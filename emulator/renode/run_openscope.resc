@@ -28,8 +28,10 @@ sysbus Tag <0x40022000, 0x40022003> "FMC_WS" 0x00000032
 # --- EXMC: LCD controller registers ---
 sysbus Tag <0xA0000000, 0xA0000107> "EXMC_REGS" 0x00000001
 
-# --- LCD memory-mapped region (writes go here for display) ---
-sysbus Tag <0x60000000, 0x6003FFFF> "LCD_MEM" 0x0000
+# --- ST7789V LCD peripheral (captures firmware display writes) ---
+# Remove the default MappedMemory at the EXMC bank, replace with our LCD peripheral
+sysbus Unregister exmcBank0
+machine PyDevFromFile @st7789v_peripheral.py 0x60000000 0x100000 True "lcd"
 
 # --- Skip spurious interrupts (Default_Handler = infinite loop) ---
 # In emulator, peripheral interrupts may fire unexpectedly.

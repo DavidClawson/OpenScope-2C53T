@@ -1,0 +1,208 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<title>OpenScope 2C53T Emulator</title>
+<style>
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  body { background: #1a1a2e; color: #eee; font-family: 'Courier New', monospace; display: flex; flex-direction: column; align-items: center; padding: 20px; }
+  h1 { color: #0ff; margin-bottom: 10px; font-size: 18px; }
+  #status { color: #888; margin-bottom: 15px; font-size: 12px; }
+  .row { display: flex; gap: 20px; align-items: flex-start; }
+  /* LCD Display */
+  #lcd-wrap { border: 3px solid #333; border-radius: 4px; background: #000; }
+  #lcd { image-rendering: pixelated; display: block; }
+  /* Button Panel */
+  #buttons { display: grid; grid-template-columns: repeat(3, 1fr); gap: 6px; width: 220px; }
+  .btn { background: #2a2a3e; color: #ccc; border: 1px solid #444; border-radius: 4px;
+         padding: 8px 4px; font-size: 11px; cursor: pointer; text-align: center; font-family: inherit; }
+  .btn:hover { background: #3a3a5e; color: #fff; border-color: #0ff; }
+  .btn:active { background: #0ff; color: #000; }
+  .btn.wide { grid-column: span 2; }
+  .btn.accent { border-color: #0ff; color: #0ff; }
+  /* Signal Injection */
+  #signal-panel { background: #222; border: 1px solid #444; border-radius: 4px; padding: 12px; width: 220px; margin-top: 10px; }
+  #signal-panel h3 { color: #0ff; font-size: 13px; margin-bottom: 8px; }
+  .sig-row { display: flex; justify-content: space-between; align-items: center; margin: 4px 0; font-size: 11px; }
+  .sig-row select, .sig-row input { background: #333; color: #eee; border: 1px solid #555; padding: 2px 4px; font-size: 11px; font-family: inherit; width: 90px; }
+  .ch-label { color: #ffe000; font-weight: bold; margin-top: 8px; display: block; font-size: 12px; }
+  .ch-label.ch2 { color: #00ffff; }
+</style>
+</head>
+<body>
+<h1>OpenScope 2C53T Emulator</h1>
+<div id="status">Connecting...</div>
+
+<div class="row">
+  <!-- LCD Display -->
+  <div>
+    <div id="lcd-wrap">
+      <canvas id="lcd" width="640" height="480"></canvas>
+    </div>
+  </div>
+
+  <!-- Controls Column -->
+  <div>
+    <!-- Button Panel -->
+    <div id="buttons">
+      <button class="btn" data-btn="CH1">CH1</button>
+      <button class="btn" data-btn="CH2">CH2</button>
+      <button class="btn" data-btn="MOVE">MOVE</button>
+      <button class="btn" data-btn="SELECT">SELECT</button>
+      <button class="btn" data-btn="TRIGGER">TRIG</button>
+      <button class="btn" data-btn="PRM">PRM</button>
+      <button class="btn accent" data-btn="AUTO">AUTO</button>
+      <button class="btn" data-btn="SAVE">SAVE</button>
+      <button class="btn accent" data-btn="MENU">MENU</button>
+      <button class="btn" data-btn="UP">UP</button>
+      <button class="btn" data-btn="OK">OK</button>
+      <button class="btn" data-btn="DOWN">DOWN</button>
+      <button class="btn" data-btn="LEFT">LEFT</button>
+      <button class="btn" data-btn="RIGHT">RIGHT</button>
+      <button class="btn" data-btn="POWER">PWR</button>
+    </div>
+
+    <!-- Signal Injection -->
+    <div id="signal-panel">
+      <h3>Signal Injection</h3>
+      <span class="ch-label">CH1</span>
+      <div class="sig-row"><label>Wave</label><select id="ch1-wave">
+        <option value="sine">Sine</option><option value="square">Square</option>
+        <option value="triangle">Triangle</option><option value="sawtooth">Sawtooth</option>
+        <option value="noise">Noise</option>
+      </select></div>
+      <div class="sig-row"><label>Freq</label><input id="ch1-freq" type="number" value="1000" min="1" max="25000" step="100"> Hz</div>
+      <div class="sig-row"><label>Amp</label><input id="ch1-amp" type="number" value="1.0" min="0" max="3.3" step="0.1"> Vpp</div>
+      <div class="sig-row"><label>Noise</label><input id="ch1-noise" type="number" value="5" min="0" max="100" step="1"> %</div>
+
+      <span class="ch-label ch2">CH2</span>
+      <div class="sig-row"><label>Wave</label><select id="ch2-wave">
+        <option value="sine">Sine</option><option value="square" selected>Square</option>
+        <option value="triangle">Triangle</option><option value="sawtooth">Sawtooth</option>
+        <option value="noise">Noise</option>
+      </select></div>
+      <div class="sig-row"><label>Freq</label><input id="ch2-freq" type="number" value="5000" min="1" max="25000" step="100"> Hz</div>
+      <div class="sig-row"><label>Amp</label><input id="ch2-amp" type="number" value="0.5" min="0" max="3.3" step="0.1"> Vpp</div>
+      <div class="sig-row"><label>Noise</label><input id="ch2-noise" type="number" value="0" min="0" max="100" step="1"> %</div>
+    </div>
+  </div>
+</div>
+
+<script>
+const canvas = document.getElementById('lcd');
+const ctx = canvas.getContext('2d');
+const status = document.getElementById('status');
+const LCD_W = 320, LCD_H = 240;
+let ws = null;
+let frameCount = 0;
+let lastFpsTime = performance.now();
+
+// Draw "no signal" pattern
+ctx.fillStyle = '#111';
+ctx.fillRect(0, 0, 640, 480);
+ctx.fillStyle = '#333';
+ctx.font = '20px monospace';
+ctx.fillText('Waiting for firmware...', 180, 240);
+
+function connect() {
+  ws = new WebSocket('ws://localhost:8765');
+  ws.binaryType = 'arraybuffer';
+
+  ws.onopen = () => { status.textContent = 'Connected'; status.style.color = '#0f0'; };
+  ws.onclose = () => { status.textContent = 'Disconnected — reconnecting...'; status.style.color = '#f00'; setTimeout(connect, 2000); };
+  ws.onerror = () => {};
+
+  ws.onmessage = (evt) => {
+    if (evt.data instanceof ArrayBuffer && evt.data.byteLength === LCD_W * LCD_H * 2) {
+      renderFrame(new Uint8Array(evt.data));
+      frameCount++;
+      const now = performance.now();
+      if (now - lastFpsTime > 1000) {
+        const fps = Math.round(frameCount * 1000 / (now - lastFpsTime));
+        status.textContent = `Connected | ${fps} FPS`;
+        frameCount = 0;
+        lastFpsTime = now;
+      }
+    } else if (typeof evt.data === 'string') {
+      try {
+        const msg = JSON.parse(evt.data);
+        if (msg.type === 'config' && msg.signal) applySignalConfig(msg.signal);
+      } catch(e) {}
+    }
+  };
+}
+
+function renderFrame(data) {
+  const img = ctx.createImageData(LCD_W, LCD_H);
+  const px = img.data;
+  for (let i = 0; i < LCD_W * LCD_H; i++) {
+    const lo = data[i * 2], hi = data[i * 2 + 1];
+    const rgb565 = lo | (hi << 8);
+    px[i * 4]     = (rgb565 >> 8) & 0xF8;        // R
+    px[i * 4 + 1] = (rgb565 >> 3) & 0xFC;        // G
+    px[i * 4 + 2] = (rgb565 << 3) & 0xF8;        // B
+    px[i * 4 + 3] = 255;                          // A
+  }
+  // Scale 2x
+  const tmp = new OffscreenCanvas(LCD_W, LCD_H);
+  tmp.getContext('2d').putImageData(img, 0, 0);
+  ctx.imageSmoothingEnabled = false;
+  ctx.drawImage(tmp, 0, 0, 640, 480);
+}
+
+// Button clicks
+document.querySelectorAll('.btn').forEach(btn => {
+  btn.addEventListener('click', () => {
+    const name = btn.dataset.btn;
+    if (ws && ws.readyState === 1) {
+      ws.send(JSON.stringify({ type: 'button', button: name }));
+      btn.style.background = '#0ff';
+      setTimeout(() => btn.style.background = '', 100);
+    }
+  });
+});
+
+// Signal injection — debounced
+let sigTimer = null;
+function sendSignalConfig() {
+  if (ws && ws.readyState === 1) {
+    ws.send(JSON.stringify({
+      type: 'signal',
+      config: {
+        ch1_waveform: document.getElementById('ch1-wave').value,
+        ch1_frequency: parseFloat(document.getElementById('ch1-freq').value),
+        ch1_amplitude: parseFloat(document.getElementById('ch1-amp').value),
+        ch1_noise: parseInt(document.getElementById('ch1-noise').value),
+        ch2_waveform: document.getElementById('ch2-wave').value,
+        ch2_frequency: parseFloat(document.getElementById('ch2-freq').value),
+        ch2_amplitude: parseFloat(document.getElementById('ch2-amp').value),
+        ch2_noise: parseInt(document.getElementById('ch2-noise').value),
+      }
+    }));
+  }
+}
+
+function applySignalConfig(cfg) {
+  if (cfg.ch1_waveform) document.getElementById('ch1-wave').value = cfg.ch1_waveform;
+  if (cfg.ch1_frequency) document.getElementById('ch1-freq').value = cfg.ch1_frequency;
+  if (cfg.ch1_amplitude) document.getElementById('ch1-amp').value = cfg.ch1_amplitude;
+  if (cfg.ch1_noise !== undefined) document.getElementById('ch1-noise').value = cfg.ch1_noise;
+  if (cfg.ch2_waveform) document.getElementById('ch2-wave').value = cfg.ch2_waveform;
+  if (cfg.ch2_frequency) document.getElementById('ch2-freq').value = cfg.ch2_frequency;
+  if (cfg.ch2_amplitude) document.getElementById('ch2-amp').value = cfg.ch2_amplitude;
+  if (cfg.ch2_noise !== undefined) document.getElementById('ch2-noise').value = cfg.ch2_noise;
+}
+
+document.getElementById('signal-panel').addEventListener('change', () => {
+  clearTimeout(sigTimer);
+  sigTimer = setTimeout(sendSignalConfig, 300);
+});
+document.getElementById('signal-panel').addEventListener('input', () => {
+  clearTimeout(sigTimer);
+  sigTimer = setTimeout(sendSignalConfig, 500);
+});
+
+connect();
+</script>
+</body>
+</html>
