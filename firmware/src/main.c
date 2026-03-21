@@ -18,6 +18,11 @@
 /* Include our drivers */
 #include "lcd.h"
 
+#ifdef FEATURE_FFT
+#include "fft.h"
+#include "fft_test_signals.h"
+#endif
+
 /* ═══════════════════════════════════════════════════════════════════
  * Constants
  * ═══════════════════════════════════════════════════════════════════ */
@@ -40,7 +45,18 @@ typedef enum {
     DCMD_DRAW_SETTINGS,
     DCMD_DRAW_STATUS_BAR,
     DCMD_REDRAW_ALL,
+#ifdef FEATURE_FFT
+    DCMD_DRAW_FFT,
+#endif
 } display_cmd_t;
+
+#ifdef FEATURE_FFT
+/* Oscilloscope sub-view (time domain vs FFT) */
+typedef enum {
+    SCOPE_VIEW_TIME = 0,
+    SCOPE_VIEW_FFT,
+} scope_view_t;
+#endif
 
 /* Button IDs */
 typedef enum {
@@ -68,6 +84,12 @@ typedef enum {
 
 static volatile device_mode_t current_mode = MODE_OSCILLOSCOPE;
 static volatile uint32_t uptime_seconds = 0;
+
+#ifdef FEATURE_FFT
+static volatile scope_view_t scope_view = SCOPE_VIEW_TIME;
+static int16_t fft_sample_buf[FFT_SIZE];
+static fft_result_t fft_result;
+#endif
 
 /* FreeRTOS handles */
 static TaskHandle_t  xDisplayTaskHandle = NULL;
@@ -129,10 +151,24 @@ static void draw_info_bar(void)
 
     switch (current_mode) {
     case MODE_OSCILLOSCOPE:
-        lcd_draw_string(4, LCD_HEIGHT - 15, "CH1:2V DC", COLOR_YELLOW, COLOR_DARK_GRAY);
-        lcd_draw_string(100, LCD_HEIGHT - 15, "Auto", COLOR_GREEN, COLOR_DARK_GRAY);
-        lcd_draw_string(160, LCD_HEIGHT - 15, "H=50uS", COLOR_WHITE, COLOR_DARK_GRAY);
-        lcd_draw_string(240, LCD_HEIGHT - 15, "CH2:200mV", COLOR_CYAN, COLOR_DARK_GRAY);
+#ifdef FEATURE_FFT
+        if (scope_view == SCOPE_VIEW_FFT) {
+            const char *win_names[] = { "Rect", "Hann", "Hamm" };
+            const fft_config_t *cfg = fft_get_config();
+            lcd_draw_string(4, LCD_HEIGHT - 15, "FFT 1024pt", COLOR_YELLOW, COLOR_DARK_GRAY);
+            lcd_draw_string(100, LCD_HEIGHT - 15,
+                            (cfg->window < FFT_WINDOW_COUNT) ? win_names[cfg->window] : "?",
+                            COLOR_GREEN, COLOR_DARK_GRAY);
+            lcd_draw_string(160, LCD_HEIGHT - 15, "PRM:Exit", COLOR_GRAY, COLOR_DARK_GRAY);
+            lcd_draw_string(240, LCD_HEIGHT - 15, "SEL:Win", COLOR_GRAY, COLOR_DARK_GRAY);
+        } else
+#endif
+        {
+            lcd_draw_string(4, LCD_HEIGHT - 15, "CH1:2V DC", COLOR_YELLOW, COLOR_DARK_GRAY);
+            lcd_draw_string(100, LCD_HEIGHT - 15, "Auto", COLOR_GREEN, COLOR_DARK_GRAY);
+            lcd_draw_string(160, LCD_HEIGHT - 15, "H=50uS", COLOR_WHITE, COLOR_DARK_GRAY);
+            lcd_draw_string(240, LCD_HEIGHT - 15, "CH2:200mV", COLOR_CYAN, COLOR_DARK_GRAY);
+        }
         break;
     case MODE_MULTIMETER:
         lcd_draw_string(4, LCD_HEIGHT - 15, "DC Voltage", COLOR_YELLOW, COLOR_DARK_GRAY);
@@ -321,6 +357,176 @@ static void draw_settings_screen(void)
     }
 }
 
+#ifdef FEATURE_FFT
+/* ═══════════════════════════════════════════════════════════════════
+ * FFT Display
+ * ═══════════════════════════════════════════════════════════════════ */
+
+/* Format a float frequency as a readable string (no sprintf) */
+static void format_freq(float freq_hz, char *buf, int bufsize)
+{
+    const char *unit;
+    float val;
+
+    if (freq_hz >= 1000000.0f) {
+        val = freq_hz / 1000000.0f;
+        unit = "MHz";
+    } else if (freq_hz >= 1000.0f) {
+        val = freq_hz / 1000.0f;
+        unit = "kHz";
+    } else {
+        val = freq_hz;
+        unit = "Hz";
+    }
+
+    /* Integer and one decimal place */
+    int integer = (int)val;
+    int frac = (int)((val - (float)integer) * 10.0f);
+    if (frac < 0) frac = -frac;
+
+    int pos = 0;
+    /* Write integer digits */
+    if (integer >= 100 && pos < bufsize - 1) buf[pos++] = (char)('0' + integer / 100);
+    if (integer >= 10  && pos < bufsize - 1) buf[pos++] = (char)('0' + (integer / 10) % 10);
+    if (pos < bufsize - 1) buf[pos++] = (char)('0' + integer % 10);
+    if (pos < bufsize - 1) buf[pos++] = '.';
+    if (pos < bufsize - 1) buf[pos++] = (char)('0' + frac);
+
+    /* Copy unit string */
+    while (*unit && pos < bufsize - 1)
+        buf[pos++] = *unit++;
+    buf[pos] = '\0';
+}
+
+/* Draw the FFT spectrum display */
+static void draw_fft_screen(void)
+{
+    const fft_config_t *cfg = fft_get_config();
+
+    /* Display area: y=16 to y=223 (between status bars), full width */
+    const uint16_t fft_y_top = 18;
+    const uint16_t fft_y_bot = LCD_HEIGHT - 18;
+    const uint16_t fft_height = fft_y_bot - fft_y_top;
+    const uint16_t fft_x_left = 0;
+    const uint16_t fft_x_right = LCD_WIDTH;
+    const uint16_t fft_width = fft_x_right - fft_x_left;
+
+    /* Clear the display area */
+    lcd_fill_rect(0, 16, LCD_WIDTH, LCD_HEIGHT - 32, COLOR_BLACK);
+
+    /* Generate test signal: 1kHz sine at 44.1kHz sample rate */
+    test_signal_generate(TEST_SIG_SQUARE, fft_sample_buf,
+                         FFT_SIZE, cfg->sample_rate_hz,
+                         1000.0f, 0.0f, 0.8f);
+
+    /* Run FFT */
+    fft_process(fft_sample_buf, FFT_SIZE, &fft_result);
+
+    /* Draw frequency bars */
+    /* Map FFT_BINS bins to fft_width pixels */
+    float ref_db = cfg->ref_level_db;
+    float range_db = cfg->db_range;
+    uint16_t x;
+
+    for (x = 0; x < fft_width; x++) {
+        /* Map pixel to bin (linear) */
+        uint16_t bin = (uint16_t)((uint32_t)x * fft_result.num_bins / fft_width);
+        if (bin >= fft_result.num_bins) bin = fft_result.num_bins - 1;
+        if (bin == 0) bin = 1;  /* Skip DC */
+
+        float db = fft_result.magnitude_db[bin];
+
+        /* Map dB to pixel height */
+        float normalized = (ref_db - db) / range_db;  /* 0=top, 1=bottom */
+        if (normalized < 0.0f) normalized = 0.0f;
+        if (normalized > 1.0f) normalized = 1.0f;
+
+        uint16_t bar_top = fft_y_top + (uint16_t)(normalized * (float)fft_height);
+
+        /* Draw bar from bar_top to bottom */
+        if (bar_top < fft_y_bot) {
+            /* Color gradient: strong signals = yellow, weak = dark cyan */
+            uint16_t color;
+            if (normalized < 0.25f)
+                color = COLOR_CH1;       /* Yellow - strong */
+            else if (normalized < 0.5f)
+                color = COLOR_GREEN;     /* Green - medium */
+            else if (normalized < 0.75f)
+                color = COLOR_CYAN;      /* Cyan - weak */
+            else
+                color = COLOR_GRID;      /* Dark - very weak */
+
+            uint16_t px = fft_x_left + x;
+            lcd_fill_rect(px, bar_top, 1, fft_y_bot - bar_top, color);
+        }
+    }
+
+    /* Draw horizontal grid lines (every 10dB) */
+    float db_step = 10.0f;
+    float db;
+    for (db = ref_db; db > ref_db - range_db; db -= db_step) {
+        float normalized = (ref_db - db) / range_db;
+        uint16_t y = fft_y_top + (uint16_t)(normalized * (float)fft_height);
+        if (y > fft_y_top && y < fft_y_bot) {
+            for (x = 0; x < fft_width; x += 4) {
+                lcd_set_pixel(fft_x_left + x, y, COLOR_GRID);
+            }
+        }
+    }
+
+    /* Draw dB scale labels on left */
+    for (db = ref_db; db > ref_db - range_db; db -= 20.0f) {
+        float normalized = (ref_db - db) / range_db;
+        uint16_t y = fft_y_top + (uint16_t)(normalized * (float)fft_height);
+        if (y > fft_y_top + 8 && y < fft_y_bot - 8) {
+            int db_int = (int)db;
+            char label[8];
+            int pos = 0;
+            if (db_int < 0) { label[pos++] = '-'; db_int = -db_int; }
+            if (db_int >= 100) label[pos++] = (char)('0' + db_int / 100);
+            if (db_int >= 10)  label[pos++] = (char)('0' + (db_int / 10) % 10);
+            label[pos++] = (char)('0' + db_int % 10);
+            label[pos] = '\0';
+            lcd_draw_string(2, y - 7, label, COLOR_GRAY, COLOR_BLACK);
+        }
+    }
+
+    /* Draw peak markers and labels */
+    uint8_t p;
+    for (p = 0; p < fft_result.num_peaks && p < 3; p++) {
+        uint16_t peak_x = (uint16_t)((uint32_t)fft_result.peaks[p].bin
+                          * fft_width / fft_result.num_bins);
+        float norm = (ref_db - fft_result.peaks[p].magnitude_db) / range_db;
+        if (norm < 0.0f) norm = 0.0f;
+        uint16_t peak_y = fft_y_top + (uint16_t)(norm * (float)fft_height);
+
+        /* Draw marker triangle */
+        peak_x += fft_x_left;
+        if (peak_y >= fft_y_top + 4 && peak_x > 2 && peak_x < fft_x_right - 2) {
+            lcd_set_pixel(peak_x, peak_y - 3, COLOR_RED);
+            lcd_set_pixel(peak_x - 1, peak_y - 2, COLOR_RED);
+            lcd_set_pixel(peak_x,     peak_y - 2, COLOR_RED);
+            lcd_set_pixel(peak_x + 1, peak_y - 2, COLOR_RED);
+        }
+
+        /* Label the primary peak with frequency */
+        if (p == 0) {
+            char freq_str[16];
+            format_freq(fft_result.peaks[0].freq_hz, freq_str, sizeof(freq_str));
+            lcd_draw_string(fft_x_left + 4, fft_y_top + 2,
+                            freq_str, COLOR_WHITE, COLOR_BLACK);
+        }
+    }
+
+    /* Window type label */
+    const char *win_names[] = { "Rect", "Hann", "Hamm" };
+    const char *win_name = (cfg->window < FFT_WINDOW_COUNT)
+                           ? win_names[cfg->window] : "?";
+    lcd_draw_string(LCD_WIDTH - 40, fft_y_top + 2,
+                    win_name, COLOR_GRAY, COLOR_BLACK);
+}
+#endif /* FEATURE_FFT */
+
 /* Draw the splash screen */
 static void draw_splash(void)
 {
@@ -381,8 +587,21 @@ static void vDisplayTask(void *pvParameters)
                 /* Fall through to draw current mode */
                 /* FALLTHROUGH */
             case DCMD_DRAW_SCOPE:
-                if (current_mode == MODE_OSCILLOSCOPE) draw_scope_screen(frame);
+                if (current_mode == MODE_OSCILLOSCOPE) {
+#ifdef FEATURE_FFT
+                    if (scope_view == SCOPE_VIEW_FFT)
+                        draw_fft_screen();
+                    else
+#endif
+                        draw_scope_screen(frame);
+                }
                 break;
+#ifdef FEATURE_FFT
+            case DCMD_DRAW_FFT:
+                if (current_mode == MODE_OSCILLOSCOPE)
+                    draw_fft_screen();
+                break;
+#endif
             case DCMD_DRAW_METER:
                 if (current_mode == MODE_MULTIMETER) draw_meter_screen();
                 break;
@@ -402,7 +621,12 @@ static void vDisplayTask(void *pvParameters)
 
         /* Animate the active mode (only scope and siggen have animation) */
         if (current_mode == MODE_OSCILLOSCOPE) {
-            draw_scope_screen(frame);
+#ifdef FEATURE_FFT
+            if (scope_view == SCOPE_VIEW_FFT)
+                draw_fft_screen();
+            else
+#endif
+                draw_scope_screen(frame);
         } else if (current_mode == MODE_SIGNAL_GEN) {
             draw_siggen_screen(frame);
         }
@@ -452,6 +676,8 @@ static void vInputTask(void *pvParameters)
         else if (!(portb & (1 << 2))) pressed = BTN_LEFT;
         else if (!(portb & (1 << 3))) pressed = BTN_RIGHT;
         else if (!(portb & (1 << 4))) pressed = BTN_OK;
+        else if (!(portc & (1 << 5))) pressed = BTN_PRM;
+        else if (!(portc & (1 << 6))) pressed = BTN_SELECT;
 
         /* Simple debounce */
         if (pressed != BTN_NONE && pressed == last_button) {
@@ -474,6 +700,28 @@ static void vInputTask(void *pvParameters)
                         xQueueSend(xDisplayQueue, &cmd, 0);
                     }
                     break;
+
+#ifdef FEATURE_FFT
+                case BTN_PRM:
+                    /* Toggle between time-domain and FFT view in scope mode */
+                    if (current_mode == MODE_OSCILLOSCOPE) {
+                        scope_view = (scope_view == SCOPE_VIEW_TIME)
+                                   ? SCOPE_VIEW_FFT : SCOPE_VIEW_TIME;
+                        cmd = DCMD_REDRAW_ALL;
+                        xQueueSend(xDisplayQueue, &cmd, 0);
+                    }
+                    break;
+
+                case BTN_SELECT:
+                    /* Cycle window type when in FFT view */
+                    if (current_mode == MODE_OSCILLOSCOPE &&
+                        scope_view == SCOPE_VIEW_FFT) {
+                        fft_cycle_window();
+                        cmd = DCMD_DRAW_FFT;
+                        xQueueSend(xDisplayQueue, &cmd, 0);
+                    }
+                    break;
+#endif
 
                 case BTN_UP:
                 case BTN_DOWN:
@@ -542,10 +790,24 @@ int main(void)
     lcd_fsmc_init();
     lcd_init();
 
+#ifdef FEATURE_FFT
+    /* Initialize FFT engine */
+    {
+        fft_config_t fft_cfg;
+        fft_cfg.window         = FFT_WINDOW_HANNING;
+        fft_cfg.sample_rate_hz = 44100.0f;  /* Test signal sample rate */
+        fft_cfg.ref_level_db   = 0.0f;      /* Full scale = 0 dBFS */
+        fft_cfg.db_range       = 80.0f;     /* Show 80dB dynamic range */
+        fft_cfg.peak_count     = 4;
+        fft_init(&fft_cfg);
+    }
+#endif
+
     /* Configure button GPIOs as inputs with pull-up */
     /* TODO: These pin assignments are placeholders */
     gpio_init(GPIOC, GPIO_MODE_IPU, GPIO_OSPEED_50MHZ,
-              GPIO_PIN_0 | GPIO_PIN_1 | GPIO_PIN_2 | GPIO_PIN_3 | GPIO_PIN_4);
+              GPIO_PIN_0 | GPIO_PIN_1 | GPIO_PIN_2 | GPIO_PIN_3 | GPIO_PIN_4 |
+              GPIO_PIN_5 | GPIO_PIN_6);
     gpio_init(GPIOB, GPIO_MODE_IPU, GPIO_OSPEED_50MHZ,
               GPIO_PIN_0 | GPIO_PIN_1 | GPIO_PIN_2 | GPIO_PIN_3 | GPIO_PIN_4);
 

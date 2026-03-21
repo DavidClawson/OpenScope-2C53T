@@ -24,9 +24,19 @@ FREERTOS   = FreeRTOS
 # Source files
 ######################################################################
 
+# Feature flags (FFT enabled by default)
+FEATURES ?= FFT
+
 # Application
 C_SOURCES  = src/main.c
 C_SOURCES += src/drivers/lcd.c
+
+# FFT / DSP module
+ifneq ($(findstring FFT,$(FEATURES)),)
+  C_SOURCES += src/dsp/fft.c
+  C_SOURCES += src/dsp/fft_test_signals.c
+  C_DEFS += -DFEATURE_FFT
+endif
 
 # GD32 CMSIS
 C_SOURCES += $(GD32_CMSIS)/GD/GD32F30x/Source/system_gd32f30x.c
@@ -54,6 +64,7 @@ ASM_SOURCES = $(GD32_CMSIS)/GD/GD32F30x/Source/GCC/startup_gd32f30x_cl.S
 ######################################################################
 C_INCLUDES  = -Iinclude
 C_INCLUDES += -Isrc/drivers
+C_INCLUDES += -Isrc/dsp
 C_INCLUDES += -I$(GD32_CMSIS)
 C_INCLUDES += -I$(GD32_CMSIS)/GD/GD32F30x/Include
 C_INCLUDES += -I$(GD32_STD)/Include
