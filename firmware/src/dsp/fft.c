@@ -11,6 +11,7 @@
  */
 
 #include "fft.h"
+#include "shared_mem.h"
 #include <math.h>
 #include <string.h>
 
@@ -33,23 +34,52 @@ static arm_rfft_fast_instance_f32 fft_instance;
  * Static buffers (~88KB total in .bss)
  * ═══════════════════════════════════════════════════════════════════ */
 
-#ifdef USE_CMSIS_DSP
-/* CMSIS-DSP: real input + complex output */
-static float fft_input[FFT_SIZE];            /* 16KB */
-static float fft_cmsis_output[FFT_SIZE];     /* 16KB */
-#else
-/* Custom radix-2: interleaved complex buffer + twiddle tables */
-static float fft_buf[FFT_SIZE * 2];          /* 32KB */
-static float twiddle_re[FFT_SIZE / 2];       /*  8KB */
-static float twiddle_im[FFT_SIZE / 2];       /*  8KB */
+/*
+ * FFT buffers use the shared memory pool (150KB available).
+ * Pointers are set by fft_init() via shared_mem_acquire().
+ *
+ * Layout in pool:
+ *   [0]     fft_buf/fft_input  32KB (radix2) or 16KB+16KB (CMSIS)
+ *   [32KB]  window_coeffs      16KB
+ *   [48KB]  magnitude_buf       8KB
+ *   [56KB]  avg_buf             8KB
+ *   [64KB]  max_hold_buf        8KB
+ *   [72KB]  twiddle_re          8KB (radix2 only)
+ *   [80KB]  twiddle_im          8KB (radix2 only)
+ *   Total: 72KB (CMSIS) or 88KB (radix2) of 150KB pool
+ */
+static float *fft_buf = 0;
+static float *window_coeffs = 0;
+static float *magnitude_buf = 0;
+static float *avg_buf = 0;
+static float *max_hold_buf = 0;
+
+#ifndef USE_CMSIS_DSP
+static float *twiddle_re = 0;
+static float *twiddle_im = 0;
 #endif
 
-static float window_coeffs[FFT_SIZE];        /* 16KB */
+#ifdef USE_CMSIS_DSP
+/* CMSIS path aliases — fft_buf is split into input + output halves */
+static float *fft_input = 0;
+static float *fft_cmsis_output = 0;
+#endif
 
-/* Output buffers (pointed to by fft_result_t) */
-static float magnitude_buf[FFT_BINS];        /*  8KB */
-static float avg_buf[FFT_BINS];              /*  8KB */
-static float max_hold_buf[FFT_BINS];         /*  8KB */
+static void fft_setup_pointers(uint8_t *pool)
+{
+    fft_buf       = (float *)(pool);
+    window_coeffs = (float *)(pool + FFT_SIZE * 2 * sizeof(float));
+    magnitude_buf = (float *)(pool + FFT_SIZE * 2 * sizeof(float) + FFT_SIZE * sizeof(float));
+    avg_buf       = magnitude_buf + FFT_BINS;
+    max_hold_buf  = avg_buf + FFT_BINS;
+#ifdef USE_CMSIS_DSP
+    fft_input        = fft_buf;
+    fft_cmsis_output = fft_buf + FFT_SIZE;
+#else
+    twiddle_re    = max_hold_buf + FFT_BINS;
+    twiddle_im    = twiddle_re + FFT_SIZE / 2;
+#endif
+}
 
 /* Current configuration */
 static fft_config_t current_cfg;
@@ -309,6 +339,10 @@ static void label_harmonics(fft_peak_t *peaks, uint8_t num_peaks)
 
 void fft_init(const fft_config_t *cfg)
 {
+    /* Acquire shared memory pool for FFT buffers */
+    uint8_t *pool = shared_mem_acquire(SHMEM_OWNER_FFT);
+    fft_setup_pointers(pool);
+
     current_cfg = *cfg;
 
     /* Set defaults for zoom if not specified */

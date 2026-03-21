@@ -8,16 +8,13 @@
  */
 
 #include "screenshot.h"
+#include "shared_mem.h"
 #include <string.h>
 
 #ifdef FEATURE_SCREENSHOT
 
-/* ========================================================================
- * Shadow framebuffer — mirrors what's on the LCD
- * 320 x 240 x 2 bytes = 153,600 bytes (150KB)
- * ======================================================================== */
-
-static uint8_t shadow_fb[SCREENSHOT_SIZE];
+/* Shadow framebuffer uses shared memory pool (150KB = full pool) */
+static uint8_t *shadow_fb = 0;
 static bool initialized = false;
 
 /* ========================================================================
@@ -44,6 +41,7 @@ static void write_le32(uint8_t *buf, uint32_t val)
 
 void screenshot_init(void)
 {
+    shadow_fb = shared_mem_acquire(SHMEM_OWNER_SCREENSHOT);
     memset(shadow_fb, 0, SCREENSHOT_SIZE);
     initialized = true;
 }

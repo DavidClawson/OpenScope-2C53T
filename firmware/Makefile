@@ -38,6 +38,7 @@ C_SOURCES += src/ui/settings_ui.c
 C_SOURCES += src/tasks/measurement.c
 C_SOURCES += src/drivers/flash_fs.c
 C_SOURCES += src/dsp/signal_gen.c
+C_SOURCES += src/dsp/shared_mem.c
 C_SOURCES += src/ui/persistence.c
 C_SOURCES += src/dsp/math_channel.c
 C_SOURCES += src/util/config.c

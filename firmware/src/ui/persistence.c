@@ -1,19 +1,22 @@
 #include "persistence.h"
+#include "shared_mem.h"
 #include <string.h>
 
-/* ~64KB persistence buffer in .bss */
-static uint8_t persist_buf[PERSIST_WIDTH * PERSIST_HEIGHT];
+/* Persistence buffer uses shared memory pool (64KB of 150KB available) */
+static uint8_t *persist_buf = 0;
 static persist_mode_t current_mode = PERSIST_OFF;
 
 void persist_init(void)
 {
-    memset(persist_buf, 0, sizeof(persist_buf));
+    persist_buf = shared_mem_acquire(SHMEM_OWNER_PERSISTENCE);
+    memset(persist_buf, 0, PERSIST_WIDTH * PERSIST_HEIGHT);
     current_mode = PERSIST_OFF;
 }
 
 void persist_clear(void)
 {
-    memset(persist_buf, 0, sizeof(persist_buf));
+    if (persist_buf)
+        memset(persist_buf, 0, PERSIST_WIDTH * PERSIST_HEIGHT);
 }
 
 void persist_set_mode(persist_mode_t mode)
@@ -67,7 +70,7 @@ void persist_decay(void)
     switch (current_mode) {
     case PERSIST_OFF:
         /* Clear everything each frame */
-        memset(persist_buf, 0, sizeof(persist_buf));
+        memset(persist_buf, 0, PERSIST_WIDTH * PERSIST_HEIGHT);
         return;
     case PERSIST_LOW:
         decay = 16;
