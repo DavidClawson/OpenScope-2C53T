@@ -22,6 +22,16 @@ FNIRSI_1014D_Firmware/
 2C53T Firmware V1.2.0/
 2C53T_Firmware_V1.1.2/
 
+# Ghidra project files (large, binary, regenerable)
+ghidra_reanalysis/
+
+# Firmware build output
+firmware/build/
+
+# Cloned dependencies (users clone themselves)
+firmware/FreeRTOS/
+firmware/gd32f30x_lib/
+
 # IDE files
 .vscode/
 *.swp
