@@ -242,6 +242,12 @@ static void draw_fft_region(uint16_t y_top, uint16_t height)
             format_freq(fft_result.peaks[0].freq_hz, freq_str, sizeof(freq_str));
             lcd_draw_string(4, y_top + 2, freq_str, COLOR_WHITE, COLOR_BLACK);
         }
+
+        /* Draw harmonic label if present */
+        if (fft_result.peaks[p].label[0] != '\0' && peak_x > 8 && peak_x < LCD_WIDTH - 30) {
+            lcd_draw_string(peak_x - 8, peak_y - 12,
+                            fft_result.peaks[p].label, COLOR_ORANGE, COLOR_BLACK);
+        }
     }
 
     /* Window type label */
@@ -297,6 +303,84 @@ void draw_split_screen(uint32_t frame)
 
     /* Bottom half: FFT (y=121 to y=222, 101px) */
     draw_fft_region(121, 101);
+}
+
+/* ═══════════════════════════════════════════════════════════════════
+ * Waterfall / Spectrogram display
+ * ═══════════════════════════════════════════════════════════════════ */
+
+#define WATERFALL_ROWS  64
+#define WATERFALL_COLS  320
+static uint8_t waterfall_buf[WATERFALL_ROWS][WATERFALL_COLS];
+static uint8_t waterfall_row_idx = 0;
+
+/* Heatmap: strong=red, weak=blue */
+static uint16_t intensity_to_color(uint8_t intensity)
+{
+    uint8_t inv = 255 - intensity;  /* 255=strong, 0=weak */
+    if (inv > 204) return COLOR_RED;
+    if (inv > 153) return RGB565(255, (uint8_t)((inv - 153) * 5), 0);
+    if (inv > 102) return RGB565((uint8_t)((153 - inv + 102) * 5), 255, 0);
+    if (inv > 51)  return RGB565(0, 255, (uint8_t)((inv - 51) * 5));
+    return RGB565(0, (uint8_t)(inv * 5), 255);
+}
+
+void draw_waterfall_screen(void)
+{
+    const fft_config_t *cfg = fft_get_config();
+
+    /* Generate test signal and run FFT */
+    test_signal_generate(TEST_SIG_SQUARE, fft_sample_buf,
+                         FFT_SIZE, cfg->sample_rate_hz,
+                         1000.0f, 0.0f, 0.8f);
+    fft_process(fft_sample_buf, FFT_SIZE, &fft_result);
+
+    const float *draw_data = (fft_result.avg_db != NULL)
+                             ? fft_result.avg_db : fft_result.magnitude_db;
+
+    uint16_t zoom_start = cfg->zoom_start_bin;
+    uint16_t zoom_end = cfg->zoom_end_bin;
+    uint16_t zoom_span = zoom_end - zoom_start;
+    if (zoom_span == 0) zoom_span = 1;
+
+    /* Convert magnitude to intensity for this row */
+    uint16_t x;
+    for (x = 0; x < WATERFALL_COLS; x++) {
+        uint16_t bin = zoom_start + (uint16_t)((uint32_t)x * zoom_span / WATERFALL_COLS);
+        if (bin >= FFT_BINS) bin = FFT_BINS - 1;
+
+        float db = draw_data[bin];
+        float normalized = (cfg->ref_level_db - db) / cfg->db_range;
+        if (normalized < 0.0f) normalized = 0.0f;
+        if (normalized > 1.0f) normalized = 1.0f;
+
+        waterfall_buf[waterfall_row_idx][x] = (uint8_t)(normalized * 255.0f);
+    }
+
+    uint8_t newest_row = waterfall_row_idx;
+    waterfall_row_idx = (uint8_t)((waterfall_row_idx + 1) % WATERFALL_ROWS);
+
+    /* Clear and render */
+    lcd_fill_rect(0, 16, LCD_WIDTH, LCD_HEIGHT - 32, COLOR_BLACK);
+
+    uint16_t display_height = LCD_HEIGHT - 34;
+    uint16_t row_height = display_height / WATERFALL_ROWS;
+    if (row_height < 1) row_height = 1;
+
+    uint8_t r;
+    for (r = 0; r < WATERFALL_ROWS; r++) {
+        uint8_t buf_row = (uint8_t)((newest_row + WATERFALL_ROWS - r) % WATERFALL_ROWS);
+        uint16_t y = (uint16_t)(18 + r * row_height);
+
+        if (y + row_height > LCD_HEIGHT - 18) break;
+
+        for (x = 0; x < WATERFALL_COLS; x++) {
+            uint16_t color = intensity_to_color(waterfall_buf[buf_row][x]);
+            lcd_fill_rect(x, y, 1, row_height, color);
+        }
+    }
+
+    lcd_draw_string(4, 18, "WFALL", COLOR_WHITE, COLOR_BLACK);
 }
 
 #endif /* FEATURE_FFT */

@@ -101,6 +101,8 @@ static void vDisplayTask(void *pvParameters)
                         draw_fft_screen();
                     else if (scope_view == SCOPE_VIEW_SPLIT)
                         draw_split_screen(frame);
+                    else if (scope_view == SCOPE_VIEW_WATERFALL)
+                        draw_waterfall_screen();
                     else
 #endif
                         draw_scope_screen(frame);
@@ -136,6 +138,8 @@ static void vDisplayTask(void *pvParameters)
                 draw_fft_screen();
             else if (scope_view == SCOPE_VIEW_SPLIT)
                 draw_split_screen(frame);
+            else if (scope_view == SCOPE_VIEW_WATERFALL)
+                draw_waterfall_screen();
             else
 #endif
                 draw_scope_screen(frame);
@@ -191,7 +195,16 @@ static void vInputTask(void *pvParameters)
 
                 case BTN_AUTO:
                     if (current_mode == MODE_OSCILLOSCOPE) {
-                        cmd = DCMD_DRAW_SCOPE;
+#ifdef FEATURE_FFT
+                        if (scope_view != SCOPE_VIEW_TIME) {
+                            /* Auto-configure FFT zoom/scale based on signal */
+                            test_signal_generate(TEST_SIG_SQUARE, fft_sample_buf,
+                                                 FFT_SIZE, fft_get_config()->sample_rate_hz,
+                                                 1000.0f, 0.0f, 0.8f);
+                            fft_auto_configure(fft_sample_buf, FFT_SIZE);
+                        }
+#endif
+                        cmd = DCMD_REDRAW_ALL;
                         xQueueSend(xDisplayQueue, &cmd, 0);
                     }
                     break;

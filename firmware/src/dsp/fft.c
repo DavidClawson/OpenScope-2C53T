@@ -223,6 +223,7 @@ static void find_peaks(const float *mag_db, uint16_t num_bins,
                 peaks[pos].bin = i;
                 peaks[pos].freq_hz = (float)i * bin_width_hz;
                 peaks[pos].magnitude_db = mag_db[i];
+                peaks[pos].label[0] = '\0';
                 (*num_found)++;
             } else if (mag_db[i] > peaks[max_peaks - 1].magnitude_db) {
                 uint8_t pos = max_peaks - 1;
@@ -233,6 +234,70 @@ static void find_peaks(const float *mag_db, uint16_t num_bins,
                 peaks[pos].bin = i;
                 peaks[pos].freq_hz = (float)i * bin_width_hz;
                 peaks[pos].magnitude_db = mag_db[i];
+                peaks[pos].label[0] = '\0';
+            }
+        }
+    }
+}
+
+/* ═══════════════════════════════════════════════════════════════════
+ * Harmonic labeling
+ * ═══════════════════════════════════════════════════════════════════ */
+
+static void label_harmonics(fft_peak_t *peaks, uint8_t num_peaks)
+{
+    if (num_peaks == 0) return;
+
+    /* Find the strongest peak */
+    uint8_t strongest_idx = 0;
+    float strongest_mag = peaks[0].magnitude_db;
+    uint8_t i;
+    for (i = 1; i < num_peaks; i++) {
+        if (peaks[i].magnitude_db > strongest_mag) {
+            strongest_mag = peaks[i].magnitude_db;
+            strongest_idx = i;
+        }
+    }
+
+    /* Find fundamental: lowest-frequency peak within 20dB of strongest */
+    uint8_t fund_idx = strongest_idx;
+    float fund_freq = peaks[strongest_idx].freq_hz;
+    float mag_threshold = strongest_mag - 20.0f;
+
+    for (i = 0; i < num_peaks; i++) {
+        if (peaks[i].magnitude_db >= mag_threshold &&
+            peaks[i].freq_hz < fund_freq) {
+            fund_freq = peaks[i].freq_hz;
+            fund_idx = i;
+        }
+    }
+
+    /* Label the fundamental */
+    peaks[fund_idx].label[0] = 'F';
+    peaks[fund_idx].label[1] = 'u';
+    peaks[fund_idx].label[2] = 'n';
+    peaks[fund_idx].label[3] = 'd';
+    peaks[fund_idx].label[4] = '\0';
+
+    if (fund_freq <= 0.0f) return;
+    float fund_bin = (float)peaks[fund_idx].bin;
+
+    /* Check each other peak for harmonic relationship */
+    for (i = 0; i < num_peaks; i++) {
+        if (i == fund_idx) continue;
+
+        float ratio = (float)peaks[i].bin / fund_bin;
+        int n = (int)(ratio + 0.5f);
+
+        if (n >= 2 && n <= 9) {
+            float expected_bin = fund_bin * (float)n;
+            float diff = (float)peaks[i].bin - expected_bin;
+            if (diff < 0.0f) diff = -diff;
+
+            if (diff <= 1.5f) {
+                peaks[i].label[0] = 'H';
+                peaks[i].label[1] = (char)('0' + n);
+                peaks[i].label[2] = '\0';
             }
         }
     }
@@ -403,6 +468,9 @@ void fft_process(const int16_t *samples, uint16_t num_samples,
             result->peak_freq_hz = result->peaks[0].freq_hz;
             result->peak_mag_db  = result->peaks[0].magnitude_db;
         }
+
+        /* Label harmonics relative to fundamental */
+        label_harmonics(result->peaks, result->num_peaks);
     }
 }
 
@@ -482,4 +550,26 @@ void fft_zoom_out(void)
     current_cfg.zoom_end_bin = current_cfg.zoom_start_bin + new_span;
     if (current_cfg.zoom_end_bin >= FFT_BINS)
         current_cfg.zoom_end_bin = FFT_BINS - 1;
+}
+
+void fft_auto_configure(const int16_t *samples, uint16_t num_samples)
+{
+    int crossings = 0;
+    int i;
+    for (i = 1; i < (int)num_samples; i++) {
+        if ((samples[i - 1] >= 0 && samples[i] < 0) ||
+            (samples[i - 1] < 0 && samples[i] >= 0))
+            crossings++;
+    }
+    float est_freq = (float)crossings * current_cfg.sample_rate_hz
+                     / (2.0f * (float)num_samples);
+
+    if (est_freq > 0.0f) {
+        float max_freq = est_freq * 12.0f;
+        uint16_t max_bin = (uint16_t)(max_freq / (current_cfg.sample_rate_hz / (float)FFT_SIZE));
+        if (max_bin > FFT_BINS - 1) max_bin = FFT_BINS - 1;
+        if (max_bin < 32) max_bin = 32;
+        current_cfg.zoom_start_bin = 1;
+        current_cfg.zoom_end_bin = max_bin;
+    }
 }

@@ -40,6 +40,7 @@ typedef struct {
     uint16_t bin;
     float    freq_hz;
     float    magnitude_db;
+    char     label[6];      /* "Fund", "H2", "H3", etc. or "" */
 } fft_peak_t;
 
 /* FFT configuration */
@@ -101,5 +102,8 @@ void fft_zoom_in(void);
 
 /* Zoom out (double visible range, clamped to full span). */
 void fft_zoom_out(void);
+
+/* Auto-configure: estimate fundamental from zero crossings, set zoom/scale. */
+void fft_auto_configure(const int16_t *samples, uint16_t num_samples);
 
 #endif /* FFT_H */
