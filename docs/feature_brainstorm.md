@@ -201,6 +201,216 @@ Ham Radio Module
 
 **Limitation:** 50MHz bandwidth means no VHF/UHF (2m, 70cm). But HF is where most homebrewing happens.
 
+## ESP32 WiFi Mod + Module Platform
+
+### The $4 Hardware Mod
+
+Solder an ESP32-S3 mini module (12×18mm, ~$4) inside the case with 4-5 wires:
+- 3.3V, GND, UART TX, UART RX (4 wires = basic WiFi/BLE)
+- BOOT pin (5th wire = enables OTA firmware updates)
+
+This single mod enables everything below.
+
+### OTA Firmware Updates
+
+The GD32F307 has a built-in UART bootloader. The ESP32 can act as a wireless flash programmer:
+
+1. Phone browser shows "Firmware v2.3 available" notification
+2. User taps "Install"
+3. ESP32 downloads binary from GitHub over WiFi
+4. ESP32 asserts GD32 BOOT pin, pulses RESET
+5. ESP32 streams firmware over UART using STM32/GD32 bootloader protocol
+6. ESP32 releases BOOT, pulses RESET → scope boots with new firmware
+
+No USB cable, no computer. Update your scope from under the car.
+
+### Module / Plugin System
+
+The 16MB SPI flash is partitioned into module slots. Modules are downloadable packages containing any combination of:
+
+**Module contents:**
+- **Procedure scripts (JSON):** Step-by-step guided tests with prompts, measurements, pass/fail criteria
+- **DTC databases:** Diagnostic trouble code → description → common causes → fix procedures
+- **Reference waveforms:** "Known good" patterns for overlay comparison
+- **Measurement profiles:** What to measure, thresholds, display layout
+- **Code overlays (advanced):** Compiled ARM code loaded into RAM overlay region and executed
+
+**SPI Flash layout:**
+```
+0x000000  System UI assets       (1MB)
+0x100000  Module slot 1          (1MB)  ← "Toyota Diagnostics"
+0x200000  Module slot 2          (1MB)  ← "HVAC Analyzer"
+0x300000  Module slot 3          (1MB)  ← "Audio Test Suite"
+0x400000  Module slot 4          (1MB)  ← "Ham Radio Tools"
+0x500000  Waveform library       (2MB)  ← community reference waveforms
+0x700000  DTC databases          (2MB)  ← Toyota, Honda, GM, Ford...
+0x900000  Screenshots            (1MB)
+0xA00000  User data              (6MB)
+```
+
+### Module Store (via ESP32 WiFi)
+
+The ESP32 serves a web page with a module browser:
+
+```
+Phone browser → "OpenScope Module Store"
+
+  📦 Toyota Diagnostic Suite v2.1        [Install]
+     K-Line decoder, 847 DTCs, 23 sensor PIDs,
+     reference waveforms for 3.4L 5VZ-FE
+     By: community/toyota-osc
+
+  📦 Fuel System Analyzer v1.3           [Install]
+     Fuel pump current profile, injector
+     balance test, fuel pressure trending
+     By: community/fuel-diag
+
+  📦 HVAC Technician Pack v1.0           [Installed ✓]
+     Capacitor test, compressor current,
+     refrigerant pressure curves
+     By: community/hvac-tools
+
+  📦 Community: "4Runner Ignition Pack"  [Install]
+     Uploaded by @david_clawson
+     Reference coil waveforms, timing specs
+```
+
+### JSON Procedure Format (concept)
+
+```json
+{
+  "module": "fuel_pump_analyzer",
+  "version": "1.3",
+  "name": "Fuel Pump Current Test",
+  "description": "Analyze fuel pump health via starter current profile",
+  "author": "openscope-community",
+  "procedures": [
+    {
+      "id": "fuel_pump_prime",
+      "name": "Fuel Pump Prime Test",
+      "steps": [
+        {
+          "type": "prompt",
+          "text": "Connect current clamp around fuel pump feed wire (B+ to pump)",
+          "image": "fuel_pump_clamp.ref"
+        },
+        {
+          "type": "configure",
+          "timebase": "500ms",
+          "ch1_vdiv": "5A",
+          "trigger": "rising",
+          "trigger_level": "0.5A"
+        },
+        {
+          "type": "prompt",
+          "text": "Turn key to ON (do not start). Pump should run for ~2 seconds."
+        },
+        {
+          "type": "capture",
+          "duration_ms": 5000,
+          "channel": "ch1"
+        },
+        {
+          "type": "measure",
+          "measurements": ["vpp", "frequency", "vrms"],
+          "reference": "fuel_pump_prime_good.ref"
+        },
+        {
+          "type": "evaluate",
+          "rules": [
+            {"measurement": "vrms", "min": 3.0, "max": 8.0, "unit": "A", "label": "Pump current"},
+            {"measurement": "vpp", "max": 2.0, "unit": "A", "label": "Current ripple"}
+          ],
+          "pass_message": "Fuel pump prime current normal",
+          "fail_message": "Abnormal pump current — check pump, relay, or wiring"
+        }
+      ]
+    },
+    {
+      "id": "injector_balance",
+      "name": "Injector Balance Test",
+      "steps": [
+        {
+          "type": "prompt",
+          "text": "Move current clamp to injector harness common feed"
+        },
+        {
+          "type": "configure",
+          "timebase": "5ms",
+          "ch1_vdiv": "1A",
+          "trigger": "rising",
+          "trigger_level": "0.2A"
+        },
+        {
+          "type": "capture",
+          "duration_ms": 200,
+          "repeat": 10,
+          "average": true
+        },
+        {
+          "type": "analyze",
+          "algorithm": "peak_detect",
+          "params": {"min_peaks": 4, "max_peaks": 8},
+          "display": "bar_chart",
+          "label_format": "Cyl %d: %.1f%%"
+        }
+      ]
+    }
+  ],
+  "references": {
+    "fuel_pump_prime_good.ref": "waveforms/fuel_pump_prime_good.bin",
+    "fuel_pump_clamp.ref": "images/fuel_pump_clamp.bin"
+  },
+  "dtc_database": "dtc/generic_fuel_system.json"
+}
+```
+
+### Automotive Sensor Add-Ons
+
+Community-designed sensor modules that connect to the scope's probe inputs:
+
+**Fuel pressure transducer** — 0-100 PSI, 0.5-4.5V output. Connect to CH1, module provides pressure-to-voltage calibration and reference curves.
+
+**Current clamp adapter** — Hall-effect current sensor (e.g., ACS712). 0-30A range for starter motor, fuel pump, alternator. Module provides amp-per-volt scaling.
+
+**Exhaust gas temperature** — K-type thermocouple with MAX6675 module. Connect via the signal gen output (repurposed as SPI CS). Module reads temperature, overlays on scope display.
+
+**MAP sensor adapter** — Manifold absolute pressure from a standalone MAP sensor. Module provides kPa-to-voltage calibration and altitude correction.
+
+### Phone as Primary Display
+
+With ESP32 WiFi, the phone becomes the better display:
+- 1080p+ resolution vs 320x240
+- Multi-touch pinch-to-zoom on waveforms
+- Multi-pane layout: scope + FFT + measurements + decoded protocol all visible
+- Screenshot and share directly from phone
+- Voice notes attached to captures
+- No app needed — pure browser-based via WebSocket
+
+### Community Platform Vision
+
+```
+GitHub: openscope-modules/
+├── modules/
+│   ├── toyota-diagnostics/     ← maintained by community
+│   ├── honda-diagnostics/
+│   ├── hvac-tools/
+│   ├── audio-analyzer/
+│   ├── ham-radio/
+│   └── education-kit/
+├── waveforms/                   ← reference waveform library
+│   ├── automotive/
+│   ├── power-supplies/
+│   └── audio/
+├── dtc-databases/               ← diagnostic trouble codes
+│   ├── obd2-generic.json
+│   ├── toyota-specific.json
+│   └── honda-specific.json
+└── module-spec.md               ← module format specification
+```
+
+Anyone can contribute a module. The ESP32 module store pulls from this repo. Scope downloads what it needs. Community grows the platform.
+
 ## Hardware Notes
 
 - **MCU:** GD32F307 Cortex-M4 @ 120MHz with FPU and DSP — plenty of power for DSP, FFT, protocol decode
