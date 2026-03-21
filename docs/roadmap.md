@@ -241,6 +241,107 @@
 
 ---
 
+## Phase 3: ESP32 WiFi/Co-Processor Mod ("$3 Upgrade")
+
+A hardware mod that adds WiFi, BLE, and a co-processor to the scope.
+Total cost: ~$4 in parts. Difficulty: 4 solder joints, 20 minutes.
+
+### The Mod
+
+**Part:** ESP32-S3 Mini module (~$4) or ESP32-C3 Super Mini (~$3)
+- 12mm × 18mm — fits inside the case near battery compartment
+- Dual-core 240MHz (S3) or single-core 160MHz (C3)
+- WiFi 802.11 b/g/n + BLE 5.0
+- 512KB SRAM (S3) or 400KB (C3)
+- Onboard PCB antenna (works through plastic case)
+
+**Solder Points (4 wires):**
+1. 3.3V — tap from existing voltage regulator
+2. GND — any ground pad
+3. UART TX — unused GPIO on GD32F307 (identified during teardown)
+4. UART RX — corresponding UART pin
+
+**Power:** ESP32 draws ~130mA when WiFi active, ~5µA in sleep.
+Menu toggle enables/disables WiFi to preserve battery life.
+
+### What It Enables
+
+**Phone as Display (biggest win)**
+- ESP32 serves a web page over WiFi
+- Phone/tablet connects — instant 1080p scope display
+- Pinch-to-zoom on waveforms, multi-pane layout
+- No app install — works in any browser on any device
+- See scope screen while working under the car hood
+
+**Remote Control**
+- Change scope settings from phone touchscreen
+- Useful when probes are in tight spots
+- Start/stop capture, change timebase, trigger level
+
+**Data Logging + Cloud**
+- Stream measurements to InfluxDB/Grafana
+- Long-term monitoring (battery drain, temperature, solar output)
+- "Log alternator voltage every 5 seconds for the next hour"
+
+**Waveform Sharing**
+- Capture a waveform, upload to community database
+- "Here's what a good Toyota 5VZ-FE injector looks like"
+- Compare your capture against known-good references
+
+**OTA Firmware Updates**
+- Update scope firmware over WiFi instead of USB cable
+- Download and flash from GitHub releases automatically
+
+**Advanced Co-Processing (ESP32-S3)**
+- Offload heavy analysis to the ESP32's faster CPU
+- Real-time machine learning (anomaly detection)
+- Continuous recording to microSD card (via ESP32 SPI)
+- Deep protocol analysis that would choke the main MCU
+
+### Architecture
+
+```
+┌──────────────────┐         ┌──────────────────┐
+│ GD32F307 (Main)  │  UART   │ ESP32-S3 (WiFi)  │
+│ • Scope control  │ or SPI  │ • Web server     │
+│ • FPGA interface │◄───────►│ • Phone display  │
+│ • LCD rendering  │ 4 wires │ • Data logging   │
+│ • Button input   │         │ • BLE beacon     │
+│ • Basic DSP      │         │ • OTA updates    │
+│ 120MHz, 256KB    │         │ 240MHz, 512KB    │
+└────────┬─────────┘         └────────┬─────────┘
+         │                            │ WiFi/BLE
+    ┌────▼────┐                  ┌────▼────────┐
+    │  FPGA   │                  │ Phone/tablet │
+    │  ADC    │                  │ 1080p touch  │
+    │ 250MS/s │                  │ any browser  │
+    └─────────┘                  └──────────────┘
+```
+
+### Implementation Steps
+
+1. **During teardown:** Identify available UART pins on GD32 PCB
+2. **ESP32 firmware:** Arduino/ESP-IDF project — serial bridge + web server
+3. **Scope firmware:** UART driver module for ESP32 communication protocol
+4. **Web UI:** Single-page HTML with WebSocket (reuse emulator UI pattern)
+5. **Physical mod:** Solder ESP32 module inside case, route antenna toward plastic panel
+6. **Mod guide:** Step-by-step photos + video for community
+
+### Why ESP32 and Not a Teensy/Other
+
+| | ESP32-S3 | Teensy 4.1 | RPi Pico W |
+|---|---------|-----------|-----------|
+| Cost | $4 | $32 | $8 |
+| WiFi/BLE | Built-in | No | WiFi only |
+| Size | 12×18mm | 18×61mm | 21×51mm |
+| Clock | 240MHz | 600MHz | 133MHz |
+| RAM | 512KB+8MB | 1MB | 264KB |
+| Power | 130mA | 100mA | 40mA |
+
+ESP32-S3 is the sweet spot: WiFi+BLE built-in, small enough to fit, powerful enough to serve as co-processor, cheap enough that the mod is accessible.
+
+---
+
 ## FPGA Notes
 
 The FPGA is now identified as **Gowin GW1N-UV2** (confirmed by EEVblog community). Open-source toolchain exists:
