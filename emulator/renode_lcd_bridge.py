@@ -133,6 +133,15 @@ MODE_COUNT = 4
 
 MODE_NAMES = ["SCOPE", "METER", "SIGGEN", "SETUP"]
 
+VIEW_TIME = 0
+VIEW_FFT = 1
+VIEW_SPLIT = 2
+VIEW_WATERFALL = 3
+VIEW_COUNT = 4
+VIEW_NAMES = ["TIME", "FFT", "SPLIT", "WFALL"]
+
+WINDOW_NAMES = ["Rect", "Hann", "Hamm", "BHar", "Flat"]
+
 class DeviceState:
     def __init__(self):
         self.mode = MODE_SCOPE
@@ -150,6 +159,10 @@ class DeviceState:
         self.siggen_wave = 0  # 0=sine, 1=square, 2=triangle, 3=saw
         self.siggen_wave_names = ["Sine", "Square", "Triangle", "Sawtooth"]
         self.splash_done = False
+        # FFT state
+        self.scope_view = VIEW_TIME
+        self.fft_window = 1  # Hanning
+        self.waterfall_history = []  # list of 320-element intensity rows
 
     def handle_button(self, btn):
         """Process a button press, return True if display needs redraw"""
@@ -182,6 +195,16 @@ class DeviceState:
             return True
         elif btn == "CH2":
             self.mode = MODE_SCOPE
+            return True
+        elif btn == "PRM":
+            if self.mode == MODE_SCOPE:
+                self.scope_view = (self.scope_view + 1) % VIEW_COUNT
+            return True
+        elif btn == "SELECT":
+            if self.mode == MODE_SCOPE and self.scope_view in (VIEW_FFT, VIEW_SPLIT, VIEW_WATERFALL):
+                self.fft_window = (self.fft_window + 1) % 5
+            elif self.mode == MODE_SIGGEN:
+                self.siggen_wave = (self.siggen_wave + 1) % 4
             return True
         elif btn == "SAVE":
             return True  # flash "Saved!" briefly
@@ -271,6 +294,144 @@ def draw_scope(fb, state):
         fb.text(140, y_center - 4, "STOP", RED, BLACK)
 
     draw_info_bar_scope(fb, state)
+
+
+def compute_fft_spectrum(state, num_bins=320):
+    """Compute a simulated FFT spectrum of a 1kHz square wave"""
+    import cmath
+    N = 1024
+    sample_rate = 44100.0
+    freq = 1000.0
+    # Generate square wave
+    samples = [1.0 if (i / sample_rate * freq) % 1.0 < 0.5 else -1.0 for i in range(N)]
+    # Apply Hanning window
+    if state.fft_window == 1:
+        samples = [s * 0.5 * (1 - math.cos(2*math.pi*i/N)) for i, s in enumerate(samples)]
+    # Simple DFT for display (just compute magnitude for each display bin)
+    magnitudes = []
+    for k in range(num_bins):
+        bin_idx = int(k * (N//2) / num_bins) + 1
+        re = sum(samples[n] * math.cos(-2*math.pi*bin_idx*n/N) for n in range(0, N, 4)) * 4
+        im = sum(samples[n] * math.sin(-2*math.pi*bin_idx*n/N) for n in range(0, N, 4)) * 4
+        mag = math.sqrt(re*re + im*im) * 2.0 / N
+        if mag < 1e-10: mag = 1e-10
+        db = 20 * math.log10(mag)
+        magnitudes.append(db)
+    return magnitudes
+
+
+def draw_fft_view(fb, state, y_top, height):
+    """Draw FFT spectrum in a region"""
+    mags = compute_fft_spectrum(state)
+    ref_db = 0.0
+    range_db = 80.0
+
+    for x in range(LCD_WIDTH):
+        db = mags[x] if x < len(mags) else -200
+        normalized = (ref_db - db) / range_db
+        normalized = max(0.0, min(1.0, normalized))
+        bar_top = int(y_top + normalized * height)
+
+        if bar_top < y_top + height:
+            if normalized < 0.25: color = YELLOW
+            elif normalized < 0.5: color = GREEN
+            elif normalized < 0.75: color = CYAN
+            else: color = GRID_COLOR
+            for y in range(bar_top, y_top + height):
+                fb.pixel(x, y, color)
+
+    # Grid lines
+    for db_val in range(0, -80, -10):
+        norm = (ref_db - db_val) / range_db
+        y = int(y_top + norm * height)
+        if y_top < y < y_top + height:
+            for x in range(0, LCD_WIDTH, 4):
+                fb.pixel(x, y, GRID_COLOR)
+
+    # Labels
+    fb.text(4, y_top + 2, "1.0kHz Fund", WHITE, BLACK)
+    fb.text(LCD_WIDTH - 30, y_top + 2, WINDOW_NAMES[state.fft_window], GRAY, BLACK)
+
+
+def draw_fft_screen(fb, state):
+    fb.rect(0, 16, LCD_WIDTH, LCD_HEIGHT - 30, BLACK)
+    draw_fft_view(fb, state, 18, LCD_HEIGHT - 34)
+
+    # Info bar
+    fb.rect(0, LCD_HEIGHT - 14, LCD_WIDTH, 14, DARK_GRAY)
+    fb.text(4, LCD_HEIGHT - 11, "FFT 4096pt", YELLOW, DARK_GRAY)
+    fb.text(100, LCD_HEIGHT - 11, WINDOW_NAMES[state.fft_window], GREEN, DARK_GRAY)
+    fb.text(160, LCD_HEIGHT - 11, "PRM:View", GRAY, DARK_GRAY)
+    fb.text(240, LCD_HEIGHT - 11, "SEL:Win", GRAY, DARK_GRAY)
+
+
+def draw_split_screen(fb, state):
+    fb.rect(0, 16, LCD_WIDTH, LCD_HEIGHT - 30, BLACK)
+
+    # Top half: scope waveform (simplified)
+    y_center = 68
+    phase = state.frame * 0.08
+    for x in range(LCD_WIDTH):
+        y = int(y_center - 25 * math.sin((x / LCD_WIDTH) * math.pi * 8 + phase))
+        if 18 <= y < 118:
+            fb.pixel(x, y, YELLOW)
+    # Center line
+    fb.hline(0, y_center, LCD_WIDTH, GRID_CTR)
+    # Divider
+    fb.hline(0, 120, LCD_WIDTH, GRID_CTR)
+
+    # Bottom half: FFT
+    draw_fft_view(fb, state, 122, 100)
+
+    # Info bar
+    fb.rect(0, LCD_HEIGHT - 14, LCD_WIDTH, 14, DARK_GRAY)
+    fb.text(4, LCD_HEIGHT - 11, "SPLIT", YELLOW, DARK_GRAY)
+    fb.text(60, LCD_HEIGHT - 11, WINDOW_NAMES[state.fft_window], GREEN, DARK_GRAY)
+
+
+def intensity_to_rgb565(intensity):
+    """Heatmap: strong(0)=red, weak(255)=blue"""
+    inv = 255 - intensity
+    if inv > 204: return RED
+    if inv > 153: return 0xFBE0  # orange-yellow
+    if inv > 102: return GREEN
+    if inv > 51: return CYAN
+    return BLUE
+
+
+def draw_waterfall_screen(fb, state):
+    fb.rect(0, 16, LCD_WIDTH, LCD_HEIGHT - 30, BLACK)
+
+    mags = compute_fft_spectrum(state)
+
+    # Convert to intensity row
+    row = []
+    for x in range(LCD_WIDTH):
+        db = mags[x] if x < len(mags) else -200
+        normalized = max(0.0, min(1.0, -db / 80.0))
+        row.append(int(normalized * 255))
+
+    state.waterfall_history.insert(0, row)
+    if len(state.waterfall_history) > 64:
+        state.waterfall_history = state.waterfall_history[:64]
+
+    # Render rows
+    row_height = 3
+    for r, hist_row in enumerate(state.waterfall_history):
+        y = 18 + r * row_height
+        if y + row_height > LCD_HEIGHT - 16:
+            break
+        for x in range(min(LCD_WIDTH, len(hist_row))):
+            color = intensity_to_rgb565(hist_row[x])
+            for dy in range(row_height):
+                fb.pixel(x, y + dy, color)
+
+    fb.text(4, 18, "WFALL", WHITE, BLACK)
+
+    # Info bar
+    fb.rect(0, LCD_HEIGHT - 14, LCD_WIDTH, 14, DARK_GRAY)
+    fb.text(4, LCD_HEIGHT - 11, "WATERFALL", YELLOW, DARK_GRAY)
+    fb.text(120, LCD_HEIGHT - 11, WINDOW_NAMES[state.fft_window], GREEN, DARK_GRAY)
 
 
 def draw_meter(fb, state):
@@ -452,7 +613,14 @@ class FirmwareRenderer:
 
         # Draw current mode
         if self.state.mode == MODE_SCOPE:
-            draw_scope(self.fb, self.state)
+            if self.state.scope_view == VIEW_FFT:
+                draw_fft_screen(self.fb, self.state)
+            elif self.state.scope_view == VIEW_SPLIT:
+                draw_split_screen(self.fb, self.state)
+            elif self.state.scope_view == VIEW_WATERFALL:
+                draw_waterfall_screen(self.fb, self.state)
+            else:
+                draw_scope(self.fb, self.state)
         elif self.state.mode == MODE_METER:
             draw_meter(self.fb, self.state)
         elif self.state.mode == MODE_SIGGEN:
