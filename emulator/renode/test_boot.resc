@@ -1,0 +1,35 @@
+mach create "test"
+machine LoadPlatformDescription @gd32f307_2c53t.repl
+
+sysbus Unregister exmcBank0
+machine PyDevFromFile @st7789v_peripheral.py 0x60000000 0x100000 True "lcd"
+
+sysbus LoadBinary @../../firmware/build/firmware.bin 0x08000000
+cpu VectorTableOffset 0x08000000
+sysbus Tag <0xA0000000, 0xA0000107> "EXMC" 0x00000001
+
+logLevel 3
+cpu PerformanceInMips 100
+
+# Skip startup — jump to main directly
+cpu PC 0x08000f28
+cpu SP 0x20040000
+
+# Step small amounts and write PC to a file
+python "f = open('/tmp/renode_trace.txt', 'w')"
+python "f.write('Before stepping\\n'); f.flush()"
+
+cpu Step 10
+python "f.write('After 10 steps, PC=0x%X\\n' % cpu.PC); f.flush()"
+
+cpu Step 100
+python "f.write('After 110 steps, PC=0x%X\\n' % cpu.PC); f.flush()"
+
+cpu Step 1000
+python "f.write('After 1110 steps, PC=0x%X\\n' % cpu.PC); f.flush()"
+
+cpu Step 10000
+python "f.write('After 11110 steps, PC=0x%X\\n' % cpu.PC); f.flush()"
+
+python "f.write('Done\\n'); f.close()"
+quit

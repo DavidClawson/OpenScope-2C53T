@@ -380,8 +380,8 @@ int main(void)
     lcd_fsmc_init();
     lcd_init();
 
-#ifdef FEATURE_FFT
-    /* Initialize FFT engine */
+#if defined(FEATURE_FFT) && !defined(EMULATOR_BUILD)
+    /* Initialize FFT engine (skipped in emulator — trig functions too slow) */
     {
         fft_config_t fft_cfg;
         fft_cfg.window         = FFT_WINDOW_HANNING;
@@ -397,7 +397,8 @@ int main(void)
     }
 #endif
 
-    /* Initialize signal generator */
+#ifndef EMULATOR_BUILD
+    /* Initialize signal generator (skipped in emulator) */
     {
         siggen_config_t sg_cfg;
         sg_cfg.waveform      = SIGGEN_SINE;
@@ -407,6 +408,7 @@ int main(void)
         sg_cfg.output_enabled = false;
         siggen_init(&sg_cfg);
     }
+#endif
 
     /* Configure button GPIOs as inputs with pull-up */
     gpio_init(GPIOC, GPIO_MODE_IPU, GPIO_OSPEED_50MHZ,
