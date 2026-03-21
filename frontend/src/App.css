@@ -1,0 +1,220 @@
+* {
+  margin: 0;
+  padding: 0;
+  box-sizing: border-box;
+}
+
+body {
+  background: #1a1a2e;
+  color: #e0e0e0;
+  font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+}
+
+.app {
+  min-height: 100vh;
+  display: flex;
+  flex-direction: column;
+}
+
+/* Toolbar */
+.toolbar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 12px 20px;
+  background: #16213e;
+  border-bottom: 1px solid #2a2a4a;
+}
+
+.toolbar h1 {
+  font-size: 18px;
+  font-weight: 600;
+  color: #4fc3f7;
+}
+
+.toolbar-controls {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+
+.hotspot-toggle {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 13px;
+  color: #888;
+  cursor: pointer;
+  user-select: none;
+}
+
+.ws-input {
+  background: #0f0f23;
+  border: 1px solid #333;
+  color: #ccc;
+  padding: 6px 10px;
+  border-radius: 4px;
+  font-size: 12px;
+  font-family: monospace;
+  width: 200px;
+}
+
+.connect-btn {
+  padding: 6px 16px;
+  border: 1px solid #4fc3f7;
+  background: transparent;
+  color: #4fc3f7;
+  border-radius: 4px;
+  cursor: pointer;
+  font-size: 13px;
+  transition: all 0.2s;
+}
+
+.connect-btn:hover {
+  background: #4fc3f722;
+}
+
+.connect-btn.connected {
+  background: #00c853;
+  border-color: #00c853;
+  color: #000;
+}
+
+/* Main content */
+.main-content {
+  display: flex;
+  flex: 1;
+  padding: 20px;
+  gap: 20px;
+  justify-content: center;
+}
+
+/* Device wrapper */
+.device-wrapper {
+  position: relative;
+  cursor: pointer;
+  flex-shrink: 0;
+  border-radius: 24px;
+  overflow: hidden;
+  box-shadow: 0 8px 32px rgba(0, 0, 0, 0.5);
+}
+
+.device-image {
+  width: 100%;
+  height: 100%;
+  display: block;
+  user-select: none;
+  -webkit-user-drag: none;
+}
+
+/* LCD overlay */
+.lcd-overlay {
+  position: absolute;
+  overflow: hidden;
+  border-radius: 2px;
+}
+
+.lcd-canvas {
+  width: 100%;
+  height: 100%;
+  display: block;
+  image-rendering: pixelated;
+}
+
+/* Button hotspots */
+.hotspot {
+  position: absolute;
+  border: 2px solid rgba(79, 195, 247, 0.6);
+  background: rgba(79, 195, 247, 0.1);
+  border-radius: 6px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  pointer-events: none;
+  transition: all 0.1s;
+}
+
+.hotspot-active {
+  background: rgba(79, 195, 247, 0.4) !important;
+  border-color: rgba(79, 195, 247, 1) !important;
+}
+
+.hotspot-flash {
+  background: rgba(255, 255, 255, 0.3);
+  border: 2px solid rgba(255, 255, 255, 0.6);
+  animation: flash 0.15s ease-out;
+}
+
+@keyframes flash {
+  0% { background: rgba(255, 255, 255, 0.5); }
+  100% { background: rgba(255, 255, 255, 0); }
+}
+
+.hotspot-label {
+  font-size: 9px;
+  font-weight: bold;
+  color: #4fc3f7;
+  text-shadow: 0 1px 2px rgba(0, 0, 0, 0.8);
+  user-select: none;
+}
+
+/* Log panel */
+.log-panel {
+  flex: 1;
+  max-width: 400px;
+  background: #0f0f23;
+  border: 1px solid #2a2a4a;
+  border-radius: 8px;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+}
+
+.log-panel h3 {
+  padding: 10px 14px;
+  font-size: 13px;
+  font-weight: 600;
+  color: #888;
+  border-bottom: 1px solid #2a2a4a;
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+}
+
+.log-content {
+  flex: 1;
+  overflow-y: auto;
+  padding: 8px;
+  font-family: 'SF Mono', 'Fira Code', monospace;
+  font-size: 11px;
+  line-height: 1.6;
+}
+
+.log-entry {
+  color: #7fdbca;
+  padding: 1px 6px;
+  border-radius: 2px;
+}
+
+.log-entry:hover {
+  background: rgba(127, 219, 202, 0.05);
+}
+
+.log-hint {
+  color: #555;
+  padding: 20px;
+  line-height: 2;
+}
+
+/* Scrollbar */
+.log-content::-webkit-scrollbar {
+  width: 6px;
+}
+
+.log-content::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+.log-content::-webkit-scrollbar-thumb {
+  background: #333;
+  border-radius: 3px;
+}
