@@ -4,7 +4,8 @@
  * A correct, windowed FFT with dB output, peak detection,
  * exponential moving average, and max hold envelope.
  * Uses only float math (hardware FPU on Cortex-M4F).
- * No external dependencies — sinf/cosf/sqrtf/log10f from libm.
+ * When USE_CMSIS_DSP is defined, uses ARM's arm_rfft_fast_f32().
+ * Otherwise falls back to custom radix-2 DIT. No other dependencies.
  *
  * Memory: ~88KB static (.bss), no heap allocation.
  */
@@ -12,6 +13,11 @@
 #include "fft.h"
 #include <math.h>
 #include <string.h>
+
+#ifdef USE_CMSIS_DSP
+#include "arm_math.h"
+static arm_rfft_fast_instance_f32 fft_instance;
+#endif
 
 #ifndef M_PI
 #define M_PI 3.14159265358979323846f
@@ -27,11 +33,18 @@
  * Static buffers (~88KB total in .bss)
  * ═══════════════════════════════════════════════════════════════════ */
 
-/* Interleaved real/imaginary for in-place FFT */
+#ifdef USE_CMSIS_DSP
+/* CMSIS-DSP: real input + complex output */
+static float fft_input[FFT_SIZE];            /* 16KB */
+static float fft_cmsis_output[FFT_SIZE];     /* 16KB */
+#else
+/* Custom radix-2: interleaved complex buffer + twiddle tables */
 static float fft_buf[FFT_SIZE * 2];          /* 32KB */
-static float window_coeffs[FFT_SIZE];        /* 16KB */
 static float twiddle_re[FFT_SIZE / 2];       /*  8KB */
 static float twiddle_im[FFT_SIZE / 2];       /*  8KB */
+#endif
+
+static float window_coeffs[FFT_SIZE];        /* 16KB */
 
 /* Output buffers (pointed to by fft_result_t) */
 static float magnitude_buf[FFT_BINS];        /*  8KB */
@@ -82,8 +95,9 @@ static void compute_window(fft_window_t type)
     }
 }
 
+#ifndef USE_CMSIS_DSP
 /* ═══════════════════════════════════════════════════════════════════
- * Twiddle factor precomputation
+ * Twiddle factor precomputation (radix-2 fallback only)
  * ═══════════════════════════════════════════════════════════════════ */
 
 static void compute_twiddles(void)
@@ -174,6 +188,7 @@ static void radix2_fft(void)
         }
     }
 }
+#endif /* !USE_CMSIS_DSP */
 
 /* ═══════════════════════════════════════════════════════════════════
  * Peak detection
@@ -238,7 +253,11 @@ void fft_init(const fft_config_t *cfg)
         current_cfg.zoom_end_bin = FFT_BINS - 1;
 
     compute_window(cfg->window);
+#ifdef USE_CMSIS_DSP
+    arm_rfft_fast_init_f32(&fft_instance, FFT_SIZE);
+#else
     compute_twiddles();
+#endif
 
     /* Initialize averaging and max hold buffers */
     uint16_t i;
@@ -259,6 +278,46 @@ void fft_process(const int16_t *samples, uint16_t num_samples,
     uint16_t i;
     uint16_t count = (num_samples < FFT_SIZE) ? num_samples : FFT_SIZE;
 
+    result->num_bins = FFT_BINS;
+    result->bin_width_hz = current_cfg.sample_rate_hz / (float)FFT_SIZE;
+
+#ifdef USE_CMSIS_DSP
+    /* ── CMSIS-DSP path ── */
+
+    /* Step 1: Window the real-valued input */
+    for (i = 0; i < count; i++)
+        fft_input[i] = (float)samples[i] * window_coeffs[i];
+    for (i = count; i < FFT_SIZE; i++)
+        fft_input[i] = 0.0f;
+
+    /* Step 2: Real FFT */
+    arm_rfft_fast_f32(&fft_instance, fft_input, fft_cmsis_output, 0);
+
+    /* Step 3: Magnitude in dB.
+     * arm_rfft_fast_f32 packs DC and Nyquist in first two elements:
+     *   output[0] = DC real, output[1] = Nyquist real */
+    float scale = 2.0f / (float)FFT_SIZE;
+
+    arm_cmplx_mag_f32(&fft_cmsis_output[2], &magnitude_buf[1], FFT_BINS - 1);
+    arm_scale_f32(&magnitude_buf[1], scale, &magnitude_buf[1], FFT_BINS - 1);
+
+    /* DC bin (no 2x factor) */
+    {
+        float dc_mag = fabsf(fft_cmsis_output[0]) / (float)FFT_SIZE;
+        if (dc_mag < FFT_FLOOR) dc_mag = FFT_FLOOR;
+        magnitude_buf[0] = 20.0f * log10f(dc_mag);
+    }
+
+    /* Convert bins 1..N/2-1 to dB */
+    for (i = 1; i < FFT_BINS; i++) {
+        if (magnitude_buf[i] < FFT_FLOOR)
+            magnitude_buf[i] = FFT_FLOOR;
+        magnitude_buf[i] = 20.0f * log10f(magnitude_buf[i]);
+    }
+
+#else
+    /* ── Custom radix-2 fallback ── */
+
     /* Step 1: Convert int16 to float, apply window, load into complex buffer */
     for (i = 0; i < count; i++) {
         fft_buf[i * 2]     = (float)samples[i] * window_coeffs[i];
@@ -276,8 +335,6 @@ void fft_process(const int16_t *samples, uint16_t num_samples,
 
     /* Step 3: Compute magnitude in dB for positive frequencies */
     float scale = 2.0f / (float)FFT_SIZE;
-    result->num_bins = FFT_BINS;
-    result->bin_width_hz = current_cfg.sample_rate_hz / (float)FFT_SIZE;
 
     for (i = 0; i < FFT_BINS; i++) {
         float re = fft_buf[i * 2];
@@ -298,6 +355,7 @@ void fft_process(const int16_t *samples, uint16_t num_samples,
         if (mag < FFT_FLOOR) mag = FFT_FLOOR;
         magnitude_buf[0] = 20.0f * log10f(mag);
     }
+#endif /* USE_CMSIS_DSP */
 
     result->magnitude_db = magnitude_buf;
 

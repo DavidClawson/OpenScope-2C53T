@@ -44,6 +44,21 @@ ifneq ($(findstring FFT,$(FEATURES)),)
   C_SOURCES += src/dsp/fft.c
   C_SOURCES += src/dsp/fft_test_signals.c
   FFT_DEFS = -DFEATURE_FFT
+  # CMSIS-DSP (optional optimization — auto-detected)
+  CMSIS_DSP = CMSIS-DSP
+  ifneq ($(wildcard $(CMSIS_DSP)/Include/arm_math.h),)
+    C_SOURCES += $(CMSIS_DSP)/Source/TransformFunctions/arm_rfft_fast_f32.c
+    C_SOURCES += $(CMSIS_DSP)/Source/TransformFunctions/arm_rfft_fast_init_f32.c
+    C_SOURCES += $(CMSIS_DSP)/Source/TransformFunctions/arm_cfft_f32.c
+    C_SOURCES += $(CMSIS_DSP)/Source/TransformFunctions/arm_cfft_init_f32.c
+    C_SOURCES += $(CMSIS_DSP)/Source/CommonTables/arm_common_tables.c
+    C_SOURCES += $(CMSIS_DSP)/Source/CommonTables/arm_const_structs.c
+    C_SOURCES += $(CMSIS_DSP)/Source/TransformFunctions/arm_cfft_radix8_f32.c
+    C_SOURCES += $(CMSIS_DSP)/Source/ComplexMathFunctions/arm_cmplx_mag_f32.c
+    C_SOURCES += $(CMSIS_DSP)/Source/BasicMathFunctions/arm_scale_f32.c
+    FFT_INCLUDES = -I$(CMSIS_DSP)/Include
+    FFT_DEFS += -DUSE_CMSIS_DSP -DARM_MATH_CM4 -D__FPU_PRESENT=1
+  endif
 endif
 
 # GD32 CMSIS
@@ -66,6 +81,11 @@ C_SOURCES += $(FREERTOS)/portable/MemMang/heap_4.c
 
 # Startup assembly (GD32F30x connectivity line - GCC variant)
 ASM_SOURCES = $(GD32_CMSIS)/GD/GD32F30x/Source/GCC/startup_gd32f30x_cl.S
+
+# CMSIS-DSP assembly (bit-reversal)
+ifneq ($(wildcard CMSIS-DSP/Include/arm_math.h),)
+  ASM_SOURCES += CMSIS-DSP/Source/TransformFunctions/arm_bitreversal2.S
+endif
 
 ######################################################################
 # Include paths
@@ -95,6 +115,7 @@ MCU = $(CPU) -mthumb $(FPU) $(FLOAT-ABI)
 C_DEFS  = -DGD32F30X_CL
 C_DEFS += -DUSE_STDPERIPH_DRIVER
 C_DEFS += $(FFT_DEFS)
+C_INCLUDES += $(FFT_INCLUDES)
 
 # Compiler flags
 CFLAGS  = $(MCU) $(C_DEFS) $(C_INCLUDES)
