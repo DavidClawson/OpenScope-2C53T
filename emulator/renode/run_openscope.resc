@@ -1,0 +1,60 @@
+# OpenScope 2C53T - Custom Firmware Emulation
+# Runs the custom FreeRTOS-based firmware in Renode
+#
+# Usage: renode --disable-gui run_openscope.resc
+
+mach create "OpenScope_2C53T"
+machine LoadPlatformDescription @gd32f307_2c53t.repl
+
+# Load custom firmware (built with 'make emu')
+sysbus LoadBinary @../../firmware/build/firmware.bin 0x08000000
+cpu VectorTableOffset 0x08000000
+
+# --- Clock system: all oscillators ready, PLL locked ---
+sysbus Tag <0x40021000, 0x40021003> "RCU_CTL" 0x0F0F0003
+sysbus Tag <0x40021004, 0x40021007> "RCU_CFG0" 0x001D840A
+sysbus Tag <0x40021008, 0x4002100B> "RCU_INT" 0x00000000
+sysbus Tag <0x40021014, 0x40021017> "RCU_AHBEN" 0x00000114
+sysbus Tag <0x40021018, 0x4002101B> "RCU_APB2EN" 0x0000FFFD
+sysbus Tag <0x4002101C, 0x4002101F> "RCU_APB1EN" 0x3FFFFFFF
+
+# --- PMU: voltage stable ---
+sysbus Tag <0x40007000, 0x40007003> "PMU_CTL" 0x00000000
+sysbus Tag <0x40007004, 0x40007007> "PMU_CS" 0x00070000
+
+# --- Flash: wait states configured ---
+sysbus Tag <0x40022000, 0x40022003> "FMC_WS" 0x00000032
+
+# --- EXMC: LCD controller registers ---
+sysbus Tag <0xA0000000, 0xA0000107> "EXMC_REGS" 0x00000001
+
+# --- LCD memory-mapped region (writes go here for display) ---
+sysbus Tag <0x60000000, 0x6003FFFF> "LCD_MEM" 0x0000
+
+# --- Skip spurious interrupts (Default_Handler = infinite loop) ---
+# In emulator, peripheral interrupts may fire unexpectedly.
+# Hook the default handler to return instead of hanging.
+set skip_default_irq
+"""
+from Antmicro.Renode.Peripherals.CPU import RegisterValue
+cpu.SetRegister(15, RegisterValue.Create(cpu.GetRegister(14).RawValue, 32))
+"""
+# Address of Default_Handler (from firmware .map)
+cpu AddHook 0x08005568 $skip_default_irq
+
+# --- Logging ---
+logLevel 3
+
+# --- Monitoring hooks (optional) ---
+set scheduler_hook
+"""
+cpu.InfoLog("[RTOS] FreeRTOS scheduler started")
+"""
+
+set splash_hook
+"""
+cpu.InfoLog("[UI] Splash screen displayed")
+"""
+
+# Start emulation
+start

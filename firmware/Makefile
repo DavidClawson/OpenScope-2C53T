@@ -193,13 +193,13 @@ emu: CFLAGS += -DEMULATOR_BUILD
 emu: C_SOURCES := $(filter-out %$(EMU_EXCLUDE),$(C_SOURCES))
 emu: clean all
 
-# Flash via Renode emulator (for testing)
-renode: $(BUILD_DIR)/$(TARGET).bin
-	/Applications/Renode.app/Contents/MacOS/renode --disable-gui -e \
-		"mach create; \
-		machine LoadPlatformDescription @../../emulator/renode/gd32f307_2c53t.repl; \
-		sysbus LoadBinary @$< 0x08000000; \
-		cpu VectorTableOffset 0x08000000; \
-		start; sleep 3; quit"
+# Run in Renode emulator (interactive)
+renode: emu
+	cd ../emulator/renode && /Applications/Renode.app/Contents/MacOS/renode --disable-gui run_openscope.resc
+
+# Run in Renode for quick smoke test (5 seconds, then quit)
+renode-test: emu
+	cd ../emulator/renode && /Applications/Renode.app/Contents/MacOS/renode --disable-gui --console -e \
+		"include @run_openscope.resc; sleep 5; pause; cpu PC; quit"
 
 .PHONY: all clean disasm size renode
