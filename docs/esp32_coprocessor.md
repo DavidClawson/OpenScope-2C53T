@@ -129,10 +129,32 @@ ESP32 advertises as `openscope.local` via mDNS/Bonjour. Works great on iPhone, M
 #### Strategy 6: SSDP/UPnP (STA mode — Android-friendly)
 ESP32 advertises via UPnP, which Android supports better than mDNS. A "Find My Scope" button in the PWA sends a SSDP M-SEARCH and finds the device on the local network.
 
+#### Strategy 7: QR Code on LCD (STA mode — best UX)
+User presses MENU → WiFi → "Show QR Code". The scope renders a QR code on the 320x240 LCD containing the URL:
+```
+QR data: "http://192.168.1.42"
+```
+User points phone camera at the scope screen → "Open in browser" → done.
+
+This is the **best strategy for STA mode** because:
+- Works on literally every phone made in the last 6 years
+- No app, no typing, no BLE pairing, no mDNS
+- The camera app handles it — nothing to install
+- Takes 2 seconds: press button, point camera, tap notification
+- Also works for sharing: "scan my scope to see what I'm looking at"
+
+The QR code can also encode WiFi credentials for AP mode:
+```
+QR data: "WIFI:T:WPA;S:OpenScope-A3F2;P:openscope;;"
+```
+Android/iOS will auto-connect to the scope's WiFi when scanned. No typing the password either.
+
+**QR code rendering** is simple — a QR code at version 2 (25×25 modules) fits a short URL easily. At 320×240, each QR module can be 8×8 pixels (200×200 total) with room for labels. A minimal QR encoder is ~200 lines of C with no dependencies.
+
 #### Recommendation:
-- **AP mode:** captive portal + fixed IP = 100% reliable, zero setup
-- **STA mode:** show IP on LCD + BLE discovery = works on every phone
-- **Bonus:** mDNS for Apple users, SSDP for Android power users
+- **AP mode:** captive portal auto-opens (zero setup) + QR code for WiFi credentials
+- **STA mode:** QR code on LCD (2-second connection) + IP on status bar as fallback
+- **Bonus:** mDNS for Apple users, BLE for PWA auto-discovery
 
 ### 2. Web Server
 
