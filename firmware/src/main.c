@@ -18,6 +18,7 @@
 /* Include our drivers and UI */
 #include "lcd.h"
 #include "ui.h"
+#include "signal_gen.h"
 
 /* ═══════════════════════════════════════════════════════════════════
  * Global State (extern'd via ui.h for UI modules)
@@ -212,9 +213,14 @@ static void vInputTask(void *pvParameters)
                         fft_cycle_window();
                         cmd = DCMD_REDRAW_ALL;
                         xQueueSend(xDisplayQueue, &cmd, 0);
+                    } else
+#endif
+                    if (current_mode == MODE_SIGNAL_GEN) {
+                        siggen_cycle_waveform();
+                        cmd = DCMD_REDRAW_ALL;
+                        xQueueSend(xDisplayQueue, &cmd, 0);
                     }
                     break;
-#endif
 
                 case BTN_UP:
 #ifdef FEATURE_FFT
@@ -226,11 +232,26 @@ static void vInputTask(void *pvParameters)
                         break;
                     }
 #endif
-                    /* FALLTHROUGH */
+                    if (current_mode == MODE_SIGNAL_GEN) {
+                        const siggen_config_t *sc = siggen_get_config();
+                        float f = sc->frequency_hz;
+                        if (f < 10.0f) f = 10.0f;
+                        else if (f < 100.0f) f = 100.0f;
+                        else if (f < 1000.0f) f = 1000.0f;
+                        else if (f < 10000.0f) f = 10000.0f;
+                        else f = 25000.0f;
+                        siggen_set_frequency(f);
+                        cmd = DCMD_REDRAW_ALL;
+                        xQueueSend(xDisplayQueue, &cmd, 0);
+                        break;
+                    }
+                    cmd = DCMD_DRAW_SCOPE + (uint8_t)current_mode;
+                    xQueueSend(xDisplayQueue, &cmd, 0);
+                    break;
+
                 case BTN_DOWN:
 #ifdef FEATURE_FFT
-                    if (pressed == BTN_DOWN &&
-                        current_mode == MODE_OSCILLOSCOPE &&
+                    if (current_mode == MODE_OSCILLOSCOPE &&
                         scope_view != SCOPE_VIEW_TIME) {
                         fft_adjust_ref_level(-5.0f);
                         cmd = DCMD_REDRAW_ALL;
@@ -238,11 +259,26 @@ static void vInputTask(void *pvParameters)
                         break;
                     }
 #endif
-                    /* FALLTHROUGH */
+                    if (current_mode == MODE_SIGNAL_GEN) {
+                        const siggen_config_t *sc = siggen_get_config();
+                        float f = sc->frequency_hz;
+                        if (f > 10000.0f) f = 10000.0f;
+                        else if (f > 1000.0f) f = 1000.0f;
+                        else if (f > 100.0f) f = 100.0f;
+                        else if (f > 10.0f) f = 10.0f;
+                        else f = 1.0f;
+                        siggen_set_frequency(f);
+                        cmd = DCMD_REDRAW_ALL;
+                        xQueueSend(xDisplayQueue, &cmd, 0);
+                        break;
+                    }
+                    cmd = DCMD_DRAW_SCOPE + (uint8_t)current_mode;
+                    xQueueSend(xDisplayQueue, &cmd, 0);
+                    break;
+
                 case BTN_LEFT:
 #ifdef FEATURE_FFT
-                    if (pressed == BTN_LEFT &&
-                        current_mode == MODE_OSCILLOSCOPE &&
+                    if (current_mode == MODE_OSCILLOSCOPE &&
                         scope_view != SCOPE_VIEW_TIME) {
                         fft_zoom_in();
                         cmd = DCMD_REDRAW_ALL;
@@ -250,11 +286,13 @@ static void vInputTask(void *pvParameters)
                         break;
                     }
 #endif
-                    /* FALLTHROUGH */
+                    cmd = DCMD_DRAW_SCOPE + (uint8_t)current_mode;
+                    xQueueSend(xDisplayQueue, &cmd, 0);
+                    break;
+
                 case BTN_RIGHT:
 #ifdef FEATURE_FFT
-                    if (pressed == BTN_RIGHT &&
-                        current_mode == MODE_OSCILLOSCOPE &&
+                    if (current_mode == MODE_OSCILLOSCOPE &&
                         scope_view != SCOPE_VIEW_TIME) {
                         fft_zoom_out();
                         cmd = DCMD_REDRAW_ALL;
@@ -262,10 +300,20 @@ static void vInputTask(void *pvParameters)
                         break;
                     }
 #endif
-                    /* FALLTHROUGH */
-                case BTN_OK:
                     cmd = DCMD_DRAW_SCOPE + (uint8_t)current_mode;
                     xQueueSend(xDisplayQueue, &cmd, 0);
+                    break;
+
+                case BTN_OK:
+                    if (current_mode == MODE_SIGNAL_GEN) {
+                        const siggen_config_t *sc = siggen_get_config();
+                        siggen_enable(!sc->output_enabled);
+                        cmd = DCMD_REDRAW_ALL;
+                        xQueueSend(xDisplayQueue, &cmd, 0);
+                    } else {
+                        cmd = DCMD_DRAW_SCOPE + (uint8_t)current_mode;
+                        xQueueSend(xDisplayQueue, &cmd, 0);
+                    }
                     break;
 
                 default:
@@ -335,6 +383,17 @@ int main(void)
         fft_init(&fft_cfg);
     }
 #endif
+
+    /* Initialize signal generator */
+    {
+        siggen_config_t sg_cfg;
+        sg_cfg.waveform      = SIGGEN_SINE;
+        sg_cfg.frequency_hz  = 1000.0f;
+        sg_cfg.amplitude_vpp = 3.3f;
+        sg_cfg.offset_v      = 0.0f;
+        sg_cfg.output_enabled = false;
+        siggen_init(&sg_cfg);
+    }
 
     /* Configure button GPIOs as inputs with pull-up */
     gpio_init(GPIOC, GPIO_MODE_IPU, GPIO_OSPEED_50MHZ,

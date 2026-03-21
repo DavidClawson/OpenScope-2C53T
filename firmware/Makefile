@@ -35,6 +35,9 @@ C_SOURCES += src/ui/scope_ui.c
 C_SOURCES += src/ui/meter_ui.c
 C_SOURCES += src/ui/siggen_ui.c
 C_SOURCES += src/ui/settings_ui.c
+C_SOURCES += src/tasks/measurement.c
+C_SOURCES += src/drivers/flash_fs.c
+C_SOURCES += src/dsp/signal_gen.c
 
 # FFT / DSP module
 ifneq ($(findstring FFT,$(FEATURES)),)
@@ -71,6 +74,7 @@ C_INCLUDES  = -Iinclude
 C_INCLUDES += -Isrc/drivers
 C_INCLUDES += -Isrc/dsp
 C_INCLUDES += -Isrc/ui
+C_INCLUDES += -Isrc/tasks
 C_INCLUDES += -I$(GD32_CMSIS)
 C_INCLUDES += -I$(GD32_CMSIS)/GD/GD32F30x/Include
 C_INCLUDES += -I$(GD32_STD)/Include
