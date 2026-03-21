@@ -30,6 +30,11 @@ FEATURES ?= FFT
 # Application
 C_SOURCES  = src/main.c
 C_SOURCES += src/drivers/lcd.c
+C_SOURCES += src/ui/status_bar.c
+C_SOURCES += src/ui/scope_ui.c
+C_SOURCES += src/ui/meter_ui.c
+C_SOURCES += src/ui/siggen_ui.c
+C_SOURCES += src/ui/settings_ui.c
 
 # FFT / DSP module
 ifneq ($(findstring FFT,$(FEATURES)),)
@@ -65,6 +70,7 @@ ASM_SOURCES = $(GD32_CMSIS)/GD/GD32F30x/Source/GCC/startup_gd32f30x_cl.S
 C_INCLUDES  = -Iinclude
 C_INCLUDES += -Isrc/drivers
 C_INCLUDES += -Isrc/dsp
+C_INCLUDES += -Isrc/ui
 C_INCLUDES += -I$(GD32_CMSIS)
 C_INCLUDES += -I$(GD32_CMSIS)/GD/GD32F30x/Include
 C_INCLUDES += -I$(GD32_STD)/Include
