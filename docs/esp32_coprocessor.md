@@ -60,18 +60,79 @@ Baud: 115200 (or 921600 for framebuffer streaming)
 
 ## ESP32 Firmware Responsibilities
 
-### 1. WiFi Access Point
+### 1. WiFi — Dual Mode (AP + Station)
 
-On first boot, the ESP32 creates a WiFi AP:
+**The problem with AP-only:** When the phone connects to the ESP32's AP, it loses internet. Android shows "no internet" warnings and may auto-disconnect. This is terrible UX.
+
+**The solution:** Use AP mode only for initial setup. Normal operation uses station mode (ESP32 joins the user's existing WiFi). The ESP32 can run both modes simultaneously.
+
+#### First boot (no WiFi configured):
 ```
-SSID: OpenScope-XXXX (last 4 of MAC)
-Password: openscope (or open network for easy setup)
-IP: 192.168.4.1
+ESP32 creates AP: "OpenScope-XXXX" (last 4 of MAC)
+Phone connects → captive portal auto-opens
+User sees: "Welcome to OpenScope! Enter your WiFi:"
+  SSID: [HomeWiFi________]
+  Pass: [••••••••________]
+  [Connect]
+ESP32 saves credentials → joins home WiFi → shows IP address
 ```
 
-User connects phone/laptop to this AP, opens browser to `http://192.168.4.1`.
+#### Normal operation (WiFi configured):
+```
+ESP32 auto-joins home WiFi on boot (e.g., 192.168.1.42)
+Phone stays on home WiFi — keeps internet!
+Phone opens scope UI — both on same network, full speed
+ESP32 has internet for module downloads + OTA updates
+```
 
-Optional: ESP32 can also connect to home WiFi as a client (configured via the web UI) for internet access (OTA updates, module downloads from GitHub).
+#### Field/garage use (no WiFi available):
+```
+ESP32 falls back to AP mode: "OpenScope-XXXX"
+Phone connects directly — no internet, but scope works fine
+Framebuffer streaming, buttons, measurements all work locally
+Module store shows "connect to WiFi for downloads"
+```
+
+The ESP32 supports AP+STA dual mode natively (2 lines of config). It always runs the AP as a fallback even when connected to home WiFi.
+
+### 2. Device Discovery (Android mDNS Workarounds)
+
+**The problem with mDNS:** Apple devices handle `openscope.local` perfectly. Android is unreliable — `.local` resolution is broken on many devices, especially Samsung, older Android (<12), and some carrier-customized ROMs. It silently fails with no error.
+
+**Multi-strategy discovery (most reliable first):**
+
+#### Strategy 1: Captive Portal (AP mode — most reliable)
+When phone connects to the ESP32's AP, Android/iOS auto-opens a captive portal browser window. We serve the scope UI directly in this portal. Zero URL typing, works on every phone.
+
+#### Strategy 2: Fixed AP IP (AP mode — foolproof)
+AP mode always uses `192.168.4.1`. User bookmarks it once. Works everywhere, no discovery needed.
+
+#### Strategy 3: LCD Status Bar (STA mode — visual)
+The scope displays the ESP32's current IP on the LCD status bar:
+```
+OpenScope  SCOPE  WiFi:192.168.1.42  00:42  2C53T
+```
+User just types what they see. Simple, always works.
+
+#### Strategy 4: BLE Discovery Assist (STA mode — automatic)
+ESP32 advertises a BLE beacon containing its current IP:
+```
+BLE Advertising Data:
+  Name: "OpenScope-A3F2"
+  Service Data: "192.168.1.42:80"
+```
+The PWA (once installed) can scan BLE to find the scope and auto-open the right URL. BLE works universally on both iOS and Android. This is just for discovery — all actual data goes over WiFi.
+
+#### Strategy 5: mDNS (STA mode — works on Apple + newer Android)
+ESP32 advertises as `openscope.local` via mDNS/Bonjour. Works great on iPhone, Mac, and Android 12+. Not relied upon as primary — it's a convenience for Apple users.
+
+#### Strategy 6: SSDP/UPnP (STA mode — Android-friendly)
+ESP32 advertises via UPnP, which Android supports better than mDNS. A "Find My Scope" button in the PWA sends a SSDP M-SEARCH and finds the device on the local network.
+
+#### Recommendation:
+- **AP mode:** captive portal + fixed IP = 100% reliable, zero setup
+- **STA mode:** show IP on LCD + BLE discovery = works on every phone
+- **Bonus:** mDNS for Apple users, SSDP for Android power users
 
 ### 2. Web Server
 
