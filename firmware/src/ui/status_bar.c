@@ -40,14 +40,17 @@ void draw_info_bar(void)
     case MODE_OSCILLOSCOPE:
 #ifdef FEATURE_FFT
         if (scope_view == SCOPE_VIEW_FFT) {
-            const char *win_names[] = { "Rect", "Hann", "Hamm" };
+            const char *win_names[] = { "Rect", "Hann", "Hamm", "BHar", "Flat" };
             const fft_config_t *cfg = fft_get_config();
-            lcd_draw_string(4, LCD_HEIGHT - 15, "FFT 1024pt", COLOR_YELLOW, COLOR_DARK_GRAY);
+            lcd_draw_string(4, LCD_HEIGHT - 15, "FFT 4096pt", COLOR_YELLOW, COLOR_DARK_GRAY);
             lcd_draw_string(100, LCD_HEIGHT - 15,
                             (cfg->window < FFT_WINDOW_COUNT) ? win_names[cfg->window] : "?",
                             COLOR_GREEN, COLOR_DARK_GRAY);
-            lcd_draw_string(160, LCD_HEIGHT - 15, "PRM:Exit", COLOR_GRAY, COLOR_DARK_GRAY);
-            lcd_draw_string(240, LCD_HEIGHT - 15, "SEL:Win", COLOR_GRAY, COLOR_DARK_GRAY);
+            if (cfg->avg_count > 0)
+                lcd_draw_string(148, LCD_HEIGHT - 15, "AVG", COLOR_CYAN, COLOR_DARK_GRAY);
+            if (cfg->max_hold)
+                lcd_draw_string(184, LCD_HEIGHT - 15, "MH", COLOR_RED, COLOR_DARK_GRAY);
+            lcd_draw_string(220, LCD_HEIGHT - 15, "PRM:View", COLOR_GRAY, COLOR_DARK_GRAY);
         } else
 #endif
         {

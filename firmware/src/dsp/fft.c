@@ -1,11 +1,12 @@
 /*
- * FFT Engine - Phase 1: Custom Radix-2 DIT
+ * FFT Engine - Phase 2: 4096-point with averaging and max hold
  *
- * A correct, windowed FFT with dB output and peak detection.
+ * A correct, windowed FFT with dB output, peak detection,
+ * exponential moving average, and max hold envelope.
  * Uses only float math (hardware FPU on Cortex-M4F).
  * No external dependencies — sinf/cosf/sqrtf/log10f from libm.
  *
- * Memory: ~14KB static (.bss), no heap allocation.
+ * Memory: ~88KB static (.bss), no heap allocation.
  */
 
 #include "fft.h"
@@ -23,18 +24,24 @@
 #define FFT_PEAK_THRESHOLD_DB (-60.0f)
 
 /* ═══════════════════════════════════════════════════════════════════
- * Static buffers (14KB total in .bss)
+ * Static buffers (~88KB total in .bss)
  * ═══════════════════════════════════════════════════════════════════ */
 
 /* Interleaved real/imaginary for in-place FFT */
-static float fft_buf[FFT_SIZE * 2];          /* 8KB: complex pairs */
-static float window_coeffs[FFT_SIZE];        /* 4KB: precomputed window */
-static float twiddle_re[FFT_SIZE / 2];       /* 2KB: cos table */
-static float twiddle_im[FFT_SIZE / 2];       /* 2KB: sin table */
+static float fft_buf[FFT_SIZE * 2];          /* 32KB */
+static float window_coeffs[FFT_SIZE];        /* 16KB */
+static float twiddle_re[FFT_SIZE / 2];       /*  8KB */
+static float twiddle_im[FFT_SIZE / 2];       /*  8KB */
+
+/* Output buffers (pointed to by fft_result_t) */
+static float magnitude_buf[FFT_BINS];        /*  8KB */
+static float avg_buf[FFT_BINS];              /*  8KB */
+static float max_hold_buf[FFT_BINS];         /*  8KB */
 
 /* Current configuration */
 static fft_config_t current_cfg;
 static bool initialized = false;
+static bool avg_primed = false;              /* Has avg_buf been initialized? */
 
 /* ═══════════════════════════════════════════════════════════════════
  * Window coefficient computation
@@ -53,6 +60,19 @@ static void compute_window(fft_window_t type)
             break;
         case FFT_WINDOW_HAMMING:
             window_coeffs[i] = 0.54f - 0.46f * cosf(2.0f * M_PI * x);
+            break;
+        case FFT_WINDOW_BLACKMAN_HARRIS:
+            window_coeffs[i] = 0.35875f
+                - 0.48829f * cosf(2.0f * M_PI * x)
+                + 0.14128f * cosf(4.0f * M_PI * x)
+                - 0.01168f * cosf(6.0f * M_PI * x);
+            break;
+        case FFT_WINDOW_FLAT_TOP:
+            window_coeffs[i] = 0.21557895f
+                - 0.41663158f * cosf(2.0f * M_PI * x)
+                + 0.277263158f * cosf(4.0f * M_PI * x)
+                - 0.083578947f * cosf(6.0f * M_PI * x)
+                + 0.006947368f * cosf(8.0f * M_PI * x);
             break;
         case FFT_WINDOW_RECTANGULAR:
         default:
@@ -113,7 +133,6 @@ static void radix2_fft(void)
     for (i = 0; i < n; i++) {
         uint16_t j = bit_reverse(i, log2n);
         if (j > i) {
-            /* Swap complex pairs */
             float tmp_re = fft_buf[i * 2];
             float tmp_im = fft_buf[i * 2 + 1];
             fft_buf[i * 2]     = fft_buf[j * 2];
@@ -144,11 +163,9 @@ static void radix2_fft(void)
                 float bot_re = fft_buf[idx_bot * 2];
                 float bot_im = fft_buf[idx_bot * 2 + 1];
 
-                /* Complex multiply: twiddle * bottom */
                 float prod_re = bot_re * tw_re - bot_im * tw_im;
                 float prod_im = bot_re * tw_im + bot_im * tw_re;
 
-                /* Butterfly */
                 fft_buf[idx_bot * 2]     = fft_buf[idx_top * 2]     - prod_re;
                 fft_buf[idx_bot * 2 + 1] = fft_buf[idx_top * 2 + 1] - prod_im;
                 fft_buf[idx_top * 2]     += prod_re;
@@ -168,7 +185,6 @@ static void find_peaks(const float *mag_db, uint16_t num_bins,
 {
     *num_found = 0;
 
-    /* Find the global maximum first to set threshold */
     float global_max = -200.0f;
     uint16_t i;
     for (i = 1; i < num_bins; i++) {
@@ -178,16 +194,13 @@ static void find_peaks(const float *mag_db, uint16_t num_bins,
 
     float threshold = global_max + FFT_PEAK_THRESHOLD_DB;
 
-    /* Scan all bins for local maxima above threshold */
     for (i = 2; i < num_bins - 1; i++) {
         if (mag_db[i] > mag_db[i - 1] &&
             mag_db[i] > mag_db[i + 1] &&
             mag_db[i] > threshold) {
 
-            /* If array not full, just insert at end */
             if (*num_found < max_peaks) {
                 uint8_t pos = *num_found;
-                /* Insert sorted by magnitude (descending) */
                 while (pos > 0 && mag_db[i] > peaks[pos - 1].magnitude_db) {
                     peaks[pos] = peaks[pos - 1];
                     pos--;
@@ -197,7 +210,6 @@ static void find_peaks(const float *mag_db, uint16_t num_bins,
                 peaks[pos].magnitude_db = mag_db[i];
                 (*num_found)++;
             } else if (mag_db[i] > peaks[max_peaks - 1].magnitude_db) {
-                /* Replace the weakest peak if this one is stronger */
                 uint8_t pos = max_peaks - 1;
                 while (pos > 0 && mag_db[i] > peaks[pos - 1].magnitude_db) {
                     peaks[pos] = peaks[pos - 1];
@@ -218,8 +230,23 @@ static void find_peaks(const float *mag_db, uint16_t num_bins,
 void fft_init(const fft_config_t *cfg)
 {
     current_cfg = *cfg;
+
+    /* Set defaults for zoom if not specified */
+    if (current_cfg.zoom_start_bin == 0)
+        current_cfg.zoom_start_bin = 1;
+    if (current_cfg.zoom_end_bin == 0)
+        current_cfg.zoom_end_bin = FFT_BINS - 1;
+
     compute_window(cfg->window);
     compute_twiddles();
+
+    /* Initialize averaging and max hold buffers */
+    uint16_t i;
+    for (i = 0; i < FFT_BINS; i++) {
+        avg_buf[i] = -200.0f;
+        max_hold_buf[i] = -200.0f;
+    }
+    avg_primed = false;
     initialized = true;
 }
 
@@ -235,7 +262,7 @@ void fft_process(const int16_t *samples, uint16_t num_samples,
     /* Step 1: Convert int16 to float, apply window, load into complex buffer */
     for (i = 0; i < count; i++) {
         fft_buf[i * 2]     = (float)samples[i] * window_coeffs[i];
-        fft_buf[i * 2 + 1] = 0.0f;  /* Imaginary = 0 for real input */
+        fft_buf[i * 2 + 1] = 0.0f;
     }
 
     /* Zero-pad if input shorter than FFT size */
@@ -260,7 +287,7 @@ void fft_process(const int16_t *samples, uint16_t num_samples,
         if (mag < FFT_FLOOR)
             mag = FFT_FLOOR;
 
-        result->magnitude_db[i] = 20.0f * log10f(mag);
+        magnitude_buf[i] = 20.0f * log10f(mag);
     }
 
     /* DC bin doesn't get the 2x factor */
@@ -269,16 +296,48 @@ void fft_process(const int16_t *samples, uint16_t num_samples,
         float im = fft_buf[1];
         float mag = sqrtf(re * re + im * im) / (float)FFT_SIZE;
         if (mag < FFT_FLOOR) mag = FFT_FLOOR;
-        result->magnitude_db[0] = 20.0f * log10f(mag);
+        magnitude_buf[0] = 20.0f * log10f(mag);
     }
 
-    /* Step 4: Find peaks */
+    result->magnitude_db = magnitude_buf;
+
+    /* Step 4: Exponential moving average */
+    if (current_cfg.avg_count > 0) {
+        float alpha = 1.0f / (float)current_cfg.avg_count;
+        if (!avg_primed) {
+            /* First frame: copy directly */
+            for (i = 0; i < FFT_BINS; i++)
+                avg_buf[i] = magnitude_buf[i];
+            avg_primed = true;
+        } else {
+            for (i = 0; i < FFT_BINS; i++)
+                avg_buf[i] = avg_buf[i] * (1.0f - alpha) + magnitude_buf[i] * alpha;
+        }
+        result->avg_db = avg_buf;
+    } else {
+        result->avg_db = NULL;
+    }
+
+    /* Step 5: Max hold */
+    if (current_cfg.max_hold) {
+        for (i = 0; i < FFT_BINS; i++) {
+            if (magnitude_buf[i] > max_hold_buf[i])
+                max_hold_buf[i] = magnitude_buf[i];
+        }
+        result->max_hold_db = max_hold_buf;
+    } else {
+        result->max_hold_db = NULL;
+    }
+
+    /* Step 6: Find peaks (use averaged data if available) */
+    const float *peak_source = (result->avg_db != NULL) ? result->avg_db : magnitude_buf;
+
     result->num_peaks = 0;
     result->peak_freq_hz = 0.0f;
     result->peak_mag_db = -200.0f;
 
     if (current_cfg.peak_count > 0) {
-        find_peaks(result->magnitude_db, FFT_BINS,
+        find_peaks(peak_source, FFT_BINS,
                    result->bin_width_hz, result->peaks,
                    current_cfg.peak_count, &result->num_peaks);
 
@@ -305,4 +364,64 @@ fft_window_t fft_cycle_window(void)
     fft_window_t next = (fft_window_t)((current_cfg.window + 1) % FFT_WINDOW_COUNT);
     fft_set_window(next);
     return next;
+}
+
+void fft_set_averaging(uint8_t count)
+{
+    current_cfg.avg_count = count;
+    avg_primed = false;
+}
+
+void fft_set_max_hold(bool enable)
+{
+    current_cfg.max_hold = enable;
+    if (enable)
+        fft_reset_max_hold();
+}
+
+void fft_reset_max_hold(void)
+{
+    uint16_t i;
+    for (i = 0; i < FFT_BINS; i++)
+        max_hold_buf[i] = -200.0f;
+}
+
+float fft_adjust_ref_level(float delta_db)
+{
+    current_cfg.ref_level_db += delta_db;
+    return current_cfg.ref_level_db;
+}
+
+void fft_zoom_in(void)
+{
+    uint16_t center = (current_cfg.zoom_start_bin + current_cfg.zoom_end_bin) / 2;
+    uint16_t span = current_cfg.zoom_end_bin - current_cfg.zoom_start_bin;
+    uint16_t new_span = span / 2;
+
+    if (new_span < 16) new_span = 16;  /* Minimum 16 bins visible */
+
+    uint16_t half = new_span / 2;
+    current_cfg.zoom_start_bin = (center > half) ? center - half : 1;
+    current_cfg.zoom_end_bin = current_cfg.zoom_start_bin + new_span;
+    if (current_cfg.zoom_end_bin >= FFT_BINS)
+        current_cfg.zoom_end_bin = FFT_BINS - 1;
+}
+
+void fft_zoom_out(void)
+{
+    uint16_t center = (current_cfg.zoom_start_bin + current_cfg.zoom_end_bin) / 2;
+    uint16_t span = current_cfg.zoom_end_bin - current_cfg.zoom_start_bin;
+    uint16_t new_span = span * 2;
+
+    if (new_span >= FFT_BINS - 1) {
+        current_cfg.zoom_start_bin = 1;
+        current_cfg.zoom_end_bin = FFT_BINS - 1;
+        return;
+    }
+
+    uint16_t half = new_span / 2;
+    current_cfg.zoom_start_bin = (center > half) ? center - half : 1;
+    current_cfg.zoom_end_bin = current_cfg.zoom_start_bin + new_span;
+    if (current_cfg.zoom_end_bin >= FFT_BINS)
+        current_cfg.zoom_end_bin = FFT_BINS - 1;
 }

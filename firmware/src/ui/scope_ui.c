@@ -128,45 +128,42 @@ static void format_freq(float freq_hz, char *buf, int bufsize)
     buf[pos] = '\0';
 }
 
-/* Draw the FFT spectrum display */
-void draw_fft_screen(void)
+/* Draw FFT spectrum into a region (used by both full and split view) */
+static void draw_fft_region(uint16_t y_top, uint16_t height)
 {
     const fft_config_t *cfg = fft_get_config();
+    uint16_t y_bot = y_top + height;
 
-    const uint16_t fft_y_top = 18;
-    const uint16_t fft_y_bot = LCD_HEIGHT - 18;
-    const uint16_t fft_height = fft_y_bot - fft_y_top;
-    const uint16_t fft_x_left = 0;
-    const uint16_t fft_x_right = LCD_WIDTH;
-    const uint16_t fft_width = fft_x_right - fft_x_left;
-
-    lcd_fill_rect(0, 16, LCD_WIDTH, LCD_HEIGHT - 32, COLOR_BLACK);
-
-    /* Generate test signal: 1kHz square at 44.1kHz sample rate */
+    /* Generate test signal and run FFT */
     test_signal_generate(TEST_SIG_SQUARE, fft_sample_buf,
                          FFT_SIZE, cfg->sample_rate_hz,
                          1000.0f, 0.0f, 0.8f);
-
     fft_process(fft_sample_buf, FFT_SIZE, &fft_result);
 
-    /* Draw frequency bars */
+    /* Use averaged data if available, otherwise raw */
+    const float *draw_data = (fft_result.avg_db != NULL)
+                             ? fft_result.avg_db : fft_result.magnitude_db;
+
     float ref_db = cfg->ref_level_db;
     float range_db = cfg->db_range;
+    uint16_t zoom_start = cfg->zoom_start_bin;
+    uint16_t zoom_end = cfg->zoom_end_bin;
+    uint16_t zoom_span = zoom_end - zoom_start;
     uint16_t x;
 
-    for (x = 0; x < fft_width; x++) {
-        uint16_t bin = (uint16_t)((uint32_t)x * fft_result.num_bins / fft_width);
-        if (bin >= fft_result.num_bins) bin = fft_result.num_bins - 1;
-        if (bin == 0) bin = 1;
+    /* Draw frequency bars */
+    for (x = 0; x < LCD_WIDTH; x++) {
+        uint16_t bin = zoom_start + (uint16_t)((uint32_t)x * zoom_span / LCD_WIDTH);
+        if (bin >= FFT_BINS) bin = FFT_BINS - 1;
 
-        float db = fft_result.magnitude_db[bin];
+        float db = draw_data[bin];
         float normalized = (ref_db - db) / range_db;
         if (normalized < 0.0f) normalized = 0.0f;
         if (normalized > 1.0f) normalized = 1.0f;
 
-        uint16_t bar_top = fft_y_top + (uint16_t)(normalized * (float)fft_height);
+        uint16_t bar_top = y_top + (uint16_t)(normalized * (float)height);
 
-        if (bar_top < fft_y_bot) {
+        if (bar_top < y_bot) {
             uint16_t color;
             if (normalized < 0.25f)
                 color = COLOR_CH1;
@@ -177,51 +174,63 @@ void draw_fft_screen(void)
             else
                 color = COLOR_GRID;
 
-            lcd_fill_rect(fft_x_left + x, bar_top, 1, fft_y_bot - bar_top, color);
+            lcd_fill_rect(x, bar_top, 1, y_bot - bar_top, color);
         }
-    }
 
-    /* Horizontal grid lines (every 10dB) */
-    float db_step = 10.0f;
-    float db;
-    for (db = ref_db; db > ref_db - range_db; db -= db_step) {
-        float normalized = (ref_db - db) / range_db;
-        uint16_t y = fft_y_top + (uint16_t)(normalized * (float)fft_height);
-        if (y > fft_y_top && y < fft_y_bot) {
-            for (x = 0; x < fft_width; x += 4) {
-                lcd_set_pixel(fft_x_left + x, y, COLOR_GRID);
+        /* Max hold overlay (dotted line) */
+        if (fft_result.max_hold_db != NULL) {
+            float mh_norm = (ref_db - fft_result.max_hold_db[bin]) / range_db;
+            if (mh_norm >= 0.0f && mh_norm <= 1.0f) {
+                uint16_t mh_y = y_top + (uint16_t)(mh_norm * (float)height);
+                if (mh_y >= y_top && mh_y < y_bot && (x & 1) == 0)
+                    lcd_set_pixel(x, mh_y, COLOR_RED);
             }
         }
     }
 
-    /* dB scale labels on left */
-    for (db = ref_db; db > ref_db - range_db; db -= 20.0f) {
+    /* Horizontal grid lines (every 10dB) */
+    float db;
+    for (db = ref_db; db > ref_db - range_db; db -= 10.0f) {
         float normalized = (ref_db - db) / range_db;
-        uint16_t y = fft_y_top + (uint16_t)(normalized * (float)fft_height);
-        if (y > fft_y_top + 8 && y < fft_y_bot - 8) {
-            int db_int = (int)db;
-            char label[8];
-            int pos = 0;
-            if (db_int < 0) { label[pos++] = '-'; db_int = -db_int; }
-            if (db_int >= 100) label[pos++] = (char)('0' + db_int / 100);
-            if (db_int >= 10)  label[pos++] = (char)('0' + (db_int / 10) % 10);
-            label[pos++] = (char)('0' + db_int % 10);
-            label[pos] = '\0';
-            lcd_draw_string(2, y - 7, label, COLOR_GRAY, COLOR_BLACK);
+        uint16_t y = y_top + (uint16_t)(normalized * (float)height);
+        if (y > y_top && y < y_bot) {
+            for (x = 0; x < LCD_WIDTH; x += 4)
+                lcd_set_pixel(x, y, COLOR_GRID);
         }
     }
 
-    /* Peak markers and labels */
+    /* dB scale labels (only if region tall enough) */
+    if (height > 80) {
+        for (db = ref_db; db > ref_db - range_db; db -= 20.0f) {
+            float normalized = (ref_db - db) / range_db;
+            uint16_t y = y_top + (uint16_t)(normalized * (float)height);
+            if (y > y_top + 8 && y < y_bot - 8) {
+                int db_int = (int)db;
+                char label[8];
+                int pos = 0;
+                if (db_int < 0) { label[pos++] = '-'; db_int = -db_int; }
+                if (db_int >= 100) label[pos++] = (char)('0' + db_int / 100);
+                if (db_int >= 10)  label[pos++] = (char)('0' + (db_int / 10) % 10);
+                label[pos++] = (char)('0' + db_int % 10);
+                label[pos] = '\0';
+                lcd_draw_string(2, y - 7, label, COLOR_GRAY, COLOR_BLACK);
+            }
+        }
+    }
+
+    /* Peak markers and frequency label */
     uint8_t p;
     for (p = 0; p < fft_result.num_peaks && p < 3; p++) {
-        uint16_t peak_x = (uint16_t)((uint32_t)fft_result.peaks[p].bin
-                          * fft_width / fft_result.num_bins);
+        uint16_t peak_bin = fft_result.peaks[p].bin;
+        if (peak_bin < zoom_start || peak_bin > zoom_end) continue;
+
+        uint16_t peak_x = (uint16_t)((uint32_t)(peak_bin - zoom_start)
+                          * LCD_WIDTH / zoom_span);
         float norm = (ref_db - fft_result.peaks[p].magnitude_db) / range_db;
         if (norm < 0.0f) norm = 0.0f;
-        uint16_t peak_y = fft_y_top + (uint16_t)(norm * (float)fft_height);
+        uint16_t peak_y = y_top + (uint16_t)(norm * (float)height);
 
-        peak_x += fft_x_left;
-        if (peak_y >= fft_y_top + 4 && peak_x > 2 && peak_x < fft_x_right - 2) {
+        if (peak_y >= y_top + 4 && peak_x > 2 && peak_x < LCD_WIDTH - 2) {
             lcd_set_pixel(peak_x, peak_y - 3, COLOR_RED);
             lcd_set_pixel(peak_x - 1, peak_y - 2, COLOR_RED);
             lcd_set_pixel(peak_x,     peak_y - 2, COLOR_RED);
@@ -231,17 +240,63 @@ void draw_fft_screen(void)
         if (p == 0) {
             char freq_str[16];
             format_freq(fft_result.peaks[0].freq_hz, freq_str, sizeof(freq_str));
-            lcd_draw_string(fft_x_left + 4, fft_y_top + 2,
-                            freq_str, COLOR_WHITE, COLOR_BLACK);
+            lcd_draw_string(4, y_top + 2, freq_str, COLOR_WHITE, COLOR_BLACK);
         }
     }
 
     /* Window type label */
-    const char *win_names[] = { "Rect", "Hann", "Hamm" };
+    const char *win_names[] = { "Rect", "Hann", "Hamm", "BHar", "Flat" };
     const char *win_name = (cfg->window < FFT_WINDOW_COUNT)
                            ? win_names[cfg->window] : "?";
-    lcd_draw_string(LCD_WIDTH - 40, fft_y_top + 2,
-                    win_name, COLOR_GRAY, COLOR_BLACK);
+    lcd_draw_string(LCD_WIDTH - 40, y_top + 2, win_name, COLOR_GRAY, COLOR_BLACK);
+}
+
+/* Draw full-screen FFT */
+void draw_fft_screen(void)
+{
+    lcd_fill_rect(0, 16, LCD_WIDTH, LCD_HEIGHT - 32, COLOR_BLACK);
+    draw_fft_region(18, LCD_HEIGHT - 36);
+}
+
+/* Draw split view: time-domain top, FFT bottom */
+void draw_split_screen(uint32_t frame)
+{
+    lcd_fill_rect(0, 16, LCD_WIDTH, LCD_HEIGHT - 32, COLOR_BLACK);
+
+    /* Top half: scope waveform (y=18 to y=119, 101px) */
+    /* Simplified scope grid for half height */
+    uint16_t x, y;
+    uint16_t scope_top = 18;
+    uint16_t scope_bot = 119;
+    uint16_t scope_mid = (scope_top + scope_bot) / 2;
+
+    for (x = 0; x < LCD_WIDTH; x += 32) {
+        for (y = scope_top; y < scope_bot; y += 2)
+            lcd_set_pixel(x, y, COLOR_GRID);
+    }
+    for (x = 0; x < LCD_WIDTH; x++)
+        lcd_set_pixel(x, scope_mid, COLOR_GRID_CENTER);
+
+    /* Draw waveform in top half */
+    static const int8_t sin_lut[64] = {
+         0, 10, 19, 29, 38, 47, 56, 63, 71, 77, 83, 88, 92, 96, 98, 99,
+        100, 99, 98, 96, 92, 88, 83, 77, 71, 63, 56, 47, 38, 29, 19, 10,
+         0,-10,-19,-29,-38,-47,-56,-63,-71,-77,-83,-88,-92,-96,-98,-99,
+       -100,-99,-98,-96,-92,-88,-83,-77,-71,-63,-56,-47,-38,-29,-19,-10,
+    };
+    for (x = 0; x < LCD_WIDTH; x++) {
+        uint8_t idx = (uint8_t)((x * 4 + frame) & 0x3F);
+        int16_t wy = scope_mid - (sin_lut[idx] * 25 / 100);
+        if (wy >= scope_top && wy < scope_bot)
+            lcd_set_pixel(x, (uint16_t)wy, COLOR_CH1);
+    }
+
+    /* Divider line */
+    for (x = 0; x < LCD_WIDTH; x++)
+        lcd_set_pixel(x, 120, COLOR_GRID_CENTER);
+
+    /* Bottom half: FFT (y=121 to y=222, 101px) */
+    draw_fft_region(121, 101);
 }
 
 #endif /* FEATURE_FFT */

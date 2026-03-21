@@ -40,7 +40,7 @@ C_SOURCES += src/ui/settings_ui.c
 ifneq ($(findstring FFT,$(FEATURES)),)
   C_SOURCES += src/dsp/fft.c
   C_SOURCES += src/dsp/fft_test_signals.c
-  C_DEFS += -DFEATURE_FFT
+  FFT_DEFS = -DFEATURE_FFT
 endif
 
 # GD32 CMSIS
@@ -90,6 +90,7 @@ MCU = $(CPU) -mthumb $(FPU) $(FLOAT-ABI)
 # C defines
 C_DEFS  = -DGD32F30X_CL
 C_DEFS += -DUSE_STDPERIPH_DRIVER
+C_DEFS += $(FFT_DEFS)
 
 # Compiler flags
 CFLAGS  = $(MCU) $(C_DEFS) $(C_INCLUDES)

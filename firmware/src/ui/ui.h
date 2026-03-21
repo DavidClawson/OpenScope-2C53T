@@ -63,6 +63,8 @@ typedef enum {
 typedef enum {
     SCOPE_VIEW_TIME = 0,
     SCOPE_VIEW_FFT,
+    SCOPE_VIEW_SPLIT,
+    SCOPE_VIEW_COUNT
 } scope_view_t;
 #endif
 
@@ -96,6 +98,7 @@ void draw_demo_waveform(uint32_t frame);
 void draw_scope_screen(uint32_t frame);
 #ifdef FEATURE_FFT
 void draw_fft_screen(void);
+void draw_split_screen(uint32_t frame);
 #endif
 
 /* meter_ui.c */

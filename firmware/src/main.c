@@ -98,6 +98,8 @@ static void vDisplayTask(void *pvParameters)
 #ifdef FEATURE_FFT
                     if (scope_view == SCOPE_VIEW_FFT)
                         draw_fft_screen();
+                    else if (scope_view == SCOPE_VIEW_SPLIT)
+                        draw_split_screen(frame);
                     else
 #endif
                         draw_scope_screen(frame);
@@ -131,6 +133,8 @@ static void vDisplayTask(void *pvParameters)
 #ifdef FEATURE_FFT
             if (scope_view == SCOPE_VIEW_FFT)
                 draw_fft_screen();
+            else if (scope_view == SCOPE_VIEW_SPLIT)
+                draw_split_screen(frame);
             else
 #endif
                 draw_scope_screen(frame);
@@ -193,28 +197,72 @@ static void vInputTask(void *pvParameters)
 
 #ifdef FEATURE_FFT
                 case BTN_PRM:
+                    /* Cycle scope views: TIME → FFT → SPLIT → TIME */
                     if (current_mode == MODE_OSCILLOSCOPE) {
-                        scope_view = (scope_view == SCOPE_VIEW_TIME)
-                                   ? SCOPE_VIEW_FFT : SCOPE_VIEW_TIME;
+                        scope_view = (scope_view_t)((scope_view + 1) % SCOPE_VIEW_COUNT);
                         cmd = DCMD_REDRAW_ALL;
                         xQueueSend(xDisplayQueue, &cmd, 0);
                     }
                     break;
 
                 case BTN_SELECT:
+                    /* Cycle window type in FFT/split views */
                     if (current_mode == MODE_OSCILLOSCOPE &&
-                        scope_view == SCOPE_VIEW_FFT) {
+                        scope_view != SCOPE_VIEW_TIME) {
                         fft_cycle_window();
-                        cmd = DCMD_DRAW_FFT;
+                        cmd = DCMD_REDRAW_ALL;
                         xQueueSend(xDisplayQueue, &cmd, 0);
                     }
                     break;
 #endif
 
                 case BTN_UP:
+#ifdef FEATURE_FFT
+                    if (current_mode == MODE_OSCILLOSCOPE &&
+                        scope_view != SCOPE_VIEW_TIME) {
+                        fft_adjust_ref_level(5.0f);
+                        cmd = DCMD_REDRAW_ALL;
+                        xQueueSend(xDisplayQueue, &cmd, 0);
+                        break;
+                    }
+#endif
+                    /* FALLTHROUGH */
                 case BTN_DOWN:
+#ifdef FEATURE_FFT
+                    if (pressed == BTN_DOWN &&
+                        current_mode == MODE_OSCILLOSCOPE &&
+                        scope_view != SCOPE_VIEW_TIME) {
+                        fft_adjust_ref_level(-5.0f);
+                        cmd = DCMD_REDRAW_ALL;
+                        xQueueSend(xDisplayQueue, &cmd, 0);
+                        break;
+                    }
+#endif
+                    /* FALLTHROUGH */
                 case BTN_LEFT:
+#ifdef FEATURE_FFT
+                    if (pressed == BTN_LEFT &&
+                        current_mode == MODE_OSCILLOSCOPE &&
+                        scope_view != SCOPE_VIEW_TIME) {
+                        fft_zoom_in();
+                        cmd = DCMD_REDRAW_ALL;
+                        xQueueSend(xDisplayQueue, &cmd, 0);
+                        break;
+                    }
+#endif
+                    /* FALLTHROUGH */
                 case BTN_RIGHT:
+#ifdef FEATURE_FFT
+                    if (pressed == BTN_RIGHT &&
+                        current_mode == MODE_OSCILLOSCOPE &&
+                        scope_view != SCOPE_VIEW_TIME) {
+                        fft_zoom_out();
+                        cmd = DCMD_REDRAW_ALL;
+                        xQueueSend(xDisplayQueue, &cmd, 0);
+                        break;
+                    }
+#endif
+                    /* FALLTHROUGH */
                 case BTN_OK:
                     cmd = DCMD_DRAW_SCOPE + (uint8_t)current_mode;
                     xQueueSend(xDisplayQueue, &cmd, 0);
@@ -280,6 +328,10 @@ int main(void)
         fft_cfg.ref_level_db   = 0.0f;
         fft_cfg.db_range       = 80.0f;
         fft_cfg.peak_count     = 4;
+        fft_cfg.avg_count      = 0;
+        fft_cfg.max_hold       = false;
+        fft_cfg.zoom_start_bin = 1;
+        fft_cfg.zoom_end_bin   = FFT_BINS - 1;
         fft_init(&fft_cfg);
     }
 #endif
