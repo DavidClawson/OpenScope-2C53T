@@ -38,6 +38,14 @@ C_SOURCES += src/ui/settings_ui.c
 C_SOURCES += src/tasks/measurement.c
 C_SOURCES += src/drivers/flash_fs.c
 C_SOURCES += src/dsp/signal_gen.c
+C_SOURCES += src/ui/persistence.c
+C_SOURCES += src/dsp/math_channel.c
+C_SOURCES += src/util/config.c
+C_SOURCES += src/util/screenshot.c
+C_SOURCES += src/decode/decode_uart.c
+C_SOURCES += src/decode/decode_i2c.c
+C_SOURCES += src/decode/decode_spi.c
+C_SOURCES += src/decode/decode_can.c
 
 # FFT / DSP module
 ifneq ($(findstring FFT,$(FEATURES)),)
@@ -95,6 +103,8 @@ C_INCLUDES += -Isrc/drivers
 C_INCLUDES += -Isrc/dsp
 C_INCLUDES += -Isrc/ui
 C_INCLUDES += -Isrc/tasks
+C_INCLUDES += -Isrc/util
+C_INCLUDES += -Isrc/decode
 C_INCLUDES += -I$(GD32_CMSIS)
 C_INCLUDES += -I$(GD32_CMSIS)/GD/GD32F30x/Include
 C_INCLUDES += -I$(GD32_STD)/Include
