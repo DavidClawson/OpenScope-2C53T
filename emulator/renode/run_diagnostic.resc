@@ -1,0 +1,93 @@
+# FNIRSI 2C53T - Diagnostic run script
+# Runs the firmware and reports progress at intervals
+
+mach create "FNIRSI_2C53T"
+machine LoadPlatformDescription @gd32f307_2c53t.repl
+
+# Load RCU, FMC, and ADC as Python peripherals
+machine PyDevFromFile @rcu_peripheral.py 0x40021000 0x400 True "rcu"
+machine PyDevFromFile @fmc_peripheral.py 0x40022000 0x400 True "fmc"
+machine PyDevFromFile @adc_peripheral.py 0x40012400 0x100 True "adc0"
+machine PyDevFromFile @adc_peripheral.py 0x40012800 0x100 True "adc1"
+
+showAnalyzer usart2
+
+macro reset
+"""
+    sysbus LoadBinary @../../2C53T\ Firmware\ V1.2.0/APP_2C53T_V1.2.0_251015.bin 0x08007000
+    sysbus LoadBinary @../../2C53T\ Firmware\ V1.2.0/APP_2C53T_V1.2.0_251015.bin 0x00007000
+    cpu VectorTableOffset 0x08007000
+    cpu PerformanceInMips 1
+"""
+runMacro $reset
+
+# Skip I2C0 status polling
+set i2c0_status_hook
+"""
+from Antmicro.Renode.Peripherals.CPU import RegisterValue
+cpu.SetRegister(0, RegisterValue.Create(1, 32))
+cpu.PC = cpu.LR
+"""
+cpu AddHook 0x0803D83C $i2c0_status_hook
+
+# Skip SYSRESETREQ
+set skip_sysreset_hook
+"""
+lr = cpu.GetRegister(14).RawValue
+cpu.InfoLog("[SKIP_RESET] Skipping SYSRESETREQ, LR=0x{0:X}", lr)
+cpu.PC = lr
+"""
+cpu AddHook 0x0803B070 $skip_sysreset_hook
+
+# Monitor FreeRTOS milestones
+set scheduler_hook
+"""
+cpu.InfoLog("[RTOS] >>> vTaskStartScheduler called! <<<")
+"""
+cpu AddHook 0x0803A6D8 $scheduler_hook
+
+set task_create_hook
+"""
+r0 = cpu.GetRegister(0).RawValue
+cpu.InfoLog("[RTOS] xTaskCreate entry=0x{0:X}", r0)
+"""
+cpu AddHook 0x0803B6A0 $task_create_hook
+
+set idle_hook
+"""
+cpu.InfoLog("[RTOS] >>> IDLE task entered! <<<")
+"""
+cpu AddHook 0x0803BECD $idle_hook
+
+# Monitor task entries
+set display_hook
+"""
+cpu.InfoLog("[TASK] Display task running!")
+"""
+cpu AddHook 0x0803DA50 $display_hook
+
+set osc_hook
+"""
+cpu.InfoLog("[TASK] Osc task running!")
+"""
+cpu AddHook 0x0804009C $osc_hook
+
+# Monitor LCD writes at 0x6001FFFE (command) and 0x60020000 (data)
+set lcd_cmd_hook
+"""
+cpu.InfoLog("[LCD] Command: 0x{0:X}", value)
+"""
+sysbus AddWatchpointHook 0x6001FFFE Word Write $lcd_cmd_hook
+
+# Set GPIOC input pins high via direct register write
+# GPIOC_ISTAT at 0x40011008 - set bits 7 and 8 high
+# This simulates external signals (FPGA ready, etc.)
+sysbus WriteDoubleWord 0x40011008 0x0000FFFF
+sysbus WriteDoubleWord 0x40010C08 0x0000FFFF
+
+# Load FPGA/DVOM simulator
+python "execfile('/Users/david/Desktop/osc/emulator/renode/fpga_dvom_sim.py')"
+
+logLevel 3 sysbus
+
+start

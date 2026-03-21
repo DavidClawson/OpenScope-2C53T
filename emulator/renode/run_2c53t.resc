@@ -1,5 +1,10 @@
 # FNIRSI 2C53T Oscilloscope - Renode Emulation Script
 # GD32F307VET6 running firmware V1.2.0
+# With FPGA/DVOM simulator and monitoring hooks
+#
+# CRITICAL: The firmware binary was compiled for base address 0x08007000.
+# All absolute addresses (literal pools, MOVW/MOVT) reference this base.
+# We must load at 0x08007000 and set VTOR accordingly.
 
 # Create and configure the machine
 mach create "FNIRSI_2C53T"
@@ -7,23 +12,158 @@ mach create "FNIRSI_2C53T"
 # Load the platform description
 machine LoadPlatformDescription @gd32f307_2c53t.repl
 
-# Show USART2 (FPGA communication) output in analyzer window
+# Load RCU (Reset and Clock Unit) as Python peripheral
+# Handles clock enable/ready bit auto-set (when firmware enables an oscillator,
+# the ready bit is automatically set, simulating instant lock)
+machine PyDevFromFile @rcu_peripheral.py 0x40021000 0x400 True "rcu"
+
+# Load ADC0 and ADC1 as Python peripherals
+# These return "conversion complete" status so firmware doesn't hang polling ADC
+machine PyDevFromFile @adc_peripheral.py 0x40012400 0x100 True "adc0"
+machine PyDevFromFile @adc_peripheral.py 0x40012800 0x100 True "adc1"
+
+# Load FMC (Flash Memory Controller) as Python peripheral
+# This properly handles flash status bits that the firmware polls during boot
+machine PyDevFromFile @fmc_peripheral.py 0x40022000 0x400 True "fmc"
+
+# Show USART2 (FPGA/DVOM communication) output in analyzer window
 showAnalyzer usart2
 
-# Load the firmware binary at flash base address 0x08000000
-# The firmware .bin is a raw binary (not ELF), loaded directly to flash
-sysbus LoadBinary @../../2C53T\ Firmware\ V1.2.0/APP_2C53T_V1.2.0_251015.bin 0x08000000
+# Define reset macro so SYSRESETREQ works properly
+macro reset
+"""
+    # Load firmware at its correct base address 0x08007000
+    sysbus LoadBinary @../../2C53T\ Firmware\ V1.2.0/APP_2C53T_V1.2.0_251015.bin 0x08007000
 
-# Also load to mirror at 0x00000000 so boot vector table is visible
-sysbus LoadBinary @../../2C53T\ Firmware\ V1.2.0/APP_2C53T_V1.2.0_251015.bin 0x00000000
+    # Also load to boot mirror at 0x00007000
+    sysbus LoadBinary @../../2C53T\ Firmware\ V1.2.0/APP_2C53T_V1.2.0_251015.bin 0x00007000
 
-# Set the vector table offset register (VTOR) to flash base
-# This tells the NVIC where to find the interrupt vector table
-cpu VectorTableOffset 0x08000000
+    # Set the vector table offset register (VTOR) to firmware base
+    cpu VectorTableOffset 0x08007000
 
-# Log peripheral accesses for debugging (uncomment as needed)
-# logLevel 0 usart2
-# logLevel 0 sysbus
+    # Set CPU performance - lower value = faster virtual time per instruction
+    # This makes SysTick-based delays complete faster in wall clock time
+    # Real chip runs at 120MHz but we set 1 MIPS so each instruction = 1us of virtual time
+    # This means SysTick delays complete much faster
+    cpu PerformanceInMips 1
+"""
+
+runMacro $reset
+
+# --- Skip I2C0/SPI1 polling at 0x40003800 ---
+# The firmware polls I2C status bits at 0x40003800+8 during touch panel (GT911) init.
+# The status check function is at 0x0803CF3C (file 0x3683C): reads [R0, #8] & R1
+# Hook it to always return 1 (success)
+set i2c0_status_hook
+"""
+from Antmicro.Renode.Peripherals.CPU import RegisterValue
+cpu.SetRegister(0, RegisterValue.Create(1, 32))
+cpu.PC = cpu.LR
+"""
+# I2C status function at 0x0803D83C (verified by BL target computation)
+cpu AddHook 0x0803D83C $i2c0_status_hook
+
+# --- Keep the SYSRESETREQ skip as backup in case chip ID check doesn't work ---
+set skip_sysreset_hook
+"""
+lr = cpu.GetRegister(14).RawValue
+cpu.InfoLog("[SKIP_RESET] Skipping SYSRESETREQ at PC=0x{0:X}, returning to LR=0x{1:X}", cpu.PC, lr)
+cpu.PC = lr
+"""
+cpu AddHook 0x0803B070 $skip_sysreset_hook
+
+# --- Monitoring Hooks ---
+# NOTE: Firmware addresses below are the actual runtime addresses when loaded at 0x08007000.
+# These match the addresses shown in Ghidra if the binary was loaded at 0x08007000 base.
+# The docs originally stated Ghidra used 0x08000000 base, but the firmware's internal
+# absolute addresses (from MOVW/MOVT) match the 0x08007000-based addresses directly.
+
+# Hook: FreeRTOS IDLE task entry (firmware address 0x0803BECD)
+set idle_task_hook
+"""
+cpu.InfoLog("[RTOS] IDLE task entered at PC=0x{0:X}", cpu.PC)
+"""
+cpu AddHook 0x0803BECD $idle_task_hook
+
+# Hook: vTaskStartScheduler (firmware address 0x0803A6D8)
+set scheduler_hook
+"""
+cpu.InfoLog("[RTOS] vTaskStartScheduler called - FreeRTOS scheduler starting!")
+"""
+cpu AddHook 0x0803A6D8 $scheduler_hook
+
+# Hook: xTaskCreate (firmware address 0x0803B6A0)
+set task_create_hook
+"""
+r0 = cpu.GetRegister(0).RawValue
+r2 = cpu.GetRegister(2).RawValue
+cpu.InfoLog("[RTOS] xTaskCreate: entry=0x{0:X} stackSize={1}", r0, r2)
+"""
+cpu AddHook 0x0803B6A0 $task_create_hook
+
+# Hook: USART2 ISR (firmware address 0x080277B4)
+set usart2_isr_hook
+"""
+cpu.InfoLog("[USART2] ISR entered")
+"""
+cpu AddHook 0x080277B4 $usart2_isr_hook
+
+# Hook: configASSERT failure (firmware address 0x0803A610)
+set assert_fail_hook
+"""
+r0 = cpu.GetRegister(0).RawValue
+lr = cpu.GetRegister(14).RawValue
+cpu.InfoLog("[ASSERT] configASSERT failed! arg=0x{0:X} LR=0x{1:X}", r0, lr)
+"""
+cpu AddHook 0x0803A610 $assert_fail_hook
+
+# Hook: display task (firmware address 0x0803DA50)
+set display_hook
+"""
+cpu.InfoLog("[TASK] Display task started!")
+"""
+cpu AddHook 0x0803DA50 $display_hook
+
+# Hook: key task (firmware address 0x08040008)
+set key_hook
+"""
+cpu.InfoLog("[TASK] Key task started!")
+"""
+cpu AddHook 0x08040008 $key_hook
+
+# Hook: osc task (firmware address 0x0804009C)
+set osc_hook
+"""
+cpu.InfoLog("[TASK] Oscilloscope task started!")
+"""
+cpu AddHook 0x0804009C $osc_hook
+
+# Hook: fpga task (firmware address 0x0803E454)
+set fpga_hook
+"""
+cpu.InfoLog("[TASK] FPGA task started!")
+"""
+cpu AddHook 0x0803E454 $fpga_hook
+
+# Hook: dvom_TX task (firmware address 0x0803E3F4)
+set dvom_tx_hook
+"""
+cpu.InfoLog("[TASK] dvom_TX task started!")
+"""
+cpu AddHook 0x0803E3F4 $dvom_tx_hook
+
+# Hook: dvom_RX task (firmware address 0x0803DAC0)
+set dvom_rx_hook
+"""
+cpu.InfoLog("[TASK] dvom_RX task started!")
+"""
+cpu AddHook 0x0803DAC0 $dvom_rx_hook
+
+# --- FPGA/DVOM simulator ---
+python "execfile('/Users/david/Desktop/osc/emulator/renode/fpga_dvom_sim.py')"
+
+# Enable info-level logging
+logLevel 3 sysbus
 
 # Start emulation
 start

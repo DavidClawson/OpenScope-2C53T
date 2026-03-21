@@ -65,19 +65,17 @@ gpioPortG: GPIOPort.STM32F1GPIOPort @ sysbus <0x40012000, +0x400>
 afio: GPIOPort.STM32F1AFIO @ sysbus 0x40010000
     gpioPorts: [gpioPortA, gpioPortB, gpioPortC, gpioPortD, gpioPortE, gpioPortF, gpioPortG]
 
-// --- USART2 at 0x40004400 (FPGA communication, IRQ 38) ---
+// --- USART2 at 0x40004400 (FPGA/DVOM communication, IRQ 38) ---
 usart2: UART.STM32_UART @ sysbus <0x40004400, +0x100>
     -> nvic@38
 
-// --- USART0/USART1 at 0x40013800 (optional debug) ---
+// --- USART0 at 0x40013800 (debug/unused, IRQ 37) ---
 usart0: UART.STM32_UART @ sysbus <0x40013800, +0x100>
     -> nvic@37
 
-// --- TIM3 at 0x40000400 (IRQ 29) ---
-timer3: Timers.STM32_Timer @ sysbus 0x40000400
-    IRQ -> nvic@29
-    frequency: 10000000
-    initialLimit: 0xFFFF
+// --- USART1 at 0x40004000 (IRQ 39) ---
+usart1: UART.STM32_UART @ sysbus <0x40004000, +0x100>
+    -> nvic@39
 
 // --- TIM2 at 0x40000000 (IRQ 28) ---
 timer2: Timers.STM32_Timer @ sysbus 0x40000000
@@ -85,9 +83,51 @@ timer2: Timers.STM32_Timer @ sysbus 0x40000000
     frequency: 10000000
     initialLimit: 0xFFFF
 
+// --- TIM3 at 0x40000400 (IRQ 29) ---
+timer3: Timers.STM32_Timer @ sysbus 0x40000400
+    IRQ -> nvic@29
+    frequency: 10000000
+    initialLimit: 0xFFFF
+
 // --- TIM4 at 0x40000800 (IRQ 30) ---
 timer4: Timers.STM32_Timer @ sysbus 0x40000800
     IRQ -> nvic@30
+    frequency: 10000000
+    initialLimit: 0xFFFF
+
+// --- TIM5 at 0x40000C00 ---
+timer5: Timers.STM32_Timer @ sysbus 0x40000C00
+    IRQ -> nvic@50
+    frequency: 10000000
+    initialLimit: 0xFFFF
+
+// --- TIM6 at 0x40001000 ---
+timer6: Timers.STM32_Timer @ sysbus 0x40001000
+    IRQ -> nvic@54
+    frequency: 10000000
+    initialLimit: 0xFFFF
+
+// --- TIM7 at 0x40001400 ---
+timer7: Timers.STM32_Timer @ sysbus 0x40001400
+    IRQ -> nvic@55
+    frequency: 10000000
+    initialLimit: 0xFFFF
+
+// --- TIM1 at 0x40012C00 (Advanced timer) ---
+timer1: Timers.STM32_Timer @ sysbus 0x40012C00
+    BreakInterrupt -> nvic@24
+    UpdateInterrupt -> nvic@25
+    [TriggerInterrupt, CommutationInterrupt] -> nvic@[26, 26]
+    CaptureCompareInterrupt -> nvic@27
+    frequency: 10000000
+    initialLimit: 0xFFFF
+
+// --- TIM8 at 0x40013400 (Advanced timer, used for buzzer/PWM) ---
+timer8: Timers.STM32_Timer @ sysbus 0x40013400
+    BreakInterrupt -> nvic@43
+    UpdateInterrupt -> nvic@44
+    [TriggerInterrupt, CommutationInterrupt] -> nvic@[45, 45]
+    CaptureCompareInterrupt -> nvic@46
     frequency: 10000000
     initialLimit: 0xFFFF
 
@@ -101,9 +141,16 @@ i2c1: I2C.STM32F4_I2C @ sysbus 0x40005400
 spi1: SPI.STM32SPI @ sysbus 0x40013000
     IRQ -> nvic@35
 
+// --- SPI2 at 0x40003C00 (FPGA data channel) ---
+// GD32 SPI2 = STM32 SPI3 at 0x40003C00
+spi2: SPI.STM32SPI @ sysbus 0x40003C00
+    IRQ -> nvic@51
+
+// --- SPI1 at 0x40003800 (I2C1 alternate / touch) ---
+// This overlaps with I2C1 alternate function area
+// Using mapped memory as stub since the actual I2C is at 0x40005400
+
 // --- USB OTG FS at 0x50000000 (GD32F307 USB FS base) ---
-// The GD32F307 USB OTG FS peripheral is at 0x50000000
-// Mapped as a memory region for basic compatibility
 usbOtgFs: Memory.MappedMemory @ sysbus 0x50000000
     size: 0x40000
 
@@ -111,8 +158,16 @@ usbOtgFs: Memory.MappedMemory @ sysbus 0x50000000
 usbDevice: Memory.MappedMemory @ sysbus 0x40005C00
     size: 0x400
 
-// --- RCU/RCC (Reset and Clock Unit) at 0x40021000 ---
-rcu: Memory.MappedMemory @ sysbus 0x40021000
+// --- CAN0/USB SRAM at 0x40006000 ---
+canUsbSram: Memory.MappedMemory @ sysbus 0x40006000
+    size: 0x400
+
+// --- CAN0 registers at 0x40006400 ---
+can0: Memory.MappedMemory @ sysbus 0x40006400
+    size: 0x400
+
+// --- CAN1 registers at 0x40006800 ---
+can1: Memory.MappedMemory @ sysbus 0x40006800
     size: 0x400
 
 // --- DMA1 ---
@@ -140,8 +195,9 @@ pwr: Memory.MappedMemory @ sysbus 0x40007000
     size: 0x400
 
 // --- Flash interface registers ---
-flashInterface: Memory.MappedMemory @ sysbus 0x40022000
-    size: 0x400
+// Replaced by PyDev in .resc for proper FMC status bit simulation
+// flashInterface: Memory.MappedMemory @ sysbus 0x40022000
+//     size: 0x400
 
 // --- Backup registers ---
 bkp: Memory.MappedMemory @ sysbus 0x40006C00
@@ -155,20 +211,44 @@ rtc: Memory.MappedMemory @ sysbus 0x40002800
 iwdg: Memory.MappedMemory @ sysbus 0x40003000
     size: 0x400
 
-// --- ADC1 ---
-adc1: Memory.MappedMemory @ sysbus 0x40012400
+// --- WWDG (Window Watchdog) ---
+wwdg: Memory.MappedMemory @ sysbus 0x40002C00
     size: 0x400
 
-// --- ADC2 ---
-adc2: Memory.MappedMemory @ sysbus 0x40012800
+// --- DAC at 0x40007400 ---
+dac: Memory.MappedMemory @ sysbus 0x40007400
     size: 0x400
+
+// --- ADC0 at 0x40012400 ---
+// Replaced by PyDev in .resc for proper conversion-complete simulation
+// adc0: Memory.MappedMemory @ sysbus 0x40012400
+//     size: 0x400
+
+// --- ADC1 at 0x40012800 ---
+// Replaced by PyDev in .resc for proper conversion-complete simulation
+// adc1: Memory.MappedMemory @ sysbus 0x40012800
+//     size: 0x400
+
+// --- RCU (Reset and Clock Unit) at 0x40021000 ---
+// Replaced by PyDev in .resc for proper clock ready-bit simulation
+// rcu: Memory.MappedMemory @ sysbus 0x40021000
+//     size: 0x400
+
+// --- CRC at 0x40023000 ---
+crc: Memory.MappedMemory @ sysbus 0x40023000
+    size: 0x400
+
+// --- System memory / Option bytes (0x1FFFF000) ---
+// Contains chip ID, option bytes, and factory calibration data
+// 0x1FFFF800-0x1FFFF80F: Option bytes
+// 0x1FFFF810: Chip variant ID used by firmware
+systemMemory: Memory.MappedMemory @ sysbus 0x1FFFF000
+    size: 0x1000
 
 // --- Initial register values ---
 sysbus:
     init:
-        // RCC_CR: HSI ready, HSE ready, PLL ready
-        Tag <0x40021000, 0x40021003> "RCU_CTL" 0x0F0A0083
-        // RCC_CFGR: PLL as system clock, AHB/APB prescalers
-        Tag <0x40021004, 0x40021007> "RCU_CFG0" 0x001D840A
-        // Flash ACR: prefetch enabled, 3 wait states
-        Tag <0x40022000, 0x40022003> "FMC_WS" 0x00000032
+        // Set chip variant ID at 0x1FFFF810 to 0xFE so firmware skips option byte reconfiguration
+        WriteByte 0x1FFFF810 0xFE
+        // PMU_CS: LDO ready flag
+        Tag <0x40007004, 0x40007007> "PMU_CS" 0x00030000
