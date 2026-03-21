@@ -1,0 +1,174 @@
+// FNIRSI 2C53T Oscilloscope - GD32F307VET6 Platform Description
+// GD32F307 is STM32F1-compatible (Cortex-M4F, 120MHz, 1MB flash, 256KB RAM)
+// Uses STM32F1 peripheral models where applicable
+
+// --- CPU ---
+cpu: CPU.CortexM @ sysbus
+    cpuType: "cortex-m4f"
+    nvic: nvic
+
+// --- Interrupt Controller ---
+nvic: IRQControllers.NVIC @ sysbus 0xE000E000
+    priorityMask: 0xF0
+    systickFrequency: 120000000
+    IRQ -> cpu@0
+
+// --- Flash (1MB at 0x08000000) ---
+// Also mirrored at 0x00000000 for boot
+flash: Memory.MappedMemory @ sysbus 0x08000000
+    size: 0x100000
+
+flashMirror: Memory.MappedMemory @ sysbus 0x00000000
+    size: 0x100000
+
+// --- SRAM (256KB at 0x20000000) ---
+sram: Memory.MappedMemory @ sysbus 0x20000000
+    size: 0x40000
+
+// --- GPIO Ports ---
+gpioPortA: GPIOPort.STM32F1GPIOPort @ sysbus <0x40010800, +0x400>
+    [0-15] -> exti@[0-15]
+
+gpioPortB: GPIOPort.STM32F1GPIOPort @ sysbus <0x40010C00, +0x400>
+    [0-15] -> exti@[0-15]
+
+gpioPortC: GPIOPort.STM32F1GPIOPort @ sysbus <0x40011000, +0x400>
+    [0-15] -> exti@[0-15]
+
+gpioPortD: GPIOPort.STM32F1GPIOPort @ sysbus <0x40011400, +0x400>
+    [0-15] -> exti@[0-15]
+
+gpioPortE: GPIOPort.STM32F1GPIOPort @ sysbus <0x40011800, +0x400>
+    [0-15] -> exti@[0-15]
+
+// --- EXTI (External Interrupt Controller) ---
+exti: IRQControllers.STM32F4_EXTI @ sysbus 0x40010400
+    numberOfOutputLines: 19
+    [0-4] -> nvic@[6-10]
+    [5-9] -> nvicInput23@[0-4]
+    [10-15] -> nvicInput40@[0-5]
+
+nvicInput23: Miscellaneous.CombinedInput @ none
+    numberOfInputs: 5
+    -> nvic@23
+
+nvicInput40: Miscellaneous.CombinedInput @ none
+    numberOfInputs: 6
+    -> nvic@40
+
+// --- AFIO (Alternate Function I/O) ---
+// STM32F1AFIO requires exactly 7 GPIO ports; stub F and G for compatibility
+gpioPortF: GPIOPort.STM32F1GPIOPort @ sysbus <0x40011C00, +0x400>
+
+gpioPortG: GPIOPort.STM32F1GPIOPort @ sysbus <0x40012000, +0x400>
+
+afio: GPIOPort.STM32F1AFIO @ sysbus 0x40010000
+    gpioPorts: [gpioPortA, gpioPortB, gpioPortC, gpioPortD, gpioPortE, gpioPortF, gpioPortG]
+
+// --- USART2 at 0x40004400 (FPGA communication, IRQ 38) ---
+usart2: UART.STM32_UART @ sysbus <0x40004400, +0x100>
+    -> nvic@38
+
+// --- USART0/USART1 at 0x40013800 (optional debug) ---
+usart0: UART.STM32_UART @ sysbus <0x40013800, +0x100>
+    -> nvic@37
+
+// --- TIM3 at 0x40000400 (IRQ 29) ---
+timer3: Timers.STM32_Timer @ sysbus 0x40000400
+    IRQ -> nvic@29
+    frequency: 10000000
+    initialLimit: 0xFFFF
+
+// --- TIM2 at 0x40000000 (IRQ 28) ---
+timer2: Timers.STM32_Timer @ sysbus 0x40000000
+    IRQ -> nvic@28
+    frequency: 10000000
+    initialLimit: 0xFFFF
+
+// --- TIM4 at 0x40000800 (IRQ 30) ---
+timer4: Timers.STM32_Timer @ sysbus 0x40000800
+    IRQ -> nvic@30
+    frequency: 10000000
+    initialLimit: 0xFFFF
+
+// --- I2C1 at 0x40005400 (Touch panel GT911) ---
+i2c1: I2C.STM32F4_I2C @ sysbus 0x40005400
+    EventInterrupt -> nvic@31
+    ErrorInterrupt -> nvic@32
+
+// --- SPI0/SPI1 at 0x40013000 (External flash W25Q64) ---
+// Note: GD32 SPI0 = STM32 SPI1 at 0x40013000
+spi1: SPI.STM32SPI @ sysbus 0x40013000
+    IRQ -> nvic@35
+
+// --- USB OTG FS at 0x50000000 (GD32F307 USB FS base) ---
+// The GD32F307 USB OTG FS peripheral is at 0x50000000
+// Mapped as a memory region for basic compatibility
+usbOtgFs: Memory.MappedMemory @ sysbus 0x50000000
+    size: 0x40000
+
+// --- USB device registers at 0x40005C00 ---
+usbDevice: Memory.MappedMemory @ sysbus 0x40005C00
+    size: 0x400
+
+// --- RCU/RCC (Reset and Clock Unit) at 0x40021000 ---
+rcu: Memory.MappedMemory @ sysbus 0x40021000
+    size: 0x400
+
+// --- DMA1 ---
+dma1: DMA.STM32G0DMA @ sysbus 0x40020000
+    numberOfChannels: 7
+    [0-6] -> nvic@[11-17]
+
+// --- DMA2 ---
+dma2: DMA.STM32G0DMA @ sysbus 0x40020400
+    numberOfChannels: 5
+    [0-4] -> nvic@[56-60]
+
+// --- EXMC/FSMC Bank 0 (LCD data interface via parallel bus) ---
+// The firmware accesses the LCD at 0x6001FFFE (command) and 0x60020000 (data)
+// via EXMC (External Memory Controller), equivalent to STM32 FSMC
+exmcBank0: Memory.MappedMemory @ sysbus 0x60000000
+    size: 0x100000
+
+// --- FSMC/EXMC control registers ---
+exmcControl: Memory.MappedMemory @ sysbus 0xA0000000
+    size: 0x10000
+
+// --- Power control ---
+pwr: Memory.MappedMemory @ sysbus 0x40007000
+    size: 0x400
+
+// --- Flash interface registers ---
+flashInterface: Memory.MappedMemory @ sysbus 0x40022000
+    size: 0x400
+
+// --- Backup registers ---
+bkp: Memory.MappedMemory @ sysbus 0x40006C00
+    size: 0x400
+
+// --- RTC ---
+rtc: Memory.MappedMemory @ sysbus 0x40002800
+    size: 0x400
+
+// --- IWDG (Independent Watchdog) ---
+iwdg: Memory.MappedMemory @ sysbus 0x40003000
+    size: 0x400
+
+// --- ADC1 ---
+adc1: Memory.MappedMemory @ sysbus 0x40012400
+    size: 0x400
+
+// --- ADC2 ---
+adc2: Memory.MappedMemory @ sysbus 0x40012800
+    size: 0x400
+
+// --- Initial register values ---
+sysbus:
+    init:
+        // RCC_CR: HSI ready, HSE ready, PLL ready
+        Tag <0x40021000, 0x40021003> "RCU_CTL" 0x0F0A0083
+        // RCC_CFGR: PLL as system clock, AHB/APB prescalers
+        Tag <0x40021004, 0x40021007> "RCU_CFG0" 0x001D840A
+        // Flash ACR: prefetch enabled, 3 wait states
+        Tag <0x40022000, 0x40022003> "FMC_WS" 0x00000032

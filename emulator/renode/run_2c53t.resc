@@ -1,0 +1,29 @@
+# FNIRSI 2C53T Oscilloscope - Renode Emulation Script
+# GD32F307VET6 running firmware V1.2.0
+
+# Create and configure the machine
+mach create "FNIRSI_2C53T"
+
+# Load the platform description
+machine LoadPlatformDescription @gd32f307_2c53t.repl
+
+# Show USART2 (FPGA communication) output in analyzer window
+showAnalyzer usart2
+
+# Load the firmware binary at flash base address 0x08000000
+# The firmware .bin is a raw binary (not ELF), loaded directly to flash
+sysbus LoadBinary @../../2C53T\ Firmware\ V1.2.0/APP_2C53T_V1.2.0_251015.bin 0x08000000
+
+# Also load to mirror at 0x00000000 so boot vector table is visible
+sysbus LoadBinary @../../2C53T\ Firmware\ V1.2.0/APP_2C53T_V1.2.0_251015.bin 0x00000000
+
+# Set the vector table offset register (VTOR) to flash base
+# This tells the NVIC where to find the interrupt vector table
+cpu VectorTableOffset 0x08000000
+
+# Log peripheral accesses for debugging (uncomment as needed)
+# logLevel 0 usart2
+# logLevel 0 sysbus
+
+# Start emulation
+start
