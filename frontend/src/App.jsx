@@ -4,15 +4,14 @@ import './App.css'
 // Original image dimensions
 const IMG_WIDTH = 388
 const IMG_HEIGHT = 735
-const DISPLAY_SCALE = 1.5 // Scale the whole device up for comfort
+const DEFAULT_SCALE = 1.2
 
-// LCD screen region within the image (approximate pixel coordinates on the original image)
-// These define where the LCD sits on the scope.jpg image
+// LCD screen region within the image (pixel coordinates on the original 388x735 image)
 const LCD_REGION = {
-  x: 37,
-  y: 108,
-  width: 314,
-  height: 235,
+  x: 42,
+  y: 72,
+  width: 305,
+  height: 228,
 }
 
 // LCD native resolution
@@ -22,28 +21,31 @@ const LCD_HEIGHT = 240
 // Button hotspot regions (x, y, width, height on the original image)
 const BUTTONS = [
   // Row 1: MOVE, SELECT, TRIGGER, PRM
-  { id: 'MOVE',    x: 30,  y: 375, w: 65, h: 26 },
-  { id: 'SELECT',  x: 112, y: 375, w: 75, h: 26 },
-  { id: 'TRIGGER', x: 200, y: 375, w: 80, h: 26 },
-  { id: 'PRM',     x: 310, y: 375, w: 55, h: 26 },
+  { id: 'MOVE',    x: 55,  y: 345, w: 55, h: 20 },
+  { id: 'SELECT',  x: 125, y: 345, w: 60, h: 20 },
+  { id: 'TRIGGER', x: 205, y: 345, w: 70, h: 20 },
+  { id: 'PRM',     x: 295, y: 345, w: 45, h: 20 },
 
   // CH1, CH2
-  { id: 'CH1',     x: 25,  y: 418, w: 55, h: 35 },
-  { id: 'CH2',     x: 308, y: 418, w: 55, h: 35 },
+  { id: 'CH1',     x: 40,  y: 385, w: 55, h: 30 },
+  { id: 'CH2',     x: 293, y: 385, w: 55, h: 30 },
 
   // AUTO, SAVE
-  { id: 'AUTO',    x: 25,  y: 468, w: 55, h: 35 },
-  { id: 'SAVE',    x: 308, y: 468, w: 55, h: 35 },
+  { id: 'AUTO',    x: 40,  y: 430, w: 55, h: 30 },
+  { id: 'SAVE',    x: 293, y: 430, w: 55, h: 30 },
 
   // D-pad
-  { id: 'UP',      x: 158, y: 408, w: 52, h: 32 },
-  { id: 'DOWN',    x: 158, y: 488, w: 52, h: 32 },
-  { id: 'LEFT',    x: 108, y: 440, w: 45, h: 42 },
-  { id: 'RIGHT',   x: 218, y: 440, w: 45, h: 42 },
-  { id: 'OK',      x: 153, y: 440, w: 62, h: 42 },
+  { id: 'UP',      x: 165, y: 375, w: 52, h: 28 },
+  { id: 'DOWN',    x: 165, y: 452, w: 52, h: 28 },
+  { id: 'LEFT',    x: 118, y: 403, w: 42, h: 38 },
+  { id: 'RIGHT',   x: 222, y: 403, w: 42, h: 38 },
+  { id: 'OK',      x: 160, y: 403, w: 62, h: 38 },
+
+  // Power button (the red circle button)
+  { id: 'POWER',   x: 55, y: 480, w: 40, h: 40 },
 
   // MENU
-  { id: 'MENU',    x: 300, y: 520, w: 65, h: 35 },
+  { id: 'MENU',    x: 278, y: 480, w: 65, h: 30 },
 ]
 
 function LCDCanvas({ framebuffer }) {
@@ -161,6 +163,7 @@ function App() {
   const [log, setLog] = useState([])
   const [activeButton, setActiveButton] = useState(null)
   const [showHotspots, setShowHotspots] = useState(false)
+  const [scale, setScale] = useState(DEFAULT_SCALE)
   const [wsUrl, setWsUrl] = useState('ws://localhost:8765')
   const wsRef = useRef(null)
   const containerRef = useRef(null)
@@ -225,6 +228,11 @@ function App() {
       <div className="toolbar">
         <h1>OpenScope-2C53T</h1>
         <div className="toolbar-controls">
+          <div className="zoom-controls">
+            <button onClick={() => setScale(s => Math.max(0.5, s - 0.1))} className="zoom-btn">-</button>
+            <span className="zoom-label">{Math.round(scale * 100)}%</span>
+            <button onClick={() => setScale(s => Math.min(2.5, s + 0.1))} className="zoom-btn">+</button>
+          </div>
           <label className="hotspot-toggle">
             <input
               type="checkbox"
@@ -255,8 +263,8 @@ function App() {
           ref={containerRef}
           onClick={handleImageClick}
           style={{
-            width: IMG_WIDTH * DISPLAY_SCALE,
-            height: IMG_HEIGHT * DISPLAY_SCALE,
+            width: IMG_WIDTH * scale,
+            height: IMG_HEIGHT * scale,
           }}
         >
           {/* Product photo background */}
@@ -271,10 +279,10 @@ function App() {
           <div
             className="lcd-overlay"
             style={{
-              left: LCD_REGION.x * DISPLAY_SCALE,
-              top: LCD_REGION.y * DISPLAY_SCALE,
-              width: LCD_REGION.width * DISPLAY_SCALE,
-              height: LCD_REGION.height * DISPLAY_SCALE,
+              left: LCD_REGION.x * scale,
+              top: LCD_REGION.y * scale,
+              width: LCD_REGION.width * scale,
+              height: LCD_REGION.height * scale,
             }}
           >
             <LCDCanvas framebuffer={framebuffer} />
@@ -286,10 +294,10 @@ function App() {
               key={btn.id}
               className={`hotspot ${activeButton === btn.id ? 'hotspot-active' : ''}`}
               style={{
-                left: btn.x * DISPLAY_SCALE,
-                top: btn.y * DISPLAY_SCALE,
-                width: btn.w * DISPLAY_SCALE,
-                height: btn.h * DISPLAY_SCALE,
+                left: btn.x * scale,
+                top: btn.y * scale,
+                width: btn.w * scale,
+                height: btn.h * scale,
               }}
             >
               <span className="hotspot-label">{btn.id}</span>
@@ -304,10 +312,10 @@ function App() {
               <div
                 className="hotspot hotspot-flash"
                 style={{
-                  left: btn.x * DISPLAY_SCALE,
-                  top: btn.y * DISPLAY_SCALE,
-                  width: btn.w * DISPLAY_SCALE,
-                  height: btn.h * DISPLAY_SCALE,
+                  left: btn.x * scale,
+                  top: btn.y * scale,
+                  width: btn.w * scale,
+                  height: btn.h * scale,
                 }}
               />
             )
