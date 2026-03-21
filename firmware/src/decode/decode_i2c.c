@@ -42,6 +42,16 @@ void decode_i2c(const int16_t *sda_samples, const int16_t *scl_samples,
     uint8_t is_first_byte = 0;
     uint32_t byte_start = 0;
 
+    /*
+     * Debounce: require a signal to hold a new level for DEBOUNCE_COUNT
+     * consecutive samples before accepting the level change. This
+     * prevents jitter and noise glitches from creating false edges
+     * that could be misinterpreted as START/STOP conditions.
+     */
+    #define DEBOUNCE_COUNT 4
+    int sda_stable = 0, scl_stable = 0;
+    uint8_t sda_debounce = 0, scl_debounce = 0;
+
     (void)sample_rate;
 
     memset(result, 0, sizeof(*result));
@@ -51,12 +61,39 @@ void decode_i2c(const int16_t *sda_samples, const int16_t *scl_samples,
         return;
     }
 
-    sda_prev = (sda_samples[0] >= cfg->sda_threshold) ? 1 : 0;
-    scl_prev = (scl_samples[0] >= cfg->scl_threshold) ? 1 : 0;
+    sda_stable = (sda_samples[0] >= cfg->sda_threshold) ? 1 : 0;
+    scl_stable = (scl_samples[0] >= cfg->scl_threshold) ? 1 : 0;
+    sda_prev = sda_stable;
+    scl_prev = scl_stable;
 
     for (i = 1; i < num_samples && result->num_frames < DECODE_MAX_FRAMES; i++) {
-        sda = (sda_samples[i] >= cfg->sda_threshold) ? 1 : 0;
-        scl = (scl_samples[i] >= cfg->scl_threshold) ? 1 : 0;
+        int sda_raw = (sda_samples[i] >= cfg->sda_threshold) ? 1 : 0;
+        int scl_raw = (scl_samples[i] >= cfg->scl_threshold) ? 1 : 0;
+
+        /* Debounce SDA: count consecutive samples at the new level */
+        if (sda_raw != sda_stable) {
+            sda_debounce++;
+            if (sda_debounce >= DEBOUNCE_COUNT) {
+                sda_stable = sda_raw;
+                sda_debounce = 0;
+            }
+        } else {
+            sda_debounce = 0;
+        }
+
+        /* Debounce SCL */
+        if (scl_raw != scl_stable) {
+            scl_debounce++;
+            if (scl_debounce >= DEBOUNCE_COUNT) {
+                scl_stable = scl_raw;
+                scl_debounce = 0;
+            }
+        } else {
+            scl_debounce = 0;
+        }
+
+        sda = sda_stable;
+        scl = scl_stable;
 
         /* START condition: SDA falls while SCL is high */
         if (sda_prev == 1 && sda == 0 && scl == 1 && scl_prev == 1) {
@@ -144,4 +181,6 @@ void decode_i2c(const int16_t *sda_samples, const int16_t *scl_samples,
         sda_prev = sda;
         scl_prev = scl;
     }
+
+    #undef DEBOUNCE_COUNT
 }
