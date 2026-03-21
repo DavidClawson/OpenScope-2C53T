@@ -1,0 +1,13 @@
+[project]
+name = "fnirsi-2c53t-emulator"
+version = "0.1.0"
+description = "GD32F307 MCU emulator for FNIRSI 2C53T oscilloscope firmware"
+readme = "README.md"
+requires-python = ">=3.10"
+dependencies = [
+    "unicorn>=2.0",
+    "capstone>=5.0",
+]
+
+[project.scripts]
+emu-2c53t = "emu_2c53t:main"
