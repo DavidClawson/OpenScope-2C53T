@@ -83,7 +83,7 @@ The filesystem uses FatFS (embedded FAT32 library). The device exposes these via
 | ADC | Unknown model | Likely connected to FPGA, 250MS/s per specs |
 | LCD | Unknown controller | 2.8" display via EXMC/FSMC parallel bus. Likely ILI9341 or ST7789 |
 | Touch | Unknown controller | Via I2C. Likely GT911/GT915 (same family as 1013D/1014D) |
-| SPI Flash | Unknown model | Likely W25Q series. Holds system files filesystem |
+| SPI Flash | **Winbond W25Q128JVSQ** (confirmed) | 128Mbit (16MB). Holds system files, UI graphics, persistent strings, calibration |
 | DAC | Built-in GD32F307 DAC | 2-channel 12-bit, likely drives signal generator |
 
 ## What Physical Teardown Would Confirm

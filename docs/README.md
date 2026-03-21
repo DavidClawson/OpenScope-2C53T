@@ -16,6 +16,7 @@ Understand the firmware well enough to:
 - [Firmware Analysis](firmware_analysis.md) — Binary structure, strings, version comparison
 - [Peripheral Map](peripheral_map.md) — Active interrupts, GPIO usage, communication buses
 - [RTOS Analysis](rtos_analysis.md) — FreeRTOS identification, task architecture, kernel functions
+- [Community Issues](community_issues.md) — 62 documented bugs and feature requests from users
 - [Function Map](function_map.md) — Named functions and variables from RE analysis
 - [Reverse Engineering Guide](re_guide.md) — Tools, methodology, how to get started
 - [Project Ideas](project_ideas.md) — Feature ideas and feasibility analysis
