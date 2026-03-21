@@ -1,0 +1,28 @@
+# FNIRSI firmware binaries (copyrighted - link to download page instead)
+*.bin
+*.zip
+
+# Ghidra project files (large, binary, regenerable)
+ghidra_project/
+ghidra_headless/
+
+# Ghidra output artifacts
+*.png.entropy
+APP_2C53T_V1.2.0_251015.bin.png
+
+# macOS
+.DS_Store
+
+# Cloned reference repos (users should clone these themselves)
+FNIRSI-1013D-1014D-Hack/
+FNIRSI_1013D_Firmware/
+FNIRSI_1014D_Firmware/
+
+# Extracted firmware directories (contain .bin files)
+2C53T Firmware V1.2.0/
+2C53T_Firmware_V1.1.2/
+
+# IDE files
+.vscode/
+*.swp
+*~
