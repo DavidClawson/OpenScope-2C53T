@@ -47,6 +47,7 @@ C_SOURCES += src/decode/decode_uart.c
 C_SOURCES += src/decode/decode_i2c.c
 C_SOURCES += src/decode/decode_spi.c
 C_SOURCES += src/decode/decode_can.c
+C_SOURCES += src/decode/decode_kline.c
 
 # FFT / DSP module
 ifneq ($(findstring FFT,$(FEATURES)),)

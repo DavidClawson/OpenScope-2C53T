@@ -4,12 +4,14 @@
 
 #define DECODE_MAX_FRAMES 64
 #define DECODE_MAX_DATA   256
+#define DECODE_MAX_LABEL  16
 
 typedef enum {
     DECODE_UART = 0,
     DECODE_I2C,
     DECODE_SPI,
     DECODE_CAN,
+    DECODE_KLINE,
     DECODE_COUNT
 } decoder_type_t;
 

@@ -16,4 +16,19 @@ void decode_uart(const int16_t *samples, uint32_t num_samples,
                  float sample_rate, const uart_config_t *cfg,
                  decode_result_t *result);
 
+/* Low-level helpers (used by K-Line and other UART-based protocol decoders) */
+
+/* Decode a single UART byte starting at a falling edge (start bit).
+ * Returns samples consumed, or 0 on error. */
+uint32_t uart_decode_byte(const int16_t *samples, uint32_t num_samples,
+                          float samples_per_bit, int16_t threshold,
+                          uint8_t *out_byte);
+
+/* Scan for UART bytes in a sample buffer. Returns number of bytes found. */
+uint32_t uart_decode_bytes(const int16_t *samples, uint32_t num_samples,
+                           float sample_rate, float baud_rate,
+                           int16_t threshold,
+                           uint8_t *raw_bytes, uint32_t *sample_positions,
+                           uint32_t max_bytes);
+
 #endif /* DECODE_UART_H */

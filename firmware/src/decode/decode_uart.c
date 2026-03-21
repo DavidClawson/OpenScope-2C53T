@@ -135,3 +135,62 @@ void decode_uart(const int16_t *samples, uint32_t num_samples,
         }
     }
 }
+
+/* ─── Low-level helpers for UART-based protocol decoders ────────── */
+
+uint32_t uart_decode_byte(const int16_t *samples, uint32_t num_samples,
+                          float samples_per_bit, int16_t threshold,
+                          uint8_t *out_byte)
+{
+    uint32_t frame_len = (uint32_t)(samples_per_bit * 10.0f);
+    if (num_samples < frame_len)
+        return 0;
+
+    /* Verify start bit */
+    if (samples[0] >= threshold)
+        return 0;
+
+    /* Sample data bits at center of each bit period */
+    uint8_t byte_val = 0;
+    int bit;
+    for (bit = 0; bit < 8; bit++) {
+        uint32_t center = (uint32_t)(samples_per_bit * (1.5f + (float)bit));
+        if (center >= num_samples)
+            return 0;
+        if (samples[center] >= threshold)
+            byte_val |= (uint8_t)(1 << bit);  /* LSB first */
+    }
+
+    *out_byte = byte_val;
+    return frame_len;
+}
+
+uint32_t uart_decode_bytes(const int16_t *samples, uint32_t num_samples,
+                           float sample_rate, float baud_rate,
+                           int16_t threshold,
+                           uint8_t *raw_bytes, uint32_t *sample_positions,
+                           uint32_t max_bytes)
+{
+    float samples_per_bit = sample_rate / baud_rate;
+    uint32_t count = 0;
+    uint32_t i = 0;
+
+    while (i < num_samples && count < max_bytes) {
+        if (samples[i] >= threshold) { i++; continue; }
+        if (i > 0 && samples[i - 1] < threshold) { i++; continue; }
+
+        uint8_t byte_val;
+        uint32_t consumed = uart_decode_byte(samples + i, num_samples - i,
+                                             samples_per_bit, threshold,
+                                             &byte_val);
+        if (consumed == 0) { i++; continue; }
+
+        if (sample_positions)
+            sample_positions[count] = i;
+        raw_bytes[count] = byte_val;
+        count++;
+        i += consumed;
+    }
+
+    return count;
+}
