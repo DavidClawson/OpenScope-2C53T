@@ -8,7 +8,7 @@ Reverse engineering and clean-room rewrite of the firmware for the **FNIRSI 2C53
 
 - **MCU:** GD32F307VET6 — ARM Cortex-M4F @ 120MHz, 1MB flash, 256KB SRAM
 - **LCD:** ST7789V 320x240 RGB565 via 16-bit parallel EXMC/FSMC bus
-- **FPGA:** Unknown (sanded markings) — handles 250MS/s ADC sampling
+- **FPGA:** Gowin GW1N-UV2 (markings sanded, identified by EEVblog community) — handles 250MS/s ADC sampling. Open-source tooling exists (Yosys/nextpnr/Apicula)
 - **SPI Flash:** Winbond W25Q128JVSQ (16MB) — UI assets and system files
 - **DAC:** 2-channel 12-bit (built-in GD32) for signal generator output
 - **Buttons:** 15 physical buttons (CH1, CH2, MOVE, SELECT, TRIGGER, PRM, AUTO, SAVE, MENU, arrows, OK, POWER)

@@ -1,206 +1,251 @@
 # Project Roadmap
 
-## Phase 1: Pre-Device (Can Do Now)
+## Completed (This Session)
 
-### Step 1: Get Renode Booting Past RTOS Idle
-
-**Goal:** Get the firmware running far enough in Renode to see display output.
-
-**What to do:**
-- The firmware is stuck because the FPGA (USART2) and DVOM chip never respond
-- Write a Renode Python script or C# peripheral that simulates USART2 responses:
-  - Reply with `[0x5A, 0xA5]` ACK when the firmware sends a 10-byte command
-  - Return valid 10-byte status frames with `[0xAA, 0x55]` header
-- Add RCU register simulation so clock checks pass (partially done with Tag values)
-- Monitor what address the firmware stalls at after each fix
-- **Success criteria:** firmware gets past hardware init and into the main event loop
-
-**Why first:** This is the single biggest unlock. Once the RTOS tasks are running, we can observe the display task drawing to the framebuffer, understand the menu system, and test button interactions — all without hardware.
-
-### Step 2: Decompile the Missing Functions
-
-**Goal:** Get coverage of the full firmware, especially the task entry points.
-
-**What to do:**
-- The Ghidra auto-analysis only found 292 functions. The FreeRTOS task mapper found that key functions (display task at 0x0803DA50, key task at 0x08040008, osc task at 0x0804009C, fpga task at 0x0803E454) were NOT in the decompiled output.
-- Fix the Ghidra base address: re-import at 0x08007000 instead of 0x08000000 (correcting the offset we discovered)
-- Manually define functions at the known task entry points
-- Run the decompiler on these newly defined functions
-- Apply all the FreeRTOS API names we've identified (19 functions)
-- Apply the variable names we've mapped (framebuffer, viewport, etc.)
-- **Goal output:** Updated `decompiled_2C53T.c` with 500+ named functions
-
-**Why second:** The decompiled code is our primary reference. Having the actual task code decompiled (especially `display`, `osc`, and `fpga` tasks) is essential for everything that follows.
-
-### Step 3: Set Up ARM Cross-Compilation Toolchain
-
-**Goal:** Be able to compile C code for the GD32F307 and produce a flashable binary.
-
-**What to do:**
-- Install `arm-none-eabi-gcc` toolchain (`brew install --cask gcc-arm-embedded`)
-- Download the GD32F30x firmware library from GigaDevice (HAL drivers, CMSIS headers, linker scripts)
-- Create a minimal project structure:
-  ```
-  firmware/
-  ├── src/
-  │   ├── main.c           # Entry point
-  │   ├── system_gd32f30x.c # System init
-  │   └── startup.s        # Startup assembly
-  ├── include/
-  │   └── gd32f30x.h       # Register definitions
-  ├── ld/
-  │   └── gd32f307.ld      # Linker script (flash at 0x08007000, RAM at 0x20000000)
-  ├── FreeRTOS/             # FreeRTOS kernel source
-  └── Makefile
-  ```
-- Write a minimal `main.c` that just blinks or writes to a GPIO
-- Compile and verify it produces a valid ARM binary
-- Test it in Renode to confirm it boots
-- **Do NOT flash to real device yet** — just verify it compiles and runs in emulator
-
-**Why third:** Having the toolchain ready means the moment we understand a peripheral (from RE or from the real device), we can immediately write and test code for it.
-
-### Step 4: Build the LCD Driver (From RE Data)
-
-**Goal:** Write a standalone LCD initialization and drawing library in C.
-
-**What to do:**
-- From the decompiled code, extract the LCD initialization sequence (EXMC/FSMC setup, LCD controller init commands)
-- Identify the LCD controller from the init sequence (ILI9341, ST7789, or similar)
-- Write `lcd.c` / `lcd.h` with:
-  - `lcd_init()` — configure EXMC, send init commands
-  - `lcd_set_pixel(x, y, color)` — write RGB565 pixel
-  - `lcd_fill_rect(x, y, w, h, color)` — fill rectangle
-  - `lcd_draw_char()` / `lcd_draw_string()` — text rendering
-- Test in Renode by hooking the EXMC memory writes → capture framebuffer → display in React frontend
-- **This is where the emulator and real firmware converge** — same LCD code runs in both
-
-**Why fourth:** The display is the most visible output. Getting "Hello World" on the LCD (even just in the emulator) is a huge motivational milestone.
+| Feature | Status | Tests |
+|---------|--------|-------|
+| Custom firmware boots in Renode through FreeRTOS | Done | Verified |
+| LCD driver (ST7789V via EXMC) | Done | Renders in emulator |
+| FFT spectrum analyzer (4096-pt, 5 windows) | Done | 19 tests |
+| CMSIS-DSP integration (arm_rfft_fast_f32) | Done | Auto-detected |
+| FFT averaging, max hold, harmonic labeling | Done | Part of FFT tests |
+| Waterfall/spectrogram display | Done | Visual |
+| Split view (time + frequency) | Done | Visual |
+| DDS signal generator (4 waveforms, sub-Hz) | Done | 25 tests |
+| Protocol decoders: UART, I2C, SPI, CAN | Done | 38 + 85 noisy tests |
+| K-Line/KWP2000 automotive decoder | Done | 9 tests |
+| Math channels (A+B, A-B, A×B, invert) | Done | 5 tests |
+| Auto-measurements (freq, Vpp, Vrms, duty) | Done | 18 tests |
+| Persistence display (5 decay modes) | Done | 8 tests |
+| Config save/load with checksum | Done | 10 tests |
+| Screenshot capture (BMP) | Done | 6 tests |
+| Shared memory pool (saves 152KB RAM) | Done | Integrated |
+| Renode ST7789V peripheral (captures real LCD) | Done | Verified |
+| Browser-based emulator UI (no React/npm) | Done | Functional |
+| UI refactor (main.c → modular src/ui/) | Done | Builds clean |
+| Safety infrastructure (timeout, mutex fs) | Done | Builds clean |
+| **Total** | **223 native tests** | **All passing** |
 
 ---
 
-## Phase 2: With Device (When It Arrives)
+## Phase 1: Pre-Device (Firmware Features)
 
-### Step 5: Hardware Teardown and Full Flash Dump
+### Priority 1: Quick Wins
 
-**Goal:** Get the complete flash contents and verify our chip identification.
+**Color Themes / Skins**
+- 4 built-in themes: Dark Blue (current), Classic Green (Tektronix), High Contrast White, Night Red
+- Per-channel color customization (accessibility for colorblind users)
+- Theme stored in config, applied at boot
+- Effort: Small — just color constant swaps + config field
 
-**What to do:**
-- Open the device (usually 4-6 screws on the back)
-- Photograph the PCB, both sides — document every IC
-- Read chip markings (even if sanded, sometimes readable at angle/under UV)
-- Confirm GD32F307 (or identify the actual MCU if different)
-- Identify the FPGA, ADC, LCD controller, flash chip, DVOM chip
-- Connect via USB Sharing mode, copy everything from the internal filesystem
-- If possible, find SWD test points on the PCB:
-  - Connect a J-Link or ST-Link
-  - Dump the full 1MB flash (this gets us the persistent string tables at 0x080BC000+ and the bootloader at 0x08000000-0x08007000)
-  - Dump the external SPI flash (the system file filesystem)
-- **Output:** Complete chip manifest, PCB photos, full flash dump, filesystem contents
+**Component Tester Mode**
+- Resistor pass/fail: set nominal value + tolerance (e.g., 4.7K ±5%), measure, display PASS/FAIL with big green/red indicator
+- Capacitor test: charge/discharge curve → calculate capacitance and ESR
+- Diode test: forward voltage measurement with polarity detection
+- Continuity: audible buzzer threshold + visual indicator
+- Effort: Medium — new measurement mode, UI screen, basic algorithms
 
-**Why fifth:** This is the first thing to do when the device arrives. Everything we assumed from firmware analysis gets confirmed or corrected.
+**XY Mode / Lissajous**
+- Plot CH1 (X) vs CH2 (Y) instead of time-domain
+- Phase relationship visualization
+- Component curve tracer (apply signal gen to component, measure V-I)
+- Effort: Small — just a different rendering mode for existing sample data
 
-### Step 6: Capture Real FPGA Protocol Traffic
+### Priority 2: Advanced Scope Features
 
-**Goal:** Record the actual USART2 and SPI2 communication between MCU and FPGA.
+**Bode Plot**
+- Signal gen sweeps frequency logarithmically
+- Scope measures amplitude + phase at each frequency
+- Automatic gain (dB) and phase (°) plot
+- Save/export frequency response data
+- Killer feature for EE students and filter designers
+- Effort: Medium — needs signal gen + scope coordination, new UI
 
-**What to do:**
-- Connect a logic analyzer (or a second scope!) to the USART2 TX/RX lines on the PCB
-- Power on the device and capture the entire boot sequence
-- Record traffic during:
-  - Boot/initialization
-  - Changing timebase
-  - Changing trigger settings
-  - Switching between oscilloscope/multimeter/signal generator modes
-  - Capturing a signal
-- Decode the USART frames using our known protocol format (10-byte frames, 0x5A/0xA5 ACK, 0xAA/0x55 data)
-- Also capture SPI2 traffic during acquisition to understand sample data format
-- Cross-reference with the decompiled fpga task code
-- **Output:** Complete FPGA command reference document, similar to pecostm32's `FPGA explained.txt`
+**Mask / Pass-Fail Testing**
+- Record a "known good" waveform as a mask template
+- Set upper/lower tolerance bounds
+- Real-time comparison: PASS if signal stays within mask, FAIL if it exits
+- Production testing use case
+- Effort: Medium — mask storage, real-time comparison, UI
 
-**Why sixth:** This is the Rosetta Stone. Once we know every FPGA command and its effect, we can write firmware that fully controls the analog frontend.
+**Roll Mode**
+- For slow signals (temperature, battery drain, parasitic draw)
+- Continuous scrolling display, no trigger needed
+- Long capture duration (minutes to hours)
+- Effort: Small — different display rendering, no trigger logic
 
-### Step 7: Flash a Minimal Custom Firmware
+**Trend Plot**
+- Graph a measurement (frequency, Vpp, Vrms) over time
+- Catch slow drift, intermittent faults
+- "Frequency was stable at 1.000kHz for 45 minutes, then jumped to 1.002kHz"
+- Effort: Small — measurement + time-series storage
 
-**Goal:** Prove we can write code that runs on the real device.
+**Segmented Memory**
+- Only capture when triggered, skip dead time between events
+- Capture rare glitches without filling memory with idle signal
+- Effort: Medium — memory management, UI for segment navigation
 
-**What to do:**
-- **FIRST: Make a complete backup** of the device's flash via SWD
-- Write a minimal firmware that:
-  - Initializes the clock system (copy from decompiled startup code)
-  - Initializes the LCD (using the driver from Step 4)
-  - Displays "OpenScope 2C53T" on the screen
-  - Blinks an LED or toggles a GPIO (if there's a visible one)
-- Flash it via the firmware update mechanism (MENU + Power, copy to USB drive)
-- Verify it boots and displays the text
-- Flash back to stock firmware to confirm the update mechanism is fully reversible
-- **Output:** Confirmed ability to write and deploy custom firmware
+### Priority 3: Automotive Suite
 
-**Why seventh:** This is the "we can actually do this" milestone. Everything before this is analysis; this is creation.
+**Relative Compression Test**
+- Current clamp on starter lead captures cranking current
+- Input: cylinder count (4/6/8), firing order
+- Auto-detect TDC from current waveform peaks
+- Label each cylinder, calculate relative compression %
+- Bar chart display with PASS/FAIL threshold
+- Overlay/average multiple crank cycles (uses persistence engine)
+- Heat map mode showing cycle-to-cycle variation
+- THIS IS THE VIRAL FEATURE for automotive YouTube
+- Effort: Large — needs cylinder detection algorithm, custom UI, persistence integration
+
+**Injector Pulse Width Analysis**
+- Capture injector drive waveform
+- Measure pulse width per cylinder, display as overlay
+- Compare duty cycle across cylinders
+- Detect stuck/lazy injectors
+- Effort: Medium
+
+**Ignition Coil Analysis**
+- Primary coil dwell time measurement
+- Spark duration and burn voltage (needs HV probe)
+- Cylinder-to-cylinder comparison
+- Effort: Medium
+
+**Alternator Ripple Test**
+- Measure AC ripple on battery with engine running
+- Normal: ~50mV ripple. Bad diode: >300mV with missing phase
+- Auto-detect "X of 6 diodes working"
+- Effort: Small — FFT of battery voltage, pattern matching
+
+**Battery Cranking Analysis**
+- Cranking voltage drop profile
+- Estimate CCA from voltage sag curve
+- Compare to battery rating
+- Effort: Small — voltage measurement + analysis
+
+**Parasitic Draw Hunt**
+- Roll mode with current clamp on battery negative
+- Long-duration recording (30+ minutes) to catch modules waking up
+- Mark events when current spikes
+- "Module wake at T+12:34, drew 2.3A for 150ms"
+- Effort: Medium — roll mode + event detection
+
+### Priority 4: Specialized Applications
+
+**Audio Analysis**
+- THD+N measurement (Total Harmonic Distortion + Noise)
+- Speaker impedance curve (frequency sweep + impedance calc)
+- Audio frequency response (Bode plot in audio range)
+- Effort: Medium — builds on FFT + signal gen
+
+**Ham Radio**
+- Harmonic analysis for FCC compliance (already done via FFT!)
+- SWR measurement (with appropriate coupler)
+- CW decoder (already have UART decoder as base)
+- Splatter analysis for transmitter testing
+- Effort: Small — mostly UI for existing FFT capabilities
+
+**HVAC/Solar**
+- Motor start capacitor test (ESR + capacitance from discharge curve)
+- Compressor current signature analysis (uses motor current analysis)
+- Solar inverter THD measurement
+- Effort: Small-Medium
+
+**3D Printing / CNC**
+- Stepper motor resonance detection (FFT of motor current)
+- TMC driver SPI decode (already have SPI decoder)
+- PWM duty cycle measurement for heaters
+- Endstop signal verification
+- Effort: Small — existing decoders + measurement tools
+
+**Industrial**
+- Motor Current Signature Analysis (MCSA) — FFT of motor current for bearing/rotor fault detection
+- 4-20mA loop testing
+- Relay contact bounce measurement
+- PLC signal verification
+- Effort: Medium
+
+### Priority 5: Connectivity & Data
+
+**USB Streaming to PC**
+- CDC virtual serial port mode
+- Stream raw samples to PC for sigrok/PulseView
+- Turns $70 device into PC-connected instrument
+- Effort: Large — USB CDC driver, protocol design
+
+**CSV/Data Export**
+- Save waveform data to SPI flash as CSV
+- Export via USB mass storage mode
+- Effort: Small
+
+**Waveform Reference Library**
+- Store "known good" reference waveforms on SPI flash
+- Overlay for comparison: "show me what a good ignition coil looks like"
+- Community-contributed waveform database
+- Effort: Medium — storage format, UI for browse/overlay
 
 ---
 
-## Phase 3: Building Features
+## Phase 2: With Device (When It Arrives ~Early April 2026)
 
-### Step 8: Implement Core Scope Functionality
+### Step 1: Hardware Teardown + SWD Connection
+- Open device, photograph PCB
+- Confirm GD32F307 + Gowin GW1N-UV2 FPGA
+- Solder Dupont wires to SWD port (SWDIO + SWCLK + GND)
+- Connect ST-Link V2 or J-Link via USB
+- Optionally connect UART TX/RX for serial debug
+- Full flash dump via SWD (1MB MCU flash + 16MB SPI flash)
+- **Success: can read/write flash, single-step firmware**
 
-**Goal:** Custom firmware that captures and displays waveforms.
+### Step 2: FPGA Protocol Capture
+- Logic analyzer or second scope on USART2 TX/RX
+- Capture full boot sequence + mode changes
+- Decode using known 10-byte frame format
+- Cross-reference with decompiled fpga task code
+- **Output: complete FPGA command reference**
 
-**What to do:**
-- Port the FPGA command interface using the protocol captured in Step 6
-- Implement basic waveform capture: configure timebase → send FPGA command → read samples via SPI2 → display on LCD
-- Implement trigger: level, edge, auto/normal/single modes
-- Implement basic UI: timebase/volts-per-div adjustment with buttons
-- Use FreeRTOS with the same task structure (display, osc, key, fpga)
-- **Success criteria:** capture and display a real signal from the scope probes
+### Step 3: Flash Custom Firmware
+- Backup original flash via SWD
+- Flash our firmware (with all 223-test-verified features)
+- Verify LCD displays our UI
+- Test buttons, mode switching, FFT, signal gen
+- Flash back to stock to confirm reversibility
+- **This is the "it actually works" moment**
 
-### Step 9: First Protocol Decoder (UART)
+### Step 4: Real Signal Acquisition
+- Understand FPGA sample data format from Step 2
+- Implement: configure timebase → FPGA command → read samples → display
+- Real waveform on real LCD from real probe
+- **The scope becomes functional**
 
-**Goal:** Prove the protocol decode overlay concept.
-
-**What to do:**
-- Implement UART decoder: auto-detect baud rate, detect start/stop bits, extract bytes
-- Draw decoded bytes as text overlay on the waveform (e.g., `0x48 'H'` above the corresponding bits)
-- Add a "Protocol" menu option to select the decoder
-- Store decoder settings in the existing configuration system
-- **This validates the architecture** for all future protocol decoders
-
-### Step 10: USB Streaming Mode
-
-**Goal:** Stream sample data to PC for use with sigrok/PulseView.
-
-**What to do:**
-- Add USB CDC (virtual serial port) mode alongside existing USB mass storage
-- When activated: stream raw samples from FPGA through USB to PC
-- Write a basic sigrok hardware driver (`libsigrok`) for the 2C53T
-- Test with PulseView — live waveform display on PC with full protocol decode library
-- **This turns the $70 device into a PC-connected instrument**
+### Step 5: Hardware-in-the-Loop Testing
+- SWD flash + UART serial = fast iteration loop
+- Claude writes code → flash → run → serial output → iterate
+- Test all protocol decoders with real signals
+- K-Line test on the 4Runner!
 
 ---
 
-## Decision Points
+## Top 10 Priority Features (Next to Implement)
 
-At each phase boundary, evaluate:
+1. **Color themes** — quick win, everyone notices
+2. **Component tester** (resistor pass/fail) — unique differentiator
+3. **XY mode / Lissajous** — expected scope feature, easy to add
+4. **Roll mode** — essential for slow signals
+5. **Bode plot** — killer feature for EE students
+6. **Relative compression test** — viral automotive feature
+7. **Alternator ripple test** — easy automotive win
+8. **Mask testing** — production/QA use case
+9. **Trend plot** — catch intermittent faults
+10. **USB streaming** — turns scope into PC instrument
 
-1. **After Phase 1:** Is the RE data sufficient, or do we need to wait for hardware? (Likely: proceed with what we have, hardware fills in gaps)
+---
 
-2. **After Step 7:** Go public with the repo? At this point you'd have confirmed the firmware update works, the device is hackable, and you have a working custom firmware. This is when the project becomes interesting to others.
+## FPGA Notes
 
-3. **After Step 9:** Release the first "useful" firmware build? A scope with UART decode would already be more capable than the stock firmware.
+The FPGA is now identified as **Gowin GW1N-UV2** (confirmed by EEVblog community). Open-source toolchain exists:
+- **Yosys** for synthesis
+- **nextpnr-gowin** for place-and-route
+- **Apicula** for bitstream generation
 
-4. **CAN bus timing:** If the GD32F307's CAN pins are accessible (discovered in Step 5), the automotive modules become much easier. If not, CAN decode from the analog waveform is still feasible but harder.
-
-## Estimated Effort
-
-| Step | Without device | With device | Effort |
-|---|---|---|---|
-| 1. Renode boot | Yes | — | 1-2 sessions |
-| 2. Full decompilation | Yes | — | 1 session |
-| 3. Toolchain setup | Yes | — | 1 session |
-| 4. LCD driver | Yes (test in emulator) | — | 1-2 sessions |
-| 5. Teardown + dump | — | Yes | 1 session |
-| 6. FPGA protocol capture | — | Yes | 1-2 sessions |
-| 7. First custom flash | — | Yes | 1 session |
-| 8. Core scope | — | Yes | 3-5 sessions |
-| 9. UART decoder | — | Yes (or emulator) | 1-2 sessions |
-| 10. USB streaming | — | Yes | 2-3 sessions |
+This opens the possibility of custom FPGA firmware — higher sample rates, custom trigger logic, protocol-aware capture, hardware acceleration. This is a Phase 3+ goal but dramatically expands what the device can do.
