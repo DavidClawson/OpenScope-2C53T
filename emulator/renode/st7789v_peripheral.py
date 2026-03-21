@@ -99,7 +99,7 @@ elif request.IsWrite:
                 cursor_y[0] = cursor_y[0] + 1
 
             write_count[0] = write_count[0] + 1
-            if write_count[0] >= 500:
+            if write_count[0] >= 5000:
                 write_count[0] = 0
                 f = open(FB_PATH, "wb")
                 f.write(bytes(fb))

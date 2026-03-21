@@ -12,14 +12,23 @@
   /* LCD Display */
   #lcd-wrap { border: 3px solid #333; border-radius: 4px; background: #000; }
   #lcd { image-rendering: pixelated; display: block; }
-  /* Button Panel */
-  #buttons { display: grid; grid-template-columns: repeat(3, 1fr); gap: 6px; width: 220px; }
+  /* Button Panel — matches physical device layout */
+  #buttons { width: 240px; }
+  .btn-row { display: flex; gap: 4px; margin-bottom: 4px; justify-content: center; }
   .btn { background: #2a2a3e; color: #ccc; border: 1px solid #444; border-radius: 4px;
-         padding: 8px 4px; font-size: 11px; cursor: pointer; text-align: center; font-family: inherit; }
+         padding: 6px 8px; font-size: 10px; cursor: pointer; text-align: center; font-family: inherit;
+         min-width: 52px; }
   .btn:hover { background: #3a3a5e; color: #fff; border-color: #0ff; }
   .btn:active { background: #0ff; color: #000; }
-  .btn.wide { grid-column: span 2; }
+  .btn.blue { background: #1a3050; border-color: #2a6090; color: #6ac; }
+  .btn.blue:hover { background: #2a5080; border-color: #0ff; }
   .btn.accent { border-color: #0ff; color: #0ff; }
+  .btn.small { min-width: 40px; padding: 6px 4px; }
+  /* D-pad */
+  .dpad { display: grid; grid-template-columns: 40px 44px 40px; grid-template-rows: 34px 34px 34px; gap: 2px; justify-content: center; margin: 6px 0; }
+  .dpad .btn { min-width: unset; width: 100%; border-radius: 6px; padding: 4px; }
+  .dpad .ok { background: #1a3050; border-color: #2a6090; border-radius: 50%; font-weight: bold; }
+  .spacer { visibility: hidden; }
   /* Signal Injection */
   #signal-panel { background: #222; border: 1px solid #444; border-radius: 4px; padding: 12px; width: 220px; margin-top: 10px; }
   #signal-panel h3 { color: #0ff; font-size: 13px; margin-bottom: 8px; }
@@ -43,23 +52,47 @@
 
   <!-- Controls Column -->
   <div>
-    <!-- Button Panel -->
+    <!-- Button Panel — matches FNIRSI 2C53T layout -->
     <div id="buttons">
-      <button class="btn" data-btn="CH1">CH1</button>
-      <button class="btn" data-btn="CH2">CH2</button>
-      <button class="btn" data-btn="MOVE">MOVE</button>
-      <button class="btn" data-btn="SELECT">SELECT</button>
-      <button class="btn" data-btn="TRIGGER">TRIG</button>
-      <button class="btn" data-btn="PRM">PRM</button>
-      <button class="btn accent" data-btn="AUTO">AUTO</button>
-      <button class="btn" data-btn="SAVE">SAVE</button>
-      <button class="btn accent" data-btn="MENU">MENU</button>
-      <button class="btn" data-btn="UP">UP</button>
-      <button class="btn" data-btn="OK">OK</button>
-      <button class="btn" data-btn="DOWN">DOWN</button>
-      <button class="btn" data-btn="LEFT">LEFT</button>
-      <button class="btn" data-btn="RIGHT">RIGHT</button>
-      <button class="btn" data-btn="POWER">PWR</button>
+      <!-- Top row: MOVE SELECT TRIGGER PRM -->
+      <div class="btn-row">
+        <button class="btn small" data-btn="MOVE">MOVE</button>
+        <button class="btn small" data-btn="SELECT">SEL</button>
+        <button class="btn small blue" data-btn="TRIGGER">TRIG</button>
+        <button class="btn small" data-btn="PRM">PRM</button>
+      </div>
+
+      <!-- CH1/CH2 row with AUTO/SAVE -->
+      <div class="btn-row" style="margin-top:8px;">
+        <button class="btn blue" data-btn="CH1">CH1</button>
+        <div style="width:80px"></div>
+        <button class="btn blue" data-btn="CH2">CH2</button>
+      </div>
+      <div class="btn-row">
+        <button class="btn accent" data-btn="AUTO">AUTO</button>
+        <div style="width:80px"></div>
+        <button class="btn" data-btn="SAVE">SAVE</button>
+      </div>
+
+      <!-- D-pad -->
+      <div class="dpad">
+        <div class="spacer"></div>
+        <button class="btn" data-btn="UP">&#9650;</button>
+        <div class="spacer"></div>
+        <button class="btn" data-btn="LEFT">&#9664;</button>
+        <button class="btn ok" data-btn="OK">OK</button>
+        <button class="btn" data-btn="RIGHT">&#9654;</button>
+        <div class="spacer"></div>
+        <button class="btn" data-btn="DOWN">&#9660;</button>
+        <div class="spacer"></div>
+      </div>
+
+      <!-- MENU and POWER -->
+      <div class="btn-row" style="margin-top:4px;">
+        <button class="btn" data-btn="POWER">PWR</button>
+        <div style="width:80px"></div>
+        <button class="btn accent" data-btn="MENU">MENU</button>
+      </div>
     </div>
 
     <!-- Signal Injection -->
@@ -200,6 +233,22 @@ document.getElementById('signal-panel').addEventListener('change', () => {
 document.getElementById('signal-panel').addEventListener('input', () => {
   clearTimeout(sigTimer);
   sigTimer = setTimeout(sendSignalConfig, 500);
+});
+
+// Keyboard shortcuts
+const keyMap = {
+  'ArrowUp': 'UP', 'ArrowDown': 'DOWN', 'ArrowLeft': 'LEFT', 'ArrowRight': 'RIGHT',
+  'Enter': 'OK', 'm': 'MENU', 'p': 'PRM', 'a': 'AUTO', 's': 'SAVE',
+  't': 'TRIGGER', '1': 'CH1', '2': 'CH2', ' ': 'SELECT',
+};
+document.addEventListener('keydown', (e) => {
+  const btn = keyMap[e.key];
+  if (btn && ws && ws.readyState === 1) {
+    e.preventDefault();
+    ws.send(JSON.stringify({ type: 'button', button: btn }));
+    const el = document.querySelector(`[data-btn="${btn}"]`);
+    if (el) { el.style.background = '#0ff'; setTimeout(() => el.style.background = '', 100); }
+  }
 });
 
 connect();
