@@ -41,14 +41,24 @@
  * GD32F307 peripheral registers used for LCD GPIO init
  * ======================================================================== */
 
-/* RCU (Reset and Clock Unit) */
+/* RCU (Reset and Clock Unit) — only define if GD32 HAL isn't present */
+#ifndef RCU_APB2EN
 #define RCU_APB2EN      (*(volatile uint32_t *)0x40021018)
+#endif
+#ifndef RCU_AHBEN
 #define RCU_AHBEN       (*(volatile uint32_t *)0x40021014)
+#endif
 
 /* RCU enable bits */
+#ifndef RCU_APB2EN_PDEN
 #define RCU_APB2EN_PDEN (1 << 5)   /* GPIOD clock enable */
+#endif
+#ifndef RCU_APB2EN_PEEN
 #define RCU_APB2EN_PEEN (1 << 6)   /* GPIOE clock enable */
+#endif
+#ifndef RCU_AHBEN_EXMC
 #define RCU_AHBEN_EXMC  (1 << 8)   /* EXMC clock enable  */
+#endif
 
 /* GPIO port D registers (0x40011400) */
 #define GPIOD_CRL       (*(volatile uint32_t *)0x40011400)
@@ -118,12 +128,17 @@
 #define COLOR_MAGENTA   0xF81F
 
 /* Colors extracted from firmware UI code */
-#define COLOR_CH1       0xFFE0  /* Channel 1: Yellow */
-#define COLOR_CH2       0x07FF  /* Channel 2: Cyan   */
-#define COLOR_TRIGGER   0x07E0  /* Trigger indicator: Green */
-#define COLOR_GRID      0x18C3  /* Grid lines: Dark gray RGB(24,24,24) */
-#define COLOR_UI_TEXT   0x055F  /* UI text: Light blue RGB(0,170,255) */
-#define COLOR_UI_BG     0x6BB0  /* UI background: Gray RGB(106,117,131) */
+#define COLOR_CH1           0xFFE0  /* Channel 1: Yellow */
+#define COLOR_CH2           0x07FF  /* Channel 2: Cyan   */
+#define COLOR_TRIGGER       0x07E0  /* Trigger indicator: Green */
+#define COLOR_GRID          0x18C3  /* Grid lines: Dark gray */
+#define COLOR_GRID_CENTER   0x3186  /* Center crosshair: Lighter gray */
+#define COLOR_UI_TEXT       0x055F  /* UI text: Light blue */
+#define COLOR_UI_BG         0x6BB0  /* UI background: Gray */
+#define COLOR_DARK_GRAY     0x2104  /* Status bars, backgrounds */
+#define COLOR_GRAY          0x8410  /* Secondary text */
+#define COLOR_SELECTED_BG   0x2945  /* Selected menu item background */
+#define COLOR_ORANGE        0xFCA0  /* Highlight/active item */
 
 /* ========================================================================
  * RGB565 color helper macro

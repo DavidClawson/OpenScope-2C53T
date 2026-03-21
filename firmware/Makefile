@@ -26,6 +26,7 @@ FREERTOS   = FreeRTOS
 
 # Application
 C_SOURCES  = src/main.c
+C_SOURCES += src/drivers/lcd.c
 
 # GD32 CMSIS
 C_SOURCES += $(GD32_CMSIS)/GD/GD32F30x/Source/system_gd32f30x.c
@@ -52,6 +53,7 @@ ASM_SOURCES = $(GD32_CMSIS)/GD/GD32F30x/Source/GCC/startup_gd32f30x_cl.S
 # Include paths
 ######################################################################
 C_INCLUDES  = -Iinclude
+C_INCLUDES += -Isrc/drivers
 C_INCLUDES += -I$(GD32_CMSIS)
 C_INCLUDES += -I$(GD32_CMSIS)/GD/GD32F30x/Include
 C_INCLUDES += -I$(GD32_STD)/Include
@@ -140,6 +142,13 @@ disasm: $(BUILD_DIR)/$(TARGET).elf
 
 size: $(BUILD_DIR)/$(TARGET).elf
 	$(SZ) --format=berkeley $<
+
+# Build for emulator (skips HAL clock init that hangs without real hardware)
+# Exclude system_gd32f30x.c since main.c provides its own SystemInit stub
+EMU_EXCLUDE = system_gd32f30x.c
+emu: CFLAGS += -DEMULATOR_BUILD
+emu: C_SOURCES := $(filter-out %$(EMU_EXCLUDE),$(C_SOURCES))
+emu: clean all
 
 # Flash via Renode emulator (for testing)
 renode: $(BUILD_DIR)/$(TARGET).bin

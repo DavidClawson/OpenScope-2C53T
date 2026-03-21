@@ -1,0 +1,22 @@
+mach create "OpenScope_2C53T"
+machine LoadPlatformDescription @gd32f307_2c53t.repl
+
+sysbus LoadBinary @../../firmware/build/firmware.bin 0x08000000
+cpu VectorTableOffset 0x08000000
+
+# Clock system - all ready/stable bits set
+sysbus Tag <0x40021000, 0x40021003> "RCU_CTL" 0x0F0F0003
+sysbus Tag <0x40021004, 0x40021007> "RCU_CFG0" 0x001D840A
+sysbus Tag <0x40021008, 0x4002100B> "RCU_INT" 0x00000000
+sysbus Tag <0x40021014, 0x40021017> "RCU_AHBEN" 0x00000114
+sysbus Tag <0x40021018, 0x4002101B> "RCU_APB2EN" 0x0000FFFD
+sysbus Tag <0x4002101C, 0x4002101F> "RCU_APB1EN" 0x3FFFFFFF
+
+# PMU - LDO voltage stable, all power ready
+sysbus Tag <0x40007000, 0x40007003> "PMU_CTL" 0x00000000
+sysbus Tag <0x40007004, 0x40007007> "PMU_CS" 0x00070000
+
+# Flash wait states
+sysbus Tag <0x40022000, 0x40022003> "FMC_WS" 0x00000032
+
+start
