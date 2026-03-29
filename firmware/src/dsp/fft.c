@@ -368,6 +368,25 @@ void fft_init(const fft_config_t *cfg)
     initialized = true;
 }
 
+void fft_deinit(void)
+{
+    if (!initialized)
+        return;
+    initialized = false;
+    shared_mem_release();
+    /* Null out pointers so accidental use after deinit is safe */
+    fft_buf = 0;
+    window_coeffs = 0;
+    magnitude_buf = 0;
+    avg_buf = 0;
+    max_hold_buf = 0;
+}
+
+bool fft_is_initialized(void)
+{
+    return initialized;
+}
+
 void fft_process(const int16_t *samples, uint16_t num_samples,
                  fft_result_t *result)
 {

@@ -15,6 +15,7 @@
 #include "scope_state.h"
 #include "math_channel.h"
 #include "component_test.h"
+#include "shared_mem.h"
 #include <stdio.h>
 
 /* Top-level menu items */
@@ -194,14 +195,23 @@ static void draw_settings_about(void)
     font_draw_string(MENU_LEFT, y, "LCD: ST7789V 320x240", fg, bg, &font_medium);
     y += 22;
     font_draw_string(MENU_LEFT, y, "RTOS: FreeRTOS", fg, bg, &font_medium);
-    y += 30;
+    y += 26;
 
-    font_draw_string(MENU_LEFT, y, "github.com/DavidClawson/",
-                     th->highlight, bg, &font_small);
-    y += 16;
-    font_draw_string(MENU_LEFT, y, "OpenScope-2C53T",
-                     th->highlight, bg, &font_small);
-    y += 24;
+    /* Pool status */
+    {
+        char pbuf[40];
+        snprintf(pbuf, sizeof(pbuf), "Pool: %s (%luKB)",
+                 shared_mem_owner_name(),
+                 (unsigned long)(shared_mem_owner_need() / 1024));
+        font_draw_string(MENU_LEFT, y, pbuf, th->highlight, bg, &font_small);
+        y += 14;
+        snprintf(pbuf, sizeof(pbuf), "Heap free: %luB  Transitions: %lu",
+                 (unsigned long)xPortGetFreeHeapSize(),
+                 (unsigned long)shared_mem_transition_count());
+        font_draw_string(MENU_LEFT, y, pbuf, fg, bg, &font_small);
+    }
+    y += 20;
+
     font_draw_string(MENU_LEFT, y, "License: GPL v3",
                      th->text_secondary, bg, &font_small);
 

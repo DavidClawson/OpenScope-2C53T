@@ -20,6 +20,7 @@
 #include "math_channel.h"
 #include "component_test.h"
 #include "persistence.h"
+#include "shared_mem.h"
 #include <stdio.h>
 
 #ifdef FEATURE_FFT
@@ -88,13 +89,16 @@ void input_handle_settings_ok(void)
                 math_op = 0;
             }
         } else if (settings_sub_selected == 1) {
-            /* Persistence: toggle on/off */
+            /* Persistence: toggle on/off with pool lifecycle */
             persist_enabled = !persist_enabled;
             if (persist_enabled) {
+                /* Persistence needs the pool — evicts FFT if active */
+                if (fft_is_initialized())
+                    fft_deinit();
                 persist_init();
                 persist_set_mode(PERSIST_MEDIUM);
             } else {
-                persist_set_mode(PERSIST_OFF);
+                persist_deinit();
             }
         } else if (settings_sub_selected == 2) {
             /* Back */
@@ -238,7 +242,28 @@ uint8_t input_handle_button(button_id_t button, QueueHandle_t dq)
 #ifdef FEATURE_FFT
     case BTN_PRM:
         if (current_mode == MODE_OSCILLOSCOPE) {
+            scope_view_t prev_view = scope_view;
             scope_view = (scope_view_t)((scope_view + 1) % SCOPE_VIEW_COUNT);
+
+            /* Pool lifecycle: claim FFT pool when entering FFT views,
+             * release when returning to time-domain */
+            if (prev_view == SCOPE_VIEW_TIME && scope_view != SCOPE_VIEW_TIME) {
+                /* Entering FFT view — claim pool */
+                fft_config_t fft_cfg;
+                fft_cfg.window         = FFT_WINDOW_HANNING;
+                fft_cfg.sample_rate_hz = 44100.0f;
+                fft_cfg.ref_level_db   = 0.0f;
+                fft_cfg.db_range       = 80.0f;
+                fft_cfg.peak_count     = 4;
+                fft_cfg.avg_count      = 0;
+                fft_cfg.max_hold       = false;
+                fft_cfg.zoom_start_bin = 1;
+                fft_cfg.zoom_end_bin   = FFT_BINS - 1;
+                fft_init(&fft_cfg);
+            } else if (prev_view != SCOPE_VIEW_TIME && scope_view == SCOPE_VIEW_TIME) {
+                /* Returning to time-domain — release pool */
+                fft_deinit();
+            }
             send_cmd(dq, cmd);
         } else if (current_mode == MODE_SIGNAL_GEN) {
             /* Cycle frequency presets: 1 -> 10 -> 100 -> 1k -> 10k -> 25k -> 1 Hz */

@@ -16,8 +16,14 @@ typedef enum {
     PERSIST_COUNT
 } persist_mode_t;
 
-/* Initialize persistence buffer */
+/* Initialize persistence buffer (claims shared memory pool) */
 void persist_init(void);
+
+/* Deinitialize persistence (releases shared memory pool) */
+void persist_deinit(void);
+
+/* Check if persistence buffer is initialized */
+bool persist_is_initialized(void);
 
 /* Clear persistence buffer */
 void persist_clear(void);

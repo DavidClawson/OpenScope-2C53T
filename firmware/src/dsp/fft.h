@@ -69,8 +69,15 @@ typedef struct {
     float       peak_mag_db;        /* Magnitude of strongest peak */
 } fft_result_t;
 
-/* Initialize FFT engine. Precomputes window coefficients and twiddle factors. */
+/* Initialize FFT engine. Claims shared memory pool and precomputes
+ * window coefficients and twiddle factors. */
 void fft_init(const fft_config_t *cfg);
+
+/* Deinitialize FFT engine. Releases shared memory pool. */
+void fft_deinit(void);
+
+/* Check if FFT engine is initialized (has pool ownership). */
+bool fft_is_initialized(void);
 
 /* Process int16 ADC samples into frequency domain result. */
 void fft_process(const int16_t *samples, uint16_t num_samples,

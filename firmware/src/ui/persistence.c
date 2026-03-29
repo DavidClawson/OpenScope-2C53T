@@ -13,6 +13,18 @@ void persist_init(void)
     current_mode = PERSIST_OFF;
 }
 
+void persist_deinit(void)
+{
+    persist_buf = 0;
+    current_mode = PERSIST_OFF;
+    shared_mem_release();
+}
+
+bool persist_is_initialized(void)
+{
+    return persist_buf != 0;
+}
+
 void persist_clear(void)
 {
     if (persist_buf)

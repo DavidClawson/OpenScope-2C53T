@@ -281,22 +281,11 @@ int main(void)
     lcd_fsmc_init();
     lcd_init();
 
-#if defined(FEATURE_FFT) && !defined(EMULATOR_BUILD)
-    /* Initialize FFT engine (skipped in emulator — trig functions too slow) */
-    {
-        fft_config_t fft_cfg;
-        fft_cfg.window         = FFT_WINDOW_HANNING;
-        fft_cfg.sample_rate_hz = 44100.0f;
-        fft_cfg.ref_level_db   = 0.0f;
-        fft_cfg.db_range       = 80.0f;
-        fft_cfg.peak_count     = 4;
-        fft_cfg.avg_count      = 0;
-        fft_cfg.max_hold       = false;
-        fft_cfg.zoom_start_bin = 1;
-        fft_cfg.zoom_end_bin   = FFT_BINS - 1;
-        fft_init(&fft_cfg);
-    }
-#endif
+    /*
+     * FFT engine is initialized ON DEMAND when user enters FFT view
+     * (via BTN_PRM in input_handler.c). This keeps the 88KB shared
+     * memory pool free for other features until actually needed.
+     */
 
 #ifndef EMULATOR_BUILD
     /* Initialize signal generator (skipped in emulator) */
