@@ -1,42 +1,314 @@
 /*
  * OpenScope 2C53T - Oscilloscope UI
+ *
+ * Waveform display with:
+ *   - Trigger level arrow + dotted line
+ *   - Ground reference markers (CH1/CH2 zero-volt arrows)
+ *   - Trigger status badge (Auto/Trig'd/Ready/Stop)
+ *   - Run/Stop indicator
+ *   - Auto-measurement badges (Freq, Vpp, Vrms, Duty, Period, Rise)
+ *   - Quick-change popup overlay
  */
 
 #include "ui.h"
 #include "lcd.h"
 #include "font.h"
 #include "theme.h"
+#include "scope_state.h"
+#include <stdio.h>
 #include <math.h>
 
-/* Draw the oscilloscope grid */
+/* ═══════════════════════════════════════════════════════════════════
+ * Layout constants
+ * ═══════════════════════════════════════════════════════════════════ */
+
+#define SCOPE_TOP       18      /* Below status bar */
+#define SCOPE_BOT       (LCD_HEIGHT - 16)  /* Above info bar */
+#define SCOPE_H         (SCOPE_BOT - SCOPE_TOP)
+#define SCOPE_MID_Y     (SCOPE_TOP + SCOPE_H / 2)
+
+/* Measurement badge layout */
+#define BADGE_W         76
+#define BADGE_H         14
+#define BADGE_PAD       2
+#define BADGE_ROW_Y     (SCOPE_BOT - BADGE_H - 2)
+#define BADGE_ROW2_Y    (BADGE_ROW_Y - BADGE_H - 1)
+
+/* Quick-change popup */
+#define POPUP_W         200
+#define POPUP_H         36
+#define POPUP_X         ((LCD_WIDTH - POPUP_W) / 2)
+#define POPUP_Y         ((LCD_HEIGHT - POPUP_H) / 2)
+
+/* ═══════════════════════════════════════════════════════════════════
+ * Quick-change popup state (shared with main.c via extern)
+ * ═══════════════════════════════════════════════════════════════════ */
+
+static char popup_text[32] = "";
+static uint8_t popup_frames = 0;  /* Countdown: show for N frames then dismiss */
+
+#define POPUP_DURATION 10  /* ~500ms at 20fps */
+
+void scope_show_popup(const char *text)
+{
+    int i = 0;
+    while (text[i] && i < (int)sizeof(popup_text) - 1) {
+        popup_text[i] = text[i];
+        i++;
+    }
+    popup_text[i] = '\0';
+    popup_frames = POPUP_DURATION;
+}
+
+/* ═══════════════════════════════════════════════════════════════════
+ * Grid
+ * ═══════════════════════════════════════════════════════════════════ */
+
 void draw_scope_grid(void)
 {
     const theme_t *th = theme_get();
     uint16_t x, y;
+
+    /* Vertical grid lines (dotted) */
     for (x = 0; x < LCD_WIDTH; x += 32) {
-        for (y = 18; y < LCD_HEIGHT - 16; y += 2) {
+        for (y = SCOPE_TOP; y < SCOPE_BOT; y += 2)
             lcd_set_pixel(x, y, th->grid);
-        }
     }
-    for (y = 18; y < LCD_HEIGHT - 16; y += 26) {
-        for (x = 0; x < LCD_WIDTH; x += 2) {
+    /* Horizontal grid lines (dotted) */
+    for (y = SCOPE_TOP; y < SCOPE_BOT; y += 26) {
+        for (x = 0; x < LCD_WIDTH; x += 2)
             lcd_set_pixel(x, y, th->grid);
-        }
     }
 
     /* Center crosshair (solid) */
-    for (x = 0; x < LCD_WIDTH; x++) {
-        lcd_set_pixel(x, (LCD_HEIGHT - 32) / 2 + 16, th->grid_center);
-    }
-    for (y = 18; y < LCD_HEIGHT - 16; y++) {
+    for (x = 0; x < LCD_WIDTH; x++)
+        lcd_set_pixel(x, SCOPE_MID_Y, th->grid_center);
+    for (y = SCOPE_TOP; y < SCOPE_BOT; y++)
         lcd_set_pixel(LCD_WIDTH / 2, y, th->grid_center);
+}
+
+/* ═══════════════════════════════════════════════════════════════════
+ * Trigger level indicator
+ * ═══════════════════════════════════════════════════════════════════ */
+
+static void draw_trigger_indicator(const scope_state_t *ss, const theme_t *th)
+{
+    /* Trigger level as pixel Y position */
+    int16_t trig_y = SCOPE_MID_Y - ss->trigger.level;
+    if (trig_y < SCOPE_TOP + 2) trig_y = SCOPE_TOP + 2;
+    if (trig_y > SCOPE_BOT - 3) trig_y = SCOPE_BOT - 3;
+
+    /* Right-edge arrow: small triangle pointing left */
+    uint16_t ax = LCD_WIDTH - 1;
+    lcd_set_pixel(ax,     (uint16_t)trig_y, th->trigger);
+    lcd_set_pixel(ax - 1, (uint16_t)trig_y, th->trigger);
+    lcd_set_pixel(ax - 2, (uint16_t)trig_y, th->trigger);
+    lcd_set_pixel(ax - 3, (uint16_t)trig_y, th->trigger);
+    lcd_set_pixel(ax - 4, (uint16_t)trig_y, th->trigger);
+    lcd_set_pixel(ax - 1, (uint16_t)(trig_y - 1), th->trigger);
+    lcd_set_pixel(ax - 2, (uint16_t)(trig_y - 2), th->trigger);
+    lcd_set_pixel(ax - 1, (uint16_t)(trig_y + 1), th->trigger);
+    lcd_set_pixel(ax - 2, (uint16_t)(trig_y + 2), th->trigger);
+
+    /* Dotted horizontal line at trigger level */
+    for (uint16_t x = 0; x < LCD_WIDTH - 6; x += 4)
+        lcd_set_pixel(x, (uint16_t)trig_y, th->trigger);
+
+    /* Trigger edge indicator (small arrow next to the trigger arrow) */
+    if (ss->trigger.edge == TRIG_RISING) {
+        /* Up arrow: rising edge */
+        lcd_set_pixel(ax - 6, (uint16_t)(trig_y + 2), th->trigger);
+        lcd_set_pixel(ax - 6, (uint16_t)(trig_y + 1), th->trigger);
+        lcd_set_pixel(ax - 6, (uint16_t)trig_y,       th->trigger);
+        lcd_set_pixel(ax - 6, (uint16_t)(trig_y - 1), th->trigger);
+        lcd_set_pixel(ax - 7, (uint16_t)trig_y,       th->trigger);
+        lcd_set_pixel(ax - 5, (uint16_t)trig_y,       th->trigger);
+    } else {
+        /* Down arrow: falling edge */
+        lcd_set_pixel(ax - 6, (uint16_t)(trig_y - 2), th->trigger);
+        lcd_set_pixel(ax - 6, (uint16_t)(trig_y - 1), th->trigger);
+        lcd_set_pixel(ax - 6, (uint16_t)trig_y,       th->trigger);
+        lcd_set_pixel(ax - 6, (uint16_t)(trig_y + 1), th->trigger);
+        lcd_set_pixel(ax - 7, (uint16_t)trig_y,       th->trigger);
+        lcd_set_pixel(ax - 5, (uint16_t)trig_y,       th->trigger);
     }
 }
 
-/* Draw a simulated sine waveform for CH1 */
+/* ═══════════════════════════════════════════════════════════════════
+ * Ground reference markers (left edge)
+ * ═══════════════════════════════════════════════════════════════════ */
+
+static void draw_ground_markers(const scope_state_t *ss, const theme_t *th)
+{
+    /* CH1 ground marker — small right-pointing arrow with "1" */
+    if (ss->ch1.enabled) {
+        int16_t ch1_y = SCOPE_MID_Y - ss->ch1.position;
+        if (ch1_y >= SCOPE_TOP + 2 && ch1_y <= SCOPE_BOT - 3) {
+            lcd_set_pixel(0, (uint16_t)ch1_y, th->ch1);
+            lcd_set_pixel(1, (uint16_t)ch1_y, th->ch1);
+            lcd_set_pixel(2, (uint16_t)ch1_y, th->ch1);
+            lcd_set_pixel(3, (uint16_t)ch1_y, th->ch1);
+            lcd_set_pixel(1, (uint16_t)(ch1_y - 1), th->ch1);
+            lcd_set_pixel(2, (uint16_t)(ch1_y - 2), th->ch1);
+            lcd_set_pixel(1, (uint16_t)(ch1_y + 1), th->ch1);
+            lcd_set_pixel(2, (uint16_t)(ch1_y + 2), th->ch1);
+            font_draw_string(5, (uint16_t)(ch1_y - 5), "1",
+                             th->ch1, th->ch1, &font_small);
+        }
+    }
+
+    /* CH2 ground marker */
+    if (ss->ch2.enabled) {
+        int16_t ch2_y = SCOPE_MID_Y - ss->ch2.position;
+        if (ch2_y >= SCOPE_TOP + 2 && ch2_y <= SCOPE_BOT - 3) {
+            lcd_set_pixel(0, (uint16_t)ch2_y, th->ch2);
+            lcd_set_pixel(1, (uint16_t)ch2_y, th->ch2);
+            lcd_set_pixel(2, (uint16_t)ch2_y, th->ch2);
+            lcd_set_pixel(3, (uint16_t)ch2_y, th->ch2);
+            lcd_set_pixel(1, (uint16_t)(ch2_y - 1), th->ch2);
+            lcd_set_pixel(2, (uint16_t)(ch2_y - 2), th->ch2);
+            lcd_set_pixel(1, (uint16_t)(ch2_y + 1), th->ch2);
+            lcd_set_pixel(2, (uint16_t)(ch2_y + 2), th->ch2);
+            font_draw_string(5, (uint16_t)(ch2_y - 5), "2",
+                             th->ch2, th->ch2, &font_small);
+        }
+    }
+}
+
+/* ═══════════════════════════════════════════════════════════════════
+ * Trigger status badge
+ * ═══════════════════════════════════════════════════════════════════ */
+
+static void draw_trigger_status(const scope_state_t *ss, const theme_t *th)
+{
+    const char *label;
+    uint16_t color;
+
+    if (!ss->running) {
+        label = "STOP";
+        color = th->warning;
+    } else if (ss->trigger.mode == TRIG_AUTO) {
+        label = "Auto";
+        color = th->success;
+    } else if (ss->trigger.mode == TRIG_SINGLE) {
+        label = "Ready";
+        color = th->highlight;
+    } else {
+        label = "Trig'd";
+        color = th->success;
+    }
+
+    /* Draw badge at top-right of waveform area */
+    uint16_t bw = 44;
+    uint16_t bx = LCD_WIDTH - bw - 2;
+    uint16_t by = SCOPE_TOP + 2;
+    lcd_fill_rect(bx, by, bw, 14, th->background);
+    font_draw_string_right(LCD_WIDTH - 4, by + 1, label,
+                           color, th->background, &font_small);
+}
+
+/* ═══════════════════════════════════════════════════════════════════
+ * Run/Stop indicator
+ * ═══════════════════════════════════════════════════════════════════ */
+
+static void draw_run_stop(const scope_state_t *ss, const theme_t *th)
+{
+    if (!ss->running) {
+        /* Prominent STOP badge top-center */
+        uint16_t bw = 40;
+        uint16_t bx = (LCD_WIDTH - bw) / 2;
+        lcd_fill_rect(bx, SCOPE_TOP + 2, bw, 16, th->warning);
+        font_draw_string_center(LCD_WIDTH / 2, SCOPE_TOP + 4, "STOP",
+                                th->text_primary, th->warning, &font_small);
+    }
+}
+
+/* ═══════════════════════════════════════════════════════════════════
+ * Measurement badges
+ * ═══════════════════════════════════════════════════════════════════ */
+
+static void draw_one_badge(uint16_t x, uint16_t y, const char *label,
+                           const char *value, uint16_t color, const theme_t *th)
+{
+    /* Semi-transparent background (just use dim background) */
+    lcd_fill_rect(x, y, BADGE_W, BADGE_H, th->background);
+
+    /* Label in dim color, value in bright channel color */
+    font_draw_string(x + BADGE_PAD, y + 1, label,
+                     th->text_secondary, th->background, &font_small);
+    font_draw_string_right(x + BADGE_W - BADGE_PAD, y + 1, value,
+                           color, th->background, &font_small);
+}
+
+static void draw_measurement_badges(const scope_state_t *ss, const theme_t *th)
+{
+    /*
+     * Demo measurements — when real ADC is available, these will come
+     * from measurement_compute(). For now, show plausible values that
+     * update based on the current V/div and timebase settings.
+     */
+    char buf[16];
+
+    /* Row 1 (bottom): Freq, Vpp, Vrms, Duty */
+    uint16_t x = 2;
+    uint16_t y1 = BADGE_ROW_Y;
+
+    snprintf(buf, sizeof(buf), "1.00kHz");
+    draw_one_badge(x, y1, "Freq", buf, th->ch1, th);
+    x += BADGE_W + 2;
+
+    snprintf(buf, sizeof(buf), "%s", vdiv_table[ss->ch1.vdiv_idx].label);
+    draw_one_badge(x, y1, "Vpp", buf, th->ch1, th);
+    x += BADGE_W + 2;
+
+    draw_one_badge(x, y1, "Vrms", "707mV", th->ch1, th);
+    x += BADGE_W + 2;
+
+    draw_one_badge(x, y1, "Duty", "50.0%", th->ch1, th);
+
+    /* Row 2 (above row 1): Period, Rise for CH2 context */
+    x = 2;
+    uint16_t y2 = BADGE_ROW2_Y;
+
+    draw_one_badge(x, y2, "Per", "1.00ms", th->ch2, th);
+    x += BADGE_W + 2;
+
+    snprintf(buf, sizeof(buf), "%s", vdiv_table[ss->ch2.vdiv_idx].label);
+    draw_one_badge(x, y2, "CH2 V", buf, th->ch2, th);
+}
+
+/* ═══════════════════════════════════════════════════════════════════
+ * Quick-change popup overlay
+ * ═══════════════════════════════════════════════════════════════════ */
+
+static void draw_popup(const theme_t *th)
+{
+    if (popup_frames == 0) return;
+    popup_frames--;
+
+    /* Dark box with border */
+    lcd_fill_rect(POPUP_X, POPUP_Y, POPUP_W, POPUP_H, th->background);
+    /* Top/bottom border */
+    lcd_fill_rect(POPUP_X, POPUP_Y, POPUP_W, 1, th->highlight);
+    lcd_fill_rect(POPUP_X, POPUP_Y + POPUP_H - 1, POPUP_W, 1, th->highlight);
+    /* Left/right border */
+    lcd_fill_rect(POPUP_X, POPUP_Y, 1, POPUP_H, th->highlight);
+    lcd_fill_rect(POPUP_X + POPUP_W - 1, POPUP_Y, 1, POPUP_H, th->highlight);
+
+    /* Centered text */
+    font_draw_string_center(LCD_WIDTH / 2, POPUP_Y + 10, popup_text,
+                            th->text_primary, th->background, &font_large);
+}
+
+/* ═══════════════════════════════════════════════════════════════════
+ * Demo waveform (sine + square)
+ * ═══════════════════════════════════════════════════════════════════ */
+
 void draw_demo_waveform(uint32_t frame)
 {
     const theme_t *th = theme_get();
+    const scope_state_t *ss = scope_state_get();
+
     static const int8_t sin_lut[64] = {
          0, 10, 19, 29, 38, 47, 56, 63, 71, 77, 83, 88, 92, 96, 98, 99,
         100, 99, 98, 96, 92, 88, 83, 77, 71, 63, 56, 47, 38, 29, 19, 10,
@@ -44,63 +316,97 @@ void draw_demo_waveform(uint32_t frame)
        -100,-99,-98,-96,-92,-88,-83,-77,-71,-63,-56,-47,-38,-29,-19,-10,
     };
 
-    uint16_t y_center = (LCD_HEIGHT - 32) / 2 + 16;
-    uint16_t x;
+    /* CH1: sine wave — scale based on vdiv index */
+    if (ss->ch1.enabled) {
+        int16_t ch1_center = SCOPE_MID_Y - ss->ch1.position;
+        int16_t amplitude = 40 - (int16_t)(ss->ch1.vdiv_idx * 2);
+        if (amplitude < 10) amplitude = 10;
 
-    /* CH1: sine wave (yellow) */
-    for (x = 0; x < LCD_WIDTH; x++) {
-        uint8_t idx = (uint8_t)((x * 4 + frame) & 0x3F);
-        int16_t y = y_center - (sin_lut[idx] * 40 / 100);
-        if (y >= 18 && y < LCD_HEIGHT - 16) {
-            lcd_set_pixel(x, (uint16_t)y, th->ch1);
-            if (y + 1 < LCD_HEIGHT - 16) lcd_set_pixel(x, (uint16_t)(y + 1), th->ch1);
+        for (uint16_t x = 0; x < LCD_WIDTH; x++) {
+            uint8_t idx = (uint8_t)((x * 4 + frame) & 0x3F);
+            int16_t y = ch1_center - (sin_lut[idx] * amplitude / 100);
+            if (y >= SCOPE_TOP && y < SCOPE_BOT) {
+                lcd_set_pixel(x, (uint16_t)y, th->ch1);
+                if (y + 1 < SCOPE_BOT)
+                    lcd_set_pixel(x, (uint16_t)(y + 1), th->ch1);
+            }
         }
     }
 
-    /* CH2: square wave (cyan) */
-    for (x = 0; x < LCD_WIDTH; x++) {
-        uint8_t phase = (uint8_t)((x * 4 + frame) & 0x3F);
-        int16_t y = y_center + 50 + (phase < 32 ? -25 : 25);
-        if (y >= 18 && y < LCD_HEIGHT - 16) {
-            lcd_set_pixel(x, (uint16_t)y, th->ch2);
-        }
-        if (x > 0) {
-            uint8_t prev_phase = (uint8_t)(((x - 1) * 4 + frame) & 0x3F);
-            if ((prev_phase < 32) != (phase < 32)) {
-                int16_t y1 = y_center + 50 - 25;
-                int16_t y2 = y_center + 50 + 25;
-                for (int16_t yy = y1; yy <= y2; yy++) {
-                    if (yy >= 18 && yy < LCD_HEIGHT - 16) {
-                        lcd_set_pixel(x, (uint16_t)yy, th->ch2);
+    /* CH2: square wave */
+    if (ss->ch2.enabled) {
+        int16_t ch2_center = SCOPE_MID_Y + 50 - ss->ch2.position;
+
+        for (uint16_t x = 0; x < LCD_WIDTH; x++) {
+            uint8_t phase = (uint8_t)((x * 4 + frame) & 0x3F);
+            int16_t y = ch2_center + (phase < 32 ? -25 : 25);
+            if (y >= SCOPE_TOP && y < SCOPE_BOT)
+                lcd_set_pixel(x, (uint16_t)y, th->ch2);
+
+            /* Vertical edges */
+            if (x > 0) {
+                uint8_t prev = (uint8_t)(((x - 1) * 4 + frame) & 0x3F);
+                if ((prev < 32) != (phase < 32)) {
+                    int16_t y1 = ch2_center - 25;
+                    int16_t y2 = ch2_center + 25;
+                    for (int16_t yy = y1; yy <= y2; yy++) {
+                        if (yy >= SCOPE_TOP && yy < SCOPE_BOT)
+                            lcd_set_pixel(x, (uint16_t)yy, th->ch2);
                     }
                 }
             }
         }
     }
-
-    /* Trigger marker */
-    lcd_fill_rect(LCD_WIDTH - 6, y_center - 3, 5, 7, th->trigger);
 }
 
-/* Draw the oscilloscope screen */
+/* ═══════════════════════════════════════════════════════════════════
+ * Main scope screen compositor
+ * ═══════════════════════════════════════════════════════════════════ */
+
 void draw_scope_screen(uint32_t frame)
 {
     const theme_t *th = theme_get();
-    lcd_fill_rect(0, 16, LCD_WIDTH, LCD_HEIGHT - 32, th->background);
+    const scope_state_t *ss = scope_state_get();
 
+    /* Clear waveform area */
+    lcd_fill_rect(0, SCOPE_TOP, LCD_WIDTH, SCOPE_H, th->background);
+
+    /* Layer 1: Grid */
     draw_scope_grid();
+
+    /* Layer 2: Ground reference markers */
+    draw_ground_markers(ss, th);
+
+    /* Layer 3: Trigger level indicator */
+    draw_trigger_indicator(ss, th);
+
+    /* Layer 4: Waveform */
     draw_demo_waveform(frame);
 
-    /* Measurements overlay (transparent bg to not obscure grid) */
-    font_draw_string(4, 18, "10.00kHz", th->ch1, th->ch1, &font_small);
-    font_draw_string(4, 32, "3.31Vpp",  th->ch1, th->ch1, &font_small);
-    font_draw_string_right(LCD_WIDTH - 4, 18, "9.96kHz", th->ch2, th->ch2, &font_small);
-    font_draw_string_right(LCD_WIDTH - 4, 32, "660mVpp", th->ch2, th->ch2, &font_small);
+    /* Layer 5: Trigger status badge */
+    draw_trigger_status(ss, th);
+
+    /* Layer 6: Run/Stop */
+    draw_run_stop(ss, th);
+
+    /* Layer 7: Measurement badges */
+    draw_measurement_badges(ss, th);
+
+    /* Layer 8: Quick-change popup (on top of everything) */
+    draw_popup(th);
+
+    /* Active channel indicator (top-left) */
+    const char *ch_label = (active_channel == 0) ? "CH1" : "CH2";
+    uint16_t ch_color = (active_channel == 0) ? th->ch1 : th->ch2;
+    font_draw_string(4, SCOPE_TOP + 2, ch_label, ch_color, ch_color, &font_small);
 }
+
+/* ═══════════════════════════════════════════════════════════════════
+ * FFT views (unchanged — reference scope_state for consistency)
+ * ═══════════════════════════════════════════════════════════════════ */
 
 #ifdef FEATURE_FFT
 
-/* Format a float frequency as a readable string (no sprintf) */
 static void format_freq(float freq_hz, char *buf, int bufsize)
 {
     const char *unit;
@@ -133,19 +439,16 @@ static void format_freq(float freq_hz, char *buf, int bufsize)
     buf[pos] = '\0';
 }
 
-/* Draw FFT spectrum into a region (used by both full and split view) */
 static void draw_fft_region(uint16_t y_top, uint16_t height)
 {
     const fft_config_t *cfg = fft_get_config();
     uint16_t y_bot = y_top + height;
 
-    /* Generate test signal and run FFT */
     test_signal_generate(TEST_SIG_SQUARE, fft_sample_buf,
                          FFT_SIZE, cfg->sample_rate_hz,
                          1000.0f, 0.0f, 0.8f);
     fft_process(fft_sample_buf, FFT_SIZE, &fft_result);
 
-    /* Use averaged data if available, otherwise raw */
     const float *draw_data = (fft_result.avg_db != NULL)
                              ? fft_result.avg_db : fft_result.magnitude_db;
 
@@ -156,7 +459,6 @@ static void draw_fft_region(uint16_t y_top, uint16_t height)
     uint16_t zoom_span = zoom_end - zoom_start;
     uint16_t x;
 
-    /* Draw frequency bars */
     for (x = 0; x < LCD_WIDTH; x++) {
         uint16_t bin = zoom_start + (uint16_t)((uint32_t)x * zoom_span / LCD_WIDTH);
         if (bin >= FFT_BINS) bin = FFT_BINS - 1;
@@ -167,22 +469,15 @@ static void draw_fft_region(uint16_t y_top, uint16_t height)
         if (normalized > 1.0f) normalized = 1.0f;
 
         uint16_t bar_top = y_top + (uint16_t)(normalized * (float)height);
-
         if (bar_top < y_bot) {
             uint16_t color;
-            if (normalized < 0.25f)
-                color = COLOR_CH1;
-            else if (normalized < 0.5f)
-                color = COLOR_GREEN;
-            else if (normalized < 0.75f)
-                color = COLOR_CYAN;
-            else
-                color = COLOR_GRID;
-
+            if (normalized < 0.25f) color = COLOR_CH1;
+            else if (normalized < 0.5f) color = COLOR_GREEN;
+            else if (normalized < 0.75f) color = COLOR_CYAN;
+            else color = COLOR_GRID;
             lcd_fill_rect(x, bar_top, 1, y_bot - bar_top, color);
         }
 
-        /* Max hold overlay (dotted line) */
         if (fft_result.max_hold_db != NULL) {
             float mh_norm = (ref_db - fft_result.max_hold_db[bin]) / range_db;
             if (mh_norm >= 0.0f && mh_norm <= 1.0f) {
@@ -198,13 +493,11 @@ static void draw_fft_region(uint16_t y_top, uint16_t height)
     for (db = ref_db; db > ref_db - range_db; db -= 10.0f) {
         float normalized = (ref_db - db) / range_db;
         uint16_t y = y_top + (uint16_t)(normalized * (float)height);
-        if (y > y_top && y < y_bot) {
+        if (y > y_top && y < y_bot)
             for (x = 0; x < LCD_WIDTH; x += 4)
                 lcd_set_pixel(x, y, COLOR_GRID);
-        }
     }
 
-    /* dB scale labels (only if region tall enough) */
     if (height > 80) {
         for (db = ref_db; db > ref_db - range_db; db -= 20.0f) {
             float normalized = (ref_db - db) / range_db;
@@ -223,7 +516,6 @@ static void draw_fft_region(uint16_t y_top, uint16_t height)
         }
     }
 
-    /* Peak markers and frequency label */
     uint8_t p;
     for (p = 0; p < fft_result.num_peaks && p < 3; p++) {
         uint16_t peak_bin = fft_result.peaks[p].bin;
@@ -238,7 +530,7 @@ static void draw_fft_region(uint16_t y_top, uint16_t height)
         if (peak_y >= y_top + 4 && peak_x > 2 && peak_x < LCD_WIDTH - 2) {
             lcd_set_pixel(peak_x, peak_y - 3, COLOR_RED);
             lcd_set_pixel(peak_x - 1, peak_y - 2, COLOR_RED);
-            lcd_set_pixel(peak_x,     peak_y - 2, COLOR_RED);
+            lcd_set_pixel(peak_x, peak_y - 2, COLOR_RED);
             lcd_set_pixel(peak_x + 1, peak_y - 2, COLOR_RED);
         }
 
@@ -248,14 +540,12 @@ static void draw_fft_region(uint16_t y_top, uint16_t height)
             font_draw_string(4, y_top + 2, freq_str, COLOR_WHITE, COLOR_WHITE, &font_small);
         }
 
-        /* Draw harmonic label if present */
         if (fft_result.peaks[p].label[0] != '\0' && peak_x > 8 && peak_x < LCD_WIDTH - 30) {
             font_draw_string(peak_x - 8, peak_y - 12,
                              fft_result.peaks[p].label, COLOR_ORANGE, COLOR_ORANGE, &font_small);
         }
     }
 
-    /* Window type label */
     const char *win_names[] = { "Rect", "Hann", "Hamm", "BHar", "Flat" };
     const char *win_name = (cfg->window < FFT_WINDOW_COUNT)
                            ? win_names[cfg->window] : "?";
@@ -263,33 +553,27 @@ static void draw_fft_region(uint16_t y_top, uint16_t height)
                            COLOR_GRAY, COLOR_GRAY, &font_small);
 }
 
-/* Draw full-screen FFT */
 void draw_fft_screen(void)
 {
-    lcd_fill_rect(0, 16, LCD_WIDTH, LCD_HEIGHT - 32, COLOR_BLACK);
-    draw_fft_region(18, LCD_HEIGHT - 36);
+    lcd_fill_rect(0, SCOPE_TOP, LCD_WIDTH, SCOPE_H, COLOR_BLACK);
+    draw_fft_region(SCOPE_TOP + 2, SCOPE_H - 4);
 }
 
-/* Draw split view: time-domain top, FFT bottom */
 void draw_split_screen(uint32_t frame)
 {
-    lcd_fill_rect(0, 16, LCD_WIDTH, LCD_HEIGHT - 32, COLOR_BLACK);
+    lcd_fill_rect(0, SCOPE_TOP, LCD_WIDTH, SCOPE_H, COLOR_BLACK);
 
-    /* Top half: scope waveform (y=18 to y=119, 101px) */
-    /* Simplified scope grid for half height */
-    uint16_t x, y;
-    uint16_t scope_top = 18;
-    uint16_t scope_bot = 119;
+    uint16_t scope_top = SCOPE_TOP;
+    uint16_t scope_bot = SCOPE_TOP + SCOPE_H / 2 - 1;
     uint16_t scope_mid = (scope_top + scope_bot) / 2;
+    uint16_t x;
 
-    for (x = 0; x < LCD_WIDTH; x += 32) {
-        for (y = scope_top; y < scope_bot; y += 2)
+    for (x = 0; x < LCD_WIDTH; x += 32)
+        for (uint16_t y = scope_top; y < scope_bot; y += 2)
             lcd_set_pixel(x, y, COLOR_GRID);
-    }
     for (x = 0; x < LCD_WIDTH; x++)
         lcd_set_pixel(x, scope_mid, COLOR_GRID_CENTER);
 
-    /* Draw waveform in top half */
     static const int8_t sin_lut[64] = {
          0, 10, 19, 29, 38, 47, 56, 63, 71, 77, 83, 88, 92, 96, 98, 99,
         100, 99, 98, 96, 92, 88, 83, 77, 71, 63, 56, 47, 38, 29, 19, 10,
@@ -299,31 +583,26 @@ void draw_split_screen(uint32_t frame)
     for (x = 0; x < LCD_WIDTH; x++) {
         uint8_t idx = (uint8_t)((x * 4 + frame) & 0x3F);
         int16_t wy = scope_mid - (sin_lut[idx] * 25 / 100);
-        if (wy >= scope_top && wy < scope_bot)
+        if (wy >= (int16_t)scope_top && wy < (int16_t)scope_bot)
             lcd_set_pixel(x, (uint16_t)wy, COLOR_CH1);
     }
 
-    /* Divider line */
+    uint16_t divider_y = SCOPE_TOP + SCOPE_H / 2;
     for (x = 0; x < LCD_WIDTH; x++)
-        lcd_set_pixel(x, 120, COLOR_GRID_CENTER);
+        lcd_set_pixel(x, divider_y, COLOR_GRID_CENTER);
 
-    /* Bottom half: FFT (y=121 to y=222, 101px) */
-    draw_fft_region(121, 101);
+    draw_fft_region(divider_y + 1, SCOPE_H / 2 - 2);
 }
 
-/* ═══════════════════════════════════════════════════════════════════
- * Waterfall / Spectrogram display
- * ═══════════════════════════════════════════════════════════════════ */
-
+/* Waterfall */
 #define WATERFALL_ROWS  64
 #define WATERFALL_COLS  320
 static uint8_t waterfall_buf[WATERFALL_ROWS][WATERFALL_COLS];
 static uint8_t waterfall_row_idx = 0;
 
-/* Heatmap: strong=red, weak=blue */
 static uint16_t intensity_to_color(uint8_t intensity)
 {
-    uint8_t inv = 255 - intensity;  /* 255=strong, 0=weak */
+    uint8_t inv = 255 - intensity;
     if (inv > 204) return COLOR_RED;
     if (inv > 153) return RGB565(255, (uint8_t)((inv - 153) * 5), 0);
     if (inv > 102) return RGB565((uint8_t)((153 - inv + 102) * 5), 255, 0);
@@ -335,7 +614,6 @@ void draw_waterfall_screen(void)
 {
     const fft_config_t *cfg = fft_get_config();
 
-    /* Generate test signal and run FFT */
     test_signal_generate(TEST_SIG_SQUARE, fft_sample_buf,
                          FFT_SIZE, cfg->sample_rate_hz,
                          1000.0f, 0.0f, 0.8f);
@@ -349,44 +627,35 @@ void draw_waterfall_screen(void)
     uint16_t zoom_span = zoom_end - zoom_start;
     if (zoom_span == 0) zoom_span = 1;
 
-    /* Convert magnitude to intensity for this row */
     uint16_t x;
     for (x = 0; x < WATERFALL_COLS; x++) {
         uint16_t bin = zoom_start + (uint16_t)((uint32_t)x * zoom_span / WATERFALL_COLS);
         if (bin >= FFT_BINS) bin = FFT_BINS - 1;
-
         float db = draw_data[bin];
         float normalized = (cfg->ref_level_db - db) / cfg->db_range;
         if (normalized < 0.0f) normalized = 0.0f;
         if (normalized > 1.0f) normalized = 1.0f;
-
         waterfall_buf[waterfall_row_idx][x] = (uint8_t)(normalized * 255.0f);
     }
 
     uint8_t newest_row = waterfall_row_idx;
     waterfall_row_idx = (uint8_t)((waterfall_row_idx + 1) % WATERFALL_ROWS);
 
-    /* Clear and render */
-    lcd_fill_rect(0, 16, LCD_WIDTH, LCD_HEIGHT - 32, COLOR_BLACK);
+    lcd_fill_rect(0, SCOPE_TOP, LCD_WIDTH, SCOPE_H, COLOR_BLACK);
 
-    uint16_t display_height = LCD_HEIGHT - 34;
-    uint16_t row_height = display_height / WATERFALL_ROWS;
+    uint16_t row_height = SCOPE_H / WATERFALL_ROWS;
     if (row_height < 1) row_height = 1;
 
     uint8_t r;
     for (r = 0; r < WATERFALL_ROWS; r++) {
         uint8_t buf_row = (uint8_t)((newest_row + WATERFALL_ROWS - r) % WATERFALL_ROWS);
-        uint16_t y = (uint16_t)(18 + r * row_height);
-
-        if (y + row_height > LCD_HEIGHT - 18) break;
-
-        for (x = 0; x < WATERFALL_COLS; x++) {
-            uint16_t color = intensity_to_color(waterfall_buf[buf_row][x]);
-            lcd_fill_rect(x, y, 1, row_height, color);
-        }
+        uint16_t y = (uint16_t)(SCOPE_TOP + r * row_height);
+        if (y + row_height > SCOPE_BOT) break;
+        for (x = 0; x < WATERFALL_COLS; x++)
+            lcd_fill_rect(x, y, 1, row_height, intensity_to_color(waterfall_buf[buf_row][x]));
     }
 
-    font_draw_string(4, 18, "WFALL", COLOR_WHITE, COLOR_WHITE, &font_small);
+    font_draw_string(4, SCOPE_TOP + 2, "WFALL", COLOR_WHITE, COLOR_WHITE, &font_small);
 }
 
 #endif /* FEATURE_FFT */
