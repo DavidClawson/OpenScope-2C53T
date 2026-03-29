@@ -20,6 +20,7 @@
 #include "ui.h"
 #include "signal_gen.h"
 #include "watchdog.h"
+#include "theme.h"
 
 /* ═══════════════════════════════════════════════════════════════════
  * Global State (extern'd via ui.h for UI modules)
@@ -342,7 +343,14 @@ static void vInputTask(void *pvParameters)
                     break;
 
                 case BTN_OK:
-                    if (current_mode == MODE_SIGNAL_GEN) {
+                    if (current_mode == MODE_SETTINGS) {
+                        if (settings_selected == 3) {
+                            /* "Display Mode" — cycle theme */
+                            theme_cycle();
+                        }
+                        cmd = DCMD_REDRAW_ALL;
+                        xQueueSend(xDisplayQueue, &cmd, 0);
+                    } else if (current_mode == MODE_SIGNAL_GEN) {
                         const siggen_config_t *sc = siggen_get_config();
                         siggen_enable(!sc->output_enabled);
                         cmd = DCMD_REDRAW_ALL;
@@ -413,6 +421,9 @@ int main(void)
     rcu_periph_clock_enable(RCU_AF);
     rcu_periph_clock_enable(RCU_EXMC);
 #endif
+
+    /* Initialize theme system */
+    theme_init(THEME_DARK_BLUE);
 
     /* Initialize LCD */
     lcd_gpio_init();

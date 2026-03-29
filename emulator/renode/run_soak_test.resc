@@ -1,0 +1,124 @@
+# OpenScope 2C53T - Soak Test
+# Runs firmware with random button fuzzing and fault monitoring.
+#
+# Usage:
+#   renode --disable-gui run_soak_test.resc
+#
+# Uses a FAST LCD stub (no per-pixel framebuffer tracking) for speed.
+# Freeze detection via firmware heartbeat hook instead of framebuffer.
+#
+# Output files:
+#   /tmp/openscope_soak_buttons.log  — button press sequence
+#   /tmp/openscope_soak_faults.log   — detected faults
+#   /tmp/openscope_soak_heartbeat    — firmware liveness (timestamp)
+#   /tmp/openscope_fb.bin            — occasional framebuffer snapshot
+
+mach create "OpenScope_2C53T_Soak"
+machine LoadPlatformDescription @gd32f307_2c53t.repl
+
+# Load custom firmware (built with 'make emu')
+sysbus LoadBinary @../../firmware/build/firmware.bin 0x08000000
+cpu VectorTableOffset 0x08000000
+
+# --- Clock system: all oscillators ready, PLL locked ---
+sysbus Tag <0x40021000, 0x40021003> "RCU_CTL" 0x0F0F0003
+sysbus Tag <0x40021004, 0x40021007> "RCU_CFG0" 0x001D840A
+sysbus Tag <0x40021008, 0x4002100B> "RCU_INT" 0x00000000
+sysbus Tag <0x40021014, 0x40021017> "RCU_AHBEN" 0x00000114
+sysbus Tag <0x40021018, 0x4002101B> "RCU_APB2EN" 0x0000FFFD
+sysbus Tag <0x4002101C, 0x4002101F> "RCU_APB1EN" 0x3FFFFFFF
+
+# --- PMU: voltage stable ---
+sysbus Tag <0x40007000, 0x40007003> "PMU_CTL" 0x00000000
+sysbus Tag <0x40007004, 0x40007007> "PMU_CS" 0x00070000
+
+# --- Flash: wait states configured ---
+sysbus Tag <0x40022000, 0x40022003> "FMC_WS" 0x00000032
+
+# --- EXMC ---
+sysbus Tag <0xA0000000, 0xA0000107> "EXMC_REGS" 0x00000001
+
+# --- FAST LCD stub (accepts writes, skips per-pixel framebuffer I/O) ---
+sysbus Unregister exmcBank0
+machine PyDevFromFile @st7789v_fast.py 0x60000000 0x100000 True "lcd"
+
+# --- Replace GPIO ports B and C with fuzzer peripherals ---
+sysbus Unregister gpioPortB
+sysbus Unregister gpioPortC
+machine PyDevFromFile @soak_gpio_portc.py 0x40011000 0x400 True "gpioPortC_soak"
+machine PyDevFromFile @soak_gpio_portb.py 0x40010C00 0x400 True "gpioPortB_soak"
+
+# --- Skip spurious interrupts (Default_Handler) ---
+set skip_default_irq
+"""
+from Antmicro.Renode.Peripherals.CPU import RegisterValue
+cpu.SetRegister(15, RegisterValue.Create(cpu.GetRegister(14).RawValue, 32))
+"""
+# Address patched by soak_test.py from firmware.map
+cpu AddHook 0x08005d2c $skip_default_irq
+
+# ═══════════════════════════════════════════════════════════════
+# Fault monitoring hooks
+# ═══════════════════════════════════════════════════════════════
+
+set stack_overflow_hook
+"""
+cpu.InfoLog("[SOAK FAULT] Stack overflow detected!")
+try:
+    f = open("/tmp/openscope_soak_faults.log", "a")
+    f.write("STACK_OVERFLOW\\n")
+    f.close()
+except:
+    pass
+"""
+
+set malloc_failed_hook
+"""
+cpu.InfoLog("[SOAK FAULT] Malloc failed!")
+try:
+    f = open("/tmp/openscope_soak_faults.log", "a")
+    f.write("MALLOC_FAILED\\n")
+    f.close()
+except:
+    pass
+"""
+
+set hardfault_hook
+"""
+cpu.InfoLog("[SOAK FAULT] HardFault!")
+try:
+    f = open("/tmp/openscope_soak_faults.log", "a")
+    f.write("HARDFAULT\\n")
+    f.close()
+except:
+    pass
+"""
+
+# Fault hook addresses are patched by soak_test.py from firmware.map
+# (placeholder comments — the driver inserts real 'cpu AddHook' lines)
+
+# ═══════════════════════════════════════════════════════════════
+# Heartbeat hook — firmware liveness detection
+# ═══════════════════════════════════════════════════════════════
+# Hooks the 1-second timer callback (vOneSecondTimerCallback).
+# Every time it fires, we write to a heartbeat file.
+# The soak test driver monitors this file's mtime for staleness.
+
+set heartbeat_hook
+"""
+import System
+try:
+    f = open("/tmp/openscope_soak_heartbeat", "w")
+    f.write(str(System.DateTime.UtcNow.Ticks))
+    f.close()
+except:
+    pass
+"""
+# Address patched by soak_test.py from firmware.map
+
+# ═══════════════════════════════════════════════════════════════
+
+logLevel 3
+
+# --- Start ---
+start

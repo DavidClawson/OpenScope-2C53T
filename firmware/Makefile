@@ -224,9 +224,14 @@ emu: CFLAGS += -DEMULATOR_BUILD
 emu: C_SOURCES := $(filter-out %$(EMU_EXCLUDE),$(C_SOURCES))
 emu: clean all
 
-# Run in Renode emulator (interactive)
+# Run in Renode emulator (display only, no input)
 renode: emu
 	cd ../emulator/renode && /Applications/Renode.app/Contents/MacOS/renode --disable-gui run_openscope.resc
+
+# Run in Renode with interactive input (use with lcd_viewer in another terminal)
+renode-interactive: emu
+	@echo "Start the LCD viewer in another terminal: cd emulator && ./lcd_viewer"
+	cd ../emulator/renode && /Applications/Renode.app/Contents/MacOS/renode --disable-gui run_interactive.resc
 
 # Run in Renode for quick smoke test (5 seconds, then quit)
 renode-test: emu

@@ -7,15 +7,16 @@
 #include "ui.h"
 #include "lcd.h"
 #include "font.h"
+#include "theme.h"
 #include "watchdog.h"
 #include <stdio.h>
 
-/* Menu item labels */
+/* Menu item labels (index 3 is dynamic — theme name appended at draw time) */
 static const char *settings_items[SETTINGS_ITEM_COUNT] = {
     "Language: English",
     "Sound and Light",
     "Auto Shutdown",
-    "Display Mode",
+    "Display Mode",     /* Shows ": <theme name>" dynamically */
     "Startup on Boot",
     "About",
     "Factory Reset",
@@ -30,11 +31,13 @@ static const char *settings_items[SETTINGS_ITEM_COUNT] = {
 /* Draw the settings screen */
 void draw_settings_screen(void)
 {
-    lcd_fill_rect(0, 16, LCD_WIDTH, LCD_HEIGHT - 32, COLOR_BLACK);
+    const theme_t *th = theme_get();
+
+    lcd_fill_rect(0, 16, LCD_WIDTH, LCD_HEIGHT - 32, th->background);
 
     /* Title */
     font_draw_string_center(LCD_WIDTH / 2, 20, "Settings",
-                            COLOR_WHITE, COLOR_BLACK, &font_large);
+                            th->text_primary, th->background, &font_large);
 
     /* Menu items */
     for (int i = 0; i < SETTINGS_ITEM_COUNT; i++) {
@@ -43,23 +46,29 @@ void draw_settings_screen(void)
 
         if (y + MENU_ITEM_H > LCD_HEIGHT - 20) break;
 
+        uint16_t bg = selected ? th->menu_selected_bg : th->background;
+
         /* Highlight bar for selected item */
         if (selected) {
-            lcd_fill_rect(MENU_LEFT - 4, y, MENU_WIDTH + 8, MENU_ITEM_H - 2,
-                          COLOR_SELECTED_BG);
+            lcd_fill_rect(MENU_LEFT - 4, y, MENU_WIDTH + 8, MENU_ITEM_H - 2, bg);
         }
 
         /* Selection indicator */
         if (selected) {
             font_draw_string(MENU_LEFT, y + 4, ">",
-                             COLOR_CYAN, COLOR_SELECTED_BG, &font_medium);
+                             th->highlight, bg, &font_medium);
         }
 
         /* Item text */
-        uint16_t fg = selected ? COLOR_WHITE : COLOR_GRAY;
-        uint16_t bg = selected ? COLOR_SELECTED_BG : COLOR_BLACK;
+        uint16_t fg = selected ? th->text_primary : th->text_secondary;
         font_draw_string(MENU_LEFT + 16, y + 4, settings_items[i],
                          fg, bg, &font_medium);
+
+        /* "Display Mode" item — append current theme name */
+        if (i == 3) {
+            font_draw_string(MENU_LEFT + 140, y + 4, th->name,
+                             th->highlight, bg, &font_medium);
+        }
     }
 }
 

@@ -51,12 +51,12 @@
 /* Hook functions */
 #define configUSE_IDLE_HOOK                     0
 #define configUSE_TICK_HOOK                     0
-#define configUSE_MALLOC_FAILED_HOOK            0
-#define configCHECK_FOR_STACK_OVERFLOW          0
+#define configUSE_MALLOC_FAILED_HOOK            1
+#define configCHECK_FOR_STACK_OVERFLOW          2
 
-/* Runtime stats */
+/* Runtime stats and trace — enable trace for task listing */
 #define configGENERATE_RUN_TIME_STATS           0
-#define configUSE_TRACE_FACILITY                0
+#define configUSE_TRACE_FACILITY                1
 #define configUSE_STATS_FORMATTING_FUNCTIONS    0
 
 /* Co-routine (not used) */
@@ -72,8 +72,8 @@
 #define xPortPendSVHandler  PendSV_Handler
 #define xPortSysTickHandler SysTick_Handler
 
-/* Optional assert */
-/* #define configASSERT(x) if((x) == 0) { taskDISABLE_INTERRUPTS(); for(;;); } */
+/* Assert — catches FreeRTOS API misuse during development */
+#define configASSERT(x) if((x) == 0) { taskDISABLE_INTERRUPTS(); for(;;); }
 
 /* Include FreeRTOS API functions */
 #define INCLUDE_vTaskPrioritySet            1
@@ -85,7 +85,7 @@
 #define INCLUDE_vTaskDelay                  1
 #define INCLUDE_xTaskGetSchedulerState      1
 #define INCLUDE_xTaskGetCurrentTaskHandle   1
-#define INCLUDE_uxTaskGetStackHighWaterMark 0
+#define INCLUDE_uxTaskGetStackHighWaterMark 1
 #define INCLUDE_xTaskGetIdleTaskHandle      0
 #define INCLUDE_eTaskGetState               0
 #define INCLUDE_xTimerPendFunctionCall      0

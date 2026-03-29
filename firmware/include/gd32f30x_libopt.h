@@ -11,6 +11,7 @@
 #include "gd32f30x_misc.h"
 #include "gd32f30x_pmu.h"
 #include "gd32f30x_fmc.h"
+#include "gd32f30x_fwdgt.h"
 
 /* Add more as needed:
 #include "gd32f30x_usart.h"
