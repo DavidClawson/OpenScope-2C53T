@@ -6,6 +6,8 @@
 #include "lcd.h"
 #include "font.h"
 #include "theme.h"
+#include "scope_state.h"
+#include <stdio.h>
 
 /* Draw the top status bar */
 void draw_status_bar(void)
@@ -67,14 +69,35 @@ void draw_info_bar(void)
         } else
 #endif
         {
-            font_draw_string(4, LCD_HEIGHT - 14, "CH1:2V DC",
-                             th->ch1, ib, &font_small);
-            font_draw_string(80, LCD_HEIGHT - 14, "Auto",
+            const scope_state_t *ss = scope_state_get();
+            char buf[24];
+
+            /* CH1: vdiv + coupling */
+            snprintf(buf, sizeof(buf), "CH1:%s %s",
+                     vdiv_table[ss->ch1.vdiv_idx].label,
+                     coupling_labels[ss->ch1.coupling]);
+            font_draw_string(4, LCD_HEIGHT - 14, buf,
+                             ss->ch1.enabled ? th->ch1 : th->text_secondary,
+                             ib, &font_small);
+
+            /* Trigger mode */
+            font_draw_string(108, LCD_HEIGHT - 14,
+                             trigger_mode_labels[ss->trigger.mode],
                              th->success, ib, &font_small);
-            font_draw_string(120, LCD_HEIGHT - 14, "H=50uS",
+
+            /* Timebase */
+            snprintf(buf, sizeof(buf), "H=%s",
+                     timebase_table[ss->timebase_idx].label);
+            font_draw_string(155, LCD_HEIGHT - 14, buf,
                              th->text_primary, ib, &font_small);
-            font_draw_string(200, LCD_HEIGHT - 14, "CH2:200mV",
-                             th->ch2, ib, &font_small);
+
+            /* CH2: vdiv + coupling */
+            snprintf(buf, sizeof(buf), "CH2:%s %s",
+                     vdiv_table[ss->ch2.vdiv_idx].label,
+                     coupling_labels[ss->ch2.coupling]);
+            font_draw_string(215, LCD_HEIGHT - 14, buf,
+                             ss->ch2.enabled ? th->ch2 : th->text_secondary,
+                             ib, &font_small);
         }
         break;
     case MODE_MULTIMETER:

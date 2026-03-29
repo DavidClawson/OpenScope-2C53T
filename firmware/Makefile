@@ -35,6 +35,7 @@ C_SOURCES += src/ui/scope_ui.c
 C_SOURCES += src/ui/meter_ui.c
 C_SOURCES += src/ui/siggen_ui.c
 C_SOURCES += src/ui/settings_ui.c
+C_SOURCES += src/ui/scope_state.c
 C_SOURCES += src/tasks/measurement.c
 C_SOURCES += src/drivers/flash_fs.c
 C_SOURCES += src/drivers/esp_comm.c

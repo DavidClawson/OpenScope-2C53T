@@ -20,6 +20,7 @@
 #include "ui.h"
 #include "signal_gen.h"
 #include "watchdog.h"
+#include "scope_state.h"
 #include "theme.h"
 
 /* ═══════════════════════════════════════════════════════════════════
@@ -29,6 +30,9 @@
 volatile device_mode_t current_mode = MODE_OSCILLOSCOPE;
 volatile uint32_t      uptime_seconds = 0;
 volatile int8_t        settings_selected = 0;
+volatile int8_t        settings_depth = 0;
+volatile int8_t        settings_sub_selected = 0;
+volatile uint8_t       active_channel = 0;  /* 0=CH1, 1=CH2 */
 
 #ifdef FEATURE_FFT
 volatile scope_view_t scope_view = SCOPE_VIEW_TIME;
@@ -164,9 +168,52 @@ static void vDisplayTask(void *pvParameters)
 /*
  * Input Task (Priority 4 — highest user task, matches original firmware)
  */
+/*
+ * Handle OK press in settings menu (top-level and sub-menus)
+ */
+static void handle_settings_ok(void)
+{
+    scope_state_t *ss = scope_state_get();
+
+    if (settings_depth == 0) {
+        /* Top-level settings menu */
+        switch (settings_selected) {
+        case 0: /* Oscilloscope Settings — enter sub-menu */
+            settings_depth = 1;
+            settings_sub_selected = 0;
+            break;
+        case 3: /* Display Mode — cycle theme */
+            theme_cycle();
+            break;
+        case 5: /* About — no action, just display */
+            settings_depth = 2;
+            break;
+        default:
+            break;
+        }
+    } else if (settings_depth == 1) {
+        /* Oscilloscope settings sub-menu */
+        switch (settings_sub_selected) {
+        case 0: scope_cycle_coupling(&ss->ch1); break;
+        case 1: scope_cycle_probe(&ss->ch1); break;
+        case 2: scope_toggle_bw_limit(&ss->ch1); break;
+        case 3: scope_cycle_coupling(&ss->ch2); break;
+        case 4: scope_cycle_probe(&ss->ch2); break;
+        case 5: scope_toggle_bw_limit(&ss->ch2); break;
+        case 6: scope_cycle_trigger_mode(ss); break;
+        case 7: scope_cycle_trigger_edge(ss); break;
+        default: break;
+        }
+    } else if (settings_depth == 2) {
+        /* About screen — OK goes back */
+        settings_depth = 0;
+    }
+}
+
 static void vInputTask(void *pvParameters)
 {
     (void)pvParameters;
+    scope_state_t *ss = scope_state_get();
     button_id_t last_button = BTN_NONE;
     uint8_t debounce_count = 0;
 
@@ -198,9 +245,58 @@ static void vInputTask(void *pvParameters)
 
                 switch (pressed) {
                 case BTN_MENU:
-                    current_mode = (device_mode_t)((current_mode + 1) % MODE_COUNT);
-                    if (current_mode == MODE_SETTINGS)
-                        settings_selected = 0;
+                    /* If in a settings sub-menu, go back to top level */
+                    if (current_mode == MODE_SETTINGS && settings_depth > 0) {
+                        settings_depth = 0;
+                        settings_sub_selected = 0;
+                    } else {
+                        current_mode = (device_mode_t)((current_mode + 1) % MODE_COUNT);
+                        if (current_mode == MODE_SETTINGS) {
+                            settings_selected = 0;
+                            settings_depth = 0;
+                        }
+                    }
+                    cmd = DCMD_REDRAW_ALL;
+                    xQueueSend(xDisplayQueue, &cmd, 0);
+                    break;
+
+                case BTN_CH1:
+                    if (current_mode == MODE_OSCILLOSCOPE) {
+                        active_channel = 0;
+                        scope_cycle_coupling(&ss->ch1);
+                    }
+                    cmd = DCMD_REDRAW_ALL;
+                    xQueueSend(xDisplayQueue, &cmd, 0);
+                    break;
+
+                case BTN_CH2:
+                    if (current_mode == MODE_OSCILLOSCOPE) {
+                        active_channel = 1;
+                        scope_cycle_coupling(&ss->ch2);
+                    }
+                    cmd = DCMD_REDRAW_ALL;
+                    xQueueSend(xDisplayQueue, &cmd, 0);
+                    break;
+
+                case BTN_TRIGGER:
+                    if (current_mode == MODE_OSCILLOSCOPE) {
+                        scope_cycle_trigger_mode(ss);
+                    }
+                    cmd = DCMD_REDRAW_ALL;
+                    xQueueSend(xDisplayQueue, &cmd, 0);
+                    break;
+
+                case BTN_MOVE:
+                    /* MOVE: cycle trigger edge in scope mode */
+                    if (current_mode == MODE_OSCILLOSCOPE) {
+                        scope_cycle_trigger_edge(ss);
+                    }
+                    cmd = DCMD_REDRAW_ALL;
+                    xQueueSend(xDisplayQueue, &cmd, 0);
+                    break;
+
+                case BTN_SAVE:
+                    /* TODO: screenshot capture when flash is available */
                     cmd = DCMD_REDRAW_ALL;
                     xQueueSend(xDisplayQueue, &cmd, 0);
                     break;
@@ -209,7 +305,6 @@ static void vInputTask(void *pvParameters)
                     if (current_mode == MODE_OSCILLOSCOPE) {
 #ifdef FEATURE_FFT
                         if (scope_view != SCOPE_VIEW_TIME) {
-                            /* Auto-configure FFT zoom/scale based on signal */
                             test_signal_generate(TEST_SIG_SQUARE, fft_sample_buf,
                                                  FFT_SIZE, fft_get_config()->sample_rate_hz,
                                                  1000.0f, 0.0f, 0.8f);
@@ -223,7 +318,6 @@ static void vInputTask(void *pvParameters)
 
 #ifdef FEATURE_FFT
                 case BTN_PRM:
-                    /* Cycle scope views: TIME → FFT → SPLIT → TIME */
                     if (current_mode == MODE_OSCILLOSCOPE) {
                         scope_view = (scope_view_t)((scope_view + 1) % SCOPE_VIEW_COUNT);
                         cmd = DCMD_REDRAW_ALL;
@@ -232,7 +326,6 @@ static void vInputTask(void *pvParameters)
                     break;
 
                 case BTN_SELECT:
-                    /* Cycle window type in FFT/split views */
                     if (current_mode == MODE_OSCILLOSCOPE &&
                         scope_view != SCOPE_VIEW_TIME) {
                         fft_cycle_window();
@@ -244,12 +337,24 @@ static void vInputTask(void *pvParameters)
                         siggen_cycle_waveform();
                         cmd = DCMD_REDRAW_ALL;
                         xQueueSend(xDisplayQueue, &cmd, 0);
+                    } else if (current_mode == MODE_OSCILLOSCOPE) {
+                        /* SELECT in time-domain: cycle probe on active channel */
+                        channel_state_t *ch = (active_channel == 0)
+                            ? &ss->ch1 : &ss->ch2;
+                        scope_cycle_probe(ch);
+                        cmd = DCMD_REDRAW_ALL;
+                        xQueueSend(xDisplayQueue, &cmd, 0);
                     }
                     break;
 
                 case BTN_UP:
                     if (current_mode == MODE_SETTINGS) {
-                        if (settings_selected > 0) settings_selected--;
+                        if (settings_depth == 0) {
+                            if (settings_selected > 0) settings_selected--;
+                        } else {
+                            if (settings_sub_selected > 0)
+                                settings_sub_selected--;
+                        }
                         cmd = DCMD_DRAW_SETTINGS;
                         xQueueSend(xDisplayQueue, &cmd, 0);
                         break;
@@ -263,6 +368,15 @@ static void vInputTask(void *pvParameters)
                         break;
                     }
 #endif
+                    if (current_mode == MODE_OSCILLOSCOPE) {
+                        /* UP in scope time-domain: increase V/div */
+                        channel_state_t *ch = (active_channel == 0)
+                            ? &ss->ch1 : &ss->ch2;
+                        scope_adjust_vdiv(ch, 1);
+                        cmd = DCMD_REDRAW_ALL;
+                        xQueueSend(xDisplayQueue, &cmd, 0);
+                        break;
+                    }
                     if (current_mode == MODE_SIGNAL_GEN) {
                         const siggen_config_t *sc = siggen_get_config();
                         float f = sc->frequency_hz;
@@ -276,14 +390,18 @@ static void vInputTask(void *pvParameters)
                         xQueueSend(xDisplayQueue, &cmd, 0);
                         break;
                     }
-                    cmd = DCMD_DRAW_SCOPE + (uint8_t)current_mode;
-                    xQueueSend(xDisplayQueue, &cmd, 0);
                     break;
 
                 case BTN_DOWN:
                     if (current_mode == MODE_SETTINGS) {
-                        if (settings_selected < SETTINGS_ITEM_COUNT - 1)
-                            settings_selected++;
+                        if (settings_depth == 0) {
+                            if (settings_selected < SETTINGS_ITEM_COUNT - 1)
+                                settings_selected++;
+                        } else {
+                            int8_t max_sub = SETTINGS_OSC_ITEM_COUNT - 1;
+                            if (settings_sub_selected < max_sub)
+                                settings_sub_selected++;
+                        }
                         cmd = DCMD_DRAW_SETTINGS;
                         xQueueSend(xDisplayQueue, &cmd, 0);
                         break;
@@ -297,6 +415,15 @@ static void vInputTask(void *pvParameters)
                         break;
                     }
 #endif
+                    if (current_mode == MODE_OSCILLOSCOPE) {
+                        /* DOWN in scope time-domain: decrease V/div */
+                        channel_state_t *ch = (active_channel == 0)
+                            ? &ss->ch1 : &ss->ch2;
+                        scope_adjust_vdiv(ch, -1);
+                        cmd = DCMD_REDRAW_ALL;
+                        xQueueSend(xDisplayQueue, &cmd, 0);
+                        break;
+                    }
                     if (current_mode == MODE_SIGNAL_GEN) {
                         const siggen_config_t *sc = siggen_get_config();
                         float f = sc->frequency_hz;
@@ -310,8 +437,6 @@ static void vInputTask(void *pvParameters)
                         xQueueSend(xDisplayQueue, &cmd, 0);
                         break;
                     }
-                    cmd = DCMD_DRAW_SCOPE + (uint8_t)current_mode;
-                    xQueueSend(xDisplayQueue, &cmd, 0);
                     break;
 
                 case BTN_LEFT:
@@ -324,8 +449,13 @@ static void vInputTask(void *pvParameters)
                         break;
                     }
 #endif
-                    cmd = DCMD_DRAW_SCOPE + (uint8_t)current_mode;
-                    xQueueSend(xDisplayQueue, &cmd, 0);
+                    if (current_mode == MODE_OSCILLOSCOPE) {
+                        /* LEFT in scope time-domain: faster timebase */
+                        scope_adjust_timebase(ss, -1);
+                        cmd = DCMD_REDRAW_ALL;
+                        xQueueSend(xDisplayQueue, &cmd, 0);
+                        break;
+                    }
                     break;
 
                 case BTN_RIGHT:
@@ -338,16 +468,18 @@ static void vInputTask(void *pvParameters)
                         break;
                     }
 #endif
-                    cmd = DCMD_DRAW_SCOPE + (uint8_t)current_mode;
-                    xQueueSend(xDisplayQueue, &cmd, 0);
+                    if (current_mode == MODE_OSCILLOSCOPE) {
+                        /* RIGHT in scope time-domain: slower timebase */
+                        scope_adjust_timebase(ss, 1);
+                        cmd = DCMD_REDRAW_ALL;
+                        xQueueSend(xDisplayQueue, &cmd, 0);
+                        break;
+                    }
                     break;
 
                 case BTN_OK:
                     if (current_mode == MODE_SETTINGS) {
-                        if (settings_selected == 3) {
-                            /* "Display Mode" — cycle theme */
-                            theme_cycle();
-                        }
+                        handle_settings_ok();
                         cmd = DCMD_REDRAW_ALL;
                         xQueueSend(xDisplayQueue, &cmd, 0);
                     } else if (current_mode == MODE_SIGNAL_GEN) {
@@ -355,8 +487,9 @@ static void vInputTask(void *pvParameters)
                         siggen_enable(!sc->output_enabled);
                         cmd = DCMD_REDRAW_ALL;
                         xQueueSend(xDisplayQueue, &cmd, 0);
-                    } else {
-                        cmd = DCMD_DRAW_SCOPE + (uint8_t)current_mode;
+                    } else if (current_mode == MODE_OSCILLOSCOPE) {
+                        scope_toggle_running(ss);
+                        cmd = DCMD_REDRAW_ALL;
                         xQueueSend(xDisplayQueue, &cmd, 0);
                     }
                     break;
@@ -424,6 +557,9 @@ int main(void)
 
     /* Initialize theme system */
     theme_init(THEME_DARK_BLUE);
+
+    /* Initialize oscilloscope state */
+    scope_state_init(scope_state_get());
 
     /* Initialize LCD */
     lcd_gpio_init();

@@ -1,7 +1,10 @@
 /*
  * OpenScope 2C53T - Settings UI
  *
- * Navigable menu with UP/DOWN selection and new font system.
+ * Multi-level navigable menu system:
+ *   depth 0: Top-level settings (7 items)
+ *   depth 1: Oscilloscope settings sub-menu (CH1/CH2/trigger config)
+ *   depth 2: About screen (device info)
  */
 
 #include "ui.h"
@@ -9,70 +12,176 @@
 #include "font.h"
 #include "theme.h"
 #include "watchdog.h"
+#include "scope_state.h"
 #include <stdio.h>
 
-/* Menu item labels (index 3 is dynamic — theme name appended at draw time) */
+/* Top-level menu items */
 static const char *settings_items[SETTINGS_ITEM_COUNT] = {
-    "Language: English",
+    "Oscilloscope Settings",
     "Sound and Light",
     "Auto Shutdown",
-    "Display Mode",     /* Shows ": <theme name>" dynamically */
+    "Display Mode",
     "Startup on Boot",
     "About",
     "Factory Reset",
 };
 
-/* Layout */
+/* Layout constants */
 #define MENU_TOP        42
 #define MENU_ITEM_H     24
 #define MENU_LEFT       16
 #define MENU_WIDTH      288
 
-/* Draw the settings screen */
-void draw_settings_screen(void)
+/* ═══════════════════════════════════════════════════════════════════
+ * Helper: draw a generic menu list
+ * ═══════════════════════════════════════════════════════════════════ */
+
+static void draw_menu_item(int i, int selected_idx, const char *label,
+                           const char *value, const theme_t *th)
+{
+    uint16_t y = MENU_TOP + i * MENU_ITEM_H;
+    bool selected = (i == selected_idx);
+
+    if (y + MENU_ITEM_H > LCD_HEIGHT - 20) return;
+
+    uint16_t bg = selected ? th->menu_selected_bg : th->background;
+
+    if (selected)
+        lcd_fill_rect(MENU_LEFT - 4, y, MENU_WIDTH + 8, MENU_ITEM_H - 2, bg);
+
+    if (selected)
+        font_draw_string(MENU_LEFT, y + 4, ">",
+                         th->highlight, bg, &font_medium);
+
+    uint16_t fg = selected ? th->text_primary : th->text_secondary;
+    font_draw_string(MENU_LEFT + 16, y + 4, label, fg, bg, &font_medium);
+
+    if (value)
+        font_draw_string_right(MENU_LEFT + MENU_WIDTH - 8, y + 4,
+                               value, th->highlight, bg, &font_medium);
+}
+
+/* ═══════════════════════════════════════════════════════════════════
+ * Top-level settings screen (depth 0)
+ * ═══════════════════════════════════════════════════════════════════ */
+
+static void draw_settings_top(void)
 {
     const theme_t *th = theme_get();
 
     lcd_fill_rect(0, 16, LCD_WIDTH, LCD_HEIGHT - 32, th->background);
 
-    /* Title */
     font_draw_string_center(LCD_WIDTH / 2, 20, "Settings",
                             th->text_primary, th->background, &font_large);
 
-    /* Menu items */
     for (int i = 0; i < SETTINGS_ITEM_COUNT; i++) {
-        uint16_t y = MENU_TOP + i * MENU_ITEM_H;
-        bool selected = (i == settings_selected);
+        const char *value = NULL;
 
-        if (y + MENU_ITEM_H > LCD_HEIGHT - 20) break;
+        /* Dynamic values for certain items */
+        if (i == 0) value = ">";        /* Has sub-menu */
+        if (i == 3) value = th->name;   /* Display Mode: theme name */
+        if (i == 5) value = ">";        /* About: has detail screen */
 
-        uint16_t bg = selected ? th->menu_selected_bg : th->background;
-
-        /* Highlight bar for selected item */
-        if (selected) {
-            lcd_fill_rect(MENU_LEFT - 4, y, MENU_WIDTH + 8, MENU_ITEM_H - 2, bg);
-        }
-
-        /* Selection indicator */
-        if (selected) {
-            font_draw_string(MENU_LEFT, y + 4, ">",
-                             th->highlight, bg, &font_medium);
-        }
-
-        /* Item text */
-        uint16_t fg = selected ? th->text_primary : th->text_secondary;
-        font_draw_string(MENU_LEFT + 16, y + 4, settings_items[i],
-                         fg, bg, &font_medium);
-
-        /* "Display Mode" item — append current theme name */
-        if (i == 3) {
-            font_draw_string(MENU_LEFT + 140, y + 4, th->name,
-                             th->highlight, bg, &font_medium);
-        }
+        draw_menu_item(i, settings_selected, settings_items[i], value, th);
     }
 }
 
-/* Draw task health diagnostics panel starting at given y position */
+/* ═══════════════════════════════════════════════════════════════════
+ * Oscilloscope settings sub-menu (depth 1)
+ * ═══════════════════════════════════════════════════════════════════ */
+
+static void draw_settings_osc(void)
+{
+    const theme_t *th = theme_get();
+    const scope_state_t *ss = scope_state_get();
+
+    lcd_fill_rect(0, 16, LCD_WIDTH, LCD_HEIGHT - 32, th->background);
+
+    font_draw_string_center(LCD_WIDTH / 2, 20, "Oscilloscope",
+                            th->text_primary, th->background, &font_large);
+
+    /* CH1 section */
+    draw_menu_item(0, settings_sub_selected,
+                   "CH1 Coupling", coupling_labels[ss->ch1.coupling], th);
+    draw_menu_item(1, settings_sub_selected,
+                   "CH1 Probe", probe_labels[ss->ch1.probe], th);
+    draw_menu_item(2, settings_sub_selected,
+                   "CH1 20M Limit", ss->ch1.bw_limit ? "ON" : "OFF", th);
+
+    /* CH2 section */
+    draw_menu_item(3, settings_sub_selected,
+                   "CH2 Coupling", coupling_labels[ss->ch2.coupling], th);
+    draw_menu_item(4, settings_sub_selected,
+                   "CH2 Probe", probe_labels[ss->ch2.probe], th);
+    draw_menu_item(5, settings_sub_selected,
+                   "CH2 20M Limit", ss->ch2.bw_limit ? "ON" : "OFF", th);
+
+    /* Trigger section */
+    draw_menu_item(6, settings_sub_selected,
+                   "Trigger Mode", trigger_mode_labels[ss->trigger.mode], th);
+    draw_menu_item(7, settings_sub_selected,
+                   "Trigger Edge", trigger_edge_labels[ss->trigger.edge], th);
+}
+
+/* ═══════════════════════════════════════════════════════════════════
+ * About screen (depth 2)
+ * ═══════════════════════════════════════════════════════════════════ */
+
+static void draw_settings_about(void)
+{
+    const theme_t *th = theme_get();
+
+    lcd_fill_rect(0, 16, LCD_WIDTH, LCD_HEIGHT - 32, th->background);
+
+    font_draw_string_center(LCD_WIDTH / 2, 20, "About",
+                            th->text_primary, th->background, &font_large);
+
+    uint16_t y = 55;
+    uint16_t fg = th->text_secondary;
+    uint16_t bg = th->background;
+
+    font_draw_string(MENU_LEFT, y, "OpenScope 2C53T", th->text_primary, bg, &font_medium);
+    y += 22;
+    font_draw_string(MENU_LEFT, y, "Custom Firmware v0.2", fg, bg, &font_medium);
+    y += 22;
+    font_draw_string(MENU_LEFT, y, "MCU: GD32F307VET6", fg, bg, &font_medium);
+    y += 22;
+    font_draw_string(MENU_LEFT, y, "LCD: ST7789V 320x240", fg, bg, &font_medium);
+    y += 22;
+    font_draw_string(MENU_LEFT, y, "RTOS: FreeRTOS", fg, bg, &font_medium);
+    y += 30;
+
+    font_draw_string(MENU_LEFT, y, "github.com/DavidClawson/",
+                     th->highlight, bg, &font_small);
+    y += 16;
+    font_draw_string(MENU_LEFT, y, "OpenScope-2C53T",
+                     th->highlight, bg, &font_small);
+    y += 24;
+    font_draw_string(MENU_LEFT, y, "License: GPL v3",
+                     th->text_secondary, bg, &font_small);
+
+    y += 24;
+    font_draw_string_center(LCD_WIDTH / 2, y, "MENU to go back",
+                            th->text_secondary, bg, &font_small);
+}
+
+/* ═══════════════════════════════════════════════════════════════════
+ * Public entry point — dispatches by depth
+ * ═══════════════════════════════════════════════════════════════════ */
+
+void draw_settings_screen(void)
+{
+    switch (settings_depth) {
+    case 1:  draw_settings_osc();   break;
+    case 2:  draw_settings_about(); break;
+    default: draw_settings_top();   break;
+    }
+}
+
+/* ═══════════════════════════════════════════════════════════════════
+ * Task health diagnostics panel
+ * ═══════════════════════════════════════════════════════════════════ */
+
 void draw_health_panel(uint16_t y_start)
 {
     const task_health_t *tasks = health_get_tasks();
@@ -89,16 +198,13 @@ void draw_health_panel(uint16_t y_start)
         bool stalled = health_is_stalled(i);
         uint16_t fg = stalled ? COLOR_RED : COLOR_GREEN;
 
-        /* Task name + status indicator */
         snprintf(buf, sizeof(buf), "%-8s", tasks[i].name);
         font_draw_string(10, y, buf, fg, COLOR_BLACK, &font_small);
 
-        /* Stack high water mark */
         snprintf(buf, sizeof(buf), "stk:%3lu",
                  (unsigned long)tasks[i].stack_hwm);
         font_draw_string(80, y, buf, COLOR_GRAY, COLOR_BLACK, &font_small);
 
-        /* Status */
         font_draw_string(170, y, stalled ? "STALL" : "OK",
                          fg, COLOR_BLACK, &font_small);
     }
