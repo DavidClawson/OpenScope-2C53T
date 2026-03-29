@@ -13,6 +13,8 @@
 #include "theme.h"
 #include "watchdog.h"
 #include "scope_state.h"
+#include "math_channel.h"
+#include "component_test.h"
 #include <stdio.h>
 
 /* Top-level menu items */
@@ -21,9 +23,19 @@ static const char *settings_items[SETTINGS_ITEM_COUNT] = {
     "Sound and Light",
     "Auto Shutdown",
     "Display Mode",
+    "Math / Persist",
+    "Component Tester",
     "Startup on Boot",
     "About",
     "Factory Reset",
+};
+
+/* Math / Persistence sub-menu items */
+#define MATH_SUB_ITEMS  3
+static const char *math_sub_labels[MATH_SUB_ITEMS] = {
+    "Math Channel",
+    "Persistence",
+    "Back",
 };
 
 /* Layout constants */
@@ -65,6 +77,37 @@ static void draw_menu_item(int i, int selected_idx, const char *label,
  * Top-level settings screen (depth 0)
  * ═══════════════════════════════════════════════════════════════════ */
 
+/* ═══════════════════════════════════════════════════════════════════
+ * Math / Persistence sub-menu (depth 3)
+ * ═══════════════════════════════════════════════════════════════════ */
+
+static void draw_settings_math(void)
+{
+    const theme_t *th = theme_get();
+
+    lcd_fill_rect(0, 16, LCD_WIDTH, LCD_HEIGHT - 32, th->background);
+
+    font_draw_string_center(LCD_WIDTH / 2, 20, "Math / Persist",
+                            th->text_primary, th->background, &font_large);
+
+    for (int i = 0; i < MATH_SUB_ITEMS; i++) {
+        const char *val = NULL;
+
+        if (i == 0) {
+            if (math_enabled) {
+                val = math_channel_name((math_op_t)math_op);
+            } else {
+                val = "Off";
+            }
+        }
+        if (i == 1) {
+            val = persist_enabled ? "On" : "Off";
+        }
+
+        draw_menu_item(i, settings_sub_selected, math_sub_labels[i], val, th);
+    }
+}
+
 static void draw_settings_top(void)
 {
     const theme_t *th = theme_get();
@@ -80,7 +123,9 @@ static void draw_settings_top(void)
         /* Dynamic values for certain items */
         if (i == 0) value = ">";        /* Has sub-menu */
         if (i == 3) value = th->name;   /* Display Mode: theme name */
-        if (i == 5) value = ">";        /* About: has detail screen */
+        if (i == 4) value = ">";        /* Math/Persist: sub-menu */
+        if (i == 5) value = ">";        /* Component Tester */
+        if (i == 7) value = ">";        /* About: has detail screen */
 
         draw_menu_item(i, settings_selected, settings_items[i], value, th);
     }
@@ -172,9 +217,11 @@ static void draw_settings_about(void)
 void draw_settings_screen(void)
 {
     switch (settings_depth) {
-    case 1:  draw_settings_osc();   break;
-    case 2:  draw_settings_about(); break;
-    default: draw_settings_top();   break;
+    case 1:  draw_settings_osc();              break;
+    case 2:  draw_settings_about();            break;
+    case 3:  draw_settings_math();             break;
+    case 4:  draw_component_test_screen();     break;
+    default: draw_settings_top();              break;
     }
 }
 

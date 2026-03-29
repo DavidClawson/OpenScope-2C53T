@@ -4,6 +4,12 @@
  * All button-to-action mapping logic lives here.
  * The input task (in main.c) handles GPIO polling and debounce,
  * then calls input_handle_button() for the actual logic.
+ *
+ * Integrated features from 4 agent worktrees:
+ *   - Cursor measurement mode (TRIGGER toggles, arrows move cursors)
+ *   - Meter 10 sub-modes (LEFT/RIGHT cycle, SELECT resets min/max/avg)
+ *   - Signal gen: amplitude stepping, duty cycle, frequency presets
+ *   - Math channel, persistence, component tester (settings sub-menus)
  */
 
 #include "input_handler.h"
@@ -11,6 +17,9 @@
 #include "scope_state.h"
 #include "signal_gen.h"
 #include "theme.h"
+#include "math_channel.h"
+#include "component_test.h"
+#include "persistence.h"
 #include <stdio.h>
 
 #ifdef FEATURE_FFT
@@ -28,14 +37,22 @@ void input_handle_settings_ok(void)
 
     if (settings_depth == 0) {
         switch (settings_selected) {
-        case 0: /* Oscilloscope Settings — enter sub-menu */
+        case 0: /* Oscilloscope Settings -- enter sub-menu */
             settings_depth = 1;
             settings_sub_selected = 0;
             break;
-        case 3: /* Display Mode — cycle theme */
+        case 3: /* Display Mode -- cycle theme */
             theme_cycle();
             break;
-        case 5: /* About — display info screen */
+        case 4: /* Math Channel -- enter math sub-menu */
+            settings_depth = 3;
+            settings_sub_selected = 0;
+            break;
+        case 5: /* Component Tester -- enter component test screen */
+            settings_depth = 4;
+            comp_test_init();
+            break;
+        case 7: /* About -- display info screen */
             settings_depth = 2;
             break;
         default:
@@ -55,7 +72,36 @@ void input_handle_settings_ok(void)
         default: break;
         }
     } else if (settings_depth == 2) {
-        /* About screen — OK goes back */
+        /* About screen -- OK goes back */
+        settings_depth = 0;
+    } else if (settings_depth == 3) {
+        /* Math channel sub-menu */
+        if (settings_sub_selected == 0) {
+            /* Math Channel: cycle Off -> A+B -> A-B -> A*B -> ... -> Off */
+            if (!math_enabled) {
+                math_enabled = true;
+                math_op = 0;
+            } else if (math_op < MATH_COUNT - 1) {
+                math_op++;
+            } else {
+                math_enabled = false;
+                math_op = 0;
+            }
+        } else if (settings_sub_selected == 1) {
+            /* Persistence: toggle on/off */
+            persist_enabled = !persist_enabled;
+            if (persist_enabled) {
+                persist_init();
+                persist_set_mode(PERSIST_MEDIUM);
+            } else {
+                persist_set_mode(PERSIST_OFF);
+            }
+        } else if (settings_sub_selected == 2) {
+            /* Back */
+            settings_depth = 0;
+        }
+    } else if (settings_depth == 4) {
+        /* Component tester: OK = back to settings */
         settings_depth = 0;
     }
 }
@@ -89,7 +135,7 @@ uint8_t input_handle_button(button_id_t button, QueueHandle_t dq)
 
     switch (button) {
 
-    /* ── Mode / Navigation ──────────────────────────────────── */
+    /* -- Mode / Navigation ---------------------------------------- */
 
     case BTN_MENU:
         if (current_mode == MODE_SETTINGS && settings_depth > 0) {
@@ -105,7 +151,7 @@ uint8_t input_handle_button(button_id_t button, QueueHandle_t dq)
         send_cmd(dq, cmd);
         break;
 
-    /* ── Channel buttons ────────────────────────────────────── */
+    /* -- Channel buttons ------------------------------------------ */
 
     case BTN_CH1:
         if (current_mode == MODE_OSCILLOSCOPE) {
@@ -131,10 +177,20 @@ uint8_t input_handle_button(button_id_t button, QueueHandle_t dq)
         }
         break;
 
-    /* ── Trigger ────────────────────────────────────────────── */
+    /* -- Trigger -------------------------------------------------- */
 
     case BTN_TRIGGER:
         if (current_mode == MODE_OSCILLOSCOPE) {
+#ifdef FEATURE_FFT
+            if (scope_view == SCOPE_VIEW_TIME)
+#endif
+            {
+                /* Toggle cursor mode in time view */
+                scope_cursor_cycle_mode();
+                send_cmd(dq, cmd);
+                break;
+            }
+            /* Fall through for non-time views: cycle trigger mode */
             scope_cycle_trigger_mode(ss);
             snprintf(pb, sizeof(pb), "Trig: %s",
                      trigger_mode_labels[ss->trigger.mode]);
@@ -155,14 +211,13 @@ uint8_t input_handle_button(button_id_t button, QueueHandle_t dq)
         }
         break;
 
-    /* ── Save ───────────────────────────────────────────────── */
+    /* -- Save ----------------------------------------------------- */
 
     case BTN_SAVE:
-        /* TODO: screenshot capture when flash is available */
         send_cmd(dq, cmd);
         break;
 
-    /* ── Auto ───────────────────────────────────────────────── */
+    /* -- Auto ----------------------------------------------------- */
 
     case BTN_AUTO:
         if (current_mode == MODE_OSCILLOSCOPE) {
@@ -178,12 +233,24 @@ uint8_t input_handle_button(button_id_t button, QueueHandle_t dq)
         }
         break;
 
-    /* ── PRM / SELECT ───────────────────────────────────────── */
+    /* -- PRM / SELECT --------------------------------------------- */
 
 #ifdef FEATURE_FFT
     case BTN_PRM:
         if (current_mode == MODE_OSCILLOSCOPE) {
             scope_view = (scope_view_t)((scope_view + 1) % SCOPE_VIEW_COUNT);
+            send_cmd(dq, cmd);
+        } else if (current_mode == MODE_SIGNAL_GEN) {
+            /* Cycle frequency presets: 1 -> 10 -> 100 -> 1k -> 10k -> 25k -> 1 Hz */
+            const siggen_config_t *sc = siggen_get_config();
+            float f = sc->frequency_hz;
+            if (f < 10.0f) f = 10.0f;
+            else if (f < 100.0f) f = 100.0f;
+            else if (f < 1000.0f) f = 1000.0f;
+            else if (f < 10000.0f) f = 10000.0f;
+            else if (f < 25000.0f) f = 25000.0f;
+            else f = 1.0f;
+            siggen_set_frequency(f);
             send_cmd(dq, cmd);
         }
         break;
@@ -198,6 +265,15 @@ uint8_t input_handle_button(button_id_t button, QueueHandle_t dq)
         if (current_mode == MODE_SIGNAL_GEN) {
             siggen_cycle_waveform();
             send_cmd(dq, cmd);
+        } else if (current_mode == MODE_MULTIMETER) {
+            meter_reset_minmaxavg();
+            send_cmd(dq, cmd);
+        } else if (current_mode == MODE_SETTINGS &&
+                   settings_depth == 4) {
+            /* Component tester: cycle component type */
+            comp_test_cycle_type();
+            cmd = DCMD_DRAW_SETTINGS;
+            send_cmd(dq, cmd);
         } else if (current_mode == MODE_OSCILLOSCOPE) {
             channel_state_t *ch = (active_channel == 0) ? &ss->ch1 : &ss->ch2;
             scope_cycle_probe(ch);
@@ -205,16 +281,25 @@ uint8_t input_handle_button(button_id_t button, QueueHandle_t dq)
         }
         break;
 
-    /* ── UP / DOWN ──────────────────────────────────────────── */
+    /* -- UP / DOWN ------------------------------------------------ */
 
     case BTN_UP:
         if (current_mode == MODE_SETTINGS) {
             if (settings_depth == 0) {
                 if (settings_selected > 0) settings_selected--;
-            } else {
+            } else if (settings_depth == 3) {
+                if (settings_sub_selected > 0) settings_sub_selected--;
+            } else if (settings_depth == 1) {
                 if (settings_sub_selected > 0) settings_sub_selected--;
             }
             cmd = DCMD_DRAW_SETTINGS;
+            send_cmd(dq, cmd);
+        }
+        /* Cursor movement in scope time view */
+        else if (current_mode == MODE_OSCILLOSCOPE &&
+                 ss->cursor.mode != CURSOR_OFF) {
+            scope_cursor_move(-4);
+            cmd = DCMD_DRAW_SCOPE;
             send_cmd(dq, cmd);
         }
 #ifdef FEATURE_FFT
@@ -232,14 +317,7 @@ uint8_t input_handle_button(button_id_t button, QueueHandle_t dq)
             popup_and_redraw(dq, pb);
         }
         else if (current_mode == MODE_SIGNAL_GEN) {
-            const siggen_config_t *sc = siggen_get_config();
-            float f = sc->frequency_hz;
-            if (f < 10.0f) f = 10.0f;
-            else if (f < 100.0f) f = 100.0f;
-            else if (f < 1000.0f) f = 1000.0f;
-            else if (f < 10000.0f) f = 10000.0f;
-            else f = 25000.0f;
-            siggen_set_frequency(f);
+            siggen_amplitude_up();
             send_cmd(dq, cmd);
         }
         break;
@@ -249,11 +327,21 @@ uint8_t input_handle_button(button_id_t button, QueueHandle_t dq)
             if (settings_depth == 0) {
                 if (settings_selected < SETTINGS_ITEM_COUNT - 1)
                     settings_selected++;
-            } else {
+            } else if (settings_depth == 3) {
+                /* Math/persist sub-menu: 3 items (0,1,2) */
+                if (settings_sub_selected < 2) settings_sub_selected++;
+            } else if (settings_depth == 1) {
                 if (settings_sub_selected < SETTINGS_OSC_ITEM_COUNT - 1)
                     settings_sub_selected++;
             }
             cmd = DCMD_DRAW_SETTINGS;
+            send_cmd(dq, cmd);
+        }
+        /* Cursor movement */
+        else if (current_mode == MODE_OSCILLOSCOPE &&
+                 ss->cursor.mode != CURSOR_OFF) {
+            scope_cursor_move(4);
+            cmd = DCMD_DRAW_SCOPE;
             send_cmd(dq, cmd);
         }
 #ifdef FEATURE_FFT
@@ -271,29 +359,42 @@ uint8_t input_handle_button(button_id_t button, QueueHandle_t dq)
             popup_and_redraw(dq, pb);
         }
         else if (current_mode == MODE_SIGNAL_GEN) {
-            const siggen_config_t *sc = siggen_get_config();
-            float f = sc->frequency_hz;
-            if (f > 10000.0f) f = 10000.0f;
-            else if (f > 1000.0f) f = 1000.0f;
-            else if (f > 100.0f) f = 100.0f;
-            else if (f > 10.0f) f = 10.0f;
-            else f = 1.0f;
-            siggen_set_frequency(f);
+            siggen_amplitude_down();
             send_cmd(dq, cmd);
         }
         break;
 
-    /* ── LEFT / RIGHT ───────────────────────────────────────── */
+    /* -- LEFT / RIGHT --------------------------------------------- */
 
     case BTN_LEFT:
-#ifdef FEATURE_FFT
+        /* Cursor: switch active cursor */
         if (current_mode == MODE_OSCILLOSCOPE &&
+            ss->cursor.mode != CURSOR_OFF) {
+            scope_cursor_next_sel();
+            cmd = DCMD_DRAW_SCOPE;
+            send_cmd(dq, cmd);
+        }
+        /* Meter: previous sub-mode */
+        else if (current_mode == MODE_MULTIMETER) {
+            if (meter_submode == 0)
+                meter_submode = METER_SUBMODE_COUNT - 1;
+            else
+                meter_submode--;
+            meter_reset_minmaxavg();
+            send_cmd(dq, cmd);
+        }
+#ifdef FEATURE_FFT
+        else if (current_mode == MODE_OSCILLOSCOPE &&
             scope_view != SCOPE_VIEW_TIME) {
             fft_zoom_in();
             send_cmd(dq, cmd);
-        } else
+        }
 #endif
-        if (current_mode == MODE_OSCILLOSCOPE) {
+        else if (current_mode == MODE_SIGNAL_GEN) {
+            siggen_duty_cycle_down();
+            send_cmd(dq, cmd);
+        }
+        else if (current_mode == MODE_OSCILLOSCOPE) {
             scope_adjust_timebase(ss, -1);
             snprintf(pb, sizeof(pb), "H=%s/div",
                      timebase_table[ss->timebase_idx].label);
@@ -302,14 +403,31 @@ uint8_t input_handle_button(button_id_t button, QueueHandle_t dq)
         break;
 
     case BTN_RIGHT:
-#ifdef FEATURE_FFT
+        /* Cursor: switch active cursor */
         if (current_mode == MODE_OSCILLOSCOPE &&
+            ss->cursor.mode != CURSOR_OFF) {
+            scope_cursor_next_sel();
+            cmd = DCMD_DRAW_SCOPE;
+            send_cmd(dq, cmd);
+        }
+        /* Meter: next sub-mode */
+        else if (current_mode == MODE_MULTIMETER) {
+            meter_submode = (meter_submode + 1) % METER_SUBMODE_COUNT;
+            meter_reset_minmaxavg();
+            send_cmd(dq, cmd);
+        }
+#ifdef FEATURE_FFT
+        else if (current_mode == MODE_OSCILLOSCOPE &&
             scope_view != SCOPE_VIEW_TIME) {
             fft_zoom_out();
             send_cmd(dq, cmd);
-        } else
+        }
 #endif
-        if (current_mode == MODE_OSCILLOSCOPE) {
+        else if (current_mode == MODE_SIGNAL_GEN) {
+            siggen_duty_cycle_up();
+            send_cmd(dq, cmd);
+        }
+        else if (current_mode == MODE_OSCILLOSCOPE) {
             scope_adjust_timebase(ss, 1);
             snprintf(pb, sizeof(pb), "H=%s/div",
                      timebase_table[ss->timebase_idx].label);
@@ -317,7 +435,7 @@ uint8_t input_handle_button(button_id_t button, QueueHandle_t dq)
         }
         break;
 
-    /* ── OK ──────────────────────────────────────────────────── */
+    /* -- OK ------------------------------------------------------- */
 
     case BTN_OK:
         if (current_mode == MODE_SETTINGS) {

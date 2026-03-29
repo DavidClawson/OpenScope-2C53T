@@ -77,6 +77,46 @@ typedef struct {
     int16_t         level;          /* Trigger level (pixel offset from center) */
 } trigger_state_t;
 
+/* ═══════════════════════════════════════════════════════════════════
+ * Cursor measurement types
+ * ═══════════════════════════════════════════════════════════════════ */
+
+/* Scope waveform area boundaries (for cursor clamping) */
+#define CURSOR_SCOPE_TOP       18
+#define CURSOR_SCOPE_BOT       224
+#define CURSOR_SCOPE_LEFT      0
+#define CURSOR_SCOPE_RIGHT     319
+#define CURSOR_SCOPE_HEIGHT    (CURSOR_SCOPE_BOT - CURSOR_SCOPE_TOP)
+#define CURSOR_SCOPE_WIDTH     (CURSOR_SCOPE_RIGHT - CURSOR_SCOPE_LEFT + 1)
+
+typedef enum {
+    CURSOR_OFF = 0,
+    CURSOR_VERTICAL,
+    CURSOR_HORIZONTAL,
+    CURSOR_BOTH,
+    CURSOR_MODE_COUNT
+} cursor_mode_t;
+
+typedef enum {
+    CURSOR_SEL_V1 = 0,
+    CURSOR_SEL_V2,
+    CURSOR_SEL_H1,
+    CURSOR_SEL_H2,
+} cursor_sel_t;
+
+typedef struct {
+    cursor_mode_t mode;
+    cursor_sel_t  active;
+
+    uint16_t v1_x;
+    uint16_t v2_x;
+    uint16_t h1_y;
+    uint16_t h2_y;
+
+    float time_per_pixel;
+    float volts_per_pixel;
+} cursor_state_t;
+
 /* Full oscilloscope state */
 typedef struct {
     channel_state_t ch1;
@@ -84,6 +124,7 @@ typedef struct {
     trigger_state_t trigger;
     uint8_t         timebase_idx;   /* Index into timebase_table[] */
     bool            running;        /* Acquisition running/stopped */
+    cursor_state_t  cursor;         /* Cursor measurement state */
 } scope_state_t;
 
 /* ═══════════════════════════════════════════════════════════════════
@@ -131,5 +172,10 @@ void scope_adjust_vdiv(channel_state_t *ch, int direction);
 void scope_adjust_timebase(scope_state_t *s, int direction);
 void scope_adjust_trigger_level(scope_state_t *s, int direction);
 void scope_toggle_running(scope_state_t *s);
+
+/* Cursor operations */
+void scope_cursor_cycle_mode(void);
+void scope_cursor_next_sel(void);
+void scope_cursor_move(int16_t delta);
 
 #endif /* SCOPE_STATE_H */

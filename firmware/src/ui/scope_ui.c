@@ -15,6 +15,8 @@
 #include "font.h"
 #include "theme.h"
 #include "scope_state.h"
+#include "math_channel.h"
+#include "persistence.h"
 #include <stdio.h>
 #include <math.h>
 
@@ -360,6 +362,276 @@ void draw_demo_waveform(uint32_t frame)
 }
 
 /* ═══════════════════════════════════════════════════════════════════
+ * Cursor measurement drawing
+ * ═══════════════════════════════════════════════════════════════════ */
+
+static void format_si(float val, const char *unit, char *buf, int bufsize)
+{
+    const char *prefix;
+    float abs_val = val < 0.0f ? -val : val;
+    int pos = 0;
+
+    if (abs_val == 0.0f) {
+        prefix = "";
+    } else if (abs_val >= 1.0f) {
+        prefix = "";
+    } else if (abs_val >= 1.0e-3f) {
+        val *= 1.0e3f;
+        prefix = "m";
+    } else if (abs_val >= 1.0e-6f) {
+        val *= 1.0e6f;
+        prefix = "u";
+    } else {
+        val *= 1.0e9f;
+        prefix = "n";
+    }
+
+    if (val < 0.0f && pos < bufsize - 1) {
+        buf[pos++] = '-';
+        val = -val;
+    }
+
+    int integer = (int)val;
+    int frac = (int)((val - (float)integer) * 100.0f + 0.5f);
+    if (frac >= 100) { integer++; frac -= 100; }
+
+    if (integer >= 1000 && pos < bufsize - 1) buf[pos++] = (char)('0' + (integer / 1000) % 10);
+    if (integer >= 100 && pos < bufsize - 1) buf[pos++] = (char)('0' + (integer / 100) % 10);
+    if (integer >= 10 && pos < bufsize - 1) buf[pos++] = (char)('0' + (integer / 10) % 10);
+    if (pos < bufsize - 1) buf[pos++] = (char)('0' + integer % 10);
+    if (pos < bufsize - 1) buf[pos++] = '.';
+    if (pos < bufsize - 1) buf[pos++] = (char)('0' + frac / 10);
+    if (pos < bufsize - 1) buf[pos++] = (char)('0' + frac % 10);
+
+    while (*prefix && pos < bufsize - 1) buf[pos++] = *prefix++;
+    while (*unit && pos < bufsize - 1) buf[pos++] = *unit++;
+    buf[pos] = '\0';
+}
+
+static void draw_vline_dashed(uint16_t x, uint16_t y_top, uint16_t y_bot,
+                              uint16_t color, bool is_active)
+{
+    for (uint16_t y = y_top; y <= y_bot; y++) {
+        if (is_active || ((y & 7) < 4))
+            lcd_set_pixel(x, y, color);
+    }
+}
+
+static void draw_hline_dashed(uint16_t y, uint16_t x_left, uint16_t x_right,
+                              uint16_t color, bool is_active)
+{
+    for (uint16_t x = x_left; x <= x_right; x++) {
+        if (is_active || ((x & 7) < 4))
+            lcd_set_pixel(x, y, color);
+    }
+}
+
+static void draw_cursors(void)
+{
+    const scope_state_t *ss = scope_state_get();
+    const cursor_state_t *c = &ss->cursor;
+    const theme_t *th = theme_get();
+
+    if (c->mode == CURSOR_OFF) return;
+
+    uint16_t color_active   = th->highlight;
+    uint16_t color_inactive = th->text_secondary;
+
+    if (c->mode == CURSOR_VERTICAL || c->mode == CURSOR_BOTH) {
+        bool v1_active = (c->active == CURSOR_SEL_V1);
+        bool v2_active = (c->active == CURSOR_SEL_V2);
+
+        draw_vline_dashed(c->v1_x, SCOPE_TOP, SCOPE_BOT,
+                          v1_active ? color_active : color_inactive, v1_active);
+        draw_vline_dashed(c->v2_x, SCOPE_TOP, SCOPE_BOT,
+                          v2_active ? color_active : color_inactive, v2_active);
+
+        font_draw_string(c->v1_x > 12 ? c->v1_x - 10 : 0, SCOPE_TOP,
+                         "V1", v1_active ? color_active : color_inactive,
+                         v1_active ? color_active : color_inactive, &font_small);
+        font_draw_string(c->v2_x > 12 ? c->v2_x - 10 : 0, SCOPE_TOP,
+                         "V2", v2_active ? color_active : color_inactive,
+                         v2_active ? color_active : color_inactive, &font_small);
+    }
+
+    if (c->mode == CURSOR_HORIZONTAL || c->mode == CURSOR_BOTH) {
+        bool h1_active = (c->active == CURSOR_SEL_H1);
+        bool h2_active = (c->active == CURSOR_SEL_H2);
+
+        draw_hline_dashed(c->h1_y, 0, LCD_WIDTH - 1,
+                          h1_active ? color_active : color_inactive, h1_active);
+        draw_hline_dashed(c->h2_y, 0, LCD_WIDTH - 1,
+                          h2_active ? color_active : color_inactive, h2_active);
+
+        font_draw_string_right(LCD_WIDTH - 1,
+                               c->h1_y > SCOPE_TOP + 2 ? c->h1_y - 13 : c->h1_y + 2,
+                               "H1", h1_active ? color_active : color_inactive,
+                               h1_active ? color_active : color_inactive, &font_small);
+        font_draw_string_right(LCD_WIDTH - 1,
+                               c->h2_y > SCOPE_TOP + 2 ? c->h2_y - 13 : c->h2_y + 2,
+                               "H2", h2_active ? color_active : color_inactive,
+                               h2_active ? color_active : color_inactive, &font_small);
+    }
+
+    /* Delta readout */
+    uint16_t badge_y = SCOPE_BOT - 28;
+    uint16_t badge_x = 4;
+    char buf[24];
+
+    if (c->mode == CURSOR_VERTICAL || c->mode == CURSOR_BOTH) {
+        int16_t dx = (int16_t)c->v2_x - (int16_t)c->v1_x;
+        float dt = (float)dx * c->time_per_pixel;
+
+        lcd_fill_rect(badge_x, badge_y, 100, 13, th->background);
+        format_si(dt < 0.0f ? -dt : dt, "s", buf, sizeof(buf));
+        {
+            char label[32];
+            int li = 0;
+            label[li++] = 'd'; label[li++] = 't'; label[li++] = '=';
+            if (dt < 0.0f) label[li++] = '-';
+            int j = 0;
+            while (buf[j] && li < 30) label[li++] = buf[j++];
+            label[li] = '\0';
+            font_draw_string(badge_x, badge_y, label, th->highlight, th->highlight, &font_small);
+        }
+
+        if (dx != 0) {
+            float freq = 1.0f / (dt < 0.0f ? -dt : dt);
+            lcd_fill_rect(badge_x, badge_y + 14, 100, 13, th->background);
+            format_si(freq, "Hz", buf, sizeof(buf));
+            {
+                char label[32];
+                int li = 0;
+                label[li++] = '1'; label[li++] = '/'; label[li++] = 'd';
+                label[li++] = 't'; label[li++] = '=';
+                int j = 0;
+                while (buf[j] && li < 30) label[li++] = buf[j++];
+                label[li] = '\0';
+                font_draw_string(badge_x, badge_y + 14, label,
+                                 th->highlight, th->highlight, &font_small);
+            }
+        }
+    }
+
+    if (c->mode == CURSOR_HORIZONTAL || c->mode == CURSOR_BOTH) {
+        int16_t dy = (int16_t)c->h1_y - (int16_t)c->h2_y;
+        float dv = (float)dy * c->volts_per_pixel;
+
+        uint16_t vbadge_x = (c->mode == CURSOR_BOTH) ? 120 : badge_x;
+        lcd_fill_rect(vbadge_x, badge_y, 100, 13, th->background);
+        format_si(dv < 0.0f ? -dv : dv, "V", buf, sizeof(buf));
+        {
+            char label[32];
+            int li = 0;
+            label[li++] = 'd'; label[li++] = 'V'; label[li++] = '=';
+            if (dv < 0.0f) label[li++] = '-';
+            int j = 0;
+            while (buf[j] && li < 30) label[li++] = buf[j++];
+            label[li] = '\0';
+            font_draw_string(vbadge_x, badge_y, label, th->highlight, th->highlight, &font_small);
+        }
+    }
+
+    /* Cursor mode indicator */
+    {
+        const char *mode_str;
+        switch (c->mode) {
+        case CURSOR_VERTICAL:    mode_str = "CUR:T"; break;
+        case CURSOR_HORIZONTAL:  mode_str = "CUR:V"; break;
+        case CURSOR_BOTH:        mode_str = "CUR:TV"; break;
+        default:                 mode_str = ""; break;
+        }
+        font_draw_string_right(LCD_WIDTH - 4, SCOPE_BOT - 13,
+                               mode_str, th->highlight, th->highlight, &font_small);
+    }
+}
+
+/* ═══════════════════════════════════════════════════════════════════
+ * Persistence overlay
+ * ═══════════════════════════════════════════════════════════════════ */
+
+static void draw_persistence_overlay(uint32_t frame)
+{
+    if (!persist_enabled) return;
+
+    /* Feed demo waveform y-values into persistence buffer */
+    static const int8_t sin_lut_p[64] = {
+         0, 10, 19, 29, 38, 47, 56, 63, 71, 77, 83, 88, 92, 96, 98, 99,
+        100, 99, 98, 96, 92, 88, 83, 77, 71, 63, 56, 47, 38, 29, 19, 10,
+         0,-10,-19,-29,-38,-47,-56,-63,-71,-77,-83,-88,-92,-96,-98,-99,
+       -100,-99,-98,-96,-92,-88,-83,-77,-71,-63,-56,-47,-38,-29,-19,-10,
+    };
+
+    uint16_t y_vals[PERSIST_WIDTH];
+    uint16_t y_center = SCOPE_H / 2;
+    for (uint16_t px = 0; px < PERSIST_WIDTH; px++) {
+        uint8_t idx = (uint8_t)((px * 4 + frame) & 0x3F);
+        int16_t yv = (int16_t)(y_center - (sin_lut_p[idx] * 40 / 100));
+        if (yv < 0) yv = 0;
+        if (yv >= PERSIST_HEIGHT) yv = PERSIST_HEIGHT - 1;
+        y_vals[px] = (uint16_t)yv;
+    }
+    persist_add_trace(y_vals, 0);
+    persist_decay();
+
+    const uint8_t *buf = persist_get_buffer();
+    if (!buf) return;
+
+    for (uint16_t y = 0; y < PERSIST_HEIGHT; y++) {
+        for (uint16_t x = 0; x < PERSIST_WIDTH; x++) {
+            uint8_t intensity = buf[y * PERSIST_WIDTH + x];
+            if (intensity > 0) {
+                uint16_t color = persist_intensity_to_color_ch1(intensity);
+                if (color != 0x0000)
+                    lcd_set_pixel(x, y + SCOPE_TOP, color);
+            }
+        }
+    }
+}
+
+/* ═══════════════════════════════════════════════════════════════════
+ * Math channel overlay
+ * ═══════════════════════════════════════════════════════════════════ */
+
+static void draw_math_waveform(uint32_t frame)
+{
+    if (!math_enabled) return;
+
+    const theme_t *th = theme_get();
+
+    static const int8_t sin_lut_m[64] = {
+         0, 10, 19, 29, 38, 47, 56, 63, 71, 77, 83, 88, 92, 96, 98, 99,
+        100, 99, 98, 96, 92, 88, 83, 77, 71, 63, 56, 47, 38, 29, 19, 10,
+         0,-10,-19,-29,-38,-47,-56,-63,-71,-77,-83,-88,-92,-96,-98,-99,
+       -100,-99,-98,-96,-92,-88,-83,-77,-71,-63,-56,-47,-38,-29,-19,-10,
+    };
+
+    int16_t ch_a[LCD_WIDTH], ch_b[LCD_WIDTH], result[LCD_WIDTH];
+    for (uint16_t x = 0; x < LCD_WIDTH; x++) {
+        uint8_t idx = (uint8_t)((x * 4 + frame) & 0x3F);
+        ch_a[x] = (int16_t)(sin_lut_m[idx] * 40);
+        uint8_t phase = (uint8_t)((x * 4 + frame) & 0x3F);
+        ch_b[x] = (int16_t)(phase < 32 ? -2500 : 2500);
+    }
+
+    math_config_t cfg;
+    cfg.operation = (math_op_t)math_op;
+    cfg.scale = 1.0f;
+    math_channel_compute(ch_a, ch_b, result, LCD_WIDTH, &cfg);
+
+    uint16_t y_center = SCOPE_MID_Y;
+    for (uint16_t x = 0; x < LCD_WIDTH; x++) {
+        int16_t y = (int16_t)(y_center - result[x] / 100);
+        if (y >= SCOPE_TOP && y < SCOPE_BOT)
+            lcd_set_pixel(x, (uint16_t)y, th->warning);
+    }
+
+    const char *name = math_channel_name((math_op_t)math_op);
+    font_draw_string(130, SCOPE_TOP, "MATH:", th->warning, th->warning, &font_small);
+    font_draw_string(170, SCOPE_TOP, name, th->warning, th->warning, &font_small);
+}
+
+/* ═══════════════════════════════════════════════════════════════════
  * Main scope screen compositor
  * ═══════════════════════════════════════════════════════════════════ */
 
@@ -371,28 +643,37 @@ void draw_scope_screen(uint32_t frame)
     /* Clear waveform area */
     lcd_fill_rect(0, SCOPE_TOP, LCD_WIDTH, SCOPE_H, th->background);
 
-    /* Layer 1: Grid */
+    /* Layer 1: Persistence overlay (under everything) */
+    draw_persistence_overlay(frame);
+
+    /* Layer 2: Grid */
     draw_scope_grid();
 
-    /* Layer 2: Ground reference markers */
+    /* Layer 3: Ground reference markers */
     draw_ground_markers(ss, th);
 
-    /* Layer 3: Trigger level indicator */
+    /* Layer 4: Trigger level indicator */
     draw_trigger_indicator(ss, th);
 
-    /* Layer 4: Waveform */
+    /* Layer 5: Waveform */
     draw_demo_waveform(frame);
 
-    /* Layer 5: Trigger status badge */
+    /* Layer 6: Math channel overlay */
+    draw_math_waveform(frame);
+
+    /* Layer 7: Cursor lines */
+    draw_cursors();
+
+    /* Layer 8: Trigger status badge */
     draw_trigger_status(ss, th);
 
-    /* Layer 6: Run/Stop */
+    /* Layer 9: Run/Stop */
     draw_run_stop(ss, th);
 
-    /* Layer 7: Measurement badges */
+    /* Layer 10: Measurement badges */
     draw_measurement_badges(ss, th);
 
-    /* Layer 8: Quick-change popup (on top of everything) */
+    /* Layer 11: Quick-change popup (on top of everything) */
     draw_popup(th);
 
     /* Active channel indicator (top-left) */

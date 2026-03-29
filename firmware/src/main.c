@@ -23,6 +23,9 @@
 #include "scope_state.h"
 #include "input_handler.h"
 #include "theme.h"
+#include "math_channel.h"
+#include "component_test.h"
+#include "persistence.h"
 
 /* ═══════════════════════════════════════════════════════════════════
  * Global State (extern'd via ui.h for UI modules)
@@ -34,6 +37,12 @@ volatile int8_t        settings_selected = 0;
 volatile int8_t        settings_depth = 0;
 volatile int8_t        settings_sub_selected = 0;
 volatile uint8_t       active_channel = 0;  /* 0=CH1, 1=CH2 */
+volatile uint8_t       meter_submode = 0;   /* 0-9: current meter sub-mode */
+
+/* Scope feature toggles */
+volatile bool          math_enabled = false;
+volatile uint8_t       math_op = 0;        /* MATH_ADD */
+volatile bool          persist_enabled = false;
 
 #ifdef FEATURE_FFT
 volatile scope_view_t scope_view = SCOPE_VIEW_TIME;
@@ -293,10 +302,11 @@ int main(void)
     /* Initialize signal generator (skipped in emulator) */
     {
         siggen_config_t sg_cfg;
-        sg_cfg.waveform      = SIGGEN_SINE;
-        sg_cfg.frequency_hz  = 1000.0f;
-        sg_cfg.amplitude_vpp = 3.3f;
-        sg_cfg.offset_v      = 0.0f;
+        sg_cfg.waveform       = SIGGEN_SINE;
+        sg_cfg.frequency_hz   = 1000.0f;
+        sg_cfg.amplitude_vpp  = 3.3f;
+        sg_cfg.offset_v       = 0.0f;
+        sg_cfg.duty_cycle_pct = 50;
         sg_cfg.output_enabled = false;
         siggen_init(&sg_cfg);
     }

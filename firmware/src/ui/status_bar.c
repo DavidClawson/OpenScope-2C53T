@@ -101,8 +101,10 @@ void draw_info_bar(void)
         }
         break;
     case MODE_MULTIMETER:
-        font_draw_string(4, LCD_HEIGHT - 14, "DC Voltage",
+        font_draw_string(4, LCD_HEIGHT - 14, meter_submode_name(meter_submode),
                          th->ch1, ib, &font_small);
+        font_draw_string(140, LCD_HEIGHT - 14, "<L/R>",
+                         th->text_secondary, ib, &font_small);
         font_draw_string(200, LCD_HEIGHT - 14, "Auto Range",
                          th->success, ib, &font_small);
         break;

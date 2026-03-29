@@ -2,8 +2,7 @@
  * DDS (Direct Digital Synthesis) Signal Generator Engine
  *
  * Uses a 32-bit phase accumulator for precise frequency generation
- * from 0.1 Hz to 25 kHz. Fixes community bug #5: signal generator
- * inaccurate below 20 Hz.
+ * from 0.1 Hz to 25 kHz. 8 waveform types with duty cycle control.
  *
  * Target: GD32F307 (ARM Cortex-M4F @ 120MHz)
  */
@@ -57,65 +56,86 @@ static const int16_t sine_lut[256] = {
 static siggen_config_t g_config;
 static uint32_t g_phase_acc;    /* 32-bit phase accumulator */
 static uint32_t g_tuning_word;  /* phase increment per sample */
+static uint32_t g_noise_state = 0xDEADBEEF; /* LFSR state for noise */
+
+/* Predefined amplitude steps (Vpp) */
+static const float amplitude_steps[] = { 0.1f, 0.2f, 0.5f, 1.0f, 2.0f, 3.3f };
+#define NUM_AMP_STEPS (sizeof(amplitude_steps) / sizeof(amplitude_steps[0]))
 
 /* ═══════════════════════════════════════════════════════════════════
  * Internal helpers
  * ═══════════════════════════════════════════════════════════════════ */
 
-/* Compute tuning word for given frequency and sample rate.
- * tuning_word = freq_hz / sample_rate * 2^32 */
 static uint32_t compute_tuning_word(float freq_hz, float sample_rate)
 {
     return (uint32_t)((double)freq_hz / (double)sample_rate * 4294967296.0);
 }
 
-/* Generate a single sample from the current phase accumulator value.
- * Returns value in range [-32767, +32767] before amplitude/offset scaling. */
 static int32_t generate_raw_sample(uint32_t phase)
 {
     switch (g_config.waveform) {
     case SIGGEN_SINE: {
-        /* Use top 8 bits as LUT index, next 8 bits for linear interpolation */
         uint8_t idx = (uint8_t)(phase >> 24);
         uint8_t frac = (uint8_t)(phase >> 16);
         int32_t s0 = sine_lut[idx];
         int32_t s1 = sine_lut[(uint8_t)(idx + 1)];
-        /* Linear interpolation: s0 + (s1 - s0) * frac / 256 */
         return s0 + (((s1 - s0) * frac) >> 8);
     }
 
-    case SIGGEN_SQUARE:
-        return (phase & 0x80000000) ? -32767 : 32767;
+    case SIGGEN_SQUARE: {
+        uint32_t threshold = (uint32_t)((uint64_t)g_config.duty_cycle_pct * 4294967295ULL / 100);
+        return (phase < threshold) ? 32767 : -32767;
+    }
 
     case SIGGEN_TRIANGLE: {
-        /* Convert phase to triangle: 0->max->0->-max->0
-         * Phase quadrants:
-         *   0x00000000-0x3FFFFFFF: ramp up   (0 to +max)
-         *   0x40000000-0x7FFFFFFF: ramp down (+max to 0)
-         *   0x80000000-0xBFFFFFFF: ramp down (0 to -max)
-         *   0xC0000000-0xFFFFFFFF: ramp up   (-max to 0) */
         uint32_t p = phase;
         int32_t ramp;
         if (p < 0x80000000UL) {
-            /* First half: 0 -> +max -> 0 */
-            ramp = (int32_t)(p >> 15); /* 0 to 65535 */
-            if (ramp > 32767) ramp = 65535 - ramp; /* fold back */
+            ramp = (int32_t)(p >> 15);
+            if (ramp > 32767) ramp = 65535 - ramp;
         } else {
-            /* Second half: 0 -> -max -> 0 */
             p -= 0x80000000UL;
-            ramp = (int32_t)(p >> 15); /* 0 to 65535 */
+            ramp = (int32_t)(p >> 15);
             if (ramp > 32767) ramp = 65535 - ramp;
             ramp = -ramp;
         }
-        /* Clamp to [-32767, 32767] */
         if (ramp > 32767) ramp = 32767;
         if (ramp < -32767) ramp = -32767;
         return ramp;
     }
 
     case SIGGEN_SAWTOOTH:
-        /* Linear ramp from -32768 to +32767 over full phase */
         return (int32_t)(phase >> 16) - 32768;
+
+    case SIGGEN_FULLRECT_SINE: {
+        uint8_t idx = (uint8_t)(phase >> 24);
+        uint8_t frac = (uint8_t)(phase >> 16);
+        int32_t s0 = sine_lut[idx];
+        int32_t s1 = sine_lut[(uint8_t)(idx + 1)];
+        int32_t val = s0 + (((s1 - s0) * frac) >> 8);
+        return (val < 0) ? -val : val;
+    }
+
+    case SIGGEN_HALFRECT_SINE: {
+        uint8_t idx = (uint8_t)(phase >> 24);
+        uint8_t frac = (uint8_t)(phase >> 16);
+        int32_t s0 = sine_lut[idx];
+        int32_t s1 = sine_lut[(uint8_t)(idx + 1)];
+        int32_t val = s0 + (((s1 - s0) * frac) >> 8);
+        return (val > 0) ? val : 0;
+    }
+
+    case SIGGEN_PULSE: {
+        uint32_t threshold = (uint32_t)((uint64_t)g_config.duty_cycle_pct * 4294967295ULL / 100);
+        return (phase < threshold) ? 32767 : -32767;
+    }
+
+    case SIGGEN_NOISE: {
+        g_noise_state ^= g_noise_state << 13;
+        g_noise_state ^= g_noise_state >> 17;
+        g_noise_state ^= g_noise_state << 5;
+        return (int32_t)(g_noise_state & 0xFFFF) - 32768;
+    }
 
     default:
         return 0;
@@ -131,14 +151,15 @@ void siggen_init(const siggen_config_t *cfg)
     if (cfg) {
         g_config = *cfg;
     } else {
-        g_config.waveform      = SIGGEN_SINE;
-        g_config.frequency_hz  = 1000.0f;
-        g_config.amplitude_vpp = 3.3f;
-        g_config.offset_v      = 0.0f;
+        g_config.waveform       = SIGGEN_SINE;
+        g_config.frequency_hz   = 1000.0f;
+        g_config.amplitude_vpp  = 3.3f;
+        g_config.offset_v       = 0.0f;
+        g_config.duty_cycle_pct = 50;
         g_config.output_enabled = false;
     }
     g_phase_acc = 0;
-    g_tuning_word = 0; /* Will be computed per fill_buffer call */
+    g_tuning_word = 0;
 }
 
 void siggen_fill_buffer(int16_t *buffer, uint16_t num_samples, float sample_rate)
@@ -147,21 +168,16 @@ void siggen_fill_buffer(int16_t *buffer, uint16_t num_samples, float sample_rate
 
     g_tuning_word = compute_tuning_word(g_config.frequency_hz, sample_rate);
 
-    /* Amplitude scale: map amplitude_vpp to fraction of full-scale (3.3V max) */
     float amp_scale = g_config.amplitude_vpp / 3.3f;
     if (amp_scale > 1.0f) amp_scale = 1.0f;
     if (amp_scale < 0.0f) amp_scale = 0.0f;
 
-    /* Offset: map offset_v to DAC counts (offset_v / 3.3 * 32767 * 2) */
     int32_t offset_counts = (int32_t)(g_config.offset_v / 3.3f * 32767.0f);
 
     for (uint16_t i = 0; i < num_samples; i++) {
         int32_t raw = generate_raw_sample(g_phase_acc);
-        /* Scale by amplitude */
         int32_t scaled = (int32_t)((float)raw * amp_scale);
-        /* Apply DC offset */
         scaled += offset_counts;
-        /* Clamp to int16 range */
         if (scaled > 32767) scaled = 32767;
         if (scaled < -32767) scaled = -32767;
         buffer[i] = (int16_t)scaled;
@@ -180,7 +196,7 @@ void siggen_set_waveform(siggen_waveform_t wave)
 {
     if (wave < SIGGEN_WAVEFORM_COUNT) {
         g_config.waveform = wave;
-        g_phase_acc = 0; /* Reset phase on waveform change */
+        g_phase_acc = 0;
     }
 }
 
@@ -204,8 +220,53 @@ void siggen_enable(bool enable)
 siggen_waveform_t siggen_cycle_waveform(void)
 {
     g_config.waveform = (siggen_waveform_t)((g_config.waveform + 1) % SIGGEN_WAVEFORM_COUNT);
-    g_phase_acc = 0; /* Reset phase on waveform change */
+    g_phase_acc = 0;
     return g_config.waveform;
+}
+
+void siggen_set_duty_cycle(uint8_t pct)
+{
+    if (pct < 10) pct = 10;
+    if (pct > 90) pct = 90;
+    g_config.duty_cycle_pct = pct;
+}
+
+float siggen_amplitude_up(void)
+{
+    for (uint8_t i = 0; i < NUM_AMP_STEPS; i++) {
+        if (amplitude_steps[i] > g_config.amplitude_vpp + 0.01f) {
+            g_config.amplitude_vpp = amplitude_steps[i];
+            return g_config.amplitude_vpp;
+        }
+    }
+    g_config.amplitude_vpp = amplitude_steps[NUM_AMP_STEPS - 1];
+    return g_config.amplitude_vpp;
+}
+
+float siggen_amplitude_down(void)
+{
+    for (int i = (int)NUM_AMP_STEPS - 1; i >= 0; i--) {
+        if (amplitude_steps[i] < g_config.amplitude_vpp - 0.01f) {
+            g_config.amplitude_vpp = amplitude_steps[i];
+            return g_config.amplitude_vpp;
+        }
+    }
+    g_config.amplitude_vpp = amplitude_steps[0];
+    return g_config.amplitude_vpp;
+}
+
+uint8_t siggen_duty_cycle_up(void)
+{
+    if (g_config.duty_cycle_pct < 90)
+        g_config.duty_cycle_pct += 10;
+    return g_config.duty_cycle_pct;
+}
+
+uint8_t siggen_duty_cycle_down(void)
+{
+    if (g_config.duty_cycle_pct > 10)
+        g_config.duty_cycle_pct -= 10;
+    return g_config.duty_cycle_pct;
 }
 
 const siggen_config_t *siggen_get_config(void)

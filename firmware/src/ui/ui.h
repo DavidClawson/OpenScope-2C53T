@@ -76,13 +76,20 @@ typedef enum {
 extern volatile device_mode_t current_mode;
 extern volatile uint32_t      uptime_seconds;
 extern volatile int8_t        settings_selected;  /* Selected menu item index */
-extern volatile int8_t        settings_depth;      /* 0=top, 1=sub-menu */
+extern volatile int8_t        settings_depth;      /* 0=top, 1=sub-menu, 2=about, 3=osc-math, 4=component */
 extern volatile int8_t        settings_sub_selected; /* Sub-menu selection */
 extern volatile uint8_t       active_channel;      /* 0=CH1, 1=CH2 (for scope adjustments) */
+extern volatile uint8_t       meter_submode;       /* 0-9: current meter sub-mode */
 
-#define SETTINGS_ITEM_COUNT     7
+/* Scope feature toggles (defined in main.c) */
+extern volatile bool          math_enabled;
+extern volatile uint8_t       math_op;        /* math_op_t cast */
+extern volatile bool          persist_enabled;
+
+#define SETTINGS_ITEM_COUNT     9
 #define SETTINGS_OSC_ITEM_COUNT 8
 #define SETTINGS_ABOUT_LINES    5
+#define METER_SUBMODE_COUNT     10
 
 #ifdef FEATURE_FFT
 #include "fft.h"
@@ -114,6 +121,8 @@ void draw_waterfall_screen(void);
 
 /* meter_ui.c */
 void draw_meter_screen(void);
+void meter_reset_minmaxavg(void);
+const char *meter_submode_name(uint8_t submode);
 
 /* siggen_ui.c */
 void draw_siggen_screen(uint32_t frame);
@@ -121,5 +130,8 @@ void draw_siggen_screen(uint32_t frame);
 /* settings_ui.c */
 void draw_settings_screen(void);
 void draw_health_panel(uint16_t y_start);
+
+/* component_ui.c */
+void draw_component_test_screen(void);
 
 #endif /* UI_H */

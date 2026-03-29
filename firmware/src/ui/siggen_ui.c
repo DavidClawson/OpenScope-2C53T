@@ -8,6 +8,20 @@
 #include "theme.h"
 #include "signal_gen.h"
 
+/* Helper: format a float as "X.X" into buf, returns length written */
+static int fmt_float1(char *buf, float val)
+{
+    int i = 0;
+    int whole = (int)val;
+    int frac = (int)((val - (float)whole) * 10.0f + 0.5f);
+    if (frac >= 10) { whole++; frac = 0; }
+    if (whole >= 10) buf[i++] = (char)('0' + whole / 10);
+    buf[i++] = (char)('0' + whole % 10);
+    buf[i++] = '.';
+    buf[i++] = (char)('0' + frac);
+    return i;
+}
+
 /* Draw the signal generator screen */
 void draw_siggen_screen(uint32_t frame)
 {
@@ -41,7 +55,10 @@ void draw_siggen_screen(uint32_t frame)
     uint16_t value_x = 120;
 
     /* Waveform name */
-    static const char *wave_names[] = { "Sine", "Square", "Triangle", "Sawtooth" };
+    static const char *wave_names[] = {
+        "Sine", "Square", "Triangle", "Sawtooth",
+        "FullRect", "HalfRect", "Pulse", "Noise"
+    };
     const char *wname = (cfg->waveform < SIGGEN_WAVEFORM_COUNT)
                         ? wave_names[cfg->waveform] : "?";
 
@@ -78,17 +95,39 @@ void draw_siggen_screen(uint32_t frame)
     font_draw_string(value_x, param_y + 20, freq_str,
                      th->text_primary, th->background, &font_medium);
 
-    /* Amplitude */
+    /* Amplitude -- now dynamic */
+    char amp_str[16];
+    i = fmt_float1(amp_str, cfg->amplitude_vpp);
+    amp_str[i++] = ' '; amp_str[i++] = 'V';
+    amp_str[i++] = 'p'; amp_str[i++] = 'p';
+    amp_str[i] = '\0';
+
     font_draw_string(label_x, param_y + 44, "Amplitude",
                      th->text_secondary, th->background, &font_small);
-    font_draw_string(value_x, param_y + 42, "3.3 Vpp",
+    font_draw_string(value_x, param_y + 42, amp_str,
                      th->text_primary, th->background, &font_medium);
 
-    /* Offset */
-    font_draw_string(label_x, param_y + 66, "Offset",
-                     th->text_secondary, th->background, &font_small);
-    font_draw_string(value_x, param_y + 64, "0.0 V",
-                     th->text_primary, th->background, &font_medium);
+    /* Duty cycle -- show for square and pulse waveforms */
+    if (cfg->waveform == SIGGEN_SQUARE || cfg->waveform == SIGGEN_PULSE) {
+        char duty_str[8];
+        int d = cfg->duty_cycle_pct;
+        i = 0;
+        if (d >= 10) duty_str[i++] = (char)('0' + d / 10);
+        duty_str[i++] = (char)('0' + d % 10);
+        duty_str[i++] = '%';
+        duty_str[i] = '\0';
+
+        font_draw_string(label_x, param_y + 66, "Duty",
+                         th->text_secondary, th->background, &font_small);
+        font_draw_string(value_x, param_y + 64, duty_str,
+                         th->text_primary, th->background, &font_medium);
+    } else {
+        /* Offset for non-duty-cycle waveforms */
+        font_draw_string(label_x, param_y + 66, "Offset",
+                         th->text_secondary, th->background, &font_small);
+        font_draw_string(value_x, param_y + 64, "0.0 V",
+                         th->text_primary, th->background, &font_medium);
+    }
 
     /* Output state - prominent */
     if (cfg->output_enabled) {
@@ -98,4 +137,8 @@ void draw_siggen_screen(uint32_t frame)
         font_draw_string(value_x, param_y + 88, "OUTPUT OFF",
                          th->warning, th->background, &font_large);
     }
+
+    /* Hint bar at bottom */
+    font_draw_string(label_x, param_y + 112, "UP/DN:Amp L/R:Duty SEL:Wave OK:On/Off",
+                     th->text_secondary, th->background, &font_small);
 }

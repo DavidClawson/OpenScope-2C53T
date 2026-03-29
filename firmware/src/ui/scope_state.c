@@ -86,6 +86,16 @@ void scope_state_init(scope_state_t *s)
 
     /* Running */
     s->running = true;
+
+    /* Cursor defaults */
+    s->cursor.mode   = CURSOR_OFF;
+    s->cursor.active = CURSOR_SEL_V1;
+    s->cursor.v1_x = CURSOR_SCOPE_LEFT + CURSOR_SCOPE_WIDTH / 3;
+    s->cursor.v2_x = CURSOR_SCOPE_LEFT + (CURSOR_SCOPE_WIDTH * 2) / 3;
+    s->cursor.h1_y = CURSOR_SCOPE_TOP + CURSOR_SCOPE_HEIGHT / 3;
+    s->cursor.h2_y = CURSOR_SCOPE_TOP + (CURSOR_SCOPE_HEIGHT * 2) / 3;
+    s->cursor.time_per_pixel  = 10.0e-3f / (float)CURSOR_SCOPE_WIDTH;
+    s->cursor.volts_per_pixel = 8.0f / (float)CURSOR_SCOPE_HEIGHT;
 }
 
 scope_state_t *scope_state_get(void)
@@ -158,4 +168,76 @@ void scope_adjust_trigger_level(scope_state_t *s, int direction)
 void scope_toggle_running(scope_state_t *s)
 {
     s->running = !s->running;
+}
+
+/* ═══════════════════════════════════════════════════════════════════
+ * Cursor operations
+ * ═══════════════════════════════════════════════════════════════════ */
+
+void scope_cursor_cycle_mode(void)
+{
+    cursor_state_t *c = &g_scope.cursor;
+    c->mode = (cursor_mode_t)((c->mode + 1) % CURSOR_MODE_COUNT);
+
+    switch (c->mode) {
+    case CURSOR_VERTICAL:    c->active = CURSOR_SEL_V1; break;
+    case CURSOR_HORIZONTAL:  c->active = CURSOR_SEL_H1; break;
+    case CURSOR_BOTH:        c->active = CURSOR_SEL_V1; break;
+    default:                 c->active = CURSOR_SEL_V1; break;
+    }
+}
+
+void scope_cursor_next_sel(void)
+{
+    cursor_state_t *c = &g_scope.cursor;
+
+    switch (c->mode) {
+    case CURSOR_VERTICAL:
+        c->active = (c->active == CURSOR_SEL_V1) ? CURSOR_SEL_V2 : CURSOR_SEL_V1;
+        break;
+    case CURSOR_HORIZONTAL:
+        c->active = (c->active == CURSOR_SEL_H1) ? CURSOR_SEL_H2 : CURSOR_SEL_H1;
+        break;
+    case CURSOR_BOTH:
+        if (c->active == CURSOR_SEL_V1) c->active = CURSOR_SEL_V2;
+        else if (c->active == CURSOR_SEL_V2) c->active = CURSOR_SEL_H1;
+        else if (c->active == CURSOR_SEL_H1) c->active = CURSOR_SEL_H2;
+        else c->active = CURSOR_SEL_V1;
+        break;
+    default:
+        break;
+    }
+}
+
+void scope_cursor_move(int16_t delta)
+{
+    cursor_state_t *c = &g_scope.cursor;
+    int16_t pos;
+
+    switch (c->active) {
+    case CURSOR_SEL_V1:
+        pos = (int16_t)c->v1_x + delta;
+        if (pos < (int16_t)CURSOR_SCOPE_LEFT) pos = CURSOR_SCOPE_LEFT;
+        if (pos > (int16_t)CURSOR_SCOPE_RIGHT) pos = CURSOR_SCOPE_RIGHT;
+        c->v1_x = (uint16_t)pos;
+        break;
+    case CURSOR_SEL_V2:
+        pos = (int16_t)c->v2_x + delta;
+        if (pos < (int16_t)CURSOR_SCOPE_LEFT) pos = CURSOR_SCOPE_LEFT;
+        if (pos > (int16_t)CURSOR_SCOPE_RIGHT) pos = CURSOR_SCOPE_RIGHT;
+        c->v2_x = (uint16_t)pos;
+        break;
+    case CURSOR_SEL_H1:
+        pos = (int16_t)c->h1_y + delta;
+        if (pos < (int16_t)CURSOR_SCOPE_TOP) pos = CURSOR_SCOPE_TOP;
+        if (pos > (int16_t)CURSOR_SCOPE_BOT) pos = CURSOR_SCOPE_BOT;
+        c->h1_y = (uint16_t)pos;
+        break;
+    case CURSOR_SEL_H2:
+        pos = (int16_t)c->h2_y + delta;
+        if (pos < (int16_t)CURSOR_SCOPE_TOP) pos = CURSOR_SCOPE_TOP;
+        if (pos > (int16_t)CURSOR_SCOPE_BOT) pos = CURSOR_SCOPE_BOT;
+        c->h2_y = (uint16_t)pos;
+        break;
+    }
 }
