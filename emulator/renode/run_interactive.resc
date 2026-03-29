@@ -1,0 +1,58 @@
+# OpenScope 2C53T - Interactive Emulation
+# Runs firmware with LCD output and keyboard input via SDL viewer.
+#
+# Usage:
+#   Terminal 1: cd firmware && make renode-interactive
+#   Terminal 2: cd emulator && ./lcd_viewer
+#
+# Keys in LCD viewer: M=menu, arrows, Enter=OK, Space=select,
+#   A=auto, S=save, P=prm, 1=CH1, 2=CH2, Q=quit
+
+mach create "OpenScope_2C53T"
+machine LoadPlatformDescription @gd32f307_2c53t.repl
+
+# Load custom firmware (built with 'make emu')
+sysbus LoadBinary @../../firmware/build/firmware.bin 0x08000000
+cpu VectorTableOffset 0x08000000
+
+# --- Clock system: all oscillators ready, PLL locked ---
+sysbus Tag <0x40021000, 0x40021003> "RCU_CTL" 0x0F0F0003
+sysbus Tag <0x40021004, 0x40021007> "RCU_CFG0" 0x001D840A
+sysbus Tag <0x40021008, 0x4002100B> "RCU_INT" 0x00000000
+sysbus Tag <0x40021014, 0x40021017> "RCU_AHBEN" 0x00000114
+sysbus Tag <0x40021018, 0x4002101B> "RCU_APB2EN" 0x0000FFFD
+sysbus Tag <0x4002101C, 0x4002101F> "RCU_APB1EN" 0x3FFFFFFF
+
+# --- PMU: voltage stable ---
+sysbus Tag <0x40007000, 0x40007003> "PMU_CTL" 0x00000000
+sysbus Tag <0x40007004, 0x40007007> "PMU_CS" 0x00070000
+
+# --- Flash: wait states configured ---
+sysbus Tag <0x40022000, 0x40022003> "FMC_WS" 0x00000032
+
+# --- EXMC: LCD controller registers ---
+sysbus Tag <0xA0000000, 0xA0000107> "EXMC_REGS" 0x00000001
+
+# --- ST7789V LCD peripheral (captures firmware display writes) ---
+sysbus Unregister exmcBank0
+machine PyDevFromFile @st7789v_peripheral.py 0x60000000 0x100000 True "lcd"
+
+# --- Interactive GPIO: replace standard ports B and C with file-backed peripherals ---
+sysbus Unregister gpioPortB
+sysbus Unregister gpioPortC
+machine PyDevFromFile @interactive_gpio_portc.py 0x40011000 0x400 True "gpioPortC"
+machine PyDevFromFile @interactive_gpio_portb.py 0x40010C00 0x400 True "gpioPortB"
+
+# --- Skip spurious interrupts (Default_Handler = infinite loop) ---
+set skip_default_irq
+"""
+from Antmicro.Renode.Peripherals.CPU import RegisterValue
+cpu.SetRegister(15, RegisterValue.Create(cpu.GetRegister(14).RawValue, 32))
+"""
+cpu AddHook 0x08005d2c $skip_default_irq
+
+# --- Logging ---
+logLevel 3
+
+# Start emulation
+start
