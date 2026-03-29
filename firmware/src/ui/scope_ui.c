@@ -4,6 +4,7 @@
 
 #include "ui.h"
 #include "lcd.h"
+#include "font.h"
 #include <math.h>
 
 /* Draw the oscilloscope grid */
@@ -86,11 +87,11 @@ void draw_scope_screen(uint32_t frame)
     draw_scope_grid();
     draw_demo_waveform(frame);
 
-    /* Measurements overlay */
-    lcd_draw_string(4, 18, "Freq:10.00kHz", COLOR_CH1, COLOR_BLACK);
-    lcd_draw_string(4, 34, "Vpp:3.31V", COLOR_CH1, COLOR_BLACK);
-    lcd_draw_string(LCD_WIDTH - 104, 18, "Freq:9.96kHz", COLOR_CH2, COLOR_BLACK);
-    lcd_draw_string(LCD_WIDTH - 88, 34, "Vpp:660mV", COLOR_CH2, COLOR_BLACK);
+    /* Measurements overlay (transparent bg to not obscure grid) */
+    font_draw_string(4, 18, "10.00kHz", COLOR_CH1, COLOR_CH1, &font_small);
+    font_draw_string(4, 32, "3.31Vpp",  COLOR_CH1, COLOR_CH1, &font_small);
+    font_draw_string_right(LCD_WIDTH - 4, 18, "9.96kHz", COLOR_CH2, COLOR_CH2, &font_small);
+    font_draw_string_right(LCD_WIDTH - 4, 32, "660mVpp", COLOR_CH2, COLOR_CH2, &font_small);
 }
 
 #ifdef FEATURE_FFT
@@ -213,7 +214,7 @@ static void draw_fft_region(uint16_t y_top, uint16_t height)
                 if (db_int >= 10)  label[pos++] = (char)('0' + (db_int / 10) % 10);
                 label[pos++] = (char)('0' + db_int % 10);
                 label[pos] = '\0';
-                lcd_draw_string(2, y - 7, label, COLOR_GRAY, COLOR_BLACK);
+                font_draw_string(2, y - 5, label, COLOR_GRAY, COLOR_GRAY, &font_small);
             }
         }
     }
@@ -240,13 +241,13 @@ static void draw_fft_region(uint16_t y_top, uint16_t height)
         if (p == 0) {
             char freq_str[16];
             format_freq(fft_result.peaks[0].freq_hz, freq_str, sizeof(freq_str));
-            lcd_draw_string(4, y_top + 2, freq_str, COLOR_WHITE, COLOR_BLACK);
+            font_draw_string(4, y_top + 2, freq_str, COLOR_WHITE, COLOR_WHITE, &font_small);
         }
 
         /* Draw harmonic label if present */
         if (fft_result.peaks[p].label[0] != '\0' && peak_x > 8 && peak_x < LCD_WIDTH - 30) {
-            lcd_draw_string(peak_x - 8, peak_y - 12,
-                            fft_result.peaks[p].label, COLOR_ORANGE, COLOR_BLACK);
+            font_draw_string(peak_x - 8, peak_y - 12,
+                             fft_result.peaks[p].label, COLOR_ORANGE, COLOR_ORANGE, &font_small);
         }
     }
 
@@ -254,7 +255,8 @@ static void draw_fft_region(uint16_t y_top, uint16_t height)
     const char *win_names[] = { "Rect", "Hann", "Hamm", "BHar", "Flat" };
     const char *win_name = (cfg->window < FFT_WINDOW_COUNT)
                            ? win_names[cfg->window] : "?";
-    lcd_draw_string(LCD_WIDTH - 40, y_top + 2, win_name, COLOR_GRAY, COLOR_BLACK);
+    font_draw_string_right(LCD_WIDTH - 4, y_top + 2, win_name,
+                           COLOR_GRAY, COLOR_GRAY, &font_small);
 }
 
 /* Draw full-screen FFT */
@@ -380,7 +382,7 @@ void draw_waterfall_screen(void)
         }
     }
 
-    lcd_draw_string(4, 18, "WFALL", COLOR_WHITE, COLOR_BLACK);
+    font_draw_string(4, 18, "WFALL", COLOR_WHITE, COLOR_WHITE, &font_small);
 }
 
 #endif /* FEATURE_FFT */

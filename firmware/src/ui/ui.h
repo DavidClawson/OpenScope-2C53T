@@ -75,6 +75,9 @@ typedef enum {
 
 extern volatile device_mode_t current_mode;
 extern volatile uint32_t      uptime_seconds;
+extern volatile int8_t        settings_selected;  /* Selected menu item index */
+
+#define SETTINGS_ITEM_COUNT 7
 
 #ifdef FEATURE_FFT
 #include "fft.h"
@@ -111,5 +114,6 @@ void draw_siggen_screen(uint32_t frame);
 
 /* settings_ui.c */
 void draw_settings_screen(void);
+void draw_health_panel(uint16_t y_start);
 
 #endif /* UI_H */

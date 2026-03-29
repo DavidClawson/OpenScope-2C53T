@@ -4,6 +4,7 @@
 
 #include "ui.h"
 #include "lcd.h"
+#include "font.h"
 #include "signal_gen.h"
 
 /* Draw the signal generator screen */
@@ -21,7 +22,7 @@ void draw_siggen_screen(uint32_t frame)
 
     siggen_fill_buffer(preview_buf, 280, preview_rate);
 
-    uint16_t y_center = 80;
+    uint16_t y_center = 75;
     for (uint16_t x = 0; x < 280; x++) {
         int16_t y_off = (int16_t)(((int32_t)preview_buf[x] * 30) / 32767);
         uint16_t py = (uint16_t)(y_center - y_off);
@@ -32,61 +33,67 @@ void draw_siggen_screen(uint32_t frame)
         }
     }
 
+    /* Parameter display below waveform */
+    uint16_t param_y = 120;
+    uint16_t label_x = 20;
+    uint16_t value_x = 120;
+
     /* Waveform name */
     static const char *wave_names[] = { "Sine", "Square", "Triangle", "Sawtooth" };
     const char *wname = (cfg->waveform < SIGGEN_WAVEFORM_COUNT)
                         ? wave_names[cfg->waveform] : "?";
 
-    /* Build display strings manually (no sprintf on embedded) */
-    char line[32];
-    int i;
-
-    /* Waveform */
-    {
-        const char *prefix = "Waveform: ";
-        i = 0;
-        while (*prefix) line[i++] = *prefix++;
-        const char *n = wname;
-        while (*n) line[i++] = *n++;
-        line[i] = '\0';
-    }
-    lcd_draw_string(20, 130, line, COLOR_WHITE, COLOR_BLACK);
+    font_draw_string(label_x, param_y, "Waveform",
+                     COLOR_GRAY, COLOR_BLACK, &font_small);
+    font_draw_string(value_x, param_y, wname,
+                     COLOR_WHITE, COLOR_BLACK, &font_medium);
 
     /* Frequency */
-    {
-        const char *prefix = "Freq: ";
-        i = 0;
-        while (*prefix) line[i++] = *prefix++;
-        float f = cfg->frequency_hz;
-        if (f >= 1000.0f) {
-            int fk = (int)(f / 1000.0f);
-            int fd = ((int)f % 1000) / 100;
-            if (fk >= 10) line[i++] = (char)('0' + fk / 10);
-            line[i++] = (char)('0' + fk % 10);
-            line[i++] = '.';
-            line[i++] = (char)('0' + fd);
-            line[i++] = ' '; line[i++] = 'k'; line[i++] = 'H'; line[i++] = 'z';
-        } else {
-            int fi = (int)f;
-            if (fi >= 100) line[i++] = (char)('0' + fi / 100);
-            if (fi >= 10) line[i++] = (char)('0' + (fi / 10) % 10);
-            line[i++] = (char)('0' + fi % 10);
-            line[i++] = ' '; line[i++] = 'H'; line[i++] = 'z';
-        }
-        line[i] = '\0';
+    char freq_str[16];
+    int i = 0;
+    float f = cfg->frequency_hz;
+    if (f >= 1000.0f) {
+        int fk = (int)(f / 1000.0f);
+        int fd = ((int)f % 1000) / 100;
+        if (fk >= 10) freq_str[i++] = (char)('0' + fk / 10);
+        freq_str[i++] = (char)('0' + fk % 10);
+        freq_str[i++] = '.';
+        freq_str[i++] = (char)('0' + fd);
+        freq_str[i++] = ' ';
+        freq_str[i++] = 'k'; freq_str[i++] = 'H'; freq_str[i++] = 'z';
+    } else {
+        int fi = (int)f;
+        if (fi >= 100) freq_str[i++] = (char)('0' + fi / 100);
+        if (fi >= 10) freq_str[i++] = (char)('0' + (fi / 10) % 10);
+        freq_str[i++] = (char)('0' + fi % 10);
+        freq_str[i++] = ' ';
+        freq_str[i++] = 'H'; freq_str[i++] = 'z';
     }
-    lcd_draw_string(20, 148, line, COLOR_WHITE, COLOR_BLACK);
+    freq_str[i] = '\0';
+
+    font_draw_string(label_x, param_y + 22, "Frequency",
+                     COLOR_GRAY, COLOR_BLACK, &font_small);
+    font_draw_string(value_x, param_y + 20, freq_str,
+                     COLOR_WHITE, COLOR_BLACK, &font_medium);
 
     /* Amplitude */
-    lcd_draw_string(20, 166, "Amplitude: 3.3 Vpp", COLOR_WHITE, COLOR_BLACK);
+    font_draw_string(label_x, param_y + 44, "Amplitude",
+                     COLOR_GRAY, COLOR_BLACK, &font_small);
+    font_draw_string(value_x, param_y + 42, "3.3 Vpp",
+                     COLOR_WHITE, COLOR_BLACK, &font_medium);
 
     /* Offset */
-    lcd_draw_string(20, 184, "Offset:    0.0 V", COLOR_WHITE, COLOR_BLACK);
+    font_draw_string(label_x, param_y + 66, "Offset",
+                     COLOR_GRAY, COLOR_BLACK, &font_small);
+    font_draw_string(value_x, param_y + 64, "0.0 V",
+                     COLOR_WHITE, COLOR_BLACK, &font_medium);
 
-    /* Output state */
+    /* Output state - prominent */
     if (cfg->output_enabled) {
-        lcd_draw_string(20, 202, "Output:    ON", COLOR_GREEN, COLOR_BLACK);
+        font_draw_string(value_x, param_y + 88, "OUTPUT ON",
+                         COLOR_GREEN, COLOR_BLACK, &font_large);
     } else {
-        lcd_draw_string(20, 202, "Output:    OFF", COLOR_RED, COLOR_BLACK);
+        font_draw_string(value_x, param_y + 88, "OUTPUT OFF",
+                         COLOR_RED, COLOR_BLACK, &font_large);
     }
 }

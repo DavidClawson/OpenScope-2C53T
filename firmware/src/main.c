@@ -19,6 +19,7 @@
 #include "lcd.h"
 #include "ui.h"
 #include "signal_gen.h"
+#include "watchdog.h"
 
 /* ═══════════════════════════════════════════════════════════════════
  * Global State (extern'd via ui.h for UI modules)
@@ -26,6 +27,7 @@
 
 volatile device_mode_t current_mode = MODE_OSCILLOSCOPE;
 volatile uint32_t      uptime_seconds = 0;
+volatile int8_t        settings_selected = 0;
 
 #ifdef FEATURE_FFT
 volatile scope_view_t scope_view = SCOPE_VIEW_TIME;
@@ -38,6 +40,10 @@ static TaskHandle_t  xDisplayTaskHandle = NULL;
 static TaskHandle_t  xInputTaskHandle   = NULL;
 static QueueHandle_t xDisplayQueue      = NULL;
 static QueueHandle_t xInputQueue        = NULL;
+
+/* Health monitor slots (assigned in main, used in task loops) */
+static int health_slot_display = -1;
+static int health_slot_input   = -1;
 
 /* ═══════════════════════════════════════════════════════════════════
  * Simple delay (used before RTOS starts)
@@ -131,6 +137,9 @@ static void vDisplayTask(void *pvParameters)
             }
         }
 
+        /* Check in with health monitor */
+        health_checkin(health_slot_display);
+
         /* Animate the active mode (only scope and siggen have animation) */
         if (current_mode == MODE_OSCILLOSCOPE) {
 #ifdef FEATURE_FFT
@@ -189,6 +198,8 @@ static void vInputTask(void *pvParameters)
                 switch (pressed) {
                 case BTN_MENU:
                     current_mode = (device_mode_t)((current_mode + 1) % MODE_COUNT);
+                    if (current_mode == MODE_SETTINGS)
+                        settings_selected = 0;
                     cmd = DCMD_REDRAW_ALL;
                     xQueueSend(xDisplayQueue, &cmd, 0);
                     break;
@@ -236,6 +247,12 @@ static void vInputTask(void *pvParameters)
                     break;
 
                 case BTN_UP:
+                    if (current_mode == MODE_SETTINGS) {
+                        if (settings_selected > 0) settings_selected--;
+                        cmd = DCMD_DRAW_SETTINGS;
+                        xQueueSend(xDisplayQueue, &cmd, 0);
+                        break;
+                    }
 #ifdef FEATURE_FFT
                     if (current_mode == MODE_OSCILLOSCOPE &&
                         scope_view != SCOPE_VIEW_TIME) {
@@ -263,6 +280,13 @@ static void vInputTask(void *pvParameters)
                     break;
 
                 case BTN_DOWN:
+                    if (current_mode == MODE_SETTINGS) {
+                        if (settings_selected < SETTINGS_ITEM_COUNT - 1)
+                            settings_selected++;
+                        cmd = DCMD_DRAW_SETTINGS;
+                        xQueueSend(xDisplayQueue, &cmd, 0);
+                        break;
+                    }
 #ifdef FEATURE_FFT
                     if (current_mode == MODE_OSCILLOSCOPE &&
                         scope_view != SCOPE_VIEW_TIME) {
@@ -338,6 +362,9 @@ static void vInputTask(void *pvParameters)
         }
         last_button = pressed;
 
+        /* Check in with health monitor */
+        health_checkin(health_slot_input);
+
         vTaskDelay(pdMS_TO_TICKS(20));
     }
 }
@@ -351,6 +378,18 @@ static void vOneSecondTimerCallback(TimerHandle_t xTimer)
     uptime_seconds++;
     uint8_t cmd = DCMD_DRAW_STATUS_BAR;
     xQueueSend(xDisplayQueue, &cmd, 0);
+}
+
+/*
+ * Health check timer — runs every 500ms
+ *
+ * Checks all registered tasks for liveness and stack health.
+ * Only feeds the watchdog if everything is OK.
+ */
+static void vHealthCheckCallback(TimerHandle_t xTimer)
+{
+    (void)xTimer;
+    health_check();
 }
 
 /* ═══════════════════════════════════════════════════════════════════
@@ -425,12 +464,27 @@ int main(void)
     xTaskCreate(vDisplayTask, "display", 512, NULL, 1, &xDisplayTaskHandle);
     xTaskCreate(vInputTask,   "key",     256, NULL, 4, &xInputTaskHandle);
 
+    /* Register tasks with health monitor */
+    health_slot_display = health_register("display", xDisplayTaskHandle);
+    health_slot_input   = health_register("key",     xInputTaskHandle);
+
     /* Create 1-second timer for uptime/status updates */
     TimerHandle_t xSecTimer = xTimerCreate(
         "1sec", pdMS_TO_TICKS(1000), pdTRUE, NULL, vOneSecondTimerCallback);
     if (xSecTimer != NULL) {
         xTimerStart(xSecTimer, 0);
     }
+
+    /* Create 500ms health check timer — monitors tasks + feeds watchdog */
+    TimerHandle_t xHealthTimer = xTimerCreate(
+        "health", pdMS_TO_TICKS(500), pdTRUE, NULL, vHealthCheckCallback);
+    if (xHealthTimer != NULL) {
+        xTimerStart(xHealthTimer, 0);
+    }
+
+    /* Initialize watchdog LAST — after all tasks and timers are running.
+     * Once enabled, the FWDGT cannot be stopped (hardware limitation). */
+    watchdog_init();
 
     vTaskStartScheduler();
 
@@ -443,12 +497,18 @@ int main(void)
 
 void vApplicationStackOverflowHook(TaskHandle_t xTask, char *pcTaskName)
 {
-    (void)xTask; (void)pcTaskName;
+    (void)xTask;
+    taskDISABLE_INTERRUPTS();
+    fault_display("STACK OVERFLOW", pcTaskName);
+    /* Watchdog will reset us */
     for (;;) {}
 }
 
 void vApplicationMallocFailedHook(void)
 {
+    taskDISABLE_INTERRUPTS();
+    fault_display("HEAP EXHAUSTED", "pvPortMalloc returned NULL");
+    /* Watchdog will reset us */
     for (;;) {}
 }
 

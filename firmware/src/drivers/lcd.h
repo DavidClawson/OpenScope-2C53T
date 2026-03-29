@@ -146,10 +146,9 @@
 #define RGB565(r, g, b) ((uint16_t)(((r) & 0xF8) << 8 | ((g) & 0xFC) << 3 | ((b) >> 3)))
 
 /* ========================================================================
- * Font system
+ * Legacy 8x16 font (still used by lcd_draw_char / lcd_draw_string)
  *
- * The firmware loads fonts from external SPI flash filesystem.
- * For standalone use, we provide a minimal embedded 8x16 ASCII font.
+ * For the new multi-size variable-width font system, see font.h
  * ======================================================================== */
 #define FONT_WIDTH      8
 #define FONT_HEIGHT     16

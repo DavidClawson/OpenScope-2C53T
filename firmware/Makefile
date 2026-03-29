@@ -38,6 +38,7 @@ C_SOURCES += src/ui/settings_ui.c
 C_SOURCES += src/tasks/measurement.c
 C_SOURCES += src/drivers/flash_fs.c
 C_SOURCES += src/drivers/esp_comm.c
+C_SOURCES += src/drivers/watchdog.c
 C_SOURCES += src/dsp/signal_gen.c
 C_SOURCES += src/dsp/shared_mem.c
 C_SOURCES += src/ui/persistence.c
@@ -58,6 +59,11 @@ C_SOURCES += src/decode/decode_can.c
 C_SOURCES += src/decode/decode_kline.c
 C_SOURCES += src/modules/compression_test.c
 C_SOURCES += src/modules/alternator_test.c
+C_SOURCES += src/fonts/font.c
+C_SOURCES += src/fonts/font_small.c
+C_SOURCES += src/fonts/font_medium.c
+C_SOURCES += src/fonts/font_large.c
+C_SOURCES += src/fonts/font_xlarge.c
 
 # FFT / DSP module
 ifneq ($(findstring FFT,$(FEATURES)),)
@@ -90,6 +96,7 @@ C_SOURCES += $(GD32_STD)/Source/gd32f30x_gpio.c
 C_SOURCES += $(GD32_STD)/Source/gd32f30x_misc.c
 C_SOURCES += $(GD32_STD)/Source/gd32f30x_pmu.c
 C_SOURCES += $(GD32_STD)/Source/gd32f30x_fmc.c
+C_SOURCES += $(GD32_STD)/Source/gd32f30x_fwdgt.c
 
 # FreeRTOS kernel
 C_SOURCES += $(FREERTOS)/tasks.c
@@ -118,6 +125,7 @@ C_INCLUDES += -Isrc/tasks
 C_INCLUDES += -Isrc/util
 C_INCLUDES += -Isrc/decode
 C_INCLUDES += -Isrc/modules
+C_INCLUDES += -Isrc/fonts
 C_INCLUDES += -I$(GD32_CMSIS)
 C_INCLUDES += -I$(GD32_CMSIS)/GD/GD32F30x/Include
 C_INCLUDES += -I$(GD32_STD)/Include
@@ -225,4 +233,14 @@ renode-test: emu
 	cd ../emulator/renode && /Applications/Renode.app/Contents/MacOS/renode --disable-gui --console -e \
 		"include @run_openscope.resc; sleep 5; pause; cpu PC; quit"
 
-.PHONY: all clean disasm size renode
+# Soak test — random button fuzzing with fault monitoring (default 2 minutes)
+SOAK_DURATION ?= 120
+SOAK_SEED ?= 42
+soak-test: emu
+	python3 ../scripts/soak_test.py --no-build --duration $(SOAK_DURATION) --seed $(SOAK_SEED)
+
+# Quick soak — 30-second smoke test with fuzzing
+soak-quick: emu
+	python3 ../scripts/soak_test.py --no-build --duration 30 --seed $(SOAK_SEED) --verbose
+
+.PHONY: all clean disasm size renode soak-test soak-quick

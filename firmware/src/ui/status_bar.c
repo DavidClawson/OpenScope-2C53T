@@ -4,31 +4,36 @@
 
 #include "ui.h"
 #include "lcd.h"
+#include "font.h"
 
 /* Draw the top status bar */
 void draw_status_bar(void)
 {
     lcd_fill_rect(0, 0, LCD_WIDTH, 16, COLOR_DARK_GRAY);
 
-    lcd_draw_string(4, 1, "OpenScope", COLOR_CYAN, COLOR_DARK_GRAY);
-    lcd_draw_string(LCD_WIDTH - 40, 1, "2C53T", COLOR_WHITE, COLOR_DARK_GRAY);
+    font_draw_string(4, 2, "OpenScope", COLOR_CYAN, COLOR_DARK_GRAY, &font_small);
 
     /* Mode indicator */
     const char *mode_names[] = { "SCOPE", "METER", "SIGGEN", "SETUP" };
-    lcd_draw_string(100, 1, mode_names[current_mode], COLOR_GREEN, COLOR_DARK_GRAY);
+    font_draw_string(120, 2, mode_names[current_mode],
+                     COLOR_GREEN, COLOR_DARK_GRAY, &font_small);
 
     /* Uptime display */
     char buf[16];
     int mins = uptime_seconds / 60;
     int secs = uptime_seconds % 60;
-    /* Manual int-to-string to avoid printf/sprintf */
     buf[0] = '0' + (mins / 10);
     buf[1] = '0' + (mins % 10);
     buf[2] = ':';
     buf[3] = '0' + (secs / 10);
     buf[4] = '0' + (secs % 10);
     buf[5] = '\0';
-    lcd_draw_string(200, 1, buf, COLOR_GRAY, COLOR_DARK_GRAY);
+    font_draw_string_right(LCD_WIDTH - 4, 2, buf,
+                           COLOR_GRAY, COLOR_DARK_GRAY, &font_small);
+
+    /* Model name */
+    font_draw_string_right(LCD_WIDTH - 50, 2, "2C53T",
+                           COLOR_WHITE, COLOR_DARK_GRAY, &font_small);
 }
 
 /* Draw the bottom info bar */
@@ -42,34 +47,47 @@ void draw_info_bar(void)
         if (scope_view == SCOPE_VIEW_FFT) {
             const char *win_names[] = { "Rect", "Hann", "Hamm", "BHar", "Flat" };
             const fft_config_t *cfg = fft_get_config();
-            lcd_draw_string(4, LCD_HEIGHT - 15, "FFT 4096pt", COLOR_YELLOW, COLOR_DARK_GRAY);
-            lcd_draw_string(100, LCD_HEIGHT - 15,
-                            (cfg->window < FFT_WINDOW_COUNT) ? win_names[cfg->window] : "?",
-                            COLOR_GREEN, COLOR_DARK_GRAY);
+            font_draw_string(4, LCD_HEIGHT - 14, "FFT 4096pt",
+                             COLOR_YELLOW, COLOR_DARK_GRAY, &font_small);
+            font_draw_string(80, LCD_HEIGHT - 14,
+                             (cfg->window < FFT_WINDOW_COUNT) ? win_names[cfg->window] : "?",
+                             COLOR_GREEN, COLOR_DARK_GRAY, &font_small);
             if (cfg->avg_count > 0)
-                lcd_draw_string(148, LCD_HEIGHT - 15, "AVG", COLOR_CYAN, COLOR_DARK_GRAY);
+                font_draw_string(120, LCD_HEIGHT - 14, "AVG",
+                                 COLOR_CYAN, COLOR_DARK_GRAY, &font_small);
             if (cfg->max_hold)
-                lcd_draw_string(184, LCD_HEIGHT - 15, "MH", COLOR_RED, COLOR_DARK_GRAY);
-            lcd_draw_string(220, LCD_HEIGHT - 15, "PRM:View", COLOR_GRAY, COLOR_DARK_GRAY);
+                font_draw_string(150, LCD_HEIGHT - 14, "MH",
+                                 COLOR_RED, COLOR_DARK_GRAY, &font_small);
+            font_draw_string(220, LCD_HEIGHT - 14, "PRM:View",
+                             COLOR_GRAY, COLOR_DARK_GRAY, &font_small);
         } else
 #endif
         {
-            lcd_draw_string(4, LCD_HEIGHT - 15, "CH1:2V DC", COLOR_YELLOW, COLOR_DARK_GRAY);
-            lcd_draw_string(100, LCD_HEIGHT - 15, "Auto", COLOR_GREEN, COLOR_DARK_GRAY);
-            lcd_draw_string(160, LCD_HEIGHT - 15, "H=50uS", COLOR_WHITE, COLOR_DARK_GRAY);
-            lcd_draw_string(240, LCD_HEIGHT - 15, "CH2:200mV", COLOR_CYAN, COLOR_DARK_GRAY);
+            font_draw_string(4, LCD_HEIGHT - 14, "CH1:2V DC",
+                             COLOR_YELLOW, COLOR_DARK_GRAY, &font_small);
+            font_draw_string(80, LCD_HEIGHT - 14, "Auto",
+                             COLOR_GREEN, COLOR_DARK_GRAY, &font_small);
+            font_draw_string(120, LCD_HEIGHT - 14, "H=50uS",
+                             COLOR_WHITE, COLOR_DARK_GRAY, &font_small);
+            font_draw_string(200, LCD_HEIGHT - 14, "CH2:200mV",
+                             COLOR_CYAN, COLOR_DARK_GRAY, &font_small);
         }
         break;
     case MODE_MULTIMETER:
-        lcd_draw_string(4, LCD_HEIGHT - 15, "DC Voltage", COLOR_YELLOW, COLOR_DARK_GRAY);
-        lcd_draw_string(200, LCD_HEIGHT - 15, "Auto Range", COLOR_GREEN, COLOR_DARK_GRAY);
+        font_draw_string(4, LCD_HEIGHT - 14, "DC Voltage",
+                         COLOR_YELLOW, COLOR_DARK_GRAY, &font_small);
+        font_draw_string(200, LCD_HEIGHT - 14, "Auto Range",
+                         COLOR_GREEN, COLOR_DARK_GRAY, &font_small);
         break;
     case MODE_SIGNAL_GEN:
-        lcd_draw_string(4, LCD_HEIGHT - 15, "Sine 1.000kHz", COLOR_YELLOW, COLOR_DARK_GRAY);
-        lcd_draw_string(200, LCD_HEIGHT - 15, "3.3Vpp", COLOR_GREEN, COLOR_DARK_GRAY);
+        font_draw_string(4, LCD_HEIGHT - 14, "Sine 1.000kHz",
+                         COLOR_YELLOW, COLOR_DARK_GRAY, &font_small);
+        font_draw_string(200, LCD_HEIGHT - 14, "3.3Vpp",
+                         COLOR_GREEN, COLOR_DARK_GRAY, &font_small);
         break;
     case MODE_SETTINGS:
-        lcd_draw_string(4, LCD_HEIGHT - 15, "MENU/SELECT to navigate", COLOR_GRAY, COLOR_DARK_GRAY);
+        font_draw_string(4, LCD_HEIGHT - 14, "MENU/SELECT to navigate",
+                         COLOR_GRAY, COLOR_DARK_GRAY, &font_small);
         break;
     default:
         break;
@@ -81,17 +99,23 @@ void draw_splash(void)
 {
     lcd_clear(COLOR_BLACK);
 
-    /* Title */
-    lcd_draw_string(72, 60, "OpenScope 2C53T", COLOR_CYAN, COLOR_BLACK);
-    /* Double-up for bold effect */
-    lcd_draw_string(73, 60, "OpenScope 2C53T", COLOR_CYAN, COLOR_BLACK);
-    lcd_draw_string(72, 61, "OpenScope 2C53T", COLOR_CYAN, COLOR_BLACK);
+    /* Title - large font, centered */
+    font_draw_string_center(LCD_WIDTH / 2, 50, "OpenScope 2C53T",
+                            COLOR_CYAN, COLOR_BLACK, &font_large);
 
-    lcd_draw_string(72, 90, "Custom Firmware v0.1", COLOR_WHITE, COLOR_BLACK);
+    /* Version */
+    font_draw_string_center(LCD_WIDTH / 2, 85, "Custom Firmware v0.1",
+                            COLOR_WHITE, COLOR_BLACK, &font_medium);
 
-    lcd_draw_string(56, 130, "GD32F307 | FreeRTOS", COLOR_GRAY, COLOR_BLACK);
-    lcd_draw_string(64, 148, "ST7789V 320x240", COLOR_GRAY, COLOR_BLACK);
+    /* Hardware info */
+    font_draw_string_center(LCD_WIDTH / 2, 125, "GD32F307 | FreeRTOS",
+                            COLOR_GRAY, COLOR_BLACK, &font_small);
+    font_draw_string_center(LCD_WIDTH / 2, 142, "ST7789V 320x240",
+                            COLOR_GRAY, COLOR_BLACK, &font_small);
 
-    lcd_draw_string(88, 190, "github.com/", COLOR_DARK_GRAY, COLOR_BLACK);
-    lcd_draw_string(48, 208, "DavidClawson/OpenScope-2C53T", COLOR_DARK_GRAY, COLOR_BLACK);
+    /* Repo */
+    font_draw_string_center(LCD_WIDTH / 2, 190, "github.com/",
+                            COLOR_DARK_GRAY, COLOR_BLACK, &font_small);
+    font_draw_string_center(LCD_WIDTH / 2, 206, "DavidClawson/OpenScope-2C53T",
+                            COLOR_DARK_GRAY, COLOR_BLACK, &font_small);
 }
