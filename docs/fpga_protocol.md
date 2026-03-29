@@ -1,126 +1,255 @@
-# FPGA Communication Protocol
+# FPGA Communication Protocol — Reverse Engineering Analysis
 
-## Correction: FUN_0802e7bc is FatFS Init, Not USART Handler
+*Decoded from decompiled V1.2.0 firmware (decompiled_2C53T_v2.c, ~39K lines)*
+*Initial analysis: 2026-03-20. Updated: 2026-03-29 with command codes, task architecture, and memory map.*
 
-Our earlier analysis incorrectly identified FUN_0802e7bc as the USART2 handler. It's actually a **FatFS filesystem initialization function** that mounts volumes and checks file availability. The "string compare" calls we saw are filesystem operations (f_mount, f_open, etc.), and the string addresses (0x80bba1f, etc.) are filesystem paths in persistent flash.
+## Architecture Overview
 
-## Dual Communication Paths to FPGA
+The FNIRSI 2C53T uses a **dual-interface** model between the GD32F307 MCU and the Gowin GW1N-UV2 FPGA:
 
-The 2C53T uses **two separate interfaces** to communicate with the FPGA:
-
-### 1. USART2 (0x40004400) — Command/Control Channel
-
-**Real ISR:** FUN_080277b4 (not the vector table entry, which lands on a function epilogue)
-
-**Protocol: Binary fixed-frame** (not text-based as initially assumed)
-
-**TX Frame (MCU → FPGA): 10 bytes**
 ```
-Byte[0-1]: Header (likely 0x5A/0xA5 or similar magic)
+MCU (GD32F307)                           FPGA (Gowin GW1N-UV2)
+┌─────────────┐                          ┌──────────────────┐
+│             │── USART2 (cmd/ctrl) ────>│                  │
+│ fpga_task   │<── USART2 (response) ───│  ADC controller  │
+│             │                          │  Trigger engine   │
+│ osc_task    │<── SPI2 (bulk data) ────│  Sample memory    │
+│             │                          │  DVOM mux         │
+│ dvom_tx     │── USART2 (config) ─────>│                  │
+└─────────────┘                          └──────────────────┘
+```
+
+**USART2** (0x40004400): Command/control channel. 10-byte frames MCU->FPGA, 2/10/12-byte responses FPGA->MCU.
+
+**SPI2** (0x40003C00): High-speed bulk data channel. MCU reads ADC sample buffers from FPGA.
+
+## USART2 Protocol
+
+### TX Frame (MCU -> FPGA): 10 bytes
+
+```
+Byte[0-1]: Header / sync markers
 Byte[2]:   Command parameter high byte
-Byte[3]:   Command parameter low byte (echoed back by FPGA for verification)
-Byte[4-8]: Command data
+Byte[3]:   Command parameter low byte (ECHOED back in RX for verification)
+Byte[4-8]: Command data fields (5 bytes, meaning varies by command)
 Byte[9]:   Checksum: (param + (param >> 8)) & 0xFF
 ```
 
-**RX Frame Type 1 — Acknowledgment: 2 bytes**
-```
-[0x5A, 0xA5]  — Sync/ACK from FPGA
-```
+**TX buffer**: RAM 0x20000005 (10 bytes)
+**TX index**: RAM 0x2000000F
+**ISR**: usart2_isr_real @ 0x080277B4 (byte-by-byte TX pump)
 
-**RX Frame Type 2 — Status Response: 10 bytes**
+### RX Frame Types
+
+**Type 1 -- ACK (2 bytes)**:
 ```
-Byte[0]: 0xAA (header)
-Byte[1]: 0x55 (header)
-Byte[3]: Echo of TX Byte[3] (command verification)
-Byte[7]: 0xAA (frame integrity marker)
+[0x5A, 0xA5]  -- Synchronization acknowledgment from FPGA
 ```
 
-**RX Frame Type 3 — Acquisition Complete: 12 bytes**
+**Type 2 -- Status Response (10 bytes)**:
 ```
-12-byte extended response indicating acquisition is done.
-Triggers PendSV (0xE000ED04 = 0x10000000) for RTOS context switch
-→ wakes the osc task to process captured data
+Byte[0]: 0xAA (frame header)
+Byte[1]: 0x55 (frame header)
+Byte[2]: Status/data byte
+Byte[3]: ECHO of TX Byte[3]    <-- verified by ISR, discarded on mismatch
+Byte[4-6]: Status fields
+Byte[7]: 0xAA (integrity marker) <-- MUST be 0xAA or frame is discarded
+Byte[8-9]: Checksum/reserved
 ```
 
-**Validation:** The ISR checks that RX_buf[3] matches TX_buf[3] (echo verification) and that RX_buf[7] == 0xAA (integrity).
+**Type 3 -- Acquisition Complete (12 bytes)**:
+```
+Extended frame signaling end of sample capture.
+Triggers PendSV (writes 0x10000000 to 0xE000ED04) for context switch.
+Wakes osc_task to process captured waveform data.
+```
 
-**Command codes observed** in DAT_20000025: 0x20 (standard), 0x21 (error/retry), 0x24 (special mode)
+### Frame Validation (usart2_isr @ 0x080277B4)
 
-### 2. SPI2 (0x40003C00) — High-Speed Data Transfer
+```c
+if (rx_buffer[3] != tx_buffer[3])   // Echo mismatch -> discard
+    return;
+if (rx_buffer[7] != 0xAA)           // Integrity marker wrong -> discard
+    return;
+// Frame accepted -- process response
+```
 
-**Function:** 0x08037454 performs SPI2 transfers
+Two-layer validation: echo verification + integrity marker. Robust against line noise.
 
-**Registers accessed:**
-- SPI2_STAT: 0x40003C08 (status register)
-- SPI2_DATA: 0x40003C0C (data register)
-- GPIO chip-select: 0x40010C10/0x40010C14 (GPIOB set/reset)
+## FPGA Command Codes
 
-**Purpose:** Bulk ADC sample data acquisition from FPGA. After the FPGA is configured via USART2, the actual waveform sample data is transferred over SPI at high speed.
+Commands are dispatched via FreeRTOS queue (`_fpga_queue_handle`). Command code is byte[0] of the queue message.
+
+| Code | Purpose | Details |
+|------|---------|---------|
+| 1 | Device mode setup | Writes device_mode (0x00-0x12) to SPI2. Configures scope/meter/siggen. |
+| 2 | Sample rate / config | Writes acquisition parameters (timebase, sample depth) to SPI2. |
+| 3 | Waveform data process | Handles display list updates, frame buffers at 0x200006A8. Processes calibration. |
+| 4 | Buffer fill/clear | Fills display buffers with 0xFF, processes 0x400 (1024) samples. |
+| 5+ | Channel configuration | Trigger level, coupling, probe settings, channel enable/disable. |
+
+### Command Prefix Encoding
+
+Commands use a prefix byte ORed into the upper bits of `_fpga_command_code`:
+
+```c
+_fpga_command_code = CONCAT13(0x20, _fpga_command_code);  // Normal execution
+_fpga_command_code = CONCAT13(0x21, _fpga_command_code);  // Error recovery / retry
+_fpga_command_code = CONCAT13(0x24, _fpga_command_code);  // Special waveform mode
+_fpga_command_code = CONCAT13(0x25, _fpga_command_code);  // Alt mode
+```
+
+This suggests a command structure of: `[prefix_byte][3 command bytes]` where the prefix indicates the execution context (normal, retry, special).
+
+## SPI2 Protocol (Bulk Data)
+
+### Registers
+
+| Address | Name | Purpose |
+|---------|------|---------|
+| 0x40003C08 | SPI2_STAT | Status (bit 0 = ready, bit 1 = busy) |
+| 0x40003C0C | SPI2_DATA | Data TX/RX register |
+| 0x40010C14 | GPIOB_BOP | Chip-select control (bit 6 = PB6) |
+
+### Access Pattern (from fpga_task @ 0x08037454)
+
+```c
+// 1. Assert chip-select
+GPIOB_BOP = 0x40;              // Set PB6
+
+// 2. Wait for SPI ready
+while (!(SPI2_STAT & 0x01));   // Poll ready bit
+
+// 3. Write command / read data
+SPI2_DATA = command_byte;
+
+// 4. Wait for completion
+while (SPI2_STAT & 0x02);      // Poll busy bit
+```
+
+Chip-select polarity (PB6 active-high vs active-low) needs verification on hardware.
 
 ## Acquisition Pipeline
 
 ```
 1. MCU sends 10-byte command via USART2
-   (configure timebase, trigger level, channel settings)
-        │
-        ▼
+   (configure timebase, trigger, channel settings)
+        |
+        v
 2. FPGA acknowledges with [0x5A, 0xA5]
-   or returns 10-byte status with [0xAA, 0x55, ...]
-        │
-        ▼
-3. FPGA captures ADC samples at configured rate
-        │
-        ▼
-4. MCU reads sample data via SPI2
-   (bulk transfer, GPIO chip-select controlled)
-        │
-        ▼
+   or returns 10-byte status [0xAA, 0x55, ...]
+        |
+        v
+3. FPGA captures ADC samples at configured rate (up to 250 MS/s)
+        |
+        v
+4. MCU reads sample data via SPI2 (bulk transfer, GPIO chip-select)
+        |
+        v
 5. FPGA sends 12-byte completion frame via USART2
-   → triggers PendSV → wakes osc task
-        │
-        ▼
-6. osc task processes waveform data
-   → sends display commands to display task queue
+   -> triggers PendSV -> context switch
+        |
+        v
+6. osc_task wakes, processes waveform from shared buffers
+   -> sends display commands to display task queue
 ```
 
-## Memory Map for FPGA Communication
+## RTOS Task Architecture (Original Firmware)
 
-| Address | Size | Purpose |
-|---|---|---|
-| 0x20000005 | 10 bytes | USART2 TX buffer (command frame) |
-| 0x2000000F | 1 byte | USART2 TX byte index |
-| 0x20000018-0x2000002F | 24 bytes | FPGA command/status structure |
-| 0x20000025 | 1 byte | Current FPGA command code |
-| 0x20004E10 | 1 byte | USART2 RX byte index |
-| 0x20004E11+ | 12 bytes | USART2 RX buffer |
-| 0x20004E14 | 1 byte | RX echo verification byte |
-| 0x20004E18 | 1 byte | RX integrity marker (must be 0xAA) |
+```
+dvom_tx_task (priority ~2)
+  |-- Receives TX frames from _dvom_tx_queue_handle
+  |-- Builds 10-byte USART2 frame
+  |-- Enables USART2 TX interrupt for byte-by-byte pump
+  |-- vTaskDelay(10) between frames (~100 frames/sec max)
 
-## Updated Function Identifications
+fpga_task (priority ~3)
+  |-- Receives command codes from _fpga_queue_handle (blocking wait)
+  |-- Switch on command code:
+  |     Case 1: Configure device mode via SPI2
+  |     Case 2: Set sample rate/config via SPI2
+  |     Case 3: Process waveform data, manage frame buffers
+  |     Case 4: Fill/clear frame buffers (1024 samples)
+  |     Case 5+: Channel/trigger configuration
+  |-- Manages calibration data
 
-| Ghidra Address | Corrected Name | Description |
-|---|---|---|
-| FUN_0802e7bc | `fatfs_init` | FatFS filesystem mount and file check (NOT USART handler) |
-| FUN_080277b4 | `usart2_isr` | Real USART2 interrupt service routine |
-| FUN_0802d534 | `fatfs_read_write` | FatFS file read/write (NOT uart_print_string) |
-| FUN_0802dc40 | `fatfs_open` | FatFS file open (NOT string_compare) |
-| FUN_0802d8b8 | `fatfs_open_read` | FatFS open for reading (NOT string_copy_or_parse) |
-| FUN_0802d80c | `fatfs_mount` | FatFS volume mount |
-| FUN_0802cfbc | `fatfs_operation` | FatFS filesystem operation |
+osc_task (priority ~2)
+  |-- Awakened by PendSV from USART2 RX completion ISR
+  |-- Reads waveform data from shared buffers (0x200006A8)
+  |-- Processes for display (scaling, measurements)
+  |-- Sends display commands to display task
 
-## Baud Rate
+dvom_rx_task (priority ~2)
+  |-- Processes multimeter readings received from FPGA
+  |-- Parses DVOM response frames
+```
 
-Not determined from the binary — the USART2 baud rate register (BRR at 0x40004408) is configured during boot initialization in a region not covered by the decompiled output. Would need to either:
-- Probe the UART lines with a logic analyzer on the real device
-- Decompile more functions from the 0x08004D60-0x08007000 region
-- Check if the GD32 HAL library defaults are used (common: 115200, 921600, or 1000000 baud)
+## Memory Map
 
-## Implications
+### FPGA Communication Buffers
 
-1. **The FPGA protocol is binary, not text** — corrects our earlier assumption
-2. **Dual interface** (UART for commands, SPI for data) is a clean design
-3. **10-byte fixed frames** with checksums means the protocol is relatively simple to replicate
-4. **The echo verification** (TX byte echoed in RX) provides built-in error detection
-5. **For the emulator**: need to simulate both USART2 responses (ACK frames) and SPI2 data (sample buffers)
-6. **For protocol decode modules**: the SPI2 path is where captured waveform data flows — protocol decoders would process this data
+| Address | Size | Description |
+|---------|------|-------------|
+| 0x20000005 | 10 | USART2 TX buffer (command frame) |
+| 0x2000000F | 1 | TX byte index (ISR byte pump counter) |
+| 0x20000008 | 1 | TX[3] copy for echo verification |
+| 0x20000019 | 1 | USART status/command state |
+| 0x20000025 | 1 | Current FPGA command code (0x20/0x21/0x24/0x25) |
+| 0x20004E10 | 1 | USART2 RX byte index |
+| 0x20004E11 | 12 | USART2 RX buffer |
+| 0x20004E12 | 1 | RX[3] echo byte (verified against TX[3]) |
+| 0x20004E18 | 1 | RX[7] integrity marker (must be 0xAA) |
+
+### ADC / Waveform Buffers
+
+| Address | Size | Description |
+|---------|------|-------------|
+| 0x2000044A | 1 | CH1 ADC raw value |
+| 0x2000044B | 1 | CH2 ADC raw value |
+| 0x2000057A | 1 | Processed CH1 display data |
+| 0x200006A8 | 8 | CH1/CH2 waveform frame buffer (active) |
+
+## Key Functions
+
+| Address | Name | Purpose |
+|---------|------|---------|
+| 0x080277B4 | usart2_isr_real | USART2 ISR: TX byte pump + RX frame parser + validation |
+| 0x08037454 | fpga_task | FPGA command dispatcher + SPI2 driver |
+| 0x08034078 | display_buf_init | Display buffer initialization |
+| 0x08039EB4 | frame_builder | TX frame construction |
+| 0x0802e7bc | fatfs_init | FatFS filesystem mount (NOT USART handler -- corrected) |
+
+## Correction Log
+
+- **FUN_0802e7bc** was initially identified as USART handler. It is actually **FatFS filesystem init** (f_mount, f_open, etc.). The "string compare" calls are filesystem path operations.
+
+## What We Still Need to Determine (On Hardware)
+
+1. **USART2 baud rate** -- likely 115200, 921600, or 1M. Set in boot init region not covered by decompilation. Probe with logic analyzer.
+2. **SPI2 clock speed** -- determines max sample transfer rate.
+3. **Chip-select polarity** -- is PB6 active-high or active-low?
+4. **Full command byte mapping** -- we have 5 command codes identified. There are likely more for calibration, DVOM mode switching, etc.
+5. **Sample data format** -- 8-bit or 12-bit ADC values? Signed or unsigned? Packed or one-per-byte?
+6. **Trigger register layout** -- which command data bytes configure trigger level/edge/mode on the FPGA side.
+7. **Calibration data format** -- references to calibration values in Case 3 processing.
+8. **DVOM response format** -- multimeter readings come through USART2 but in a different frame format.
+
+## Emulator Simulation
+
+`emulator/renode/fpga_dvom_sim.py` implements basic response simulation:
+
+```python
+# ACK: [0x5A, 0xA5]
+# Status: [0xAA, 0x55, 0x00, echo_byte, 0x00, 0x00, 0x00, 0xAA, 0x00, 0x00]
+```
+
+Enough for firmware to boot. Does not simulate real ADC data or SPI2 bulk transfers.
+
+## Hardware Day Plan
+
+1. Connect logic analyzer to USART2 TX/RX pins + SPI2 MOSI/MISO/CLK/CS
+2. Boot original firmware, capture idle traffic to determine baud rate
+3. Trigger various modes (scope, meter, siggen) and capture command sequences
+4. Map command bytes to mode transitions
+5. Capture SPI2 bulk data during scope acquisition to determine sample format
+6. Feed captured data into our emulator simulation for validation
