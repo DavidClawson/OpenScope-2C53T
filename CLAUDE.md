@@ -51,28 +51,41 @@ FNIRSI-1013D-1014D-Hack/    # Submodule: historical RE work
 ## Build & Run
 
 ```bash
-# Build firmware
+# Build firmware (cross-compile for GD32F307)
 cd firmware && make
 
 # Build for emulator (skips HAL clock init)
 make emu
 
-# Run in Renode emulator
+# Run in Renode (display-only, no input)
 make renode
+
+# Run interactive emulator (keyboard → GPIO button input)
+# Terminal 1:
+make renode-interactive
+# Terminal 2:
+cd emulator && ./lcd_viewer
+
+# Smoke test (5 seconds, headless)
+make renode-test
 
 # Disassembly listing
 make disasm
 ```
 
-**Toolchain:** `arm-none-eabi-gcc` (ARM GNU Embedded)
+**Toolchain:** `arm-none-eabi-gcc` via Homebrew cask `gcc-arm-embedded` (native ARM64)
 **Renode:** Expected at `/Applications/Renode.app`
+**SDL3 viewer:** `cd emulator && make` (requires `brew install sdl3`)
 
 ## Architecture
 
 - **RTOS:** FreeRTOS with Cortex-M4 port (120MHz tick, 1000Hz, 32KB heap)
 - **Original firmware tasks:** Display, Input, Acquisition, Measurement, USB, FPGA
-- **Current custom firmware:** Single main task with 4 UI modes (scope, meter, signal gen, settings)
+- **Current custom firmware:** Display task + Input task, 4 UI modes (scope, meter, signal gen, settings)
 - **LCD interface:** Memory-mapped at 0x6001FFFE (command) / 0x60020000 (data), address line A17 selects RS/DCX
+- **Font system:** Variable-width bitmap fonts at 4 sizes (12/16/24/48px), generated from TTF via `scripts/generate_font.py`
+- **Theme system:** 4 color themes (Dark Blue, Classic Green, High Contrast, Night Red), switchable in Settings > Display Mode
+- **Emulator display:** SDL3 native viewer reads `/tmp/openscope_fb.bin` at 30fps; interactive GPIO via `/tmp/openscope_buttons.txt`
 
 ## Key Conventions
 
@@ -92,8 +105,11 @@ make disasm
 
 ## Current State
 
-- Custom firmware boots in Renode through FreeRTOS scheduler
-- LCD driver functional (grid, waveforms, text rendering)
-- Button handling and mode switching implemented
-- React frontend displays simulated framebuffer via WebSocket
-- No real hardware flashing yet — development is emulator-first
+- Custom firmware boots in Renode through FreeRTOS scheduler (~167KB / 1MB flash)
+- LCD driver functional with multi-size font system (4 sizes from SF Pro + Menlo)
+- 4 themed UI modes: oscilloscope (with FFT/waterfall), multimeter (large digits), signal generator, navigable settings
+- Theme switching (4 themes) wired through all screens
+- SDL3 native LCD viewer with interactive button input (replaces React/WebSocket pipeline)
+- Soak testing infrastructure (random button fuzzing with fault monitoring)
+- Watchdog, health monitoring, task stack checking
+- No real hardware flashing yet — development is emulator-first (device arriving ~early April 2026)
