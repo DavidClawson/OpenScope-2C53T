@@ -5,13 +5,15 @@
 #include "ui.h"
 #include "lcd.h"
 #include "font.h"
+#include "theme.h"
 #include "signal_gen.h"
 
 /* Draw the signal generator screen */
 void draw_siggen_screen(uint32_t frame)
 {
     (void)frame;
-    lcd_fill_rect(0, 16, LCD_WIDTH, LCD_HEIGHT - 32, COLOR_BLACK);
+    const theme_t *th = theme_get();
+    lcd_fill_rect(0, 16, LCD_WIDTH, LCD_HEIGHT - 32, th->background);
 
     const siggen_config_t *cfg = siggen_get_config();
 
@@ -27,9 +29,9 @@ void draw_siggen_screen(uint32_t frame)
         int16_t y_off = (int16_t)(((int32_t)preview_buf[x] * 30) / 32767);
         uint16_t py = (uint16_t)(y_center - y_off);
         if (py >= 18 && py < LCD_HEIGHT - 16) {
-            lcd_set_pixel(x + 20, py, COLOR_CH1);
+            lcd_set_pixel(x + 20, py, th->ch1);
             if (py + 1 < LCD_HEIGHT - 16)
-                lcd_set_pixel(x + 20, py + 1, COLOR_CH1);
+                lcd_set_pixel(x + 20, py + 1, th->ch1);
         }
     }
 
@@ -44,9 +46,9 @@ void draw_siggen_screen(uint32_t frame)
                         ? wave_names[cfg->waveform] : "?";
 
     font_draw_string(label_x, param_y, "Waveform",
-                     COLOR_GRAY, COLOR_BLACK, &font_small);
+                     th->text_secondary, th->background, &font_small);
     font_draw_string(value_x, param_y, wname,
-                     COLOR_WHITE, COLOR_BLACK, &font_medium);
+                     th->text_primary, th->background, &font_medium);
 
     /* Frequency */
     char freq_str[16];
@@ -72,28 +74,28 @@ void draw_siggen_screen(uint32_t frame)
     freq_str[i] = '\0';
 
     font_draw_string(label_x, param_y + 22, "Frequency",
-                     COLOR_GRAY, COLOR_BLACK, &font_small);
+                     th->text_secondary, th->background, &font_small);
     font_draw_string(value_x, param_y + 20, freq_str,
-                     COLOR_WHITE, COLOR_BLACK, &font_medium);
+                     th->text_primary, th->background, &font_medium);
 
     /* Amplitude */
     font_draw_string(label_x, param_y + 44, "Amplitude",
-                     COLOR_GRAY, COLOR_BLACK, &font_small);
+                     th->text_secondary, th->background, &font_small);
     font_draw_string(value_x, param_y + 42, "3.3 Vpp",
-                     COLOR_WHITE, COLOR_BLACK, &font_medium);
+                     th->text_primary, th->background, &font_medium);
 
     /* Offset */
     font_draw_string(label_x, param_y + 66, "Offset",
-                     COLOR_GRAY, COLOR_BLACK, &font_small);
+                     th->text_secondary, th->background, &font_small);
     font_draw_string(value_x, param_y + 64, "0.0 V",
-                     COLOR_WHITE, COLOR_BLACK, &font_medium);
+                     th->text_primary, th->background, &font_medium);
 
     /* Output state - prominent */
     if (cfg->output_enabled) {
         font_draw_string(value_x, param_y + 88, "OUTPUT ON",
-                         COLOR_GREEN, COLOR_BLACK, &font_large);
+                         th->success, th->background, &font_large);
     } else {
         font_draw_string(value_x, param_y + 88, "OUTPUT OFF",
-                         COLOR_RED, COLOR_BLACK, &font_large);
+                         th->warning, th->background, &font_large);
     }
 }

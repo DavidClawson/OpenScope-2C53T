@@ -5,18 +5,20 @@
 #include "ui.h"
 #include "lcd.h"
 #include "font.h"
+#include "theme.h"
 
 /* Draw the top status bar */
 void draw_status_bar(void)
 {
-    lcd_fill_rect(0, 0, LCD_WIDTH, 16, COLOR_DARK_GRAY);
+    const theme_t *th = theme_get();
+    lcd_fill_rect(0, 0, LCD_WIDTH, 16, th->status_bar_bg);
 
-    font_draw_string(4, 2, "OpenScope", COLOR_CYAN, COLOR_DARK_GRAY, &font_small);
+    font_draw_string(4, 2, "OpenScope", th->ch2, th->status_bar_bg, &font_small);
 
     /* Mode indicator */
     const char *mode_names[] = { "SCOPE", "METER", "SIGGEN", "SETUP" };
     font_draw_string(120, 2, mode_names[current_mode],
-                     COLOR_GREEN, COLOR_DARK_GRAY, &font_small);
+                     th->success, th->status_bar_bg, &font_small);
 
     /* Uptime display */
     char buf[16];
@@ -29,18 +31,20 @@ void draw_status_bar(void)
     buf[4] = '0' + (secs % 10);
     buf[5] = '\0';
     font_draw_string_right(LCD_WIDTH - 4, 2, buf,
-                           COLOR_GRAY, COLOR_DARK_GRAY, &font_small);
+                           th->text_secondary, th->status_bar_bg, &font_small);
 
     /* Model name */
     font_draw_string_right(LCD_WIDTH - 50, 2, "2C53T",
-                           COLOR_WHITE, COLOR_DARK_GRAY, &font_small);
+                           th->text_primary, th->status_bar_bg, &font_small);
 }
 
 /* Draw the bottom info bar */
 void draw_info_bar(void)
 {
-    lcd_fill_rect(0, LCD_HEIGHT - 16, LCD_WIDTH, 16, COLOR_DARK_GRAY);
+    const theme_t *th = theme_get();
+    lcd_fill_rect(0, LCD_HEIGHT - 16, LCD_WIDTH, 16, th->status_bar_bg);
 
+    uint16_t ib = th->status_bar_bg;
     switch (current_mode) {
     case MODE_OSCILLOSCOPE:
 #ifdef FEATURE_FFT
@@ -48,46 +52,46 @@ void draw_info_bar(void)
             const char *win_names[] = { "Rect", "Hann", "Hamm", "BHar", "Flat" };
             const fft_config_t *cfg = fft_get_config();
             font_draw_string(4, LCD_HEIGHT - 14, "FFT 4096pt",
-                             COLOR_YELLOW, COLOR_DARK_GRAY, &font_small);
+                             th->ch1, ib, &font_small);
             font_draw_string(80, LCD_HEIGHT - 14,
                              (cfg->window < FFT_WINDOW_COUNT) ? win_names[cfg->window] : "?",
-                             COLOR_GREEN, COLOR_DARK_GRAY, &font_small);
+                             th->success, ib, &font_small);
             if (cfg->avg_count > 0)
                 font_draw_string(120, LCD_HEIGHT - 14, "AVG",
-                                 COLOR_CYAN, COLOR_DARK_GRAY, &font_small);
+                                 th->ch2, ib, &font_small);
             if (cfg->max_hold)
                 font_draw_string(150, LCD_HEIGHT - 14, "MH",
-                                 COLOR_RED, COLOR_DARK_GRAY, &font_small);
+                                 th->warning, ib, &font_small);
             font_draw_string(220, LCD_HEIGHT - 14, "PRM:View",
-                             COLOR_GRAY, COLOR_DARK_GRAY, &font_small);
+                             th->text_secondary, ib, &font_small);
         } else
 #endif
         {
             font_draw_string(4, LCD_HEIGHT - 14, "CH1:2V DC",
-                             COLOR_YELLOW, COLOR_DARK_GRAY, &font_small);
+                             th->ch1, ib, &font_small);
             font_draw_string(80, LCD_HEIGHT - 14, "Auto",
-                             COLOR_GREEN, COLOR_DARK_GRAY, &font_small);
+                             th->success, ib, &font_small);
             font_draw_string(120, LCD_HEIGHT - 14, "H=50uS",
-                             COLOR_WHITE, COLOR_DARK_GRAY, &font_small);
+                             th->text_primary, ib, &font_small);
             font_draw_string(200, LCD_HEIGHT - 14, "CH2:200mV",
-                             COLOR_CYAN, COLOR_DARK_GRAY, &font_small);
+                             th->ch2, ib, &font_small);
         }
         break;
     case MODE_MULTIMETER:
         font_draw_string(4, LCD_HEIGHT - 14, "DC Voltage",
-                         COLOR_YELLOW, COLOR_DARK_GRAY, &font_small);
+                         th->ch1, ib, &font_small);
         font_draw_string(200, LCD_HEIGHT - 14, "Auto Range",
-                         COLOR_GREEN, COLOR_DARK_GRAY, &font_small);
+                         th->success, ib, &font_small);
         break;
     case MODE_SIGNAL_GEN:
         font_draw_string(4, LCD_HEIGHT - 14, "Sine 1.000kHz",
-                         COLOR_YELLOW, COLOR_DARK_GRAY, &font_small);
+                         th->ch1, ib, &font_small);
         font_draw_string(200, LCD_HEIGHT - 14, "3.3Vpp",
-                         COLOR_GREEN, COLOR_DARK_GRAY, &font_small);
+                         th->success, ib, &font_small);
         break;
     case MODE_SETTINGS:
         font_draw_string(4, LCD_HEIGHT - 14, "MENU/SELECT to navigate",
-                         COLOR_GRAY, COLOR_DARK_GRAY, &font_small);
+                         th->text_secondary, ib, &font_small);
         break;
     default:
         break;

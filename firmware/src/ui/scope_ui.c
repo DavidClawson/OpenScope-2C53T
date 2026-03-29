@@ -5,35 +5,38 @@
 #include "ui.h"
 #include "lcd.h"
 #include "font.h"
+#include "theme.h"
 #include <math.h>
 
 /* Draw the oscilloscope grid */
 void draw_scope_grid(void)
 {
+    const theme_t *th = theme_get();
     uint16_t x, y;
     for (x = 0; x < LCD_WIDTH; x += 32) {
         for (y = 18; y < LCD_HEIGHT - 16; y += 2) {
-            lcd_set_pixel(x, y, COLOR_GRID);
+            lcd_set_pixel(x, y, th->grid);
         }
     }
     for (y = 18; y < LCD_HEIGHT - 16; y += 26) {
         for (x = 0; x < LCD_WIDTH; x += 2) {
-            lcd_set_pixel(x, y, COLOR_GRID);
+            lcd_set_pixel(x, y, th->grid);
         }
     }
 
     /* Center crosshair (solid) */
     for (x = 0; x < LCD_WIDTH; x++) {
-        lcd_set_pixel(x, (LCD_HEIGHT - 32) / 2 + 16, COLOR_GRID_CENTER);
+        lcd_set_pixel(x, (LCD_HEIGHT - 32) / 2 + 16, th->grid_center);
     }
     for (y = 18; y < LCD_HEIGHT - 16; y++) {
-        lcd_set_pixel(LCD_WIDTH / 2, y, COLOR_GRID_CENTER);
+        lcd_set_pixel(LCD_WIDTH / 2, y, th->grid_center);
     }
 }
 
 /* Draw a simulated sine waveform for CH1 */
 void draw_demo_waveform(uint32_t frame)
 {
+    const theme_t *th = theme_get();
     static const int8_t sin_lut[64] = {
          0, 10, 19, 29, 38, 47, 56, 63, 71, 77, 83, 88, 92, 96, 98, 99,
         100, 99, 98, 96, 92, 88, 83, 77, 71, 63, 56, 47, 38, 29, 19, 10,
@@ -49,8 +52,8 @@ void draw_demo_waveform(uint32_t frame)
         uint8_t idx = (uint8_t)((x * 4 + frame) & 0x3F);
         int16_t y = y_center - (sin_lut[idx] * 40 / 100);
         if (y >= 18 && y < LCD_HEIGHT - 16) {
-            lcd_set_pixel(x, (uint16_t)y, COLOR_CH1);
-            if (y + 1 < LCD_HEIGHT - 16) lcd_set_pixel(x, (uint16_t)(y + 1), COLOR_CH1);
+            lcd_set_pixel(x, (uint16_t)y, th->ch1);
+            if (y + 1 < LCD_HEIGHT - 16) lcd_set_pixel(x, (uint16_t)(y + 1), th->ch1);
         }
     }
 
@@ -59,7 +62,7 @@ void draw_demo_waveform(uint32_t frame)
         uint8_t phase = (uint8_t)((x * 4 + frame) & 0x3F);
         int16_t y = y_center + 50 + (phase < 32 ? -25 : 25);
         if (y >= 18 && y < LCD_HEIGHT - 16) {
-            lcd_set_pixel(x, (uint16_t)y, COLOR_CH2);
+            lcd_set_pixel(x, (uint16_t)y, th->ch2);
         }
         if (x > 0) {
             uint8_t prev_phase = (uint8_t)(((x - 1) * 4 + frame) & 0x3F);
@@ -68,7 +71,7 @@ void draw_demo_waveform(uint32_t frame)
                 int16_t y2 = y_center + 50 + 25;
                 for (int16_t yy = y1; yy <= y2; yy++) {
                     if (yy >= 18 && yy < LCD_HEIGHT - 16) {
-                        lcd_set_pixel(x, (uint16_t)yy, COLOR_CH2);
+                        lcd_set_pixel(x, (uint16_t)yy, th->ch2);
                     }
                 }
             }
@@ -76,22 +79,23 @@ void draw_demo_waveform(uint32_t frame)
     }
 
     /* Trigger marker */
-    lcd_fill_rect(LCD_WIDTH - 6, y_center - 3, 5, 7, COLOR_TRIGGER);
+    lcd_fill_rect(LCD_WIDTH - 6, y_center - 3, 5, 7, th->trigger);
 }
 
 /* Draw the oscilloscope screen */
 void draw_scope_screen(uint32_t frame)
 {
-    lcd_fill_rect(0, 16, LCD_WIDTH, LCD_HEIGHT - 32, COLOR_BLACK);
+    const theme_t *th = theme_get();
+    lcd_fill_rect(0, 16, LCD_WIDTH, LCD_HEIGHT - 32, th->background);
 
     draw_scope_grid();
     draw_demo_waveform(frame);
 
     /* Measurements overlay (transparent bg to not obscure grid) */
-    font_draw_string(4, 18, "10.00kHz", COLOR_CH1, COLOR_CH1, &font_small);
-    font_draw_string(4, 32, "3.31Vpp",  COLOR_CH1, COLOR_CH1, &font_small);
-    font_draw_string_right(LCD_WIDTH - 4, 18, "9.96kHz", COLOR_CH2, COLOR_CH2, &font_small);
-    font_draw_string_right(LCD_WIDTH - 4, 32, "660mVpp", COLOR_CH2, COLOR_CH2, &font_small);
+    font_draw_string(4, 18, "10.00kHz", th->ch1, th->ch1, &font_small);
+    font_draw_string(4, 32, "3.31Vpp",  th->ch1, th->ch1, &font_small);
+    font_draw_string_right(LCD_WIDTH - 4, 18, "9.96kHz", th->ch2, th->ch2, &font_small);
+    font_draw_string_right(LCD_WIDTH - 4, 32, "660mVpp", th->ch2, th->ch2, &font_small);
 }
 
 #ifdef FEATURE_FFT
