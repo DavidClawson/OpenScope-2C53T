@@ -1,15 +1,18 @@
 /*
  * OpenScope 2C53T - Custom Firmware
  *
- * Target: GD32F307 (ARM Cortex-M4F @ 120MHz)
- * Display: ST7789V 320x240 via EXMC
+ * Target: Artery AT32F403A (ARM Cortex-M4F @ 240MHz)
+ * Display: ST7789V 320x240 via EXMC/XMC
  * RTOS: FreeRTOS
  *
  * This firmware initializes the LCD, draws a scope-like UI,
  * and responds to button inputs for mode selection.
  */
 
-#include "gd32f30x.h"
+#include "at32f403a_407.h"
+
+/* AT32 clock config (from at32f403a_gcc/user/) */
+extern void system_clock_config(void);
 #include "FreeRTOS.h"
 #include "task.h"
 #include "queue.h"
@@ -38,6 +41,12 @@ volatile int8_t        settings_depth = 0;
 volatile int8_t        settings_sub_selected = 0;
 volatile uint8_t       active_channel = 0;  /* 0=CH1, 1=CH2 */
 volatile uint8_t       meter_submode = 0;   /* 0-9: current meter sub-mode */
+volatile uint8_t       meter_layout = 0;   /* 0=full, 1=chart, 2=stats */
+volatile bool          meter_rel_enabled = false;  /* Relative/delta mode */
+volatile float         meter_rel_reference = 0.0f;
+volatile bool          meter_hold_enabled = false;  /* Auto-hold mode */
+volatile bool          meter_hold_locked = false;   /* Hold has captured */
+volatile float         meter_hold_value = 0.0f;
 
 /* Scope feature toggles */
 volatile bool          math_enabled = false;
@@ -69,7 +78,7 @@ void delay_ms(uint32_t ms)
 {
     volatile uint32_t count;
     while (ms--) {
-        count = 12000;
+        count = system_core_clock / 10000;  /* Clock-speed independent */
         while (count--) {
             __asm volatile("nop");
         }
@@ -155,18 +164,24 @@ static void vDisplayTask(void *pvParameters)
         /* Check in with health monitor */
         health_checkin(health_slot_display);
 
-        /* Animate the active mode (only scope and siggen have animation) */
+        /* Animate the active mode (only scope and siggen have animation).
+         * When scope is stopped, skip continuous redraws — waveform is
+         * frozen and redraws only on explicit commands (V/div, timebase
+         * changes send DCMD_REDRAW_ALL via the queue above). */
         if (current_mode == MODE_OSCILLOSCOPE) {
+            const scope_state_t *ss_anim = scope_state_get();
+            if (ss_anim->running) {
 #ifdef FEATURE_FFT
-            if (scope_view == SCOPE_VIEW_FFT)
-                draw_fft_screen();
-            else if (scope_view == SCOPE_VIEW_SPLIT)
-                draw_split_screen(frame);
-            else if (scope_view == SCOPE_VIEW_WATERFALL)
-                draw_waterfall_screen();
-            else
+                if (scope_view == SCOPE_VIEW_FFT)
+                    draw_fft_screen();
+                else if (scope_view == SCOPE_VIEW_SPLIT)
+                    draw_split_screen(frame);
+                else if (scope_view == SCOPE_VIEW_WATERFALL)
+                    draw_waterfall_screen();
+                else
 #endif
-                draw_scope_screen(frame);
+                    draw_scope_screen(frame);
+            }
         } else if (current_mode == MODE_SIGNAL_GEN) {
             draw_siggen_screen(frame);
         }
@@ -190,8 +205,8 @@ static void vInputTask(void *pvParameters)
     for (;;) {
         button_id_t pressed = BTN_NONE;
 
-        uint16_t portc = (uint16_t)gpio_input_port_get(GPIOC);
-        uint16_t portb = (uint16_t)gpio_input_port_get(GPIOB);
+        uint16_t portc = (uint16_t)GPIOC->idt;
+        uint16_t portb = (uint16_t)GPIOB->idt;
 
         /* Map GPIO states to button IDs */
         if (!(portc & (1 << 0))) pressed = BTN_MENU;
@@ -255,19 +270,34 @@ static void vHealthCheckCallback(TimerHandle_t xTimer)
 int main(void)
 {
 #ifdef EMULATOR_BUILD
-    SystemCoreClock = 120000000;
+    system_core_clock = 240000000;
     *(volatile uint32_t *)0x40021014 = 0x00000114;
     *(volatile uint32_t *)0x40021018 = 0x0000FFFD;
     *(volatile uint32_t *)0x4002101C = 0x3FFFFFFF;
 #else
-    SystemCoreClockUpdate();
-    rcu_periph_clock_enable(RCU_GPIOA);
-    rcu_periph_clock_enable(RCU_GPIOB);
-    rcu_periph_clock_enable(RCU_GPIOC);
-    rcu_periph_clock_enable(RCU_GPIOD);
-    rcu_periph_clock_enable(RCU_GPIOE);
-    rcu_periph_clock_enable(RCU_AF);
-    rcu_periph_clock_enable(RCU_EXMC);
+    /* FIRST: Power hold — PC9 HIGH to keep device on */
+    crm_periph_clock_enable(CRM_GPIOC_PERIPH_CLOCK, TRUE);
+    GPIOC->cfghr = (GPIOC->cfghr & ~(0xF << 4)) | (0x3 << 4); /* PC9 push-pull 50MHz */
+    GPIOC->scr = (1 << 9);  /* PC9 HIGH */
+
+    /* NOTE: EOPB0 must be set to 0xFE (224KB SRAM) via DFU option bytes
+     * before this firmware will work. See eopb0_setup.c or use:
+     *   dfu-util -a 1 -d 2e3c:df11 -s 0x1FFFF800 -D option_bytes48.bin */
+
+    /* Clock init to 240MHz */
+    system_clock_config();
+
+    /* Enable peripheral clocks */
+    crm_periph_clock_enable(CRM_GPIOA_PERIPH_CLOCK, TRUE);
+    crm_periph_clock_enable(CRM_GPIOB_PERIPH_CLOCK, TRUE);
+    crm_periph_clock_enable(CRM_GPIOD_PERIPH_CLOCK, TRUE);
+    crm_periph_clock_enable(CRM_GPIOE_PERIPH_CLOCK, TRUE);
+    crm_periph_clock_enable(CRM_IOMUX_PERIPH_CLOCK, TRUE);
+    crm_periph_clock_enable(CRM_XMC_PERIPH_CLOCK, TRUE);
+
+    /* PB8 = LCD backlight ON */
+    GPIOB->cfghr = (GPIOB->cfghr & ~(0xF << 0)) | (0x3 << 0); /* PB8 push-pull 50MHz */
+    GPIOB->scr = (1 << 8);
 #endif
 
     /* Initialize theme system */
@@ -276,10 +306,55 @@ int main(void)
     /* Initialize oscilloscope state */
     scope_state_init(scope_state_get());
 
-    /* Initialize LCD */
-    lcd_gpio_init();
-    lcd_fsmc_init();
-    lcd_init();
+    /* Initialize LCD — using proven hwtest approach */
+    {
+        /* GPIO config for EXMC pins (same as hwtest) */
+        #define _GPIO_CFG(base, pin, mode, cnf) do { \
+            volatile uint32_t *r = (pin < 8) ? \
+                (volatile uint32_t *)(base + 0x00) : \
+                (volatile uint32_t *)(base + 0x04); \
+            uint8_t p = (pin < 8) ? pin : (pin - 8); \
+            uint32_t v = *r; \
+            v &= ~(0xFU << (p * 4)); \
+            v |= (((mode) | ((cnf) << 2)) << (p * 4)); \
+            *r = v; \
+        } while(0)
+
+        /* PD0,1,4,5,7,8,9,10,11,12,14,15 as AF push-pull */
+        uint8_t pd_pins[] = {0,1,4,5,7,8,9,10,11,12,14,15};
+        for (int i = 0; i < 12; i++)
+            _GPIO_CFG(0x40011400, pd_pins[i], 3, 2);
+        /* PE7-15 as AF push-pull */
+        for (int i = 7; i <= 15; i++)
+            _GPIO_CFG(0x40011800, i, 3, 2);
+
+        /* EXMC config — proven working values */
+        *(volatile uint32_t *)0xA0000000 = 0x00005010;
+        *(volatile uint32_t *)0xA0000004 = 0x02020424;
+        *(volatile uint32_t *)0xA0000104 = 0x00000202;
+        *(volatile uint32_t *)0xA0000000 |= 0x0001;
+        delay_ms(50);
+
+        /* LCD init — proven working sequence from hwtest */
+        lcd_write_cmd(0x01);  /* Software reset */
+        delay_ms(200);
+        lcd_write_cmd(0x11);  /* Sleep out */
+        delay_ms(200);
+        lcd_write_cmd(0x36);  /* MADCTL — landscape, flipped */
+        delay_ms(1);
+        lcd_write_data8(0xA0);
+        delay_ms(10);
+        lcd_write_cmd(0x3A);  /* Pixel format 16-bit */
+        delay_ms(1);
+        lcd_write_data8(0x55);
+        delay_ms(10);
+        lcd_write_cmd(0x29);  /* Display on */
+        delay_ms(50);
+
+        #undef _GPIO_CFG
+    }
+
+    /* LCD init complete — UI will be drawn by FreeRTOS display task */
 
     /*
      * FFT engine is initialized ON DEMAND when user enters FFT view
@@ -301,12 +376,12 @@ int main(void)
     }
 #endif
 
-    /* Configure button GPIOs as inputs with pull-up */
-    gpio_init(GPIOC, GPIO_MODE_IPU, GPIO_OSPEED_50MHZ,
-              GPIO_PIN_0 | GPIO_PIN_1 | GPIO_PIN_2 | GPIO_PIN_3 | GPIO_PIN_4 |
-              GPIO_PIN_5 | GPIO_PIN_6);
-    gpio_init(GPIOB, GPIO_MODE_IPU, GPIO_OSPEED_50MHZ,
-              GPIO_PIN_0 | GPIO_PIN_1 | GPIO_PIN_2 | GPIO_PIN_3 | GPIO_PIN_4);
+    /* Configure button GPIOs as inputs with pull-up
+     * Mode=0 (input), CNF=2 (input with pull-up/down), then set ODR for pull-up */
+    GPIOC->cfglr = (GPIOC->cfglr & 0xF0000000) | 0x08888888; /* PC0-PC6 input pull-up */
+    GPIOC->scr = 0x007F;  /* Pull-up on PC0-PC6 */
+    GPIOB->cfglr = (GPIOB->cfglr & 0xFFF00000) | 0x00088888; /* PB0-PB4 input pull-up */
+    GPIOB->scr = 0x001F;  /* Pull-up on PB0-PB4 */
 
     /* Create queues */
     xDisplayQueue = xQueueCreate(20, sizeof(uint8_t));
@@ -368,9 +443,14 @@ void vApplicationMallocFailedHook(void)
  * SystemInit override for emulator
  * ═══════════════════════════════════════════════════════════════════ */
 #ifdef EMULATOR_BUILD
-uint32_t SystemCoreClock = 120000000;
+uint32_t system_core_clock = 240000000;
 
 void SystemInit(void)
+{
+    /* Stub — do nothing in emulator mode. */
+}
+
+void system_clock_config(void)
 {
     /* Stub — do nothing in emulator mode. */
 }

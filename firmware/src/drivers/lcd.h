@@ -59,6 +59,9 @@
 #ifndef RCU_AHBEN_EXMC
 #define RCU_AHBEN_EXMC  (1 << 8)   /* EXMC clock enable  */
 #endif
+#ifndef RCU_APB2EN_AFEN
+#define RCU_APB2EN_AFEN (1 << 0)   /* AFIO/IOMUX clock enable */
+#endif
 
 /* GPIO port D registers (0x40011400) */
 #define GPIOD_CRL       (*(volatile uint32_t *)0x40011400)

@@ -26,6 +26,7 @@ static const char *settings_items[SETTINGS_ITEM_COUNT] = {
     "Display Mode",
     "Math / Persist",
     "Component Tester",
+    "Bode Plot",
     "Startup on Boot",
     "About",
     "Factory Reset",
@@ -126,7 +127,8 @@ static void draw_settings_top(void)
         if (i == 3) value = th->name;   /* Display Mode: theme name */
         if (i == 4) value = ">";        /* Math/Persist: sub-menu */
         if (i == 5) value = ">";        /* Component Tester */
-        if (i == 7) value = ">";        /* About: has detail screen */
+        if (i == 6) value = ">";        /* Bode Plot */
+        if (i == 8) value = ">";        /* About: has detail screen */
 
         draw_menu_item(i, settings_selected, settings_items[i], value, th);
     }
@@ -231,6 +233,8 @@ void draw_settings_screen(void)
     case 2:  draw_settings_about();            break;
     case 3:  draw_settings_math();             break;
     case 4:  draw_component_test_screen();     break;
+    case 5:  draw_resistor_calc_screen();      break;
+    case 6:  draw_bode_screen();              break;
     default: draw_settings_top();              break;
     }
 }

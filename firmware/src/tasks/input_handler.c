@@ -53,7 +53,10 @@ void input_handle_settings_ok(void)
             settings_depth = 4;
             comp_test_init();
             break;
-        case 7: /* About -- display info screen */
+        case 6: /* Bode Plot -- enter bode screen */
+            settings_depth = 6;
+            break;
+        case 8: /* About -- display info screen */
             settings_depth = 2;
             break;
         default:
@@ -105,7 +108,14 @@ void input_handle_settings_ok(void)
             settings_depth = 0;
         }
     } else if (settings_depth == 4) {
-        /* Component tester: OK = back to settings */
+        /* Component tester: OK = enter resistor calculator */
+        settings_depth = 5;
+        resistor_calc_init();
+    } else if (settings_depth == 5) {
+        /* Resistor calculator: OK = back to component tester */
+        settings_depth = 4;
+    } else if (settings_depth == 6) {
+        /* Bode plot: OK = back to settings */
         settings_depth = 0;
     }
 }
@@ -184,7 +194,10 @@ uint8_t input_handle_button(button_id_t button, QueueHandle_t dq)
     /* -- Trigger -------------------------------------------------- */
 
     case BTN_TRIGGER:
-        if (current_mode == MODE_OSCILLOSCOPE) {
+        if (current_mode == MODE_MULTIMETER) {
+            meter_toggle_hold();
+            send_cmd(dq, cmd);
+        } else if (current_mode == MODE_OSCILLOSCOPE) {
 #ifdef FEATURE_FFT
             if (scope_view == SCOPE_VIEW_TIME)
 #endif
@@ -215,16 +228,29 @@ uint8_t input_handle_button(button_id_t button, QueueHandle_t dq)
         }
         break;
 
-    /* -- Save ----------------------------------------------------- */
+    /* -- Save (screenshot) ---------------------------------------- */
 
     case BTN_SAVE:
+        /* TODO: On real hardware, capture shadow framebuffer to SPI flash.
+         * For now, show confirmation popup — the emulator's lcd_viewer
+         * independently saves screenshots on 'S' key via its own BMP writer. */
+        {
+            static uint16_t screenshot_num = 0;
+            screenshot_num++;
+            char sb[24];
+            snprintf(sb, sizeof(sb), "SAVED #%d", screenshot_num);
+            scope_show_popup(sb);
+        }
         send_cmd(dq, cmd);
         break;
 
     /* -- Auto ----------------------------------------------------- */
 
     case BTN_AUTO:
-        if (current_mode == MODE_OSCILLOSCOPE) {
+        if (current_mode == MODE_MULTIMETER) {
+            meter_toggle_relative();
+            send_cmd(dq, cmd);
+        } else if (current_mode == MODE_OSCILLOSCOPE) {
 #ifdef FEATURE_FFT
             if (scope_view != SCOPE_VIEW_TIME) {
                 test_signal_generate(TEST_SIG_SQUARE, fft_sample_buf,
@@ -294,6 +320,12 @@ uint8_t input_handle_button(button_id_t button, QueueHandle_t dq)
             meter_reset_minmaxavg();
             send_cmd(dq, cmd);
         } else if (current_mode == MODE_SETTINGS &&
+                   settings_depth == 5) {
+            /* Resistor calc: simulate measurement */
+            resistor_calc_simulate_measure();
+            cmd = DCMD_DRAW_SETTINGS;
+            send_cmd(dq, cmd);
+        } else if (current_mode == MODE_SETTINGS &&
                    settings_depth == 4) {
             /* Component tester: cycle component type */
             comp_test_cycle_type();
@@ -310,7 +342,9 @@ uint8_t input_handle_button(button_id_t button, QueueHandle_t dq)
 
     case BTN_UP:
         if (current_mode == MODE_SETTINGS) {
-            if (settings_depth == 0) {
+            if (settings_depth == 5) {
+                resistor_calc_change_color(1);
+            } else if (settings_depth == 0) {
                 if (settings_selected > 0) settings_selected--;
             } else if (settings_depth == 3) {
                 if (settings_sub_selected > 0) settings_sub_selected--;
@@ -349,7 +383,9 @@ uint8_t input_handle_button(button_id_t button, QueueHandle_t dq)
 
     case BTN_DOWN:
         if (current_mode == MODE_SETTINGS) {
-            if (settings_depth == 0) {
+            if (settings_depth == 5) {
+                resistor_calc_change_color(-1);
+            } else if (settings_depth == 0) {
                 if (settings_selected < SETTINGS_ITEM_COUNT - 1)
                     settings_selected++;
             } else if (settings_depth == 3) {
@@ -392,8 +428,13 @@ uint8_t input_handle_button(button_id_t button, QueueHandle_t dq)
     /* -- LEFT / RIGHT --------------------------------------------- */
 
     case BTN_LEFT:
+        if (current_mode == MODE_SETTINGS && settings_depth == 5) {
+            resistor_calc_move_band(-1);
+            cmd = DCMD_DRAW_SETTINGS;
+            send_cmd(dq, cmd);
+        }
         /* Cursor: switch active cursor */
-        if (current_mode == MODE_OSCILLOSCOPE &&
+        else if (current_mode == MODE_OSCILLOSCOPE &&
             ss->cursor.mode != CURSOR_OFF) {
             scope_cursor_next_sel();
             cmd = DCMD_DRAW_SCOPE;
@@ -428,8 +469,13 @@ uint8_t input_handle_button(button_id_t button, QueueHandle_t dq)
         break;
 
     case BTN_RIGHT:
+        if (current_mode == MODE_SETTINGS && settings_depth == 5) {
+            resistor_calc_move_band(1);
+            cmd = DCMD_DRAW_SETTINGS;
+            send_cmd(dq, cmd);
+        }
         /* Cursor: switch active cursor */
-        if (current_mode == MODE_OSCILLOSCOPE &&
+        else if (current_mode == MODE_OSCILLOSCOPE &&
             ss->cursor.mode != CURSOR_OFF) {
             scope_cursor_next_sel();
             cmd = DCMD_DRAW_SCOPE;
@@ -469,6 +515,9 @@ uint8_t input_handle_button(button_id_t button, QueueHandle_t dq)
         } else if (current_mode == MODE_SIGNAL_GEN) {
             const siggen_config_t *sc = siggen_get_config();
             siggen_enable(!sc->output_enabled);
+            send_cmd(dq, cmd);
+        } else if (current_mode == MODE_MULTIMETER) {
+            meter_layout = (meter_layout + 1) % METER_LAYOUT_COUNT;
             send_cmd(dq, cmd);
         } else if (current_mode == MODE_OSCILLOSCOPE) {
             scope_toggle_running(ss);

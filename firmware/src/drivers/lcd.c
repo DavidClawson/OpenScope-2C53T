@@ -127,9 +127,16 @@ static const uint8_t font_8x16[95][16] = {
  * Low-level LCD register access
  * ======================================================================== */
 
+/* Small delay between LCD command/data writes for AT32 @ 240MHz */
+static inline void lcd_bus_delay(void) {
+    volatile uint32_t i = 50;
+    while (i--) __asm volatile("nop");
+}
+
 void lcd_write_cmd(uint8_t cmd)
 {
     *LCD_CMD_ADDR = (uint16_t)cmd;
+    lcd_bus_delay();
 }
 
 void lcd_write_data(uint16_t data)
@@ -140,6 +147,7 @@ void lcd_write_data(uint16_t data)
 void lcd_write_data8(uint8_t data)
 {
     *LCD_DATA_ADDR = (uint16_t)data;
+    lcd_bus_delay();
 }
 
 uint16_t lcd_read_data(void)
@@ -165,8 +173,8 @@ uint16_t lcd_read_data(void)
  * ======================================================================== */
 void lcd_gpio_init(void)
 {
-    /* Enable clocks for GPIOD, GPIOE, and EXMC */
-    RCU_APB2EN |= RCU_APB2EN_PDEN | RCU_APB2EN_PEEN;
+    /* Enable clocks for GPIOD, GPIOE, AFIO/IOMUX, and EXMC */
+    RCU_APB2EN |= RCU_APB2EN_PDEN | RCU_APB2EN_PEEN | RCU_APB2EN_AFEN;
     RCU_AHBEN  |= RCU_AHBEN_EXMC;
 
     /*

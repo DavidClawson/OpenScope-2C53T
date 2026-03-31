@@ -311,6 +311,13 @@ void draw_demo_waveform(uint32_t frame)
     const theme_t *th = theme_get();
     const scope_state_t *ss = scope_state_get();
 
+    /* Freeze waveform when stopped — hold the last running frame */
+    static uint32_t frozen_frame = 0;
+    if (ss->running) {
+        frozen_frame = frame;
+    }
+    uint32_t draw_frame = ss->running ? frame : frozen_frame;
+
     static const int8_t sin_lut[64] = {
          0, 10, 19, 29, 38, 47, 56, 63, 71, 77, 83, 88, 92, 96, 98, 99,
         100, 99, 98, 96, 92, 88, 83, 77, 71, 63, 56, 47, 38, 29, 19, 10,
@@ -325,7 +332,7 @@ void draw_demo_waveform(uint32_t frame)
         if (amplitude < 10) amplitude = 10;
 
         for (uint16_t x = 0; x < LCD_WIDTH; x++) {
-            uint8_t idx = (uint8_t)((x * 4 + frame) & 0x3F);
+            uint8_t idx = (uint8_t)((x * 4 + draw_frame) & 0x3F);
             int16_t y = ch1_center - (sin_lut[idx] * amplitude / 100);
             if (y >= SCOPE_TOP && y < SCOPE_BOT) {
                 lcd_set_pixel(x, (uint16_t)y, th->ch1);
@@ -340,14 +347,14 @@ void draw_demo_waveform(uint32_t frame)
         int16_t ch2_center = SCOPE_MID_Y + 50 - ss->ch2.position;
 
         for (uint16_t x = 0; x < LCD_WIDTH; x++) {
-            uint8_t phase = (uint8_t)((x * 4 + frame) & 0x3F);
+            uint8_t phase = (uint8_t)((x * 4 + draw_frame) & 0x3F);
             int16_t y = ch2_center + (phase < 32 ? -25 : 25);
             if (y >= SCOPE_TOP && y < SCOPE_BOT)
                 lcd_set_pixel(x, (uint16_t)y, th->ch2);
 
             /* Vertical edges */
             if (x > 0) {
-                uint8_t prev = (uint8_t)(((x - 1) * 4 + frame) & 0x3F);
+                uint8_t prev = (uint8_t)(((x - 1) * 4 + draw_frame) & 0x3F);
                 if ((prev < 32) != (phase < 32)) {
                     int16_t y1 = ch2_center - 25;
                     int16_t y2 = ch2_center + 25;

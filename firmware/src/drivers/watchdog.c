@@ -19,7 +19,7 @@
 #include <string.h>
 
 #ifndef EMULATOR_BUILD
-#include "gd32f30x_fwdgt.h"
+#include "at32f403a_407_wdt.h"
 #endif
 
 /* ═══════════════════════════════════════════════════════════════════
@@ -45,15 +45,18 @@ void watchdog_init(void)
      * 500ms and feeds the WDT if all tasks are healthy, so under
      * normal operation the WDT is fed ~6 times per timeout period.
      */
-    fwdgt_config(1875, FWDGT_PSC_DIV64);
-    fwdgt_enable();
+    wdt_register_write_enable(TRUE);
+    wdt_divider_set(WDT_CLK_DIV_64);
+    wdt_reload_value_set(1875);
+    wdt_counter_reload();
+    wdt_enable();
 #endif
 }
 
 void watchdog_feed(void)
 {
 #ifndef EMULATOR_BUILD
-    fwdgt_counter_reload();
+    wdt_counter_reload();
 #endif
 }
 

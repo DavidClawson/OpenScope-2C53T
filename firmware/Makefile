@@ -1,5 +1,5 @@
 # Makefile for FNIRSI 2C53T Custom Firmware
-# Target: GD32F307 (ARM Cortex-M4F @ 120MHz)
+# Target: Artery AT32F403A (ARM Cortex-M4F @ 240MHz)
 
 ######################################################################
 # Toolchain
@@ -15,9 +15,9 @@ OBJDUMP = $(PREFIX)objdump
 # Project paths
 ######################################################################
 BUILD_DIR  = build
-FW_DIR     = gd32f30x_lib/Firmware
-GD32_CMSIS = $(FW_DIR)/CMSIS
-GD32_STD   = $(FW_DIR)/GD32F30x_standard_peripheral
+AT32_LIB   = at32f403a_lib/libraries
+AT32_DRV   = $(AT32_LIB)/drivers
+AT32_CMSIS = $(AT32_LIB)/cmsis/cm4
 FREERTOS   = FreeRTOS
 
 ######################################################################
@@ -36,6 +36,8 @@ C_SOURCES += src/ui/meter_ui.c
 C_SOURCES += src/ui/siggen_ui.c
 C_SOURCES += src/ui/settings_ui.c
 C_SOURCES += src/ui/component_ui.c
+C_SOURCES += src/ui/resistor_calc_ui.c
+C_SOURCES += src/ui/bode_ui.c
 C_SOURCES += src/ui/scope_state.c
 C_SOURCES += src/tasks/input_handler.c
 C_SOURCES += src/tasks/measurement.c
@@ -90,16 +92,17 @@ ifneq ($(findstring FFT,$(FEATURES)),)
   endif
 endif
 
-# GD32 CMSIS
-C_SOURCES += $(GD32_CMSIS)/GD/GD32F30x/Source/system_gd32f30x.c
+# AT32 CMSIS + clock config
+C_SOURCES += $(AT32_CMSIS)/device_support/system_at32f403a_407.c
+C_SOURCES += src/at32f403a_407_clock.c
 
-# GD32 Standard Peripheral Library (only what we need)
-C_SOURCES += $(GD32_STD)/Source/gd32f30x_rcu.c
-C_SOURCES += $(GD32_STD)/Source/gd32f30x_gpio.c
-C_SOURCES += $(GD32_STD)/Source/gd32f30x_misc.c
-C_SOURCES += $(GD32_STD)/Source/gd32f30x_pmu.c
-C_SOURCES += $(GD32_STD)/Source/gd32f30x_fmc.c
-C_SOURCES += $(GD32_STD)/Source/gd32f30x_fwdgt.c
+# AT32 Peripheral Library (only what we need)
+C_SOURCES += $(AT32_DRV)/src/at32f403a_407_crm.c
+C_SOURCES += $(AT32_DRV)/src/at32f403a_407_gpio.c
+C_SOURCES += $(AT32_DRV)/src/at32f403a_407_flash.c
+C_SOURCES += $(AT32_DRV)/src/at32f403a_407_misc.c
+C_SOURCES += $(AT32_DRV)/src/at32f403a_407_xmc.c
+C_SOURCES += $(AT32_DRV)/src/at32f403a_407_wdt.c
 
 # FreeRTOS kernel
 C_SOURCES += $(FREERTOS)/tasks.c
@@ -109,8 +112,8 @@ C_SOURCES += $(FREERTOS)/timers.c
 C_SOURCES += $(FREERTOS)/portable/GCC/ARM_CM4F/port.c
 C_SOURCES += $(FREERTOS)/portable/MemMang/heap_4.c
 
-# Startup assembly (GD32F30x connectivity line - GCC variant)
-ASM_SOURCES = $(GD32_CMSIS)/GD/GD32F30x/Source/GCC/startup_gd32f30x_cl.S
+# Startup assembly (AT32F403A - GCC variant)
+ASM_SOURCES = $(AT32_CMSIS)/device_support/startup/gcc/startup_at32f403a_407.s
 
 # CMSIS-DSP assembly (bit-reversal)
 ifneq ($(wildcard CMSIS-DSP/Include/arm_math.h),)
@@ -129,9 +132,10 @@ C_INCLUDES += -Isrc/util
 C_INCLUDES += -Isrc/decode
 C_INCLUDES += -Isrc/modules
 C_INCLUDES += -Isrc/fonts
-C_INCLUDES += -I$(GD32_CMSIS)
-C_INCLUDES += -I$(GD32_CMSIS)/GD/GD32F30x/Include
-C_INCLUDES += -I$(GD32_STD)/Include
+C_INCLUDES += -Isrc
+C_INCLUDES += -I$(AT32_DRV)/inc
+C_INCLUDES += -I$(AT32_CMSIS)/device_support
+C_INCLUDES += -I$(AT32_CMSIS)/core_support
 C_INCLUDES += -I$(FREERTOS)/include
 C_INCLUDES += -I$(FREERTOS)/portable/GCC/ARM_CM4F
 
@@ -146,8 +150,7 @@ FLOAT-ABI = -mfloat-abi=hard
 MCU = $(CPU) -mthumb $(FPU) $(FLOAT-ABI)
 
 # C defines
-C_DEFS  = -DGD32F30X_CL
-C_DEFS += -DUSE_STDPERIPH_DRIVER
+C_DEFS  = -DAT32F403AVGT7
 C_DEFS += $(FFT_DEFS)
 C_INCLUDES += $(FFT_INCLUDES)
 
@@ -164,7 +167,7 @@ ASFLAGS = $(MCU) $(C_DEFS) $(C_INCLUDES)
 ######################################################################
 # Linker flags
 ######################################################################
-LDSCRIPT = ld/gd32f307.ld
+LDSCRIPT = ld/at32f403a.ld
 
 LDFLAGS  = $(MCU)
 LDFLAGS += -specs=nano.specs
@@ -184,14 +187,19 @@ all: $(BUILD_DIR)/$(TARGET).bin
 OBJECTS = $(addprefix $(BUILD_DIR)/,$(notdir $(C_SOURCES:.c=.o)))
 vpath %.c $(sort $(dir $(C_SOURCES)))
 
-# List of ASM objects
-OBJECTS += $(addprefix $(BUILD_DIR)/,$(notdir $(ASM_SOURCES:.S=.o)))
+# List of ASM objects (AT32 uses .s, CMSIS-DSP uses .S)
+OBJECTS += $(addprefix $(BUILD_DIR)/,$(notdir $(ASM_SOURCES:.s=.o)))
+OBJECTS := $(OBJECTS:.S=.o)
+vpath %.s $(sort $(dir $(ASM_SOURCES)))
 vpath %.S $(sort $(dir $(ASM_SOURCES)))
 
 $(BUILD_DIR)/%.o: %.c Makefile | $(BUILD_DIR)
 	$(CC) -c $(CFLAGS) $< -o $@
 
 $(BUILD_DIR)/%.o: %.S Makefile | $(BUILD_DIR)
+	$(AS) -c $(ASFLAGS) $< -o $@
+
+$(BUILD_DIR)/%.o: %.s Makefile | $(BUILD_DIR)
 	$(AS) -c $(ASFLAGS) $< -o $@
 
 $(BUILD_DIR)/$(TARGET).elf: $(OBJECTS) Makefile $(LDSCRIPT)
@@ -221,11 +229,14 @@ size: $(BUILD_DIR)/$(TARGET).elf
 	$(SZ) --format=berkeley $<
 
 # Build for emulator (skips HAL clock init that hangs without real hardware)
-# Exclude system_gd32f30x.c since main.c provides its own SystemInit stub
-EMU_EXCLUDE = system_gd32f30x.c
+EMU_EXCLUDE = system_at32f403a_407.c
 emu: CFLAGS += -DEMULATOR_BUILD
 emu: C_SOURCES := $(filter-out %$(EMU_EXCLUDE),$(C_SOURCES))
 emu: clean all
+
+# Flash via DFU (device must be in DFU mode)
+flash-dfu: $(BUILD_DIR)/$(TARGET).bin
+	dfu-util -a 0 -d 2e3c:df11 -s 0x08000000:leave -D $<
 
 # Run in Renode emulator (display only, no input)
 renode: emu

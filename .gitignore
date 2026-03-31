@@ -31,8 +31,14 @@ firmware/build/
 # Cloned dependencies (users clone themselves)
 firmware/FreeRTOS/
 firmware/gd32f30x_lib/
+firmware/at32f403a_lib/
+firmware/at32f403a_gcc/
 
 # IDE files
 .vscode/
 *.swp
 *~
+
+# Environment files (API keys, secrets)
+.env
+scripts/.env

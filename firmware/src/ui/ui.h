@@ -80,16 +80,26 @@ extern volatile int8_t        settings_depth;      /* 0=top, 1=sub-menu, 2=about
 extern volatile int8_t        settings_sub_selected; /* Sub-menu selection */
 extern volatile uint8_t       active_channel;      /* 0=CH1, 1=CH2 (for scope adjustments) */
 extern volatile uint8_t       meter_submode;       /* 0-9: current meter sub-mode */
+extern volatile uint8_t       meter_layout;        /* 0=full, 1=chart, 2=stats */
+extern volatile bool          meter_rel_enabled;   /* Relative/delta mode */
+extern volatile float         meter_rel_reference; /* Zero reference value */
+extern volatile bool          meter_hold_enabled;  /* Auto-hold mode */
+extern volatile bool          meter_hold_locked;   /* Hold captured a reading */
+extern volatile float         meter_hold_value;    /* Captured hold value */
 
 /* Scope feature toggles (defined in main.c) */
 extern volatile bool          math_enabled;
 extern volatile uint8_t       math_op;        /* math_op_t cast */
 extern volatile bool          persist_enabled;
 
-#define SETTINGS_ITEM_COUNT     9
+#define SETTINGS_ITEM_COUNT     10
 #define SETTINGS_OSC_ITEM_COUNT 8
 #define SETTINGS_ABOUT_LINES    5
 #define METER_SUBMODE_COUNT     10
+#define METER_LAYOUT_COUNT      3
+#define METER_LAYOUT_FULL       0
+#define METER_LAYOUT_CHART      1
+#define METER_LAYOUT_STATS      2
 
 #ifdef FEATURE_FFT
 #include "fft.h"
@@ -122,6 +132,8 @@ void draw_waterfall_screen(void);
 /* meter_ui.c */
 void draw_meter_screen(void);
 void meter_reset_minmaxavg(void);
+void meter_toggle_relative(void);
+void meter_toggle_hold(void);
 const char *meter_submode_name(uint8_t submode);
 
 /* siggen_ui.c */
@@ -133,5 +145,16 @@ void draw_health_panel(uint16_t y_start);
 
 /* component_ui.c */
 void draw_component_test_screen(void);
+
+/* bode_ui.c */
+void draw_bode_screen(void);
+
+/* resistor_calc_ui.c */
+void draw_resistor_calc_screen(void);
+void resistor_calc_init(void);
+void resistor_calc_move_band(int direction);
+void resistor_calc_change_color(int direction);
+void resistor_calc_simulate_measure(void);
+float resistor_calc_get_value(void);
 
 #endif /* UI_H */

@@ -1,0 +1,80 @@
+# Makefile for AT32 hardware test on FNIRSI 2C53T
+# Minimal build: clock init + power hold + backlight + LCD
+
+PREFIX = arm-none-eabi-
+CC = $(PREFIX)gcc
+AS = $(PREFIX)gcc -x assembler-with-cpp
+CP = $(PREFIX)objcopy
+SZ = $(PREFIX)size
+
+BUILD_DIR = build
+
+# AT32 library paths
+AT32_LIB = at32f403a_lib/libraries
+AT32_DRV = $(AT32_LIB)/drivers
+AT32_CMSIS = $(AT32_LIB)/cmsis/cm4
+AT32_STARTUP = $(AT32_CMSIS)/device_support/startup/gcc
+
+# Source files
+C_SOURCES = \
+	src/hwtest.c \
+	at32f403a_gcc/user/at32f403a_407_clock.c \
+	$(AT32_CMSIS)/device_support/system_at32f403a_407.c \
+	$(AT32_DRV)/src/at32f403a_407_crm.c \
+	$(AT32_DRV)/src/at32f403a_407_gpio.c \
+	$(AT32_DRV)/src/at32f403a_407_flash.c \
+	$(AT32_DRV)/src/at32f403a_407_misc.c \
+	$(AT32_DRV)/src/at32f403a_407_xmc.c
+
+ASM_SOURCES = $(AT32_STARTUP)/startup_at32f403a_407.s
+
+# Include paths
+C_INCLUDES = \
+	-Iat32f403a_gcc/user \
+	-I$(AT32_DRV)/inc \
+	-I$(AT32_CMSIS)/device_support \
+	-I$(AT32_CMSIS)/core_support \
+	-I$(AT32_CMSIS)
+
+# MCU flags
+MCU = -mcpu=cortex-m4 -mthumb -mfpu=fpv4-sp-d16 -mfloat-abi=hard
+
+# C flags
+CFLAGS = $(MCU) $(C_INCLUDES) -DAT32F403AVGT7 -Os -Wall -fdata-sections -ffunction-sections
+
+# Linker
+LDSCRIPT = $(AT32_STARTUP)/linker/AT32F403AxG_FLASH.ld
+LDFLAGS = $(MCU) -specs=nano.specs -specs=nosys.specs -T$(LDSCRIPT) -Wl,--gc-sections -Wl,-Map=$(BUILD_DIR)/hwtest.map,--cref
+
+# Build targets
+all: $(BUILD_DIR)/hwtest.bin
+
+OBJECTS = $(addprefix $(BUILD_DIR)/,$(notdir $(C_SOURCES:.c=.o)))
+OBJECTS += $(addprefix $(BUILD_DIR)/,$(notdir $(ASM_SOURCES:.s=.o)))
+vpath %.c $(sort $(dir $(C_SOURCES)))
+vpath %.s $(sort $(dir $(ASM_SOURCES)))
+
+$(BUILD_DIR)/%.o: %.c | $(BUILD_DIR)
+	$(CC) -c $(CFLAGS) $< -o $@
+
+$(BUILD_DIR)/%.o: %.s | $(BUILD_DIR)
+	$(AS) -c $(MCU) $< -o $@
+
+$(BUILD_DIR)/hwtest.elf: $(OBJECTS)
+	$(CC) $(OBJECTS) $(LDFLAGS) -o $@
+	$(SZ) $@
+
+$(BUILD_DIR)/hwtest.bin: $(BUILD_DIR)/hwtest.elf
+	$(CP) -O binary $< $@
+	@echo "Built: $@ ($$(wc -c < $@) bytes)"
+
+$(BUILD_DIR):
+	mkdir -p $@
+
+clean:
+	rm -rf $(BUILD_DIR)
+
+flash: $(BUILD_DIR)/hwtest.bin
+	dfu-util -a 0 -d 2e3c:df11 -s 0x08000000:leave -D $<
+
+.PHONY: all clean flash

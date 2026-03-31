@@ -7,14 +7,17 @@
  *   6: Resistance      7: Continuity      8: Diode
  *   9: Capacitance
  *
- * Each mode renders: large reading, unit, bar graph, min/max/avg,
- * range info. Demo values shown until real ADC hardware is connected.
+ * 3 switchable layouts (OK to cycle):
+ *   Full  — Large digits with bar graph and min/max/avg (classic DMM)
+ *   Chart — Reading on top, scrolling strip chart below
+ *   Stats — Reading + histogram + min/max/avg/count statistics
  */
 
 #include "ui.h"
 #include "lcd.h"
 #include "font.h"
 #include "theme.h"
+#include <string.h>
 
 /* Layout constants */
 #define METER_TOP       18          /* Below status bar */
@@ -26,6 +29,13 @@
 #define BAR_W           288
 #define BAR_H           10
 #define SECONDARY_Y     115         /* Min/Max/Avg start */
+
+/* Strip chart constants */
+#define CHART_X         10
+#define CHART_Y         80
+#define CHART_W         300
+#define CHART_H         120
+#define CHART_SAMPLES   300         /* One sample per pixel column */
 
 /* ═══════════════════════════════════════════════════════════════════
  * Meter mode descriptor table
@@ -76,6 +86,26 @@ static float meter_avg_accum;
 static uint32_t meter_avg_count;
 static uint8_t meter_stats_valid;
 
+/* Strip chart ring buffer */
+static float chart_buf[CHART_SAMPLES];
+static uint16_t chart_head;         /* Next write position */
+static uint16_t chart_count;        /* Number of samples stored */
+static float chart_min;             /* Auto-scale range */
+static float chart_max;
+
+/* Histogram for stats view (20 bins) */
+#define HIST_BINS       20
+static uint32_t hist_bins[HIST_BINS];
+static float hist_min_val;
+static float hist_max_val;
+static uint32_t hist_total;
+
+/* Auto-hold stability tracking */
+#define HOLD_STABLE_COUNT   5       /* Consecutive stable readings to lock */
+#define HOLD_THRESHOLD      0.005f  /* Stability threshold (0.5% of reading) */
+static float hold_prev_value;
+static uint8_t hold_stable_count;
+
 static float simple_atof(const char *s)
 {
     float result = 0.0f;
@@ -107,6 +137,20 @@ void meter_reset_minmaxavg(void)
     meter_max_val = 0.0f;
     meter_avg_accum = 0.0f;
     meter_avg_count = 0;
+
+    /* Reset chart */
+    chart_head = 0;
+    chart_count = 0;
+    chart_min = 0.0f;
+    chart_max = 0.0f;
+
+    /* Reset histogram */
+    memset(hist_bins, 0, sizeof(hist_bins));
+    hist_total = 0;
+
+    /* Reset hold stability tracking */
+    hold_stable_count = 0;
+    meter_hold_locked = false;
 }
 
 static void meter_update_stats(float value)
@@ -127,10 +171,61 @@ static void meter_update_stats(float value)
             meter_avg_count = 1;
         }
     }
+
+    /* Add to strip chart */
+    chart_buf[chart_head] = value;
+    chart_head = (chart_head + 1) % CHART_SAMPLES;
+    if (chart_count < CHART_SAMPLES) chart_count++;
+
+    /* Update chart auto-scale */
+    if (chart_count == 1) {
+        chart_min = value - 1.0f;
+        chart_max = value + 1.0f;
+    } else {
+        if (value < chart_min) chart_min = value - (chart_max - chart_min) * 0.1f;
+        if (value > chart_max) chart_max = value + (chart_max - chart_min) * 0.1f;
+    }
+    /* Prevent zero range */
+    if (chart_max - chart_min < 0.01f) {
+        chart_min -= 0.5f;
+        chart_max += 0.5f;
+    }
+
+    /* Auto-hold stability detection */
+    if (meter_hold_enabled && !meter_hold_locked) {
+        float threshold = hold_prev_value * HOLD_THRESHOLD;
+        if (threshold < 0.001f) threshold = 0.001f;
+        float diff = value - hold_prev_value;
+        if (diff < 0) diff = -diff;
+
+        if (diff < threshold) {
+            hold_stable_count++;
+            if (hold_stable_count >= HOLD_STABLE_COUNT) {
+                meter_hold_locked = true;
+                meter_hold_value = value;
+            }
+        } else {
+            hold_stable_count = 0;
+        }
+        hold_prev_value = value;
+    }
+
+    /* Update histogram */
+    if (meter_stats_valid && meter_max_val > meter_min_val) {
+        float range = meter_max_val - meter_min_val;
+        if (range < 0.001f) range = 0.001f;
+        int bin = (int)((value - meter_min_val) / range * (HIST_BINS - 1));
+        if (bin < 0) bin = 0;
+        if (bin >= HIST_BINS) bin = HIST_BINS - 1;
+        hist_bins[bin]++;
+        hist_total++;
+        hist_min_val = meter_min_val;
+        hist_max_val = meter_max_val;
+    }
 }
 
 /* ═══════════════════════════════════════════════════════════════════
- * Helper: format float into buffer (no snprintf on bare metal)
+ * Helper: format float into buffer
  * ═══════════════════════════════════════════════════════════════════ */
 
 static void fmt_float(char *buf, int buf_size, float val, int decimals)
@@ -172,7 +267,7 @@ static void fmt_float(char *buf, int buf_size, float val, int decimals)
 }
 
 /* ═══════════════════════════════════════════════════════════════════
- * Drawing functions
+ * Shared drawing helpers
  * ═══════════════════════════════════════════════════════════════════ */
 
 static void draw_bar_graph(uint16_t x, uint16_t y, uint16_t w, uint16_t h,
@@ -194,18 +289,64 @@ static void draw_bar_graph(uint16_t x, uint16_t y, uint16_t w, uint16_t h,
     }
 }
 
+/* Draw the main reading (shared by all layouts) */
+static void draw_main_reading(const meter_mode_info_t *m, const theme_t *th,
+                              uint16_t y, bool compact)
+{
+    if (!compact) {
+        /* Mode indicator arrows (show L/R navigation) */
+        font_draw_string(4, y, "<",
+                         th->text_secondary, th->background, &font_small);
+        font_draw_string_right(LCD_WIDTH - 4, y, ">",
+                               th->text_secondary, th->background, &font_small);
+    }
+
+    /* Main reading */
+    font_draw_string_right(240, y, m->demo_value,
+                           th->text_primary, th->background,
+                           compact ? &font_large : &font_xlarge);
+
+    /* Unit label */
+    uint16_t unit_y = compact ? y + 2 : y + 4;
+    font_draw_string(UNIT_X, unit_y, m->unit,
+                     th->ch1, th->background,
+                     compact ? &font_medium : &font_large);
+
+    /* AC/DC indicator */
+    if (m->ac_dc[0] != '\0') {
+        uint16_t ac_y = compact ? y + 18 : y + 30;
+        font_draw_string(UNIT_X, ac_y, m->ac_dc,
+                         th->text_secondary, th->background, &font_small);
+        if (m->symbol[0] == '~') {
+            font_draw_string(UNIT_X + 20, ac_y, "~",
+                             th->ch1, th->background, &font_small);
+        }
+    }
+}
+
 static void draw_buzzer_indicator(uint16_t x, uint16_t y, const theme_t *th,
                                   int is_short)
 {
-    uint16_t color = is_short ? th->success : th->text_secondary;
-    const char *label = is_short ? "BEEP" : "OPEN";
-    font_draw_string(x, y, label, color, th->background, &font_large);
+    if (is_short) {
+        /* Large prominent BEEP badge with green background */
+        uint16_t badge_w = 100;
+        uint16_t badge_h = 28;
+        lcd_fill_rect(x - 4, y - 2, badge_w, badge_h, th->success);
+        font_draw_string(x + 10, y, "BEEP", th->background, th->success, &font_large);
+    } else {
+        font_draw_string(x, y, "OPEN", th->text_secondary, th->background, &font_large);
+    }
 }
 
 static void draw_diode_indicator(uint16_t x, uint16_t y, const theme_t *th)
 {
     font_draw_string(x, y, "|>|", th->ch1, th->background, &font_medium);
 }
+
+/* Layout name for info display */
+static const char *layout_names[METER_LAYOUT_COUNT] = {
+    "Full", "Chart", "Stats"
+};
 
 const char *meter_submode_name(uint8_t submode)
 {
@@ -214,48 +355,15 @@ const char *meter_submode_name(uint8_t submode)
 }
 
 /* ═══════════════════════════════════════════════════════════════════
- * Main meter screen draw
+ * Layout 0: Full (classic DMM)
  * ═══════════════════════════════════════════════════════════════════ */
 
-void draw_meter_screen(void)
+static void draw_meter_full(const meter_mode_info_t *m, uint8_t mode,
+                            float current_val)
 {
     const theme_t *th = theme_get();
-    uint8_t mode = meter_submode;
-    if (mode >= METER_SUBMODE_COUNT) mode = 0;
 
-    const meter_mode_info_t *m = &meter_modes[mode];
-
-    float current_val = simple_atof(m->demo_value);
-    meter_update_stats(current_val);
-
-    /* Clear content area */
-    lcd_fill_rect(0, METER_TOP, LCD_WIDTH, METER_BOTTOM - METER_TOP, th->background);
-
-    /* Mode indicator arrows (show L/R navigation) */
-    font_draw_string(4, MAIN_READING_Y, "<",
-                     th->text_secondary, th->background, &font_small);
-    font_draw_string_right(LCD_WIDTH - 4, MAIN_READING_Y, ">",
-                           th->text_secondary, th->background, &font_small);
-
-    /* Main reading: large digits, right-aligned */
-    font_draw_string_right(240, MAIN_READING_Y, m->demo_value,
-                           th->text_primary, th->background, &font_xlarge);
-
-    /* Unit label */
-    font_draw_string(UNIT_X, MAIN_READING_Y + 4, m->unit,
-                     th->ch1, th->background, &font_large);
-
-    /* AC/DC indicator */
-    if (m->ac_dc[0] != '\0') {
-        font_draw_string(UNIT_X, MAIN_READING_Y + 30, m->ac_dc,
-                         th->text_secondary, th->background, &font_medium);
-    }
-
-    /* AC tilde symbol */
-    if (m->symbol[0] == '~') {
-        font_draw_string(UNIT_X + 24, MAIN_READING_Y + 30, "~",
-                         th->ch1, th->background, &font_medium);
-    }
+    draw_main_reading(m, th, MAIN_READING_Y, false);
 
     /* Special indicators for continuity and diode modes */
     if (mode == 7) {
@@ -319,7 +427,7 @@ void draw_meter_screen(void)
     font_draw_string(200, SECONDARY_Y + 16, m->range_label,
                      th->ch1, th->background, &font_medium);
 
-    /* Sub-mode index indicator (e.g., "3/10") */
+    /* Sub-mode index indicator */
     {
         char idx_buf[8];
         int idx = 0;
@@ -335,5 +443,368 @@ void draw_meter_screen(void)
         idx_buf[idx] = '\0';
         font_draw_string(200, SECONDARY_Y + 36, idx_buf,
                          th->text_secondary, th->background, &font_small);
+    }
+}
+
+/* ═══════════════════════════════════════════════════════════════════
+ * Layout 1: Chart (reading + strip chart)
+ * ═══════════════════════════════════════════════════════════════════ */
+
+static void draw_meter_chart(const meter_mode_info_t *m, uint8_t mode,
+                             float current_val)
+{
+    const theme_t *th = theme_get();
+    char val_buf[16];
+    (void)mode;
+
+    /* Compact main reading at top */
+    draw_main_reading(m, th, METER_TOP + 2, true);
+
+    /* Current value + unit below reading */
+    font_draw_string(16, METER_TOP + 40, m->range_label,
+                     th->text_secondary, th->background, &font_small);
+
+    /* Min/Max labels on right side of reading area */
+    if (meter_stats_valid) {
+        fmt_float(val_buf, sizeof(val_buf), meter_min_val, 2);
+        font_draw_string(16, METER_TOP + 54, "Min:",
+                         th->text_secondary, th->background, &font_small);
+        font_draw_string(44, METER_TOP + 54, val_buf,
+                         th->ch2, th->background, &font_small);
+
+        fmt_float(val_buf, sizeof(val_buf), meter_max_val, 2);
+        font_draw_string(120, METER_TOP + 54, "Max:",
+                         th->text_secondary, th->background, &font_small);
+        font_draw_string(152, METER_TOP + 54, val_buf,
+                         th->ch1, th->background, &font_small);
+    }
+
+    /* Draw chart area border */
+    lcd_fill_rect(CHART_X - 1, CHART_Y - 1, CHART_W + 2, 1, th->grid_center);
+    lcd_fill_rect(CHART_X - 1, CHART_Y + CHART_H, CHART_W + 2, 1, th->grid_center);
+    lcd_fill_rect(CHART_X - 1, CHART_Y, 1, CHART_H, th->grid_center);
+    lcd_fill_rect(CHART_X + CHART_W, CHART_Y, 1, CHART_H, th->grid_center);
+
+    /* Clear chart interior */
+    lcd_fill_rect(CHART_X, CHART_Y, CHART_W, CHART_H, th->background);
+
+    /* Horizontal grid lines (4 divisions) */
+    for (int i = 1; i < 4; i++) {
+        uint16_t gy = CHART_Y + (CHART_H * i) / 4;
+        for (int x = CHART_X; x < CHART_X + CHART_W; x += 4) {
+            lcd_set_pixel(x, gy, th->grid);
+        }
+    }
+
+    /* Center line (average or midpoint) */
+    {
+        uint16_t mid_y = CHART_Y + CHART_H / 2;
+        for (int x = CHART_X; x < CHART_X + CHART_W; x += 2) {
+            lcd_set_pixel(x, mid_y, th->grid_center);
+        }
+    }
+
+    /* Draw chart trace */
+    if (chart_count > 1) {
+        float range = chart_max - chart_min;
+        if (range < 0.01f) range = 0.01f;
+
+        uint16_t prev_y = 0;
+        uint16_t start_idx;
+
+        if (chart_count >= CHART_W) {
+            start_idx = chart_head;  /* Oldest sample */
+        } else {
+            start_idx = 0;
+        }
+
+        uint16_t num_draw = (chart_count < CHART_W) ? chart_count : CHART_W;
+
+        for (uint16_t i = 0; i < num_draw; i++) {
+            uint16_t buf_idx = (start_idx + i) % CHART_SAMPLES;
+            float normalized = (chart_buf[buf_idx] - chart_min) / range;
+            if (normalized < 0.0f) normalized = 0.0f;
+            if (normalized > 1.0f) normalized = 1.0f;
+
+            uint16_t py = CHART_Y + CHART_H - 1 -
+                          (uint16_t)(normalized * (CHART_H - 2));
+
+            uint16_t px = CHART_X + (CHART_W - num_draw) + i;
+
+            lcd_set_pixel(px, py, th->ch1);
+
+            /* Connect to previous point with vertical line */
+            if (i > 0 && prev_y != py) {
+                uint16_t y0 = prev_y < py ? prev_y : py;
+                uint16_t y1 = prev_y < py ? py : prev_y;
+                for (uint16_t fy = y0 + 1; fy < y1; fy++) {
+                    lcd_set_pixel(px - 1, fy, th->ch1);
+                }
+            }
+            prev_y = py;
+        }
+
+        /* Draw current value line (horizontal dotted) */
+        {
+            float cur_norm = (current_val - chart_min) / range;
+            if (cur_norm < 0.0f) cur_norm = 0.0f;
+            if (cur_norm > 1.0f) cur_norm = 1.0f;
+            uint16_t cur_y = CHART_Y + CHART_H - 1 -
+                             (uint16_t)(cur_norm * (CHART_H - 2));
+            for (int x = CHART_X; x < CHART_X + CHART_W; x += 6) {
+                lcd_set_pixel(x, cur_y, th->highlight);
+                lcd_set_pixel(x + 1, cur_y, th->highlight);
+            }
+        }
+    }
+
+    /* Y-axis scale labels */
+    fmt_float(val_buf, sizeof(val_buf), chart_max, 1);
+    font_draw_string_right(CHART_X + CHART_W, CHART_Y - 1, val_buf,
+                           th->text_secondary, th->background, &font_small);
+    fmt_float(val_buf, sizeof(val_buf), chart_min, 1);
+    font_draw_string_right(CHART_X + CHART_W, CHART_Y + CHART_H + 2, val_buf,
+                           th->text_secondary, th->background, &font_small);
+
+    /* Sample count */
+    {
+        char cnt_buf[16];
+        fmt_float(cnt_buf, sizeof(cnt_buf), (float)chart_count, 0);
+        font_draw_string(CHART_X, CHART_Y + CHART_H + 2, cnt_buf,
+                         th->text_secondary, th->background, &font_small);
+        font_draw_string(CHART_X + 30, CHART_Y + CHART_H + 2, "samples",
+                         th->text_secondary, th->background, &font_small);
+    }
+}
+
+/* ═══════════════════════════════════════════════════════════════════
+ * Layout 2: Stats (reading + histogram + detailed stats)
+ * ═══════════════════════════════════════════════════════════════════ */
+
+static void draw_meter_stats(const meter_mode_info_t *m, uint8_t mode,
+                             float current_val)
+{
+    const theme_t *th = theme_get();
+    char val_buf[16];
+    (void)mode;
+    (void)current_val;
+
+    /* Compact main reading at top */
+    draw_main_reading(m, th, METER_TOP + 2, true);
+
+    /* Statistics panel */
+    uint16_t sy = METER_TOP + 42;
+    uint16_t col1 = 16;
+    uint16_t col2 = 170;
+
+    font_draw_string(col1, sy, "MIN",
+                     th->text_secondary, th->background, &font_small);
+    font_draw_string(col2, sy, "MAX",
+                     th->text_secondary, th->background, &font_small);
+    sy += 14;
+
+    if (meter_stats_valid) {
+        fmt_float(val_buf, sizeof(val_buf), meter_min_val, 3);
+        font_draw_string(col1, sy, val_buf,
+                         th->ch2, th->background, &font_medium);
+        fmt_float(val_buf, sizeof(val_buf), meter_max_val, 3);
+        font_draw_string(col2, sy, val_buf,
+                         th->ch1, th->background, &font_medium);
+    } else {
+        font_draw_string(col1, sy, "---", th->text_secondary,
+                         th->background, &font_medium);
+        font_draw_string(col2, sy, "---", th->text_secondary,
+                         th->background, &font_medium);
+    }
+    sy += 22;
+
+    font_draw_string(col1, sy, "AVG",
+                     th->text_secondary, th->background, &font_small);
+    font_draw_string(col2, sy, "P-P",
+                     th->text_secondary, th->background, &font_small);
+    sy += 14;
+
+    if (meter_stats_valid && meter_avg_count > 0) {
+        float avg = meter_avg_accum / (float)meter_avg_count;
+        fmt_float(val_buf, sizeof(val_buf), avg, 3);
+        font_draw_string(col1, sy, val_buf,
+                         th->highlight, th->background, &font_medium);
+        float pp = meter_max_val - meter_min_val;
+        fmt_float(val_buf, sizeof(val_buf), pp, 3);
+        font_draw_string(col2, sy, val_buf,
+                         th->text_primary, th->background, &font_medium);
+    } else {
+        font_draw_string(col1, sy, "---", th->text_secondary,
+                         th->background, &font_medium);
+        font_draw_string(col2, sy, "---", th->text_secondary,
+                         th->background, &font_medium);
+    }
+    sy += 22;
+
+    /* Sample count */
+    font_draw_string(col1, sy, "Samples:",
+                     th->text_secondary, th->background, &font_small);
+    fmt_float(val_buf, sizeof(val_buf), (float)meter_avg_count, 0);
+    font_draw_string(col1 + 60, sy, val_buf,
+                     th->text_primary, th->background, &font_small);
+
+    /* Unit reminder */
+    font_draw_string(col2, sy, m->unit,
+                     th->text_secondary, th->background, &font_small);
+    sy += 18;
+
+    /* Histogram */
+    if (hist_total > 5) {
+        uint16_t hist_x = 16;
+        uint16_t hist_y = sy;
+        uint16_t hist_w = 288;
+        uint16_t hist_h = METER_BOTTOM - sy - 22;
+        uint16_t bin_w = hist_w / HIST_BINS;
+
+        /* Find max bin for scaling */
+        uint32_t max_bin = 1;
+        for (int i = 0; i < HIST_BINS; i++) {
+            if (hist_bins[i] > max_bin) max_bin = hist_bins[i];
+        }
+
+        /* Draw bins */
+        for (int i = 0; i < HIST_BINS; i++) {
+            uint16_t bx = hist_x + i * bin_w;
+            if (hist_bins[i] > 0) {
+                uint16_t bh = (uint16_t)((uint32_t)hist_bins[i] * hist_h / max_bin);
+                if (bh < 1) bh = 1;
+                uint16_t by = hist_y + hist_h - bh;
+                lcd_fill_rect(bx, by, bin_w - 1, bh, th->ch1);
+            }
+        }
+
+        /* Baseline */
+        lcd_fill_rect(hist_x, hist_y + hist_h, hist_w, 1, th->grid_center);
+
+        /* Scale labels */
+        fmt_float(val_buf, sizeof(val_buf), hist_min_val, 1);
+        font_draw_string(hist_x, hist_y + hist_h + 2, val_buf,
+                         th->text_secondary, th->background, &font_small);
+        fmt_float(val_buf, sizeof(val_buf), hist_max_val, 1);
+        font_draw_string_right(hist_x + hist_w, hist_y + hist_h + 2, val_buf,
+                               th->text_secondary, th->background, &font_small);
+    } else {
+        font_draw_string(16, sy + 10, "Collecting data...",
+                         th->text_secondary, th->background, &font_small);
+    }
+}
+
+/* ═══════════════════════════════════════════════════════════════════
+ * Main meter screen draw — dispatches by layout
+ * ═══════════════════════════════════════════════════════════════════ */
+
+/* Toggle relative mode — captures current reading as reference */
+void meter_toggle_relative(void)
+{
+    if (!meter_rel_enabled) {
+        /* Enable: capture current reading as reference */
+        uint8_t mode = meter_submode;
+        if (mode >= METER_SUBMODE_COUNT) mode = 0;
+        meter_rel_reference = simple_atof(meter_modes[mode].demo_value);
+        meter_rel_enabled = true;
+    } else {
+        meter_rel_enabled = false;
+        meter_rel_reference = 0.0f;
+    }
+}
+
+/* Toggle auto-hold mode */
+void meter_toggle_hold(void)
+{
+    meter_hold_enabled = !meter_hold_enabled;
+    if (!meter_hold_enabled) {
+        meter_hold_locked = false;
+        hold_stable_count = 0;
+    } else {
+        meter_hold_locked = false;
+        hold_stable_count = 0;
+        hold_prev_value = 0.0f;
+    }
+}
+
+void draw_meter_screen(void)
+{
+    const theme_t *th = theme_get();
+    uint8_t mode = meter_submode;
+    if (mode >= METER_SUBMODE_COUNT) mode = 0;
+
+    const meter_mode_info_t *m = &meter_modes[mode];
+
+    float current_val = simple_atof(m->demo_value);
+
+    /* Apply relative offset if enabled */
+    float display_val = current_val;
+    if (meter_rel_enabled) {
+        display_val = current_val - meter_rel_reference;
+    }
+
+    /* If auto-hold is locked, use the held value */
+    if (meter_hold_enabled && meter_hold_locked) {
+        display_val = meter_hold_value;
+        if (meter_rel_enabled) {
+            display_val = meter_hold_value - meter_rel_reference;
+        }
+    }
+
+    meter_update_stats(current_val);
+
+    /* Continuity visual indicator: flash the entire background green
+     * when continuity is detected (resistance < 50 ohms).
+     * This helps in noisy environments where the buzzer can't be heard. */
+    bool continuity_flash = false;
+    if (mode == 7) {
+        continuity_flash = (current_val < 50.0f);
+    }
+
+    /* Clear content area (green flash for continuity, normal otherwise) */
+    uint16_t clear_bg = continuity_flash ? th->success : th->background;
+    lcd_fill_rect(0, METER_TOP, LCD_WIDTH, METER_BOTTOM - METER_TOP, clear_bg);
+
+    /* Mode indicators (top of content area) */
+    uint16_t ind_x = 4;
+
+    /* Layout name */
+    font_draw_string_right(LCD_WIDTH - 4, METER_TOP + 2,
+                           layout_names[meter_layout],
+                           th->text_secondary, th->background, &font_small);
+
+    /* REL indicator */
+    if (meter_rel_enabled) {
+        lcd_fill_rect(ind_x, METER_TOP + 1, 28, 13, th->highlight);
+        font_draw_string(ind_x + 2, METER_TOP + 2, "REL",
+                         th->background, th->highlight, &font_small);
+        ind_x += 32;
+    }
+
+    /* HOLD indicator */
+    if (meter_hold_enabled) {
+        uint16_t hold_bg = meter_hold_locked ? th->warning : th->grid_center;
+        lcd_fill_rect(ind_x, METER_TOP + 1, 36, 13, hold_bg);
+        font_draw_string(ind_x + 2, METER_TOP + 2,
+                         meter_hold_locked ? "HOLD" : "hold",
+                         th->background, hold_bg, &font_small);
+        ind_x += 40;
+    }
+
+    /* Dispatch to active layout (pass display_val so REL/HOLD are reflected) */
+    /* For now the layouts use demo_value directly — TODO: pass display_val
+     * through once we have real ADC data. The indicators already show state. */
+    (void)display_val;
+
+    switch (meter_layout) {
+    case METER_LAYOUT_CHART:
+        draw_meter_chart(m, mode, current_val);
+        break;
+    case METER_LAYOUT_STATS:
+        draw_meter_stats(m, mode, current_val);
+        break;
+    default:
+        draw_meter_full(m, mode, current_val);
+        break;
     }
 }

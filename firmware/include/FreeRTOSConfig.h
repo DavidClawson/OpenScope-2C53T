@@ -1,5 +1,5 @@
 /*
- * FreeRTOS configuration for FNIRSI 2C53T (GD32F307, Cortex-M4F @ 120MHz)
+ * FreeRTOS configuration for FNIRSI 2C53T (AT32F403A, Cortex-M4F @ 240MHz)
  *
  * Based on reverse-engineered task architecture:
  *   - 6 user tasks (display, key, osc, fpga, dvom_TX, dvom_RX)
@@ -21,7 +21,7 @@
 #define configUSE_PREEMPTION                    1
 #define configUSE_PORT_OPTIMISED_TASK_SELECTION 1
 #define configUSE_TICKLESS_IDLE                 0
-#define configCPU_CLOCK_HZ                      ((uint32_t)120000000)
+#define configCPU_CLOCK_HZ                      ((uint32_t)240000000)
 #define configTICK_RATE_HZ                      ((TickType_t)1000)
 #define configMAX_PRIORITIES                    5
 #define configMINIMAL_STACK_SIZE                ((uint16_t)128)
