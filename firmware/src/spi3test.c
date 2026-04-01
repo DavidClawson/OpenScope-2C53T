@@ -1,16 +1,28 @@
 /*
- * SPI3 FPGA Interface Test for FNIRSI 2C53T
+ * SPI3 FPGA Interface Test V2 for FNIRSI 2C53T
  *
- * Tests the hypothesis that the FPGA communicates via SPI3 (0x40003C00)
- * on PB3 (SCK), PB4 (MISO), PB5 (MOSI) with PB6 as GPIO chip select.
+ * Based on disassembly of stock firmware FPGA task (FUN_08036934, ~11KB):
  *
- * PB3/PB4 are JTAG pins by default — we must disable JTAG via IOMUX remap.
+ * SPI3 CONFIG (from FUN_08036848 init + 0x080265DE):
+ *   - Mode 3: CPOL=1 (clock idle HIGH), CPHA=1 (trailing edge sample)
+ *   - Master, 8-bit, MSB first, software CS (SSM=1, SSI=1)
+ *   - Stock uses APB1/2 = 60MHz clock (we use /16 = 7.5MHz for safety)
+ *   - PB6 = software CS (GPIO), PB3=SCK, PB4=MISO, PB5=MOSI
  *
- * Phase 0: Disable JTAG, configure SPI3, show register state
- * Phase 1: Assert CS (PB6), try SPI3 read (send 0xFF, read back)
- * Phase 2: Try multiple CS pins (PB6, PA15, PA4) in case CS is elsewhere
- * Phase 3: Try sending FPGA command bytes and reading response
- * Phase 4: Monitor — continuous read with display
+ * USART COMMAND FORMAT (from 0x08037420):
+ *   - 3 bytes: [high_byte, low_byte, checksum(high+low)]
+ *   - Single-byte commands: high=0, low=cmd, cksum=cmd
+ *   - Known commands: 0x1B, 0x1C, 0x1E, 0x0A, 0x07, 0x22, 0x23
+ *
+ * SPI3 PROTOCOL (from 0x080374E8):
+ *   - CS assert (PB6 LOW)
+ *   - Send command byte, get response
+ *   - Table branch on response (9 cases)
+ *   - Bulk read: 0x400 (1024) bytes to meter_state_base + 0x5B0
+ *   - CS deassert (PB6 HIGH)
+ *
+ * V1 result: SPI3 operational, all 0xFF reads (wrong SPI mode!)
+ * V2 change: Mode 3 (CPOL=1, CPHA=1) + correct USART command format
  *
  * Build: make -f Makefile.hwtest TEST=spi3test
  * Flash: make -f Makefile.hwtest TEST=spi3test flash
@@ -227,12 +239,25 @@ int main(void) {
     gpio_pin_remap_config(SWJTAG_GMUX_010, TRUE);
     lcd_hex8(140, 2, 0x01, CYAN, BG, 2); /* marker: JTAG disabled */
 
+    /* RE-ENABLE SPI3 remap. On AT32F403A, JTAG disable frees the pins
+     * but SPI3 AF may need explicit mux config via extended IOMUX registers.
+     * SPI3_GMUX_0010 on AT32 = SPI3 on PB3/PB4/PB5 (NOT PC10/PC11/PC12). */
     gpio_pin_remap_config(SPI3_GMUX_0010, TRUE);
-    lcd_hex8(170, 2, 0x02, CYAN, BG, 2); /* marker: SPI3 remapped */
+    lcd_hex8(170, 2, 0x04, CYAN, BG, 2); /* marker: SPI3 remap enabled */
 
     /* Show IOMUX state */
     lcd_hex32(5, y, *(volatile uint32_t *)(0x40010004), CYAN, BG, 2);
     y += 18;
+
+    /* CRITICAL FPGA control pins from comprehensive decompilation:
+     * PC6 = FPGA SPI enable (set HIGH at 0x0802663C before SPI3 init)
+     * PB11 = FPGA active mode signal (set HIGH in mode_switch_reset_handler at 0x08007344)
+     * Both MUST be HIGH for FPGA to respond on SPI3 */
+    gpio_pin_cfg(GPIOC_BASE, 6, 3, 0);  /* PC6: push-pull output */
+    GPIOC->scr = (1 << 6);              /* PC6 HIGH — FPGA SPI enable */
+
+    gpio_pin_cfg(GPIOB_BASE, 11, 3, 0); /* PB11: push-pull output */
+    GPIOB->scr = (1 << 11);             /* PB11 HIGH — FPGA active mode */
 
     /* Step 2: Enable SPI3 peripheral clock */
     crm_periph_clock_enable(CRM_SPI3_PERIPH_CLOCK, TRUE);
@@ -250,17 +275,31 @@ int main(void) {
     cs_deassert(GPIOB_BASE, 6);          /* CS high (deasserted) */
 
     /* Step 4: Configure SPI3 peripheral
-     * Master mode, 8-bit, software CS, various clock configs to try */
-
-    /* First try: CPOL=0, CPHA=0, clock = PCLK1/16
-     * At 240MHz, APB1 is typically 120MHz, so SPI clock = 7.5MHz */
+     * Extracted from stock firmware FUN_08036848 + init at 0x080265DE:
+     *   Mode 3 (CPOL=1, CPHA=1), Master, 8-bit, MSB-first
+     *   Software CS (SSM=1, SSI=1), Clock = APB1/2
+     *
+     * Stock firmware also sets CTL1 bits 0,1 (DMA RX/TX enable)
+     * and then sets SPE (bit 6) to enable.
+     *
+     * Start with /16 divider for safety (can try /2 later) */
     SPI3_CTL0 = 0;  /* Reset */
+    SPI3_CTL1 = 0;  /* Reset CTL1 */
+
+    /* Disable I2S mode (stock firmware does this first) */
+    *(volatile uint32_t *)(SPI3_BASE + 0x1C) &= ~(1 << 11);
+
     SPI3_CTL0 = (1 << 2)   /* MSTEN: Master mode */
-              | (0 << 1)   /* CLKPHA: CPHA=0 */
-              | (0 << 0)   /* CLKPOL: CPOL=0 */
-              | (3 << 3)   /* MDIV: /16 (bits[5:3]=011) */
+              | (1 << 1)   /* CLKPOL: CPOL=1 (clock idle HIGH) — from firmware! */
+              | (1 << 0)   /* CLKPHA: CPHA=1 (trailing edge) — from firmware! */
+              | (0 << 3)   /* MDIV: /2 = 60MHz — match stock firmware exactly */
               | (1 << 9)   /* SWCSEN: Software CS management */
               | (1 << 8);  /* SWCSIL: Internal CS high */
+
+    /* CTL1: enable DMA requests (stock firmware does this) */
+    SPI3_CTL1 |= (1 << 0) | (1 << 1);  /* DMAREN + DMATEN */
+
+    /* Enable SPI */
     SPI3_CTL0 |= (1 << 6); /* SPIEN: Enable SPI */
 
     /* Show SPI3 registers after config */
@@ -330,21 +369,43 @@ int main(void) {
      * ============================================================ */
     lcd_hex8(5, y, 0x02, ORNG, BG, 2);
 
-    /* Send 10-byte command frames */
+    /* Send FPGA commands via USART2 using correct 10-byte frame format.
+     *
+     * From TX ISR at 0x08027822:
+     *   - Sends 10 bytes from buffer at 0x20000005
+     *   - Stops when byte index reaches 10 (0x0A)
+     *
+     * Frame layout (10 bytes):
+     *   [0-1] = sync header (likely 0xAA 0x55 based on RX echo check)
+     *   [2]   = high byte of command (0x00 for single-byte cmds)
+     *   [3]   = low byte of command
+     *   [4-8] = zeros (parameters/padding)
+     *   [9]   = checksum = (high + low) & 0xFF
+     *
+     * FPGA responds with 12-byte frame: 0x5A 0xA5 or 0xAA 0x55 header
+     */
     {
-        uint8_t cmd0[] = {0xAA, 0x55, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00};
-        uint8_t cmd1[] = {0xAA, 0x55, 0x00, 0x01, 0x00, 0x00, 0x00, 0x00, 0x00, 0x01};
-        uint8_t cmd2[] = {0xAA, 0x55, 0x00, 0x1C, 0x00, 0x00, 0x00, 0x00, 0x00, 0x1C};
-
-        for (int f = 0; f < 3; f++) {
-            uint8_t *cmd = (f == 0) ? cmd0 : (f == 1) ? cmd1 : cmd2;
+        uint8_t all_cmds[] = {0x01, 0x02, 0x06, 0x07, 0x08, 0x1C, 0x1B, 0x1E};
+        for (int c = 0; c < 8; c++) {
+            uint8_t cmd = all_cmds[c];
+            uint8_t frame[10] = {
+                0x00, 0x00,     /* bytes 0-1: zero (BSS-initialized in stock FW) */
+                0x00, cmd,      /* high=0, low=command */
+                0x00, 0x00, 0x00, 0x00, 0x00,  /* padding */
+                cmd             /* checksum = (0x00 + cmd) & 0xFF */
+            };
             for (int i = 0; i < 10; i++) {
                 while (!(USART2->sts & (1 << 7))); /* TDBE */
-                USART2->dt = cmd[i];
+                USART2->dt = frame[i];
             }
-            /* Wait for TX complete */
             while (!(USART2->sts & (1 << 6))); /* TDC */
-            delay_ms(50);
+            delay_ms(100);  /* wait for FPGA to process + respond */
+
+            /* Drain any USART RX response */
+            for (int i = 0; i < 20; i++) {
+                if (USART2->sts & (1 << 5))
+                    (void)(USART2->dt);
+            }
         }
     }
 
@@ -365,49 +426,206 @@ int main(void) {
     y += 18;
 
     /* ============================================================
-     * PHASE 3: SPI3 read after USART2 commands
+     * PHASE 3: SPI3 init handshake + read
+     * From stock firmware init at 0x0802676E:
+     *   1. CS assert, send 0x00, read response, CS deassert
+     *   2. CS assert, send 0x05, read response, CS deassert
+     * Then bulk reads follow in the main FPGA task.
      * ============================================================ */
     lcd_hex8(5, y, 0x03, ORNG, BG, 2);
+
+    /* Show GPIOB and GPIOC state */
+    uint32_t gpioc_idr = *(volatile uint32_t *)(0x40011008);
+    lcd_hex32(40, y, gpioc_idr, MAGNT, BG, 2);
     y += 18;
 
-    SPI3_CTL0 &= ~(1 << 6);
-    SPI3_CTL0 &= ~0x03;
-    SPI3_CTL0 |= (1 << 6);
+    /* SysTick-like delay before SPI3 handshake (stock FW does this) */
+    delay_ms(100);
 
+    /* ============================================================
+     * SPI3 FPGA HANDSHAKE — exact sequence from stock firmware
+     * Traced from init at 0x0802676E-0x08026872:
+     *
+     * Step 1: CS HIGH, send 0x00 (dummy flush)
+     * Step 2: CS LOW,  send 0x05 (FPGA command)
+     * Step 3:          send 0x00 (parameter, still CS low)
+     * Step 4: CS HIGH (deassert)
+     * Step 5: CS HIGH, send 0x00, 0x00 (dummy flushes)
+     * Step 6: delay
+     * ============================================================ */
+
+    /* Step 1: Dummy flush with CS high */
+    cs_deassert(GPIOB_BASE, 6);  /* ensure CS HIGH */
+    uint8_t h0 = spi3_xfer(0x00);
+    lcd_hex8(5, y, h0, (h0 != 0xFF) ? GREEN : GRAY, BG, 2);
+
+    /* Step 2-3: CS assert, send 0x05 + 0x00 */
     cs_assert(GPIOB_BASE, 6);
-    delay_ms(1);
-    uint8_t rx_buf[8];
-    for (int i = 0; i < 8; i++)
-        rx_buf[i] = spi3_xfer(0xFF);
+    uint8_t h1 = spi3_xfer(0x05);  /* FPGA command */
+    uint8_t h2 = spi3_xfer(0x00);  /* parameter */
     cs_deassert(GPIOB_BASE, 6);
+    lcd_hex8(20, y, h1, (h1 != 0xFF) ? GREEN : GRAY, BG, 2);
+    lcd_hex8(35, y, h2, (h2 != 0xFF) ? GREEN : GRAY, BG, 2);
 
-    for (int i = 0; i < 8; i++) {
-        uint16_t color = (rx_buf[i] != 0xFF && rx_buf[i] != 0x00) ? GREEN : GRAY;
-        lcd_hex8(5 + i * 30, y, rx_buf[i], color, BG, 2);
-    }
+    /* Step 5: Dummy flushes */
+    uint8_t h3 = spi3_xfer(0x00);
+    uint8_t h4 = spi3_xfer(0x00);
+    lcd_hex8(50, y, h3, (h3 != 0xFF) ? GREEN : GRAY, BG, 2);
+    lcd_hex8(65, y, h4, (h4 != 0xFF) ? GREEN : GRAY, BG, 2);
+
+    /* Step 6: delay */
+    delay_ms(100);
+
+    /* Second handshake: CS assert, send more commands */
+    cs_assert(GPIOB_BASE, 6);
+    uint8_t h5 = spi3_xfer(0x01);  /* try command 1 */
+    uint8_t h6 = spi3_xfer(0x00);
+    cs_deassert(GPIOB_BASE, 6);
+    lcd_hex8(80, y, h5, (h5 != 0xFF) ? GREEN : GRAY, BG, 2);
+    lcd_hex8(95, y, h6, (h6 != 0xFF) ? GREEN : GRAY, BG, 2);
     y += 18;
 
     /* ============================================================
-     * PHASE 4: Monitor — SPI3 + USART2 RX
+     * PHASE 3B: GPIO DIAGNOSTIC — Read PB4 as raw GPIO input
+     * Disable SPI3, configure PB4 as plain input, read GPIOB_IDR
+     * If bit 4 is always 1 → pin floating (no FPGA connection)
+     * If bit 4 changes → FPGA is driving MISO
+     * ============================================================ */
+    /* ============================================================
+     * PHASE 3B: USART FRAME CAPTURE
+     * Capture complete 12-byte frames from FPGA (0x5A 0xA5 header)
+     * Display raw frame data to understand FPGA protocol
+     * Then try SPI3 after successful USART exchange
+     * ============================================================ */
+
+    /* Continuously capture and display USART frames */
+    uint8_t rx_frame[16];
+    uint8_t rx_idx = 0;
+    uint32_t frame_count = 0;
+    uint16_t fy = 168;
+    uint32_t send_timer = 0;
+
+    lcd_fill(0, 168, 320, 72, BG);  /* clear bottom area */
+
+    while (1) {
+        /* Periodically send USART commands to stimulate FPGA responses */
+        send_timer++;
+        if (send_timer % 50000 == 0) {
+            uint8_t cmd = 0x07;  /* scope mode command */
+            uint8_t frame10[10] = {0,0, 0,cmd, 0,0,0,0,0, cmd};
+            for (int i = 0; i < 10; i++) {
+                while (!(USART2->sts & (1 << 7)));
+                USART2->dt = frame10[i];
+            }
+        }
+
+        /* Check for USART RX data */
+        if (USART2->sts & (1 << 5)) {  /* RDBF */
+            uint8_t byte = (uint8_t)(USART2->dt & 0xFF);
+
+            if (rx_idx == 0) {
+                /* Looking for frame start: 0x5A or 0xAA */
+                if (byte == 0x5A || byte == 0xAA) {
+                    rx_frame[0] = byte;
+                    rx_idx = 1;
+                }
+            } else if (rx_idx == 1) {
+                /* Validate second sync byte */
+                if ((rx_frame[0] == 0x5A && byte == 0xA5) ||
+                    (rx_frame[0] == 0xAA && byte == 0x55)) {
+                    rx_frame[1] = byte;
+                    rx_idx = 2;
+                } else {
+                    rx_idx = 0;  /* bad sync, restart */
+                }
+            } else {
+                rx_frame[rx_idx++] = byte;
+                uint8_t expected_len = (rx_frame[0] == 0x5A) ? 12 : 10;
+
+                if (rx_idx >= expected_len) {
+                    /* Complete frame! Display it */
+                    uint16_t color = (rx_frame[0] == 0x5A) ? CYAN : YELLO;
+                    fy = 168 + (frame_count % 3) * 18;
+                    lcd_fill(0, fy, 320, 16, BG);
+
+                    /* Show frame type + all bytes */
+                    for (int i = 0; i < expected_len && i < 12; i++) {
+                        lcd_hex8(5 + i * 24, fy, rx_frame[i], color, BG, 2);
+                    }
+                    frame_count++;
+                    lcd_hex32(220, 2, frame_count, GRAY, BG, 2);
+
+                    /* After receiving 5 frames, try SPI3 */
+                    if (frame_count == 5) {
+                        lcd_fill(0, 222, 320, 16, BG);
+                        cs_assert(GPIOB_BASE, 6);
+                        uint8_t s0 = spi3_xfer(0x05);
+                        uint8_t s1 = spi3_xfer(0x00);
+                        cs_deassert(GPIOB_BASE, 6);
+                        uint16_t sc = (s0 != 0xFF || s1 != 0xFF) ? GREEN : RED;
+                        lcd_hex8(5, 222, s0, sc, BG, 2);
+                        lcd_hex8(25, 222, s1, sc, BG, 2);
+
+                        /* Also try reading 8 bytes */
+                        cs_assert(GPIOB_BASE, 6);
+                        for (int i = 0; i < 8; i++) {
+                            uint8_t v = spi3_xfer(0xFF);
+                            uint16_t vc = (v != 0xFF) ? GREEN : GRAY;
+                            lcd_hex8(55 + i * 24, 222, v, vc, BG, 2);
+                        }
+                        cs_deassert(GPIOB_BASE, 6);
+                    }
+
+                    rx_idx = 0;  /* reset for next frame */
+                }
+            }
+        }
+    }
+
+    /* ============================================================
+     * PHASE 4: Monitor — SPI3 command/response + USART2 RX
+     *
+     * From FPGA task disassembly:
+     *   - First SPI byte sent is a command ID
+     *   - Response byte indicates what to do next
+     *   - After command exchange, bulk reads of 0x400 (1024) bytes
+     *   - Data stored at meter_state_base + 0x5B0
      * ============================================================ */
     uint32_t frame = 0;
+
+    /* Try different SPI command bytes each frame */
+    uint8_t spi_cmds[] = {0x00, 0x01, 0x02, 0x03, 0x04, 0x05, 0x06, 0x07, 0x08};
+
     while (1) {
+        uint8_t cmd = spi_cmds[frame % sizeof(spi_cmds)];
+
+        /* SPI3 transaction: send command, read response */
         cs_assert(GPIOB_BASE, 6);
-        uint8_t spi_mon[8];
-        for (int i = 0; i < 8; i++)
-            spi_mon[i] = spi3_xfer(0xFF);
+        uint8_t spi_resp = spi3_xfer(cmd);  /* Command byte */
+        uint8_t spi_data[6];
+        for (int i = 0; i < 6; i++)
+            spi_data[i] = spi3_xfer(0xFF);  /* Read data bytes */
         cs_deassert(GPIOB_BASE, 6);
 
+        /* Read any USART2 data */
         uint8_t uart_mon[8] = {0};
         for (int i = 0; i < 8; i++) {
             if (USART2->sts & (1 << 5))
                 uart_mon[i] = (uint8_t)(USART2->dt & 0xFF);
         }
 
-        for (int i = 0; i < 8; i++) {
-            uint16_t color = (spi_mon[i] != 0xFF && spi_mon[i] != 0x00) ? GREEN : GRAY;
-            lcd_hex8(5 + i * 30, 204, spi_mon[i], color, BG, 2);
+        /* Display: cmd sent | response | data bytes */
+        lcd_hex8(5, 186, cmd, WHITE, BG, 2);
+        lcd_hex8(35, 186, spi_resp, (spi_resp != 0xFF) ? GREEN : GRAY, BG, 2);
+        for (int i = 0; i < 6; i++) {
+            uint16_t color = (spi_data[i] != 0xFF && spi_data[i] != 0x00) ? GREEN : GRAY;
+            lcd_hex8(75 + i * 30, 186, spi_data[i], color, BG, 2);
         }
+
+        /* Show SPI3 status register */
+        lcd_hex32(5, 204, SPI3_STS, CYAN, BG, 2);
+
+        /* USART2 monitor */
         for (int i = 0; i < 8; i++) {
             uint16_t color = (uart_mon[i] != 0x00) ? YELLO : GRAY;
             lcd_hex8(5 + i * 30, 222, uart_mon[i], color, BG, 2);
@@ -415,6 +633,6 @@ int main(void) {
 
         lcd_hex32(200, 2, frame, GRAY, BG, 2);
         frame++;
-        delay_ms(50);
+        delay_ms(100);
     }
 }

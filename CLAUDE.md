@@ -24,6 +24,9 @@ Reverse engineering and clean-room rewrite of the firmware for the **FNIRSI 2C53
 | LCD backlight | PB8 | HIGH to enable |
 | FPGA SPI3 data | PB3 (SCK), PB4 (MISO), PB5 (MOSI) | Bulk ADC data from FPGA (JTAG pins, remapped) |
 | FPGA SPI3 CS | PB6 (GPIO) | Software chip select for FPGA SPI3 |
+| FPGA SPI enable | PC6 (GPIO) | Must be HIGH for FPGA SPI3 to work |
+| FPGA active mode | PB11 (GPIO) | Set HIGH during active measurement mode |
+| FPGA USART cmd | PA2 (TX), PA3 (RX) | 9600 baud, 10-byte TX / 12-byte RX frames |
 | SWD | PA13 (SWDIO), PA14 (SWCLK) | Debug header near USB-C port |
 | UART debug | RX, TX, GND | Through-hole pads (not yet mapped to MCU pins) |
 | FPGA programming | M0-M3, GND, VDD, VPP | Header for Gowin programmer |
@@ -127,15 +130,19 @@ make renode-test                 # 5-second smoke test
 ## RE Reference
 
 - **Coverage:** 362 functions decompiled, 138KB mapped (54.5%), 113KB in gaps (see `reverse_engineering/COVERAGE.md`)
-- **FPGA interface:** SPI3 (0x40003C00) on PB3/PB4/PB5 for bulk data, USART2 for commands. Real FPGA task = FUN_08036934 (11KB, in gap)
-- **Priority tiers:** P0 = FPGA init via SPI3 (UNBLOCKED), P1 = ADC format/meter path/clocks, P2 = power/siggen
-- Largest decompiled functions: scope FSM (13.3KB), FPGA task (2.6KB), siggen config (1.6KB), ADC core (2.6KB)
-- Key data addresses: DAT_20008350/352 (display buffer pointers), 0x0804C0CC (meter dispatch table), 0x0804C5E8 (meter data table)
+- **FPGA interface:** SPI3 (0x40003C00) on PB3/PB4/PB5 for bulk data, USART (0x40004400) on PA2/PA3 for commands
+- **FPGA task:** FUN_08036934 is actually 10 sub-functions (~12KB total), comprehensively decompiled
+- **SPI3 config:** Mode 3 (CPOL=1, CPHA=1), Master, /2 clock (60MHz), 8-bit, software CS on PB6
+- **USART protocol:** 10-byte TX frames, 12-byte RX frames (0x5A 0xA5 header), 9600 baud, timer-driven (not USART IRQ)
+- **FPGA control pins:** PC6 = SPI enable (HIGH), PB11 = active mode (HIGH)
+- **Hardware verified:** PB4 (MISO) physically connected to FPGA (GPIO test confirmed)
+- **Boot sequence:** 53-step init documented in `reverse_engineering/analysis_v120/FPGA_BOOT_SEQUENCE.md`
+- **8 FreeRTOS tasks:** display, key, osc, fpga, dvom_TX, dvom_RX, Timer1, Timer2
+- **Comprehensive decompilation:** 12,700 lines across 3 files (init function, FPGA task, USART protocol)
 - Calibration tables in RAM: 6 gain/offset pairs at 0x20000358–0x20000434 (loaded from SPI flash at boot)
 - Filesystem paths in firmware: `2:/Screenshot file/`, `3:/System file/`
 - Firmware versions analyzed: V1.0.3 → V1.0.7 → V1.1.2 → V1.2.0
-- V1.2.0 added EXTI3 interrupt (continuity buzzer detection)
-- **Key docs:** `docs/fpga_protocol.md` (command table + meter commands), `docs/peripheral_map.md` (full peripheral/GPIO/calibration reference)
+- **Key docs:** `docs/fpga_protocol.md`, `docs/peripheral_map.md`, `reverse_engineering/analysis_v120/FPGA_BOOT_SEQUENCE.md`
 
 ## Current State
 
@@ -150,4 +157,5 @@ make renode-test                 # 5-second smoke test
 - Soak testing infrastructure (random button fuzzing with fault monitoring)
 - Watchdog, health monitoring, task stack checking
 - Button input on hardware not yet mapped (pin assignments need verification)
-- No real ADC/FPGA data yet — FPGA communication not implemented
+- **FPGA USART communication working** — bidirectional, frames captured, meter data flowing
+- **FPGA SPI3 not yet responding** — hardware connected (verified), correct mode/pins/control signals set, but FPGA holds MISO HIGH. Likely needs timer-generated hardware trigger or specific init sequence timing. See `FPGA_BOOT_SEQUENCE.md`
