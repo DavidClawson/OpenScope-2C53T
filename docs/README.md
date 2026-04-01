@@ -42,6 +42,7 @@ Open-source reverse engineering and firmware replacement for the FNIRSI 2C53T ha
 ## Planning & Community
 
 - [Roadmap](roadmap.md) — Completed features, in-progress work, future milestones
+- [Platform Architecture](platform_architecture.md) — HAL layer design, SDK vision, making the codebase a reusable developer platform
 - [Resource Planning](resource_planning.md) — RAM/flash budget, module hot-loading strategy
 - [Developer Experience](developer_experience.md) — Multi-tier accessibility (end users → vendors)
 - [Community Issues](community_issues.md) — 62 documented bugs/requests from EEVblog and forums

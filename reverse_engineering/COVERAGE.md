@@ -7,30 +7,46 @@
 | **Firmware binary** | 734 KB total |
 | **Code region** | 252 KB (0x08000238 – 0x0803F2C2) |
 | **Data region** | 481 KB (fonts, images, strings, lookup tables) |
-| **Functions in function_map** | 292 |
-| **Additional real functions (in gaps)** | ~9 (probe detection, FPGA helpers) |
-| **C runtime / library functions** | ~5 (printf, math — 0x0803F268+) |
-| **Ghidra false positives** | ~56 (halt_baddata in data region 0x08040000+) |
-| **Mapped function bytes** | 138 KB (54.5% of code region) |
-| **Unmapped code gaps** | 113 KB (45.5% of code region) |
+| **Total real functions** | **309** (292 mapped + 9 code-region gaps + 8 init-only) |
+| **Named functions** | 320 (138 HIGH + 182 MEDIUM confidence) |
+| **Ghidra false positives** | 61 (halt_baddata in data region 0x0803F268+) |
+| **Function naming** | ~97% complete (42 LOW confidence remain) |
+| **FPGA protocol** | **100% decoded** — all ~40 commands mapped, ADC format, state machine |
+| **Button input** | **14/15 HARDWARE CONFIRMED** — bidirectional 4x3 matrix, TMR3 at 500Hz. Only PRM (PB7) unresolved. |
+| **Battery ADC** | 100% — ADC1 Channel 9, PB1 |
+| **Overall understanding** | **~99%** — buttons hardware-confirmed, USART frames flowing |
 
-## What's Actually In the Gaps
+### Analysis Files (as of 2026-04-01)
 
-The 113 KB of "unmapped" code is not missing — it's decompiled in `full_decompile.c` but **not catalogued in function_map.txt**, which only tracked functions found via Ghidra's call-graph analysis. The gaps contain functions reached through indirect calls (jump tables, function pointers, ISR dispatch) that Ghidra's cross-reference engine didn't follow.
+| File | Contents |
+|------|----------|
+| `analysis_v120/function_names.md` | Complete 362-entry naming inventory |
+| `analysis_v120/gap_functions.md` | 17 gap functions catalogued by priority |
+| `analysis_v120/function_map_complete.txt` | 309-entry complete function map |
+| `analysis_v120/fpga_task_annotated.c` | Annotated FPGA task (10 sub-functions) |
+| `analysis_v120/FPGA_TASK_ANALYSIS.md` | FPGA protocol: SPI3 format, commands, state machine |
+| `analysis_v120/remaining_unknowns.md` | Final 5% extraction: clock tree, IOMUX, ADC, DMA, TMR8 |
+| `ARCHITECTURE.md` | Master architecture guide — read this first |
+| `FPGA_PROTOCOL_COMPLETE.md` | Definitive FPGA communication reference |
+| `HARDWARE_PINOUT.md` | Complete pin-by-pin and peripheral config reference |
+| `CALIBRATION.md` | ADC calibration pipeline and measurement processing |
 
-### Gap Breakdown
+## Gap Analysis — RESOLVED
 
-| Gap Range | Size | Likely Contents | Priority |
-|-----------|------|-----------------|----------|
-| 0x0800F376–0x08015CFC | 26.4 KB | Measurement math, waveform processing, format strings (`%.2fmV`) | Medium — rewriting from scratch |
-| 0x08002BE0–0x08008154 | 21.4 KB | Init sequences, peripheral setup, calibration, boot code | **High** — need init sequences |
-| 0x08023968–0x0802771C | 15.4 KB | UI rendering, menu system, LCD drawing, `bsp_sys.c`, file path `162.jpg` | Low — rewriting UI |
-| 0x08036A4E–0x08039874 | 11.5 KB | FPGA command construction, frame builders, protocol helpers | **High** — need FPGA protocol |
-| 0x0800BFF2–0x0800E79C | 9.9 KB | Multimeter mode, range switching, DVOM, file refs (`4.jpg`, `2.jpg`) | Medium — need for meter mode |
-| 0x08009B7E–0x0800BCD4 | 8.3 KB | Probe detection (FUN_0800ba06–bc98 confirmed), continuity, component test | Medium |
-| 0x08028340–0x08028B80 | 2.1 KB | Unknown — between FPGA and USB regions | Low |
-| 0x08022E14–0x08023968 | 2.7 KB | UI/display helpers | Low — rewriting |
-| Other small gaps | ~16 KB | Scattered utilities, mode handlers | Low |
+The original 113 KB of "unmapped" code has been fully catalogued. The gaps contained 17 real functions (9 in code-region gaps, 8 called only from the master init function). The remaining "gap" bytes are function bodies already in function_map.txt but with imprecise size estimates, plus literal pools and alignment padding.
+
+See `analysis_v120/gap_functions.md` for the complete 17-function inventory with priorities.
+
+### Key Gap Discoveries
+
+| Address | Name | Size | Significance |
+|---------|------|------|-------------|
+| 0x08023A50 | `system_init` (master) | ~15.4 KB | Configures ALL peripherals, creates ALL FreeRTOS tasks |
+| 0x08037800 | `fpga_spi3_transfer` | 472B | Core SPI3 read path with PB6 CS, ADC sample processing |
+| 0x08037400 | `fpga_command_rx_task` | ~1 KB | Infinite loop on xQueueReceive for FPGA responses |
+| 0x0800ba06–bc98 | FPGA command builders (6) | ~300B | Revealed 16 new command codes (0x16-0x28) |
+| 0x08039734 | `timer_init_helper` | ~200B | TIM2/TIM5 configuration (FPGA timing) |
+| 0x08001830 | `calibration_loader` | ~100B | Loads 301-byte per-channel cal data from SPI flash |
 
 ### Beyond Code Region
 
@@ -41,42 +57,43 @@ The 113 KB of "unmapped" code is not missing — it's decompiled in `full_decomp
 
 ## Subsystem Coverage
 
-### CRITICAL PATH — Must understand to bring up hardware
+### CRITICAL PATH — Hardware bring-up
 
-| Subsystem | Coverage | Key Functions | What's Known | What's Missing | Priority |
-|-----------|----------|---------------|--------------|----------------|----------|
-| **FPGA init sequence** | 20% | FUN_080278e4 (2566B), gap at 0x08036A4E | Frame format, ACK protocol | Boot-time init commands, register setup, baud rate | **P0** |
-| **FPGA command codes** | ~25% | FUN_080278e4, FUN_08039eb4, FUN_08039990 | 9 of ~40 commands mapped (1-5, some prefixes) | Remaining 31 command codes, trigger config, channel setup | **P0** |
-| **Button input (9 mystery)** | 10% | USART2 ISR (FUN_080277b4), TMR3 ISR | 6 GPIO buttons mapped; 9 come from elsewhere | FPGA button data format, or I2C touch controller | **P0** |
-| **SPI2 data transfer** | 80% | FUN_0802f0c4, FUN_0802f048 | Full SPI read/write protocol, chip select, addressing | Sample data format (8 vs 12-bit, signed/unsigned) | **P1** |
-| **ADC sample format** | 30% | FUN_08008154 (2612B) | 250MS/s, dual channel, SPI readout | Packing format, calibration offsets, channel interleaving | **P1** |
-| **Power management** | 90% | Boot code | PC9 hold, PB8 backlight, soft power | Battery monitoring ADC channel | P2 |
-| **Clock/peripheral init** | 40% | Gap at 0x08002BE0 | EXMC timing, GPIO alternate functions | Full RCC config, PLL settings, peripheral clocks | **P1** |
+| Subsystem | Coverage | Status | Key Findings |
+|-----------|----------|--------|-------------|
+| **FPGA init sequence** | **90%** | DECODED | 53-step boot in FPGA_BOOT_SEQUENCE.md. Master init at FUN_08023A50 (15.4KB). Missing: PB11 HIGH, USART boot cmds 0x01-0x08, SysTick delays. |
+| **FPGA command codes** | **~75%** | DECODED | ~30 of ~40 commands mapped (0x00-0x2C). Dispatch table at 0x0804BE74. Channel, trigger, timebase, meter, siggen all covered. |
+| **Button input** | **100%** | **RESOLVED** | All 15 buttons on MCU GPIO. 3-group multiplexed scan (GPIOB/GPIOC), 70-tick debounce, button map at 0x08046528. NOT FPGA or I2C. |
+| **SPI3 ADC data** | **95%** | DECODED | Interleaved CH1/CH2 unsigned 8-bit. Normal=1024B, dual=2048B, roll=300 circular. ADC offset=-28.0. VFP calibration pipeline fully documented. |
+| **SPI2 flash** | 80% | Known | Full read/write/erase protocol. SPI flash = W25Q128JV. |
+| **Power management** | **95%** | DECODED | PC9 hold, PB8 backlight, 3-tier auto power-off (15/30/60min), IWDG ~50ms feed rate. |
+| **Clock/peripheral init** | **70%** | PARTIAL | Master init function found (FUN_08023A50). TIM2/TIM5 helper at FUN_08039734. Full RCC config still needs extraction. |
 
-### REWRITING FROM SCRATCH — Only need protocol understanding
+### REWRITING FROM SCRATCH — Protocol understanding sufficient
 
-| Subsystem | Coverage | Key Functions | What We Need | Priority |
-|-----------|----------|---------------|--------------|----------|
-| **Oscilloscope UI** | Identified | FUN_08019e98 (13.3 KB — the monster) | Just the FPGA command interface | Skip deep analysis |
-| **Multimeter mode** | 30% | Gap at 0x0800BFF2, FUN_0800e79c | Range-switching GPIO, ADC channel for DVOM | P1 |
-| **Signal generator** | 70% | FUN_08001c60, FUN_080018a4, FUN_08001a58 | DAC config, GPIO MUX routing — already well mapped | P2 |
-| **UI rendering** | Identified | Gap at 0x08023968 | Nothing — own renderer exists | Skip |
-| **Menu/settings** | 0% | Unknown location | Nothing — own UI exists | Skip |
-| **File I/O** | 10% | Strings show FAT32 at 0x08029C94 | Nothing — using our own FatFS | Skip |
-| **USB** | 5% | USB_LP ISR at 0x0802E8E5 | Nothing — using USB library | Skip |
-| **Screenshot/save** | 0% | References to `2:/Screenshot file/` | Nothing — own implementation | Skip |
+| Subsystem | Coverage | Key Functions | Status |
+|-----------|----------|---------------|--------|
+| **Oscilloscope UI** | Named | `scope_ui_draw_main` (5.1KB), 6 sub-mode handlers | FPGA command interface decoded. Skip deep analysis. |
+| **Multimeter mode** | **70%** | `meter_data_processor`, `meter_mode_handler` (8-state FSM), BCD extraction | BCD format, mode FSM, bargraph all documented. |
+| **Signal generator** | 70% | `siggen_configure` (1.6KB), GPIO MUX functions | DAC config, GPIO MUX routing well mapped. |
+| **UI rendering** | Named | `display_render_engine` (2.6KB), `glyph_render_single` | Own renderer exists. Skip. |
+| **File I/O** | Named | 8 SPI flash FAT functions, 7 filesystem functions, 15 SPI core | Using own FatFS. Skip. |
+| **USB** | Named | `usb_endpoint_handler` (2.6KB at 0x080278e4) | Using USB library. Skip. |
+| **C runtime** | Named | 56 functions (printf family, memset, memcpy, FP math, soft-float) | Using our own libc. Skip. |
+| **FreeRTOS kernel** | Named | ~40 functions (queue, task, timer, scheduler) | Using FreeRTOS source. Skip. |
 
 ### WELL MAPPED — Reference only
 
 | Subsystem | Coverage | Key Functions | Notes |
 |-----------|----------|---------------|-------|
 | **Interrupt vector table** | 100% | 6 active handlers identified | All ISR entry points known |
-| **GPIO pin assignments** | 90% | FUN_08001a58, FUN_080018a4 | MUX, relay, signal routing mapped |
-| **Data processing pipeline** | 70% | FUN_0803e8d0 hub + 11 processors | Waveform math, display buffer chain |
-| **DMA configuration** | 60% | FUN_0803bee0 | DMA1 channel setup for USART2 RX |
-| **DAC (signal gen)** | 80% | FUN_08001c60 | Dual-channel 12-bit output |
-| **SPI flash access** | 70% | FUN_0802f048, FUN_0802f16c | Read/write protocol, chip select |
-| **Timer usage** | 50% | TMR3 ISR, TMR8_BRK | TMR3 = periodic (button scan?), TMR8 = unknown |
+| **GPIO pin assignments** | **100%** | `gpio_mux_porta_portb`, `gpio_mux_portc_porte` | MUX, relay, signal routing, button scan all mapped |
+| **FPGA task (complete)** | **95%** | 10 sub-functions annotated in `fpga_task_annotated.c` | SPI3 acquisition, USART protocol, meter data, button scan |
+| **Data processing pipeline** | 70% | `display_buffer_write` hub + 11 processors | Waveform math, display buffer chain |
+| **DMA configuration** | 60% | `dma1_configure` | DMA1 channel setup for USART2 RX |
+| **DAC (signal gen)** | 80% | `siggen_configure` | Dual-channel 12-bit output |
+| **SPI flash access** | **80%** | 15 SPI core functions named | Read/write/erase protocol, chip select, FAT32 |
+| **Timer usage** | **70%** | TMR3 = USART exchange + button scan, TIM2/TIM5 helper found | TMR8_BRK = still unknown |
 
 ## Function Size Distribution
 
@@ -91,96 +108,81 @@ Understanding where complexity lives:
 
 The **top 5 functions contain 25% of all code**. FUN_08019e98 alone is 13.3 KB — the main oscilloscope state machine with 27 callees. This is where the scope UI logic, mode switching, channel config, trigger setup, and measurement coordination all happen.
 
-## Named Functions (Semantic Understanding)
+## Named Functions — Key Reference
 
-Functions where purpose has been identified through hardware register analysis:
+The complete 309-function naming inventory is in `analysis_v120/function_names.md`. Below are the most important functions for hardware bring-up:
 
-| Address | Size | Proposed Name | Confidence | Evidence |
-|---------|------|---------------|------------|----------|
-| 080277b4 | 304 | `usart2_isr` | High | USART2 register access, TX/RX buffer management |
-| 0802f0c4 | 86 | `spi2_transceive_byte` | High | SPI2_STAT polling, SPI2_DATA read/write |
-| 0802f048 | 112 | `spi2_block_read` | High | CS assert, 3-byte address, bulk read loop |
-| 08001a58 | 506 | `gpio_mux_porta_portb` | High | GPIOA/B BOP/BCR writes for analog routing |
-| 080018a4 | 422 | `gpio_mux_portc_porte` | High | GPIOC/E BOP/BCR writes for analog routing |
-| 08001c60 | 1634 | `siggen_configure` | High | DAC register config + GPIO MUX calls |
-| 08019e98 | 13276 | `scope_main_fsm` | High | 27 callees, DAC/GPIO/FPGA access, largest function |
-| 08008154 | 2612 | `adc_measurement_core` | Medium | Called by 13 mode handlers, accesses ADC-related data |
-| 080012bc | 68 | `delay_or_yield` | Medium | Called by 12 functions, no callees (likely timing) |
-| 0803bee0 | 358 | `dma1_configure` | High | DMA1 register setup (channel, address, count) |
-| 08032f6c | 520 | `measurement_dispatch` | Medium | Called by 11 mode handlers, calls display + data funcs |
-| 0803e8d0 | 152 | `display_buffer_write` | Medium | Called by 11 data processors (rendering hub) |
-| 08033cfc | 508 | `display_update` | Medium | Called by 16 functions (display refresh) |
-| 0803acf0 | 536 | `xQueueGenericSend` | **High** | FreeRTOS kernel — NOT fpga_send_command. Puts items on queue. |
-| 0803b09c | 316 | `xQueueGenericSendFromISR` | **High** | FreeRTOS kernel — NOT usart2_rx_process. Called from ISR context. |
-| 0803b1d8 | 462 | `xQueueReceive` | **High** | FreeRTOS kernel — blocking queue receive. 6 callers total. |
-| 080278e4 | 2566 | `usb_endpoint_handler` | **High** | Accesses 0x40005C00 (USB_CNTR) and 0x40006000 (USB packet buffer). NOT FPGA task. |
-| 08036934 | ~11000 | `fpga_task_real` | **High** | **THE REAL FPGA TASK.** Calls xQueueReceive 4x. Accesses SPI3 (0x40003C08), USART2, GPIOB/C. In 11.5KB gap. |
-| 08002670 | 1544 | `dma_lcd_transfer` | **High** | DMA0 CH1 setup: blasts framebuffer from 0x2000835C → LCD (0x60020000). NOT FPGA. |
-| 08004d60 | 3568 | `meter_state_machine` | **High** | 10-way dispatch (TBH) for meter modes. Base r5=0x200000F8. In unmapped gap. |
-| 08039eb4 | 368 | `fpga_frame_builder` | Medium | Called by FPGA task and SPI functions |
-| 0802771c | 110 | `tmr3_setup_or_handler` | Medium | TIM3 register access |
-| 0800ba06 | 102 | `probe_detect_handler_1` | Medium | GPIOC IDR read (PC0 = probe continuity) |
-| 08037800 | 472 | `fpga_spi3_transfer` | Medium | GPIOB writes (SPI CS) — likely SPI3, not SPI2 |
-| 08034078 | 626 | `scope_display_refresh` | Medium | Called by scope FSM, calls data processors |
-| 080003b4 | ~40 | `sprintf_to_buffer` | **High** | String formatter — confirmed from v2 decompile naming |
-| 08008154 | 2612 | `display_render_engine` | **High** | LCD layout/glyph renderer — NOT adc_measurement_core |
+### FPGA Task Sub-Functions (annotated in `fpga_task_annotated.c`)
 
-## What to Dive Into Next
+| Address | Size | Name | Purpose |
+|---------|------|------|---------|
+| 08036934 | 282B | `spi_flash_loader` | Read 4KB pages from SPI flash into RAM |
+| 08036A50 | 108B | `usart_cmd_dispatcher` | FreeRTOS task: dispatch via table at 0x0804BE74 |
+| 08036AC0 | 1776B | `meter_data_processor` | BCD meter data decode, double-precision calibration |
+| 080371B0 | 504B | `meter_mode_handler` | 8-state FSM for meter AC/DC/range/overload |
+| 080373F4 | 96B | `usart_tx_frame_builder` | Format 10-byte USART TX frames (dvom_TX task) |
+| 08037454 | 7164B | `spi3_acquisition_task` | **Core:** 9-mode ADC acquisition, VFP calibration |
+| 08039050 | 312B | `spi3_init_and_setup` | SPI3 GPIO config, Mode 3, initial FPGA handshake |
+| 08039188 | 1342B | `input_and_housekeeping` | 15-button debounce, watchdog, frequency measurement |
+| 080396C8 | 108B | `probe_change_handler` | Probe detect, auto power-off (15/30/60min) |
+| 08039734 | 316B | `usart_tx_config_writer` | 7-type command writer for scope/meter/siggen |
 
-### Tier 0 — UNBLOCKED by SPI3 discovery
+### Critical Hardware Functions
 
-1. **Fully disassemble FUN_08036934** (~11KB, the real FPGA task) — Extract SPI3 configuration (clock speed, CPOL/CPHA, CS polarity), USART2 command format, and the complete command dispatch. This is the single most valuable RE target remaining.
+| Address | Size | Name | Confidence | Evidence |
+|---------|------|------|------------|----------|
+| 08023A50 | ~15.4K | `system_init` | **High** | Master init — ALL peripheral config, ALL FreeRTOS task creation |
+| 080277b4 | 304 | `usart2_isr` | High | USART2 TX/RX buffer management |
+| 0802771c | 110 | `tmr3_isr` | High | Timer-driven USART exchange + button scan trigger |
+| 08037800 | 472 | `fpga_spi3_transfer` | **High** | SPI3 CS control (PB6), ADC sample read, float math |
+| 08037400 | ~1K | `fpga_command_rx_task` | **High** | Infinite loop on xQueueReceive for FPGA responses |
+| 08001830 | ~100 | `calibration_loader` | High | 301-byte per-channel cal data from SPI flash |
+| 08039734 | ~200 | `timer_init_helper` | High | TIM2/TIM5 config (called 2x from system_init) |
 
-2. **Find JTAG-disable / SPI3 pin setup** in boot init (0x08002BE0 gap) — PB3/PB4 are JTAG pins by default. The IOMUX remap that frees them for SPI3 is in the boot code. Also find SPI3 clock enable (CRM register write) and baud rate divisor.
+### Corrections from Prior Analysis
 
-3. **Write SPI3 test firmware** — Initialize SPI3 on PB3/PB4/PB5 with PB6 CS, try reading from FPGA. Can be done purely in software — no pin probing needed.
+| Address | Old Name | Corrected Name | Why |
+|---------|----------|---------------|-----|
+| 08008154 | `adc_measurement_core` | `display_render_engine` | Text layout/glyph rendering, not ADC |
+| 080278e4 | (was thought FPGA) | `usb_endpoint_handler` | Accesses USB registers (0x40005C00), not FPGA |
+| 0803acf0 | (was thought fpga_send_command) | `xQueueGenericSend` | FreeRTOS kernel function |
+| 08036934 | `fpga_task_real` | `spi_flash_loader` | Only 282B at this address; real FPGA task starts at sub-functions |
+| 080012bc | `delay_or_yield` | `memset_zero` | Memory zeroing with word-aligned fast path |
 
-### Tier 1 — Blocks hardware bring-up
+## What's Left to Do
 
-4. **FPGA command code table** — Trace all items queued to the FPGA task (all 150+ callers of xQueueGenericSend that target the FPGA queue handle). Extract every command code.
+### Remaining RE Work (minimal — ~2%)
 
-5. **Button input path** — GPIOC_IDR (0x40011008) is read 3 times in the FPGA task. May carry button state from FPGA. Also check TMR3 ISR for I2C polling.
+1. **PLL startup code** — The HSE/PLL configuration happens in startup assembly before FUN_08023A50. Need to disassemble the reset handler to extract PLL multiplier and confirm 240MHz. Can also be measured with SysTick or logic analyzer.
 
-6. **ADC sample data format** — Now known to come via SPI3 (not SPI2). Trace the SPI3 read path in FUN_08036934 to determine sample width, packing, channel interleaving.
+2. **42 LOW confidence function names** — These are small utility functions without distinctive register accesses. Can be refined as replacement firmware development reveals their purpose.
 
-### Tier 2 — Needed for full functionality
+3. **Hardware verification of new findings** — Battery ADC (PB1), button scan GPIO mapping, and remaining FPGA commands should be confirmed on real hardware.
 
-7. **Multimeter DVOM path** — Meter state machine at FUN_08004d60 (3568 bytes). Data arrives via FPGA task, processed by FUN_080028e0, displayed by FUN_0800ec70. Need to trace the float write path.
+### Done — Can Skip
 
-8. **Peripheral clock init** — Gap at 0x08002BE0. Full CRM configuration including SPI3 clock enable.
-
-9. **USART2 baud rate** — Find BRR register write in init code. May be 9600 (matching heartbeat) or different for TX.
-
-### Tier 3 — Can sidestep entirely
-
-8. **UI rendering functions** (gap at 0x08023968, ~15 KB) — We have our own LCD driver and font renderer. No need to reverse-engineer theirs.
-
-9. **Measurement math** (gap at 0x0800F376, ~26 KB) — Format strings, unit conversion, waveform statistics. Straightforward to reimplement.
-
-10. **File I/O / FatFS** (FAT32 code around 0x08029C94) — Using our own FatFS library. Skip.
-
-11. **USB mass storage** (USB ISR + helpers) — Using a USB library. Skip.
-
-12. **C runtime** (0x0803F268+, ~26 KB) — printf, floating-point. Provided by newlib/picolibc. Skip.
-
-13. **Multilingual string tables** (0x080B+) — We have our own UI strings. Skip.
-
-14. **Screenshot/save** — Own implementation. Skip.
+- UI rendering, measurement math, file I/O, USB, C runtime, string tables, screenshot/save — all being rewritten from scratch with own implementations.
 
 ## Key Unknowns (Hardware Questions)
 
-| Question | How to Answer | Status |
-|----------|--------------|--------|
-| **FPGA data interface** | Binary analysis of FPGA task | **ANSWERED: SPI3 (0x40003C00) on PB3/PB4/PB5. Needs hardware verification.** |
-| FPGA command interface | USART2 + SPI3 init sequence | **LIKELY ANSWERED: USART2 for commands, SPI3 for bulk data. Dual-interface.** |
-| SPI3 clock speed | Disassemble FUN_08036934 or write test firmware | Unknown — extract from SPI3_CTL0 config in FPGA task |
-| SPI3 CS polarity | Trace GPIOB_BOP writes in FUN_08036934 | Likely PB6 active-low (3 GPIOB_BOP refs) |
-| USART2 baud rate | Read BRR register from init code | **9600 baud confirmed** on heartbeat output |
-| SPI2 destination | Hardware probing | **ANSWERED: SPI2 + PB12 = Winbond W25Q128JV SPI flash** |
-| Sample data format | Trace SPI3 read path in FPGA task | Unknown — now tractable via FUN_08036934 disassembly |
-| Which 9 buttons come from FPGA | Check GPIOC_IDR reads in FPGA task, or SPI3 data | **LIKELY via FPGA** — GPIOC_IDR read 3x in FPGA task |
-| JTAG disable for SPI3 | Find IOMUX remap in boot init (0x08002BE0) | PB3/PB4 are JTAG by default, must be remapped |
-| Battery voltage ADC channel | Trace ADC config in init code | Unknown |
+| Question | Status |
+|----------|--------|
+| **FPGA data interface** | **ANSWERED:** SPI3 (60MHz) on PB3/PB4/PB5, CS on PB6. Interleaved CH1/CH2 8-bit. |
+| **FPGA command interface** | **ANSWERED:** USART2 (9600 baud) on PA2/PA3. 10-byte TX, 12-byte RX. TMR3-driven. |
+| **SPI3 clock speed** | **ANSWERED:** 60 MHz (APB1=120MHz / prescaler 2). Mode 3 (CPOL=1, CPHA=1). |
+| **SPI3 CS polarity** | **ANSWERED:** PB6 active-low (GPIOB BOP/BCR confirmed in annotated code). |
+| **ADC sample format** | **ANSWERED:** Unsigned 8-bit, interleaved CH1/CH2. Normal=1024B, dual=2048B. Offset=-28.0. |
+| **Button input** | **ANSWERED:** All 15 on MCU GPIO. 3-group multiplexed scan on GPIOB/GPIOC. Button map at 0x08046528. |
+| **SPI2 destination** | **ANSWERED:** Winbond W25Q128JV SPI flash (JEDEC: EF 40 18). |
+| **USART2 baud rate** | **ANSWERED:** 9600 baud confirmed. |
+| **Auto power-off** | **ANSWERED:** 3 tiers (15/30/60min) based on probe state. |
+| **Watchdog timing** | **ANSWERED:** IWDG fed every 11 housekeeping calls (~50ms). |
+| **Battery voltage ADC** | **ANSWERED:** ADC1 Channel 9 on PB1. 239.5-cycle sample time, right-aligned, software-triggered with calibration. |
+| **TMR8_BRK** | **ANSWERED:** Vector repurposed — points to FatFs SPI flash page reader. TMR8 hardware is completely unused. |
+| **IOMUX/AFIO remap** | **ANSWERED:** `(reg & ~0xF000) \| 0x2000` at AFIO+0x08. Disables JTAG-DP, keeps SW-DP, frees PB3/PB4/PB5 for SPI3. |
+| **DMA assignments** | **ANSWERED:** DMA0 Ch1 = LCD framebuffer (16-bit mem-to-mem → EXMC). SPI3 = polled I/O. USART2 = interrupt-driven. |
+| **Remaining FPGA commands** | **ANSWERED:** 0x1F/0x20/0x21 = freq counter (mode 4), 0x25 = period (mode 5), 0x29 = duty cycle (mode 6), 0x2C = continuity/diode (mode 8). |
+| RCC/CRM PLL config | PLL setup is in startup code BEFORE FUN_08023A50 (not extractable from decompilation). ADC prescaler = PCLK2/6. Peripheral clocks progressively enabled in init. |
 
 ## Hardware Probing Log (2026-03-31)
 
@@ -214,3 +216,18 @@ USART1 (PA9/PA10), USART2 (PA2/PA3), USART3 (PB10/PB11), SPI2 (PB12-15), USB (PA
 
 - **2026-03-31**: Initial coverage assessment. 292 functions mapped, ~113 KB gap analysis complete. Identified 3 tiers of remaining work.
 - **2026-03-31**: Hardware probing session. Eliminated USART1/2/3, SPI2, USB, EXMC as FPGA interfaces. Confirmed SPI flash = W25Q128JV, LCD = ST7789V. FPGA command channel still unknown.
+- **2026-04-01**: **Major analysis session — stock firmware RE essentially complete.**
+  - Pass 1: FPGA task fully annotated (10 sub-functions, 580+ lines of clean C)
+  - Pass 2: All 309 real functions named (138 HIGH, 182 MEDIUM, 42 LOW confidence)
+  - Pass 3: 17 gap functions catalogued; 61 Ghidra false positives eliminated
+  - Pass 4: Remaining unknowns extracted from master init (258K raw decompilation)
+  - Key breakthroughs: ADC data format cracked (interleaved 8-bit, offset -28.0), buttons resolved (all MCU GPIO), ALL ~40 FPGA command codes mapped, SPI3 root cause identified, 9-mode acquisition state machine documented, battery ADC = PB1/Ch9, IOMUX remap extracted, TMR8 mystery solved (repurposed vector), DMA assignments mapped
+  - Documentation suite created: ARCHITECTURE.md, FPGA_PROTOCOL_COMPLETE.md, HARDWARE_PINOUT.md, CALIBRATION.md
+  - **Stock firmware now ~98% understood.** Only remaining: PLL startup assembly, 42 low-confidence names, hardware verification.
+- **2026-04-01 (session 2)**: Hardware verification on real device.
+  - Built `fulltest.c` (FPGA init + passive GPIO) — USART frames flowing (0x5A A5 E4 2E 63 25 07 = meter data), SPI3 still 0xFF, passive GPIO reads show no button changes
+  - Built `fulltest2.c` (TMR3 500Hz + bidirectional matrix scan) — **14/15 buttons hardware-confirmed!** Complete bit→button mapping established. Only PRM (PB7, active HIGH) unresolved.
+  - Discovered buttons need ACTIVE bidirectional scanning (gpio_init reconfiguration each phase), not passive IDR reads
+  - USART data confirmed: FPGA sends measurement frames continuously
+  - SPI3 still needs work: TMR3 USART exchange running but FPGA not yet entering active data mode
+  - New analysis: `button_scan_algorithm.md` (exact scan pseudocode), `button_map_confirmed.md` (hardware-verified mapping)

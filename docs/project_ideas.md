@@ -30,6 +30,7 @@ Write small ARM Thumb routines, place in free flash space, redirect existing cod
 |---|---|---|
 | Screen flash on continuity | Add display call at EXTI3 handler (0x08009C11) | Medium |
 | Custom beep patterns | Modify TIM8 PWM parameters at buzzer trigger points | Medium |
+| Buzzer audio system | Synthesized tones (NES-style), pitch-proportional continuity, PWM audio playback from SPI flash. See feature_brainstorm.md "Buzzer / Audio Feedback System" | Medium |
 | Additional auto-off intervals | Add menu options to existing auto-shutdown UI | Medium |
 
 ### New Features (Requires RE + development)

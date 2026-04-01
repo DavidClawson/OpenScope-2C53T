@@ -13,7 +13,12 @@ Ideas for custom firmware features, organized by subsystem. The hardware already
 | Noise injection | White/pink noise, or noise added to a signal | Easy |
 | Chirp / burst | Time-limited signals: single pulse, N cycles, rising frequency chirp | Easy-Medium |
 | Servo tester | Generate standard RC servo PWM (50Hz, 1-2ms adjustable pulse) | Easy |
+| S-Bus generation | Inverted UART at 100kbaud, 8E2 framing — test RC receivers, flight controllers, ESCs. Use UART peripheral with signal inverter or bit-bang from timer. Full S-Bus frame = 25 bytes, 16 proportional channels. | Easy-Medium |
 | DDS improvements | Better output quality if FPGA has a DDS path (vs MCU DAC) | Unknown (needs FPGA RE) |
+
+### DAC Architecture Note
+
+The signal generator uses the MCU's built-in 12-bit DAC (2 channels) driven by DMA from a hardware timer. The timer sets the sample rate, DMA moves data from a lookup table to the DAC, CPU isn't involved after setup. Waveform tables are typically 256-512 points (diminishing returns beyond that with 12-bit resolution). For digital protocols (PWM, S-Bus, I2C test traffic), the MCU's hardware timer outputs and UART/SPI peripherals are more appropriate than the DAC.
 
 ## Oscilloscope Display Modes
 
@@ -96,6 +101,47 @@ These leverage the 3-in-1 design — features no single-function instrument can 
 | Guided diagnostic tests | JSON procedure files with auto-setup and pass/fail | Medium |
 | Known-good waveform library | Reference waveforms for comparison | Easy (data contribution) |
 | Vehicle definition files | DBC/JSON files mapping CAN IDs to signal names per vehicle | Easy (data contribution) |
+
+## Buzzer / Audio Feedback System
+
+The buzzer is a passive piezo driven by TIM8 PWM. Full control over frequency (pitch) and duty cycle (perceived volume).
+
+### Synthesized Tones (NES-style)
+
+No storage needed — just frequency/duration/duty-cycle sequences driven by timer callbacks. A few dozen bytes per sound effect.
+
+| Sound | Implementation | Use Case |
+|---|---|---|
+| Single beep | Fixed frequency, short duration | Auto-hold captured |
+| Double beep | Two quick tones | Stack push / short-to-reset |
+| Rising sweep | Rapid frequency ramp up | Power-on, success |
+| Descending tones | Three falling notes | Stack full, warning |
+| Pitch-proportional tone | Continuous, frequency tracks measurement value | Continuity (R→pitch), nulling/tuning |
+| Trigger tick | Very short click on each trigger event | Signal presence confirmation |
+| Threshold alarm | Alternating two-tone | Voltage/current limit crossed |
+
+### PWM Audio Playback
+
+Play sampled audio from SPI flash using PWM as a crude 1-bit DAC:
+1. Store 8-bit audio samples in SPI flash (8kHz sample rate = phone quality)
+2. Run TIM8 at high carrier frequency (~62.5kHz, above audible range)
+3. Separate timer interrupt at audio sample rate updates PWM duty cycle per sample
+4. Buzzer's mechanical inertia acts as natural low-pass filter
+
+Quality: "talking greeting card" — recognizable sounds, tinny, lo-fi. Good for short effects.
+Storage: 16MB SPI flash at 8kHz 8-bit mono = 30+ minutes. A startup chime or custom alert is a few KB.
+
+### Audio as Measurement Tool
+
+The most useful audio modes are where sound encodes a **continuous variable**, not just binary beep/no-beep:
+
+| Mode | Audio Behavior | Use Case |
+|---|---|---|
+| Continuity (pitch ∝ resistance) | Lower R = higher pitch | Trace wires through harness by ear |
+| Null/peak tuning | Pitch rises approaching target, steady tone at target | Trim pots, antenna tuning, bridge balancing |
+| Threshold alarm | Silent until limit crossed, then alert tone | Monitor a rail while probing elsewhere |
+| Trigger tick | Faint click on each trigger | Confirm intermittent signal without looking |
+| Auto-hold feedback | Rising tone → firm beep on lock | Eyes-free measurement (see meter_ideas.md) |
 
 ## UX / Software
 

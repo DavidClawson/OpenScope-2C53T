@@ -13,8 +13,8 @@ Reverse engineering and clean-room rewrite of the firmware for the **FNIRSI 2C53
 - **FPGA:** Gowin GW1N-UV2 (non-volatile, retains bitstream across power cycles) — handles 250MS/s ADC sampling via **SPI3 data + USART2 commands**
 - **SPI Flash:** Winbond W25Q128JVSQ (16MB) — UI assets and system files
 - **DAC:** 2-channel 12-bit (built-in) for signal generator output
-- **Buttons:** 15 physical buttons (CH1, CH2, MOVE, SELECT, TRIGGER, PRM, AUTO, SAVE, MENU, arrows, OK, POWER)
-- **Touch:** I2C interface (likely GT911/GT915)
+- **Buttons:** 15 physical buttons — 4x3 bidirectional GPIO matrix (PA7/PB0/PC5/PE2 × PA8/PC10/PE3) + 3 passive (PC8=POWER, PB7=PRM, PC13=UP). 14/15 hardware-confirmed. TMR3 ISR at 500Hz.
+- **Touch:** I2C interface (likely GT911/GT915) — not used for button input
 - **Board revision:** 2C53T-V1.4
 
 ### Confirmed Pin Assignments
@@ -28,6 +28,7 @@ Reverse engineering and clean-room rewrite of the firmware for the **FNIRSI 2C53
 | FPGA active mode | PB11 (GPIO) | Set HIGH during active measurement mode |
 | FPGA USART cmd | PA2 (TX), PA3 (RX) | 9600 baud, 10-byte TX / 12-byte RX frames |
 | SWD | PA13 (SWDIO), PA14 (SWCLK) | Debug header near USB-C port |
+| Battery sense | PB1 (ADC1 Ch9) | 239.5-cycle sample time, software-triggered |
 | UART debug | RX, TX, GND | Through-hole pads (not yet mapped to MCU pins) |
 | FPGA programming | M0-M3, GND, VDD, VPP | Header for Gowin programmer |
 | Pinhole reset | NRST | Accessible from outside case |
@@ -47,12 +48,17 @@ firmware/           # Custom replacement firmware (GCC + Make)
   Makefile.hwtest   # Minimal hardware test build
 
 reverse_engineering/  # Ghidra decompilation artifacts
-  COVERAGE.md             # RE coverage tracker: 362 functions, 45.5% gap analysis, priority tiers
+  COVERAGE.md             # RE coverage tracker: 309 real functions, fully catalogued
   analysis_v120/          # Latest analysis: full_decompile.c, hardware_map, xref_map, RAM map, FPGA protocol
+    fpga_task_annotated.c     # Annotated FPGA task (10 sub-functions, 580+ lines)
+    FPGA_TASK_ANALYSIS.md     # FPGA protocol analysis: SPI3 format, command table, state machine
+    function_names.md         # Complete function naming inventory (309 real + 61 false positives)
+    gap_functions.md          # 17 gap functions catalogued with priorities
+    function_map_complete.txt # Complete 309-entry function map
   decompiled_2C53T.c      # V1.2.0 decompilation (~35K lines, 292+ functions)
   decompiled_2C53T_v2.c   # Updated with named functions (~39K lines)
   strings_with_addresses.txt  # 290 strings mapped to firmware addresses
-  ghidra_scripts/         # 6 Java automation scripts
+  ghidra_scripts/         # 14 Java automation scripts
 
 emulator/           # Simulation infrastructure
   renode/           # Full-system emulation (GD32F307 platform + peripherals)
@@ -129,20 +135,32 @@ make renode-test                 # 5-second smoke test
 
 ## RE Reference
 
-- **Coverage:** 362 functions decompiled, 138KB mapped (54.5%), 113KB in gaps (see `reverse_engineering/COVERAGE.md`)
-- **FPGA interface:** SPI3 (0x40003C00) on PB3/PB4/PB5 for bulk data, USART (0x40004400) on PA2/PA3 for commands
-- **FPGA task:** FUN_08036934 is actually 10 sub-functions (~12KB total), comprehensively decompiled
+- **Coverage:** 309 real functions fully decompiled and named (138 HIGH, 182 MEDIUM, 42 LOW confidence). 61 Ghidra false positives eliminated.
+- **FPGA interface:** Dual-channel — SPI3 (60MHz) for bulk ADC data, USART2 (9600 baud) for commands. Fully annotated.
+- **FPGA task:** 10 sub-functions across 11.5KB, annotated in `analysis_v120/fpga_task_annotated.c`
+- **SPI3 data format:** Interleaved CH1/CH2 unsigned 8-bit. Normal=1024B (512 pairs), dual=2048B. ADC offset=-28.0.
 - **SPI3 config:** Mode 3 (CPOL=1, CPHA=1), Master, /2 clock (60MHz), 8-bit, software CS on PB6
-- **USART protocol:** 10-byte TX frames, 12-byte RX frames (0x5A 0xA5 header), 9600 baud, timer-driven (not USART IRQ)
+- **USART protocol:** 10-byte TX frames (header + cmd + params + checksum), 12-byte RX (0x5A 0xA5 data, 0xAA 0x55 echo). Timer-driven via TMR3.
+- **FPGA command codes:** ALL ~40 mapped (0x00-0x2C) — scope, trigger, timebase, meter, siggen, freq counter, period, duty cycle, continuity/diode. Dispatch table at 0x0804BE74.
 - **FPGA control pins:** PC6 = SPI enable (HIGH), PB11 = active mode (HIGH)
-- **Hardware verified:** PB4 (MISO) physically connected to FPGA (GPIO test confirmed)
+- **Buttons: 14/15 HARDWARE CONFIRMED.** Bidirectional 4x3 matrix + 3 passive. See `analysis_v120/button_map_confirmed.md` for complete mapping. Only PRM (PB7) unresolved.
+- **Acquisition:** Double-buffered (2 queue items per trigger), 9-mode state machine (fast TB, roll, normal, dual, extended, meter ADC, siggen, calibration, self-test)
+- **Calibration:** ADC offset -28.0, per-channel VFP pipeline, 301-byte cal data loaded from SPI flash per channel
+- **Meter data:** BCD digit extraction from cross-byte nibbles in USART RX frames, 8-state mode FSM
 - **Boot sequence:** 53-step init documented in `reverse_engineering/analysis_v120/FPGA_BOOT_SEQUENCE.md`
+- **Master init:** FUN_08023A50 (15.4KB) — configures all peripherals, creates all FreeRTOS tasks
 - **8 FreeRTOS tasks:** display, key, osc, fpga, dvom_TX, dvom_RX, Timer1, Timer2
-- **Comprehensive decompilation:** 12,700 lines across 3 files (init function, FPGA task, USART protocol)
+- **7 FreeRTOS queues:** usart_cmd (0x20002D6C), button_event (0x20002D70), usart_tx (0x20002D74), spi3_data (0x20002D78), meter_sem (0x20002D7C), fpga_sem1 (0x20002D80), fpga_sem2 (0x20002D84)
+- **Auto power-off:** 3 tiers (15min/30min/1hr) based on probe state
+- **Watchdog:** IWDG fed every 11 calls to input_and_housekeeping (~50ms)
 - Calibration tables in RAM: 6 gain/offset pairs at 0x20000358–0x20000434 (loaded from SPI flash at boot)
 - Filesystem paths in firmware: `2:/Screenshot file/`, `3:/System file/`
 - Firmware versions analyzed: V1.0.3 → V1.0.7 → V1.1.2 → V1.2.0
-- **Key docs:** `docs/fpga_protocol.md`, `docs/peripheral_map.md`, `reverse_engineering/analysis_v120/FPGA_BOOT_SEQUENCE.md`
+- **IOMUX remap:** `(reg & ~0xF000) | 0x2000` at AFIO+0x08 — disables JTAG-DP, keeps SW-DP, frees PB3/PB4/PB5 for SPI3
+- **Battery ADC:** PB1 / ADC1 Channel 9, 239.5-cycle sample, right-aligned, software-triggered
+- **TMR8:** Vector repurposed for FatFs. TMR8 hardware is unused.
+- **DMA:** Ch1 = LCD framebuffer (16-bit mem-to-mem → EXMC). SPI3 = polled. USART2 = interrupt-driven.
+- **Key docs:** `reverse_engineering/ARCHITECTURE.md` (start here), `FPGA_PROTOCOL_COMPLETE.md`, `HARDWARE_PINOUT.md`, `CALIBRATION.md`, `analysis_v120/FPGA_TASK_ANALYSIS.md`
 
 ## Current State
 
@@ -156,6 +174,7 @@ make renode-test                 # 5-second smoke test
 - SDL3 native LCD viewer with interactive button input for emulator
 - Soak testing infrastructure (random button fuzzing with fault monitoring)
 - Watchdog, health monitoring, task stack checking
-- Button input on hardware not yet mapped (pin assignments need verification)
+- **Button input: 14/15 HARDWARE CONFIRMED** — bidirectional 4x3 matrix scan at 500Hz via TMR3 ISR. Rows: PA7,PB0,PC5,PE2. Cols: PA8,PC10,PE3. Passive: PC8(POWER),PB7(PRM),PC13(UP). Complete mapping in `analysis_v120/button_map_confirmed.md`. PRM (PB7) detection still needs work.
 - **FPGA USART communication working** — bidirectional, frames captured, meter data flowing
-- **FPGA SPI3 not yet responding** — hardware connected (verified), correct mode/pins/control signals set, but FPGA holds MISO HIGH. Likely needs timer-generated hardware trigger or specific init sequence timing. See `FPGA_BOOT_SEQUENCE.md`
+- **FPGA SPI3 root cause identified** — was missing: PB11 HIGH (active mode), full USART boot command sequence (0x01-0x08), queue-driven triggering (not polled), SysTick delays between boot phases. See `FPGA_TASK_ANALYSIS.md`
+- **Stock firmware ~98% understood** — 309 functions named, ALL FPGA commands mapped, ADC format cracked, button input resolved, battery ADC found, IOMUX remap extracted, TMR8 mystery solved. Remaining: PLL startup assembly, 42 low-confidence function names.

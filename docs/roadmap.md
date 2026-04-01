@@ -123,12 +123,22 @@
 - Compare to battery rating
 - Effort: Small — voltage measurement + analysis
 
-**Parasitic Draw Hunt**
+**Parasitic Draw Hunt (Current Clamp Method)**
 - Roll mode with current clamp on battery negative
 - Long-duration recording (30+ minutes) to catch modules waking up
 - Mark events when current spikes
 - "Module wake at T+12:34, drew 2.3A for 150ms"
 - Effort: Medium — roll mode + event detection
+
+**Parasitic Draw Hunt (Fuse Voltage Drop Method)**
+- Measure millivolt drop across automotive blade fuses (fuse as shunt resistor)
+- Built-in lookup table: fuse type (Mini/ATC/Maxi/Micro2) × rating (1A-40A) → typical resistance
+- UI: arrow keys to select fuse type and rating, auto-calculate current from V/R
+- No current clamp needed — just probe across each fuse in the fuse box
+- Resolution depends on multimeter ADC path; heavy averaging helps (DC measurement, unlimited time)
+- Combines with SPI flash data logging for time-series parasitic draw profiles
+- See meter_ideas.md for full UI mockup and fuse resistance table
+- Effort: Small — lookup table + UI + existing meter measurement path
 
 ### Priority 4: Specialized Applications
 
@@ -166,6 +176,17 @@
 - Effort: Medium
 
 ### Priority 5: Connectivity & Data
+
+**Custom Bootloader (Closed-Case USB Flashing)**
+- Small program (~4-8KB) at start of flash, runs before main firmware
+- On boot, checks a condition (e.g., USB plugged in + MENU button held)
+- If yes: enters DFU mode over USB — flash new firmware without opening the case
+- If no: jumps to main firmware at offset (e.g., 0x08002000)
+- Eliminates the need to hold BOOT0 resistor pad + pinhole reset
+- Workflow becomes: plug USB, hold button, power on, flash, done
+- Future: could check SPI flash for update file, or receive OTA via ESP32
+- Effort: Small-Medium — self-contained, well-understood pattern, but must be rock-solid
+- **Build this after core firmware is stable** — bricking during bootloader development is the risk
 
 **USB Streaming to PC**
 - CDC virtual serial port mode
