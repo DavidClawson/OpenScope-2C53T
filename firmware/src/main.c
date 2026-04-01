@@ -124,8 +124,26 @@ static void vDisplayTask(void *pvParameters)
                 lcd_clear(COLOR_BLACK);
                 draw_status_bar();
                 draw_info_bar();
-                /* Fall through to draw current mode */
-                /* FALLTHROUGH */
+                /* Draw current mode's screen */
+                if (current_mode == MODE_OSCILLOSCOPE) {
+#ifdef FEATURE_FFT
+                    if (scope_view == SCOPE_VIEW_FFT)
+                        draw_fft_screen();
+                    else if (scope_view == SCOPE_VIEW_SPLIT)
+                        draw_split_screen(frame);
+                    else if (scope_view == SCOPE_VIEW_WATERFALL)
+                        draw_waterfall_screen();
+                    else
+#endif
+                        draw_scope_screen(frame);
+                } else if (current_mode == MODE_MULTIMETER) {
+                    draw_meter_screen();
+                } else if (current_mode == MODE_SIGNAL_GEN) {
+                    draw_siggen_screen(frame);
+                } else if (current_mode == MODE_SETTINGS) {
+                    draw_settings_screen();
+                }
+                break;
             case DCMD_DRAW_SCOPE:
                 if (current_mode == MODE_OSCILLOSCOPE) {
 #ifdef FEATURE_FFT
@@ -259,6 +277,9 @@ int main(void)
     crm_periph_clock_enable(CRM_GPIOC_PERIPH_CLOCK, TRUE);
     GPIOC->cfghr = (GPIOC->cfghr & ~(0xF << 4)) | (0x3 << 4); /* PC9 push-pull 50MHz */
     GPIOC->scr = (1 << 9);  /* PC9 HIGH */
+
+    /* Set VTOR for app at 0x08004000 (bootloader occupies 0x08000000-0x08003FFF) */
+    SCB->VTOR = FLASH_BASE | 0x4000;
 
     /* Check if previous run requested DFU reboot (magic word in RAM).
      * RAM persists across soft reset, so the magic word survives. */

@@ -22,7 +22,7 @@
 ENTRY(Reset_Handler)
 
 /* Highest address of the user mode stack */
-_estack = 0x20038000;    /* end of 224KB extended RAM (requires EOPB0=0xFE) */
+_estack = 0x20037FE0;    /* leave top 32 bytes for DFU magic at 0x20037FE0 */
 
 /* Generate a link error if heap and stack don't fit into RAM */
 _Min_Heap_Size = 0x200;      /* required amount of heap  */

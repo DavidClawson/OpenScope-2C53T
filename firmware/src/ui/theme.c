@@ -100,6 +100,12 @@ theme_id_t theme_cycle(void)
     return current_theme_id;
 }
 
+theme_id_t theme_cycle_reverse(void)
+{
+    current_theme_id = (current_theme_id + THEME_COUNT - 1) % THEME_COUNT;
+    return current_theme_id;
+}
+
 const theme_t *theme_get(void)
 {
     return &themes[current_theme_id];

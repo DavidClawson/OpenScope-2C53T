@@ -9,16 +9,15 @@ Build a permanent USB bootloader so the case can be closed and firmware updated 
 ```
 Flash Layout (AT32F403A, 1MB):
 ┌──────────────────────┐ 0x08000000
-│  BOOTLOADER (8KB)    │  Permanent, never overwritten by user
-│  - PC9 power hold    │
+│  BOOTLOADER (16KB)   │  Permanent, never overwritten by user
+│  - PC9 power hold    │  (~9KB code, 16KB reserved)
 │  - RAM flag check    │
 │  - USB HID IAP       │
 │  - Flash programmer  │
-├──────────────────────┤ 0x08001800
-│  IAP Flag (2KB)      │  Magic word 0x41544B38 = valid app
-├──────────────────────┤ 0x08002000
-│  APPLICATION         │  Main firmware, VTOR offset = 0x2000
-│  (~1016KB available) │
+│  (IAP flag at 0x3800)│  Magic word 0x41544B38 = valid app
+├──────────────────────┤ 0x08004000
+│  APPLICATION         │  Main firmware, VTOR offset = 0x4000
+│  (~1008KB available) │
 └──────────────────────┘ 0x080FFFFF
 ```
 
@@ -26,7 +25,7 @@ Flash Layout (AT32F403A, 1MB):
 
 1. Power on → bootloader starts → PC9 HIGH (power hold)
 2. Check RAM at 0x20037FF0: if magic word 0xDEADBEEF → enter USB DFU
-3. Check flash at 0x08001800: if 0x41544B38 → jump to app at 0x08002000
+3. Check flash at 0x08003800: if 0x41544B38 → jump to app at 0x08004000
 4. Otherwise → enter USB DFU (no valid app, or update requested)
 
 ## Implementation
@@ -40,7 +39,7 @@ Based on ArteryTek's HID IAP example in the SDK:
 Key adaptations:
 - **USB clock:** Use HICK (internal 48MHz) since 240MHz has no /5 divider for USB
 - **PC9 power hold:** Must be first instruction
-- **App address:** 0x08002000 (not 0x08005000 as in the demo)
+- **App address:** 0x08004000 (not 0x08005000 as in the demo)
 - **RAM flag:** Check 0x20037FF0 for 0xDEADBEEF before flash flag
 
 USB HID protocol (from SDK):
@@ -50,9 +49,9 @@ USB HID protocol (from SDK):
 
 ### App Changes
 
-1. **Linker script:** FLASH origin = 0x08002000, LENGTH = 1016K
-2. **VTOR:** `nvic_vector_table_set(NVIC_VECTTAB_FLASH, 0x2000)` at start of main()
-3. **DFU request:** Write 0xDEADBEEF to 0x20037FF0, call NVIC_SystemReset()
+1. **Linker script:** FLASH origin = 0x08004000, LENGTH = 1008K  ✅ DONE
+2. **VTOR:** `SCB->VTOR = FLASH_BASE | 0x4000` at start of main()  ✅ DONE
+3. **DFU request:** Write 0xDEADBEEF to 0x20037FF0, call NVIC_SystemReset()  ✅ DONE
 
 ### Host Tool (`scripts/hid_flash.py`)
 

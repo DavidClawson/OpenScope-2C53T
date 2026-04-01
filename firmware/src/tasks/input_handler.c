@@ -29,6 +29,41 @@
 #endif
 
 /* ═══════════════════════════════════════════════════════════════════
+ * Oscilloscope settings Left/Right handler
+ * ═══════════════════════════════════════════════════════════════════ */
+
+static void osc_settings_adjust(int dir)
+{
+    scope_state_t *ss = scope_state_get();
+    switch (settings_sub_selected) {
+    case 0: /* CH1 Coupling */
+        ss->ch1.coupling = (coupling_t)((ss->ch1.coupling + COUPLING_COUNT + dir) % COUPLING_COUNT);
+        break;
+    case 1: /* CH1 Probe */
+        ss->ch1.probe = (probe_t)((ss->ch1.probe + PROBE_COUNT + dir) % PROBE_COUNT);
+        break;
+    case 2: /* CH1 20M Limit */
+        ss->ch1.bw_limit = !ss->ch1.bw_limit;
+        break;
+    case 3: /* CH2 Coupling */
+        ss->ch2.coupling = (coupling_t)((ss->ch2.coupling + COUPLING_COUNT + dir) % COUPLING_COUNT);
+        break;
+    case 4: /* CH2 Probe */
+        ss->ch2.probe = (probe_t)((ss->ch2.probe + PROBE_COUNT + dir) % PROBE_COUNT);
+        break;
+    case 5: /* CH2 20M Limit */
+        ss->ch2.bw_limit = !ss->ch2.bw_limit;
+        break;
+    case 6: /* Trigger Mode */
+        ss->trigger.mode = (trigger_mode_t)((ss->trigger.mode + TRIG_COUNT + dir) % TRIG_COUNT);
+        break;
+    case 7: /* Trigger Edge */
+        ss->trigger.edge = (trigger_edge_t)((ss->trigger.edge + TRIG_EDGE_COUNT + dir) % TRIG_EDGE_COUNT);
+        break;
+    }
+}
+
+/* ═══════════════════════════════════════════════════════════════════
  * Settings OK handler
  * ═══════════════════════════════════════════════════════════════════ */
 
@@ -434,7 +469,17 @@ uint8_t input_handle_button(button_id_t button, QueueHandle_t dq)
     /* -- LEFT / RIGHT --------------------------------------------- */
 
     case BTN_LEFT:
-        if (current_mode == MODE_SETTINGS && settings_depth == 5) {
+        if (current_mode == MODE_SETTINGS && settings_depth == 0 && settings_selected == 3) {
+            theme_cycle_reverse();
+            cmd = DCMD_DRAW_SETTINGS;
+            send_cmd(dq, cmd);
+        }
+        else if (current_mode == MODE_SETTINGS && settings_depth == 1) {
+            osc_settings_adjust(-1);
+            cmd = DCMD_DRAW_SETTINGS;
+            send_cmd(dq, cmd);
+        }
+        else if (current_mode == MODE_SETTINGS && settings_depth == 5) {
             resistor_calc_move_band(-1);
             cmd = DCMD_DRAW_SETTINGS;
             send_cmd(dq, cmd);
@@ -475,7 +520,17 @@ uint8_t input_handle_button(button_id_t button, QueueHandle_t dq)
         break;
 
     case BTN_RIGHT:
-        if (current_mode == MODE_SETTINGS && settings_depth == 5) {
+        if (current_mode == MODE_SETTINGS && settings_depth == 0 && settings_selected == 3) {
+            theme_cycle();
+            cmd = DCMD_DRAW_SETTINGS;
+            send_cmd(dq, cmd);
+        }
+        else if (current_mode == MODE_SETTINGS && settings_depth == 1) {
+            osc_settings_adjust(+1);
+            cmd = DCMD_DRAW_SETTINGS;
+            send_cmd(dq, cmd);
+        }
+        else if (current_mode == MODE_SETTINGS && settings_depth == 5) {
             resistor_calc_move_band(1);
             cmd = DCMD_DRAW_SETTINGS;
             send_cmd(dq, cmd);

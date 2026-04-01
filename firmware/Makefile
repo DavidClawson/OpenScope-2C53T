@@ -169,7 +169,7 @@ ASFLAGS = $(MCU) $(C_DEFS) $(C_INCLUDES)
 ######################################################################
 # Linker flags
 ######################################################################
-LDSCRIPT = ld/at32f403a.ld
+LDSCRIPT = ld/at32f403a_app.ld
 
 LDFLAGS  = $(MCU)
 LDFLAGS += -specs=nano.specs
@@ -233,12 +233,30 @@ size: $(BUILD_DIR)/$(TARGET).elf
 # Build for emulator (skips HAL clock init that hangs without real hardware)
 EMU_EXCLUDE = system_at32f403a_407.c
 emu: CFLAGS += -DEMULATOR_BUILD
+emu: LDSCRIPT = ld/at32f403a.ld
 emu: C_SOURCES := $(filter-out %$(EMU_EXCLUDE),$(C_SOURCES))
 emu: clean all
 
-# Flash via DFU (device must be in DFU mode)
+# Flash app via USB HID bootloader (bootloader must be running)
+flash: $(BUILD_DIR)/$(TARGET).bin
+	uv run ../scripts/hid_flash.py $<
+
+# Flash app via DFU (device must be in ROM DFU mode — BOOT0 + reset)
 flash-dfu: $(BUILD_DIR)/$(TARGET).bin
-	dfu-util -a 0 -d 2e3c:df11 -s 0x08000000:leave -D $<
+	dfu-util -a 0 -d 2e3c:df11 -s 0x08004000:leave -D $<
+
+# Build and flash the bootloader (one-time, via DFU)
+bootloader:
+	$(MAKE) -C bootloader
+
+flash-bootloader:
+	$(MAKE) -C bootloader
+	dfu-util -a 0 -d 2e3c:df11 -s 0x08000000 -D bootloader/build/bootloader.bin
+
+# Flash both bootloader + app in one go (via ROM DFU, for initial setup)
+flash-all: $(BUILD_DIR)/$(TARGET).bin bootloader
+	dfu-util -a 0 -d 2e3c:df11 -s 0x08000000 -D bootloader/build/bootloader.bin
+	dfu-util -a 0 -d 2e3c:df11 -s 0x08004000:leave -D $(BUILD_DIR)/$(TARGET).bin
 
 # Run in Renode emulator (display only, no input)
 renode: emu
@@ -264,4 +282,4 @@ soak-test: emu
 soak-quick: emu
 	python3 ../scripts/soak_test.py --no-build --duration 30 --seed $(SOAK_SEED) --verbose
 
-.PHONY: all clean disasm size renode soak-test soak-quick
+.PHONY: all clean disasm size renode soak-test soak-quick flash flash-dfu bootloader flash-bootloader flash-all
