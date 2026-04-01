@@ -72,8 +72,15 @@
 #define xPortPendSVHandler  PendSV_Handler
 #define xPortSysTickHandler SysTick_Handler
 
-/* Assert — catches FreeRTOS API misuse during development */
-#define configASSERT(x) if((x) == 0) { taskDISABLE_INTERRUPTS(); for(;;); }
+/* Assert — catches FreeRTOS API misuse during development.
+ * Routes through fault_display() so the user sees what happened
+ * before the watchdog resets the MCU (~3 seconds). */
+extern void fault_display(const char *title, const char *detail);
+#define configASSERT(x) if((x) == 0) { \
+    taskDISABLE_INTERRUPTS(); \
+    fault_display("ASSERT FAIL", "FreeRTOS API misuse"); \
+    for(;;); \
+}
 
 /* Include FreeRTOS API functions */
 #define INCLUDE_vTaskPrioritySet            1

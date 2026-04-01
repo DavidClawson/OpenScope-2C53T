@@ -31,6 +31,7 @@ extern void system_clock_config(void);
 #include "persistence.h"
 #include "button_scan.h"
 #include "dfu_boot.h"
+#include "battery.h"
 
 /* ═══════════════════════════════════════════════════════════════════
  * Global State (extern'd via ui.h for UI modules)
@@ -122,6 +123,7 @@ static void vDisplayTask(void *pvParameters)
                 break;
             case DCMD_REDRAW_ALL:
                 lcd_clear(COLOR_BLACK);
+                status_bar_invalidate();
                 draw_status_bar();
                 draw_info_bar();
                 /* Draw current mode's screen */
@@ -246,6 +248,9 @@ static void vOneSecondTimerCallback(TimerHandle_t xTimer)
     (void)xTimer;
     uptime_seconds++;
     uint8_t cmd = DCMD_DRAW_STATUS_BAR;
+    /* Zero timeout is intentional: timer service task is highest priority,
+     * so blocking here would stall all timers including the health check.
+     * A dropped status bar update is harmless — the next one catches up. */
     xQueueSend(xDisplayQueue, &cmd, 0);
 }
 
@@ -295,8 +300,14 @@ int main(void)
      * before this firmware will work. See eopb0_setup.c or use:
      *   dfu-util -a 1 -d 2e3c:df11 -s 0x1FFFF800 -D option_bytes48.bin */
 
+    /* Feed watchdog early — IWDG may still be running from previous boot
+     * (it can't be stopped once started, survives system reset) */
+    wdt_counter_reload();
+
     /* Clock init to 240MHz */
     system_clock_config();
+
+    wdt_counter_reload();
 
     /* Enable peripheral clocks */
     crm_periph_clock_enable(CRM_GPIOA_PERIPH_CLOCK, TRUE);
@@ -310,6 +321,11 @@ int main(void)
     GPIOB->cfghr = (GPIOB->cfghr & ~(0xF << 0)) | (0x3 << 0); /* PB8 push-pull 50MHz */
     GPIOB->scr = (1 << 8);
 #endif
+
+    /* Initialize battery ADC (PB1) */
+    battery_adc_init();
+
+    wdt_counter_reload();
 
     /* Initialize theme system */
     theme_init(THEME_DARK_BLUE);
@@ -365,6 +381,7 @@ int main(void)
         #undef _GPIO_CFG
     }
 
+    wdt_counter_reload();
     /* LCD init complete — UI will be drawn by FreeRTOS display task */
 
     /*
@@ -397,8 +414,8 @@ int main(void)
     button_scan_init(xInputQueue);
 
     /* Create tasks */
-    xTaskCreate(vDisplayTask, "display", 512, NULL, 1, &xDisplayTaskHandle);
-    xTaskCreate(vInputTask,   "key",     256, NULL, 4, &xInputTaskHandle);
+    xTaskCreate(vDisplayTask, "display", 768, NULL, 1, &xDisplayTaskHandle);
+    xTaskCreate(vInputTask,   "key",     384, NULL, 4, &xInputTaskHandle);
 
     /* Register tasks with health monitor */
     health_slot_display = health_register("display", xDisplayTaskHandle);
