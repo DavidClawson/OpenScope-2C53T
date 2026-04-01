@@ -29,6 +29,7 @@ static const char *settings_items[SETTINGS_ITEM_COUNT] = {
     "Bode Plot",
     "Startup on Boot",
     "About",
+    "Firmware Update",
     "Factory Reset",
 };
 
@@ -50,13 +51,18 @@ static const char *math_sub_labels[MATH_SUB_ITEMS] = {
  * Helper: draw a generic menu list
  * ═══════════════════════════════════════════════════════════════════ */
 
-static void draw_menu_item(int i, int selected_idx, const char *label,
-                           const char *value, const theme_t *th)
-{
-    uint16_t y = MENU_TOP + i * MENU_ITEM_H;
-    bool selected = (i == selected_idx);
+/* Maximum visible items given screen geometry */
+#define MENU_VISIBLE    ((LCD_HEIGHT - 20 - MENU_TOP) / MENU_ITEM_H)
 
-    if (y + MENU_ITEM_H > LCD_HEIGHT - 20) return;
+static void draw_menu_item(int i, int scroll_offset, int selected_idx,
+                           const char *label, const char *value,
+                           const theme_t *th)
+{
+    int row = i - scroll_offset;
+    if (row < 0 || row >= MENU_VISIBLE) return;
+
+    uint16_t y = MENU_TOP + row * MENU_ITEM_H;
+    bool selected = (i == selected_idx);
 
     uint16_t bg = selected ? th->menu_selected_bg : th->background;
 
@@ -106,7 +112,7 @@ static void draw_settings_math(void)
             val = persist_enabled ? "On" : "Off";
         }
 
-        draw_menu_item(i, settings_sub_selected, math_sub_labels[i], val, th);
+        draw_menu_item(i, 0, settings_sub_selected, math_sub_labels[i], val, th);
     }
 }
 
@@ -119,6 +125,11 @@ static void draw_settings_top(void)
     font_draw_string_center(LCD_WIDTH / 2, 20, "Settings",
                             th->text_primary, th->background, &font_large);
 
+    /* Compute scroll offset so selected item is always visible */
+    int scroll = 0;
+    if (settings_selected >= MENU_VISIBLE)
+        scroll = settings_selected - MENU_VISIBLE + 1;
+
     for (int i = 0; i < SETTINGS_ITEM_COUNT; i++) {
         const char *value = NULL;
 
@@ -129,8 +140,9 @@ static void draw_settings_top(void)
         if (i == 5) value = ">";        /* Component Tester */
         if (i == 6) value = ">";        /* Bode Plot */
         if (i == 8) value = ">";        /* About: has detail screen */
+        if (i == 9) value = "DFU";      /* Firmware Update: reboot to bootloader */
 
-        draw_menu_item(i, settings_selected, settings_items[i], value, th);
+        draw_menu_item(i, scroll, settings_selected, settings_items[i], value, th);
     }
 }
 
@@ -149,25 +161,25 @@ static void draw_settings_osc(void)
                             th->text_primary, th->background, &font_large);
 
     /* CH1 section */
-    draw_menu_item(0, settings_sub_selected,
+    draw_menu_item(0, 0, settings_sub_selected,
                    "CH1 Coupling", coupling_labels[ss->ch1.coupling], th);
-    draw_menu_item(1, settings_sub_selected,
+    draw_menu_item(1, 0, settings_sub_selected,
                    "CH1 Probe", probe_labels[ss->ch1.probe], th);
-    draw_menu_item(2, settings_sub_selected,
+    draw_menu_item(2, 0, settings_sub_selected,
                    "CH1 20M Limit", ss->ch1.bw_limit ? "ON" : "OFF", th);
 
     /* CH2 section */
-    draw_menu_item(3, settings_sub_selected,
+    draw_menu_item(3, 0, settings_sub_selected,
                    "CH2 Coupling", coupling_labels[ss->ch2.coupling], th);
-    draw_menu_item(4, settings_sub_selected,
+    draw_menu_item(4, 0, settings_sub_selected,
                    "CH2 Probe", probe_labels[ss->ch2.probe], th);
-    draw_menu_item(5, settings_sub_selected,
+    draw_menu_item(5, 0, settings_sub_selected,
                    "CH2 20M Limit", ss->ch2.bw_limit ? "ON" : "OFF", th);
 
     /* Trigger section */
-    draw_menu_item(6, settings_sub_selected,
+    draw_menu_item(6, 0, settings_sub_selected,
                    "Trigger Mode", trigger_mode_labels[ss->trigger.mode], th);
-    draw_menu_item(7, settings_sub_selected,
+    draw_menu_item(7, 0, settings_sub_selected,
                    "Trigger Edge", trigger_edge_labels[ss->trigger.edge], th);
 }
 

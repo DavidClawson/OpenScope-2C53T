@@ -59,6 +59,12 @@ void input_handle_settings_ok(void)
         case 8: /* About -- display info screen */
             settings_depth = 2;
             break;
+        case 9: /* Firmware Update -- reboot into DFU bootloader */
+            {
+                extern void dfu_request_reboot(void);
+                dfu_request_reboot();
+            }
+            break;
         default:
             break;
         }

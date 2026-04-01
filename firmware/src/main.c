@@ -29,6 +29,8 @@ extern void system_clock_config(void);
 #include "math_channel.h"
 #include "component_test.h"
 #include "persistence.h"
+#include "button_scan.h"
+#include "dfu_boot.h"
 
 /* ═══════════════════════════════════════════════════════════════════
  * Global State (extern'd via ui.h for UI modules)
@@ -193,50 +195,28 @@ static void vDisplayTask(void *pvParameters)
 /*
  * Input Task (Priority 4 — highest user task, matches original firmware)
  *
- * Polls GPIO for button presses, debounces, then delegates to
- * input_handle_button() in input_handler.c for all action logic.
+ * Receives hardware-debounced button presses from the TMR3 matrix scan
+ * driver (button_scan.c), then delegates to input_handle_button() for
+ * all action logic.
+ *
+ * The old GPIO polling code was replaced after hardware testing confirmed
+ * the buttons use a bidirectional 4x3 matrix requiring active scanning.
+ * See: reverse_engineering/analysis_v120/button_map_confirmed.md
  */
 static void vInputTask(void *pvParameters)
 {
     (void)pvParameters;
-    button_id_t last_button = BTN_NONE;
-    uint8_t debounce_count = 0;
 
     for (;;) {
-        button_id_t pressed = BTN_NONE;
+        button_id_t pressed;
 
-        uint16_t portc = (uint16_t)GPIOC->idt;
-        uint16_t portb = (uint16_t)GPIOB->idt;
-
-        /* Map GPIO states to button IDs */
-        if (!(portc & (1 << 0))) pressed = BTN_MENU;
-        else if (!(portc & (1 << 1))) pressed = BTN_AUTO;
-        else if (!(portc & (1 << 2))) pressed = BTN_SAVE;
-        else if (!(portc & (1 << 3))) pressed = BTN_CH1;
-        else if (!(portc & (1 << 4))) pressed = BTN_CH2;
-        else if (!(portb & (1 << 0))) pressed = BTN_UP;
-        else if (!(portb & (1 << 1))) pressed = BTN_DOWN;
-        else if (!(portb & (1 << 2))) pressed = BTN_LEFT;
-        else if (!(portb & (1 << 3))) pressed = BTN_RIGHT;
-        else if (!(portb & (1 << 4))) pressed = BTN_OK;
-        else if (!(portc & (1 << 5))) pressed = BTN_PRM;
-        else if (!(portc & (1 << 6))) pressed = BTN_SELECT;
-
-        /* Simple debounce */
-        if (pressed != BTN_NONE && pressed == last_button) {
-            debounce_count++;
-            if (debounce_count == 3) {
-                input_handle_button(pressed, xDisplayQueue);
-            }
-        } else {
-            debounce_count = 0;
+        /* Block until TMR3 ISR confirms a debounced button press */
+        if (xQueueReceive(xInputQueue, &pressed, pdMS_TO_TICKS(100)) == pdTRUE) {
+            input_handle_button(pressed, xDisplayQueue);
         }
-        last_button = pressed;
 
         /* Check in with health monitor */
         health_checkin(health_slot_input);
-
-        vTaskDelay(pdMS_TO_TICKS(20));
     }
 }
 
@@ -275,10 +255,20 @@ int main(void)
     *(volatile uint32_t *)0x40021018 = 0x0000FFFD;
     *(volatile uint32_t *)0x4002101C = 0x3FFFFFFF;
 #else
-    /* FIRST: Power hold — PC9 HIGH to keep device on */
+    /* Power hold — PC9 HIGH to keep device on (MUST be first!) */
     crm_periph_clock_enable(CRM_GPIOC_PERIPH_CLOCK, TRUE);
     GPIOC->cfghr = (GPIOC->cfghr & ~(0xF << 4)) | (0x3 << 4); /* PC9 push-pull 50MHz */
     GPIOC->scr = (1 << 9);  /* PC9 HIGH */
+
+    /* Check if previous run requested DFU reboot (magic word in RAM).
+     * RAM persists across soft reset, so the magic word survives. */
+    dfu_check_magic();
+
+    /* NOTE: Boot button DFU check (dfu_check_boot_button) is disabled for now.
+     * PC8 (POWER) reads LOW during power-on since it's the same button that
+     * turns the device on, causing false DFU entry. Need a different trigger
+     * (e.g., MENU + POWER combo, or long-hold detection with LCD feedback).
+     * For now, use Settings > Firmware Update for software DFU entry. */
 
     /* NOTE: EOPB0 must be set to 0xFE (224KB SRAM) via DFU option bytes
      * before this firmware will work. See eopb0_setup.c or use:
@@ -376,16 +366,14 @@ int main(void)
     }
 #endif
 
-    /* Configure button GPIOs as inputs with pull-up
-     * Mode=0 (input), CNF=2 (input with pull-up/down), then set ODR for pull-up */
-    GPIOC->cfglr = (GPIOC->cfglr & 0xF0000000) | 0x08888888; /* PC0-PC6 input pull-up */
-    GPIOC->scr = 0x007F;  /* Pull-up on PC0-PC6 */
-    GPIOB->cfglr = (GPIOB->cfglr & 0xFFF00000) | 0x00088888; /* PB0-PB4 input pull-up */
-    GPIOB->scr = 0x001F;  /* Pull-up on PB0-PB4 */
-
     /* Create queues */
     xDisplayQueue = xQueueCreate(20, sizeof(uint8_t));
-    xInputQueue   = xQueueCreate(15, sizeof(uint8_t));
+    xInputQueue   = xQueueCreate(15, sizeof(button_id_t));
+
+    /* Initialize button matrix scan driver (TMR3 ISR at 500Hz).
+     * This replaces the old passive GPIO reads that didn't work on hardware.
+     * The driver handles all GPIO config for the 4x3 matrix + 3 passive pins. */
+    button_scan_init(xInputQueue);
 
     /* Create tasks */
     xTaskCreate(vDisplayTask, "display", 512, NULL, 1, &xDisplayTaskHandle);
