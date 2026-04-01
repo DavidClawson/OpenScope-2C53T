@@ -39,6 +39,11 @@ firmware/at32f403a_gcc/
 *.swp
 *~
 
+# Raw decompiled source (copyright — keep analysis docs, not full dumps)
+reverse_engineering/decompiled_2C53T.c
+reverse_engineering/decompiled_2C53T_v2.c
+reverse_engineering/decompiled_2C53T_v120.c
+
 # Environment files (API keys, secrets)
 .env
 scripts/.env
