@@ -80,13 +80,13 @@ The filesystem uses FatFS (embedded FAT32 library). The device exposes these via
 
 | Peripheral | Status | Notes |
 |---|---|---|
-| MCU | GD32F307 (high confidence) | Identified from firmware analysis |
-| FPGA | **Gowin GW1N-UV2** (community-identified) | Markings sanded off but identified by EEVblog user jbtronics. Gowin has public docs and open-source tooling (Yosys/nextpnr). Communicates via USART2 or GPIO |
-| ADC | Unknown model | Likely connected to FPGA, 250MS/s per specs. Possibly AD9288 or clone (standard in this device class) |
-| LCD | Unknown controller | 2.8" display via EXMC/FSMC parallel bus. Likely ILI9341 or ST7789 |
-| Touch | Unknown controller | Via I2C. Likely GT911/GT915 (same family as 1013D/1014D) |
-| SPI Flash | **Winbond W25Q128JVSQ** (confirmed) | 128Mbit (16MB). Holds system files, UI graphics, persistent strings, calibration |
-| DAC | Built-in GD32F307 DAC | 2-channel 12-bit, likely drives signal generator |
+| MCU | **Artery AT32F403A** (confirmed via DFU) | Markings sanded off. Bootloader identifies as "AT32 Bootloader DFU" (VID:PID 2e3c:df11). Register-compatible with GD32/STM32F1. |
+| FPGA | **Gowin GW1N-UV2** (community-identified) | Markings sanded off but identified by EEVblog user jbtronics. Gowin has public docs and open-source tooling (Yosys/nextpnr). **Command interface unknown** — not on any USART, SPI2, USB, or EXMC (see fpga_protocol.md). |
+| ADC | Unknown model | Likely connected to FPGA, 250MS/s per specs. Possibly AD9288 or clone (10-bit based on `& 0x3ff` mask in decompiled code) |
+| LCD | **ST7789V** (confirmed via hardware probe) | 2.8" 320x240 display via EXMC/FSMC parallel bus. Read ID returns 0x85. |
+| Touch | Unknown / possibly none | No I2C references found in decompiled firmware. Touch may not exist on this model. |
+| SPI Flash | **Winbond W25Q128JV** (confirmed via JEDEC ID `EF 40 18`) | 128Mbit (16MB) on SPI2 (PB12 CS, PB13-15 CLK/MISO/MOSI). Contains FAT filesystem with UI assets. |
+| DAC | Built-in AT32F403A DAC | 2-channel 12-bit, drives signal generator output |
 
 ## Physical Teardown (2026-03-30)
 
@@ -131,6 +131,18 @@ The Gowin GW1N-UV2 is a small non-volatile FPGA from Gowin Semiconductor (Guangz
 The FPGA communicates with the GD32F307 via USART2 using a string-based command protocol. It handles high-speed ADC sampling (250 MS/s) and likely manages trigger detection, timebase control, and sample buffer management.
 
 **Source:** EEVblog user jbtronics, [2C53T thread](https://www.eevblog.com/forum/testgear/new-handheld-scopedmm-fnirsi-2c53t-2ch-50mhz250msps-(aug-2024)/)
+
+## Debug & Analysis Tools
+
+| Tool | Purpose | Install |
+|------|---------|---------|
+| SWD (OpenOCD/pyOCD) | Live debug, flash, breakpoints | Via SWD header near USB-C |
+| `dfu-util` | Flash firmware via USB DFU mode | `brew install dfu-util` |
+| `sigrok-cli` | Logic analyzer capture & protocol decode | `brew install sigrok-cli` |
+
+**Logic Analyzer:** HiLetgo 24MHz 8CH USB (Saleae Logic clone). Uses `fx2lafw` driver — firmware auto-loaded by sigrok. 8 channels at up to 24MHz sample rate, sufficient for USART2 (likely ≤1Mbaud) and SPI2 clock sniffing.
+
+See [fpga_protocol.md](fpga_protocol.md#logic-analyzer-setup) for wiring plan and capture commands.
 
 ## Related Device Hardware Comparison
 

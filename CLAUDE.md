@@ -42,6 +42,8 @@ firmware/           # Custom replacement firmware (GCC + Make)
   Makefile.hwtest   # Minimal hardware test build
 
 reverse_engineering/  # Ghidra decompilation artifacts
+  COVERAGE.md             # RE coverage tracker: 362 functions, 45.5% gap analysis, priority tiers
+  analysis_v120/          # Latest analysis: full_decompile.c, hardware_map, xref_map, RAM map, FPGA protocol
   decompiled_2C53T.c      # V1.2.0 decompilation (~35K lines, 292+ functions)
   decompiled_2C53T_v2.c   # Updated with named functions (~39K lines)
   strings_with_addresses.txt  # 290 strings mapped to firmware addresses
@@ -53,7 +55,7 @@ emulator/           # Simulation infrastructure
   emu_2c53t.py      # Unicorn-based emulator (limited — no NVIC/SysTick)
 
 frontend/           # React web UI for LCD display simulation (Vite)
-docs/               # 24+ design/analysis documents
+docs/               # 33 design/analysis/planning documents (see docs/README.md for full index)
 ghidra_project/     # Pre-analyzed Ghidra database (V1.2.0)
 modules/            # JSON procedure files (automotive, HVAC, ham radio, education)
 APP_2C53T_*.bin     # Original firmware binaries (V1.0.3, V1.0.7)
@@ -97,6 +99,7 @@ make renode-test                 # 5-second smoke test
 **DFU tool:** `dfu-util` via `brew install dfu-util`
 **Renode:** Expected at `/Applications/Renode.app`
 **SDL3 viewer:** `cd emulator && make` (requires `brew install sdl3`)
+**Logic analyzer:** `sigrok-cli` via `brew install sigrok-cli` — drives HiLetgo 24MHz 8CH USB analyzer (fx2lafw driver)
 
 ## Architecture
 
@@ -121,11 +124,15 @@ make renode-test                 # 5-second smoke test
 
 ## RE Reference
 
-- Largest decompiled functions: UI event loop, waveform processing, signal generator, multimeter mode
-- Key data addresses: DAT_20008350/352 (display buffer pointers), various mode/state flags
+- **Coverage:** 362 functions decompiled, 138KB mapped (54.5%), 113KB in gaps (see `reverse_engineering/COVERAGE.md`)
+- **Priority tiers:** P0 = FPGA init/buttons (another team), P1 = SPI2 data/ADC format/meter path/clocks, P2 = power/siggen
+- Largest decompiled functions: scope FSM (13.3KB), FPGA task (2.6KB), siggen config (1.6KB), ADC core (2.6KB)
+- Key data addresses: DAT_20008350/352 (display buffer pointers), 0x0804C0CC (meter dispatch table), 0x0804C5E8 (meter data table)
+- Calibration tables in RAM: 6 gain/offset pairs at 0x20000358–0x20000434 (loaded from SPI flash at boot)
 - Filesystem paths in firmware: `2:/Screenshot file/`, `3:/System file/`
 - Firmware versions analyzed: V1.0.3 → V1.0.7 → V1.1.2 → V1.2.0
 - V1.2.0 added EXTI3 interrupt (continuity buzzer detection)
+- **Key docs:** `docs/fpga_protocol.md` (command table + meter commands), `docs/peripheral_map.md` (full peripheral/GPIO/calibration reference)
 
 ## Current State
 

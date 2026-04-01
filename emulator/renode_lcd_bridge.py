@@ -296,27 +296,35 @@ def draw_scope(fb, state):
     draw_info_bar_scope(fb, state)
 
 
+_fft_cache = {}  # keyed by window type
+
 def compute_fft_spectrum(state, num_bins=320):
-    """Compute a simulated FFT spectrum of a 1kHz square wave"""
-    import cmath
+    """Compute FFT spectrum of a 1kHz square wave (cached per window type)"""
+    if state.fft_window in _fft_cache:
+        return _fft_cache[state.fft_window]
+
     N = 1024
     sample_rate = 44100.0
     freq = 1000.0
-    # Generate square wave
     samples = [1.0 if (i / sample_rate * freq) % 1.0 < 0.5 else -1.0 for i in range(N)]
-    # Apply Hanning window
-    if state.fft_window == 1:
+
+    # Apply window
+    if state.fft_window == 1:  # Hanning
         samples = [s * 0.5 * (1 - math.cos(2*math.pi*i/N)) for i, s in enumerate(samples)]
-    # Simple DFT for display (just compute magnitude for each display bin)
+    elif state.fft_window == 2:  # Hamming
+        samples = [s * (0.54 - 0.46 * math.cos(2*math.pi*i/N)) for i, s in enumerate(samples)]
+
+    # Compute DFT magnitudes (one-time cost)
     magnitudes = []
     for k in range(num_bins):
         bin_idx = int(k * (N//2) / num_bins) + 1
-        re = sum(samples[n] * math.cos(-2*math.pi*bin_idx*n/N) for n in range(0, N, 4)) * 4
-        im = sum(samples[n] * math.sin(-2*math.pi*bin_idx*n/N) for n in range(0, N, 4)) * 4
+        re = sum(samples[n] * math.cos(-2*math.pi*bin_idx*n/N) for n in range(0, N, 8)) * 8
+        im = sum(samples[n] * math.sin(-2*math.pi*bin_idx*n/N) for n in range(0, N, 8)) * 8
         mag = math.sqrt(re*re + im*im) * 2.0 / N
         if mag < 1e-10: mag = 1e-10
-        db = 20 * math.log10(mag)
-        magnitudes.append(db)
+        magnitudes.append(20 * math.log10(mag))
+
+    _fft_cache[state.fft_window] = magnitudes
     return magnitudes
 
 
@@ -413,7 +421,7 @@ def draw_waterfall_screen(fb, state):
 
     state.waterfall_history.insert(0, row)
     if len(state.waterfall_history) > 64:
-        state.waterfall_history = state.waterfall_history[:64]
+        del state.waterfall_history[64:]
 
     # Render rows
     row_height = 3
@@ -671,11 +679,20 @@ async def broadcast_frames():
     while True:
         if connected_clients:
             frame = renderer.generate_frame()
-            await asyncio.gather(
+            # Send to all clients, remove dead ones
+            dead = set()
+            results = await asyncio.gather(
                 *[c.send(frame) for c in connected_clients],
                 return_exceptions=True
             )
-        await asyncio.sleep(1.0 / 30)
+            for client, result in zip(list(connected_clients), results):
+                if isinstance(result, Exception):
+                    dead.add(client)
+            connected_clients.difference_update(dead)
+        else:
+            # No clients — still advance state but don't render
+            renderer.state.frame += 1
+        await asyncio.sleep(1.0 / 20)  # 20fps
 
 
 async def main():

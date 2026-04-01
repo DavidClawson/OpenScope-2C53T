@@ -16,15 +16,20 @@ AT32_CMSIS = $(AT32_LIB)/cmsis/cm4
 AT32_STARTUP = $(AT32_CMSIS)/device_support/startup/gcc
 
 # Source files
+# Default test program (override with: make -f Makefile.hwtest TEST=uartsniff)
+TEST ?= hwtest
+
 C_SOURCES = \
-	src/hwtest.c \
+	src/$(TEST).c \
 	at32f403a_gcc/user/at32f403a_407_clock.c \
 	$(AT32_CMSIS)/device_support/system_at32f403a_407.c \
 	$(AT32_DRV)/src/at32f403a_407_crm.c \
 	$(AT32_DRV)/src/at32f403a_407_gpio.c \
 	$(AT32_DRV)/src/at32f403a_407_flash.c \
 	$(AT32_DRV)/src/at32f403a_407_misc.c \
-	$(AT32_DRV)/src/at32f403a_407_xmc.c
+	$(AT32_DRV)/src/at32f403a_407_xmc.c \
+	$(AT32_DRV)/src/at32f403a_407_usart.c \
+	$(AT32_DRV)/src/at32f403a_407_wdt.c
 
 ASM_SOURCES = $(AT32_STARTUP)/startup_at32f403a_407.s
 
@@ -47,7 +52,7 @@ LDSCRIPT = $(AT32_STARTUP)/linker/AT32F403AxG_FLASH.ld
 LDFLAGS = $(MCU) -specs=nano.specs -specs=nosys.specs -T$(LDSCRIPT) -Wl,--gc-sections -Wl,-Map=$(BUILD_DIR)/hwtest.map,--cref
 
 # Build targets
-all: $(BUILD_DIR)/hwtest.bin
+all: $(BUILD_DIR)/$(TEST).bin
 
 OBJECTS = $(addprefix $(BUILD_DIR)/,$(notdir $(C_SOURCES:.c=.o)))
 OBJECTS += $(addprefix $(BUILD_DIR)/,$(notdir $(ASM_SOURCES:.s=.o)))
@@ -60,11 +65,11 @@ $(BUILD_DIR)/%.o: %.c | $(BUILD_DIR)
 $(BUILD_DIR)/%.o: %.s | $(BUILD_DIR)
 	$(AS) -c $(MCU) $< -o $@
 
-$(BUILD_DIR)/hwtest.elf: $(OBJECTS)
+$(BUILD_DIR)/$(TEST).elf: $(OBJECTS)
 	$(CC) $(OBJECTS) $(LDFLAGS) -o $@
 	$(SZ) $@
 
-$(BUILD_DIR)/hwtest.bin: $(BUILD_DIR)/hwtest.elf
+$(BUILD_DIR)/$(TEST).bin: $(BUILD_DIR)/$(TEST).elf
 	$(CP) -O binary $< $@
 	@echo "Built: $@ ($$(wc -c < $@) bytes)"
 
@@ -74,7 +79,7 @@ $(BUILD_DIR):
 clean:
 	rm -rf $(BUILD_DIR)
 
-flash: $(BUILD_DIR)/hwtest.bin
+flash: $(BUILD_DIR)/$(TEST).bin
 	dfu-util -a 0 -d 2e3c:df11 -s 0x08000000:leave -D $<
 
 .PHONY: all clean flash

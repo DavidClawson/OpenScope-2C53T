@@ -1,0 +1,33 @@
+# Button Dispatch Table at 0x08046544
+[ 0] 0xFFFFEF04 -> unknown
+[ 1] 0x00F3FFFF -> unknown
+[ 2] 0xFFFFBF00 -> unknown
+[ 3] 0x00000070 -> unknown
+[ 4] 0x00000000 -> unknown
+[ 5] 0x00000000 -> unknown
+[ 6] 0xFFFF7D00 -> unknown
+[ 7] 0xFEFFFFFF -> unknown
+[ 8] 0x555565A8 -> unknown
+[ 9] 0x66666655 -> unknown
+[10] 0x66666666 -> unknown
+[11] 0x66666666 -> unknown
+[12] 0xEF9C7866 -> unknown
+[13] 0xFBFFFFFF -> unknown
+[14] 0xFF1F0000 -> unknown
+[15] 0xFFFFF1FF -> unknown
+[16] 0x000020FF -> unknown
+[17] 0x00000000 -> unknown
+[18] 0x00000000 -> unknown
+[19] 0x00000000 -> unknown
+[20] 0xFF0F0000 -> unknown
+[21] 0x0000F4FF -> unknown
+[22] 0x00000000 -> unknown
+[23] 0x00000000 -> unknown
+[24] 0xFF2D0000 -> unknown
+[25] 0xF3FFFFFF -> unknown
+[26] 0xFFBF0000 -> unknown
+[27] 0x000070FF -> unknown
+[28] 0x00000000 -> unknown
+[29] 0x00000000 -> unknown
+[30] 0x4B000000 -> unknown
+[31] 0xFFFFFFFF -> unknown

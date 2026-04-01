@@ -55,7 +55,7 @@ from Antmicro.Renode.Peripherals.CPU import RegisterValue
 cpu.SetRegister(15, RegisterValue.Create(cpu.GetRegister(14).RawValue, 32))
 """
 # Address patched by soak_test.py from firmware.map
-cpu AddHook 0x08005d2c $skip_default_irq
+cpu AddHook 0x0800a818 $skip_default_irq
 
 # ═══════════════════════════════════════════════════════════════
 # Fault monitoring hooks

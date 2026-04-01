@@ -1,81 +1,168 @@
 # Peripheral Map
 
-## GD32F307 Memory-Mapped Peripherals Used by Firmware
+*Updated: 2026-03-31. MCU confirmed as Artery AT32F403A (register-compatible with GD32/STM32F1).*
+
+## Memory-Mapped Peripherals Used by Firmware
 
 | Address | Peripheral | Usage in Firmware |
 |---|---|---|
-| 0x40000400 | TIM3 | Timer interrupt (vector 45). Timing/delays/measurements |
-| 0x40003800 | I2C1 / SPI2 | Touch panel communication (I2C protocol confirmed by register bit patterns) |
+| 0x40000400 | TIM3 | Periodic interrupt — likely button scan interval |
+| 0x40003800 | SPI2 | **FPGA bulk data channel** — ADC sample readout (PB13=CLK, PB14=MISO, PB15=MOSI) |
+| 0x40004400 | USART2 | **FPGA command/control** — 10-byte TX frames, 2/10/12-byte RX frames (PA2=TX, PA3=RX) |
 | 0x40005C00 | USB FS Device | USB mass storage mode ("USB Sharing") |
 | 0x40006000 | CAN0 SRAM / USB SRAM | USB/CAN shared memory region |
-| 0x40010C00 | GPIOB | Pin configuration (used by GPIO init function FUN_080302fc) |
-| 0x40011000 | GPIOC | Pin reads (FUN_080304e0 reads pin 7) |
-| 0x40021000 | RCU (RCC) | Clock configuration |
-| 0xA0000000 | EXMC (FSMC) | LCD display parallel bus interface |
-| 0x60000000+ | EXMC Data Region | LCD command/data writes (memory-mapped) |
+| 0x40007400 | DAC | **Signal generator + calibration output** — dual 12-bit channels |
+| 0x40010800 | GPIOA | Analog MUX control (PA15), button matrix (PA7, PA8) |
+| 0x40010C00 | GPIOB | SPI CS (PB6=FPGA, PB12=flash), backlight (PB8), analog MUX (PB10, PB11), button (PB7) |
+| 0x40011000 | GPIOC | Power hold (PC9), probe continuity (PC0), button matrix (PC5, PC10), analog front-end (PC12) |
+| 0x40011400 | GPIOD | Signal routing (PD13), LCD EXMC data bus |
+| 0x40011800 | GPIOE | Analog front-end (PE4/5/6), button matrix columns (PE2/3), LCD EXMC data bus |
+| 0x40021000 | RCC/CRM | Clock configuration — FUN_0802a514 sets enable bits via (offset<<16 | bit) encoding |
+| 0x60000000+ | EXMC Data Region | LCD ST7789V — 0x6001FFFE (command), 0x60020000 (data), A17 selects RS/DCX |
 
 ## Active Interrupt Handlers (V1.2.0)
 
 | Vector | IRQ | Handler Address | Purpose |
 |---|---|---|---|
-| 15 | SysTick | 0x0802A995 | System tick timer |
-| 25 | EXTI3 | 0x08009C11 | **Continuity detection** (added in V1.2.0 for buzzer fix) |
-| 28 | DMA1_Ch2 | 0x08009671 | DMA transfer (likely SPI↔memory for display or flash) |
+| 15 | SysTick | 0x0802A995 | FreeRTOS system tick (1000Hz) |
+| 25 | EXTI3 | 0x08009C11 | **Continuity buzzer detection** (added in V1.2.0) |
+| 28 | DMA1_Ch2 | 0x08009671 | DMA transfer complete — USART2 RX bulk receive |
 | 36 | USB_LP_CAN_RX0 | 0x0802E8E5 | USB device interrupt |
-| 45 | TIM3 | 0x0802E71D | Timer (measurements, delays, auto-shutdown countdown?) |
-| 54 | USART2 | 0x0802E7B5 | UART communication (**possibly FPGA command interface**) |
-| 59 | TIM8_BRK | 0x0802E78D | Timer 8 break (PWM for buzzer or signal generator) |
+| 45 | TIM3 | 0x0802E71D | Periodic timer — possible button scan or measurement timing |
+| 54 | USART2 | 0x0802E7B5 | **FPGA command interface** — TX byte pump + RX frame parser with echo/integrity validation |
+| 59 | TIM8_BRK | 0x0802E78D | Timer 8 break — purpose unknown |
+
+## Analog Front-End — GPIO MUX Routing
+
+The firmware uses two GPIO multiplexing functions to select among 10 analog input configurations:
+
+### FUN_080018a4 — Port C/E MUX (10 modes)
+
+Controls PC12, PE4, PE5, PE6 for analog front-end relay/MUX switching. Each of the 10 cases sets specific GPIO output patterns on Port C (0x40011010/0x40011014) and Port E (0x40011810/0x40011814).
+
+After switching, applies **floating-point ADC calibration**:
+- Reads gain/offset from RAM lookup tables (selected by measurement mode)
+- Formula: `result = ((gain - offset) / cal_constant) * (DAT_200000fc + 100) + offset`
+- Writes 12-bit result to **DAC channel 2** (0x40007408)
+
+### FUN_08001a58 — Port A/B MUX (10 modes)
+
+Controls PA15, PB10, PB11 for analog range/MUX selection. Same 10-case structure as Port C/E MUX.
+
+### ADC Calibration Tables (RAM)
+
+Six table pairs (gain + offset), selected by mode:
+
+| Condition | Gain Table | Offset Table |
+|-----------|-----------|--------------|
+| Mode ≥ 5 | 0x20000394 | 0x20000358 |
+| Mode 4 or sub-mode 3 | 0x200003a8 | 0x2000036c |
+| All other modes | 0x200003bc | 0x20000380 |
+
+Port A/B uses a parallel set: 0x2000040c/0x200003d0, 0x20000420/0x200003e4, 0x20000434/0x200003f8.
+
+These tables are likely loaded from SPI flash at boot (calibration data persisted across power cycles).
+
+## SPI2 — FPGA Bulk Data Interface
+
+| Register | Address | Purpose |
+|----------|---------|---------|
+| SPI2_STAT | 0x40003800 | Status: bit 1 = TX ready, bit 0 = RX ready |
+| SPI2_DATA | 0x4000380C | Data TX/RX register |
+| GPIOB BOP | 0x40010C10 | Chip select — PB12 (flash) or PB6 (FPGA) |
+
+### SPI2 Functions
+
+**spi2_transceive_byte** (FUN_0802f0c4): Polls TX ready, writes byte, polls RX ready, returns received byte. Standard half-duplex SPI polling.
+
+**spi2_block_read** (FUN_0802f048):
+1. Assert chip select (0x40010C14 = 0x1000)
+2. Send command 0x03 (SPI read)
+3. Send 3-byte address (MSB first)
+4. Clock out N bytes with 0xFF dummy writes → buffer
+5. Deassert chip select (0x40010C10 = 0x1000)
+
+This is standard SPI NOR flash protocol. Used for both SPI flash access and possibly FPGA data readout (with PB6 CS instead of PB12).
+
+## DAC — Signal Generator + Calibration
+
+| Register | Address | Purpose |
+|----------|---------|---------|
+| DAC_CTL | 0x40007404 | Control (bit 0 = enable) |
+| DAC_CH2_DATA | 0x40007408 | Channel 2 12-bit output (lower 12 bits) |
+
+DAC is used for:
+1. **Calibration offset output** — GPIO MUX functions write calibrated values to DAC CH2 after analog input switching
+2. **Signal generator output** — FUN_08001c60 configures waveform generation
+
+## Signal Generator Architecture
+
+**FUN_08001c60** (siggen_configure, 1634 bytes):
+- Manages **6 output channels** (DAT_2000010d high nibble = channel count)
+- 300-byte waveform descriptor per channel at RAM base 0x2000044E (stride 0x12D)
+- Computes min/max across 16 waveform samples per channel
+- 6 operating modes (switch on DAT_20000127 nibble-packed mode bits):
+  - Case 1: Frequency stepping (up to 9 steps via DAT_200000FA[channel])
+  - Case 2: Power mode with FPGA register control
+  - Case 3: Frequency sweep with target calculation
+  - Case 4-5: Sweep confirmation and modulation
+  - Case 0xF: Finalization with measurement output
+- Calls GPIO MUX functions for analog routing
+- Writes to DAC (0x40007408) and GPIO control registers (0x40011410)
+
+## Multimeter DVOM Architecture
+
+### Mode Dispatch
+
+Function pointer table at **0x0804C0CC** — indexed by meter sub-mode to select the handler function.
+
+### FPGA Command Sequences by Meter Mode
+
+| Function | Commands Sent | Likely Mode |
+|----------|--------------|-------------|
+| FUN_0800ba06 | 0x07/0x0A, 0x1A, 0x1B, 0x1C, 0x1D, 0x1E | Oscilloscope-style meter (AC voltage?) |
+| FUN_0800bb10 | 0x07/0x0A, 0x16, 0x17, 0x18, 0x19 | DC voltage/current meter |
+| FUN_0800bba6 | 0x20, 0x21 | Component tester |
+| FUN_0800bc00 | 0x26, 0x27, 0x28 | Unknown meter sub-mode |
+| FUN_0800bc98 | 0x07/0x0A | Single-command mode (probe detect?) |
+
+All use `fpga_send_command` (FUN_0803acf0). Command 0x07 vs 0x0A is selected based on a sign bit in *param_1.
+
+### Display Pipeline
+
+Meter readings rendered via 6-position vertical layout:
+- Y positions: 0x18, 0x3C, 0x60, 0x84, 0xA8, 0xCC
+- Data fetched from table at **0x0804C5E8** indexed by `DAT_20001058` (mode) × 0x34 stride
+- Scaling/formatting in FUN_0800ec70 (1,798 bytes of float math)
+- Display callback at 0x20001114
+
+## Button Input
+
+### Confirmed MCU GPIO Buttons (6 of 15)
+
+| Button | Row Pin | Column Pin | Mechanism |
+|--------|---------|------------|-----------|
+| PRM | PB7 | — | Direct GPIO (active-low) |
+| CH2 | PA7 | PE3 | Matrix scan |
+| Down | PC5 | PE3 | Matrix scan |
+| Right | PA8 | PE2 | Matrix scan |
+| Auto | PC10 | PE2 | Matrix scan |
+| Save | PB0 | PE3 | Matrix scan |
+
+### Missing Buttons (9 of 15)
+
+CH1, MOVE, SELECT, TRIGGER, MENU, Up, Left, Play/Pause, POWER — **NOT on MCU GPIO**. Firmware has ZERO reads from GPIOA/B/D/E IDR registers. Must come through FPGA USART2 responses, I2C touch controller, or other peripheral.
 
 ## Unused But Available Peripherals
 
-These are built into the GD32F307 but have no interrupt handlers in the firmware:
-
 | Peripheral | Potential Use |
 |---|---|
-| **CAN0 (0x40006400)** | Native CAN bus receive — protocol decode without external hardware |
+| **CAN0 (0x40006400)** | Native CAN bus — protocol decode without external hardware |
 | **CAN1 (0x40006800)** | Second CAN channel |
-| **DAC (0x40007000)** | Likely used for signal generator but via polling, not interrupts |
 | **ADC0 (0x40013000)** | Internal ADC (separate from FPGA's external ADC) |
-| **SPI0 (0x40013800)** | SPI bus (likely used for external flash, no interrupt) |
-| **TIM1, TIM2, TIM4-7** | Additional timers available for new features |
+| **SPI0 (0x40013800)** | SPI bus (no interrupt handler in original firmware) |
+| **TIM1, TIM2, TIM4-7** | Additional timers |
 | **USART1, USART3, UART4, UART5** | Additional serial ports |
+| **I2C1 (0x40005400)** | I2C — possibly used for GT911/GT915 touch controller (needs investigation) |
 | **I2C2 (0x40005800)** | Second I2C bus |
 | **DMA2** | Additional DMA channels |
-
-## FPGA Communication
-
-The FPGA communication method is not yet fully determined. Two candidates:
-
-1. **USART2** — Has an active interrupt handler. References string addresses in the data section. Could be a serial command/response interface with the FPGA.
-
-2. **GPIO bit-banging** — The 1013D/1014D used GPIO bit-banging (8-bit data bus + clock/read-write/command-data control lines on Port E). The 2C53T may use a similar approach through GPIOB/GPIOC.
-
-The 1013D FPGA interface used:
-- 8-bit data bus: PE0:7
-- Clock: PE08
-- Read/Write: PE09 (0=read, 1=write)
-- Data/Command: PE10 (0=data, 1=command)
-
-The 2C53T may use a different port but a similar protocol. Determining this is a key RE milestone.
-
-## FPGA Commands (from 1013D — may be similar)
-
-These were documented by pecostm32 for the 1013D. The 2C53T FPGA may use similar commands:
-
-| Command | Function |
-|---|---|
-| 0x01 | Start/stop signal acquisition |
-| 0x02 | Channel 1 enable |
-| 0x03 | Channel 2 enable |
-| 0x05 | Wait flag (lsb must become 1) |
-| 0x06 | FPGA version check |
-| 0x0D/0x0E | Timebase configuration |
-| 0x15 | Trigger channel select |
-| 0x16 | Trigger edge (0=rising, 1=falling) |
-| 0x17 | 50% trigger setting |
-| 0x1A | Trigger mode (0=auto, 1=normal/single) |
-| 0x20-0x23 | Channel signal data readout |
-| 0x32-0x37 | Channel voltage/coupling config |
-| 0x38 | Display brightness |
-
-**Warning:** These are from the 1013D. The 2C53T FPGA may use different commands. Do not assume compatibility.

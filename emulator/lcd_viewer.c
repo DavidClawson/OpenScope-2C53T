@@ -33,6 +33,15 @@
 #define BTN_PATH    "/tmp/openscope_buttons.txt"
 #define TARGET_FPS  30
 
+/*
+ * Minimum button hold time in milliseconds.
+ * Emulated time runs ~100-300x slower than wall clock, so a quick
+ * physical keypress may release before the firmware's debounce
+ * (3 polls × 20ms emulated = 60ms emulated) has a chance to fire.
+ * We hold the button state for at least this long in real time.
+ */
+#define MIN_HOLD_MS 500
+
 /* ── Button-to-GPIO mapping ──────────────────────────────────── */
 
 typedef struct {
@@ -193,6 +202,11 @@ int main(int argc, char *argv[])
     int running = 1;
     Uint64 frame_ns = 1000000000ULL / TARGET_FPS;
 
+    /* Button hold timer: ensure minimum hold even on quick taps */
+    Uint64 btn_press_time = 0;     /* SDL_GetTicksNS() when button pressed */
+    int    btn_held = 0;           /* 1 if we're in a forced-hold period */
+    int    btn_pending_release = 0; /* 1 if key-up arrived during hold */
+
     /* Initialize button state */
     write_button_state(0, 0);
 
@@ -225,20 +239,45 @@ int main(int argc, char *argv[])
                 for (int i = 0; i < (int)NUM_BUTTONS; i++) {
                     if (ev.key.key == buttons[i].key) {
                         write_button_state(buttons[i].port, buttons[i].pin);
+                        btn_press_time = SDL_GetTicksNS();
+                        btn_held = 1;
+                        btn_pending_release = 0;
                         printf("[PRESS]   %s\n", buttons[i].name);
                         break;
                     }
                 }
 
             } else if (ev.type == SDL_EVENT_KEY_UP) {
-                /* Release: any key-up clears the button state */
+                /* Release: defer if minimum hold hasn't elapsed */
                 for (int i = 0; i < (int)NUM_BUTTONS; i++) {
                     if (ev.key.key == buttons[i].key) {
-                        write_button_state(0, 0);
-                        printf("[RELEASE] %s\n", buttons[i].name);
+                        if (btn_held) {
+                            Uint64 elapsed_ms = (SDL_GetTicksNS() - btn_press_time) / 1000000ULL;
+                            if (elapsed_ms >= MIN_HOLD_MS) {
+                                write_button_state(0, 0);
+                                btn_held = 0;
+                                printf("[RELEASE] %s\n", buttons[i].name);
+                            } else {
+                                btn_pending_release = 1;
+                            }
+                        } else {
+                            write_button_state(0, 0);
+                            printf("[RELEASE] %s\n", buttons[i].name);
+                        }
                         break;
                     }
                 }
+            }
+        }
+
+        /* Check deferred button release (minimum hold elapsed) */
+        if (btn_held && btn_pending_release) {
+            Uint64 elapsed_ms = (SDL_GetTicksNS() - btn_press_time) / 1000000ULL;
+            if (elapsed_ms >= MIN_HOLD_MS) {
+                write_button_state(0, 0);
+                btn_held = 0;
+                btn_pending_release = 0;
+                printf("[RELEASE] (after %llums hold)\n", (unsigned long long)elapsed_ms);
             }
         }
 
