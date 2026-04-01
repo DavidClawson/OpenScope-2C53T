@@ -4,7 +4,10 @@
 
 # Ghidra project files (large, binary, regenerable)
 ghidra_project/
+ghidra_project_v120/
 ghidra_headless/
+ghidra_reanalysis/
+ghidra_decompile_v120.log
 
 # Ghidra output artifacts
 *.png.entropy
@@ -22,11 +25,30 @@ FNIRSI_1014D_Firmware/
 2C53T Firmware V1.2.0/
 2C53T_Firmware_V1.1.2/
 
-# Ghidra project files (large, binary, regenerable)
-ghidra_reanalysis/
-
-# Firmware build output
+# Build output
 firmware/build/
+firmware/bootloader/build/
+esp32_uart_bridge/.pio/
+
+# Compiled test binaries (keep .c source, ignore executables)
+firmware/tests/test_automotive
+firmware/tests/test_bode_mask
+firmware/tests/test_component
+firmware/tests/test_config_screenshot
+firmware/tests/test_decode
+firmware/tests/test_decode_kline
+firmware/tests/test_decode_noisy
+firmware/tests/test_esp_comm
+firmware/tests/test_fft
+firmware/tests/test_font
+firmware/tests/test_math_measure
+firmware/tests/test_persistence
+firmware/tests/test_siggen
+firmware/tests/test_theme
+firmware/tests/test_xy_roll_trend
+
+# Compiled emulator tools
+emulator/lcd_viewer
 
 # Cloned dependencies (users clone themselves)
 firmware/FreeRTOS/
@@ -34,16 +56,24 @@ firmware/gd32f30x_lib/
 firmware/at32f403a_lib/
 firmware/at32f403a_gcc/
 
+# Python
+**/__pycache__/
+*.pyc
+
+# Logic analyzer captures (binary, large)
+captures/
+
+# Raw decompiled source (copyright — keep analysis docs, not full dumps)
+reverse_engineering/decompiled_*.c
+
 # IDE files
 .vscode/
 *.swp
 *~
 
-# Raw decompiled source (copyright — keep analysis docs, not full dumps)
-reverse_engineering/decompiled_2C53T.c
-reverse_engineering/decompiled_2C53T_v2.c
-reverse_engineering/decompiled_2C53T_v120.c
-
 # Environment files (API keys, secrets)
 .env
 scripts/.env
+
+# Node.js (frontend has its own .gitignore but belt-and-suspenders)
+node_modules/
