@@ -7,7 +7,8 @@
 | Address | Peripheral | Usage in Firmware |
 |---|---|---|
 | 0x40000400 | TIM3 | Periodic interrupt — likely button scan interval |
-| 0x40003800 | SPI2 | **FPGA bulk data channel** — ADC sample readout (PB13=CLK, PB14=MISO, PB15=MOSI) |
+| 0x40003800 | SPI2 | **SPI flash** — Winbond W25Q128JV (PB13=CLK, PB14=MISO, PB15=MOSI, PB12=CS) |
+| 0x40003C00 | **SPI3** | **FPGA bulk data channel** — ADC sample readout (**PB3=SCK, PB4=MISO, PB5=MOSI**, CS via GPIOB likely PB6) |
 | 0x40004400 | USART2 | **FPGA command/control** — 10-byte TX frames, 2/10/12-byte RX frames (PA2=TX, PA3=RX) |
 | 0x40005C00 | USB FS Device | USB mass storage mode ("USB Sharing") |
 | 0x40006000 | CAN0 SRAM / USB SRAM | USB/CAN shared memory region |
@@ -26,7 +27,7 @@
 |---|---|---|---|
 | 15 | SysTick | 0x0802A995 | FreeRTOS system tick (1000Hz) |
 | 25 | EXTI3 | 0x08009C11 | **Continuity buzzer detection** (added in V1.2.0) |
-| 28 | DMA1_Ch2 | 0x08009671 | DMA transfer complete — USART2 RX bulk receive |
+| 28 | DMA0_Ch1 | 0x08009671 | DMA transfer complete — LCD framebuffer blast (RAM 0x2000835C → EXMC 0x60020000) |
 | 36 | USB_LP_CAN_RX0 | 0x0802E8E5 | USB device interrupt |
 | 45 | TIM3 | 0x0802E71D | Periodic timer — possible button scan or measurement timing |
 | 54 | USART2 | 0x0802E7B5 | **FPGA command interface** — TX byte pump + RX frame parser with echo/integrity validation |
@@ -63,26 +64,44 @@ Port A/B uses a parallel set: 0x2000040c/0x200003d0, 0x20000420/0x200003e4, 0x20
 
 These tables are likely loaded from SPI flash at boot (calibration data persisted across power cycles).
 
-## SPI2 — FPGA Bulk Data Interface
+## SPI2 — SPI Flash Interface
 
 | Register | Address | Purpose |
 |----------|---------|---------|
-| SPI2_STAT | 0x40003800 | Status: bit 1 = TX ready, bit 0 = RX ready |
+| SPI2_STAT | 0x40003808 | Status: bit 1 = TX ready, bit 0 = RX ready |
 | SPI2_DATA | 0x4000380C | Data TX/RX register |
-| GPIOB BOP | 0x40010C10 | Chip select — PB12 (flash) or PB6 (FPGA) |
+| GPIOB BOP | 0x40010C10 | Chip select PB12 (flash) |
 
-### SPI2 Functions
+**spi2_transceive_byte** (FUN_0802f0c4): Polls TX ready, writes byte, polls RX ready, returns received byte.
 
-**spi2_transceive_byte** (FUN_0802f0c4): Polls TX ready, writes byte, polls RX ready, returns received byte. Standard half-duplex SPI polling.
+**spi2_block_read** (FUN_0802f048): Standard SPI NOR flash read — command 0x03 + 3-byte address + bulk read. PB12 chip select.
 
-**spi2_block_read** (FUN_0802f048):
-1. Assert chip select (0x40010C14 = 0x1000)
-2. Send command 0x03 (SPI read)
-3. Send 3-byte address (MSB first)
-4. Clock out N bytes with 0xFF dummy writes → buffer
-5. Deassert chip select (0x40010C10 = 0x1000)
+This is SPI flash only (Winbond W25Q128JV). **NOT the FPGA data channel.**
 
-This is standard SPI NOR flash protocol. Used for both SPI flash access and possibly FPGA data readout (with PB6 CS instead of PB12).
+## SPI3 — FPGA Bulk Data Interface (DISCOVERED 2026-03-31)
+
+| Register | Address | Purpose |
+|----------|---------|---------|
+| SPI3_CTL0 | 0x40003C00 | Control register (clock, mode, enable) |
+| SPI3_STAT | 0x40003C08 | Status — polled in FPGA task (FUN_08036934) |
+| SPI3_DATA | 0x40003C0C | Data TX/RX register |
+| GPIOB BOP | 0x40010C10 | Chip select (likely PB6) — 3 references in FPGA task |
+
+### Pin Mapping
+
+| Signal | Pin | Notes |
+|--------|-----|-------|
+| SPI3_SCK | **PB3** | JTAG pin (JTDO) by default — requires IOMUX remap to use as SPI3 |
+| SPI3_MISO | **PB4** | JTAG pin (JNTRST) by default — requires IOMUX remap |
+| SPI3_MOSI | **PB5** | Normal GPIO |
+| SPI3_CS | **PB6 (GPIO)** | Software-controlled via GPIOB_BOP |
+
+### Discovery Method
+
+Found by tracing FreeRTOS `xQueueReceive` callers to FUN_08036934, then disassembling MOVW/MOVT instruction pairs to reconstruct the peripheral address `0x40003C08` (SPI3_STAT). This was missed in earlier analysis because:
+1. Ghidra decompiler showed the address as SPI2 (0x40003800) due to Ghidra's GD32 processor definition not distinguishing SPI2/SPI3
+2. Hardware probing only tested SPI2 (0x40003800)
+3. PB3/PB4 are JTAG pins by default, not suspected as SPI
 
 ## DAC — Signal Generator + Calibration
 
@@ -160,7 +179,7 @@ CH1, MOVE, SELECT, TRIGGER, MENU, Up, Left, Play/Pause, POWER — **NOT on MCU G
 | **CAN0 (0x40006400)** | Native CAN bus — protocol decode without external hardware |
 | **CAN1 (0x40006800)** | Second CAN channel |
 | **ADC0 (0x40013000)** | Internal ADC (separate from FPGA's external ADC) |
-| **SPI0 (0x40013800)** | SPI bus (no interrupt handler in original firmware) |
+| **SPI1 (0x40013000)** | High-speed SPI (APB2, no interrupt handler) |
 | **TIM1, TIM2, TIM4-7** | Additional timers |
 | **USART1, USART3, UART4, UART5** | Additional serial ports |
 | **I2C1 (0x40005400)** | I2C — possibly used for GT911/GT915 touch controller (needs investigation) |

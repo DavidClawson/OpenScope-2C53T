@@ -1,24 +1,117 @@
 # FPGA Communication Protocol — Reverse Engineering Analysis
 
 *Decoded from decompiled V1.2.0 firmware (decompiled_2C53T_v2.c, ~39K lines)*
-*Initial analysis: 2026-03-20. Updated: 2026-03-29 with command codes, task architecture, and memory map.*
+*Initial analysis: 2026-03-20. Updated: 2026-03-31 with SPI3 discovery, corrected function IDs.*
+
+## BREAKTHROUGH: FPGA Data Interface is SPI3 (0x40003C00) on PB3/PB4/PB5
+
+**Discovery date:** 2026-03-31
+
+The FPGA bulk data channel is **SPI3** (AT32 peripheral at `0x40003C00`), NOT SPI2 (`0x40003800`). Previous hardware probing tested SPI2 and found it connected to the Winbond SPI flash. SPI3 was never tested because it wasn't known to be in use.
+
+### How This Was Found
+
+Binary analysis of the V1.2.0 firmware, working backward from FreeRTOS kernel functions:
+
+1. `FUN_0803acf0` was labeled "fpga_send_command" in earlier analysis — **actually `xQueueGenericSend`** (FreeRTOS kernel). It puts items on a queue, doesn't touch hardware.
+2. `FUN_0803b09c` was labeled "usart2_rx_process" — **actually `xQueueGenericSendFromISR`**. Called from USART2 ISR and DMA-to-LCD function.
+3. `FUN_0803b1d8` is the real **`xQueueReceive`** — found by identifying FreeRTOS kernel patterns (ISB/DSB barriers, BASEPRI manipulation, PendSV triggers).
+4. Tracing all callers of `xQueueReceive` found **FUN_08036934** in the 11.5KB gap at 0x08036A4E–0x08039874.
+5. Disassembling FUN_08036934 revealed MOVW/MOVT pairs constructing peripheral address **0x40003C08** — that's **SPI3_STAT**, not SPI2_STAT (0x40003808).
+
+### Corrected Peripheral Map
+
+| Peripheral | Address | Pins | Function |
+|---|---|---|---|
+| **SPI3** | **0x40003C00** | **PB3 (SCK), PB4 (MISO), PB5 (MOSI)** | **FPGA bulk data channel (ADC samples)** |
+| USART2 | 0x40004400 | PA2 (TX), PA3 (RX) | FPGA command/status (heartbeat + commands) |
+| SPI2 | 0x40003800 | PB13 (SCK), PB14 (MISO), PB15 (MOSI), PB12 (CS) | SPI flash only (Winbond W25Q128JV) |
+| DMA0 CH1 | 0x4002001C | N/A | LCD framebuffer DMA (RAM → EXMC 0x60020000) |
+
+### Peripheral Addresses in FPGA Task (FUN_08036934)
+
+| Address | Register | Usage in FPGA Task |
+|---|---|---|
+| 0x40003C08 | SPI3_STAT | Polled for TX/RX ready during data transfer |
+| 0x4000440C | USART2_CTL0 | Command framing control |
+| 0x40010C10 | GPIOB_BOP | Chip select assertion (3 references — PB6 likely) |
+| 0x40011008 | GPIOC_IDR | Input read (3 references — handshake or status) |
+| 0x40010800 | GPIOA_CTL0 | Pin configuration (SPI3 alternate function setup) |
+| 0x40011800 | GPIOE_CTL0 | Pin configuration |
+| 0x40000400 | TMR2 | Timing/delay |
+
+### SPI3 Pin Mapping (AT32F403A)
+
+Default SPI3 pins (no remap):
+| Signal | Pin | Notes |
+|---|---|---|
+| SPI3_SCK | **PB3** | Shared with JTDO/TRACESWO — requires JTAG disable (IOMUX remap) |
+| SPI3_MISO | **PB4** | Shared with JNTRST |
+| SPI3_MOSI | **PB5** | |
+| SPI3_CS | PA15 or GPIO | GPIOB_BOP suggests PB6 used as software CS |
+
+**Important:** PB3 and PB4 are JTAG pins by default. The firmware must disable JTAG via IOMUX/AFIO remap to use them as SPI3. This is likely done in the boot init code (gap at 0x08002BE0).
+
+### What This Explains
+
+1. **Why SPI2 probing found only SPI flash** — SPI2 IS connected to flash. The FPGA uses a completely separate SPI peripheral.
+2. **Why USART2 probing showed only heartbeat** — USART2 handles command framing, but the data path is SPI3. Without sending valid commands first, the FPGA has nothing to send on SPI3.
+3. **Why the 11.5KB gap was labeled "FPGA protocol"** — it IS the FPGA task. FUN_08036934 receives commands from FreeRTOS queues and executes them via SPI3 + USART2.
+4. **Why PB3/PB4/PB5 weren't in the pin table** — they're JTAG pins by default, so they weren't suspected as SPI.
+
+### Hardware Verification (2026-03-31 evening)
+
+Custom `spi3test.c` firmware flashed via DFU and tested on real hardware:
+
+**SPI3 peripheral: CONFIRMED OPERATIONAL**
+- JTAG disabled via `gpio_pin_remap_config(SWJTAG_GMUX_010, TRUE)` — SWD preserved
+- SPI3 remapped via `gpio_pin_remap_config(SPI3_GMUX_0010, TRUE)` — PB3/PB4/PB5
+- SPI3_CTL0 = `0x0000035C` (master, CPOL=0, CPHA=0, /16 clock, software CS, enabled)
+- SPI3_STS = `0x00000002` (TXE set — peripheral alive and ready)
+- All SPI3 reads return `0xFF` — FPGA not driving MISO yet
+
+**USART2 heartbeat: CONFIRMED ON HARDWARE**
+- USART2 configured at 9600 baud on PA2 (TX) / PA3 (RX)
+- Captured heartbeat bytes: `5A A5 E4 2E 63 25 07 00 00 00 ...`
+- Matches exactly what was seen on debug UART pads
+- 11 of 12 bytes captured per frame (started mid-frame)
+- Heartbeat continuously received in monitor loop (bottom of LCD)
+
+**USART2 command test: NO RESPONSE**
+- Sent 3 command frames: `AA 55 00 00...`, `AA 55 00 01...`, `AA 55 00 1C...`
+- All responses were `00` — FPGA did not reply
+- Command frame format may be wrong, or FPGA needs different init handshake
+
+**SPI3 after USART2 commands: STILL ALL FF**
+- SPI3 reads unchanged after sending USART2 commands
+- FPGA likely needs correct init sequence before activating SPI3 data channel
+
+**Test firmware:** `firmware/src/spi3test.c` — builds with `make -f Makefile.hwtest TEST=spi3test`
+
+### Next Steps
+
+1. **Disassemble FUN_08036934 fully** (11KB) to extract the exact FPGA init sequence, SPI3 clock config, and command frame format
+2. **Find USART2 BRR (baud rate)** in the boot init gap — TX baud might differ from 9600 RX heartbeat
+3. **Extract the boot init code** at 0x08002BE0 to find the complete peripheral setup sequence
+4. **Try different command frame formats** — the `AA 55` prefix may be wrong; the decompiled TX buffer starts at 0x20000005 and the ISR sends 10 bytes
+5. **Try SPI3 with FPGA command bytes** — send known FPGA commands (0x01-0x05) directly on SPI3 instead of USART2
+
+---
 
 ## Hardware Probing Results (2026-03-31)
 
-**CRITICAL UPDATE:** Systematic hardware probing with custom `fpgaprobe.c` firmware has **eliminated all standard peripherals** as the FPGA command interface. The FPGA communication path remains unknown.
+Previous probing eliminated these interfaces (all still valid — SPI3 was simply not tested):
 
-### What Was Tested and Eliminated
-
-| Interface | Pins | Baud Rates Tested | Result |
-|---|---|---|---|
-| USART2 | PA2 TX, PA3 RX | 9600, 115200, 230400, 460800, 921600, 1M | PA3 receives 9600 baud heartbeat only (one-way, same signal as debug pads). No response to commands at any rate. |
-| USART1 | PA9 TX, PA10 RX | Same 6 rates | Dead — 0 bytes received at every rate |
-| USART3 | PB10 TX, PB11 RX | Same 6 rates | Dead — 0 bytes received at every rate |
-| SPI2 + PB12 CS | PB13 CLK, PB14 MISO, PB15 MOSI | N/A | **Winbond W25Q128JV SPI flash** (JEDEC ID: `EF 40 18`). Contains FAT filesystem. NOT the FPGA. |
-| SPI2 + PB6 CS | Same SPI pins | N/A | Same SPI flash chip responds |
-| USB peripheral | PA11 D-, PA12 D+ | N/A | Default reset state (CNTR=0x0003). Both lines LOW. Packet buffer = uninitialized SRAM. |
-| EXMC NE1 bus | PD/PE data lines | N/A | Only LCD (ST7789V, ID=0x85) responds. Memory Read (cmd 0x2E) returns pixel data. |
-| EXMC NE2-4 | 0x64/68/6C000000 | N/A | Bus fault (HardFault) — no device. GPIOG pins unavailable on LQFP100. |
+| Interface | Pins | Result |
+|---|---|---|
+| USART2 | PA2 TX, PA3 RX | PA3 receives 9600 baud heartbeat only. Commands need proper init sequence. |
+| USART1 | PA9 TX, PA10 RX | Dead — 0 bytes received |
+| USART3 | PB10 TX, PB11 RX | Dead — 0 bytes received |
+| SPI2 + PB12 CS | PB13/14/15 | Winbond W25Q128JV SPI flash (JEDEC: `EF 40 18`). FAT filesystem. |
+| SPI2 + PB6 CS | PB13/14/15 | Same SPI flash responds |
+| **SPI3** | **PB3/4/5, PB6 CS** | **TESTED: Peripheral works (STS=0x02), reads all 0xFF. FPGA not responding yet — needs init sequence.** |
+| USB | PA11/PA12 | Default reset state |
+| EXMC NE1 | PD/PE data bus | LCD only (ST7789V) |
 
 ### Debug UART Heartbeat
 
@@ -28,51 +121,36 @@ The FPGA continuously outputs 12-byte frames at 9600 baud on both the debug UART
 ```
 - Bytes 2-10 (`E4 2E 63 25 07 00 00 00 00`) are constant regardless of button presses or commands sent
 - Byte 11 cycles F0→F1→F2→F3→F0... (counter changed to EE/EF range when custom firmware runs)
-- This is a passive heartbeat — confirmed NOT the command interface
+- This is a passive heartbeat — likely FPGA idle output before command init sequence
 
 ### SPI Flash Contents
 
 SPI2 with PB12 chip select reads from Winbond W25Q128JV (16MB):
 - Address 0x000000: `EB 3C 90 4D 53 44 4F 53` = FAT filesystem boot sector ("MSDOS")
-- Contains UI asset images and system files (paths like `3:/System file/`)
-
-### Remaining Hypotheses
-
-1. **Bit-banged GPIO** — FPGA may use non-standard protocol on unidentified GPIO pins
-2. **I2C** — I2C1 (PB6/PB7) or I2C2 (PB10/PB11) not yet tested as I2C
-3. **Decompiled addresses may be miscomputed** — Ghidra's 0x40005C00/0x40006000 references could be pointer arithmetic, not literal hardware addresses
-4. **FPGA needs specific init handshake** — data channel may only activate after undiscovered boot sequence
-
-### Next Steps
-
-1. Flash stock firmware, use logic analyzer on all GPIO pins during mode changes
-2. Re-examine Ghidra decompilation of 0x40005C00 accesses for pointer indirection
-3. Probe I2C1/I2C2 buses
-4. Check if FPGA JTAG pins are accessible from MCU GPIO (could allow bitstream inspection)
+- Contains UI asset images, system files, and unit format strings (paths like `3:/System file/`)
 
 ---
 
-## Architecture Overview (from decompiled firmware — NOT YET VERIFIED ON HARDWARE)
-
-> **Note:** The architecture below was decoded from the decompiled V1.2.0 firmware. Hardware probing (above) has not confirmed USART2 or SPI2 as the actual FPGA command/data interfaces. The decompiled code clearly references these peripherals, but the physical connections may differ from what the code suggests.
+## Architecture Overview
 
 The FNIRSI 2C53T uses a **dual-interface** model between the AT32F403A MCU and the Gowin GW1N-UV2 FPGA:
 
 ```
-MCU (GD32F307)                           FPGA (Gowin GW1N-UV2)
+MCU (AT32F403A)                          FPGA (Gowin GW1N-UV2)
 ┌─────────────┐                          ┌──────────────────┐
-│             │── USART2 (cmd/ctrl) ────>│                  │
-│ fpga_task   │<── USART2 (response) ───│  ADC controller  │
-│             │                          │  Trigger engine   │
-│ osc_task    │<── SPI2 (bulk data) ────│  Sample memory    │
-│             │                          │  DVOM mux         │
-│ dvom_tx     │── USART2 (config) ─────>│                  │
+│             │── USART2 PA2/PA3 ──────>│                  │
+│ fpga_task   │   (cmd/ctrl 9600bd)     │  ADC controller  │
+│ FUN_08036934│<── USART2 (response) ───│  Trigger engine   │
+│             │                          │  Sample memory    │
+│             │<── SPI3 PB3/4/5 ───────│  DVOM mux         │
+│             │   (bulk data, high-spd) │                  │
+│             │── GPIOB (CS, PB6?) ────>│                  │
 └─────────────┘                          └──────────────────┘
 ```
 
-**USART2** (0x40004400): Command/control channel. 10-byte frames MCU->FPGA, 2/10/12-byte responses FPGA->MCU.
+**USART2** (0x40004400, PA2 TX / PA3 RX): Command/control channel. 10-byte frames MCU->FPGA, 2/10/12-byte responses FPGA->MCU.
 
-**SPI2** (0x40003C00): High-speed bulk data channel. MCU reads ADC sample buffers from FPGA.
+**SPI3** (0x40003C00, PB3 SCK / PB4 MISO / PB5 MOSI): High-speed bulk data channel. MCU reads ADC sample buffers from FPGA. Chip select via GPIOB (likely PB6).
 
 ## USART2 Protocol
 

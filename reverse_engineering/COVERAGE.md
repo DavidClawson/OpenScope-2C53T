@@ -110,34 +110,46 @@ Functions where purpose has been identified through hardware register analysis:
 | 08032f6c | 520 | `measurement_dispatch` | Medium | Called by 11 mode handlers, calls display + data funcs |
 | 0803e8d0 | 152 | `display_buffer_write` | Medium | Called by 11 data processors (rendering hub) |
 | 08033cfc | 508 | `display_update` | Medium | Called by 16 functions (display refresh) |
-| 0803acf0 | 536 | `fpga_send_command` | Medium | Called by scope FSM, siggen, and FPGA task |
-| 0803b09c | 316 | `usart2_rx_process` | Medium | Called from USART2 ISR, processes received frames |
-| 080278e4 | 2566 | `fpga_task_main` | Medium | Calls frame builder + FPGA protocol functions |
+| 0803acf0 | 536 | `xQueueGenericSend` | **High** | FreeRTOS kernel — NOT fpga_send_command. Puts items on queue. |
+| 0803b09c | 316 | `xQueueGenericSendFromISR` | **High** | FreeRTOS kernel — NOT usart2_rx_process. Called from ISR context. |
+| 0803b1d8 | 462 | `xQueueReceive` | **High** | FreeRTOS kernel — blocking queue receive. 6 callers total. |
+| 080278e4 | 2566 | `usb_endpoint_handler` | **High** | Accesses 0x40005C00 (USB_CNTR) and 0x40006000 (USB packet buffer). NOT FPGA task. |
+| 08036934 | ~11000 | `fpga_task_real` | **High** | **THE REAL FPGA TASK.** Calls xQueueReceive 4x. Accesses SPI3 (0x40003C08), USART2, GPIOB/C. In 11.5KB gap. |
+| 08002670 | 1544 | `dma_lcd_transfer` | **High** | DMA0 CH1 setup: blasts framebuffer from 0x2000835C → LCD (0x60020000). NOT FPGA. |
+| 08004d60 | 3568 | `meter_state_machine` | **High** | 10-way dispatch (TBH) for meter modes. Base r5=0x200000F8. In unmapped gap. |
 | 08039eb4 | 368 | `fpga_frame_builder` | Medium | Called by FPGA task and SPI functions |
 | 0802771c | 110 | `tmr3_setup_or_handler` | Medium | TIM3 register access |
 | 0800ba06 | 102 | `probe_detect_handler_1` | Medium | GPIOC IDR read (PC0 = probe continuity) |
-| 08037800 | 472 | `fpga_spi_bulk_transfer` | Medium | GPIOB writes (SPI CS) in hardware_map |
+| 08037800 | 472 | `fpga_spi3_transfer` | Medium | GPIOB writes (SPI CS) — likely SPI3, not SPI2 |
 | 08034078 | 626 | `scope_display_refresh` | Medium | Called by scope FSM, calls data processors |
+| 080003b4 | ~40 | `sprintf_to_buffer` | **High** | String formatter — confirmed from v2 decompile naming |
+| 08008154 | 2612 | `display_render_engine` | **High** | LCD layout/glyph renderer — NOT adc_measurement_core |
 
 ## What to Dive Into Next
 
-### Tier 1 — Blocks hardware bring-up (do these first)
+### Tier 0 — UNBLOCKED by SPI3 discovery
 
-1. **FPGA initialization sequence** — Decompile the gap at 0x08036A4E–0x08039874 and FUN_080278e4 in detail. This is the FPGA task that runs at boot. Without understanding what commands the MCU sends to configure the FPGA, we can't acquire real waveforms.
+1. **Fully disassemble FUN_08036934** (~11KB, the real FPGA task) — Extract SPI3 configuration (clock speed, CPOL/CPHA, CS polarity), USART2 command format, and the complete command dispatch. This is the single most valuable RE target remaining.
 
-2. **FPGA command code table** — The 10-byte TX frame has a command parameter field. We've mapped codes 1-5 but there are ~40 total. Need to trace all callers of FUN_0803acf0 (fpga_send_command) and enumerate every command value.
+2. **Find JTAG-disable / SPI3 pin setup** in boot init (0x08002BE0 gap) — PB3/PB4 are JTAG pins by default. The IOMUX remap that frees them for SPI3 is in the boot code. Also find SPI3 clock enable (CRM register write) and baud rate divisor.
 
-3. **Button input path** — Trace the USART2 RX processing (FUN_0803b09c) to see if 12-byte response frames carry button state. Also check TMR3 ISR for I2C polling of a touch controller.
+3. **Write SPI3 test firmware** — Initialize SPI3 on PB3/PB4/PB5 with PB6 CS, try reading from FPGA. Can be done purely in software — no pin probing needed.
 
-4. **USART2 baud rate** — Find the USART2 BRR (baud rate register) write in the init code. Gap at 0x08002BE0 likely contains this. Critical for talking to FPGA.
+### Tier 1 — Blocks hardware bring-up
+
+4. **FPGA command code table** — Trace all items queued to the FPGA task (all 150+ callers of xQueueGenericSend that target the FPGA queue handle). Extract every command code.
+
+5. **Button input path** — GPIOC_IDR (0x40011008) is read 3 times in the FPGA task. May carry button state from FPGA. Also check TMR3 ISR for I2C polling.
+
+6. **ADC sample data format** — Now known to come via SPI3 (not SPI2). Trace the SPI3 read path in FUN_08036934 to determine sample width, packing, channel interleaving.
 
 ### Tier 2 — Needed for full functionality
 
-5. **ADC sample data format** — Trace the SPI2 read path after trigger to determine: 8-bit or 12-bit samples, signed or unsigned, channel interleaving, calibration offsets.
+7. **Multimeter DVOM path** — Meter state machine at FUN_08004d60 (3568 bytes). Data arrives via FPGA task, processed by FUN_080028e0, displayed by FUN_0800ec70. Need to trace the float write path.
 
-6. **Multimeter DVOM path** — Gap at 0x0800BFF2. How does the MCU read DVOM values? Direct ADC? FPGA forwarding? What GPIO controls the range-switching relay?
+8. **Peripheral clock init** — Gap at 0x08002BE0. Full CRM configuration including SPI3 clock enable.
 
-7. **Peripheral clock init** — Gap at 0x08002BE0. Full RCC/CRM configuration. What clocks are enabled, PLL multiplier, AHB/APB dividers. We partially know this from the AT32 HAL but confirming the original would catch edge cases.
+9. **USART2 baud rate** — Find BRR register write in init code. May be 9600 (matching heartbeat) or different for TX.
 
 ### Tier 3 — Can sidestep entirely
 
@@ -157,19 +169,18 @@ Functions where purpose has been identified through hardware register analysis:
 
 ## Key Unknowns (Hardware Questions)
 
-These can only be answered on real hardware, not from firmware analysis alone:
-
 | Question | How to Answer | Status |
 |----------|--------------|--------|
-| USART2 baud rate | Read BRR register from init code, or logic analyzer on TX pin | **9600 baud confirmed** (debug UART pads) but USART2 may not be the command channel |
-| SPI2 destination | Hardware probing | **ANSWERED: SPI2 + PB12 = Winbond W25Q128JV SPI flash, NOT FPGA** |
-| FPGA command interface | Systematic peripheral probing | **OPEN: All standard peripherals eliminated (USART1/2/3, SPI2, USB, EXMC). Interface unknown.** |
-| FPGA chip-select polarity | Logic analyzer on PB6 during SPI transfer | PB6 CS reads same SPI flash as PB12 |
-| Sample data format | Logic analyzer on SPI2 during acquisition, or trace code | Unknown — blocked by FPGA interface discovery |
-| Which 9 buttons come from FPGA vs I2C | Logic analyzer during button press, or USART2 sniffing | **OPEN: Not USART heartbeat (confirmed). Not I2C (no I2C in decompile). Likely requires FPGA init first.** |
+| **FPGA data interface** | Binary analysis of FPGA task | **ANSWERED: SPI3 (0x40003C00) on PB3/PB4/PB5. Needs hardware verification.** |
+| FPGA command interface | USART2 + SPI3 init sequence | **LIKELY ANSWERED: USART2 for commands, SPI3 for bulk data. Dual-interface.** |
+| SPI3 clock speed | Disassemble FUN_08036934 or write test firmware | Unknown — extract from SPI3_CTL0 config in FPGA task |
+| SPI3 CS polarity | Trace GPIOB_BOP writes in FUN_08036934 | Likely PB6 active-low (3 GPIOB_BOP refs) |
+| USART2 baud rate | Read BRR register from init code | **9600 baud confirmed** on heartbeat output |
+| SPI2 destination | Hardware probing | **ANSWERED: SPI2 + PB12 = Winbond W25Q128JV SPI flash** |
+| Sample data format | Trace SPI3 read path in FPGA task | Unknown — now tractable via FUN_08036934 disassembly |
+| Which 9 buttons come from FPGA | Check GPIOC_IDR reads in FPGA task, or SPI3 data | **LIKELY via FPGA** — GPIOC_IDR read 3x in FPGA task |
+| JTAG disable for SPI3 | Find IOMUX remap in boot init (0x08002BE0) | PB3/PB4 are JTAG by default, must be remapped |
 | Battery voltage ADC channel | Trace ADC config in init code | Unknown |
-| Touch controller I2C address | Scan I2C bus, or find i2c_write in init code | **No I2C references found in decompiled firmware** |
-| FPGA JTAG pin mapping | Continuity test from FPGA header to MCU pins | Unknown |
 
 ## Hardware Probing Log (2026-03-31)
 

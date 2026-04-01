@@ -10,7 +10,7 @@ Reverse engineering and clean-room rewrite of the firmware for the **FNIRSI 2C53
   - Originally identified as GD32F307 from firmware analysis; physical teardown revealed AT32 (markings sanded off)
   - Register-compatible with GD32/STM32F1 at the GPIO/EXMC level
 - **LCD:** ST7789V 320x240 RGB565 via 16-bit parallel EXMC/XMC bus
-- **FPGA:** Gowin GW1N-UV2 (non-volatile, retains bitstream across power cycles) — handles 250MS/s ADC sampling via USART2 command protocol
+- **FPGA:** Gowin GW1N-UV2 (non-volatile, retains bitstream across power cycles) — handles 250MS/s ADC sampling via **SPI3 data + USART2 commands**
 - **SPI Flash:** Winbond W25Q128JVSQ (16MB) — UI assets and system files
 - **DAC:** 2-channel 12-bit (built-in) for signal generator output
 - **Buttons:** 15 physical buttons (CH1, CH2, MOVE, SELECT, TRIGGER, PRM, AUTO, SAVE, MENU, arrows, OK, POWER)
@@ -22,6 +22,8 @@ Reverse engineering and clean-room rewrite of the firmware for the **FNIRSI 2C53
 |----------|-----|-------|
 | Power hold | PC9 | Must be HIGH immediately at boot or device shuts off |
 | LCD backlight | PB8 | HIGH to enable |
+| FPGA SPI3 data | PB3 (SCK), PB4 (MISO), PB5 (MOSI) | Bulk ADC data from FPGA (JTAG pins, remapped) |
+| FPGA SPI3 CS | PB6 (GPIO) | Software chip select for FPGA SPI3 |
 | SWD | PA13 (SWDIO), PA14 (SWCLK) | Debug header near USB-C port |
 | UART debug | RX, TX, GND | Through-hole pads (not yet mapped to MCU pins) |
 | FPGA programming | M0-M3, GND, VDD, VPP | Header for Gowin programmer |
@@ -125,7 +127,8 @@ make renode-test                 # 5-second smoke test
 ## RE Reference
 
 - **Coverage:** 362 functions decompiled, 138KB mapped (54.5%), 113KB in gaps (see `reverse_engineering/COVERAGE.md`)
-- **Priority tiers:** P0 = FPGA init/buttons (another team), P1 = SPI2 data/ADC format/meter path/clocks, P2 = power/siggen
+- **FPGA interface:** SPI3 (0x40003C00) on PB3/PB4/PB5 for bulk data, USART2 for commands. Real FPGA task = FUN_08036934 (11KB, in gap)
+- **Priority tiers:** P0 = FPGA init via SPI3 (UNBLOCKED), P1 = ADC format/meter path/clocks, P2 = power/siggen
 - Largest decompiled functions: scope FSM (13.3KB), FPGA task (2.6KB), siggen config (1.6KB), ADC core (2.6KB)
 - Key data addresses: DAT_20008350/352 (display buffer pointers), 0x0804C0CC (meter dispatch table), 0x0804C5E8 (meter data table)
 - Calibration tables in RAM: 6 gain/offset pairs at 0x20000358–0x20000434 (loaded from SPI flash at boot)
