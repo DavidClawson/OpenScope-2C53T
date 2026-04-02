@@ -469,7 +469,10 @@ void vApplicationMallocFailedHook(void)
  * SystemInit override for emulator
  * ═══════════════════════════════════════════════════════════════════ */
 #ifdef EMULATOR_BUILD
-/* Must match AT32 HAL declaration: "extern unsigned int system_core_clock" */
+/* Must match AT32 HAL declaration: "extern unsigned int system_core_clock".
+ * The HAL's system_at32f403a_407.c also defines these symbols, but the
+ * emu build uses --allow-multiple-definition so main.o's versions win
+ * (linked first). */
 unsigned int system_core_clock = 240000000;
 
 void SystemInit(void)

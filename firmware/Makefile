@@ -232,11 +232,13 @@ disasm: $(BUILD_DIR)/$(TARGET).elf
 size: $(BUILD_DIR)/$(TARGET).elf
 	$(SZ) --format=berkeley $<
 
-# Build for emulator (skips HAL clock init that hangs without real hardware)
-EMU_EXCLUDE = system_at32f403a_407.c
+# Build for emulator (skips HAL clock init that hangs without real hardware).
+# main.c provides stub overrides for SystemInit/system_clock_config when
+# EMULATOR_BUILD is defined. --allow-multiple-definition lets main.o's
+# versions win over the HAL's (main.o is linked first).
 emu: CFLAGS += -DEMULATOR_BUILD
+emu: LDFLAGS += -Wl,--allow-multiple-definition
 emu: LDSCRIPT = ld/at32f403a.ld
-emu: C_SOURCES := $(filter-out %$(EMU_EXCLUDE),$(C_SOURCES))
 emu: clean all
 
 # Flash app via USB HID bootloader (bootloader must be running)
