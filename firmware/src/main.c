@@ -32,6 +32,8 @@ extern void system_clock_config(void);
 #include "button_scan.h"
 #include "dfu_boot.h"
 #include "battery.h"
+#include "fpga.h"
+#include "meter_data.h"
 
 /* ═══════════════════════════════════════════════════════════════════
  * Global State (extern'd via ui.h for UI modules)
@@ -404,6 +406,19 @@ int main(void)
     }
 #endif
 
+    /* Initialize meter data parser */
+    meter_data_init();
+
+#ifndef EMULATOR_BUILD
+    /* Initialize FPGA communication (USART2 + SPI3 + boot sequence).
+     * Must happen after clock init and GPIO clocks are enabled.
+     * Sends boot commands, configures SPI3 Mode 3, performs handshake,
+     * sets PB11 HIGH (FPGA active mode) and PC6 HIGH (SPI enable). */
+    wdt_counter_reload();
+    fpga_init();
+    wdt_counter_reload();
+#endif
+
     /* Create queues */
     xDisplayQueue = xQueueCreate(20, sizeof(uint8_t));
     xInputQueue   = xQueueCreate(15, sizeof(button_id_t));
@@ -420,6 +435,12 @@ int main(void)
     /* Register tasks with health monitor */
     health_slot_display = health_register("display", xDisplayTaskHandle);
     health_slot_input   = health_register("key",     xInputTaskHandle);
+
+#ifndef EMULATOR_BUILD
+    /* Create FPGA communication tasks (USART TX/RX + SPI3 acquisition).
+     * These match the stock firmware's dvom_TX, dvom_RX, and fpga tasks. */
+    fpga_create_tasks();
+#endif
 
     /* Create 1-second timer for uptime/status updates */
     TimerHandle_t xSecTimer = xTimerCreate(

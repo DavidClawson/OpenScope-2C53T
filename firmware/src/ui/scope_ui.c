@@ -17,6 +17,7 @@
 #include "scope_state.h"
 #include "math_channel.h"
 #include "persistence.h"
+#include "fpga.h"
 #include <stdio.h>
 #include <math.h>
 
@@ -317,6 +318,59 @@ void draw_demo_waveform(uint32_t frame)
         frozen_frame = frame;
     }
     uint32_t draw_frame = ss->running ? frame : frozen_frame;
+
+    /*
+     * If FPGA has delivered real ADC data, render from the sample buffers.
+     * Each buffer holds 512 samples (normal mode) as unsigned 8-bit values
+     * centered around 128 (after ADC offset calibration).
+     * We map the 0-255 range into the waveform display area.
+     */
+    if (fpga_data_ready()) {
+        const volatile uint8_t *ch1_buf = fpga_get_ch1_buf();
+        const volatile uint8_t *ch2_buf = fpga_get_ch2_buf();
+
+        /* Also trigger the next acquisition while we draw this one.
+         * Double-buffered: send two triggers per the stock firmware pattern. */
+        if (ss->running) {
+            fpga_trigger_acquisition(fpga.acq_mode);
+            fpga_trigger_acquisition(fpga.acq_mode);
+        }
+
+        /* CH1: real ADC data */
+        if (ss->ch1.enabled && ch1_buf != NULL) {
+            int16_t ch1_offset = ss->ch1.position;
+            for (uint16_t x = 0; x < LCD_WIDTH && x < 512; x++) {
+                /* Map 0-255 ADC value to waveform area.
+                 * 128 = center (SCOPE_MID_Y), scale to fit SCOPE_H. */
+                int16_t sample = (int16_t)ch1_buf[x];
+                int16_t y = SCOPE_MID_Y - ((sample - 128) * SCOPE_H / 256)
+                            - ch1_offset;
+                if (y >= SCOPE_TOP && y < SCOPE_BOT) {
+                    lcd_set_pixel(x, (uint16_t)y, th->ch1);
+                    if (y + 1 < SCOPE_BOT)
+                        lcd_set_pixel(x, (uint16_t)(y + 1), th->ch1);
+                }
+            }
+        }
+
+        /* CH2: real ADC data */
+        if (ss->ch2.enabled && ch2_buf != NULL) {
+            int16_t ch2_offset = ss->ch2.position;
+            for (uint16_t x = 0; x < LCD_WIDTH && x < 512; x++) {
+                int16_t sample = (int16_t)ch2_buf[x];
+                int16_t y = SCOPE_MID_Y - ((sample - 128) * SCOPE_H / 256)
+                            - ch2_offset;
+                if (y >= SCOPE_TOP && y < SCOPE_BOT) {
+                    lcd_set_pixel(x, (uint16_t)y, th->ch2);
+                    if (y + 1 < SCOPE_BOT)
+                        lcd_set_pixel(x, (uint16_t)(y + 1), th->ch2);
+                }
+            }
+        }
+        return;
+    }
+
+    /* ── Fallback: synthetic demo waveform (no FPGA data yet) ────── */
 
     static const int8_t sin_lut[64] = {
          0, 10, 19, 29, 38, 47, 56, 63, 71, 77, 83, 88, 92, 96, 98, 99,

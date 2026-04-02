@@ -1,0 +1,330 @@
+/*
+ * OpenScope 2C53T - Meter Data Parser
+ *
+ * Implements BCD digit extraction from FPGA USART2 RX frames,
+ * following the stock firmware's meter_data_processor (0x08036AC0)
+ * and meter_mode_handler (0x080371B0).
+ *
+ * USART2 RX data frame format (12 bytes):
+ *   [0] = 0x5A  (header byte 1)
+ *   [1] = 0xA5  (header byte 2)
+ *   [2]-[6] = packed BCD nibble pairs (measurement digits)
+ *   [7] = status flags (AC, auto-range, overload, polarity)
+ *   [8]-[9] = additional status
+ *   [10]-[11] = extra data (range info)
+ *
+ * BCD extraction: digits are encoded as cross-byte nibble pairs:
+ *   digit0 = lookup((rx[2] & 0xF0) | (rx[3] & 0x0F))
+ *   digit1 = lookup((rx[3] & 0xF0) | (rx[4] & 0x0F))
+ *   digit2 = lookup((rx[4] & 0xF0) | (rx[5] & 0x0F))
+ *   digit3 = lookup((rx[5] & 0xF0) | (rx[6] & 0x0F))
+ */
+
+#include "meter_data.h"
+#include <string.h>
+
+/* ═══════════════════════════════════════════════════════════════════
+ * Global State
+ * ═══════════════════════════════════════════════════════════════════ */
+
+meter_reading_t meter_reading;
+
+/* ═══════════════════════════════════════════════════════════════════
+ * BCD Nibble Lookup — extracted from stock firmware FUN_08033EF8
+ *
+ * The FPGA contains a meter IC core (likely FS9922 or similar Chinese
+ * multimeter ASIC) that outputs 7-segment LCD drive signals rather
+ * than clean BCD. The cross-byte nibble pairs encode which LCD
+ * segments are lit, using this scrambled bit mapping:
+ *
+ *   input bit 0 → segment d (bottom)
+ *   input bit 1 → segment c (lower right)
+ *   input bit 2 → segment g (middle bar)
+ *   input bit 3 → segment b (upper right)
+ *   input bit 4 → (unused, masked off by AND 0xEF)
+ *   input bit 5 → segment e (lower left)
+ *   input bit 6 → segment f (upper left)
+ *   input bit 7 → segment a (top)
+ *
+ * The stock firmware reverses this encoding back to digit values
+ * using a function with TBB/TBH jump tables. This lookup table is
+ * the equivalent, extracted by simulating FUN_08033EF8 for all 256
+ * input values against the V1.2.0 firmware binary.
+ *
+ * Output codes: 0-9 = BCD digits, 0x0A = OL_hi, 0x0B = OL_lo,
+ *   0x0C/0x0D/0x0E/0x0F = special, 0x10 = blank, 0x11 = partial,
+ *   0x12 = continuity, 0x13 = mode change, 0x14 = special,
+ *   0xFF = invalid/unmapped.
+ *
+ * Since bit 4 is masked, rows 0x1n and 0x0n are identical, etc.
+ * ═══════════════════════════════════════════════════════════════════ */
+
+static const uint8_t bcd_lookup[256] = {
+    0x10, 0xFF, 0xFF, 0xFF, 0x0F, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0x01, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF,  /* 0x00-0x0F */
+    0x10, 0xFF, 0xFF, 0xFF, 0x0F, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0x01, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF,  /* 0x10-0x1F */
+    0xFF, 0xFF, 0xFF, 0x0B, 0x14, 0xFF, 0xFF, 0x0D, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF,  /* 0x20-0x2F */
+    0xFF, 0xFF, 0xFF, 0x0B, 0x14, 0xFF, 0xFF, 0x0D, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF,  /* 0x30-0x3F */
+    0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0x04, 0xFF,  /* 0x40-0x4F */
+    0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0x04, 0xFF,  /* 0x50-0x5F */
+    0xFF, 0x0E, 0xFF, 0xFF, 0xFF, 0x0C, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF,  /* 0x60-0x6F */
+    0xFF, 0x0E, 0xFF, 0xFF, 0xFF, 0x0C, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF,  /* 0x70-0x7F */
+    0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0x07, 0xFF, 0xFF, 0xFF, 0xFF, 0x03,  /* 0x80-0x8F */
+    0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0x07, 0xFF, 0xFF, 0xFF, 0xFF, 0x03,  /* 0x90-0x9F */
+    0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0x02, 0xFF, 0xFF,  /* 0xA0-0xAF */
+    0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0x02, 0xFF, 0xFF,  /* 0xB0-0xBF */
+    0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0x05, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0x09,  /* 0xC0-0xCF */
+    0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0x05, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0x09,  /* 0xD0-0xDF */
+    0xFF, 0x11, 0xFF, 0xFF, 0xFF, 0x13, 0xFF, 0x06, 0xFF, 0xFF, 0xFF, 0x00, 0x12, 0xFF, 0x0A, 0x08,  /* 0xE0-0xEF */
+    0xFF, 0x11, 0xFF, 0xFF, 0xFF, 0x13, 0xFF, 0x06, 0xFF, 0xFF, 0xFF, 0x00, 0x12, 0xFF, 0x0A, 0x08   /* 0xF0-0xFF */
+};
+
+static uint8_t bcd_nibble_lookup(uint8_t combined)
+{
+    return bcd_lookup[combined];
+}
+
+/* ═══════════════════════════════════════════════════════════════════
+ * Decimal point placement per sub-mode
+ *
+ * Based on the result formatting switch in meter_data_processor:
+ *   Sub-mode 0 (DC V):   X.XXX  → decimal at position 1 (after 1st digit)
+ *   Sub-mode 1 (AC V):   XX.XX  → decimal at position 2
+ *   Sub-mode 2 (DC mA):  XX.XX  → decimal at position 2
+ *   Sub-mode 3 (DC A):   X.XXX  → decimal at position 1
+ *   Sub-mode 4 (AC mA):  XX.XX  → decimal at position 2
+ *   Sub-mode 5 (AC A):   X.XXX  → decimal at position 1
+ *   Sub-mode 6 (Ohm):    X.XXX  → decimal at position 1
+ *   Sub-mode 7 (Cont):   XXX.X  → decimal at position 3
+ *   Sub-mode 8 (Diode):  X.XXX  → decimal at position 1
+ *   Sub-mode 9 (Cap):    XX.XX  → decimal at position 2
+ *
+ * The actual decimal position depends on the auto-range state,
+ * but these are the defaults for the most common range.
+ * ═══════════════════════════════════════════════════════════════════ */
+
+static const uint8_t default_decimal_pos[10] = {
+    1, 2, 2, 1, 2, 1, 1, 3, 1, 2
+};
+
+/* Full-scale values per sub-mode (for bar graph calculation) */
+static const float bar_full_scale[10] = {
+    20.0f,    /* DC V: 20V */
+    200.0f,   /* AC V: 200V */
+    200.0f,   /* DC mA: 200mA */
+    10.0f,    /* DC A: 10A */
+    200.0f,   /* AC mA: 200mA */
+    10.0f,    /* AC A: 10A */
+    20.0f,    /* Ohm: 20kOhm */
+    200.0f,   /* Cont: 200 Ohm */
+    2.0f,     /* Diode: 2V */
+    200.0f,   /* Cap: 200nF */
+};
+
+/* ═══════════════════════════════════════════════════════════════════
+ * Format value into display string
+ * ═══════════════════════════════════════════════════════════════════ */
+
+static void format_reading(meter_reading_t *r, uint8_t submode)
+{
+    char *s = r->display_str;
+    int pos = 0;
+
+    if (r->negative) {
+        s[pos++] = '-';
+    }
+
+    uint8_t dec = r->decimal_pos;
+
+    for (int i = 0; i < 4; i++) {
+        if (i == (int)dec && dec > 0 && dec < 4) {
+            s[pos++] = '.';
+        }
+        s[pos++] = '0' + r->digits[i];
+    }
+    s[pos] = '\0';
+
+    /* Strip leading zeros (but keep at least one digit before decimal) */
+    /* e.g., "0.623" stays, but "0047" becomes "47" */
+    if (dec == 0) {
+        /* No decimal point — strip leading zeros */
+        int start = r->negative ? 1 : 0;
+        int first_nonzero = start;
+        while (first_nonzero < pos - 1 && s[first_nonzero] == '0') {
+            first_nonzero++;
+        }
+        if (first_nonzero > start) {
+            memmove(s + start, s + first_nonzero, pos - first_nonzero + 1);
+        }
+    }
+
+    /* Calculate float value from BCD */
+    float divisor = 1.0f;
+    for (int i = 0; i < (4 - (int)dec); i++) {
+        divisor *= 10.0f;
+    }
+    r->value = (float)r->raw_bcd / divisor;
+    if (r->negative) r->value = -r->value;
+
+    /* Bar graph fraction */
+    float abs_val = r->value < 0 ? -r->value : r->value;
+    float full_scale = (submode < 10) ? bar_full_scale[submode] : 1000.0f;
+    r->bar_fraction = abs_val / full_scale;
+    if (r->bar_fraction > 1.0f) r->bar_fraction = 1.0f;
+}
+
+/* ═══════════════════════════════════════════════════════════════════
+ * Public API
+ * ═══════════════════════════════════════════════════════════════════ */
+
+void meter_data_init(void)
+{
+    memset(&meter_reading, 0, sizeof(meter_reading));
+    strcpy(meter_reading.display_str, "---");
+}
+
+void meter_data_process_frame(const volatile uint8_t *frame, uint8_t submode)
+{
+    meter_reading_t *r = &meter_reading;
+
+    /* Validate header */
+    if (frame[0] != 0x5A || frame[1] != 0xA5) return;
+
+    /* Extract cross-byte nibble pairs */
+    uint8_t b2 = frame[2], b3 = frame[3], b4 = frame[4];
+    uint8_t b5 = frame[5], b6 = frame[6];
+
+    uint8_t digit0 = bcd_nibble_lookup((b2 & 0xF0) | (b3 & 0x0F));
+    uint8_t digit1 = bcd_nibble_lookup((b3 & 0xF0) | (b4 & 0x0F));
+    uint8_t digit2 = bcd_nibble_lookup((b4 & 0xF0) | (b5 & 0x0F));
+    uint8_t digit3 = bcd_nibble_lookup((b5 & 0xF0) | (b6 & 0x0F));
+
+    /* Parse status flags from byte [7] */
+    uint8_t status = frame[7];
+    r->is_ac = (status & (1 << 2)) != 0;
+    r->is_auto_range = (status & (1 << 3)) != 0;
+    r->negative = (status & (1 << 0)) != 0;
+
+    /* Parse flags from byte [6] */
+    r->is_hold = (frame[6] & (1 << 6)) != 0;
+
+    /* --- Special value detection --- */
+
+    /* Overload: "OL" */
+    if (digit0 == 0x0A && digit1 == 0x0B) {
+        r->result_class = METER_RESULT_OVERLOAD;
+        strcpy(r->display_str, "OL");
+        r->value = 0.0f;
+        r->bar_fraction = 1.0f;
+        r->continuity_beep = false;
+        r->valid = true;
+        r->update_count++;
+        return;
+    }
+
+    /* Blank display */
+    if (digit0 == 0x10 && digit1 == 0x10) {
+        r->result_class = METER_RESULT_BLANK;
+        strcpy(r->display_str, "---");
+        r->value = 0.0f;
+        r->bar_fraction = 0.0f;
+        r->continuity_beep = false;
+        r->valid = true;
+        r->update_count++;
+        return;
+    }
+
+    /* Partial blank */
+    if (digit0 == 0x10 && digit1 == 0x11) {
+        r->result_class = METER_RESULT_BLANK;
+        strcpy(r->display_str, "---");
+        r->value = 0.0f;
+        r->bar_fraction = 0.0f;
+        r->valid = true;
+        r->update_count++;
+        return;
+    }
+
+    /* Continuity detection */
+    if (digit1 == 0x12 && digit2 == 0x0A && digit3 == 5) {
+        r->result_class = METER_RESULT_CONTINUITY;
+        r->continuity_beep = true;
+        /* Still try to show a value if digit0 is valid */
+        if (digit0 <= 9) {
+            r->digits[0] = digit0;
+            r->digits[1] = 0;
+            r->digits[2] = 0;
+            r->digits[3] = 0;
+            r->raw_bcd = digit0;
+            r->decimal_pos = 0;
+            format_reading(r, submode);
+        } else {
+            strcpy(r->display_str, "CONT");
+            r->value = 0.0f;
+        }
+        r->valid = true;
+        r->update_count++;
+        return;
+    }
+
+    /* Invalid digits */
+    if (digit0 == 0xFF || digit1 == 0xFF || digit2 == 0xFF || digit3 == 0xFF) {
+        r->result_class = METER_RESULT_INVALID;
+        strcpy(r->display_str, "ERR");
+        r->value = 0.0f;
+        r->bar_fraction = 0.0f;
+        r->valid = true;
+        r->update_count++;
+        return;
+    }
+
+    /* --- Normal BCD value --- */
+
+    /* Mask off special code high bits for assembly */
+    uint8_t d0 = (digit0 >= 0x10) ? (digit0 - 0x10) : digit0;
+    uint8_t d1 = (digit1 >= 0x10) ? (digit1 - 0x10) : digit1;
+    uint8_t d2 = (digit2 >= 0x10) ? (digit2 - 0x10) : digit2;
+    uint8_t d3 = (digit3 >= 0x10) ? (digit3 - 0x10) : digit3;
+
+    /* Clamp individual digits to valid BCD range */
+    if (d0 > 9) d0 = 0;
+    if (d1 > 9) d1 = 0;
+    if (d2 > 9) d2 = 0;
+    if (d3 > 9) d3 = 0;
+
+    r->digits[0] = d0;
+    r->digits[1] = d1;
+    r->digits[2] = d2;
+    r->digits[3] = d3;
+    r->raw_bcd = d0 * 1000 + d1 * 100 + d2 * 10 + d3;
+
+    /* Set decimal position based on sub-mode */
+    r->decimal_pos = (submode < 10) ? default_decimal_pos[submode] : 1;
+
+    /* Format the display string and compute float value */
+    r->result_class = METER_RESULT_NORMAL;
+    r->continuity_beep = false;
+    format_reading(r, submode);
+
+    r->valid = true;
+    r->update_count++;
+}
+
+bool meter_data_valid(void)
+{
+    return meter_reading.valid;
+}
+
+float meter_data_get_value(void)
+{
+    return meter_reading.value;
+}
+
+const char *meter_data_get_display_str(void)
+{
+    return meter_reading.display_str;
+}
+
+float meter_data_get_bar_fraction(void)
+{
+    return meter_reading.bar_fraction;
+}

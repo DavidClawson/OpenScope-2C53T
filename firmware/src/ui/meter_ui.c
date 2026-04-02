@@ -17,6 +17,7 @@
 #include "lcd.h"
 #include "font.h"
 #include "theme.h"
+#include "meter_data.h"
 #include <string.h>
 
 /* Layout constants */
@@ -289,9 +290,10 @@ static void draw_bar_graph(uint16_t x, uint16_t y, uint16_t w, uint16_t h,
     }
 }
 
-/* Draw the main reading (shared by all layouts) */
+/* Draw the main reading (shared by all layouts)
+ * value_str: the string to display (real or demo) */
 static void draw_main_reading(const meter_mode_info_t *m, const theme_t *th,
-                              uint16_t y, bool compact)
+                              uint16_t y, bool compact, const char *value_str)
 {
     if (!compact) {
         /* Mode indicator arrows (show L/R navigation) */
@@ -302,7 +304,7 @@ static void draw_main_reading(const meter_mode_info_t *m, const theme_t *th,
     }
 
     /* Main reading */
-    font_draw_string_right(240, y, m->demo_value,
+    font_draw_string_right(240, y, value_str,
                            th->text_primary, th->background,
                            compact ? &font_large : &font_xlarge);
 
@@ -359,11 +361,12 @@ const char *meter_submode_name(uint8_t submode)
  * ═══════════════════════════════════════════════════════════════════ */
 
 static void draw_meter_full(const meter_mode_info_t *m, uint8_t mode,
-                            float current_val)
+                            float current_val, const char *value_str,
+                            float bar_pct)
 {
     const theme_t *th = theme_get();
 
-    draw_main_reading(m, th, MAIN_READING_Y, false);
+    draw_main_reading(m, th, MAIN_READING_Y, false, value_str);
 
     /* Special indicators for continuity and diode modes */
     if (mode == 7) {
@@ -374,7 +377,7 @@ static void draw_meter_full(const meter_mode_info_t *m, uint8_t mode,
     }
 
     /* Bar graph */
-    draw_bar_graph(BAR_X, BAR_Y, BAR_W, BAR_H, m->demo_bar_pct, th->success);
+    draw_bar_graph(BAR_X, BAR_Y, BAR_W, BAR_H, bar_pct, th->success);
 
     font_draw_string(BAR_X, BAR_Y + BAR_H + 2, "0",
                      th->text_secondary, th->background, &font_small);
@@ -451,14 +454,14 @@ static void draw_meter_full(const meter_mode_info_t *m, uint8_t mode,
  * ═══════════════════════════════════════════════════════════════════ */
 
 static void draw_meter_chart(const meter_mode_info_t *m, uint8_t mode,
-                             float current_val)
+                             float current_val, const char *value_str)
 {
     const theme_t *th = theme_get();
     char val_buf[16];
     (void)mode;
 
     /* Compact main reading at top */
-    draw_main_reading(m, th, METER_TOP + 2, true);
+    draw_main_reading(m, th, METER_TOP + 2, true, value_str);
 
     /* Current value + unit below reading */
     font_draw_string(16, METER_TOP + 40, m->range_label,
@@ -582,7 +585,7 @@ static void draw_meter_chart(const meter_mode_info_t *m, uint8_t mode,
  * ═══════════════════════════════════════════════════════════════════ */
 
 static void draw_meter_stats(const meter_mode_info_t *m, uint8_t mode,
-                             float current_val)
+                             float current_val, const char *value_str)
 {
     const theme_t *th = theme_get();
     char val_buf[16];
@@ -590,7 +593,7 @@ static void draw_meter_stats(const meter_mode_info_t *m, uint8_t mode,
     (void)current_val;
 
     /* Compact main reading at top */
-    draw_main_reading(m, th, METER_TOP + 2, true);
+    draw_main_reading(m, th, METER_TOP + 2, true, value_str);
 
     /* Statistics panel */
     uint16_t sy = METER_TOP + 42;
@@ -705,7 +708,11 @@ void meter_toggle_relative(void)
         /* Enable: capture current reading as reference */
         uint8_t mode = meter_submode;
         if (mode >= METER_SUBMODE_COUNT) mode = 0;
-        meter_rel_reference = simple_atof(meter_modes[mode].demo_value);
+        if (meter_data_valid()) {
+            meter_rel_reference = meter_data_get_value();
+        } else {
+            meter_rel_reference = simple_atof(meter_modes[mode].demo_value);
+        }
         meter_rel_enabled = true;
     } else {
         meter_rel_enabled = false;
@@ -735,7 +742,21 @@ void draw_meter_screen(void)
 
     const meter_mode_info_t *m = &meter_modes[mode];
 
-    float current_val = simple_atof(m->demo_value);
+    /* Use real FPGA meter data if available, otherwise fall back to demo */
+    float current_val;
+    const char *value_str;
+    float bar_pct;
+
+    if (meter_data_valid() &&
+        meter_reading.result_class != METER_RESULT_NONE) {
+        current_val = meter_reading.value;
+        value_str = meter_reading.display_str;
+        bar_pct = meter_reading.bar_fraction;
+    } else {
+        current_val = simple_atof(m->demo_value);
+        value_str = m->demo_value;
+        bar_pct = m->demo_bar_pct;
+    }
 
     /* Apply relative offset if enabled */
     float display_val = current_val;
@@ -758,7 +779,8 @@ void draw_meter_screen(void)
      * This helps in noisy environments where the buzzer can't be heard. */
     bool continuity_flash = false;
     if (mode == 7) {
-        continuity_flash = (current_val < 50.0f);
+        continuity_flash = (current_val < 50.0f) ||
+                           meter_reading.continuity_beep;
     }
 
     /* Clear content area (green flash for continuity, normal otherwise) */
@@ -791,20 +813,28 @@ void draw_meter_screen(void)
         ind_x += 40;
     }
 
-    /* Dispatch to active layout (pass display_val so REL/HOLD are reflected) */
-    /* For now the layouts use demo_value directly — TODO: pass display_val
-     * through once we have real ADC data. The indicators already show state. */
-    (void)display_val;
+    /* Use display_val for REL/HOLD-adjusted readings */
+    if (meter_rel_enabled || (meter_hold_enabled && meter_hold_locked)) {
+        /* Format the adjusted value for display */
+        static char adjusted_str[16];
+        int decimals = 2;  /* Default decimal places for adjusted display */
+        fmt_float(adjusted_str, sizeof(adjusted_str), display_val, decimals);
+        value_str = adjusted_str;
+        /* Update bar for adjusted value */
+        float abs_dv = display_val < 0 ? -display_val : display_val;
+        bar_pct = abs_dv / m->bar_max;
+        if (bar_pct > 1.0f) bar_pct = 1.0f;
+    }
 
     switch (meter_layout) {
     case METER_LAYOUT_CHART:
-        draw_meter_chart(m, mode, current_val);
+        draw_meter_chart(m, mode, current_val, value_str);
         break;
     case METER_LAYOUT_STATS:
-        draw_meter_stats(m, mode, current_val);
+        draw_meter_stats(m, mode, current_val, value_str);
         break;
     default:
-        draw_meter_full(m, mode, current_val);
+        draw_meter_full(m, mode, current_val, value_str, bar_pct);
         break;
     }
 }
