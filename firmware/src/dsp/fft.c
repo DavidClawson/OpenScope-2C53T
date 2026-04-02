@@ -53,6 +53,7 @@ static float *window_coeffs = 0;
 static float *magnitude_buf = 0;
 static float *avg_buf = 0;
 static float *max_hold_buf = 0;
+static int16_t *sample_buf = 0;    /* ADC sample scratch buffer (in pool) */
 
 #ifndef USE_CMSIS_DSP
 static float *twiddle_re = 0;
@@ -75,9 +76,13 @@ static void fft_setup_pointers(uint8_t *pool)
 #ifdef USE_CMSIS_DSP
     fft_input        = fft_buf;
     fft_cmsis_output = fft_buf + FFT_SIZE;
+    /* Sample buffer after max_hold (72KB offset) */
+    sample_buf    = (int16_t *)(max_hold_buf + FFT_BINS);
 #else
     twiddle_re    = max_hold_buf + FFT_BINS;
     twiddle_im    = twiddle_re + FFT_SIZE / 2;
+    /* Sample buffer after twiddle tables (88KB offset) */
+    sample_buf    = (int16_t *)(twiddle_im + FFT_SIZE / 2);
 #endif
 }
 
@@ -380,6 +385,12 @@ void fft_deinit(void)
     magnitude_buf = 0;
     avg_buf = 0;
     max_hold_buf = 0;
+    sample_buf = 0;
+}
+
+int16_t *fft_get_sample_buf(void)
+{
+    return sample_buf;
 }
 
 bool fft_is_initialized(void)

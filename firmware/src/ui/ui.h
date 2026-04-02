@@ -105,7 +105,6 @@ extern volatile bool          persist_enabled;
 #include "fft.h"
 #include "fft_test_signals.h"
 extern volatile scope_view_t scope_view;
-extern int16_t          fft_sample_buf[];
 extern fft_result_t     fft_result;
 #endif
 
@@ -115,6 +114,7 @@ extern fft_result_t     fft_result;
 
 /* status_bar.c */
 void draw_status_bar(void);
+void status_bar_invalidate(void);
 void draw_info_bar(void);
 void draw_splash(void);
 

@@ -14,6 +14,8 @@
 
 #include "input_handler.h"
 #include "ui.h"
+#include "lcd.h"
+#include "font.h"
 #include "scope_state.h"
 #include "signal_gen.h"
 #include "theme.h"
@@ -21,6 +23,8 @@
 #include "component_test.h"
 #include "persistence.h"
 #include "shared_mem.h"
+#include "at32f403a_407.h"
+#include "task.h"
 #include <stdio.h>
 
 #ifdef FEATURE_FFT
@@ -294,10 +298,11 @@ uint8_t input_handle_button(button_id_t button, QueueHandle_t dq)
         } else if (current_mode == MODE_OSCILLOSCOPE) {
 #ifdef FEATURE_FFT
             if (scope_view != SCOPE_VIEW_TIME) {
-                test_signal_generate(TEST_SIG_SQUARE, fft_sample_buf,
+                int16_t *sbuf = fft_get_sample_buf();
+                test_signal_generate(TEST_SIG_SQUARE, sbuf,
                                      FFT_SIZE, fft_get_config()->sample_rate_hz,
                                      1000.0f, 0.0f, 0.8f);
-                fft_auto_configure(fft_sample_buf, FFT_SIZE);
+                fft_auto_configure(sbuf, FFT_SIZE);
             }
 #endif
             send_cmd(dq, cmd);
@@ -585,6 +590,53 @@ uint8_t input_handle_button(button_id_t button, QueueHandle_t dq)
             scope_show_popup(ss->running ? "RUN" : "STOP");
             send_cmd(dq, cmd);
         }
+        break;
+
+    /* -- Power ---------------------------------------------------- */
+
+    case BTN_POWER:
+        {
+            const theme_t *th = theme_get();
+            uint16_t bg = 0x0010;  /* dark background */
+
+            /* Draw "Hold to power off" overlay */
+            lcd_fill_rect(60, 80, 200, 80, bg);
+            lcd_fill_rect(61, 81, 198, 78, bg);
+            font_draw_string_center(160, 88, "Hold to power off",
+                                    th->warning, bg, &font_medium);
+
+            /* Countdown 3..2..1 while POWER button held */
+            for (int countdown = 3; countdown > 0; countdown--) {
+                char digit[2] = { '0' + countdown, '\0' };
+                lcd_fill_rect(140, 115, 40, 30, bg);
+                font_draw_string_center(160, 115, digit,
+                                        th->text_primary, bg, &font_large);
+
+                /* Wait 1 second, polling button every 50ms */
+                for (int i = 0; i < 20; i++) {
+                    vTaskDelay(pdMS_TO_TICKS(50));
+                    /* PC8 active LOW — if released, cancel */
+                    if (GPIOC->idt & (1U << 8)) {
+                        /* Button released — cancel, redraw */
+                        send_cmd(dq, DCMD_REDRAW_ALL);
+                        goto power_done;
+                    }
+                }
+            }
+
+            /* Still held after 3 seconds — power off */
+            lcd_fill_rect(60, 80, 200, 80, bg);
+            font_draw_string_center(160, 110, "Goodbye!",
+                                    th->success, bg, &font_large);
+            vTaskDelay(pdMS_TO_TICKS(500));
+
+            /* Drop PC9 LOW — device powers off */
+            GPIOC->clr = (1U << 9);
+
+            /* Should never reach here */
+            while (1);
+        }
+        power_done:
         break;
 
     default:

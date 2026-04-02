@@ -58,7 +58,6 @@ volatile bool          persist_enabled = false;
 
 #ifdef FEATURE_FFT
 volatile scope_view_t scope_view = SCOPE_VIEW_TIME;
-int16_t fft_sample_buf[FFT_SIZE];
 fft_result_t fft_result;
 #endif
 
@@ -247,6 +246,7 @@ static void vOneSecondTimerCallback(TimerHandle_t xTimer)
 {
     (void)xTimer;
     uptime_seconds++;
+    battery_update();
     uint8_t cmd = DCMD_DRAW_STATUS_BAR;
     /* Zero timeout is intentional: timer service task is highest priority,
      * so blocking here would stall all timers including the health check.

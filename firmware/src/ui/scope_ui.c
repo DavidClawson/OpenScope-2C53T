@@ -732,10 +732,11 @@ static void draw_fft_region(uint16_t y_top, uint16_t height)
     const fft_config_t *cfg = fft_get_config();
     uint16_t y_bot = y_top + height;
 
-    test_signal_generate(TEST_SIG_SQUARE, fft_sample_buf,
+    int16_t *sbuf = fft_get_sample_buf();
+    test_signal_generate(TEST_SIG_SQUARE, sbuf,
                          FFT_SIZE, cfg->sample_rate_hz,
                          1000.0f, 0.0f, 0.8f);
-    fft_process(fft_sample_buf, FFT_SIZE, &fft_result);
+    fft_process(sbuf, FFT_SIZE, &fft_result);
 
     const float *draw_data = (fft_result.avg_db != NULL)
                              ? fft_result.avg_db : fft_result.magnitude_db;
@@ -902,10 +903,11 @@ void draw_waterfall_screen(void)
 {
     const fft_config_t *cfg = fft_get_config();
 
-    test_signal_generate(TEST_SIG_SQUARE, fft_sample_buf,
+    int16_t *sbuf = fft_get_sample_buf();
+    test_signal_generate(TEST_SIG_SQUARE, sbuf,
                          FFT_SIZE, cfg->sample_rate_hz,
                          1000.0f, 0.0f, 0.8f);
-    fft_process(fft_sample_buf, FFT_SIZE, &fft_result);
+    fft_process(sbuf, FFT_SIZE, &fft_result);
 
     const float *draw_data = (fft_result.avg_db != NULL)
                              ? fft_result.avg_db : fft_result.magnitude_db;

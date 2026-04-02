@@ -46,11 +46,21 @@ static const button_id_t bit_to_button[15] = {
  * ═══════════════════════════════════════════════════════════════════ */
 
 #define DEBOUNCE_CONFIRM  70   /* 140ms at 500Hz — short press */
+#define REPEAT_INITIAL   250   /* 500ms after confirm before first repeat */
+#define REPEAT_INTERVAL   75   /* 150ms between repeats (~6.7/sec) */
 #define NUM_BUTTONS       15
+
+/* Buttons that auto-repeat when held (directional navigation) */
+static const uint16_t repeat_mask =
+    (1 << 10) |  /* BTN_UP */
+    (1 << 11) |  /* BTN_DOWN */
+    (1 << 12) |  /* BTN_LEFT */
+    (1 << 13);   /* BTN_RIGHT */
 
 static QueueHandle_t  s_button_queue = NULL;
 static volatile uint16_t s_raw_state = 0;
 static uint8_t s_debounce[NUM_BUTTONS] = {0};
+static uint16_t s_repeat[NUM_BUTTONS] = {0};
 
 /* ═══════════════════════════════════════════════════════════════════
  * GPIO helpers — reconfigure pins each scan phase
@@ -170,7 +180,16 @@ void TMR3_GLOBAL_IRQHandler(void) {
     uint16_t events = matrix_scan();
     s_raw_state = events;
 
-    /* Debounce: confirm on rising edge at tick 70 */
+    /* Debounce + auto-repeat for directional buttons.
+     *
+     * Initial press fires at tick DEBOUNCE_CONFIRM (140ms).
+     * For UP/DOWN/LEFT/RIGHT only: after REPEAT_INITIAL more ticks (500ms),
+     * repeats fire every REPEAT_INTERVAL ticks (150ms, ~6.7/sec).
+     *
+     * POWER long-press is NOT handled here — the input task polls GPIO
+     * directly for the 3-2-1 countdown (see input_handler.c BTN_POWER). */
+    BaseType_t any_woken = pdFALSE;
+
     for (int i = 0; i < NUM_BUTTONS; i++) {
         if (i == 6) continue;  /* skip PRM (bit 6) — always HIGH, WIP */
 
@@ -180,14 +199,25 @@ void TMR3_GLOBAL_IRQHandler(void) {
             if (s_debounce[i] == DEBOUNCE_CONFIRM) {
                 /* Confirmed press — send to queue from ISR */
                 button_id_t btn = bit_to_button[i];
-                BaseType_t woken = pdFALSE;
-                xQueueSendFromISR(s_button_queue, &btn, &woken);
-                portYIELD_FROM_ISR(woken);
+                xQueueSendFromISR(s_button_queue, &btn, &any_woken);
+                s_repeat[i] = 0;
+            } else if (s_debounce[i] > DEBOUNCE_CONFIRM && (repeat_mask & mask)) {
+                /* Auto-repeat for directional buttons */
+                s_repeat[i]++;
+                if (s_repeat[i] == REPEAT_INITIAL ||
+                    (s_repeat[i] > REPEAT_INITIAL &&
+                     (s_repeat[i] - REPEAT_INITIAL) % REPEAT_INTERVAL == 0)) {
+                    button_id_t btn = bit_to_button[i];
+                    xQueueSendFromISR(s_button_queue, &btn, &any_woken);
+                }
             }
         } else {
             s_debounce[i] = 0;
+            s_repeat[i] = 0;
         }
     }
+
+    portYIELD_FROM_ISR(any_woken);
 }
 
 /* ═══════════════════════════════════════════════════════════════════

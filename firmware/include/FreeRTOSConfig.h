@@ -62,7 +62,18 @@
 /* Co-routine (not used) */
 #define configUSE_CO_ROUTINES                   0
 
-/* Interrupt nesting */
+/* Interrupt nesting
+ *
+ * Any ISR that calls FreeRTOS API (xQueueSendFromISR, etc.) MUST have
+ * NVIC priority >= configMAX_SYSCALL_INTERRUPT_PRIORITY (i.e., numeric
+ * value >= 5). Lower numeric values = higher urgency on ARM, and those
+ * ISRs CANNOT safely call FreeRTOS functions.
+ *
+ * Current ISRs using FreeRTOS API:
+ *   TMR3 (button scan) — priority 5  [button_scan.c]
+ *
+ * If adding FPGA SPI/USART interrupts, use priority >= 5.
+ */
 #define configKERNEL_INTERRUPT_PRIORITY         (15 << (8 - configPRIO_BITS))
 #define configMAX_SYSCALL_INTERRUPT_PRIORITY    (5 << (8 - configPRIO_BITS))
 #define configMAX_API_CALL_INTERRUPT_PRIORITY   configMAX_SYSCALL_INTERRUPT_PRIORITY

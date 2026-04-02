@@ -79,6 +79,10 @@ void fft_deinit(void);
 /* Check if FFT engine is initialized (has pool ownership). */
 bool fft_is_initialized(void);
 
+/* Get the FFT sample scratch buffer (FFT_SIZE int16s, lives in shared pool).
+ * Returns NULL if FFT is not initialized. Fill this, then pass to fft_process(). */
+int16_t *fft_get_sample_buf(void);
+
 /* Process int16 ADC samples into frequency domain result. */
 void fft_process(const int16_t *samples, uint16_t num_samples,
                  fft_result_t *result);
