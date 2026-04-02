@@ -314,6 +314,76 @@ Each module is a JSON file stored on the device filesystem:
 6. **Reference waveforms** — "this is what good looks like" — learn by comparison
 7. **Knowledge base** — built-in troubleshooting guidance based on the results
 
+## Small Engine / Outdoor Power Equipment
+
+Lawnmowers, chainsaws, generators, pressure washers, snowblowers. Every small engine shop in the country, plus millions of DIYers. The ignition and charging systems are simpler than automotive but the diagnostic approach is the same — and these shops have almost no electronic test equipment.
+
+| Test | How it works | Why it matters |
+|---|---|---|
+| **Ignition coil output** | Capture primary coil waveform during cranking or running | No-spark conditions, weak spark, intermittent misfire. Small engine coils are simple 2-wire — easy to probe. |
+| **Charging system (stator)** | Scope the AC output from the magneto/alternator stator | Bad stator = no charge = dead battery. Measure AC voltage and waveform shape. Missing phases = shorted windings. |
+| **Kill switch / safety interlock** | Verify the kill circuit opens and closes cleanly | Blade-brake-clutch, seat switch, handlebar deadman — these fail constantly. Scope shows intermittent contacts that a meter misses. |
+| **Governor hunting** | Log engine RPM (from ignition pulse frequency) over time | Governor surge/hunt is a common complaint. The scope can show the RPM oscillation pattern and help dial in governor adjustment. |
+| **Electric starter current** | Current clamp on starter circuit | Same as automotive starter profiling but for smaller motors. Diagnose dragging starter, low battery, high compression. |
+
+**Why this market matters:** There are ~100,000+ small engine repair shops in the US, and most of them work with a multimeter and "experience." A $70 scope that speaks their language (ignition coil, stator, kill switch) would be immediately useful. The Briggs & Stratton / Kohler / Honda small engine community is huge.
+
+## Motorcycle / Powersports
+
+Different community from automotive, different systems, different culture. Motorcycle mechanics are often owner-mechanics who wrench on their own bikes.
+
+| Test | How it works | Why it matters |
+|---|---|---|
+| **Stator AC output** | Scope all 3 phases of the stator output (one at a time with CH1) | The #1 charging failure on motorcycles. A shorted stator winding shows as one phase with lower amplitude. Dedicated stator testers cost $150+. |
+| **Regulator/rectifier output** | Scope the DC output ripple from the reg/rec | Bad regulator = overcharging (kills battery) or undercharging. The ripple pattern shows which diodes are working. Same as alternator ripple but different physical setup. |
+| **CDI ignition timing** | Capture trigger coil signal and CDI output simultaneously | Verify advance curve, diagnose no-start conditions. CDI boxes fail silently — the scope is the only way to see inside them. |
+| **Throttle Position Sensor** | Monitor TPS voltage through full throttle range | Fuel-injected bikes rely on TPS for fueling. A dead spot or noisy TPS causes hesitation. The scope shows what a multimeter can't — the transition quality. |
+| **Fuel injector waveform** | Capture injector driver signal at idle and WOT | Modern sport bikes run 4 injectors. Compare pulse widths across cylinders to find lean/rich cylinders. |
+| **ABS wheel speed** | Same as automotive but relevant for newer bikes | ABS module failures are common and expensive. Verify the sensor signal before replacing the module. |
+
+**Why this market matters:** The motorcycle aftermarket is massive. Forums like ADVrider, SportBikes.net, and the various brand-specific communities have hundreds of thousands of members who do their own maintenance. A YouTube video titled "diagnose your motorcycle charging system with a $70 scope" would go viral in that community.
+
+## Appliance Repair / White Goods
+
+Washing machines, dryers, dishwashers, refrigerators, ovens. ~150,000 appliance repair techs in the US, and the industry is moving rapidly from simple electromechanical to inverter-driven, microcontroller-controlled appliances that require electronic diagnosis.
+
+| Test | How it works | Why it matters |
+|---|---|---|
+| **Inverter motor diagnostics** | Current clamp on motor phases, capture startup and running waveform | Samsung/LG/GE front-load washers use inverter-driven motors. Bad inverter = no spin/agitate. The current waveform shows whether the inverter or the motor is the problem. |
+| **Control board relay outputs** | Scope the relay driver signals on the main control board | Modern appliances have 5-15 relays controlled by a microcontroller. If the board commands the relay but nothing happens, the relay or the load is bad. If the board doesn't command it, the board is bad. The scope answers the question. |
+| **NTC thermistor validation** | Measure thermistor voltage at known temperature, compare to expected curve | Thermistors drift over time. A dryer thermistor that reads 10% high runs 10% too cold. The meter can measure resistance, but a reference curve comparison tells you if it's in spec. |
+| **Door lock motor current** | Capture current draw of the door lock actuator | Front-load washer door locks are electromechanical and fail frequently. The current waveform shows: lock engaging, latch engagement, microswitch closure. A partial failure (lock engages but latch doesn't catch) is visible in the waveform but invisible on a multimeter. |
+| **Water level pressure switch** | Monitor the pressure switch signal during fill | Electronic pressure sensors output a frequency proportional to water level. If the frequency is wrong, the machine overfills or underfills. The scope measures frequency directly. |
+
+**Why this market matters:** Appliance repair techs currently use basic multimeters. The industry is shifting to inverter-driven, electronically-controlled appliances that need scope-level diagnostics. Samsung and LG publish waveform-based diagnostic procedures that most techs can't perform because they don't own a scope. A $70 scope with appliance-specific guided tests fills a real gap.
+
+## Generator / Backup Power
+
+Standby generators, portable generators, UPS systems. Installers, electricians, and facility maintenance techs who commission and maintain backup power systems.
+
+| Test | How it works | Why it matters |
+|---|---|---|
+| **Output voltage quality** | Scope the AC output, measure THD via FFT | A generator with high THD damages sensitive electronics. Inverter generators claim "clean power" — verify the claim. |
+| **Frequency stability** | Track output frequency over time under varying load | Frequency should be 60.0 Hz ±0.5 Hz. Governors that hunt show up immediately. |
+| **Load step response** | Capture voltage/frequency transient when a large load turns on | How quickly does the generator recover? Long sag = undersized generator or slow governor. |
+| **Transfer switch timing** | Scope the utility and generator feeds simultaneously | Measure the blackout window during transfer. Critical for UPS-backed loads. Should be <100ms for most automatic transfer switches. |
+| **Battery charger output** | Monitor the float/bulk/equalize charge profile on the starter battery | Standby generators sit for months. If the battery charger fails, the generator won't start when needed. The scope catches charger failure before the outage does. |
+
+**Why this market matters:** Backup power is critical infrastructure. Every hospital, data center, cell tower, and grocery store has generators that require periodic testing. The techs who maintain them need to verify output quality, and most carry only a basic multimeter.
+
+## Welding
+
+Welders are deeply technical, tool-obsessed, and already comfortable with electrical concepts. The welding community is large and active online.
+
+| Test | How it works | Why it matters |
+|---|---|---|
+| **Arc voltage/current waveform** | Capture welding arc voltage and current (with appropriate isolation) | The waveform reveals arc stability, spatter tendency, heat input. Professional welding engineers use oscilloscopes for WPS (Welding Procedure Specification) qualification. |
+| **Pulse waveform verification** | Scope the pulse output of a pulse MIG or pulse TIG welder | Verify that the welder's pulse settings (peak current, background current, frequency, pulse width) match what's programmed. Cheap welders often lie about their pulse parameters. |
+| **Wire feed speed** | Tach signal from wire feeder motor | Verify WFS matches the setting. Inconsistent wire feed = inconsistent weld quality. |
+| **Welder output ripple** | Scope the DC output of a welder at no-load and under arc | Excessive ripple = bad diodes in the rectifier. Same concept as alternator ripple test. |
+
+**Why this market matters:** The American Welding Society has ~70,000 members. Welding schools graduate thousands of students per year. The intersection of "welder who owns a scope" is currently small, but that's because no $70 scope has ever spoken their language.
+
 ### Target Audiences by Market Size
 
 | Industry | US Workforce | Current Tool Cost | Our Advantage |
@@ -328,3 +398,8 @@ Each module is a JSON file stored on the device filesystem:
 | Industrial | ~500,000 maintenance techs | $2,000-10,000 MCSA tools | Motor analysis at 1/100 the price |
 | Education | Millions of students | $200-500 lab scopes | Guided labs + component ID |
 | EV service | ~50,000 (growing fast) | $500-2,000 EV tools | J1772 + BMS + CAN decode |
+| Small engine | ~100,000 shops + millions DIY | $100-300 ignition testers | Coil + stator + governor in one tool |
+| Motorcycle | ~50,000 shops + millions riders | $150-500 stator testers | Charging + CDI + injector analysis |
+| Appliance repair | ~150,000 | $200-400 meters | Inverter motor + control board diagnostics |
+| Generator/backup | ~30,000 + electricians | $300-1,000 power analyzers | THD + frequency + transfer switch timing |
+| Welding | ~70,000 AWS members + schools | $500-2,000 weld monitors | Arc waveform + pulse verification |

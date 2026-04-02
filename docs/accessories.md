@@ -410,6 +410,75 @@ Current Sense: 100K to GND
 
 The MCU reads the detection pin's ADC value and automatically loads the appropriate mode and settings. Plug in the RF bridge → scope switches to antenna analyzer mode.
 
+## 3D-Printed Top Panel Replacement
+
+The FNIRSI 2C53T has two validated hardware complaints that a replacement top panel can fix:
+
+1. **BNC connectors too close** — probes with molded strain relief / safety shrouds physically collide when both channels are connected ([Elektor Review](https://www.elektormagazine.com/review/fnirsi-2c53t-50-mhz-two-channel-oscilloscope-multimeter-generator-review))
+2. **Banana jack spacing < 19mm** — standard multimeter accessories (Pomona plugs, shrouded leads) don't fit ([Elektor Review](https://www.elektormagazine.com/review/fnirsi-2c53t-50-mhz-two-channel-oscilloscope-multimeter-generator-review))
+
+The top panel is a removable plastic piece — no PCB, no electronics, just a cosmetic/mechanical part. The BNC connectors and banana jacks are soldered to the main board underneath. A 3D-printed replacement with wider openings solves both problems.
+
+### What to Measure During Teardown
+
+- Center-to-center distance of the two BNC holes
+- Center-to-center distance of the banana jack holes
+- Whether PCB clearance allows widening banana spacing to 19mm (standard ¾")
+- Whether BNC hole surrounds can be enlarged without hitting board components
+- Snap-fit geometry, screw post locations, alignment features
+- Panel thickness and overall dimensions
+- Signal generator output and USB-C port cutout geometry
+
+### Design Goals
+
+```
+Stock top panel:
+┌──────────────────────────────────┐
+│  [BNC1][BNC2]  [●][●]  [USB-C]  │  ← BNCs too close, banana too narrow
+└──────────────────────────────────┘
+
+Replacement panel:
+┌──────────────────────────────────┐
+│  [BNC1] [BNC2] [● ●]   [USB-C]  │  ← BNC clearance for shrouded probes
+└──────────────────────────────────┘           banana at standard 19mm
+```
+
+The BNC connectors are fixed on the PCB, so we can't increase center-to-center distance. But we CAN:
+- Enlarge the plastic cutouts so probe bodies don't collide
+- Add chamfers or relief cuts for strain relief clearance
+- Potentially widen banana jack openings to accept standard 19mm accessories
+
+If the PCB banana jack spacing is already close to 19mm, just widening the plastic holes may be enough. If the PCB itself is non-standard, it might require desoldering and relocating the jacks (more involved mod, separate guide).
+
+### Printing Notes
+
+- **PETG recommended** — better heat resistance and durability than PLA, handles pocket carry and summer car temps
+- **PLA works** — easier to print, fine for bench use, might soften in a hot car
+- **0.2mm layer height** — good balance of speed and finish for a cosmetic part
+- **No supports needed** if designed with print orientation in mind (flat panel, holes printed vertically)
+- **Color:** black to match stock, or go wild — transparent, team colors, whatever
+
+### Distribution
+
+- STL and STEP files on Printables / Thingiverse / GitHub repo
+- Include both "widened clearance" version (safe, no desoldering) and "full 19mm banana" version (if PCB allows)
+- Pair with firmware flashing guide: "Fix the software AND the hardware"
+
+### Content Angle
+
+- YouTube Short: "The #1 hardware complaint about the FNIRSI 2C53T — fixed with a 3D printer"
+- Before/after of two probes actually fitting side by side
+- Cost: $0.20 of filament vs replacing the entire device
+- Ties directly into the open-source firmware narrative: community fixing what the manufacturer won't
+
+### PicoBNC+ Context
+
+PicoScope's newer scopes (4225A, 4425A) use [PicoBNC+](https://www.picoauto.com/products/test-leads/picobnc-automotive-test-lead-10-1-4mm-shrouded-scope-probe) — a proprietary smart connector that auto-identifies probes and configures the software. The physical connector is BNC-compatible but adds digital ID pins. Their probes have large molded safety shrouds which is partly why BNC spacing matters — these are the probes that won't fit two-at-a-time on the stock 2C53T panel.
+
+Our accessory detection system (resistor-based ID on the BNC shield, see above) gives us a similar auto-detect capability without proprietary connectors. Combined with wider BNC spacing on the printed panel, we'd support both standard and shrouded probes.
+
+---
+
 ## Community Contribution Model
 
 1. Someone designs a board in KiCad

@@ -1,0 +1,109 @@
+# ═══════════════════════════════════════════════════════════════════
+# OpenScope Module Descriptor
+# ═══════════════════════════════════════════════════════════════════
+#
+# Every module (in-repo or out-of-tree) must include a module.yaml
+# in its root directory. The build system, configurator, and CI
+# all read this file.
+#
+# Copy this file, rename to module.yaml, and fill in your values.
+# ═══════════════════════════════════════════════════════════════════
+
+# ── Identity ──────────────────────────────────────────────────────
+
+name: "Example Module"                # Full display name
+short_name: "EXMP"                    # Max 6 chars, shown in status bar
+description: "One-line description of what this module does"
+version: "0.1.0"                      # Semantic versioning (major.minor.patch)
+author: "Your Name"
+license: "GPL-3.0"                    # Or "MIT", "proprietary", etc.
+
+# Module API version this module targets (must match module_api.h)
+api_version: "0.1"
+
+# ── Category ──────────────────────────────────────────────────────
+# Used by the configurator to group modules in the UI.
+#
+# Categories:
+#   protocol   — Protocol decoders (I2C, SPI, CAN, UART, etc.)
+#   analysis   — Signal analysis tools (FFT, THD, power, etc.)
+#   automotive — Automotive-specific tests and decoders
+#   industrial — Industrial automation and testing
+#   education  — Educational / learning tools
+#   test       — Hardware test and validation
+#   export     — Data export and connectivity
+#   other      — Anything else
+
+category: "other"
+
+# ── Source Files ──────────────────────────────────────────────────
+# Paths are relative to this module.yaml file.
+
+source_files:
+  - example_module.c
+
+header_files:
+  - example_module.h
+
+# Optional: test signal data (only compiled with EMULATOR_BUILD)
+test_signals:
+  - test_signals.c
+
+# ── Platform Requirements ─────────────────────────────────────────
+# Declare what platform features your module needs. The configurator
+# uses this to warn users about missing dependencies.
+
+requires:
+  - scope              # Needs ADC sample data (ch1/ch2)
+  # - siggen           # Needs signal generator output
+  # - dmm              # Needs multimeter readings
+  # - dual_channel     # Needs both scope channels
+  # - fft              # Needs FFT computation results
+
+# ── Resource Estimates ────────────────────────────────────────────
+# Used by the configurator to show flash/RAM budgets.
+# Be honest — underestimates cause hard-to-debug failures.
+
+resources:
+  ram_bytes: 1024          # Static + heap allocation in init()
+  flash_bytes: 8192        # Approximate compiled size
+
+# ── Settings ──────────────────────────────────────────────────────
+# Declare user-configurable parameters. These are rendered in a
+# standard settings UI by the platform. Values are persisted to
+# flash between power cycles.
+#
+# This section is informational — the actual settings are defined
+# in code via mod_setting_t structs. But declaring them here lets
+# the configurator show a preview.
+
+settings:
+  - key: "threshold"
+    name: "Detection Threshold"
+    type: float
+    default: 1.5
+    min: 0.0
+    max: 5.0
+    unit: "V"
+
+  - key: "auto_reset"
+    name: "Auto Reset"
+    type: bool
+    default: true
+
+# ── Compatibility ─────────────────────────────────────────────────
+# Optional: restrict which boards this module works on.
+# Omit this section if the module is board-independent (preferred).
+
+# boards:
+#   - 2c53t            # Only tested on 2C53T
+#   - 5012h            # Also works on 5012H
+
+# ── Build Options ─────────────────────────────────────────────────
+# Optional: extra compiler flags needed by this module.
+# Use sparingly — most modules shouldn't need this.
+
+# build:
+#   cflags: "-Wno-unused-variable"
+#   defines:
+#     - "MODULE_BUFFER_SIZE=2048"
