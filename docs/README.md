@@ -2,7 +2,7 @@
 
 Open-source reverse engineering and firmware replacement for the FNIRSI 2C53T handheld 3-in-1 oscilloscope/multimeter/signal generator.
 
-**Start here:** The project README is at the repo root. For RE details, see `CLAUDE.md`. For the full RE archive, see `reverse_engineering/`.
+**Start here:** The project README is at the repo root. For the full RE archive, see `reverse_engineering/`.
 
 ## Hardware & Architecture
 
@@ -64,4 +64,4 @@ Open-source reverse engineering and firmware replacement for the FNIRSI 2C53T ha
 3. Flash (first time / DFU): `make flash-all` (see CLAUDE.md for EOPB0 setup)
 4. Emulate: `make renode` (display-only) or `make renode-interactive` (with buttons)
 5. Ghidra analysis: `ghidraRun` → Open `ghidra_project/FNIRSI_2C53T`
-6. Read [CLAUDE.md](../CLAUDE.md) for the complete hardware reference
+6. Read [reverse_engineering/ARCHITECTURE.md](../reverse_engineering/ARCHITECTURE.md) for the hardware reference

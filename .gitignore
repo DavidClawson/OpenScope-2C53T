@@ -1,17 +1,18 @@
-# FNIRSI firmware binaries (copyrighted - link to download page instead)
+# Archive — tracked subdirs (esp32_uart_bridge, frontend) plus local-only clutter
+# Only ignore the local-only stuff, not the git-tracked moves
+archive/*
+!archive/esp32_uart_bridge/
+!archive/frontend/
+
+# FNIRSI firmware binaries (copyrighted)
 *.bin
 *.zip
 
 # Ghidra project files (large, binary, regenerable)
 ghidra_project/
-ghidra_project_v120/
-ghidra_headless/
-ghidra_reanalysis/
-ghidra_decompile_v120.log
 
 # Ghidra output artifacts
 *.png.entropy
-APP_2C53T_V1.2.0_251015.bin.png
 
 # macOS
 .DS_Store
@@ -21,14 +22,9 @@ FNIRSI-1013D-1014D-Hack/
 FNIRSI_1013D_Firmware/
 FNIRSI_1014D_Firmware/
 
-# Extracted firmware directories (contain .bin files)
-2C53T Firmware V1.2.0/
-2C53T_Firmware_V1.1.2/
-
 # Build output
 firmware/build/
 firmware/bootloader/build/
-esp32_uart_bridge/.pio/
 
 # Compiled test binaries (keep .c source, ignore executables)
 firmware/tests/test_automotive
@@ -60,9 +56,6 @@ firmware/at32f403a_gcc/
 **/__pycache__/
 *.pyc
 
-# Logic analyzer captures (binary, large)
-captures/
-
 # Raw decompiled source (copyright — keep analysis docs, not full dumps)
 reverse_engineering/decompiled_*.c
 
@@ -75,9 +68,5 @@ reverse_engineering/decompiled_*.c
 .env
 scripts/.env
 
-# Marketing / business research (not firmware)
-marketing/
-scripts/youtube_*.py
-
-# Node.js (frontend has its own .gitignore but belt-and-suspenders)
+# Node.js
 node_modules/

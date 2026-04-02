@@ -1,367 +1,97 @@
-# Project Roadmap
-
-## Completed (This Session)
-
-| Feature | Status | Tests |
-|---------|--------|-------|
-| Custom firmware boots in Renode through FreeRTOS | Done | Verified |
-| LCD driver (ST7789V via EXMC) | Done | Renders in emulator |
-| FFT spectrum analyzer (4096-pt, 5 windows) | Done | 19 tests |
-| CMSIS-DSP integration (arm_rfft_fast_f32) | Done | Auto-detected |
-| FFT averaging, max hold, harmonic labeling | Done | Part of FFT tests |
-| Waterfall/spectrogram display | Done | Visual |
-| Split view (time + frequency) | Done | Visual |
-| DDS signal generator (4 waveforms, sub-Hz) | Done | 25 tests |
-| Protocol decoders: UART, I2C, SPI, CAN | Done | 38 + 85 noisy tests |
-| K-Line/KWP2000 automotive decoder | Done | 9 tests |
-| Math channels (A+B, A-B, A×B, invert) | Done | 5 tests |
-| Auto-measurements (freq, Vpp, Vrms, duty) | Done | 18 tests |
-| Persistence display (5 decay modes) | Done | 8 tests |
-| Config save/load with checksum | Done | 10 tests |
-| Screenshot capture (BMP) | Done | 6 tests |
-| Shared memory pool (saves 152KB RAM) | Done | Integrated |
-| Renode ST7789V peripheral (captures real LCD) | Done | Verified |
-| Browser-based emulator UI (no React/npm) | Done | Functional |
-| UI refactor (main.c → modular src/ui/) | Done | Builds clean |
-| Safety infrastructure (timeout, mutex fs) | Done | Builds clean |
-| **Total** | **223 native tests** | **All passing** |
-
----
-
-## Phase 1: Pre-Device (Firmware Features)
-
-### Priority 1: Quick Wins
-
-**Color Themes / Skins**
-- 4 built-in themes: Dark Blue (current), Classic Green (Tektronix), High Contrast White, Night Red
-- Per-channel color customization (accessibility for colorblind users)
-- Theme stored in config, applied at boot
-- Effort: Small — just color constant swaps + config field
-
-**Component Tester Mode**
-- Resistor pass/fail: set nominal value + tolerance (e.g., 4.7K ±5%), measure, display PASS/FAIL with big green/red indicator
-- Capacitor test: charge/discharge curve → calculate capacitance and ESR
-- Diode test: forward voltage measurement with polarity detection
-- Continuity: audible buzzer threshold + visual indicator
-- Effort: Medium — new measurement mode, UI screen, basic algorithms
-
-**XY Mode / Lissajous**
-- Plot CH1 (X) vs CH2 (Y) instead of time-domain
-- Phase relationship visualization
-- Component curve tracer (apply signal gen to component, measure V-I)
-- Effort: Small — just a different rendering mode for existing sample data
-
-### Priority 2: Advanced Scope Features
-
-**Bode Plot**
-- Signal gen sweeps frequency logarithmically
-- Scope measures amplitude + phase at each frequency
-- Automatic gain (dB) and phase (°) plot
-- Save/export frequency response data
-- Killer feature for EE students and filter designers
-- Effort: Medium — needs signal gen + scope coordination, new UI
-
-**Mask / Pass-Fail Testing**
-- Record a "known good" waveform as a mask template
-- Set upper/lower tolerance bounds
-- Real-time comparison: PASS if signal stays within mask, FAIL if it exits
-- Production testing use case
-- Effort: Medium — mask storage, real-time comparison, UI
-
-**Roll Mode**
-- For slow signals (temperature, battery drain, parasitic draw)
-- Continuous scrolling display, no trigger needed
-- Long capture duration (minutes to hours)
-- Effort: Small — different display rendering, no trigger logic
-
-**Trend Plot**
-- Graph a measurement (frequency, Vpp, Vrms) over time
-- Catch slow drift, intermittent faults
-- "Frequency was stable at 1.000kHz for 45 minutes, then jumped to 1.002kHz"
-- Effort: Small — measurement + time-series storage
-
-**Segmented Memory**
-- Only capture when triggered, skip dead time between events
-- Capture rare glitches without filling memory with idle signal
-- Effort: Medium — memory management, UI for segment navigation
-
-### Priority 3: Automotive Suite
-
-**Relative Compression Test**
-- Current clamp on starter lead captures cranking current
-- Input: cylinder count (4/6/8), firing order
-- Auto-detect TDC from current waveform peaks
-- Label each cylinder, calculate relative compression %
-- Bar chart display with PASS/FAIL threshold
-- Overlay/average multiple crank cycles (uses persistence engine)
-- Heat map mode showing cycle-to-cycle variation
-- THIS IS THE VIRAL FEATURE for automotive YouTube
-- Effort: Large — needs cylinder detection algorithm, custom UI, persistence integration
-
-**Injector Pulse Width Analysis**
-- Capture injector drive waveform
-- Measure pulse width per cylinder, display as overlay
-- Compare duty cycle across cylinders
-- Detect stuck/lazy injectors
-- Effort: Medium
-
-**Ignition Coil Analysis**
-- Primary coil dwell time measurement
-- Spark duration and burn voltage (needs HV probe)
-- Cylinder-to-cylinder comparison
-- Effort: Medium
-
-**Alternator Ripple Test**
-- Measure AC ripple on battery with engine running
-- Normal: ~50mV ripple. Bad diode: >300mV with missing phase
-- Auto-detect "X of 6 diodes working"
-- Effort: Small — FFT of battery voltage, pattern matching
-
-**Battery Cranking Analysis**
-- Cranking voltage drop profile
-- Estimate CCA from voltage sag curve
-- Compare to battery rating
-- Effort: Small — voltage measurement + analysis
-
-**Parasitic Draw Hunt (Current Clamp Method)**
-- Roll mode with current clamp on battery negative
-- Long-duration recording (30+ minutes) to catch modules waking up
-- Mark events when current spikes
-- "Module wake at T+12:34, drew 2.3A for 150ms"
-- Effort: Medium — roll mode + event detection
-
-**Parasitic Draw Hunt (Fuse Voltage Drop Method)**
-- Measure millivolt drop across automotive blade fuses (fuse as shunt resistor)
-- Built-in lookup table: fuse type (Mini/ATC/Maxi/Micro2) × rating (1A-40A) → typical resistance
-- UI: arrow keys to select fuse type and rating, auto-calculate current from V/R
-- No current clamp needed — just probe across each fuse in the fuse box
-- Resolution depends on multimeter ADC path; heavy averaging helps (DC measurement, unlimited time)
-- Combines with SPI flash data logging for time-series parasitic draw profiles
-- See meter_ideas.md for full UI mockup and fuse resistance table
-- Effort: Small — lookup table + UI + existing meter measurement path
-
-### Priority 4: Specialized Applications
-
-**Audio Analysis**
-- THD+N measurement (Total Harmonic Distortion + Noise)
-- Speaker impedance curve (frequency sweep + impedance calc)
-- Audio frequency response (Bode plot in audio range)
-- Effort: Medium — builds on FFT + signal gen
-
-**Ham Radio**
-- Harmonic analysis for FCC compliance (already done via FFT!)
-- SWR measurement (with appropriate coupler)
-- CW decoder (already have UART decoder as base)
-- Splatter analysis for transmitter testing
-- Effort: Small — mostly UI for existing FFT capabilities
-
-**HVAC/Solar**
-- Motor start capacitor test (ESR + capacitance from discharge curve)
-- Compressor current signature analysis (uses motor current analysis)
-- Solar inverter THD measurement
-- Effort: Small-Medium
-
-**3D Printing / CNC**
-- Stepper motor resonance detection (FFT of motor current)
-- TMC driver SPI decode (already have SPI decoder)
-- PWM duty cycle measurement for heaters
-- Endstop signal verification
-- Effort: Small — existing decoders + measurement tools
-
-**Industrial**
-- Motor Current Signature Analysis (MCSA) — FFT of motor current for bearing/rotor fault detection
-- 4-20mA loop testing
-- Relay contact bounce measurement
-- PLC signal verification
-- Effort: Medium
-
-### Priority 5: Connectivity & Data
-
-**Custom Bootloader (Closed-Case USB Flashing)**
-- Small program (~4-8KB) at start of flash, runs before main firmware
-- On boot, checks a condition (e.g., USB plugged in + MENU button held)
-- If yes: enters DFU mode over USB — flash new firmware without opening the case
-- If no: jumps to main firmware at offset (e.g., 0x08002000)
-- Eliminates the need to hold BOOT0 resistor pad + pinhole reset
-- Workflow becomes: plug USB, hold button, power on, flash, done
-- Future: could check SPI flash for update file, or receive OTA via ESP32
-- Effort: Small-Medium — self-contained, well-understood pattern, but must be rock-solid
-- **Build this after core firmware is stable** — bricking during bootloader development is the risk
-
-**USB Streaming to PC**
-- CDC virtual serial port mode
-- Stream raw samples to PC for sigrok/PulseView
-- Turns $70 device into PC-connected instrument
-- Effort: Large — USB CDC driver, protocol design
-
-**CSV/Data Export**
-- Save waveform data to SPI flash as CSV
-- Export via USB mass storage mode
-- Effort: Small
-
-**Waveform Reference Library**
-- Store "known good" reference waveforms on SPI flash
-- Overlay for comparison: "show me what a good ignition coil looks like"
-- Community-contributed waveform database
-- Effort: Medium — storage format, UI for browse/overlay
-
----
-
-## Phase 2: Hardware Bring-Up (Completed March-April 2026)
-
-### Step 1: Hardware Teardown + Identification — DONE
-- Opened device, photographed PCB
-- **MCU is Artery AT32F403A** (not GD32F307 — markings sanded off, identified via register probing)
-- FPGA confirmed as Gowin GW1N-UV2
-- SWD port accessible (PA13/PA14), through-hole UART debug pads found
-- EOPB0 set to 0xFE for 224KB SRAM (required one-time DFU option byte write)
-
-### Step 2: FPGA Protocol — DONE
-- USART2 command protocol fully captured and decoded (9600 baud, 10-byte TX / 12-byte RX frames)
-- ALL ~40 FPGA command codes mapped (0x00-0x2C)
-- SPI3 bulk ADC data format cracked (interleaved CH1/CH2, 8-bit unsigned, offset -28.0)
-- See `reverse_engineering/FPGA_PROTOCOL_COMPLETE.md` and `analysis_v120/FPGA_TASK_ANALYSIS.md`
-
-### Step 3: Custom Firmware Running — DONE
-- Custom firmware boots on real hardware, LCD displays our UI
-- FreeRTOS scheduler running (display + input tasks)
-- 14/15 buttons hardware-confirmed via bidirectional matrix scan
-- USB HID bootloader enables closed-case firmware updates (`make flash`)
-- Battery monitor with percentage display, USB charge detection, low-battery shutdown
-
-### Step 4: Real Signal Acquisition — IN PROGRESS
-- FPGA USART communication bidirectional, meter data flowing
-- SPI3 root cause identified (needs PB11 HIGH, full boot sequence, queue-driven triggering)
-- Next: implement full FPGA boot sequence → SPI3 ADC data → real waveform display
-
-### Step 5: Hardware-in-the-Loop Testing — ONGOING
-- DFU + USB HID bootloader = fast iteration (Settings → Firmware Update → `make flash`)
-- Button matrix, battery ADC, LCD, power management all verified on hardware
-- Logic analyzer captures of FPGA communication saved in `captures/`
-
----
-
-## Top 10 Priority Features (Next to Implement)
-
-1. **Color themes** — quick win, everyone notices
-2. **Component tester** (resistor pass/fail) — unique differentiator
-3. **XY mode / Lissajous** — expected scope feature, easy to add
-4. **Roll mode** — essential for slow signals
-5. **Bode plot** — killer feature for EE students
-6. **Relative compression test** — viral automotive feature
-7. **Alternator ripple test** — easy automotive win
-8. **Mask testing** — production/QA use case
-9. **Trend plot** — catch intermittent faults
-10. **USB streaming** — turns scope into PC instrument
-
----
-
-## Phase 3: ESP32 WiFi/Co-Processor Mod ("$3 Upgrade")
-
-A hardware mod that adds WiFi, BLE, and a co-processor to the scope.
-Total cost: ~$4 in parts. Difficulty: 4 solder joints, 20 minutes.
-
-### The Mod
-
-**Part:** ESP32-S3 Mini module (~$4) or ESP32-C3 Super Mini (~$3)
-- 12mm × 18mm — fits inside the case near battery compartment
-- Dual-core 240MHz (S3) or single-core 160MHz (C3)
-- WiFi 802.11 b/g/n + BLE 5.0
-- 512KB SRAM (S3) or 400KB (C3)
-- Onboard PCB antenna (works through plastic case)
-
-**Solder Points (4 wires):**
-1. 3.3V — tap from existing voltage regulator
-2. GND — any ground pad
-3. UART TX — unused GPIO on GD32F307 (identified during teardown)
-4. UART RX — corresponding UART pin
-
-**Power:** ESP32 draws ~130mA when WiFi active, ~5µA in sleep.
-Menu toggle enables/disables WiFi to preserve battery life.
-
-### What It Enables
-
-**Phone as Display (biggest win)**
-- ESP32 serves a web page over WiFi
-- Phone/tablet connects — instant 1080p scope display
-- Pinch-to-zoom on waveforms, multi-pane layout
-- No app install — works in any browser on any device
-- See scope screen while working under the car hood
-
-**Remote Control**
-- Change scope settings from phone touchscreen
-- Useful when probes are in tight spots
-- Start/stop capture, change timebase, trigger level
-
-**Data Logging + Cloud**
-- Stream measurements to InfluxDB/Grafana
-- Long-term monitoring (battery drain, temperature, solar output)
-- "Log alternator voltage every 5 seconds for the next hour"
-
-**Waveform Sharing**
-- Capture a waveform, upload to community database
-- "Here's what a good Toyota 5VZ-FE injector looks like"
-- Compare your capture against known-good references
-
-**OTA Firmware Updates**
-- Update scope firmware over WiFi instead of USB cable
-- Download and flash from GitHub releases automatically
-
-**Advanced Co-Processing (ESP32-S3)**
-- Offload heavy analysis to the ESP32's faster CPU
-- Real-time machine learning (anomaly detection)
-- Continuous recording to microSD card (via ESP32 SPI)
-- Deep protocol analysis that would choke the main MCU
-
-### Architecture
-
-```
-┌──────────────────┐         ┌──────────────────┐
-│ GD32F307 (Main)  │  UART   │ ESP32-S3 (WiFi)  │
-│ • Scope control  │ or SPI  │ • Web server     │
-│ • FPGA interface │◄───────►│ • Phone display  │
-│ • LCD rendering  │ 4 wires │ • Data logging   │
-│ • Button input   │         │ • BLE beacon     │
-│ • Basic DSP      │         │ • OTA updates    │
-│ 120MHz, 256KB    │         │ 240MHz, 512KB    │
-└────────┬─────────┘         └────────┬─────────┘
-         │                            │ WiFi/BLE
-    ┌────▼────┐                  ┌────▼────────┐
-    │  FPGA   │                  │ Phone/tablet │
-    │  ADC    │                  │ 1080p touch  │
-    │ 250MS/s │                  │ any browser  │
-    └─────────┘                  └──────────────┘
-```
-
-### Implementation Steps
-
-1. **During teardown:** Identify available UART pins on GD32 PCB
-2. **ESP32 firmware:** Arduino/ESP-IDF project — serial bridge + web server
-3. **Scope firmware:** UART driver module for ESP32 communication protocol
-4. **Web UI:** Single-page HTML with WebSocket (reuse emulator UI pattern)
-5. **Physical mod:** Solder ESP32 module inside case, route antenna toward plastic panel
-6. **Mod guide:** Step-by-step photos + video for community
-
-### Why ESP32 and Not a Teensy/Other
-
-| | ESP32-S3 | Teensy 4.1 | RPi Pico W |
-|---|---------|-----------|-----------|
-| Cost | $4 | $32 | $8 |
-| WiFi/BLE | Built-in | No | WiFi only |
-| Size | 12×18mm | 18×61mm | 21×51mm |
-| Clock | 240MHz | 600MHz | 133MHz |
-| RAM | 512KB+8MB | 1MB | 264KB |
-| Power | 130mA | 100mA | 40mA |
-
-ESP32-S3 is the sweet spot: WiFi+BLE built-in, small enough to fit, powerful enough to serve as co-processor, cheap enough that the mod is accessible.
-
----
-
-## FPGA Notes
-
-The FPGA is now identified as **Gowin GW1N-UV2** (confirmed by EEVblog community). Open-source toolchain exists:
-- **Yosys** for synthesis
-- **nextpnr-gowin** for place-and-route
-- **Apicula** for bitstream generation
-
-This opens the possibility of custom FPGA firmware — higher sample rates, custom trigger logic, protocol-aware capture, hardware acceleration. This is a Phase 3+ goal but dramatically expands what the device can do.
+# Roadmap
+
+## What Works on Hardware
+
+Everything in this section runs on the real FNIRSI 2C53T, tested on AT32F403A @ 240MHz.
+
+- **Custom firmware boots and runs** — FreeRTOS scheduler with display + input tasks
+- **LCD driver** — ST7789V via 16-bit EXMC, variable-width bitmap fonts (4 sizes from SF Pro + Menlo)
+- **4 UI modes** — Oscilloscope, multimeter, signal generator, settings — all navigable via buttons
+- **4 color themes** — Dark Blue, Classic Green, High Contrast, Night Red — switchable in settings
+- **Button matrix** — 14/15 buttons hardware-confirmed, bidirectional 4x3 scan at 500Hz via TMR3 ISR
+- **Battery monitor** — PB1 ADC with 16-sample averaging, percentage display, USB charge detection ("CHG"), low-battery auto-off at 3.3V
+- **Power management** — PC9 hold, PB8 backlight, POWER button 3-2-1 countdown shutdown
+- **USB HID bootloader** — Closed-case firmware updates via `make flash`, LCD status screen, auto-reboot after flash
+- **FPGA USART** — Bidirectional 9600 baud communication, meter data flowing
+- **Watchdog + health monitoring** — Task stack checking, fault recovery
+- **Emulator** — Renode full-system emulation + SDL3 native LCD viewer with interactive buttons
+
+## Implemented and Tested (Awaiting Real Data)
+
+These features are written in C, unit-tested, and integrated into the firmware build. They currently run on synthetic demo waveforms because FPGA SPI3 data acquisition isn't connected yet. Once live ADC data flows, these light up.
+
+| Feature | Tests | Notes |
+|---------|-------|-------|
+| FFT spectrum analyzer | 19 | 4096-point, 5 windows (Hann, Hamming, Blackman, Blackman-Harris, flat-top), averaging, max hold, harmonic labeling |
+| Waterfall / spectrogram | — | Time-frequency display |
+| Split view (time + freq) | — | Simultaneous waveform and spectrum |
+| Protocol decoders | 132 | UART (async), SPI (CPOL/CPHA), I2C (debounced), CAN (full frame + CRC), K-Line/KWP2000 |
+| Math channels | 5 | CH1+CH2, CH1-CH2, CH1*CH2, invert A, invert B |
+| Auto-measurements | 18 | Frequency, period, Vpp, Vrms, Vavg, duty cycle, rise/fall time |
+| Persistence display | 8 | 5 decay modes, anti-aliased phosphor rendering |
+| DDS signal generator | 25 | 4 waveforms (sine, square, triangle, sawtooth), sub-Hz resolution |
+| Bode plot | — | Log/linear sweep, quadrature demodulation, gain + phase |
+| Component tester | — | Resistor, capacitor, ESR, diode, continuity (no inductance yet) |
+| XY mode / Lissajous | — | CH1 vs CH2 scatter plot |
+| Roll mode | — | Continuous scroll for slow signals |
+| Trend plot | — | Measurement over time (min/max/avg auto-scale) |
+| Mask / pass-fail | — | Template comparison with tolerance bounds |
+| Config save/load | 10 | Checksum-verified settings persistence |
+| Screenshot capture | 6 | BMP to SPI flash |
+| Shared memory pool | — | Saves ~152KB RAM via buffer reuse |
+
+## In Progress
+
+**FPGA SPI3 data acquisition** — This is the critical path. The FPGA sends ADC samples over SPI3 (PB3/PB4/PB5 at 60MHz), but getting it working requires:
+1. PB11 HIGH (active mode signal to FPGA)
+2. Full USART boot command sequence (commands 0x01-0x08)
+3. Queue-driven triggering (not polled)
+4. SysTick delays between boot phases
+
+Root cause is identified and documented in `reverse_engineering/analysis_v120/FPGA_TASK_ANALYSIS.md`. Implementation is next.
+
+## Future Plans
+
+Roughly ordered by priority. Not committed to timelines.
+
+### Near-term (after data acquisition works)
+- **Real oscilloscope display** — live waveforms from FPGA ADC
+- **Multimeter with real readings** — FPGA USART meter data → display
+- **Signal generator output** — DAC waveform generation on real hardware
+- **ADC calibration pipeline** — per-channel calibration from SPI flash data
+
+### Medium-term
+- **USB streaming to PC** — CDC serial port, raw samples to sigrok/PulseView
+- **CSV/data export** — waveform data to SPI flash, export via USB mass storage
+- **Segmented memory** — trigger-only capture, skip dead time
+- **Waveform reference library** — known-good overlays on SPI flash
+
+### Automotive suite
+- **Relative compression test** — cranking current analysis, per-cylinder bar chart
+- **Alternator ripple test** — FFT of battery voltage, diode fault detection
+- **Parasitic draw (fuse voltage drop)** — millivolt drop across blade fuses with built-in lookup table
+- **Parasitic draw (current clamp)** — roll mode with event detection for module wake-ups
+- **Injector pulse width** — per-cylinder duty cycle comparison
+- **Ignition coil analysis** — dwell time, spark duration
+- **Battery cranking analysis** — voltage sag curve, CCA estimate
+
+### Specialized applications
+- **Audio analysis** — THD+N, speaker impedance curve
+- **Ham radio** — harmonic analysis, SWR measurement
+- **HVAC/Solar** — motor start capacitor test, inverter THD
+- **Industrial** — motor current signature analysis (MCSA), 4-20mA loop testing
+
+### Hardware mods (Phase 3)
+- **ESP32 WiFi co-processor** — $4 solder-in mod for phone display, remote control, data logging, OTA updates. Design doc at `docs/esp32_coprocessor.md`.
+- **Custom FPGA bitstream** — Gowin GW1N-UV2 has open-source toolchain (Yosys + nextpnr-gowin + Apicula). Could enable higher sample rates, custom triggers, hardware acceleration.
+
+## Reverse Engineering Status
+
+~98% of the stock firmware is understood:
+- 309 functions identified and named (138 high, 182 medium, 42 low confidence)
+- All ~40 FPGA commands mapped (0x00-0x2C)
+- ADC data format cracked (interleaved CH1/CH2, 8-bit unsigned, offset -28.0)
+- Complete hardware pinout documented
+- 53-step boot sequence traced
+- 8 FreeRTOS tasks and 7 queues mapped
+- Remaining: PLL startup assembly, 42 low-confidence function names
