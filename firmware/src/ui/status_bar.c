@@ -7,37 +7,77 @@
 #include "font.h"
 #include "theme.h"
 #include "scope_state.h"
+#include "battery.h"
+#include "at32f403a_407.h"
 #include <stdio.h>
+
+/* Track whether status bar has been drawn once (first draw needs full clear) */
+static uint8_t status_bar_drawn = 0;
 
 /* Draw the top status bar */
 void draw_status_bar(void)
 {
     const theme_t *th = theme_get();
-    lcd_fill_rect(0, 0, LCD_WIDTH, 16, th->status_bar_bg);
 
-    font_draw_string(4, 2, "OpenScope", th->ch2, th->status_bar_bg, &font_small);
+    /* Full clear only on first draw or mode change */
+    if (!status_bar_drawn) {
+        lcd_fill_rect(0, 0, LCD_WIDTH, 16, th->status_bar_bg);
+        font_draw_string(4, 2, "OpenScope", th->ch2, th->status_bar_bg, &font_small);
+        font_draw_string_right(LCD_WIDTH - 50, 2, "2C53T",
+                               th->text_primary, th->status_bar_bg, &font_small);
+        status_bar_drawn = 1;
+    }
 
-    /* Mode indicator */
-    const char *mode_names[] = { "SCOPE", "METER", "SIGGEN", "SETUP" };
+    /* Mode indicator (pad to fixed width to overwrite old text) */
+    const char *mode_names[] = { "SCOPE ", "METER ", "SIGGEN", "SETUP " };
     font_draw_string(120, 2, mode_names[current_mode],
                      th->success, th->status_bar_bg, &font_small);
 
-    /* Uptime display */
-    char buf[16];
-    int mins = uptime_seconds / 60;
-    int secs = uptime_seconds % 60;
-    buf[0] = '0' + (mins / 10);
-    buf[1] = '0' + (mins % 10);
-    buf[2] = ':';
-    buf[3] = '0' + (secs / 10);
-    buf[4] = '0' + (secs % 10);
-    buf[5] = '\0';
-    font_draw_string_right(LCD_WIDTH - 4, 2, buf,
-                           th->text_secondary, th->status_bar_bg, &font_small);
+    /* Battery status */
+    {
+        char buf[12];
+        if (battery_is_critical()) {
+            /* Flash LOW warning — alternates red/dark each second */
+            uint16_t color = (uptime_seconds & 1) ? th->warning : th->status_bar_bg;
+            snprintf(buf, sizeof(buf), " LOW");
+            font_draw_string_right(LCD_WIDTH - 4, 2, buf,
+                                   color, th->status_bar_bg, &font_small);
+        } else if (battery_is_charging()) {
+            snprintf(buf, sizeof(buf), " CHG");
+            font_draw_string_right(LCD_WIDTH - 4, 2, buf,
+                                   th->success, th->status_bar_bg, &font_small);
+        } else {
+            uint8_t pct = battery_percent();
+            snprintf(buf, sizeof(buf), "%3d%%", pct);
+            uint16_t bat_color = (pct <= 15) ? th->warning :
+                                 (pct <= 30) ? 0xFE00 : th->success;
+            font_draw_string_right(LCD_WIDTH - 4, 2, buf,
+                                   bat_color, th->status_bar_bg, &font_small);
+        }
+    }
 
-    /* Model name */
-    font_draw_string_right(LCD_WIDTH - 50, 2, "2C53T",
-                           th->text_primary, th->status_bar_bg, &font_small);
+    /* Auto-shutdown at critical battery — protect the LiPo cell */
+    if (battery_is_critical()) {
+        static uint8_t shutdown_timer = 0;
+        shutdown_timer++;
+        if (shutdown_timer >= 30) {  /* 30 seconds of critical = shutdown */
+            lcd_fill_rect(40, 80, 240, 80, 0x0000);
+            font_draw_string_center(160, 95, "Battery Critical",
+                                    th->warning, 0x0000, &font_large);
+            font_draw_string_center(160, 130, "Shutting down...",
+                                    th->text_secondary, 0x0000, &font_medium);
+            /* Brief delay so user can see the message */
+            for (volatile uint32_t d = 0; d < 100000000; d++);
+            GPIOC->clr = (1U << 9);  /* PC9 LOW = power off */
+            while (1);
+        }
+    }
+}
+
+/* Force full redraw on next status bar update (call on theme/mode change) */
+void status_bar_invalidate(void)
+{
+    status_bar_drawn = 0;
 }
 
 /* Draw the bottom info bar */

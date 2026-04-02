@@ -1,103 +1,86 @@
-# Next Session Plan: USB In-Application Bootloader
+# Next Session Plan: Real Measurement Data
 
-## Goal
+## Status After Bootloader Session
 
-Build a permanent USB bootloader so the case can be closed and firmware updated over USB-C without opening it. This is the critical path to end-user usability.
+**Bootloader: DONE** — USB HID IAP bootloader working, closed-case `make flash`, LCD status screen, POWER button exit, auto-reboot after flash.
 
-## Architecture
+**Current firmware:** Full UI with 4 modes, theme switching, settings navigation — but **all measurement data is simulated** (demo waveforms, hardcoded meter values).
 
-```
-Flash Layout (AT32F403A, 1MB):
-┌──────────────────────┐ 0x08000000
-│  BOOTLOADER (16KB)   │  Permanent, never overwritten by user
-│  - PC9 power hold    │  (~9KB code, 16KB reserved)
-│  - RAM flag check    │
-│  - USB HID IAP       │
-│  - Flash programmer  │
-│  (IAP flag at 0x3800)│  Magic word 0x41544B38 = valid app
-├──────────────────────┤ 0x08004000
-│  APPLICATION         │  Main firmware, VTOR offset = 0x4000
-│  (~1008KB available) │
-└──────────────────────┘ 0x080FFFFF
-```
+## What's Needed for Real Measurements
 
-## Boot Flow
+All measurement data (scope AND meter) flows through the **FPGA** (Gowin GW1N-UV2):
+- **Oscilloscope:** FPGA samples 250MS/s ADC → sends data via **SPI3** (PB3/4/5/6)
+- **Multimeter:** FPGA measures → sends BCD digits via **USART2** (PA2/PA3)
+- **MCU ADC** is only used for battery voltage (PB1)
 
-1. Power on → bootloader starts → PC9 HIGH (power hold)
-2. Check RAM at 0x20037FF0: if magic word 0xDEADBEEF → enter USB DFU
-3. Check flash at 0x08003800: if 0x41544B38 → jump to app at 0x08004000
-4. Otherwise → enter USB DFU (no valid app, or update requested)
+### The FPGA Must Be Booted First
 
-## Implementation
+The FPGA has its own bitstream (non-volatile) but needs a ~50-step command sequence from the MCU before it starts producing data. This is fully documented in `reverse_engineering/analysis_v120/FPGA_BOOT_SEQUENCE.md`.
 
-### Bootloader (`firmware/bootloader/`)
+## Roadmap (ordered by dependency)
 
-Based on ArteryTek's HID IAP example in the SDK:
-- `middlewares/usbd_class/hid_iap/` — HID class with IAP protocol
-- `middlewares/usbd_drivers/` — USB device core
+### Phase 1: FPGA USART Communication (Meter Data)
+**Easiest win — meter readings with no probes needed**
 
-Key adaptations:
-- **USB clock:** Use HICK (internal 48MHz) since 240MHz has no /5 divider for USB
-- **PC9 power hold:** Must be first instruction
-- **App address:** 0x08004000 (not 0x08005000 as in the demo)
-- **RAM flag:** Check 0x20037FF0 for 0xDEADBEEF before flash flag
+1. Initialize USART2 (PA2 TX, PA3 RX, 9600 baud)
+2. Set PC6 HIGH (FPGA SPI enable pin)
+3. Send FPGA boot commands 0x01-0x08 via USART2
+4. Set PB11 HIGH (FPGA active mode)
+5. Parse 12-byte USART RX frames (0x5A 0xA5 header + BCD meter data)
+6. Wire parsed meter values to meter_ui.c (replace demo_value)
 
-USB HID protocol (from SDK):
-- Device enumerates as HID (VID 0x2E3C, PID 0xAF01)
-- 64-byte reports: START → ADDR → DATA (1KB chunks) → FINISH → JMP
-- ~7.5KB total code, fits in 8KB with -Os
+**Test:** Connect probes to a battery, see real DC voltage on the meter screen.
 
-### App Changes
+**Key files:**
+- `reverse_engineering/analysis_v120/FPGA_BOOT_SEQUENCE.md` — init sequence
+- `reverse_engineering/analysis_v120/FPGA_TASK_ANALYSIS.md` — USART frame format
+- `firmware/src/fpgainit.c` — existing USART2 init code (partially working)
+- `firmware/src/fpgatalk.c` — frame TX/RX handling
 
-1. **Linker script:** FLASH origin = 0x08004000, LENGTH = 1008K  ✅ DONE
-2. **VTOR:** `SCB->VTOR = FLASH_BASE | 0x4000` at start of main()  ✅ DONE
-3. **DFU request:** Write 0xDEADBEEF to 0x20037FF0, call NVIC_SystemReset()  ✅ DONE
+### Phase 2: FPGA SPI3 Acquisition (Scope Data)
+**The big one — real oscilloscope waveforms**
 
-### Host Tool (`scripts/hid_flash.py`)
+1. Configure SPI3 (PB3 SCK, PB4 MISO, PB5 MOSI, PB6 CS as GPIO)
+2. IOMUX remap: disable JTAG, keep SWD, free PB3/PB4/PB5
+3. SPI3 Mode 3 (CPOL=1, CPHA=1), /2 prescaler (60MHz)
+4. Implement SPI3 handshake (command 0x05 sequence)
+5. Read 1024-byte blocks: interleaved CH1/CH2, unsigned 8-bit, offset -28.0
+6. Double-buffer with FreeRTOS queue (2 items per trigger)
+7. Apply VFP calibration pipeline (per-channel gain/offset from flash cal data)
+8. Wire to scope_ui.c (replace draw_demo_waveform)
 
-~60-line Python script using `hidapi`:
-```
-./hid_flash.py firmware/build/firmware.bin
-```
-Sends START → ADDR → DATA chunks → FINISH → JMP. Progress bar.
+**Test:** Connect probe to signal generator output, see real waveform.
 
-### Development Workflow (end state)
+**Key files:**
+- `reverse_engineering/analysis_v120/FPGA_TASK_ANALYSIS.md` — SPI3 format, capture modes
+- `reverse_engineering/analysis_v120/fpga_task_annotated.c` — 580-line annotated FPGA task
 
-```bash
-# From terminal, case closed:
-./scripts/hid_flash.py firmware/build/firmware.bin
-# OR from device: Settings → Firmware Update → device enters bootloader
-# Then: ./scripts/hid_flash.py firmware/build/firmware.bin
-```
+### Phase 3: Timebase and Trigger Control
+**Make the scope actually usable**
 
-## What's Already Done
+1. Implement USART2 command sender for timebase changes (cmd 0x04)
+2. Trigger level/edge/mode commands (cmd 0x06-0x08)
+3. Wire scope_state timebase/trigger changes to FPGA commands
+4. Implement auto-trigger and normal trigger modes
 
-- AT32 USB middleware already in `at32f403a_lib/middlewares/`
-- HID IAP class code ready in `middlewares/usbd_class/hid_iap/`
-- Virtual MSC IAP example at `project/at_start_f403a/examples/usb_device/virtual_msc_iap/`
-- Full analysis documented in this file
+### Phase 4: Signal Generator Output
+**Already partially working (DAC init exists)**
 
-## What Was Tried (ROM Bootloader)
+1. Verify DAC output on probe tip
+2. Wire siggen_ui frequency/waveform selection to DAC updates
+3. Test with scope in loopback (siggen output → scope input)
 
-Software jump to the AT32 ROM bootloader failed because:
-1. ROM bootloader checks BOOT0 pin — can't drive it HIGH from software
-2. PC9 soft power latch drops on NVIC_SystemReset()
-3. Flash erase + direct jump: bootloader started but USB didn't re-enumerate, device powered off
+## Hardware Needed
 
-The in-application bootloader solves all of these: it handles PC9 itself, doesn't need BOOT0, and stays resident until explicitly jumping to the app.
+- **Phase 1:** Just the device + USB-C cable (meter probes are built in)
+- **Phase 2:** Probe + any signal source (even touching a wire to see noise)
+- **Phase 3:** Same as Phase 2
+- **Phase 4:** Oscilloscope probe or multimeter to verify output
 
-## Estimated Effort
+## Quick Wins (No FPGA Needed)
 
-- Bootloader build system + main.c: 1 hour
-- USB HID IAP integration: 2 hours
-- Linker script changes for app: 30 min
-- Python host tool: 30 min
-- Testing: 1 hour
-- **Total: ~5 hours**
-
-## Files Referenced
-
-- `at32f403a_lib/middlewares/usbd_drivers/` — USB device core
-- `at32f403a_lib/middlewares/usbd_class/hid_iap/` — HID IAP class
-- `at32f403a_lib/project/at_start_f403a/examples/usb_device/virtual_msc_iap/` — Full IAP example
-- `at32f403a_lib/libraries/drivers/src/at32f403a_407_usb.c` — Low-level USB driver
+These can be done in parallel with FPGA work:
+- **Battery voltage display:** Wire PB1 ADC reading to status bar (already have the ADC code in RE)
+- **Power-off from software:** Long-press POWER → drop PC9 LOW
+- **Settings persistence:** Save/load theme, coupling, probe settings to SPI flash
+- **About screen:** Fix MCU string (says GD32F307 but it's AT32F403A)

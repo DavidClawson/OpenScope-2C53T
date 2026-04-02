@@ -299,10 +299,12 @@ uint8_t input_handle_button(button_id_t button, QueueHandle_t dq)
 #ifdef FEATURE_FFT
             if (scope_view != SCOPE_VIEW_TIME) {
                 int16_t *sbuf = fft_get_sample_buf();
-                test_signal_generate(TEST_SIG_SQUARE, sbuf,
-                                     FFT_SIZE, fft_get_config()->sample_rate_hz,
-                                     1000.0f, 0.0f, 0.8f);
-                fft_auto_configure(sbuf, FFT_SIZE);
+                if (sbuf) {
+                    test_signal_generate(TEST_SIG_SQUARE, sbuf,
+                                         FFT_SIZE, fft_get_config()->sample_rate_hz,
+                                         1000.0f, 0.0f, 0.8f);
+                    fft_auto_configure(sbuf, FFT_SIZE);
+                }
             }
 #endif
             send_cmd(dq, cmd);

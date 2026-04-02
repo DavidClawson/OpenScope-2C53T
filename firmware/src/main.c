@@ -469,7 +469,8 @@ void vApplicationMallocFailedHook(void)
  * SystemInit override for emulator
  * ═══════════════════════════════════════════════════════════════════ */
 #ifdef EMULATOR_BUILD
-uint32_t system_core_clock = 240000000;
+/* Must match AT32 HAL declaration: "extern unsigned int system_core_clock" */
+unsigned int system_core_clock = 240000000;
 
 void SystemInit(void)
 {

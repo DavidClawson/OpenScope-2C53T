@@ -235,6 +235,14 @@ static void lcd_draw_bootloader_screen(void)
     lcd_draw_string_center(160, 195, "Hold POWER to boot normally", 0xBDF7, 0x0008, 1);
 }
 
+/* Called from iap_loop before NVIC_SystemReset after successful flash */
+void lcd_draw_reboot_message(void)
+{
+    lcd_fill(0, 0, 320, 240, 0x0008);
+    lcd_draw_string_center(160, 80, "OPENSCOPE 2C53T", 0x07FF, 0x0008, 3);
+    lcd_draw_string_center(160, 130, "Rebooting...", 0x07E0, 0x0008, 2);
+}
+
 #undef _GPIO_CFG
 
 /* ═══════════════════════════════════════════════════════════════════

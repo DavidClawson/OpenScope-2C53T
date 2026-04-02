@@ -204,7 +204,7 @@ static void draw_settings_about(void)
     y += 22;
     font_draw_string(MENU_LEFT, y, "Custom Firmware v0.2", fg, bg, &font_medium);
     y += 22;
-    font_draw_string(MENU_LEFT, y, "MCU: GD32F307VET6", fg, bg, &font_medium);
+    font_draw_string(MENU_LEFT, y, "MCU: AT32F403A @240MHz", fg, bg, &font_medium);
     y += 22;
     font_draw_string(MENU_LEFT, y, "LCD: ST7789V 320x240", fg, bg, &font_medium);
     y += 22;

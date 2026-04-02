@@ -203,7 +203,7 @@ void TMR3_GLOBAL_IRQHandler(void) {
                 s_repeat[i] = 0;
             } else if (s_debounce[i] > DEBOUNCE_CONFIRM && (repeat_mask & mask)) {
                 /* Auto-repeat for directional buttons */
-                s_repeat[i]++;
+                if (s_repeat[i] < 0xFFFE) s_repeat[i]++;
                 if (s_repeat[i] == REPEAT_INITIAL ||
                     (s_repeat[i] > REPEAT_INITIAL &&
                      (s_repeat[i] - REPEAT_INITIAL) % REPEAT_INTERVAL == 0)) {

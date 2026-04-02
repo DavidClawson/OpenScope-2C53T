@@ -322,11 +322,16 @@ void usbd_hid_iap_in_complete(void *udev)
     iap_info.state = IAP_STS_JMP;
 }
 
+/* Defined in main.c — draw message on bootloader LCD */
+extern void lcd_draw_reboot_message(void);
+
 void iap_loop(void)
 {
   if (iap_info.state == IAP_STS_JMP)
   {
     usb_delay_ms(100);
+    lcd_draw_reboot_message();
+    usb_delay_ms(200);
     /* Clean reset — bootloader will find upgrade flag and jump to app */
     NVIC_SystemReset();
   }

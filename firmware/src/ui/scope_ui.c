@@ -733,6 +733,7 @@ static void draw_fft_region(uint16_t y_top, uint16_t height)
     uint16_t y_bot = y_top + height;
 
     int16_t *sbuf = fft_get_sample_buf();
+    if (!sbuf) return;  /* FFT not initialized */
     test_signal_generate(TEST_SIG_SQUARE, sbuf,
                          FFT_SIZE, cfg->sample_rate_hz,
                          1000.0f, 0.0f, 0.8f);
@@ -904,6 +905,7 @@ void draw_waterfall_screen(void)
     const fft_config_t *cfg = fft_get_config();
 
     int16_t *sbuf = fft_get_sample_buf();
+    if (!sbuf) return;  /* FFT not initialized */
     test_signal_generate(TEST_SIG_SQUARE, sbuf,
                          FFT_SIZE, cfg->sample_rate_hz,
                          1000.0f, 0.0f, 0.8f);

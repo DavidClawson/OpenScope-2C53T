@@ -43,8 +43,9 @@ firmware/           # Custom replacement firmware (GCC + Make)
   FreeRTOS/         # FreeRTOS kernel (submodule)
   at32f403a_lib/    # Artery AT32 HAL library (clone from ArteryTek GitHub)
   gd32f30x_lib/     # GD32 HAL library (legacy, kept for emulator builds)
-  ld/               # Linker scripts (at32f403a.ld for hardware, gd32f307.ld for emulator)
-  Makefile          # Build: make, make emu, make renode, make flash-dfu
+  bootloader/       # USB HID IAP bootloader (16KB at 0x08000000)
+  ld/               # Linker scripts (at32f403a_app.ld for hardware, at32f403a.ld for emu)
+  Makefile          # Build: make, make flash, make flash-all, make emu
   Makefile.hwtest   # Minimal hardware test build
 
 reverse_engineering/  # Ghidra decompilation artifacts
@@ -81,21 +82,27 @@ FNIRSI-1013D-1014D-Hack/    # Submodule: historical RE work
 ### Hardware (AT32F403A target)
 ```bash
 cd firmware && make              # Build for real hardware (AT32 @ 240MHz)
-make flash-dfu                   # Flash via USB DFU (device must be in DFU mode)
+make flash                       # Flash via USB HID bootloader (case closed)
+make flash-all                   # Flash bootloader + app via DFU (first-time setup)
+make flash-dfu                   # Flash app via ROM DFU (fallback, BOOT0 + reset)
 ```
 
-### Flashing procedure
-1. Open case, hold BOOT0 resistor pad to 3V3
-2. Press pinhole reset button on side of case
-3. Release BOOT0 — device enumerates as "AT32 Bootloader DFU"
-4. `dfu-util -a 0 -d 2e3c:df11 -s 0x08000000:leave -D firmware/build/firmware.bin`
+### Normal dev cycle (case closed)
+1. On device: Settings → Firmware Update (shows "BOOTLOADER MODE" screen)
+2. On host: `cd firmware && make flash`
+3. Device auto-reboots into updated firmware
 
-### First-time setup (EOPB0 for 224KB SRAM)
-The AT32 defaults to 96KB SRAM. The firmware requires 224KB. Set EOPB0 once:
-```bash
-# Enter DFU mode, then:
-dfu-util -a 1 -d 2e3c:df11 -s 0x1FFFF800 -D firmware/build/option_bytes48.bin
-# Then flash firmware normally
+### First-time setup
+1. Set EOPB0 for 224KB SRAM (one-time): enter DFU mode (BOOT0 + reset), then:
+   `dfu-util -a 1 -d 2e3c:df11 -s 0x1FFFF800 -D firmware/build/option_bytes48.bin`
+2. Flash bootloader + app: `make flash-all`
+3. Close the case — all future updates go over USB-C
+
+### Flash layout
+```
+0x08000000  Bootloader (16KB) — permanent, USB HID IAP
+0x08003800  Upgrade flag (2KB sector)
+0x08004000  Application (1008KB) — updated via make flash
 ```
 
 ### Emulator
@@ -169,8 +176,9 @@ make renode-test                 # 5-second smoke test
 - 4 themed UI modes: oscilloscope (with FFT/waterfall), multimeter (large digits), signal generator, navigable settings
 - Theme switching (4 themes) wired through all screens
 - FreeRTOS scheduler running with display + input tasks
-- Power management: PC9 hold, PB8 backlight, soft power button
-- DFU flashing via USB (BOOT0 + pinhole reset)
+- Power management: PC9 hold, PB8 backlight, POWER button 3-2-1 countdown shutdown, low-battery auto-off at 3.3V
+- **USB HID bootloader** — closed-case firmware updates via `make flash`, LCD status screen, POWER button exit, auto-reboot after flash
+- Battery monitor: PB1 ADC with 16-sample averaging, percentage display, USB charge detection ("CHG"), LiPo protection shutdown
 - SDL3 native LCD viewer with interactive button input for emulator
 - Soak testing infrastructure (random button fuzzing with fault monitoring)
 - Watchdog, health monitoring, task stack checking
