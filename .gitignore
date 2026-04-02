@@ -75,5 +75,8 @@ reverse_engineering/decompiled_*.c
 .env
 scripts/.env
 
+# Marketing / business research (not firmware)
+marketing/
+
 # Node.js (frontend has its own .gitignore but belt-and-suspenders)
 node_modules/

@@ -142,7 +142,12 @@ Use automotive blade fuses as shunt resistors. Measure the millivolt drop across
 | 20A | ~2.5 mΩ | 1.25 mV |
 | 30A | ~1.5 mΩ | 0.75 mV |
 
-**UI:** User selects fuse type (Mini, ATC/ATO, Maxi, Low-profile Mini, Micro2) and rating (1A-40A) with arrow buttons. Firmware looks up typical resistance and displays calculated current.
+**Full resistance data:** `docs/fuse_model.json` (5 fuse types, 47 entries from averaged sources).
+**Firmware lookup table:** `firmware/src/ui/fuse_table.h` — compiled-in const arrays, integer math, ~400 bytes in .rodata.
+
+#### UI Mode 1: Detailed (single fuse selected)
+
+User selects fuse type (Mini, ATC/ATO, Maxi, Low-profile Mini, Micro2) and rating (1A-40A) with arrow buttons. Firmware looks up typical resistance and displays calculated current.
 
 ```
 ┌─────────────────────────────────────────┐
@@ -160,9 +165,80 @@ Use automotive blade fuses as shunt resistors. Measure the millivolt drop across
 └─────────────────────────────────────────┘
 ```
 
+#### UI Mode 2: Multi-fuse (show all sizes at once)
+
+When you don't know which fuse you're probing (or don't want to fiddle with settings), show the estimated current for all common fuse sizes simultaneously. The user can just glance and read the row that matches.
+
+```
+┌─────────────────────────────────────────┐
+│ FUSE CURRENT          V_drop: 1.02 mV  │
+├─────────────────────────────────────────┤
+│  Fuse    Resistance    Est. Current     │
+│  ─────  ──────────    ────────────      │
+│   5A      8.0 mΩ       128 mA          │
+│  10A      5.0 mΩ       204 mA          │
+│  15A      3.0 mΩ       340 mA          │
+│  20A      2.5 mΩ       408 mA          │
+│  30A      1.5 mΩ       680 mA          │
+├─────────────────────────────────────────┤
+│ All readings show current. Active draw. │
+└─────────────────────────────────────────┘
+```
+
+This mode is faster for scanning — you don't need to know the fuse rating in advance, just read the right row after the fact.
+
+#### UI Mode 3: Pass/Fail (parasitic draw hunting)
+
+For the "is anything drawing current when the car should be asleep?" workflow, exact amps don't matter. You just need to know: **current or no current**.
+
+```
+┌─────────────────────────────────────────┐
+│ PARASITIC SCAN         V_drop: 0.03 mV  │
+├─────────────────────────────────────────┤
+│                                         │
+│              ● NO DRAW                  │
+│            (< 0.5 mV)                   │
+│                                         │
+│         Move to next fuse               │
+├─────────────────────────────────────────┤
+│ Threshold: ◄ 0.5 mV ►                  │
+└─────────────────────────────────────────┘
+```
+vs.
+```
+┌─────────────────────────────────────────┐
+│ PARASITIC SCAN         V_drop: 1.82 mV  │
+├─────────────────────────────────────────┤
+│                                         │
+│          ⚠ DRAW DETECTED                │
+│            (1.82 mV)                    │
+│                                         │
+│        Check this circuit!              │
+├─────────────────────────────────────────┤
+│ Threshold: ◄ 0.5 mV ►                  │
+└─────────────────────────────────────────┘
+```
+
+#### Audio-Guided Probing (all modes)
+
+The killer workflow: probe an entire fuse box by ear without looking at the screen. Essential when reaching into tight spaces.
+
+| Condition | Audio Pattern | Meaning |
+|-----------|--------------|---------|
+| No contact / open fuse | Silence | Probes not connected, or fuse blown |
+| Contact, no current | One long beep | Fuse good, circuit inactive — move on |
+| Contact, current detected | Rapid triple beep | Current flowing — this circuit is live |
+| High current (> threshold) | Continuous fast beeping | Significant load — investigate |
+
+**Workflow:** Set scope to Fuse Test mode, touch probes across a fuse, listen for the beep pattern, move to next fuse. Glance at the display only when you hear something interesting.
+
+**Audio output:** Stock firmware beeps in continuity mode, so there's likely a piezo or the DAC drives the signal generator output. Need to trace which pin during next hardware session.
+
 **Resolution concern:** The voltage drops are in the microvolt-to-low-millivolt range. The oscilloscope ADC (8-bit, fast) won't resolve this. The multimeter ADC path (slower, higher resolution) might work, especially with heavy averaging — parasitic drain is DC, so we have unlimited averaging time. Needs validation on hardware.
 
 **Combines with SPI flash data logging:** Start the test, close the car door, walk away for 30 minutes. The time-series log shows module sleep behavior, wake events, and final steady-state draw.
+
+Also see: `docs/fuse_current_tester.md` for the original audio-guided concept brainstorm.
 
 ## Data Logging
 
@@ -177,3 +253,56 @@ Use automotive blade fuses as shunt resistors. Measure the millivolt drop across
 - Alternator ripple test (AC component of DC voltage)
 - Injector pulse width measurement
 - Sensor range validation (e.g., TPS should be 0.5-4.5V)
+
+### Deeper Automotive — Not Yet Covered Elsewhere
+
+**Crank/Cam Sensor Correlation (Timing Chain Diagnostics)**
+- CH1 on crankshaft position sensor, CH2 on camshaft position sensor
+- Overlay both waveforms, measure the phase relationship
+- A stretched timing chain shifts the cam signal relative to crank
+- Show the offset in degrees and flag if it exceeds a threshold
+- This test normally requires a $2,000+ scan tool with graphing capability
+- Our advantage: dual-channel scope does this natively, just needs UI + angle math
+
+**Wheel Speed Sensor Testing (ABS Diagnostics)**
+- Spin the wheel by hand, capture the AC output from the variable reluctance sensor
+- Frequency = wheel speed, amplitude = air gap health
+- Compare all 4 sensors: if one has half the amplitude, the air gap is wrong or the tone ring is damaged
+- For active (Hall-effect) sensors: should produce a clean square wave — if it's ragged, the sensor is failing
+- Common repair shop test that currently requires an expensive scan tool's graphing PID mode
+
+**Variable Valve Timing Solenoid Testing**
+- VVT solenoids are PWM-driven by the ECU (typically 200-300 Hz)
+- Capture the duty cycle waveform on the solenoid control wire
+- Show duty cycle %, current draw, and response time
+- A stuck VVT solenoid causes check engine lights, rough idle, and poor fuel economy
+- The scope shows immediately whether the ECU is commanding the solenoid AND whether the solenoid is responding
+
+**Transmission Shift Solenoid Analysis**
+- Modern automatics have 5-8 PWM solenoids controlling shift timing and pressure
+- Capture solenoid command signal during a shift event
+- Show duty cycle ramp during shift, measure shift timing
+- Harsh/late/flare shifts show up clearly in the waveform
+- Currently diagnosed by transmission specialists with $5,000+ scan tools
+
+**MAF Sensor Degradation Check**
+- Snap-throttle test: wide-open throttle for 1 second, let off
+- Capture the MAF voltage curve on the scope
+- A good MAF has a fast rise to 4+ volts, clean return to idle
+- A contaminated MAF rises slowly, peaks low, and has a noisy signal
+- Overlay against reference curve for the specific sensor type (Bosch hot-wire, Denso hot-film, etc.)
+- This is one of the most common driveability complaints and the scope makes it obvious
+
+**Starter Motor Current Profiling (Beyond Compression)**
+- The full starter current waveform tells a story beyond cylinder compression:
+  - Initial spike = solenoid engagement and pinion gear meshing (bad solenoid = weak/delayed spike)
+  - Sustained draw = cranking current (too high = tight engine, too low = weak battery)
+  - Ripple pattern = individual cylinder compression (the compression test)
+  - Dropout/hesitation = ring gear damage or starter drive slipping
+- A reference waveform overlay for "healthy starter" vs "bad solenoid" vs "worn brushes" would be extremely educational
+
+**EGR Valve Position Testing**
+- Linear EGR valves have a 0-5V position feedback sensor
+- Command sweep from scan tool, watch position follow on scope
+- Sticky EGR = position lags behind command, shows stairstepping
+- Simple voltage measurement but the time-domain view on the scope catches what a multimeter misses

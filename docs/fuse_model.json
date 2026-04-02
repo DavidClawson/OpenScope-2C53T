@@ -1,0 +1,107 @@
+{
+  "name": "Automotive Fuse Voltage Drop Model",
+  "version": "1.0",
+  "description": "Estimates circuit current by measuring the voltage drop across an in-place automotive fuse. Each fuse behaves as a low-value resistor, so Ohm's law applies directly. This model stores one resistance value per fuse type and amp rating, replacing thousands of lookup table entries.",
+  "how_to_use": {
+    "formula": "current_mA = voltage_drop_mV / resistance_mOhm",
+    "example": "A 10A ATO/ATC fuse shows a 0.5 mV drop. Current = 0.5 / 0.0079 = 63.3 mA.",
+    "steps": [
+      "1. Identify the fuse type (printed on fuse or fuse box lid) and its amp rating.",
+      "2. Set your multimeter to millivolt (mV) DC mode.",
+      "3. Touch the probes to both legs of the fuse while it is still installed in the fuse box.",
+      "4. Read the voltage drop in millivolts.",
+      "5. Look up the resistance (mOhm) for that fuse type and rating from this file.",
+      "6. Divide: current_mA = voltage_drop_mV / resistance_mOhm."
+    ],
+    "typical_use_case": "Parasitic draw testing with the vehicle off. Probe each fuse to find which circuit is drawing unexpected current without pulling fuses or breaking circuits."
+  },
+  "accuracy": {
+    "note": "This is a rough estimation tool, not a precision instrument. Expect +/- 10% accuracy. That is more than sufficient for identifying a circuit drawing current that should not be.",
+    "sources": "Resistance values averaged from two independent sources (CaravanChronicles and Power Probe) where both cover the same fuse type. Single-source data used where only one source is available.",
+    "limitations": [
+      "Fuse resistance varies slightly by manufacturer and age.",
+      "Very small voltage drops (under 0.05 mV) are below typical DMM resolution.",
+      "Large-rated fuses (30A+) produce tiny drops at low currents, making small draws hard to detect."
+    ]
+  },
+  "fuse_types": {
+    "ATO/ATC": {
+      "also_known_as": "Standard blade fuse",
+      "common_in": "Most vehicles from 1980s onward, both interior and underhood fuse boxes",
+      "resistance_mOhm": {
+        "1": 0.1395,
+        "2": 0.0546,
+        "3": 0.0314,
+        "4": 0.0227,
+        "5": 0.0177,
+        "7.5": 0.011,
+        "10": 0.0079,
+        "15": 0.0049,
+        "20": 0.0035,
+        "25": 0.0026,
+        "30": 0.0021,
+        "35": 0.0017,
+        "40": 0.0015
+      }
+    },
+    "Mini": {
+      "also_known_as": "ATM / Mini blade fuse",
+      "common_in": "Modern vehicles (2000s+), typically in interior fuse boxes",
+      "resistance_mOhm": {
+        "1": 0.121,
+        "2": 0.0527,
+        "3": 0.0317,
+        "4": 0.0236,
+        "5": 0.0172,
+        "7.5": 0.011,
+        "10": 0.0076,
+        "15": 0.0048,
+        "20": 0.0033,
+        "25": 0.0025,
+        "30": 0.002
+      }
+    },
+    "Micro": {
+      "also_known_as": "Micro2 / Micro3 blade fuse",
+      "common_in": "Newer vehicles, especially imports and compact fuse boxes",
+      "resistance_mOhm": {
+        "3": 0.0317,
+        "5": 0.0174,
+        "7.5": 0.0108,
+        "10": 0.0077,
+        "15": 0.0049,
+        "20": 0.0035,
+        "25": 0.0026,
+        "30": 0.0021
+      }
+    },
+    "Maxi": {
+      "also_known_as": "APX / Maxi blade fuse",
+      "common_in": "Underhood fuse/relay boxes for high-current circuits (cooling fans, ABS, fuel pump relay)",
+      "resistance_mOhm": {
+        "20": 0.0031,
+        "25": 0.0024,
+        "30": 0.0019,
+        "35": 0.0017,
+        "40": 0.0014,
+        "50": 0.0011,
+        "60": 0.0009,
+        "70": 0.0006,
+        "80": 0.0005
+      }
+    },
+    "JCase": {
+      "also_known_as": "JCase cartridge / low-profile cartridge fuse",
+      "common_in": "Newer GM, Ford, and Toyota vehicles in underhood and battery junction boxes",
+      "resistance_mOhm": {
+        "20": 0.006,
+        "30": 0.0052,
+        "40": 0.0038,
+        "50": 0.0024,
+        "60": 0.0017,
+        "80": 0.0012,
+        "100": 0.0005
+      }
+    }
+  }
+}
