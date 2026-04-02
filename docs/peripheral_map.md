@@ -31,7 +31,7 @@
 | 36 | USB_LP_CAN_RX0 | 0x0802E8E5 | USB device interrupt |
 | 45 | TIM3 | 0x0802E71D | Periodic timer — possible button scan or measurement timing |
 | 54 | USART2 | 0x0802E7B5 | **FPGA command interface** — TX byte pump + RX frame parser with echo/integrity validation |
-| 59 | TIM8_BRK | 0x0802E78D | Timer 8 break — purpose unknown |
+| 59 | TIM8_BRK | 0x0802E78D | Vector repurposed for FatFs filesystem (TIM8 hardware is unused) |
 
 ## Analog Front-End — GPIO MUX Routing
 

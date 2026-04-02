@@ -406,7 +406,7 @@ Total PWA size: ~50-100KB. Fits easily in ESP32's 4MB flash with room for buffer
 1. Remove 4-6 screws from back of 2C53T case
 2. Carefully separate case halves (watch for ribbon cables)
 3. Photograph the PCB for reference
-4. Identify UART pads on GD32F307 (TBD from teardown — look for TP labels or trace from datasheet)
+4. Identify UART pads on AT32F403A (through-hole UART debug pads are visible near the edge of the PCB — RX, TX, GND. MCU pins TBD — trace from pads to MCU)
 5. Tin the 4 pads (3.3V, GND, TX, RX) and ESP32 module pins
 6. Cut 4 lengths of 30AWG wire (~3cm each)
 7. Solder wires: ESP32 TX → GD32 RX, ESP32 RX → GD32 TX, 3.3V, GND

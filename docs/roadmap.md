@@ -207,43 +207,37 @@
 
 ---
 
-## Phase 2: With Device (When It Arrives ~Early April 2026)
+## Phase 2: Hardware Bring-Up (Completed March-April 2026)
 
-### Step 1: Hardware Teardown + SWD Connection
-- Open device, photograph PCB
-- Confirm GD32F307 + Gowin GW1N-UV2 FPGA
-- Solder Dupont wires to SWD port (SWDIO + SWCLK + GND)
-- Connect ST-Link V2 or J-Link via USB
-- Optionally connect UART TX/RX for serial debug
-- Full flash dump via SWD (1MB MCU flash + 16MB SPI flash)
-- **Success: can read/write flash, single-step firmware**
+### Step 1: Hardware Teardown + Identification — DONE
+- Opened device, photographed PCB
+- **MCU is Artery AT32F403A** (not GD32F307 — markings sanded off, identified via register probing)
+- FPGA confirmed as Gowin GW1N-UV2
+- SWD port accessible (PA13/PA14), through-hole UART debug pads found
+- EOPB0 set to 0xFE for 224KB SRAM (required one-time DFU option byte write)
 
-### Step 2: FPGA Protocol Capture
-- Logic analyzer or second scope on USART2 TX/RX
-- Capture full boot sequence + mode changes
-- Decode using known 10-byte frame format
-- Cross-reference with decompiled fpga task code
-- **Output: complete FPGA command reference**
+### Step 2: FPGA Protocol — DONE
+- USART2 command protocol fully captured and decoded (9600 baud, 10-byte TX / 12-byte RX frames)
+- ALL ~40 FPGA command codes mapped (0x00-0x2C)
+- SPI3 bulk ADC data format cracked (interleaved CH1/CH2, 8-bit unsigned, offset -28.0)
+- See `reverse_engineering/FPGA_PROTOCOL_COMPLETE.md` and `analysis_v120/FPGA_TASK_ANALYSIS.md`
 
-### Step 3: Flash Custom Firmware
-- Backup original flash via SWD
-- Flash our firmware (with all 223-test-verified features)
-- Verify LCD displays our UI
-- Test buttons, mode switching, FFT, signal gen
-- Flash back to stock to confirm reversibility
-- **This is the "it actually works" moment**
+### Step 3: Custom Firmware Running — DONE
+- Custom firmware boots on real hardware, LCD displays our UI
+- FreeRTOS scheduler running (display + input tasks)
+- 14/15 buttons hardware-confirmed via bidirectional matrix scan
+- USB HID bootloader enables closed-case firmware updates (`make flash`)
+- Battery monitor with percentage display, USB charge detection, low-battery shutdown
 
-### Step 4: Real Signal Acquisition
-- Understand FPGA sample data format from Step 2
-- Implement: configure timebase → FPGA command → read samples → display
-- Real waveform on real LCD from real probe
-- **The scope becomes functional**
+### Step 4: Real Signal Acquisition — IN PROGRESS
+- FPGA USART communication bidirectional, meter data flowing
+- SPI3 root cause identified (needs PB11 HIGH, full boot sequence, queue-driven triggering)
+- Next: implement full FPGA boot sequence → SPI3 ADC data → real waveform display
 
-### Step 5: Hardware-in-the-Loop Testing
-- SWD flash + UART serial = fast iteration loop
-- Claude writes code → flash → run → serial output → iterate
-- Test all protocol decoders with real signals
-- K-Line test on the 4Runner!
+### Step 5: Hardware-in-the-Loop Testing — ONGOING
+- DFU + USB HID bootloader = fast iteration (Settings → Firmware Update → `make flash`)
+- Button matrix, battery ADC, LCD, power management all verified on hardware
+- Logic analyzer captures of FPGA communication saved in `captures/`
 
 ---
 
