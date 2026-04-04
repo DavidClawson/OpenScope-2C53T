@@ -149,7 +149,12 @@ make renode-test                 # 5-second smoke test
 - **SPI3 config:** Mode 3 (CPOL=1, CPHA=1), Master, /2 clock (60MHz), 8-bit, software CS on PB6
 - **USART protocol:** 10-byte TX frames (header + cmd + params + checksum), 12-byte RX (0x5A 0xA5 data, 0xAA 0x55 echo). Timer-driven via TMR3.
 - **FPGA command codes:** ALL ~40 mapped (0x00-0x2C) — scope, trigger, timebase, meter, siggen, freq counter, period, duty cycle, continuity/diode. Dispatch table at 0x0804BE74.
-- **FPGA control pins:** PC6 = SPI enable (HIGH), PB11 = active mode (HIGH)
+- **FPGA control pins:** PC6 = SPI enable (HIGH), PB11 = active mode (HIGH), PC11 = meter MUX enable (HIGH in meter mode)
+- **Analog frontend relays:** PC12 = input routing, PE4/PE5/PE6 = range/attenuation select. DCV pattern: PC12=H, PE4=H, PE5=L, PE6=H
+- **Gain resistors:** PA15, PA10 = gain select (HIGH for DCV), PB10 = gain select (LOW for DCV). Controlled by gpio_mux_porta_portb (FUN_08001A58)
+- **Additional frontend pins:** PB9, PA6 = analog frontend control (undocumented, configured as outputs in stock init)
+- **SPI3 calibration exchange:** 411 bytes (137 entries x 3) sent to FPGA during boot via commands 0x3B/0x3A. Table at 0x08051D19 in V1.2.0 binary.
+- **Master init decompilation:** 4 phase files in analysis_v120/master_init_phase[1-4].c (~3500 lines total)
 - **Buttons: 14/15 HARDWARE CONFIRMED.** Bidirectional 4x3 matrix + 3 passive. See `analysis_v120/button_map_confirmed.md` for complete mapping. Only PRM (PB7) unresolved.
 - **Acquisition:** Double-buffered (2 queue items per trigger), 9-mode state machine (fast TB, roll, normal, dual, extended, meter ADC, siggen, calibration, self-test)
 - **Calibration:** ADC offset -28.0, per-channel VFP pipeline, 301-byte cal data loaded from SPI flash per channel
@@ -165,7 +170,7 @@ make renode-test                 # 5-second smoke test
 - Firmware versions analyzed: V1.0.3 → V1.0.7 → V1.1.2 → V1.2.0
 - **IOMUX remap:** `(reg & ~0xF000) | 0x2000` at AFIO+0x08 — disables JTAG-DP, keeps SW-DP, frees PB3/PB4/PB5 for SPI3
 - **Battery ADC:** PB1 / ADC1 Channel 9, 239.5-cycle sample, right-aligned, software-triggered
-- **TMR8:** Vector repurposed for FatFs. TMR8 hardware is unused.
+- **TMR8:** Actually IS configured (ARR=99, generates periodic interrupt for FatFs). Not unused as previously thought.
 - **DMA:** Ch1 = LCD framebuffer (16-bit mem-to-mem → EXMC). SPI3 = polled. USART2 = interrupt-driven.
 - **Key docs:** `reverse_engineering/ARCHITECTURE.md` (start here), `FPGA_PROTOCOL_COMPLETE.md`, `HARDWARE_PINOUT.md`, `CALIBRATION.md`, `analysis_v120/FPGA_TASK_ANALYSIS.md`
 
@@ -184,5 +189,9 @@ make renode-test                 # 5-second smoke test
 - Watchdog, health monitoring, task stack checking
 - **Button input: 14/15 HARDWARE CONFIRMED** — bidirectional 4x3 matrix scan at 500Hz via TMR3 ISR. Rows: PA7,PB0,PC5,PE2. Cols: PA8,PC10,PE3. Passive: PC8(POWER),PB7(PRM),PC13(UP). Complete mapping in `analysis_v120/button_map_confirmed.md`. PRM (PB7) detection still needs work.
 - **FPGA USART communication working** — bidirectional, frames captured, meter data flowing
+- **LIVE VOLTAGE READINGS FROM METER IC** — first achieved 2026-04-03. Meter IC activated by continuous USART TX polling from display task. Reads ~3.7x high (5.6V for 1.5V) — calibration/gain tuning needed.
+- **Boot safety system** — 3-strike crash recovery: app crashes 3x → bootloader enters SAFE MODE automatically. Hold POWER at boot = force bootloader. boot_validate() handshake. Never need to open case again.
+- **Fuse current tester UI** — 4th meter layout (OK cycles Full→Chart→Stats→Fuse). 3 views, 5 fuse types, 47 ratings. Uses real meter mV readings for parasitic drain estimation.
 - **FPGA SPI3 root cause identified** — was missing: PB11 HIGH (active mode), full USART boot command sequence (0x01-0x08), queue-driven triggering (not polled), SysTick delays between boot phases. See `FPGA_TASK_ANALYSIS.md`
-- **Stock firmware ~98% understood** — 309 functions named, ALL FPGA commands mapped, ADC format cracked, button input resolved, battery ADC found, IOMUX remap extracted, TMR8 mystery solved. Remaining: PLL startup assembly, 42 low-confidence function names.
+- **Stock firmware ~98% understood** — 309 functions named, ALL FPGA commands mapped, ADC format cracked, button input resolved, battery ADC found, IOMUX remap extracted. Master init fully decompiled in 4 phase files. Remaining: dispatch table mechanism (null entries), 42 low-confidence function names.
+- **Critical lesson learned:** Display task MUST continuously redraw meter screen for USART TX commands to keep flowing. Without continuous redraws, TX stops after ~5 frames and FPGA goes silent. Meter mode added to animation loop alongside scope/siggen.
