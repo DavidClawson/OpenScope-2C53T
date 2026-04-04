@@ -19,6 +19,7 @@
 #include "theme.h"
 #include "meter_data.h"
 #include "fpga.h"
+#include "at32f403a_407.h"
 #include <string.h>
 
 /* Layout constants */
@@ -744,16 +745,19 @@ void draw_meter_screen(void)
     const meter_mode_info_t *m = &meter_modes[mode];
 
     /* Request fresh meter data from FPGA.
-     * Stock firmware Mode 1 sequence: 0x00, 0x09, 0x07, 0x1A-0x1E
-     * All TX frame params [4]-[8] are zero (matches stock firmware). */
-    fpga_send_cmd(0x00, 0x00);  /* Reset */
-    fpga_send_cmd(0x00, 0x09);  /* Meter: start measurement */
-    fpga_send_cmd(0x00, 0x07);  /* Meter: probe detected */
-    fpga_send_cmd(0x00, 0x1A);  /* CH1 gain */
-    fpga_send_cmd(0x00, 0x1B);  /* CH1 offset */
-    fpga_send_cmd(0x00, 0x1C);  /* CH2 gain */
-    fpga_send_cmd(0x00, 0x1D);  /* CH2 offset */
-    fpga_send_cmd(0x00, 0x1E);  /* Coupling/BW limit */
+     * Stock firmware Mode 3 (extended multimeter) sequence with probe detect.
+     * PC7 HIGH = probe connected → send 0x07, else 0x0A. */
+    {
+        uint8_t probe_cmd = (GPIOC->idt & (1U << 7)) ? 0x07 : 0x0A;
+        fpga_send_cmd(0x00, 0x00);    /* Reset */
+        fpga_send_cmd(0x00, 0x08);    /* Meter: configure */
+        fpga_send_cmd(0x00, 0x09);    /* Meter: start measurement */
+        fpga_send_cmd(0x00, probe_cmd); /* Probe detect (0x07 or 0x0A) */
+        fpga_send_cmd(0x00, 0x16);    /* Meter range config */
+        fpga_send_cmd(0x00, 0x17);    /* Meter range config */
+        fpga_send_cmd(0x00, 0x18);    /* Meter range config */
+        fpga_send_cmd(0x00, 0x19);    /* Meter range config */
+    }
 
     /* Use real FPGA meter data if available, otherwise fall back to demo */
     float current_val;

@@ -116,26 +116,14 @@ static void usart2_send_byte(uint8_t b)
 
 static void usart2_send_frame(const uint8_t *frame)
 {
-    /* Disable RX interrupt during TX to prevent half-duplex collision.
-     * Stock firmware uses TMR3-paced byte pumping which naturally
-     * interleaves TX/RX; our polled burst might collide. */
-    USART2->ctrl1 &= ~USART_CTRL1_RDBFIEN;
-
     for (int i = 0; i < FPGA_TX_FRAME_SIZE; i++) {
         usart2_send_byte(frame[i]);
-        /* Brief pause between bytes (~2ms, matching TMR3 500Hz cadence) */
-        for (volatile int d = 0; d < 500; d++) {}
     }
     /* Wait for transmit complete */
-    while (!(USART2->sts & USART_TDC_FLAG)) {}
-
-    /* Drain any RX data that arrived during TX */
-    while (USART2->sts & USART_RDBF_FLAG) {
-        (void)USART2->dt;
+    volatile uint32_t timeout = 100000;
+    while (!(USART2->sts & USART_TDC_FLAG)) {
+        if (--timeout == 0) break;
     }
-
-    /* Re-enable RX interrupt */
-    USART2->ctrl1 |= USART_CTRL1_RDBFIEN;
 }
 
 /*
@@ -620,20 +608,166 @@ void fpga_init(void)
     systick_delay_ms(10);
 
     /* ---------------------------------------------------------------
-     * Step 7: Additional SPI3 configuration
-     * Stock firmware sends command 0x12 and sets up ADC parameters.
+     * Step 7: Additional SPI3 handshake commands
+     * Stock firmware sends 0x12 and 0x15 queries.
      * --------------------------------------------------------------- */
     SPI3_CS_ASSERT();
-    spi3_xfer(0x12);  /* ADC/trigger config command */
+    spi3_xfer(0x12);
+    spi3_xfer(0x00);
+    spi3_xfer(0x00);
+    spi3_xfer(0x00);
     SPI3_CS_DEASSERT();
 
     systick_delay_ms(5);
+
+    SPI3_CS_ASSERT();
+    spi3_xfer(0x15);
+    spi3_xfer(0x00);
+    spi3_xfer(0x00);
+    spi3_xfer(0x00);
+    SPI3_CS_DEASSERT();
+
+    systick_delay_ms(5);
+
+    /* ---------------------------------------------------------------
+     * Step 7b: SPI3 calibration data exchange
+     * Stock firmware sends 411 bytes (137 entries x 3) of calibration
+     * data to the FPGA via SPI3 commands 0x3B/0x3A.
+     * Table extracted from V1.2.0 binary at 0x08051D19.
+     * This configures the FPGA's internal ADC correction tables
+     * and may activate the meter IC.
+     * --------------------------------------------------------------- */
+    {
+        static const uint8_t fpga_cal_table[411] = {
+            0x00,0x00,0x04,0x00,0x00,0x00,0x20,0x10,0x00,0x00,0x20,0x00,0x00,0x00,0x00,0x00,
+            0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x30,0xEE,0xFF,0xFF,
+            0xFF,0xFF,0xFF,0xFF,0x00,0x00,0x20,0x00,0x10,0x00,0x00,0x00,0x00,0x00,0x00,0x00,
+            0x00,0x00,0x00,0x00,0x00,0x10,0x00,0x00,0x08,0x00,0x20,0x00,0x00,0x00,0x00,0x00,
+            0x00,0x00,0x00,0x00,0x00,0x00,0x20,0x42,0x40,0x00,0x00,0x01,0x00,0x00,0x00,0x24,
+            0x00,0x26,0x00,0x00,0x00,0x02,0x00,0x40,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,
+            0x46,0x00,0x10,0x00,0x80,0x02,0x00,0x8C,0x20,0x00,0x00,0x00,0x00,0x08,0x00,0x26,
+            0x01,0x04,0x40,0x02,0x00,0x40,0x04,0x60,0x00,0x44,0x00,0x20,0x00,0x40,0x08,0x00,
+            0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,
+            0x00,0x00,0x00,0x00,0x00,0x00,0x10,0x00,0x00,0x00,0x20,0x00,0x04,0x00,0x00,0x00,
+            0x00,0x00,0x80,0x00,0x20,0x01,0x00,0x00,0x00,0x20,0x00,0x06,0x00,0x00,0x00,0x00,
+            0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x0A,0x8C,0xFF,0xFF,
+            0xFF,0xFF,0xFF,0xFF,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,
+            0x00,0x00,0x00,0x00,0x6D,0xF1,0xBC,0xE0,0x18,0x05,0x98,0xC0,0x00,0x00,0x00,0x90,
+            0x00,0xB0,0x01,0x7C,0x4F,0xC0,0xF6,0x0C,0x0B,0x98,0xC1,0xC4,0x0D,0x83,0x11,0xE0,
+            0x19,0x8E,0x60,0x42,0xC0,0xF6,0x9C,0xE0,0xC8,0x76,0x44,0x18,0x02,0xB2,0x7E,0xF9,
+            0xAC,0x68,0xCA,0x34,0xA9,0x0C,0xA6,0x80,0x06,0xC0,0x00,0xA6,0x01,0xD2,0x49,0x8E,
+            0x0E,0x00,0xBC,0x60,0x0C,0x60,0x18,0x00,0x1F,0x83,0xC3,0x00,0xC2,0x49,0x00,0x00,
+            0x00,0x04,0x00,0x00,0xC0,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,
+            0x00,0x00,0x00,0x00,0x00,0x06,0x86,0x8B,0xCC,0x00,0x00,0x21,0x85,0x00,0x00,0x00,
+            0x00,0x26,0xC0,0x08,0x02,0x00,0x20,0xEB,0x01,0x9F,0x59,0xAC,0x00,0x00,0x00,0x00,
+            0x00,0x00,0x48,0x00,0x00,0x02,0x40,0x00,0x00,0x00,0x00,0x00,0x5E,0x29,0xFF,0xFF,
+            0xFF,0xFF,0xFF,0xFF,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,
+            0x00,0x00,0x00,0x00,0x40,0x01,0x02,0x80,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,
+            0x00,0x40,0x08,0x20,0x02,0x01,0x00,0x8A,0x06,0x00,0x22,0x00,0x80,0x20,0x42,0x00,
+            0x01,0x00,0x00,0x04,0x00,0x28,0x0B,0x40,0x01,0x00,0x20,
+        };
+
+        /* Send 0x3B command header */
+        SPI3_CS_ASSERT();
+        spi3_xfer(0x3B);
+        spi3_xfer(0x00);
+        spi3_xfer(0x00);
+        SPI3_CS_DEASSERT();
+
+        systick_delay_ms(5);
+
+        /* Send calibration data: 137 entries x 3 bytes each */
+        SPI3_CS_ASSERT();
+        spi3_xfer(0x3A);  /* Calibration data block command */
+        for (int i = 0; i < 411; i++) {
+            spi3_xfer(fpga_cal_table[i]);
+        }
+        SPI3_CS_DEASSERT();
+
+        systick_delay_ms(10);
+    }
 
     /* ---------------------------------------------------------------
      * Step 8: Set PB11 HIGH — FPGA active mode
      * Stock firmware does this in step 52, just before scheduler start.
      * --------------------------------------------------------------- */
     GPIOB->scr = PB11_MASK;  /* PB11 HIGH — FPGA active */
+
+    /* ---------------------------------------------------------------
+     * Step 9: Analog frontend + Meter IC activation
+     * Stock firmware configures PB9 and PA6 as outputs during init
+     * (discovered in master_init Phase 1 decompilation).
+     * These pins may control the analog MUX or meter IC enable.
+     * PC11 = meter analog MUX (from mode_switch decompilation).
+     * --------------------------------------------------------------- */
+
+    /* ---------------------------------------------------------------
+     * Step 9: Analog frontend relay control
+     * Decoded from stock firmware gpio_mux_portc_porte (FUN_080018A4).
+     * These GPIO pins control physical relays that route the probe
+     * signal to the meter IC's sigma-delta ADC.
+     *
+     * DC Voltage mode: PC12=HIGH, PE4=HIGH, PE5=LOW, PE6=HIGH
+     * Without these, the meter IC has no analog input.
+     * --------------------------------------------------------------- */
+
+    /* Configure relay control pins as push-pull outputs */
+    gpio_cfg.gpio_mode = GPIO_MODE_OUTPUT;
+    gpio_cfg.gpio_out_type = GPIO_OUTPUT_PUSH_PULL;
+    gpio_cfg.gpio_drive_strength = GPIO_DRIVE_STRENGTH_STRONGER;
+
+    /* PC12 — input routing relay */
+    gpio_cfg.gpio_pins = GPIO_PINS_12;
+    gpio_init(GPIOC, &gpio_cfg);
+
+    /* PE4, PE5, PE6 — range/attenuation select */
+    gpio_cfg.gpio_pins = GPIO_PINS_4 | GPIO_PINS_5 | GPIO_PINS_6;
+    gpio_init(GPIOE, &gpio_cfg);
+
+    /* Set DC Voltage relay pattern */
+    GPIOC->scr = (1U << 12);  /* PC12 HIGH — route probe to meter IC */
+    GPIOE->scr = (1U << 4);   /* PE4 HIGH  — range select bit 0 */
+    GPIOE->clr = (1U << 5);   /* PE5 LOW   — range select bit 1 */
+    GPIOE->scr = (1U << 6);   /* PE6 HIGH  — attenuation/coupling */
+
+    /* PB9, PA6 — additional analog frontend pins (from Phase 1 RE) */
+    gpio_cfg.gpio_pins = GPIO_PINS_9;
+    gpio_init(GPIOB, &gpio_cfg);
+    GPIOB->scr = (1U << 9);
+
+    gpio_cfg.gpio_pins = GPIO_PINS_6;
+    gpio_init(GPIOA, &gpio_cfg);
+    GPIOA->scr = (1U << 6);
+
+    /* PC11 — meter analog MUX enable */
+    GPIOC->scr = (1U << 11);
+
+    systick_delay_ms(50);  /* Let relays settle */
+
+    /* Mode 3 (extended multimeter) command sequence */
+    usart2_send_cmd(0x00, 0x00);  /* Reset */
+    systick_delay_ms(10);
+    usart2_send_cmd(0x00, 0x08);  /* Meter: configure */
+    systick_delay_ms(10);
+    usart2_send_cmd(0x00, 0x09);  /* Meter: start measurement */
+    systick_delay_ms(10);
+
+    /* Probe detect: read PC7 */
+    if (GPIOC->idt & (1U << 7)) {
+        usart2_send_cmd(0x00, 0x07);  /* Probe detected */
+    } else {
+        usart2_send_cmd(0x00, 0x0A);  /* No probe */
+    }
+    systick_delay_ms(10);
+
+    usart2_send_cmd(0x00, 0x16);  /* Meter range */
+    systick_delay_ms(10);
+    usart2_send_cmd(0x00, 0x17);  /* Meter range */
+    systick_delay_ms(10);
+    usart2_send_cmd(0x00, 0x18);  /* Meter range */
+    systick_delay_ms(10);
+    usart2_send_cmd(0x00, 0x19);  /* Meter range */
+    systick_delay_ms(50);
 
     fpga.initialized = true;
     fpga.acq_mode = FPGA_ACQ_NORMAL + 1;  /* Default to normal scope mode */
@@ -673,9 +807,10 @@ BaseType_t fpga_send_cmd(uint8_t cmd_high, uint8_t cmd_low)
 {
     if (!fpga.initialized) return pdFALSE;
 
-    /* Use polled send (same as boot sequence) — more reliable than
-     * interrupt-driven TX task during early development. */
+    /* Use polled send with 10ms delay (matches stock firmware's
+     * dvom_TX task which calls vTaskDelay(10) between frames). */
     usart2_send_cmd(cmd_high, cmd_low);
+    vTaskDelay(pdMS_TO_TICKS(10));
     return pdTRUE;
 }
 
