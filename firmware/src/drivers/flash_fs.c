@@ -200,3 +200,52 @@ bool flash_fs_is_ready(void)
 {
     return fs_ready;
 }
+
+/* ═══════════════════════════════════════════════════════════════════
+ * Factory calibration mirror
+ *
+ * Stock firmware path: SPI flash "3:/System file/" contains per-channel
+ * calibration blobs (301 bytes each) that are loaded on boot into a
+ * RAM block at 0x20000358-0x20000434 and consumed by the meter/scope
+ * scaling pipeline.
+ *
+ * This is a load-only stub. The real SPI flash driver is not yet
+ * wired through flash_fs_read(), so this routine currently reads 0
+ * bytes and leaves `loaded` false. Drivers consuming factory_cal_t
+ * must fall back to built-in defaults in that case.
+ * ═══════════════════════════════════════════════════════════════════ */
+
+static factory_cal_t g_factory_cal;  /* BSS zero */
+
+flash_fs_error_t flash_fs_load_factory_cal(void)
+{
+    memset(&g_factory_cal, 0, sizeof(g_factory_cal));
+
+    uint32_t br1 = 0;
+    uint32_t br2 = 0;
+
+    flash_fs_error_t r1 = flash_fs_read("3:/System file/cal_ch1.bin",
+                                        g_factory_cal.ch1,
+                                        FACTORY_CAL_CHANNEL_SIZE, &br1);
+    flash_fs_error_t r2 = flash_fs_read("3:/System file/cal_ch2.bin",
+                                        g_factory_cal.ch2,
+                                        FACTORY_CAL_CHANNEL_SIZE, &br2);
+
+    if (r1 == FLASH_FS_OK && r2 == FLASH_FS_OK &&
+        br1 == FACTORY_CAL_CHANNEL_SIZE &&
+        br2 == FACTORY_CAL_CHANNEL_SIZE) {
+        g_factory_cal.loaded = true;
+        /* TODO(phase3): apply these coefficients in meter_data.c */
+        return FLASH_FS_OK;
+    }
+
+    /* Stub path: SPI flash driver not yet populated. Log-only outcome
+     * is implicit — the caller can check flash_fs_factory_cal()->loaded. */
+    g_factory_cal.loaded = false;
+    return FLASH_FS_ERR_READ;
+}
+
+const factory_cal_t *flash_fs_factory_cal(void)
+{
+    return &g_factory_cal;
+}

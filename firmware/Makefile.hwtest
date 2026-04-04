@@ -20,7 +20,7 @@ AT32_STARTUP = $(AT32_CMSIS)/device_support/startup/gcc
 TEST ?= hwtest
 
 C_SOURCES = \
-	src/$(TEST).c \
+	src/attic/$(TEST).c \
 	at32f403a_gcc/user/at32f403a_407_clock.c \
 	$(AT32_CMSIS)/device_support/system_at32f403a_407.c \
 	$(AT32_DRV)/src/at32f403a_407_crm.c \

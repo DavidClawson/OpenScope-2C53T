@@ -326,6 +326,10 @@ void draw_demo_waveform(uint32_t frame)
      * We map the 0-255 range into the waveform display area.
      */
     if (fpga_data_ready()) {
+        /* Latch: once we've ever seen real ADC data, disable the
+         * synthetic demo fallback permanently. */
+        scope_mark_acquisition_ready();
+
         const volatile uint8_t *ch1_buf = fpga_get_ch1_buf();
         const volatile uint8_t *ch2_buf = fpga_get_ch2_buf();
 
@@ -366,7 +370,15 @@ void draw_demo_waveform(uint32_t frame)
         return;
     }
 
-    /* ── Fallback: synthetic demo waveform (no FPGA data yet) ────── */
+    /* ── Fallback: synthetic demo waveform (no FPGA data yet) ──────
+     *
+     * Only rendered if acquisition has NEVER produced real data. Once
+     * the latch flips, we leave the grid empty instead — otherwise a
+     * transient FPGA stall would flash fake waveforms on top of a
+     * stopped trace, which is worse than an empty screen. */
+    if (scope_acquisition_ready()) {
+        return;
+    }
 
     /* NOTE: Scope SPI3 acquisition triggers DISABLED for now.
      * The FPGA does not respond to SPI3 bulk reads in the current
@@ -703,7 +715,10 @@ static void draw_math_waveform(uint32_t frame)
 /* ═══════════════════════════════════════════════════════════════════
  * SPI3 Debug Overlay
  * Shows raw acquisition status for diagnosing scope data pipeline.
+ * Off by default. Enable with -DSCOPE_DEBUG_OVERLAY at build time.
  * ═══════════════════════════════════════════════════════════════════ */
+
+#ifdef SCOPE_DEBUG_OVERLAY
 
 #define SCOPE_DBG_Y   (LCD_HEIGHT - 48)
 #define SCOPE_DBG_H   30
@@ -738,6 +753,8 @@ static void draw_scope_debug(const theme_t *th)
     font_draw_string(2, SCOPE_DBG_Y + 16, buf,
                      0xFFE0, 0x0000, &font_small);  /* yellow */
 }
+
+#endif /* SCOPE_DEBUG_OVERLAY */
 
 void draw_scope_screen(uint32_t frame)
 {
@@ -785,8 +802,10 @@ void draw_scope_screen(uint32_t frame)
     uint16_t ch_color = (active_channel == 0) ? th->ch1 : th->ch2;
     font_draw_string(4, SCOPE_TOP + 2, ch_label, ch_color, ch_color, &font_small);
 
+#ifdef SCOPE_DEBUG_OVERLAY
     /* Layer 12: SPI3 debug overlay (bottom of screen) */
     draw_scope_debug(th);
+#endif
 }
 
 /* ═══════════════════════════════════════════════════════════════════

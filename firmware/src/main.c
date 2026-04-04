@@ -34,6 +34,7 @@ extern void system_clock_config(void);
 #include "battery.h"
 #include "fpga.h"
 #include "meter_data.h"
+#include "flash_fs.h"
 
 /* ═══════════════════════════════════════════════════════════════════
  * Global State (extern'd via ui.h for UI modules)
@@ -419,6 +420,14 @@ int main(void)
 
     /* Initialize meter data parser */
     meter_data_init();
+
+    /* Factory calibration stub: initializes the flash_fs mutex and
+     * attempts to load per-channel cal blobs from SPI flash into the
+     * RAM mirror. Currently a no-op read (real SPI flash driver is not
+     * yet wired) — meter/scope paths still use built-in defaults.
+     * Phase 3 will apply the loaded coefficients. */
+    (void)flash_fs_init();
+    (void)flash_fs_load_factory_cal();
 
 #ifndef EMULATOR_BUILD
     /* Initialize FPGA communication (USART2 + SPI3 + boot sequence).

@@ -178,4 +178,16 @@ void scope_cursor_cycle_mode(void);
 void scope_cursor_next_sel(void);
 void scope_cursor_move(int16_t delta);
 
+/* Acquisition-ready latch.
+ *
+ * Starts false at boot and stays false until the scope has observed at
+ * least one real ADC frame from the FPGA. The UI uses this to decide
+ * whether to show the synthetic demo waveform (shipped as a "not
+ * connected" placeholder) or to leave the grid empty.
+ *
+ * Phase 4 will flip this via scope_mark_acquisition_ready() as soon as
+ * the SPI3 bringup is working. */
+bool scope_acquisition_ready(void);
+void scope_mark_acquisition_ready(void);
+
 #endif /* SCOPE_STATE_H */

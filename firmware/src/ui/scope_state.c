@@ -241,3 +241,15 @@ void scope_cursor_move(int16_t delta)
         break;
     }
 }
+
+static bool g_scope_acquisition_ready = false;
+
+bool scope_acquisition_ready(void)
+{
+    return g_scope_acquisition_ready;
+}
+
+void scope_mark_acquisition_ready(void)
+{
+    g_scope_acquisition_ready = true;
+}
