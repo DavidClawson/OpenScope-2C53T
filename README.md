@@ -69,22 +69,25 @@ brew install dfu-util                    # USB DFU flasher
 
 ### First-Time Hardware Setup
 
-The first flash requires opening the case to access the DFU boot pads. After that, all updates go over USB-C with the case closed.
+The first flash requires opening the case to enter DFU mode. After that, all updates go over USB-C with the case closed.
 
-**What you need:** Phillips screwdriver, a jumper wire or tweezers, the USB-C cable.
+**See the full walkthrough with photos: [DFU Mode Guide](docs/dfu_mode_guide.md)**
 
-1. Remove the 4 Phillips screws on the back and open the case
-2. Locate the 3V3 pad on the header below the USB-C port and the BOOT0 test point
-3. Bridge BOOT0 to 3V3 while pressing the pinhole reset button, then release — the device enumerates as "AT32 Bootloader DFU"
-4. Set EOPB0 for 224KB SRAM (one-time, the AT32 defaults to only 96KB):
+The short version:
+
+1. Open the case (4 Phillips screws on back)
+2. Use a jumper wire to bridge 3.3V (from the SWD header near USB-C) to the BOOT0 pull-down resistor (MCU side, near the main chip)
+3. While holding 3.3V on BOOT0, press the pinhole reset button, then release both
+4. The device enumerates as `AT32 Bootloader DFU` (verify with `dfu-util -l`)
+5. Set EOPB0 for 224KB SRAM (one-time):
    ```bash
    dfu-util -a 1 -d 2e3c:df11 -s 0x1FFFF800 -D firmware/build/option_bytes48.bin
    ```
-5. Flash the bootloader and application:
+6. Flash the bootloader and application:
    ```bash
    cd firmware && make flash-all
    ```
-6. Close the case — you won't need to open it again
+7. Close the case — you won't need to open it again
 
 ### Normal Development Cycle (case closed)
 
