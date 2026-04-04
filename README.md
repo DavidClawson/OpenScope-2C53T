@@ -61,10 +61,31 @@ These algorithms are written and unit-tested, but currently run on demo waveform
 
 ### Prerequisites
 
+**Toolchain:**
+
 ```bash
 # macOS (Homebrew)
 brew install --cask gcc-arm-embedded    # ARM toolchain
 brew install dfu-util                    # USB DFU flasher
+
+# Linux (Debian/Ubuntu)
+sudo apt install gcc-arm-none-eabi libnewlib-arm-none-eabi
+sudo apt install dfu-util make
+
+# Windows
+# Install ARM GNU Toolchain from https://developer.arm.com/downloads/-/arm-gnu-toolchain-downloads
+# Install dfu-util from https://dfu-util.sourceforge.net/
+# Build with Make (via MSYS2, WSL, or similar)
+```
+
+**Dependencies (all platforms):**
+
+The firmware depends on two libraries that aren't bundled in the repo. Clone them into the `firmware/` directory:
+
+```bash
+cd firmware
+git clone https://github.com/ArteryTek/AT32F403A_407_Firmware_Library.git at32f403a_lib
+git clone https://github.com/FreeRTOS/FreeRTOS-Kernel.git FreeRTOS
 ```
 
 ### First-Time Hardware Setup
