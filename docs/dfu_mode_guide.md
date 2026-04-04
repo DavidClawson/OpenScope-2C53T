@@ -29,9 +29,17 @@ The BOOT0 pin is accessible on the MCU side of a pull-down resistor near the bot
   <img src="images/boot0_resistor.jpg" alt="BOOT0 resistor location near MCU" width="400">
 </p>
 
+## Battery vs. USB Power
+
+> **Note (unconfirmed):** You can likely perform this entire procedure **without the battery connected**. Unplug the JST battery connector, then plug in USB-C — the USB charge circuit appears to power the board independently. This gives you more room to work inside the case and avoids any risk to the battery.
+>
+> Evidence: with USB plugged in, the device stays powered even when the power kill switch is pressed — USB holds the rails up on its own. The ROM DFU bootloader is baked into the AT32 silicon and doesn't depend on any user firmware, so PC9 (power hold) shouldn't matter.
+>
+> If you can confirm this works, please let us know in [issue #1](https://github.com/DavidClawson/OpenScope-2C53T/issues/1)!
+
 ## Step-by-Step Procedure
 
-1. **Open the case** and connect USB-C to your computer.
+1. **Open the case** and connect USB-C to your computer (see note above — you may be able to disconnect the battery first).
 
 2. **Prepare the jumper wire.** Take a DuPont wire and connect one end to the **3V3 pad** on the SWD header (you may need to solder a pin into the through-hole for a solid connection).
 
