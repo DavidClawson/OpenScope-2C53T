@@ -47,6 +47,23 @@ typedef struct {
     /* Display string (pre-formatted for UI) */
     char     display_str[16];    /* e.g., "-13.82", "OL", "---" */
 
+    /* Unit suffix string for the current range.
+     * Points to a static string (never NULL). Example values:
+     *   DCV:         "V", "mV"
+     *   ACV:         "V", "mV"
+     *   DCA/ACA:     "A", "mA", "uA"
+     *   Resistance:  "Ohm", "kOhm", "MOhm"
+     *   Frequency:   "Hz", "kHz", "MHz"
+     *   Capacitance: "nF", "uF"
+     *   Diode:       "V"
+     */
+    const char *unit_suffix;
+
+    /* Unit variant (0..2) within the current submode — mirrors the
+     * stock meter_mode_handler's DAT_2000102e. Used to select between
+     * e.g. mA / A / uA in the same DCA mode. */
+    uint8_t  unit_variant;
+
     /* Bar graph fraction (0.0 - 1.0) */
     float    bar_fraction;
 

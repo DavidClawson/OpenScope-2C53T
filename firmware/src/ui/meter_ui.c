@@ -292,11 +292,25 @@ static void draw_bar_graph(uint16_t x, uint16_t y, uint16_t w, uint16_t h,
     }
 }
 
+/* Live unit string: prefer the suffix decoded by meter_data from the
+ * current frame (reflects auto-ranging), fall back to the static mode
+ * table when meter data hasn't arrived yet or the suffix is empty. */
+static const char *live_unit(const meter_mode_info_t *m)
+{
+    if (meter_reading.valid &&
+        meter_reading.unit_suffix != NULL &&
+        meter_reading.unit_suffix[0] != '\0') {
+        return meter_reading.unit_suffix;
+    }
+    return m->unit;
+}
+
 /* Draw the main reading (shared by all layouts)
  * value_str: the string to display (real or demo) */
 static void draw_main_reading(const meter_mode_info_t *m, const theme_t *th,
                               uint16_t y, bool compact, const char *value_str)
 {
+    const char *unit_str = live_unit(m);
     if (!compact) {
         /* Mode indicator arrows (show L/R navigation) */
         font_draw_string(4, y, "<",
@@ -310,9 +324,11 @@ static void draw_main_reading(const meter_mode_info_t *m, const theme_t *th,
                            th->text_primary, th->background,
                            compact ? &font_large : &font_xlarge);
 
-    /* Unit label */
+    /* Unit label — use the live suffix decoded by meter_data from the
+     * current USART frame. Falls back to the static mode table string
+     * before any data has arrived. */
     uint16_t unit_y = compact ? y + 2 : y + 4;
-    font_draw_string(UNIT_X, unit_y, m->unit,
+    font_draw_string(UNIT_X, unit_y, unit_str,
                      th->ch1, th->background,
                      compact ? &font_medium : &font_large);
 
@@ -367,6 +383,7 @@ static void draw_meter_full(const meter_mode_info_t *m, uint8_t mode,
                             float bar_pct)
 {
     const theme_t *th = theme_get();
+    const char *unit_str = live_unit(m);
 
     draw_main_reading(m, th, MAIN_READING_Y, false, value_str);
 
@@ -400,7 +417,7 @@ static void draw_meter_full(const meter_mode_info_t *m, uint8_t mode,
     }
     font_draw_string_right(120, SECONDARY_Y, val_buf,
                            th->text_primary, th->background, &font_medium);
-    font_draw_string(122, SECONDARY_Y, m->unit,
+    font_draw_string(122, SECONDARY_Y, unit_str,
                      th->text_secondary, th->background, &font_small);
 
     font_draw_string(16, SECONDARY_Y + 22, "MAX",
@@ -412,7 +429,7 @@ static void draw_meter_full(const meter_mode_info_t *m, uint8_t mode,
     }
     font_draw_string_right(120, SECONDARY_Y + 22, val_buf,
                            th->text_primary, th->background, &font_medium);
-    font_draw_string(122, SECONDARY_Y + 22, m->unit,
+    font_draw_string(122, SECONDARY_Y + 22, unit_str,
                      th->text_secondary, th->background, &font_small);
 
     font_draw_string(16, SECONDARY_Y + 44, "AVG",
@@ -425,7 +442,7 @@ static void draw_meter_full(const meter_mode_info_t *m, uint8_t mode,
     }
     font_draw_string_right(120, SECONDARY_Y + 44, val_buf,
                            th->text_primary, th->background, &font_medium);
-    font_draw_string(122, SECONDARY_Y + 44, m->unit,
+    font_draw_string(122, SECONDARY_Y + 44, unit_str,
                      th->text_secondary, th->background, &font_small);
 
     /* Range info */

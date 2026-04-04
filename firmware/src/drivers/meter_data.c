@@ -139,6 +139,40 @@ static const float bar_full_scale[10] = {
 };
 
 /* ═══════════════════════════════════════════════════════════════════
+ * Unit suffix table
+ *
+ * Indexed by [submode][unit_variant]. Variant 0 is the only variant
+ * the stock firmware actually uses for submodes 1-7 — see
+ * reverse_engineering/analysis_v120/meter_fsm_deep_dive.md Q2: the
+ * variant state (stock `DAT_2000102e`) is only written inside the
+ * DCV FSM case (case 0 of meter_mode_handler at 0x080371B0), and it
+ * persists from there into whatever submode runs next. Other modes
+ * read it as a side-effect but never drive it.
+ *
+ * Variants 1/2 for submodes 1-7 are placeholder strings that will
+ * never be selected at runtime today. They're left here as
+ * documentation targets for when we wire up per-submode range
+ * feedback in a future phase.
+ *
+ * Strings are ASCII-only so the font renderer doesn't need Greek
+ * mu/ohm glyphs.
+ * ═══════════════════════════════════════════════════════════════════ */
+
+static const char * const unit_suffix_table[10][3] = {
+    /*                v0       v1       v2    */
+    /* 0 DCV      */ { "V",    "mV",    "mV"   },
+    /* 1 ACV      */ { "V",    "mV",    "mV"   },
+    /* 2 DCA(mA)  */ { "mA",   "uA",    "mA"   },
+    /* 3 DCA(A)   */ { "A",    "A",     "A"    },
+    /* 4 ACA(mA)  */ { "mA",   "uA",    "mA"   },
+    /* 5 Freq/ACA */ { "Hz",   "kHz",   "MHz"  },
+    /* 6 Ohm      */ { "Ohm",  "kOhm",  "MOhm" },
+    /* 7 Cont     */ { "Ohm",  "Ohm",   "Ohm"  },
+    /* 8 Diode    */ { "V",    "V",     "V"    },
+    /* 9 Cap      */ { "nF",   "uF",    "uF"   },
+};
+
+/* ═══════════════════════════════════════════════════════════════════
  * Format value into display string
  * ═══════════════════════════════════════════════════════════════════ */
 
@@ -198,6 +232,8 @@ void meter_data_init(void)
 {
     memset(&meter_reading, 0, sizeof(meter_reading));
     strcpy(meter_reading.display_str, "---");
+    meter_reading.unit_suffix = "";  /* Never NULL — UI can render directly. */
+    meter_reading.unit_variant = 0;
 }
 
 void meter_data_process_frame(const volatile uint8_t *frame, uint8_t submode)
@@ -268,10 +304,16 @@ void meter_data_process_frame(const volatile uint8_t *frame, uint8_t submode)
         r->probe_type = 0;
     }
 
-    /* Compute auto-range command parameter for FPGA feedback.
-     * Stock firmware fpga_state_update (0x080028E0) sets ms[0xF2E]
-     * based on meter_mode and probe_type, then sends cmds 0x1B/0x1C/0x1E.
-     * For DCV mode 0: param = probe_type directly. */
+    /* Legacy "range command" parameter — kept for API compatibility.
+     *
+     * Earlier notes claimed stock firmware "sends cmds 0x1B/0x1C/0x1E
+     * as FPGA range-select commands" from FUN_080028e0. That was wrong:
+     * see reverse_engineering/analysis_v120/meter_fsm_deep_dive.md Q3.
+     * Those bytes are display-queue dispatch codes (indices into the
+     * display task function table at 0x804be74), not FPGA commands.
+     * Stock firmware does NOT implement firmware-driven auto-ranging;
+     * the FPGA meter IC auto-ranges autonomously and the MCU just
+     * renders whatever frame it receives. */
     r->range_cmd = r->probe_type;
 
     /* --- Special value detection --- */
@@ -364,8 +406,20 @@ void meter_data_process_frame(const volatile uint8_t *frame, uint8_t submode)
     r->digits[3] = d3;
     r->raw_bcd = d0 * 1000 + d1 * 100 + d2 * 10 + d3;
 
-    /* Set decimal position based on sub-mode */
+    /* Decimal position: the FSM port from stock meter_mode_handler
+     * (decode_decimal_from_fsm) tested worse than the static default
+     * on hardware — bit semantics of frame[6]/[7] don't match what
+     * the decomp suggested. Reverted to the static default pending a
+     * proper frame capture of real auto-range transitions. The FSM
+     * function is retained below but unused; see the comment there. */
     r->decimal_pos = (submode < 10) ? default_decimal_pos[submode] : 1;
+
+    /* Unit suffix: populate from the static table at variant 0. Live
+     * auto-range variant updates will be wired once the FSM is fixed. */
+    r->unit_variant = 0;
+    r->unit_suffix = (submode < 10)
+                     ? unit_suffix_table[submode][0]
+                     : "";
 
     /* Format the display string and compute float value */
     r->result_class = METER_RESULT_NORMAL;
