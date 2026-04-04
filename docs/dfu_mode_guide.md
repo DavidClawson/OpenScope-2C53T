@@ -11,7 +11,7 @@ The first time you flash custom firmware, you need to enter DFU (Device Firmware
 
 ## Locating the Test Points
 
-Open the case by removing the 4 Phillips screws on the back.
+Open the case by removing the 6 Phillips screws on the back.
 
 ### 3.3V Source
 

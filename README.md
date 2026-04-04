@@ -104,7 +104,7 @@ The first flash requires opening the case to enter DFU mode. After that, all upd
 
 The short version:
 
-1. Open the case (4 Phillips screws on back)
+1. Open the case (6 Phillips screws on back)
 2. Use a jumper wire to bridge 3.3V (from the SWD header near USB-C) to the BOOT0 pull-down resistor (MCU side, near the main chip)
 3. While holding 3.3V on BOOT0, press the pinhole reset button, then release both
 4. The device enumerates as `AT32 Bootloader DFU` (verify with `dfu-util -l`)
