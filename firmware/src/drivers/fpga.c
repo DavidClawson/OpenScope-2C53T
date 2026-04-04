@@ -739,6 +739,18 @@ void fpga_init(void)
     gpio_init(GPIOA, &gpio_cfg);
     GPIOA->scr = (1U << 6);
 
+    /* Gain resistor configuration — gpio_mux_porta_portb for DCV mode.
+     * PA15, PA10 = gain select, PB10 = gain select, PB11 already set.
+     * Without these, meter IC has wrong input gain → no measurement. */
+    gpio_cfg.gpio_pins = GPIO_PINS_15 | GPIO_PINS_10;
+    gpio_init(GPIOA, &gpio_cfg);
+    GPIOA->scr = (1U << 15);  /* PA15 HIGH — gain bit */
+    GPIOA->scr = (1U << 10);  /* PA10 HIGH — gain bit */
+
+    gpio_cfg.gpio_pins = GPIO_PINS_10;
+    gpio_init(GPIOB, &gpio_cfg);
+    GPIOB->clr = (1U << 10);  /* PB10 LOW — gain bit */
+
     /* PC11 — meter analog MUX enable */
     GPIOC->scr = (1U << 11);
 
