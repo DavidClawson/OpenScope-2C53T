@@ -49,6 +49,7 @@ C_SOURCES += src/drivers/button_scan.c
 C_SOURCES += src/drivers/dfu_boot.c
 C_SOURCES += src/drivers/battery.c
 C_SOURCES += src/drivers/fpga.c
+C_SOURCES += src/drivers/dac_output.c
 C_SOURCES += src/drivers/meter_data.c
 C_SOURCES += src/dsp/signal_gen.c
 C_SOURCES += src/dsp/shared_mem.c
@@ -110,6 +111,8 @@ C_SOURCES += $(AT32_DRV)/src/at32f403a_407_misc.c
 C_SOURCES += $(AT32_DRV)/src/at32f403a_407_xmc.c
 C_SOURCES += $(AT32_DRV)/src/at32f403a_407_wdt.c
 C_SOURCES += $(AT32_DRV)/src/at32f403a_407_adc.c
+C_SOURCES += $(AT32_DRV)/src/at32f403a_407_dac.c
+C_SOURCES += $(AT32_DRV)/src/at32f403a_407_tmr.c
 
 # FreeRTOS kernel
 C_SOURCES += $(FREERTOS)/tasks.c

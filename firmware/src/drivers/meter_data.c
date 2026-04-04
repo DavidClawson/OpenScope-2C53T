@@ -102,8 +102,26 @@ static uint8_t bcd_nibble_lookup(uint8_t combined)
  * but these are the defaults for the most common range.
  * ═══════════════════════════════════════════════════════════════════ */
 
+/* Default decimal position per submode (index 0 = no decimal, 1-3 = after nth digit).
+ * Empirically tuned from hardware readings:
+ *   DCV (0): 1-10V range, raw 9899 → 9.899 V, decimal after digit 1
+ *   ACV (1): similar
+ *   Resistance (6): 20k range, raw 9899 → 98.99 kΩ, decimal after digit 2
+ *   Continuity (7): 200Ω range, raw 16 → 1.6 Ω, decimal after digit 3
+ *   Diode (8): 2V range, raw 623 → 0.623 V, decimal after digit 1
+ *   Capacitance (9): 200nF range, raw 1034 → 103.4 nF, decimal after digit 3
+ */
 static const uint8_t default_decimal_pos[10] = {
-    1, 2, 2, 1, 2, 1, 1, 3, 1, 2
+    1,  /* 0: DCV       — 9.899 V */
+    2,  /* 1: ACV       — 98.99 V */
+    2,  /* 2: DCA (mA)  — 98.99 mA */
+    1,  /* 3: DCA (A)   — 9.899 A */
+    2,  /* 4: ACA (mA)  — 98.99 mA */
+    1,  /* 5: ACA (A) or Frequency */
+    2,  /* 6: Resistance— 98.99 kΩ */
+    3,  /* 7: Continuity— 198.9 Ω */
+    1,  /* 8: Diode     — 0.623 V */
+    3,  /* 9: Capacitance— 198.9 nF */
 };
 
 /* Full-scale values per sub-mode (for bar graph calculation) */

@@ -401,8 +401,11 @@ int main(void)
      */
 
 #ifndef EMULATOR_BUILD
-    /* Initialize signal generator (skipped in emulator) */
+    /* Initialize signal generator and DAC hardware */
     {
+        extern void dac_output_init(void);
+        dac_output_init();
+
         siggen_config_t sg_cfg;
         sg_cfg.waveform       = SIGGEN_SINE;
         sg_cfg.frequency_hz   = 1000.0f;
@@ -448,6 +451,11 @@ int main(void)
     /* Create FPGA communication tasks (USART TX/RX + SPI3 acquisition).
      * These match the stock firmware's dvom_TX, dvom_RX, and fpga tasks. */
     fpga_create_tasks();
+
+    /* Device boots into oscilloscope mode — send scope FPGA commands and
+     * queue initial SPI3 acquisition triggers. The triggers will be waiting
+     * in the queue when vTaskStartScheduler() kicks off the acq task. */
+    fpga_enter_scope_mode();
 #endif
 
     /* Create 1-second timer for uptime/status updates */

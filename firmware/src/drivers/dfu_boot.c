@@ -32,11 +32,24 @@ void dfu_check_magic(void) {
 void dfu_check_boot_button(void) {
 }
 
+/* Must match bootloader's definition */
+#define BOOT_COUNTER_MAGIC   0xB007F000
+
 void boot_validate(void) {
-    /* Clear the boot attempt counter — tells the bootloader we started OK.
-     * This must be called after the app confirms LCD + core systems work.
-     * Writing 0 ensures the counter won't match BOOT_COUNTER_MAGIC on next
-     * reset, so it reads as a fresh boot (count=0). */
-    *BOOT_COUNTER_ADDR = 0;
+    /* Reset the boot attempt counter to zero while preserving the magic
+     * marker. The bootloader checks (val & 0xFFFF0000) == BOOT_COUNTER_MAGIC
+     * to recognize a valid counter.
+     *
+     * Previously this wrote plain 0, which broke the 3-strike system:
+     * the bootloader wouldn't recognize 0 as a valid counter, so the
+     * fail count never accumulated across crashes that happen AFTER
+     * boot_validate() (e.g., FreeRTOS task crashes, watchdog resets).
+     *
+     * With the magic preserved, the flow is:
+     *   Boot 1: bootloader writes MAGIC|1, app writes MAGIC|0 (success)
+     *   Boot 2: bootloader writes MAGIC|1, app crashes → watchdog reset
+     *   Boot 3: bootloader writes MAGIC|2, app crashes → watchdog reset
+     *   Boot 4: bootloader sees count=3 ≥ BOOT_FAIL_MAX → safe mode */
+    *BOOT_COUNTER_ADDR = BOOT_COUNTER_MAGIC;  /* count = 0, magic preserved */
     __DSB();
 }

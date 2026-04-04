@@ -208,16 +208,15 @@ uint8_t input_handle_button(button_id_t button, QueueHandle_t dq)
                 settings_depth = 0;
             }
             /* Tell the FPGA which mode we're entering.
-             * Stock firmware sets PC11 HIGH for meter mode (analog MUX)
-             * and clears it when leaving meter mode. */
+             * Each mode needs different FPGA commands and analog MUX config. */
             if (current_mode == MODE_MULTIMETER) {
-                GPIOC->scr = (1U << 11);  /* PC11 HIGH — meter enable */
-                fpga_send_cmd(0x00, FPGA_CMD_METER_START);
+                fpga_set_meter_mode(meter_submode);
+            } else if (current_mode == MODE_SIGNAL_GEN) {
+                fpga_enter_siggen_mode();
+            } else if (current_mode == MODE_OSCILLOSCOPE) {
+                fpga_enter_scope_mode();
             } else {
                 GPIOC->clr = (1U << 11);  /* PC11 LOW — meter disable */
-                if (current_mode == MODE_OSCILLOSCOPE) {
-                    fpga_send_cmd(0x00, FPGA_CMD_SCOPE_CH);
-                }
             }
         }
         send_cmd(dq, cmd);
@@ -535,6 +534,7 @@ uint8_t input_handle_button(button_id_t button, QueueHandle_t dq)
                 else
                     meter_submode--;
                 meter_reset_minmaxavg();
+                fpga_set_meter_mode(meter_submode);
             }
             send_cmd(dq, cmd);
         }
@@ -587,6 +587,7 @@ uint8_t input_handle_button(button_id_t button, QueueHandle_t dq)
             } else {
                 meter_submode = (meter_submode + 1) % METER_SUBMODE_COUNT;
                 meter_reset_minmaxavg();
+                fpga_set_meter_mode(meter_submode);
             }
             send_cmd(dq, cmd);
         }

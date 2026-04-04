@@ -4,10 +4,14 @@
  * Uses a 32-bit phase accumulator for precise frequency generation
  * from 0.1 Hz to 25 kHz. 8 waveform types with duty cycle control.
  *
- * Target: GD32F307 (ARM Cortex-M4F @ 120MHz)
+ * When output is enabled, generates samples into the DAC hardware
+ * buffer (12-bit unsigned, 0-4095) and drives PA4 via DMA.
  */
 
 #include "signal_gen.h"
+#ifndef EMULATOR_BUILD
+#include "dac_output.h"
+#endif
 #include <math.h>
 
 /* ═══════════════════════════════════════════════════════════════════
@@ -61,6 +65,9 @@ static uint32_t g_noise_state = 0xDEADBEEF; /* LFSR state for noise */
 /* Predefined amplitude steps (Vpp) */
 static const float amplitude_steps[] = { 0.1f, 0.2f, 0.5f, 1.0f, 2.0f, 3.3f };
 #define NUM_AMP_STEPS (sizeof(amplitude_steps) / sizeof(amplitude_steps[0]))
+
+/* Forward declaration — refreshes DAC hardware buffer when params change */
+static void siggen_update_dac(void);
 
 /* ═══════════════════════════════════════════════════════════════════
  * Internal helpers
@@ -190,6 +197,7 @@ void siggen_set_frequency(float freq_hz)
     if (freq_hz < 0.1f) freq_hz = 0.1f;
     if (freq_hz > 25000.0f) freq_hz = 25000.0f;
     g_config.frequency_hz = freq_hz;
+    siggen_update_dac();
 }
 
 void siggen_set_waveform(siggen_waveform_t wave)
@@ -197,6 +205,7 @@ void siggen_set_waveform(siggen_waveform_t wave)
     if (wave < SIGGEN_WAVEFORM_COUNT) {
         g_config.waveform = wave;
         g_phase_acc = 0;
+        siggen_update_dac();
     }
 }
 
@@ -205,16 +214,66 @@ void siggen_set_amplitude(float vpp)
     if (vpp < 0.0f) vpp = 0.0f;
     if (vpp > 3.3f) vpp = 3.3f;
     g_config.amplitude_vpp = vpp;
+    siggen_update_dac();
 }
 
 void siggen_set_offset(float offset_v)
 {
     g_config.offset_v = offset_v;
+    siggen_update_dac();
+}
+
+/*
+ * Fill the DAC hardware buffer and start/restart output.
+ * Converts the DDS engine's int16 samples (-32767..+32767)
+ * to 12-bit unsigned DAC values (0..4095).
+ *
+ * sample_rate = frequency_hz × DAC_BUFFER_SIZE
+ * This gives exactly one waveform cycle per buffer.
+ */
+static void siggen_update_dac(void)
+{
+#ifndef EMULATOR_BUILD
+    if (!g_config.output_enabled) return;
+
+    /* One complete cycle in the buffer.
+     * sample_rate = freq × buffer_size so DDS wraps exactly once. */
+    uint32_t sample_rate = (uint32_t)(g_config.frequency_hz * DAC_BUFFER_SIZE);
+    if (sample_rate < 256) sample_rate = 256;      /* ~1 Hz minimum */
+    if (sample_rate > 6400000) sample_rate = 6400000; /* ~25 kHz max */
+
+    /* Generate one cycle of int16 samples into a temp buffer */
+    int16_t temp[DAC_BUFFER_SIZE];
+    uint32_t saved_phase = g_phase_acc;
+    g_phase_acc = 0;  /* Start from phase 0 for clean cycle */
+    siggen_fill_buffer(temp, DAC_BUFFER_SIZE, (float)sample_rate);
+    g_phase_acc = saved_phase;
+
+    /* Convert int16 (-32767..+32767) → uint12 (0..4095) */
+    uint16_t *dac_buf = dac_output_get_buffer();
+    for (int i = 0; i < DAC_BUFFER_SIZE; i++) {
+        int32_t val = (int32_t)temp[i] + 32768;  /* Shift to 0..65535 */
+        val = val >> 4;                            /* Scale to 0..4095 */
+        if (val > 4095) val = 4095;
+        if (val < 0) val = 0;
+        dac_buf[i] = (uint16_t)val;
+    }
+
+    /* Start or restart DMA output at the computed rate */
+    dac_output_start(sample_rate);
+#endif
 }
 
 void siggen_enable(bool enable)
 {
     g_config.output_enabled = enable;
+#ifndef EMULATOR_BUILD
+    if (enable) {
+        siggen_update_dac();
+    } else {
+        dac_output_stop();
+    }
+#endif
 }
 
 siggen_waveform_t siggen_cycle_waveform(void)
@@ -236,10 +295,12 @@ float siggen_amplitude_up(void)
     for (uint8_t i = 0; i < NUM_AMP_STEPS; i++) {
         if (amplitude_steps[i] > g_config.amplitude_vpp + 0.01f) {
             g_config.amplitude_vpp = amplitude_steps[i];
+            siggen_update_dac();
             return g_config.amplitude_vpp;
         }
     }
     g_config.amplitude_vpp = amplitude_steps[NUM_AMP_STEPS - 1];
+    siggen_update_dac();
     return g_config.amplitude_vpp;
 }
 
@@ -248,10 +309,12 @@ float siggen_amplitude_down(void)
     for (int i = (int)NUM_AMP_STEPS - 1; i >= 0; i--) {
         if (amplitude_steps[i] < g_config.amplitude_vpp - 0.01f) {
             g_config.amplitude_vpp = amplitude_steps[i];
+            siggen_update_dac();
             return g_config.amplitude_vpp;
         }
     }
     g_config.amplitude_vpp = amplitude_steps[0];
+    siggen_update_dac();
     return g_config.amplitude_vpp;
 }
 
@@ -259,6 +322,7 @@ uint8_t siggen_duty_cycle_up(void)
 {
     if (g_config.duty_cycle_pct < 90)
         g_config.duty_cycle_pct += 10;
+    siggen_update_dac();
     return g_config.duty_cycle_pct;
 }
 
@@ -266,6 +330,7 @@ uint8_t siggen_duty_cycle_down(void)
 {
     if (g_config.duty_cycle_pct > 10)
         g_config.duty_cycle_pct -= 10;
+    siggen_update_dac();
     return g_config.duty_cycle_pct;
 }
 

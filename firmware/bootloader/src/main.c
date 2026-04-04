@@ -251,8 +251,8 @@ static void lcd_draw_bootloader_screen(void)
 
     /* Instructions */
     lcd_draw_string_center(160, 180, "Run: make flash", 0xBDF7, 0x0008, 1);
-    lcd_draw_string_center(160, 195, "Hold POWER at boot = safe mode", 0xBDF7, 0x0008, 1);
-    lcd_draw_string_center(160, 210, "Hold POWER here  = boot to app", 0xBDF7, 0x0008, 1);
+    lcd_draw_string_center(160, 195, "POWER+PRM at boot = bootloader", 0xBDF7, 0x0008, 1);
+    lcd_draw_string_center(160, 210, "Hold POWER here   = boot to app", 0xBDF7, 0x0008, 1);
 }
 
 /* Called from iap_loop before NVIC_SystemReset after successful flash */
@@ -326,6 +326,24 @@ static void power_button_init(void)
     GPIOC->scr = (1U << 8); /* Pull-up */
 }
 
+/* Check PRM button (PB7) — active LOW, passive */
+static int prm_button_pressed(void)
+{
+    return !(GPIOB->idt & (1U << 7));
+}
+
+static void prm_button_init(void)
+{
+    /* PB7 input with pull-up.
+     * PB7 is in GPIOB CRL (pins 0-7), bits [31:28] for pin 7. */
+    crm_periph_clock_enable(CRM_GPIOB_PERIPH_CLOCK, TRUE);
+    uint32_t cfglr = GPIOB->cfglr;
+    cfglr &= ~(0xFU << 28);
+    cfglr |= (0x8U << 28);   /* CNF=10 (input pull-up/down), MODE=00 */
+    GPIOB->cfglr = cfglr;
+    GPIOB->scr = (1U << 7);  /* Pull-up */
+}
+
 /* ═══════════════════════════════════════════════════════════════════
  * Busy-wait delay (no SysTick required — works before system_clock_config)
  * ═══════════════════════════════════════════════════════════════════ */
@@ -373,14 +391,32 @@ int main(void)
         }
     }
 
-    /* 2.5: Delayed POWER button check — hold POWER during boot to force
-     *      bootloader entry (safe mode without app menu). Wait 800ms for
-     *      user to release from normal power-on tap, then check if still held. */
+    /* 2.5: Button-based bootloader entry.
+     *
+     * Two methods:
+     *   A) POWER + PRM held simultaneously — immediate entry, no timing dance.
+     *      Checked early (200ms) so it's hard to miss. This is the recommended
+     *      recovery method when the app is crashing.
+     *   B) POWER held alone for 800ms — original method, still works.
+     *
+     * PRM (PB7) was chosen because it's a passive button (not in the scan
+     * matrix), easy to reach, and unlikely to be held accidentally. */
     if (!enter_bootloader) {
         power_button_init();
-        busy_delay_ms(800);
-        if (power_button_pressed()) {
+        prm_button_init();
+
+        /* Quick check: POWER + PRM combo (200ms debounce) */
+        busy_delay_ms(200);
+        if (power_button_pressed() && prm_button_pressed()) {
             enter_bootloader = 1;
+        }
+
+        /* Longer check: POWER alone (800ms total from boot) */
+        if (!enter_bootloader) {
+            busy_delay_ms(600);  /* 200 + 600 = 800ms total */
+            if (power_button_pressed()) {
+                enter_bootloader = 1;
+            }
         }
     }
 

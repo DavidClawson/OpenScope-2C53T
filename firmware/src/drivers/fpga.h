@@ -60,12 +60,37 @@
 #define FPGA_CMD_METER_START  0x09   /* Start meter measurement */
 #define FPGA_CMD_METER_NOPROBE 0x0A  /* No probe detected */
 
+/* Scope configuration commands (case 0 of mode init dispatcher FUN_0800b908).
+ * Sent as a sequence when entering oscilloscope mode: 0x0B-0x11.
+ * Each dispatches through the FPGA command table to a config writer that
+ * encodes channel coupling/BW, voltage range, trigger, and timebase. */
+#define FPGA_CMD_SCOPE_CFG_0B 0x0B   /* Scope config: CH1 coupling/range */
+#define FPGA_CMD_SCOPE_CFG_0C 0x0C   /* Scope config: CH2 coupling/range */
+#define FPGA_CMD_SCOPE_CFG_0D 0x0D   /* Scope config: trigger threshold */
+#define FPGA_CMD_SCOPE_CFG_0E 0x0E   /* Scope config: trigger mode/edge */
+#define FPGA_CMD_SCOPE_CFG_0F 0x0F   /* Scope config: timebase prescaler */
+#define FPGA_CMD_SCOPE_CFG_10 0x10   /* Scope config: timebase period */
+#define FPGA_CMD_SCOPE_CFG_11 0x11   /* Scope config: timebase mode */
+
+/* Meter variant setup (system_mode 9: resistance) */
+#define FPGA_CMD_METER_VAR_12 0x12   /* Meter variant config */
+#define FPGA_CMD_METER_VAR_13 0x13   /* Meter variant config */
+#define FPGA_CMD_METER_VAR_14 0x14   /* Meter variant config */
+
 /* Channel gain/offset/coupling (sent at boot + runtime auto-range) */
 #define FPGA_CMD_CH1_GAIN     0x1A   /* CH1 gain setting */
 #define FPGA_CMD_CH1_OFFSET   0x1B   /* CH1 offset setting */
 #define FPGA_CMD_CH2_GAIN     0x1C   /* CH2 gain setting */
 #define FPGA_CMD_CH2_OFFSET   0x1D   /* CH2 offset setting */
 #define FPGA_CMD_COUPLING     0x1E   /* Coupling / bandwidth limit */
+
+/* Frequency counter (system_mode 4) */
+#define FPGA_CMD_FREQ_CFG     0x1F   /* Freq counter config */
+#define FPGA_CMD_FREQ_20      0x20   /* Freq counter param */
+#define FPGA_CMD_FREQ_21      0x21   /* Freq counter param */
+
+/* Continuity/Diode (system_mode 8) */
+#define FPGA_CMD_CONT_DIODE   0x2C   /* Continuity/diode mode */
 
 /* ═══════════════════════════════════════════════════════════════════
  * SPI3 Acquisition Modes (trigger_byte - 1)
@@ -196,5 +221,35 @@ const volatile uint8_t *fpga_get_ch2_buf(void);
  * Must be HIGH during oscilloscope/meter operation.
  */
 void fpga_set_active(bool active);
+
+/*
+ * Enter oscilloscope mode: send FPGA scope configuration commands
+ * (0x00, 0x01, 0x0B-0x11) and fire initial SPI3 acquisition triggers.
+ *
+ * Call at boot (device starts in scope mode) and when switching
+ * from meter/siggen back to oscilloscope.
+ */
+void fpga_enter_scope_mode(void);
+
+/*
+ * Enter signal generator mode: send FPGA siggen configuration commands
+ * (0x02-0x06, 0x08) and switch analog MUX to route DAC output to BNC.
+ *
+ * Call when switching to signal generator mode.
+ */
+void fpga_enter_siggen_mode(void);
+
+/*
+ * Configure FPGA for a specific meter submode.
+ * Sends the appropriate FPGA init command sequence:
+ *   - DCV/ACV (0,1): system_mode 1 → 0x00, 0x09, probe, 0x1A-0x1E
+ *   - Resistance (6): system_mode 9 → 0x00, 0x12-0x14, 0x09, probe
+ *   - Continuity (7): system_mode 8 → 0x00, 0x2C
+ *   - Diode (8): system_mode 8 → 0x00, 0x2C
+ *   - Frequency (5): system_mode 4 → 0x00, 0x1F, 0x09, 0x20, 0x21
+ *
+ * Call when the meter submode changes (LEFT/RIGHT buttons).
+ */
+void fpga_set_meter_mode(uint8_t submode);
 
 #endif /* FPGA_H */

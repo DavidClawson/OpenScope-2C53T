@@ -329,12 +329,8 @@ void draw_demo_waveform(uint32_t frame)
         const volatile uint8_t *ch1_buf = fpga_get_ch1_buf();
         const volatile uint8_t *ch2_buf = fpga_get_ch2_buf();
 
-        /* Also trigger the next acquisition while we draw this one.
-         * Double-buffered: send two triggers per the stock firmware pattern. */
-        if (ss->running) {
-            fpga_trigger_acquisition(fpga.acq_mode);
-            fpga_trigger_acquisition(fpga.acq_mode);
-        }
+        /* Re-triggering DISABLED — see note in demo waveform fallback.
+         * TODO: re-enable once SPI3 protocol is confirmed working. */
 
         /* CH1: real ADC data */
         if (ss->ch1.enabled && ch1_buf != NULL) {
@@ -371,6 +367,14 @@ void draw_demo_waveform(uint32_t frame)
     }
 
     /* ── Fallback: synthetic demo waveform (no FPGA data yet) ────── */
+
+    /* NOTE: Scope SPI3 acquisition triggers DISABLED for now.
+     * The FPGA does not respond to SPI3 bulk reads in the current
+     * configuration — transfers return 0xFF (timeout) and flood the
+     * system, causing watchdog resets after ~10 seconds.
+     * Next step: debug the SPI3 protocol (preamble command, FPGA
+     * mode setup) before enabling real acquisition.
+     * When ready, uncomment and fire: fpga_trigger_acquisition(fpga.acq_mode); */
 
     static const int8_t sin_lut[64] = {
          0, 10, 19, 29, 38, 47, 56, 63, 71, 77, 83, 88, 92, 96, 98, 99,
@@ -696,6 +700,45 @@ static void draw_math_waveform(uint32_t frame)
  * Main scope screen compositor
  * ═══════════════════════════════════════════════════════════════════ */
 
+/* ═══════════════════════════════════════════════════════════════════
+ * SPI3 Debug Overlay
+ * Shows raw acquisition status for diagnosing scope data pipeline.
+ * ═══════════════════════════════════════════════════════════════════ */
+
+#define SCOPE_DBG_Y   (LCD_HEIGHT - 48)
+#define SCOPE_DBG_H   30
+
+static void draw_scope_debug(const theme_t *th)
+{
+    /* Dark background strip at bottom of screen */
+    lcd_fill_rect(0, SCOPE_DBG_Y, LCD_WIDTH, SCOPE_DBG_H, 0x0000);
+
+    char buf[64];
+    const volatile uint8_t *ch1 = fpga_get_ch1_buf();
+
+    /* Line 1 (green): FPGA status — init, data_ready, frame count, acq_mode */
+    snprintf(buf, sizeof(buf), "SPI3 %s F%u M%u %s",
+             fpga.initialized ? "OK" : "NO",
+             fpga.frame_count,
+             fpga.acq_mode,
+             fpga_data_ready() ? "DATA" : "wait");
+    font_draw_string(2, SCOPE_DBG_Y + 2, buf,
+                     0x07E0, 0x0000, &font_small);  /* green */
+
+    /* Line 2 (yellow): First 8 raw CH1 samples + USART TX/RX counts */
+    if (ch1 != NULL) {
+        snprintf(buf, sizeof(buf), "%02X%02X%02X%02X%02X%02X%02X%02X T%u E%u",
+                 ch1[0], ch1[1], ch1[2], ch1[3],
+                 ch1[4], ch1[5], ch1[6], ch1[7],
+                 fpga.tx_count, fpga.echo_count);
+    } else {
+        snprintf(buf, sizeof(buf), "-- no buffer -- T%u E%u",
+                 fpga.tx_count, fpga.echo_count);
+    }
+    font_draw_string(2, SCOPE_DBG_Y + 16, buf,
+                     0xFFE0, 0x0000, &font_small);  /* yellow */
+}
+
 void draw_scope_screen(uint32_t frame)
 {
     const theme_t *th = theme_get();
@@ -741,6 +784,9 @@ void draw_scope_screen(uint32_t frame)
     const char *ch_label = (active_channel == 0) ? "CH1" : "CH2";
     uint16_t ch_color = (active_channel == 0) ? th->ch1 : th->ch2;
     font_draw_string(4, SCOPE_TOP + 2, ch_label, ch_color, ch_color, &font_small);
+
+    /* Layer 12: SPI3 debug overlay (bottom of screen) */
+    draw_scope_debug(th);
 }
 
 /* ═══════════════════════════════════════════════════════════════════

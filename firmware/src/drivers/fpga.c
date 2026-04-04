@@ -906,3 +906,188 @@ void fpga_set_active(bool active)
     }
     fpga.spi3_active = active;
 }
+
+void fpga_enter_scope_mode(void)
+{
+    if (!fpga.initialized) return;
+
+    /* Stop DAC output if signal gen was running */
+    {
+        extern void dac_output_stop(void);
+        extern bool dac_output_is_running(void);
+        if (dac_output_is_running()) dac_output_stop();
+    }
+
+    /* Reset data_ready so display shows demo waveform until real data arrives */
+    data_ready = false;
+
+    /* Send scope init command sequence.
+     * Stock firmware mode init dispatcher (FUN_0800b908, case 0) sends:
+     *   0x00, 0x01, 0x0B, 0x0C, 0x0D, 0x0E, 0x0F, 0x10, 0x11
+     *
+     * In the stock firmware, these go through the dispatch table which reads
+     * current scope state (coupling, V/div, trigger, timebase) and computes
+     * the parameter byte for each. We send param=0 for now — the FPGA
+     * will use default configuration. Once we see data flowing, we can
+     * encode proper params from scope_state. */
+    fpga_send_cmd(0x00, FPGA_CMD_RESET);
+    fpga_send_cmd(0x00, FPGA_CMD_SCOPE_CH);
+    fpga_send_cmd(0x00, FPGA_CMD_SCOPE_CFG_0B);
+    fpga_send_cmd(0x00, FPGA_CMD_SCOPE_CFG_0C);
+    fpga_send_cmd(0x00, FPGA_CMD_SCOPE_CFG_0D);
+    fpga_send_cmd(0x00, FPGA_CMD_SCOPE_CFG_0E);
+    fpga_send_cmd(0x00, FPGA_CMD_SCOPE_CFG_0F);
+    fpga_send_cmd(0x00, FPGA_CMD_SCOPE_CFG_10);
+    fpga_send_cmd(0x00, FPGA_CMD_SCOPE_CFG_11);
+
+    /* Set acquisition mode for normal scope (1024 bytes interleaved) */
+    fpga.acq_mode = FPGA_ACQ_NORMAL + 1;
+
+    /* NOTE: Do NOT fire acquisition triggers here. The scope USART commands
+     * need ~180ms to transmit at 9600 baud (9 cmds x 20ms each). If we
+     * trigger SPI3 reads before the FPGA has processed them, spi3_xfer()
+     * hangs in its polling loop and the watchdog resets the device.
+     * Instead, the display task (scope_ui.c) fires the first trigger
+     * after a short delay, once the FPGA has had time to configure. */
+}
+
+void fpga_enter_siggen_mode(void)
+{
+    if (!fpga.initialized) return;
+
+    /* Send signal generator init command sequence.
+     * Stock firmware mode init dispatcher (FUN_0800b908, case 2) sends:
+     *   0x02, 0x03, 0x04, 0x05, 0x06, 0x08
+     * Then falls through to case 9 tail: 0x14, 0x09, [0x07/0x0A]
+     *
+     * 0x02-0x06 = siggen setup (freq, wave, amplitude, offset, duty)
+     * 0x08 = meter configure range (shared)
+     * 0x14 = meter variant setup
+     * 0x09 = meter start measurement
+     * 0x07/0x0A = probe detect */
+    fpga_send_cmd(0x00, 0x02);  /* Siggen: frequency */
+    fpga_send_cmd(0x00, 0x03);  /* Siggen: waveform */
+    fpga_send_cmd(0x00, 0x04);  /* Siggen: amplitude */
+    fpga_send_cmd(0x00, 0x05);  /* Siggen: offset */
+    fpga_send_cmd(0x00, 0x06);  /* Siggen: duty cycle */
+    fpga_send_cmd(0x00, 0x08);  /* Meter: configure range */
+
+    /* Case 9 tail: meter variant + probe detect */
+    fpga_send_cmd(0x00, 0x14);
+    fpga_send_cmd(0x00, FPGA_CMD_METER_START);
+
+    /* Probe detect: read PC7 */
+    if (GPIOC->idt & (1U << 7)) {
+        fpga_send_cmd(0x00, 0x07);  /* Probe detected */
+    } else {
+        fpga_send_cmd(0x00, FPGA_CMD_METER_NOPROBE);
+    }
+
+    /* Switch analog MUX for signal gen output.
+     * In meter mode: PC12=HIGH routes probe→meter IC, PE4/5/6 set range.
+     * For signal gen: try reversing PC12 to route DAC→BNC output.
+     * PC11 LOW (meter MUX off — not measuring). */
+    GPIOC->clr = (1U << 11);  /* PC11 LOW — meter MUX off */
+    GPIOC->clr = (1U << 12);  /* PC12 LOW — try routing DAC to BNC */
+    GPIOE->clr = (1U << 4);   /* PE4 LOW — clear range select */
+    GPIOE->clr = (1U << 5);   /* PE5 LOW */
+    GPIOE->clr = (1U << 6);   /* PE6 LOW */
+}
+
+/* Helper: send probe detect command (shared by meter modes) */
+static void fpga_send_probe_detect(void)
+{
+    if (GPIOC->idt & (1U << 7)) {
+        fpga_send_cmd(0x00, 0x07);  /* PC7 HIGH: probe detected */
+    } else {
+        fpga_send_cmd(0x00, FPGA_CMD_METER_NOPROBE);
+    }
+}
+
+void fpga_set_meter_mode(uint8_t submode)
+{
+    if (!fpga.initialized) return;
+
+    /* Stop DAC output if signal gen was running */
+    {
+        extern void dac_output_stop(void);
+        extern bool dac_output_is_running(void);
+        if (dac_output_is_running()) dac_output_stop();
+    }
+
+    /* Ensure meter MUX is enabled */
+    GPIOC->scr = (1U << 11);  /* PC11 HIGH — meter MUX on */
+
+    /* Send mode-specific FPGA command sequence.
+     * Mapping from RE analysis of mode init dispatcher (FUN_0800b908):
+     *
+     * Submodes 0-4 (DCV, ACV, DCA, ACA, unused) → system_mode 1 (basic meter)
+     * Submode 5 (Frequency)                      → system_mode 4 (freq counter)
+     * Submode 6 (Resistance)                     → system_mode 9 (meter variant)
+     * Submode 7 (Continuity)                     → system_mode 8 (cont/diode)
+     * Submode 8 (Diode)                          → system_mode 8 (cont/diode)
+     * Submode 9 (Capacitance)                    → system_mode 3 (extended meter)
+     */
+    switch (submode) {
+
+    case 0: /* DCV */
+    case 1: /* ACV */
+    case 2: /* DCA */
+    case 3: /* ACA */
+    case 4: /* (unused) */
+    default:
+        /* System mode 1: basic meter.
+         * Commands: 0x00, 0x09, probe, 0x1A-0x1E */
+        fpga_send_cmd(0x00, FPGA_CMD_RESET);
+        fpga_send_cmd(0x00, FPGA_CMD_METER_START);
+        fpga_send_probe_detect();
+        fpga_send_cmd(0x00, FPGA_CMD_CH1_GAIN);
+        fpga_send_cmd(0x00, FPGA_CMD_CH1_OFFSET);
+        fpga_send_cmd(0x00, FPGA_CMD_CH2_GAIN);
+        fpga_send_cmd(0x00, FPGA_CMD_CH2_OFFSET);
+        fpga_send_cmd(0x00, FPGA_CMD_COUPLING);
+        break;
+
+    case 5: /* Frequency */
+        /* System mode 4: frequency counter.
+         * Commands: 0x00, 0x1F, 0x09, 0x20, 0x21 */
+        fpga_send_cmd(0x00, FPGA_CMD_RESET);
+        fpga_send_cmd(0x00, FPGA_CMD_FREQ_CFG);
+        fpga_send_cmd(0x00, FPGA_CMD_METER_START);
+        fpga_send_cmd(0x00, FPGA_CMD_FREQ_20);
+        fpga_send_cmd(0x00, FPGA_CMD_FREQ_21);
+        break;
+
+    case 6: /* Resistance */
+        /* System mode 9: meter variant.
+         * Commands: 0x00, 0x12, 0x13, 0x14, 0x09, probe */
+        fpga_send_cmd(0x00, FPGA_CMD_RESET);
+        fpga_send_cmd(0x00, FPGA_CMD_METER_VAR_12);
+        fpga_send_cmd(0x00, FPGA_CMD_METER_VAR_13);
+        fpga_send_cmd(0x00, FPGA_CMD_METER_VAR_14);
+        fpga_send_cmd(0x00, FPGA_CMD_METER_START);
+        fpga_send_probe_detect();
+        break;
+
+    case 7: /* Continuity */
+    case 8: /* Diode */
+        /* System mode 8: continuity/diode.
+         * Commands: 0x00, 0x2C */
+        fpga_send_cmd(0x00, FPGA_CMD_RESET);
+        fpga_send_cmd(0x00, FPGA_CMD_CONT_DIODE);
+        break;
+
+    case 9: /* Capacitance */
+        /* System mode 3: extended meter.
+         * Commands: 0x00, 0x08, 0x09, probe, 0x16-0x19 */
+        fpga_send_cmd(0x00, FPGA_CMD_RESET);
+        fpga_send_cmd(0x00, 0x08);
+        fpga_send_cmd(0x00, FPGA_CMD_METER_START);
+        fpga_send_probe_detect();
+        fpga_send_cmd(0x00, 0x16);
+        fpga_send_cmd(0x00, 0x17);
+        fpga_send_cmd(0x00, 0x18);
+        fpga_send_cmd(0x00, 0x19);
+        break;
+    }
+}

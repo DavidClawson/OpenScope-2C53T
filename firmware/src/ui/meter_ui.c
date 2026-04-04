@@ -372,7 +372,9 @@ static void draw_meter_full(const meter_mode_info_t *m, uint8_t mode,
 
     /* Special indicators for continuity and diode modes */
     if (mode == 7) {
-        int is_short = (current_val < 50.0f);
+        /* Continuity: BEEP only for a real short (small positive resistance).
+         * Value = 0 usually means no connection (meter IC idle), not a short. */
+        int is_short = (current_val > 0.01f && current_val < 50.0f);
         draw_buzzer_indicator(170, SECONDARY_Y + 44, th, is_short);
     } else if (mode == 8) {
         draw_diode_indicator(170, SECONDARY_Y + 44, th);
@@ -785,7 +787,8 @@ void draw_meter_screen(void)
      * This helps in noisy environments where the buzzer can't be heard. */
     bool continuity_flash = false;
     if (mode == 7) {
-        continuity_flash = (current_val < 50.0f) ||
+        /* Flash green only for real short (exclude 0, which means open) */
+        continuity_flash = (current_val > 0.01f && current_val < 50.0f) ||
                            meter_reading.continuity_beep;
     }
 
