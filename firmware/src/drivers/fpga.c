@@ -276,6 +276,11 @@ static void fpga_usart_tx_task(void *pv)
  * USART RX Processing Task (dvom_RX equivalent)
  * Wakes on meter_sem when a complete data frame arrives.
  * Parses BCD meter readings and updates the global meter_reading.
+ *
+ * After parsing, sends auto-range feedback commands (0x1B, 0x1C, 0x1E)
+ * to keep the FPGA meter IC properly configured. Without these, the
+ * meter IC operates with wrong gain/reference settings.
+ * See: fpga_state_update (0x080028E0) in stock firmware.
  */
 static void fpga_usart_rx_task(void *pv)
 {
@@ -289,6 +294,25 @@ static void fpga_usart_rx_task(void *pv)
          * meter_submode is the global from main.c (via ui.h extern). */
         extern volatile uint8_t meter_submode;
         meter_data_process_frame(fpga.rx_frame, meter_submode);
+
+        /* Auto-range feedback commands (0x1B, 0x1C, 0x1E) DISABLED.
+         *
+         * 2026-04-04 findings: Sending these at runtime causes the FPGA
+         * meter IC to auto-range internally, but the MCU's analog frontend
+         * relays don't track the range changes. Result: correct readings
+         * only in the ~2-10V sweet spot, wildly wrong outside it.
+         *
+         * With these disabled and boot commands 0x1A-0x1E (param=0), the
+         * meter IC stays on a fixed 10V range: accurate 1-10V DCV readings,
+         * BCD wraps above 10V. A relay click at ~0.7V suggests the FPGA
+         * controls some analog switching internally.
+         *
+         * TODO: Implement MCU-side auto-ranging with relay switching:
+         *   1. Detect BCD overflow (>9500) → send higher range params
+         *   2. Detect BCD underflow (<100) → send lower range params
+         *   3. Switch relays via gpio_mux_portc_porte/porta_portb
+         *   4. Need to discover param values for 600mV, 60V, 600V ranges
+         */
     }
 }
 
@@ -776,6 +800,31 @@ void fpga_init(void)
     systick_delay_ms(10);
 
     usart2_send_cmd(0x05, 0x14);  /* Meter variant setup */
+    systick_delay_ms(50);
+
+    /* Meter channel gain/offset/coupling initialization (0x1A-0x1E).
+     * Stock firmware meter_basic mode (case 1 in FUN_0800b908) sends these
+     * at boot to configure the FPGA meter IC.
+     *
+     * Discovered 2026-04-04:
+     *   param=0 → 10V range (1-10V accurate, BCD wraps at 10000 counts)
+     *   param=1 → same as param=0 (no range change observed)
+     *   Relay click heard at ~0.7V — FPGA controls some analog switching
+     *   Below ~1V: readings incorrect (meter IC internal range mismatch)
+     *   Above 10V: BCD wraps (11V→0.99, 12V→2, 13V→3)
+     *
+     * TODO: Find params for other ranges (600mV, 60V, 600V) to enable
+     *       full auto-ranging. May require different command codes or
+     *       MCU-side relay switching via gpio_mux functions. */
+    usart2_send_cmd(0x00, FPGA_CMD_CH1_GAIN);    /* 0x1A: CH1 gain */
+    systick_delay_ms(10);
+    usart2_send_cmd(0x00, FPGA_CMD_CH1_OFFSET);  /* 0x1B: CH1 offset */
+    systick_delay_ms(10);
+    usart2_send_cmd(0x00, FPGA_CMD_CH2_GAIN);    /* 0x1C: CH2 gain */
+    systick_delay_ms(10);
+    usart2_send_cmd(0x00, FPGA_CMD_CH2_OFFSET);  /* 0x1D: CH2 offset */
+    systick_delay_ms(10);
+    usart2_send_cmd(0x00, FPGA_CMD_COUPLING);    /* 0x1E: coupling/BW */
     systick_delay_ms(50);
 
     fpga.initialized = true;

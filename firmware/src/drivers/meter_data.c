@@ -189,23 +189,72 @@ void meter_data_process_frame(const volatile uint8_t *frame, uint8_t submode)
     /* Validate header */
     if (frame[0] != 0x5A || frame[1] != 0xA5) return;
 
+    /* Save raw frame for debug display */
+    for (int i = 0; i < 12; i++) r->dbg_frame[i] = frame[i];
+
     /* Extract cross-byte nibble pairs */
     uint8_t b2 = frame[2], b3 = frame[3], b4 = frame[4];
     uint8_t b5 = frame[5], b6 = frame[6];
 
-    uint8_t digit0 = bcd_nibble_lookup((b2 & 0xF0) | (b3 & 0x0F));
-    uint8_t digit1 = bcd_nibble_lookup((b3 & 0xF0) | (b4 & 0x0F));
-    uint8_t digit2 = bcd_nibble_lookup((b4 & 0xF0) | (b5 & 0x0F));
-    uint8_t digit3 = bcd_nibble_lookup((b5 & 0xF0) | (b6 & 0x0F));
+    uint8_t nib0 = (b2 & 0xF0) | (b3 & 0x0F);
+    uint8_t nib1 = (b3 & 0xF0) | (b4 & 0x0F);
+    uint8_t nib2 = (b4 & 0xF0) | (b5 & 0x0F);
+    uint8_t nib3 = (b5 & 0xF0) | (b6 & 0x0F);
 
-    /* Parse status flags from byte [7] */
+    /* Save pre-lookup nibbles for debug */
+    r->dbg_nibbles[0] = nib0;
+    r->dbg_nibbles[1] = nib1;
+    r->dbg_nibbles[2] = nib2;
+    r->dbg_nibbles[3] = nib3;
+
+    uint8_t digit0 = bcd_nibble_lookup(nib0);
+    uint8_t digit1 = bcd_nibble_lookup(nib1);
+    uint8_t digit2 = bcd_nibble_lookup(nib2);
+    uint8_t digit3 = bcd_nibble_lookup(nib3);
+
+    /* Save post-lookup digit codes for debug */
+    r->dbg_raw_digits[0] = digit0;
+    r->dbg_raw_digits[1] = digit1;
+    r->dbg_raw_digits[2] = digit2;
+    r->dbg_raw_digits[3] = digit3;
+
+    /* Parse status flags from byte [7]
+     * Based on meter_mode_handler FSM at 0x080371B0 in stock firmware.
+     * The status byte encodes polarity, AC/DC, overload, and range info. */
     uint8_t status = frame[7];
     r->is_ac = (status & (1 << 2)) != 0;
     r->is_auto_range = (status & (1 << 3)) != 0;
     r->negative = (status & (1 << 0)) != 0;
 
     /* Parse flags from byte [6] */
-    r->is_hold = (frame[6] & (1 << 6)) != 0;
+    uint8_t flags = frame[6];
+    r->is_hold = (flags & (1 << 6)) != 0;
+
+    /* Range indicators from frame[6] bits 4-5 (stock firmware FSM case 4) */
+    r->range_indicator = (flags >> 4) & 0x03;
+
+    /* Determine probe_type from status bits (stock firmware FSM case 0).
+     * This drives the calibration coefficient selection in fpga_state_update.
+     *   status bit 1 set → probe_type = 1
+     *   status bit 0 set (alone) → probe_type = 2
+     *   status bit 3 set (auto-range) → probe_type = 2
+     *   otherwise → probe_type = 0
+     */
+    if (status & (1 << 1)) {
+        r->probe_type = 1;
+    } else if (status & (1 << 0)) {
+        r->probe_type = 2;
+    } else if (status & (1 << 3)) {
+        r->probe_type = 2;
+    } else {
+        r->probe_type = 0;
+    }
+
+    /* Compute auto-range command parameter for FPGA feedback.
+     * Stock firmware fpga_state_update (0x080028E0) sets ms[0xF2E]
+     * based on meter_mode and probe_type, then sends cmds 0x1B/0x1C/0x1E.
+     * For DCV mode 0: param = probe_type directly. */
+    r->range_cmd = r->probe_type;
 
     /* --- Special value detection --- */
 

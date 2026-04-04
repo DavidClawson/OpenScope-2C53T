@@ -852,9 +852,9 @@ void draw_meter_screen(void)
     /* ── DEBUG OVERLAY — FPGA meter pipeline status ── */
     {
         char dbg[40];
-        uint16_t dy = LCD_HEIGHT - 34;
+        uint16_t dy = LCD_HEIGHT - 48;
         uint16_t dbg_bg = 0x0000;  /* black */
-        lcd_fill_rect(0, dy, LCD_WIDTH, 16, dbg_bg);
+        lcd_fill_rect(0, dy, LCD_WIDTH, 30, dbg_bg);
 
         /* Show: D:data E:echo T:tx B:rxbytes | hex */
         int i = 0;
@@ -901,5 +901,48 @@ void draw_meter_screen(void)
         dbg[i] = '\0';
 
         font_draw_string(4, dy + 2, dbg, 0x07E0, dbg_bg, &font_small);
+
+        /* Second debug line: nibble pairs → digits, probe_type, raw_bcd */
+        {
+            const char *hex = "0123456789ABCDEF";
+            int j = 0;
+            char db2[48];
+
+            /* Nibble pairs (pre-lookup) */
+            db2[j++] = 'N';
+            for (int k = 0; k < 4; k++) {
+                uint8_t n = meter_reading.dbg_nibbles[k];
+                db2[j++] = hex[(n >> 4) & 0xF];
+                db2[j++] = hex[n & 0xF];
+                db2[j++] = ' ';
+            }
+
+            /* Decoded digits (post-lookup) */
+            db2[j++] = 'D';
+            for (int k = 0; k < 4; k++) {
+                uint8_t d = meter_reading.dbg_raw_digits[k];
+                db2[j++] = hex[(d >> 4) & 0xF];
+                db2[j++] = hex[d & 0xF];
+                db2[j++] = ' ';
+            }
+
+            /* Probe type and range */
+            db2[j++] = 'P';
+            db2[j++] = '0' + meter_reading.probe_type;
+            db2[j++] = ' ';
+            db2[j++] = 'R';
+            db2[j++] = '0' + meter_reading.range_indicator;
+            db2[j++] = ' ';
+
+            /* Raw BCD */
+            db2[j++] = '=';
+            { int bcd = meter_reading.raw_bcd; char tmp[6]; int t = 0;
+              if (bcd == 0) tmp[t++] = '0';
+              else { int v = bcd; while (v > 0 && t < 5) { tmp[t++] = '0' + (v % 10); v /= 10; } }
+              for (int q = t - 1; q >= 0; q--) db2[j++] = tmp[q]; }
+
+            db2[j] = '\0';
+            font_draw_string(4, dy + 16, db2, 0xFFE0, dbg_bg, &font_small);
+        }
     }
 }

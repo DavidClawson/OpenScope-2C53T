@@ -58,12 +58,22 @@ typedef struct {
     bool     is_auto_range;      /* Auto-range enabled */
     bool     is_hold;            /* Hold mode active */
 
+    /* Meter mode handler state (from frame[6]/[7] status bits) */
+    uint8_t  probe_type;         /* 0, 1, or 2 — from frame[7] bit pattern */
+    uint8_t  range_indicator;    /* from frame[6] bits 4-5: range band */
+    uint8_t  range_cmd;          /* Parameter for auto-range FPGA commands */
+
     /* Continuity buzzer state */
     bool     continuity_beep;    /* Should buzzer sound */
 
     /* Validity */
     bool     valid;              /* At least one successful parse */
     uint32_t update_count;       /* Incremented on each new reading */
+
+    /* Debug: raw frame bytes and pre-lookup nibble pairs */
+    uint8_t  dbg_frame[12];     /* Last raw USART RX frame */
+    uint8_t  dbg_nibbles[4];    /* Pre-lookup nibble pair values */
+    uint8_t  dbg_raw_digits[4]; /* Post-lookup digit codes (before masking) */
 
 } meter_reading_t;
 

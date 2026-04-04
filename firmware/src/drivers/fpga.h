@@ -60,6 +60,13 @@
 #define FPGA_CMD_METER_START  0x09   /* Start meter measurement */
 #define FPGA_CMD_METER_NOPROBE 0x0A  /* No probe detected */
 
+/* Channel gain/offset/coupling (sent at boot + runtime auto-range) */
+#define FPGA_CMD_CH1_GAIN     0x1A   /* CH1 gain setting */
+#define FPGA_CMD_CH1_OFFSET   0x1B   /* CH1 offset setting */
+#define FPGA_CMD_CH2_GAIN     0x1C   /* CH2 gain setting */
+#define FPGA_CMD_CH2_OFFSET   0x1D   /* CH2 offset setting */
+#define FPGA_CMD_COUPLING     0x1E   /* Coupling / bandwidth limit */
+
 /* ═══════════════════════════════════════════════════════════════════
  * SPI3 Acquisition Modes (trigger_byte - 1)
  * ═══════════════════════════════════════════════════════════════════ */

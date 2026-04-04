@@ -52,8 +52,8 @@ scope_main_fsm, siggen_configure, meter handler, and FreeRTOS timer callback.
 
 | Address | Size | Ghidra Name | Likely Purpose | Priority | Evidence |
 |---------|------|-------------|----------------|----------|----------|
-| 08037400 | ~1024 | FUN_08037400 | FPGA command RX task (infinite loop) | P0 | Calls `xQueueReceive` in infinite loop, writes to `DAT_2000000f`, accesses `uRam40000000 \| 0x80` |
-| 08037800 | 472 | FUN_08037800 | FPGA SPI3 data transfer + ADC sample processing | P0 | Writes `0x40010c10`/`0x40010c14` (GPIOB BOP/BCR for PB6 CS), SPI data register polling, float math, `VectorSignedToFloat`, calls `xQueueReceive` on `DAT_20002d78` |
+| 08037400 | ~60 | FUN_08037400 | **fpga_usart_tx_task** (dvom_TX FreeRTOS task) — infinite loop on USART TX queue, builds 10-byte TX frames, kicks TMR2 for transmission | P0 | Calls `xQueueReceive` on USART_TX_QUEUE (0x20002D74), writes TX buf at 0x20000005, sets TMR2_CTL0 bit 7, delays 10 ticks. **ANNOTATED in gap_functions_annotated.c** |
+| 08037800 | 472 | FUN_08037800 | **NOT a separate function** — inner loop of spi3_acquisition_task (FUN_08037454). Ghidra split due to unresolved computed branch. Contains per-mode SPI3 acquisition: cases 1-4 = normal/dual/roll/bulk with VFP calibration pipeline | P0 | Writes `0x40010c10`/`0x40010c14` (GPIOB BOP/BCR for PB6 CS), SPI data register polling, float math, `VectorSignedToFloat`, calls `xQueueReceive` on `DAT_20002d78`. **ANNOTATED in gap_functions_annotated.c** |
 
 ### Init-Only Functions (from FUN_08023A50 system_init, not in full_decompile.c)
 
@@ -77,7 +77,7 @@ boot sequence.
 | 08002c78 | ~200 | FUN_08002c78 | GPIOC probe detect / analog input init | P1 | Called 1x after reading GPIOC_ISTAT (0x40011008) bit 8 check, immediately before RCU_APB2EN enables |
 | 0800b908 | ~512 | FUN_0800b908 | Probe/meter mode init (FPGA command sequence) | P1 | Called 1x during init, 8 bytes after FUN_0800b900 (jump table), in probe detection gap region |
 | 08022d40 | ~200 | FUN_08022d40 | LCD window setup or display region config | P2 | Called 1x just before FUN_08022e14 (2.9KB UI helper), between UI/display gap functions |
-| 08039734 | ~200 | FUN_08039734 | Timer init helper (TIM5/TIM2 configuration) | P1 | Called 2x: first with r0=TIM5_CTL0 (0x40000C00), second with r0=TIM2_CTL0 (0x40000000). Configures timer prescaler/period from sp+0x40 |
+| 08039734 | 316 | FUN_08039734 | **Generic config writer** (`usart_tx_config_writer` in fpga_task_annotated.c). DUAL-PURPOSE: when called from system_init with timer base addresses (TIM5/TIM2), configures timers. When called from FPGA task with state pointer, writes USART TX config. Uses 7-type TBB switch. | P1 | Called 2x from init: r0=TIM5_CTL0 (0x40000C00), r0=TIM2_CTL0 (0x40000000). **Already annotated in fpga_task_annotated.c lines 1382-1493.** Discrepancy resolved in gap_functions_annotated.c. |
 
 ## FPGA Command Code Map (Extracted from Gap Functions)
 

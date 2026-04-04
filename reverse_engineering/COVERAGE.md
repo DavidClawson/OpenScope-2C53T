@@ -16,12 +16,17 @@
 | **Battery ADC** | 100% — ADC1 Channel 9, PB1 |
 | **Overall understanding** | **~99%** — buttons hardware-confirmed, USART frames flowing |
 
-### Analysis Files (as of 2026-04-01)
+### Analysis Files (as of 2026-04-03)
 
 | File | Contents |
 |------|----------|
 | `analysis_v120/function_names.md` | Complete 362-entry naming inventory |
 | `analysis_v120/gap_functions.md` | 17 gap functions catalogued by priority |
+| `analysis_v120/gap_functions_annotated.c` | All 17 gap functions annotated with clean C |
+| `analysis_v120/STATE_STRUCTURE.md` | **Complete ~4KB global state structure at 0x200000F8** — every known offset decoded |
+| `analysis_v120/scope_main_fsm_annotated.c` | **13.3KB scope FSM fully annotated** — 10 sections, 4 algorithms, all 27 callees documented |
+| `analysis_v120/core_subsystems_annotated.c` | **5 core subsystems** — timebase, waveform render, siggen/frontend, trigger, display task |
+| `analysis_v120/fpga_comms_deep_dive.c` | **FPGA comms deep dive** — mode init dispatcher, USART2 ISR, meter pipeline (3.7x root cause), all 9 SPI3 modes, trigger-to-display flow |
 | `analysis_v120/function_map_complete.txt` | 309-entry complete function map |
 | `analysis_v120/fpga_task_annotated.c` | Annotated FPGA task (10 sub-functions) |
 | `analysis_v120/FPGA_TASK_ANALYSIS.md` | FPGA protocol: SPI3 format, commands, state machine |
@@ -44,7 +49,7 @@ See `analysis_v120/gap_functions.md` for the complete 17-function inventory with
 | 0x08023A50 | `system_init` (master) | ~15.4 KB | Configures ALL peripherals, creates ALL FreeRTOS tasks |
 | 0x08037800 | `fpga_spi3_transfer` | 472B | Core SPI3 read path with PB6 CS, ADC sample processing |
 | 0x08037400 | `fpga_command_rx_task` | ~1 KB | Infinite loop on xQueueReceive for FPGA responses |
-| 0x0800ba06–bc98 | FPGA command builders (6) | ~300B | Revealed 16 new command codes (0x16-0x28) |
+| 0x0800b908 | Mode init dispatcher (10-case switch) | 512B | **CORRECTION**: Not 6 independent functions — single switch in FUN_0800b908. Boot-time only. Queues 1-byte cmd codes to usart_cmd_queue. |
 | 0x08039734 | `timer_init_helper` | ~200B | TIM2/TIM5 configuration (FPGA timing) |
 | 0x08001830 | `calibration_loader` | ~100B | Loads 301-byte per-channel cal data from SPI flash |
 
@@ -231,3 +236,27 @@ USART1 (PA9/PA10), USART2 (PA2/PA3), USART3 (PB10/PB11), SPI2 (PB12-15), USB (PA
   - USART data confirmed: FPGA sends measurement frames continuously
   - SPI3 still needs work: TMR3 USART exchange running but FPGA not yet entering active data mode
   - New analysis: `button_scan_algorithm.md` (exact scan pseudocode), `button_map_confirmed.md` (hardware-verified mapping)
+- **2026-04-03**: **Gap functions deep annotation session.**
+  - All 17 gap functions annotated in `analysis_v120/gap_functions_annotated.c`
+  - Key discoveries:
+    - FUN_08037400 (`fpga_usart_tx_task`): dvom_TX FreeRTOS task — dequeues FPGA commands, builds 10-byte USART frames with checksum, kicks TMR2 for transmission, 10ms inter-frame delay
+    - FUN_08037800: NOT a separate function — inner loop of spi3_acquisition_task with 4-mode switch (normal/dual/roll/bulk), per-sample VFP calibration, circular buffer trigger detection
+    - FUN_08039734 naming discrepancy RESOLVED: generic config writer used for BOTH timer init (from system_init) AND USART TX config (from FPGA task). Same TBB switch, different base pointer.
+    - FPGA command architecture mapped: 5 command builders → mode dispatcher → TX task → USART2
+    - Calibration loader: 301-byte per-channel tables, ADC offset XOR 0x80 as key
+  - Updated gap_functions.md with corrected descriptions and cross-references
+  - **Annotated code now covers ~10,000 lines** (was 8,000) across 3 files
+  - Created `STATE_STRUCTURE.md` — complete decode of ~4KB global state at 0x200000F8
+    - 80+ fields mapped across 15 sections
+    - Every field has: offset, absolute address, data type, ref count, accessor functions, purpose
+    - Key finds: +0x15 is packed (hi nibble=active_ch, lo nibble=num_ch), +0x30 is scope_sub_mode (37 refs, scope_fsm exclusive), +0x38 is menu_state (49 refs!), +0xF78-F88 = waveform viewport rect (40+ refs each)
+    - Cross-reference table: 10 most-important functions mapped to their state field access patterns
+  - Updated ARCHITECTURE.md with state structure section
+  - Created `scope_main_fsm_annotated.c` — full annotation of the 13.3KB scope FSM:
+    - 10 major sections identified (entry guard → exit epilog)
+    - 4 key algorithms documented: auto-range, auto-timebase, DC offset calibration, DAC trigger level
+    - acquisition_phase state machine fully mapped (phases 0→1→2→3→0x11, 0xFF)
+    - scope_sub_mode state machine decoded (0x30-0x39 = DC cal, bit packing: bits 0-3=range, 4-6=iter, 7=channel)
+    - DAC trigger level formula extracted (12-bit, from 3 calibration table selections)
+    - 20-entry auto-timebase period→index mapping table documented (1-3-5 pattern)
+    - All 27 callees categorized (sub-modes, hardware config, display, RTOS, FP math)

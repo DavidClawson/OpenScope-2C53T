@@ -562,6 +562,22 @@ Battery voltage is read via an ADC channel. The specific ADC channel has not yet
 
 ## 11. Memory Map
 
+### Global State Structure (0x200000F8, ~4 KB)
+
+The firmware's entire runtime state lives in a single ~4KB structure at RAM address 0x200000F8. Every scope, meter, and siggen function accesses it — 71+ functions total. Register `r9` or `sl` typically holds the base pointer.
+
+**See `analysis_v120/STATE_STRUCTURE.md` for the complete field-by-field decode.**
+
+Key regions within the structure:
+- **+0x00 – 0x3F**: Core config (channels, trigger, voltage range, timebase, mode)
+- **+0x50 – 0x230**: Cursor data array (120 entries, scope_mode_cursor exclusive)
+- **+0x260 – 0x33C**: Calibration tables (12 gain/offset pairs from SPI flash)
+- **+0x356 – 0x5AF**: Roll mode circular buffers (301 bytes × 2 channels)
+- **+0x5B0 – 0xDAF**: ADC sample buffers (1024 bytes × 2 channels)
+- **+0xDB0 – 0xE0F**: Acquisition runtime (counters, busy flags, roll pointers)
+- **+0xF2D – 0xF40**: Meter operating state (independent from scope)
+- **+0xF78 – 0xF88**: Waveform viewport rectangle (X, Y, W, H — 40+ refs each)
+
 ### Flash Layout (0x08000000, 734 KB total)
 
 ```
