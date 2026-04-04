@@ -111,7 +111,10 @@ typedef struct {
     /* Status */
     volatile bool    initialized;      /* Boot sequence complete */
     volatile bool    spi3_active;      /* SPI3 acquisition running */
-    volatile uint16_t frame_count;     /* Acquisition frame counter */
+    volatile uint16_t frame_count;     /* Data frame counter (0x5A 0xA5) */
+    volatile uint16_t echo_count;     /* Echo frame counter (0xAA 0x55) */
+    volatile uint16_t tx_count;       /* TX commands sent */
+    volatile uint16_t rx_byte_count;  /* Raw RX bytes received */
 
     /* Acquisition mode (set by mode switch, read by acq task) */
     volatile uint8_t acq_mode;         /* fpga_acq_mode_t */

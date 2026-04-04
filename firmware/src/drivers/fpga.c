@@ -187,6 +187,7 @@ void USART2_IRQHandler(void)
 
     /* RX: receive and assemble frame */
     if (USART2->sts & USART_RDBF_FLAG) {
+        fpga.rx_byte_count++;
         uint8_t byte = (uint8_t)USART2->dt;
 
         if (fpga.rx_index == 0) {
@@ -228,6 +229,7 @@ void USART2_IRQHandler(void)
             } else if (fpga.rx_buf[0] == FPGA_RX_ECHO_HDR_0 &&
                        fpga.rx_index >= 10) {
                 /* Complete echo frame (10 bytes): just acknowledge */
+                fpga.echo_count++;
                 fpga.rx_index = 0;
             }
         }
@@ -255,6 +257,7 @@ static void fpga_usart_tx_task(void *pv)
         uint8_t cmd_hi = (cmd_item >> 8) & 0xFF;
 
         /* Build TX frame — bytes [4]-[8] stay 0x00 (matches stock firmware) */
+        fpga.tx_count++;
         fpga.tx_index = 0;
         memset((void *)fpga.tx_frame, 0, FPGA_TX_FRAME_SIZE);
         fpga.tx_frame[2] = cmd_hi;
@@ -756,29 +759,23 @@ void fpga_init(void)
 
     systick_delay_ms(50);  /* Let relays settle */
 
-    /* Mode 3 (extended multimeter) command sequence */
-    usart2_send_cmd(0x00, 0x00);  /* Reset */
+    /* Meter activation: cmd_hi=0x05 routes to meter IC subsystem!
+     * Stock firmware TX queue items: 0x0508, 0x0509, 0x0507, 0x0514.
+     * This was discovered by tracing direct TX queue writes in the binary. */
+    usart2_send_cmd(0x05, 0x08);  /* Meter: configure */
     systick_delay_ms(10);
-    usart2_send_cmd(0x00, 0x08);  /* Meter: configure */
-    systick_delay_ms(10);
-    usart2_send_cmd(0x00, 0x09);  /* Meter: start measurement */
+    usart2_send_cmd(0x05, 0x09);  /* Meter: start measurement */
     systick_delay_ms(10);
 
     /* Probe detect: read PC7 */
     if (GPIOC->idt & (1U << 7)) {
-        usart2_send_cmd(0x00, 0x07);  /* Probe detected */
+        usart2_send_cmd(0x05, 0x07);  /* Probe detected */
     } else {
-        usart2_send_cmd(0x00, 0x0A);  /* No probe */
+        usart2_send_cmd(0x05, 0x0A);  /* No probe */
     }
     systick_delay_ms(10);
 
-    usart2_send_cmd(0x00, 0x16);  /* Meter range */
-    systick_delay_ms(10);
-    usart2_send_cmd(0x00, 0x17);  /* Meter range */
-    systick_delay_ms(10);
-    usart2_send_cmd(0x00, 0x18);  /* Meter range */
-    systick_delay_ms(10);
-    usart2_send_cmd(0x00, 0x19);  /* Meter range */
+    usart2_send_cmd(0x05, 0x14);  /* Meter variant setup */
     systick_delay_ms(50);
 
     fpga.initialized = true;
@@ -819,10 +816,14 @@ BaseType_t fpga_send_cmd(uint8_t cmd_high, uint8_t cmd_low)
 {
     if (!fpga.initialized) return pdFALSE;
 
-    /* Use polled send with 10ms delay (matches stock firmware's
-     * dvom_TX task which calls vTaskDelay(10) between frames). */
+    /* Use interrupt-driven TX via the dvom_TX task queue.
+     * Non-blocking send — don't stall the calling task. */
+    if (usart_tx_queue != NULL) {
+        uint16_t item = ((uint16_t)cmd_high << 8) | cmd_low;
+        return xQueueSend(usart_tx_queue, &item, 0);  /* non-blocking */
+    }
+    /* Fallback to polled if queue not created yet */
     usart2_send_cmd(cmd_high, cmd_low);
-    vTaskDelay(pdMS_TO_TICKS(10));
     return pdTRUE;
 }
 

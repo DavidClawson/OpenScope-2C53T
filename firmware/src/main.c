@@ -213,6 +213,8 @@ static void vDisplayTask(void *pvParameters)
             }
         } else if (current_mode == MODE_SIGNAL_GEN) {
             draw_siggen_screen(frame);
+        } else if (current_mode == MODE_MULTIMETER) {
+            draw_meter_screen();
         }
 
         frame++;

@@ -744,20 +744,9 @@ void draw_meter_screen(void)
 
     const meter_mode_info_t *m = &meter_modes[mode];
 
-    /* Request fresh meter data from FPGA.
-     * Stock firmware Mode 3 (extended multimeter) sequence with probe detect.
-     * PC7 HIGH = probe connected → send 0x07, else 0x0A. */
-    {
-        uint8_t probe_cmd = (GPIOC->idt & (1U << 7)) ? 0x07 : 0x0A;
-        fpga_send_cmd(0x00, 0x00);    /* Reset */
-        fpga_send_cmd(0x00, 0x08);    /* Meter: configure */
-        fpga_send_cmd(0x00, 0x09);    /* Meter: start measurement */
-        fpga_send_cmd(0x00, probe_cmd); /* Probe detect (0x07 or 0x0A) */
-        fpga_send_cmd(0x00, 0x16);    /* Meter range config */
-        fpga_send_cmd(0x00, 0x17);    /* Meter range config */
-        fpga_send_cmd(0x00, 0x18);    /* Meter range config */
-        fpga_send_cmd(0x00, 0x19);    /* Meter range config */
-    }
+    /* Request fresh meter data from FPGA via interrupt-driven TX.
+     * Polled TX was failing at runtime (F counter frozen after boot). */
+    fpga_send_cmd(0x00, 0x09);  /* Meter: start measurement */
 
     /* Use real FPGA meter data if available, otherwise fall back to demo */
     float current_val;
@@ -867,25 +856,39 @@ void draw_meter_screen(void)
         uint16_t dbg_bg = 0x0000;  /* black */
         lcd_fill_rect(0, dy, LCD_WIDTH, 16, dbg_bg);
 
-        /* Show: init? | frame_count | rx_valid | raw bytes[2..6] */
+        /* Show: D:data E:echo T:tx B:rxbytes | hex */
         int i = 0;
-        dbg[i++] = fpga.initialized ? 'I' : 'i';
+
+        /* Data frame count */
+        dbg[i++] = 'D';
+        { uint16_t fc = fpga.frame_count; char tmp[6]; int t = 0;
+          if (fc == 0) tmp[t++] = '0';
+          else while (fc > 0 && t < 5) { tmp[t++] = '0' + (fc % 10); fc /= 10; }
+          for (int j = t - 1; j >= 0; j--) dbg[i++] = tmp[j]; }
         dbg[i++] = ' ';
-        dbg[i++] = 'F';
-        dbg[i++] = ':';
-        /* frame count (up to 5 digits) */
-        {
-            uint16_t fc = fpga.frame_count;
-            char tmp[6]; int t = 0;
-            if (fc == 0) tmp[t++] = '0';
-            else while (fc > 0 && t < 5) { tmp[t++] = '0' + (fc % 10); fc /= 10; }
-            for (int j = t - 1; j >= 0; j--) dbg[i++] = tmp[j];
-        }
+
+        /* Echo frame count */
+        dbg[i++] = 'E';
+        { uint16_t fc = fpga.echo_count; char tmp[6]; int t = 0;
+          if (fc == 0) tmp[t++] = '0';
+          else while (fc > 0 && t < 5) { tmp[t++] = '0' + (fc % 10); fc /= 10; }
+          for (int j = t - 1; j >= 0; j--) dbg[i++] = tmp[j]; }
         dbg[i++] = ' ';
-        dbg[i++] = 'R';
-        dbg[i++] = ':';
-        dbg[i++] = fpga.rx_frame_valid ? 'Y' : 'N';
+
+        /* TX commands sent */
+        dbg[i++] = 'T';
+        { uint16_t fc = fpga.tx_count; char tmp[6]; int t = 0;
+          if (fc == 0) tmp[t++] = '0';
+          else while (fc > 0 && t < 5) { tmp[t++] = '0' + (fc % 10); fc /= 10; }
+          for (int j = t - 1; j >= 0; j--) dbg[i++] = tmp[j]; }
         dbg[i++] = ' ';
+
+        /* RX bytes total */
+        dbg[i++] = 'B';
+        { uint16_t fc = fpga.rx_byte_count; char tmp[6]; int t = 0;
+          if (fc == 0) tmp[t++] = '0';
+          else while (fc > 0 && t < 5) { tmp[t++] = '0' + (fc % 10); fc /= 10; }
+          for (int j = t - 1; j >= 0; j--) dbg[i++] = tmp[j]; }
 
         /* Raw rx_frame bytes [2..7] as hex (includes status byte) */
         for (int b = 2; b <= 7 && i < 38; b++) {
