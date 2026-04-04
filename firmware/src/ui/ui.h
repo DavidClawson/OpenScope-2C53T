@@ -86,6 +86,10 @@ extern volatile float         meter_rel_reference; /* Zero reference value */
 extern volatile bool          meter_hold_enabled;  /* Auto-hold mode */
 extern volatile bool          meter_hold_locked;   /* Hold captured a reading */
 extern volatile float         meter_hold_value;    /* Captured hold value */
+extern volatile uint8_t       fuse_type;           /* fuse_type_t: ATO, Mini, etc. */
+extern volatile uint8_t       fuse_rating_idx;     /* Index into fuse table for selected type */
+extern volatile uint8_t       fuse_view;           /* FUSE_VIEW_DETAIL/MULTI/SCAN */
+extern volatile float         fuse_scan_threshold_mv; /* Pass/fail threshold in mV */
 
 /* Scope feature toggles (defined in main.c) */
 extern volatile bool          math_enabled;
@@ -96,10 +100,17 @@ extern volatile bool          persist_enabled;
 #define SETTINGS_OSC_ITEM_COUNT 8
 #define SETTINGS_ABOUT_LINES    5
 #define METER_SUBMODE_COUNT     10
-#define METER_LAYOUT_COUNT      3
+#define METER_LAYOUT_COUNT      4
 #define METER_LAYOUT_FULL       0
 #define METER_LAYOUT_CHART      1
 #define METER_LAYOUT_STATS      2
+#define METER_LAYOUT_FUSE       3
+
+/* Fuse tester sub-views (cycled with SELECT in fuse layout) */
+#define FUSE_VIEW_DETAIL        0   /* Single fuse: current + V_drop + R + bar */
+#define FUSE_VIEW_MULTI         1   /* All ratings for selected type */
+#define FUSE_VIEW_SCAN          2   /* Pass/fail parasitic draw hunting */
+#define FUSE_VIEW_COUNT         3
 
 #ifdef FEATURE_FFT
 #include "fft.h"
@@ -134,6 +145,14 @@ void draw_meter_screen(void);
 void meter_reset_minmaxavg(void);
 void meter_toggle_relative(void);
 void meter_toggle_hold(void);
+
+/* fuse_ui.c */
+void draw_fuse_screen(float voltage_drop_mv);
+void fuse_cycle_view(void);
+void fuse_next_rating(void);
+void fuse_prev_rating(void);
+void fuse_next_type(void);
+void fuse_prev_type(void);
 const char *meter_submode_name(uint8_t submode);
 
 /* siggen_ui.c */

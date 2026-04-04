@@ -7,8 +7,10 @@
  * Boot flow:
  *   1. PC9 HIGH (power hold) — must be first or device shuts off
  *   2. Check RAM magic at 0x20037FE0 → enter USB HID IAP
- *   3. Check flash upgrade flag → jump to app at 0x08004000
- *   4. Otherwise → enter USB HID IAP (no valid app)
+ *   2.5 Check boot counter ≥ 3 → safe mode entry
+ *   3. Delayed POWER button check (800ms) → hold POWER at boot = force bootloader
+ *   4. Check flash upgrade flag → jump to app at 0x08004000
+ *   5. Otherwise → enter USB HID IAP (no valid app)
  *
  * In bootloader mode:
  *   - LCD shows "Waiting for firmware..." status screen
@@ -28,6 +30,15 @@
 /* RAM magic word: app writes this before NVIC_SystemReset() */
 #define DFU_RAM_MAGIC_ADDR   ((volatile uint32_t *)0x20037FE0)
 #define DFU_RAM_MAGIC_VALUE  0xDEADBEEF
+
+/* Boot validation: app must clear this counter within 5 seconds.
+ * If the app crashes, IWDG fires → system reset → RAM preserved.
+ * After BOOT_FAIL_MAX consecutive failures, enter bootloader.
+ * Power cycle resets RAM (counter = garbage), so we validate range. */
+#define BOOT_COUNTER_ADDR    ((volatile uint32_t *)0x20037FDC)
+#define BOOT_COUNTER_MAGIC   0xB007F000  /* Upper 16 bits = magic, lower 16 = count */
+#define BOOT_COUNTER_MASK    0xFFFF0000
+#define BOOT_FAIL_MAX        3
 
 /* LCD registers via EXMC */
 #define LCD_CMD   (*(volatile uint16_t *)0x6001FFFE)
@@ -217,6 +228,8 @@ static void lcd_draw_string_center(uint16_t cx, uint16_t y, const char *s,
 }
 
 /* Draw the bootloader status screen */
+static int safe_mode_entry = 0;  /* Set before calling this if boot failed 3x */
+
 static void lcd_draw_bootloader_screen(void)
 {
     /* Dark blue background */
@@ -225,14 +238,21 @@ static void lcd_draw_bootloader_screen(void)
     /* Title */
     lcd_draw_string_center(160, 30, "OPENSCOPE 2C53T", 0x07FF, 0x0008, 3);
 
-    /* Status */
-    lcd_draw_string_center(160, 90, "BOOTLOADER MODE", 0xFFFF, 0x0008, 2);
-
-    lcd_draw_string_center(160, 130, "Waiting for firmware...", 0x07E0, 0x0008, 2);
+    if (safe_mode_entry) {
+        /* Red warning for safe mode */
+        lcd_draw_string_center(160, 80, "SAFE MODE", 0xF800, 0x0008, 3);
+        lcd_draw_string_center(160, 120, "App crashed 3x", 0xFFE0, 0x0008, 2);
+        lcd_draw_string_center(160, 150, "Flash working firmware:", 0xBDF7, 0x0008, 1);
+    } else {
+        /* Normal bootloader entry */
+        lcd_draw_string_center(160, 90, "BOOTLOADER MODE", 0xFFFF, 0x0008, 2);
+        lcd_draw_string_center(160, 130, "Waiting for firmware...", 0x07E0, 0x0008, 2);
+    }
 
     /* Instructions */
     lcd_draw_string_center(160, 180, "Run: make flash", 0xBDF7, 0x0008, 1);
-    lcd_draw_string_center(160, 195, "Hold POWER to boot normally", 0xBDF7, 0x0008, 1);
+    lcd_draw_string_center(160, 195, "Hold POWER at boot = safe mode", 0xBDF7, 0x0008, 1);
+    lcd_draw_string_center(160, 210, "Hold POWER here  = boot to app", 0xBDF7, 0x0008, 1);
 }
 
 /* Called from iap_loop before NVIC_SystemReset after successful flash */
@@ -307,6 +327,16 @@ static void power_button_init(void)
 }
 
 /* ═══════════════════════════════════════════════════════════════════
+ * Busy-wait delay (no SysTick required — works before system_clock_config)
+ * ═══════════════════════════════════════════════════════════════════ */
+
+static void busy_delay_ms(uint32_t ms)
+{
+    /* ~8MHz HICK at startup, ~8000 cycles per ms (rough) */
+    for (volatile uint32_t i = 0; i < ms * 2000; i++) {}
+}
+
+/* ═══════════════════════════════════════════════════════════════════
  * Main
  * ═══════════════════════════════════════════════════════════════════ */
 
@@ -326,10 +356,45 @@ int main(void)
         enter_bootloader = 1;
     }
 
-    /* 2. Flash upgrade flag (valid app installed?) */
+    /* 2. Boot validation: check consecutive failure count.
+     *    RAM persists across IWDG/NVIC resets. If the app crashes
+     *    before calling boot_validate(), the counter accumulates.
+     *    After BOOT_FAIL_MAX failures, force bootloader entry. */
+    if (!enter_bootloader) {
+        uint32_t boot_val = *BOOT_COUNTER_ADDR;
+        if ((boot_val & BOOT_COUNTER_MASK) == BOOT_COUNTER_MAGIC) {
+            uint16_t fail_count = boot_val & 0xFFFF;
+            if (fail_count >= BOOT_FAIL_MAX) {
+                /* Too many consecutive failures — enter safe mode */
+                *BOOT_COUNTER_ADDR = 0;  /* Reset for next attempt */
+                safe_mode_entry = 1;
+                enter_bootloader = 1;
+            }
+        }
+    }
+
+    /* 2.5: Delayed POWER button check — hold POWER during boot to force
+     *      bootloader entry (safe mode without app menu). Wait 800ms for
+     *      user to release from normal power-on tap, then check if still held. */
+    if (!enter_bootloader) {
+        power_button_init();
+        busy_delay_ms(800);
+        if (power_button_pressed()) {
+            enter_bootloader = 1;
+        }
+    }
+
+    /* 3. Flash upgrade flag (valid app installed?) */
     if (!enter_bootloader) {
         iap_init();
         if (iap_get_upgrade_flag() == IAP_SUCCESS) {
+            /* Increment boot attempt counter before jumping */
+            uint32_t boot_val = *BOOT_COUNTER_ADDR;
+            uint16_t fail_count = 0;
+            if ((boot_val & BOOT_COUNTER_MASK) == BOOT_COUNTER_MAGIC) {
+                fail_count = boot_val & 0xFFFF;
+            }
+            *BOOT_COUNTER_ADDR = BOOT_COUNTER_MAGIC | (fail_count + 1);
             jump_to_app(FLASH_APP_ADDRESS);
         }
         enter_bootloader = 1;

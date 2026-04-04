@@ -84,12 +84,20 @@ static volatile bool data_ready = false;
  */
 static uint8_t spi3_xfer(uint8_t tx_byte)
 {
+    volatile uint32_t timeout;
+
     /* Wait for TX buffer empty */
-    while (!(FPGA_SPI->sts & SPI_I2S_TDBE_FLAG)) {}
+    timeout = 100000;
+    while (!(FPGA_SPI->sts & SPI_I2S_TDBE_FLAG)) {
+        if (--timeout == 0) return 0xFF;
+    }
     FPGA_SPI->dt = tx_byte;
 
     /* Wait for RX buffer not empty */
-    while (!(FPGA_SPI->sts & SPI_I2S_RDBF_FLAG)) {}
+    timeout = 100000;
+    while (!(FPGA_SPI->sts & SPI_I2S_RDBF_FLAG)) {
+        if (--timeout == 0) return 0xFF;
+    }
     return (uint8_t)FPGA_SPI->dt;
 }
 
@@ -99,17 +107,35 @@ static uint8_t spi3_xfer(uint8_t tx_byte)
 
 static void usart2_send_byte(uint8_t b)
 {
-    while (!(USART2->sts & USART_TDBE_FLAG)) {}
+    volatile uint32_t timeout = 100000;
+    while (!(USART2->sts & USART_TDBE_FLAG)) {
+        if (--timeout == 0) return;
+    }
     USART2->dt = b;
 }
 
 static void usart2_send_frame(const uint8_t *frame)
 {
+    /* Disable RX interrupt during TX to prevent half-duplex collision.
+     * Stock firmware uses TMR3-paced byte pumping which naturally
+     * interleaves TX/RX; our polled burst might collide. */
+    USART2->ctrl1 &= ~USART_CTRL1_RDBFIEN;
+
     for (int i = 0; i < FPGA_TX_FRAME_SIZE; i++) {
         usart2_send_byte(frame[i]);
+        /* Brief pause between bytes (~2ms, matching TMR3 500Hz cadence) */
+        for (volatile int d = 0; d < 500; d++) {}
     }
     /* Wait for transmit complete */
     while (!(USART2->sts & USART_TDC_FLAG)) {}
+
+    /* Drain any RX data that arrived during TX */
+    while (USART2->sts & USART_RDBF_FLAG) {
+        (void)USART2->dt;
+    }
+
+    /* Re-enable RX interrupt */
+    USART2->ctrl1 |= USART_CTRL1_RDBFIEN;
 }
 
 /*
@@ -122,7 +148,9 @@ static void usart2_send_cmd(uint8_t cmd_hi, uint8_t cmd_lo)
     uint8_t frame[FPGA_TX_FRAME_SIZE] = {0};
     frame[2] = cmd_hi;
     frame[3] = cmd_lo;
-    frame[9] = (cmd_hi + cmd_lo) & 0xFF;
+    /* Bytes [4]-[8] remain 0x00 — matches stock firmware exactly.
+     * Stock firmware never writes to these bytes (BSS-initialized). */
+    frame[9] = (cmd_lo + cmd_hi) & 0xFF;
     usart2_send_frame(frame);
 }
 
@@ -199,14 +227,15 @@ void USART2_IRQHandler(void)
                 memcpy((void *)fpga.rx_frame, (const void *)fpga.rx_buf,
                        FPGA_RX_FRAME_SIZE);
                 fpga.rx_frame_valid = true;
+                fpga.frame_count++;
                 fpga.rx_index = 0;
 
-                /* Signal meter processing task */
-                BaseType_t xHigherPriorityTaskWoken = pdFALSE;
-                if (meter_sem != NULL) {
+                /* Signal meter processing task (only if RTOS is running) */
+                if (meter_sem != NULL && xTaskGetSchedulerState() == taskSCHEDULER_RUNNING) {
+                    BaseType_t xHigherPriorityTaskWoken = pdFALSE;
                     xSemaphoreGiveFromISR(meter_sem, &xHigherPriorityTaskWoken);
+                    portYIELD_FROM_ISR(xHigherPriorityTaskWoken);
                 }
-                portYIELD_FROM_ISR(xHigherPriorityTaskWoken);
 
             } else if (fpga.rx_buf[0] == FPGA_RX_ECHO_HDR_0 &&
                        fpga.rx_index >= 10) {
@@ -237,12 +266,12 @@ static void fpga_usart_tx_task(void *pv)
         uint8_t cmd_lo = cmd_item & 0xFF;
         uint8_t cmd_hi = (cmd_item >> 8) & 0xFF;
 
-        /* Build TX frame */
+        /* Build TX frame — bytes [4]-[8] stay 0x00 (matches stock firmware) */
         fpga.tx_index = 0;
         memset((void *)fpga.tx_frame, 0, FPGA_TX_FRAME_SIZE);
         fpga.tx_frame[2] = cmd_hi;
         fpga.tx_frame[3] = cmd_lo;
-        fpga.tx_frame[9] = (cmd_hi + cmd_lo) & 0xFF;
+        fpga.tx_frame[9] = (cmd_lo + cmd_hi) & 0xFF;
 
         /* Enable TX interrupt — ISR pumps all 10 bytes */
         USART2->ctrl1 |= USART_CTRL1_TDBEIEN;
@@ -616,6 +645,13 @@ void fpga_init(void)
 
 QueueHandle_t fpga_create_tasks(void)
 {
+    /* Only create FPGA tasks if init succeeded.
+     * If fpga_init() failed or was skipped, the rest of the
+     * firmware still works — just no scope/meter data. */
+    if (!fpga.initialized) {
+        return NULL;
+    }
+
     /* Create queues */
     usart_tx_queue = xQueueCreate(10, sizeof(uint16_t));
     spi3_acq_queue = xQueueCreate(15, sizeof(uint8_t));
@@ -635,9 +671,12 @@ QueueHandle_t fpga_create_tasks(void)
 
 BaseType_t fpga_send_cmd(uint8_t cmd_high, uint8_t cmd_low)
 {
-    if (usart_tx_queue == NULL) return pdFALSE;
-    uint16_t item = ((uint16_t)cmd_high << 8) | cmd_low;
-    return xQueueSend(usart_tx_queue, &item, 0);
+    if (!fpga.initialized) return pdFALSE;
+
+    /* Use polled send (same as boot sequence) — more reliable than
+     * interrupt-driven TX task during early development. */
+    usart2_send_cmd(cmd_high, cmd_low);
+    return pdTRUE;
 }
 
 BaseType_t fpga_trigger_acquisition(uint8_t mode)

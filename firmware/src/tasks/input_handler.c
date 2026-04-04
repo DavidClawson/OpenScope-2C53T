@@ -23,6 +23,7 @@
 #include "component_test.h"
 #include "persistence.h"
 #include "shared_mem.h"
+#include "fpga.h"
 #include "at32f403a_407.h"
 #include "task.h"
 #include <stdio.h>
@@ -206,6 +207,18 @@ uint8_t input_handle_button(button_id_t button, QueueHandle_t dq)
                 settings_selected = 0;
                 settings_depth = 0;
             }
+            /* Tell the FPGA which mode we're entering.
+             * Stock firmware sets PC11 HIGH for meter mode (analog MUX)
+             * and clears it when leaving meter mode. */
+            if (current_mode == MODE_MULTIMETER) {
+                GPIOC->scr = (1U << 11);  /* PC11 HIGH — meter enable */
+                fpga_send_cmd(0x00, FPGA_CMD_METER_START);
+            } else {
+                GPIOC->clr = (1U << 11);  /* PC11 LOW — meter disable */
+                if (current_mode == MODE_OSCILLOSCOPE) {
+                    fpga_send_cmd(0x00, FPGA_CMD_SCOPE_CH);
+                }
+            }
         }
         send_cmd(dq, cmd);
         break;
@@ -365,7 +378,11 @@ uint8_t input_handle_button(button_id_t button, QueueHandle_t dq)
             siggen_cycle_waveform();
             send_cmd(dq, cmd);
         } else if (current_mode == MODE_MULTIMETER) {
-            meter_reset_minmaxavg();
+            if (meter_layout == METER_LAYOUT_FUSE) {
+                fuse_cycle_view();
+            } else {
+                meter_reset_minmaxavg();
+            }
             send_cmd(dq, cmd);
         } else if (current_mode == MODE_SETTINGS &&
                    settings_depth == 5) {
@@ -423,6 +440,11 @@ uint8_t input_handle_button(button_id_t button, QueueHandle_t dq)
                      active_channel + 1, vdiv_table[ch->vdiv_idx].label);
             popup_and_redraw(dq, pb);
         }
+        else if (current_mode == MODE_MULTIMETER &&
+                 meter_layout == METER_LAYOUT_FUSE) {
+            fuse_prev_rating();
+            send_cmd(dq, cmd);
+        }
         else if (current_mode == MODE_SIGNAL_GEN) {
             siggen_amplitude_up();
             send_cmd(dq, cmd);
@@ -467,6 +489,11 @@ uint8_t input_handle_button(button_id_t button, QueueHandle_t dq)
                      active_channel + 1, vdiv_table[ch->vdiv_idx].label);
             popup_and_redraw(dq, pb);
         }
+        else if (current_mode == MODE_MULTIMETER &&
+                 meter_layout == METER_LAYOUT_FUSE) {
+            fuse_next_rating();
+            send_cmd(dq, cmd);
+        }
         else if (current_mode == MODE_SIGNAL_GEN) {
             siggen_amplitude_down();
             send_cmd(dq, cmd);
@@ -498,13 +525,17 @@ uint8_t input_handle_button(button_id_t button, QueueHandle_t dq)
             cmd = DCMD_DRAW_SCOPE;
             send_cmd(dq, cmd);
         }
-        /* Meter: previous sub-mode */
+        /* Meter: fuse type or previous sub-mode */
         else if (current_mode == MODE_MULTIMETER) {
-            if (meter_submode == 0)
-                meter_submode = METER_SUBMODE_COUNT - 1;
-            else
-                meter_submode--;
-            meter_reset_minmaxavg();
+            if (meter_layout == METER_LAYOUT_FUSE) {
+                fuse_prev_type();
+            } else {
+                if (meter_submode == 0)
+                    meter_submode = METER_SUBMODE_COUNT - 1;
+                else
+                    meter_submode--;
+                meter_reset_minmaxavg();
+            }
             send_cmd(dq, cmd);
         }
 #ifdef FEATURE_FFT
@@ -549,10 +580,14 @@ uint8_t input_handle_button(button_id_t button, QueueHandle_t dq)
             cmd = DCMD_DRAW_SCOPE;
             send_cmd(dq, cmd);
         }
-        /* Meter: next sub-mode */
+        /* Meter: fuse type or next sub-mode */
         else if (current_mode == MODE_MULTIMETER) {
-            meter_submode = (meter_submode + 1) % METER_SUBMODE_COUNT;
-            meter_reset_minmaxavg();
+            if (meter_layout == METER_LAYOUT_FUSE) {
+                fuse_next_type();
+            } else {
+                meter_submode = (meter_submode + 1) % METER_SUBMODE_COUNT;
+                meter_reset_minmaxavg();
+            }
             send_cmd(dq, cmd);
         }
 #ifdef FEATURE_FFT

@@ -18,6 +18,7 @@
 #include "font.h"
 #include "theme.h"
 #include "meter_data.h"
+#include "fpga.h"
 #include <string.h>
 
 /* Layout constants */
@@ -347,7 +348,7 @@ static void draw_diode_indicator(uint16_t x, uint16_t y, const theme_t *th)
 
 /* Layout name for info display */
 static const char *layout_names[METER_LAYOUT_COUNT] = {
-    "Full", "Chart", "Stats"
+    "Full", "Chart", "Stats", "Fuse"
 };
 
 const char *meter_submode_name(uint8_t submode)
@@ -742,6 +743,18 @@ void draw_meter_screen(void)
 
     const meter_mode_info_t *m = &meter_modes[mode];
 
+    /* Request fresh meter data from FPGA.
+     * Stock firmware Mode 1 sequence: 0x00, 0x09, 0x07, 0x1A-0x1E
+     * All TX frame params [4]-[8] are zero (matches stock firmware). */
+    fpga_send_cmd(0x00, 0x00);  /* Reset */
+    fpga_send_cmd(0x00, 0x09);  /* Meter: start measurement */
+    fpga_send_cmd(0x00, 0x07);  /* Meter: probe detected */
+    fpga_send_cmd(0x00, 0x1A);  /* CH1 gain */
+    fpga_send_cmd(0x00, 0x1B);  /* CH1 offset */
+    fpga_send_cmd(0x00, 0x1C);  /* CH2 gain */
+    fpga_send_cmd(0x00, 0x1D);  /* CH2 offset */
+    fpga_send_cmd(0x00, 0x1E);  /* Coupling/BW limit */
+
     /* Use real FPGA meter data if available, otherwise fall back to demo */
     float current_val;
     const char *value_str;
@@ -833,8 +846,53 @@ void draw_meter_screen(void)
     case METER_LAYOUT_STATS:
         draw_meter_stats(m, mode, current_val, value_str);
         break;
+    case METER_LAYOUT_FUSE:
+        /* Fuse tester uses the mV reading as voltage drop.
+         * In demo mode, simulate a 1.5 mV drop (typical parasitic draw). */
+        draw_fuse_screen(current_val);
+        break;
     default:
         draw_meter_full(m, mode, current_val, value_str, bar_pct);
         break;
+    }
+
+    /* ── DEBUG OVERLAY — FPGA meter pipeline status ── */
+    {
+        char dbg[40];
+        uint16_t dy = LCD_HEIGHT - 34;
+        uint16_t dbg_bg = 0x0000;  /* black */
+        lcd_fill_rect(0, dy, LCD_WIDTH, 16, dbg_bg);
+
+        /* Show: init? | frame_count | rx_valid | raw bytes[2..6] */
+        int i = 0;
+        dbg[i++] = fpga.initialized ? 'I' : 'i';
+        dbg[i++] = ' ';
+        dbg[i++] = 'F';
+        dbg[i++] = ':';
+        /* frame count (up to 5 digits) */
+        {
+            uint16_t fc = fpga.frame_count;
+            char tmp[6]; int t = 0;
+            if (fc == 0) tmp[t++] = '0';
+            else while (fc > 0 && t < 5) { tmp[t++] = '0' + (fc % 10); fc /= 10; }
+            for (int j = t - 1; j >= 0; j--) dbg[i++] = tmp[j];
+        }
+        dbg[i++] = ' ';
+        dbg[i++] = 'R';
+        dbg[i++] = ':';
+        dbg[i++] = fpga.rx_frame_valid ? 'Y' : 'N';
+        dbg[i++] = ' ';
+
+        /* Raw rx_frame bytes [2..7] as hex (includes status byte) */
+        for (int b = 2; b <= 7 && i < 38; b++) {
+            uint8_t v = fpga.rx_frame[b];
+            const char *hex = "0123456789ABCDEF";
+            dbg[i++] = hex[(v >> 4) & 0xF];
+            dbg[i++] = hex[v & 0xF];
+            dbg[i++] = ' ';
+        }
+        dbg[i] = '\0';
+
+        font_draw_string(4, dy + 2, dbg, 0x07E0, dbg_bg, &font_small);
     }
 }

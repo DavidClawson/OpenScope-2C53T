@@ -16,6 +16,9 @@
 #define DFU_MAGIC_ADDR   ((volatile uint32_t *)0x20037FE0)
 #define DFU_MAGIC_VALUE  0xDEADBEEF
 
+/* Boot validation counter — must match bootloader's definition */
+#define BOOT_COUNTER_ADDR    ((volatile uint32_t *)0x20037FDC)
+
 void dfu_request_reboot(void) {
     *DFU_MAGIC_ADDR = DFU_MAGIC_VALUE;
     __DSB();
@@ -27,4 +30,13 @@ void dfu_check_magic(void) {
 }
 
 void dfu_check_boot_button(void) {
+}
+
+void boot_validate(void) {
+    /* Clear the boot attempt counter — tells the bootloader we started OK.
+     * This must be called after the app confirms LCD + core systems work.
+     * Writing 0 ensures the counter won't match BOOT_COUNTER_MAGIC on next
+     * reset, so it reads as a fresh boot (count=0). */
+    *BOOT_COUNTER_ADDR = 0;
+    __DSB();
 }

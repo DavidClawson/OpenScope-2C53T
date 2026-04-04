@@ -53,6 +53,12 @@ volatile bool          meter_hold_enabled = false;  /* Auto-hold mode */
 volatile bool          meter_hold_locked = false;   /* Hold has captured */
 volatile float         meter_hold_value = 0.0f;
 
+/* Fuse tester state */
+volatile uint8_t       fuse_type = 0;               /* FUSE_TYPE_ATO_ATC */
+volatile uint8_t       fuse_rating_idx = 4;          /* Default to 10A (index 4 in ATO table) */
+volatile uint8_t       fuse_view = 0;                /* FUSE_VIEW_DETAIL */
+volatile float         fuse_scan_threshold_mv = 0.5f; /* Pass/fail threshold */
+
 /* Scope feature toggles */
 volatile bool          math_enabled = false;
 volatile uint8_t       math_op = 0;        /* MATH_ADD */
@@ -455,6 +461,12 @@ int main(void)
     if (xHealthTimer != NULL) {
         xTimerStart(xHealthTimer, 0);
     }
+
+    /* Boot validation: tell the bootloader we started successfully.
+     * Clears the boot attempt counter so we won't enter safe mode on
+     * next reset. Must be called after LCD init and task creation —
+     * if we got here, the firmware is healthy. */
+    boot_validate();
 
     /* Initialize watchdog LAST — after all tasks and timers are running.
      * Once enabled, the FWDGT cannot be stopped (hardware limitation). */

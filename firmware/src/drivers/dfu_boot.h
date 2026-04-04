@@ -39,4 +39,15 @@ void dfu_check_boot_button(void);
  */
 void dfu_check_magic(void);
 
+/*
+ * Boot validation: signal to the bootloader that the app started successfully.
+ * Clears the boot attempt counter in RAM. Must be called once during init,
+ * after LCD is confirmed working and FreeRTOS is about to start.
+ *
+ * If the app crashes before calling this, the IWDG fires, the MCU resets,
+ * and the bootloader's counter increments. After 3 consecutive failures,
+ * the bootloader enters safe mode (USB flash) automatically.
+ */
+void boot_validate(void);
+
 #endif /* DFU_BOOT_H */
