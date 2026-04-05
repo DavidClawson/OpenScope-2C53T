@@ -89,6 +89,14 @@ static float meter_avg_accum;
 static uint32_t meter_avg_count;
 static uint8_t meter_stats_valid;
 
+/* FPGA frame debug overlay toggle. Default off in release builds.
+ * Flip to true from the debugger, a future settings entry, or a
+ * button handler to re-enable the three-line RX frame / BCD / f6
+ * history strip at the bottom of the meter screen. Used during
+ * the low-Ω band-interpretation reverse engineering session
+ * (2026-04-04) — see meter_data.c for the band override story. */
+static bool meter_debug_overlay = false;
+
 /* Strip chart ring buffer */
 static float chart_buf[CHART_SAMPLES];
 static uint16_t chart_head;         /* Next write position */
@@ -319,10 +327,28 @@ static void draw_main_reading(const meter_mode_info_t *m, const theme_t *th,
                                th->text_secondary, th->background, &font_small);
     }
 
-    /* Main reading */
+    /* Main reading
+     *
+     * font_xlarge only has the numeric subset 0-9, '.', '-', '+', ':', ' '
+     * plus unit letters V/A/k/m/M/H/z/W/F/O. Special state strings like
+     * "OL", "CONT", "ERR", "---" contain letters (L, N, T, R, -) that
+     * aren't in the xlarge font — they silently drop and the user sees
+     * a truncated display (e.g. "OL" → "O", which looks like a "0").
+     * Fall back to font_large for non-numeric state strings. */
+    bool is_numeric = true;
+    for (const char *p = value_str; *p; p++) {
+        char c = *p;
+        if (!((c >= '0' && c <= '9') || c == '.' || c == '-' || c == '+' || c == ' ')) {
+            is_numeric = false;
+            break;
+        }
+    }
+    const font_t *main_font =
+        compact        ? &font_large :
+        is_numeric     ? &font_xlarge :
+                         &font_large;
     font_draw_string_right(240, y, value_str,
-                           th->text_primary, th->background,
-                           compact ? &font_large : &font_xlarge);
+                           th->text_primary, th->background, main_font);
 
     /* Unit label — use the live suffix decoded by meter_data from the
      * current USART frame. Falls back to the static mode table string
@@ -763,9 +789,13 @@ void draw_meter_screen(void)
 
     const meter_mode_info_t *m = &meter_modes[mode];
 
-    /* Request fresh meter data from FPGA via interrupt-driven TX.
-     * Polled TX was failing at runtime (F counter frozen after boot). */
-    fpga_send_cmd(0x00, 0x09);  /* Meter: start measurement */
+    /* Meter IC polling is now handled by fpga_meter_poll_task at ~4 Hz.
+     * Previously, this function called fpga_send_cmd(0x00, 0x09) on every
+     * redraw to keep FPGA data frames flowing, which coupled the data
+     * acquisition cadence to the UI refresh loop — stop redrawing and the
+     * FPGA went silent within ~5 frames. The dedicated poll task decouples
+     * the two. See fpga.c:fpga_meter_poll_task and
+     * analysis_v120/usart2_isr_state_machine.md. */
 
     /* Use real FPGA meter data if available, otherwise fall back to demo */
     float current_val;
@@ -869,54 +899,43 @@ void draw_meter_screen(void)
         break;
     }
 
-    /* ── DEBUG OVERLAY — FPGA meter pipeline status ── */
-    {
-        char dbg[40];
+    /* ── DEBUG OVERLAY — FPGA meter frame capture ──
+     *
+     * Used during reverse engineering to correlate the 12-byte RX
+     * frame + parsed BCD + f6 history with known-input readings.
+     * This is how we found the upper-nibble band-interpretation bug
+     * (frame[6] = 0x0A/0x0B/0x0D/... all meant low-Ω).
+     *
+     * Disabled by default in release builds — the block is still
+     * compiled in so it can be re-enabled from the debugger or a
+     * future settings toggle without a rebuild. To enable, set
+     * meter_debug_overlay = true via a breakpoint, a settings entry,
+     * or a button handler.
+     */
+    if (meter_debug_overlay) {
+        char dbg[64];
+        const char *hex = "0123456789ABCDEF";
         uint16_t dy = LCD_HEIGHT - 48;
         uint16_t dbg_bg = 0x0000;  /* black */
         lcd_fill_rect(0, dy, LCD_WIDTH, 30, dbg_bg);
 
-        /* Show: D:data E:echo T:tx B:rxbytes | hex */
         int i = 0;
 
-        /* Data frame count */
-        dbg[i++] = 'D';
+        /* Short frame counter prefix so we can see updates */
+        dbg[i++] = 'F';
         { uint16_t fc = fpga.frame_count; char tmp[6]; int t = 0;
           if (fc == 0) tmp[t++] = '0';
           else while (fc > 0 && t < 5) { tmp[t++] = '0' + (fc % 10); fc /= 10; }
           for (int j = t - 1; j >= 0; j--) dbg[i++] = tmp[j]; }
         dbg[i++] = ' ';
 
-        /* Echo frame count */
-        dbg[i++] = 'E';
-        { uint16_t fc = fpga.echo_count; char tmp[6]; int t = 0;
-          if (fc == 0) tmp[t++] = '0';
-          else while (fc > 0 && t < 5) { tmp[t++] = '0' + (fc % 10); fc /= 10; }
-          for (int j = t - 1; j >= 0; j--) dbg[i++] = tmp[j]; }
-        dbg[i++] = ' ';
-
-        /* TX commands sent */
-        dbg[i++] = 'T';
-        { uint16_t fc = fpga.tx_count; char tmp[6]; int t = 0;
-          if (fc == 0) tmp[t++] = '0';
-          else while (fc > 0 && t < 5) { tmp[t++] = '0' + (fc % 10); fc /= 10; }
-          for (int j = t - 1; j >= 0; j--) dbg[i++] = tmp[j]; }
-        dbg[i++] = ' ';
-
-        /* RX bytes total */
-        dbg[i++] = 'B';
-        { uint16_t fc = fpga.rx_byte_count; char tmp[6]; int t = 0;
-          if (fc == 0) tmp[t++] = '0';
-          else while (fc > 0 && t < 5) { tmp[t++] = '0' + (fc % 10); fc /= 10; }
-          for (int j = t - 1; j >= 0; j--) dbg[i++] = tmp[j]; }
-
-        /* Raw rx_frame bytes [2..7] as hex (includes status byte) */
-        for (int b = 2; b <= 7 && i < 38; b++) {
+        /* All 12 frame bytes — fits in 64-char buffer with room to spare.
+         * 12 bytes × 3 chars ("HH ") = 36 chars, plus ~8 prefix = ~44 total. */
+        for (int b = 0; b < 12; b++) {
             uint8_t v = fpga.rx_frame[b];
-            const char *hex = "0123456789ABCDEF";
             dbg[i++] = hex[(v >> 4) & 0xF];
             dbg[i++] = hex[v & 0xF];
-            dbg[i++] = ' ';
+            if (b < 11) dbg[i++] = ' ';
         }
         dbg[i] = '\0';
 
@@ -961,8 +980,47 @@ void draw_meter_screen(void)
               else { int v = bcd; while (v > 0 && t < 5) { tmp[t++] = '0' + (v % 10); v /= 10; } }
               for (int q = t - 1; q >= 0; q--) db2[j++] = tmp[q]; }
 
+            /* Decoder state — what dp and unit the parser chose for
+             * the most recent frame. If this says "dp1 kOhm" but the
+             * main reading still shows "32.30", we know the UI path
+             * is ignoring it. If this says "dp2 Ohm", the decoder
+             * didn't fire at all. */
+            db2[j++] = ' ';
+            db2[j++] = 'd';
+            db2[j++] = 'p';
+            db2[j++] = '0' + (meter_reading.decimal_pos & 7);
+            db2[j++] = ' ';
+            const char *us = meter_reading.unit_suffix;
+            if (us != NULL) {
+                while (*us && j < (int)sizeof(db2) - 1) db2[j++] = *us++;
+            }
+
             db2[j] = '\0';
             font_draw_string(4, dy + 16, db2, 0xFFE0, dbg_bg, &font_small);
+        }
+
+        /* Third line: distinct frame[6] values seen since boot.
+         * Reveals how many different frame types the FPGA is sending
+         * per measurement — without this we can't distinguish real
+         * range frames from coincidentally-matching spurious frames. */
+        {
+            const char *hex2 = "0123456789ABCDEF";
+            char db3[64];
+            int k = 0;
+            db3[k++] = 'f';
+            db3[k++] = '6';
+            db3[k++] = ':';
+            db3[k++] = ' ';
+            for (int idx = 0; idx < meter_f6_history_count &&
+                              k < (int)sizeof(db3) - 4; idx++) {
+                uint8_t v = meter_f6_history[idx];
+                db3[k++] = hex2[(v >> 4) & 0xF];
+                db3[k++] = hex2[v & 0xF];
+                db3[k++] = ' ';
+            }
+            db3[k] = '\0';
+            /* Render in cyan, below the yellow line. */
+            font_draw_string(4, dy + 30, db3, 0x07FF, dbg_bg, &font_small);
         }
     }
 }

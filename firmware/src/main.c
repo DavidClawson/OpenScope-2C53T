@@ -215,7 +215,23 @@ static void vDisplayTask(void *pvParameters)
         } else if (current_mode == MODE_SIGNAL_GEN) {
             draw_siggen_screen(frame);
         } else if (current_mode == MODE_MULTIMETER) {
-            draw_meter_screen();
+            /* Only redraw the meter when new FPGA data has arrived, or
+             * every second as a safety tick for time-based UI elements
+             * (HOLD indicator animations, REL clock, etc.). The display
+             * loop runs at 20 Hz but the FPGA meter poll task only
+             * produces data at ~4 Hz — drawing every loop iteration
+             * caused visible flicker from the content-area clear +
+             * redraw sequence. Settings doesn't flicker because it has
+             * no unconditional redraw branch; meter now matches that
+             * pattern, gated on the meter_reading.update_count field. */
+            static uint32_t last_meter_update = 0xFFFFFFFFu;
+            static uint32_t last_meter_frame  = 0;
+            uint32_t uc = meter_reading.update_count;
+            if (uc != last_meter_update || (frame - last_meter_frame) >= 20) {
+                draw_meter_screen();
+                last_meter_update = uc;
+                last_meter_frame  = frame;
+            }
         }
 
         frame++;

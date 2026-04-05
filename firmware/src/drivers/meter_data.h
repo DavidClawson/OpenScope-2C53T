@@ -97,6 +97,14 @@ typedef struct {
 /* Global meter reading (defined in meter_data.c) */
 extern meter_reading_t meter_reading;
 
+/* Debug: distinct values of frame[6] seen since boot.
+ * Up to 8 unique byte values stored; new values push out the oldest.
+ * Used by the Phase 1 meter UI debug strip to visualize how many
+ * different frame types the FPGA is sending per measurement. */
+#define METER_F6_HISTORY_LEN 8
+extern uint8_t meter_f6_history[METER_F6_HISTORY_LEN];
+extern uint8_t meter_f6_history_count;
+
 /* ═══════════════════════════════════════════════════════════════════
  * API
  * ═══════════════════════════════════════════════════════════════════ */
