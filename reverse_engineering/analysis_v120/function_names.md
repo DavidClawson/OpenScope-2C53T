@@ -2,10 +2,20 @@
 
 ## Statistics
 - Total functions: 362
-- Named (HIGH confidence): 138
-- Named (MEDIUM confidence): 182
+- Named (HIGH confidence): 142 (138 + 4 corrected from MEDIUM in 2026-04-04 RE session)
+- Named (MEDIUM confidence): 179
 - Named (LOW confidence): 42
 - Ghidra false positives (halt_baddata): 61 (all in data region 0x0803f3b9+)
+
+## Corrections from the 2026-04-04 five-agent RE session
+
+| Address | Old name | Corrected name | Why |
+|---------|----------|----------------|-----|
+| 0x08030524 | `waveform_render_ch1` | `jpeg_huffman_decode_1` | Contains SOI markers, DHT tables, IDCT butterflies — it's a JPEG decoder, not a waveform renderer |
+| 0x08031f20 | `waveform_render_ch2` | `jpeg_huffman_decode_2` | Sibling JPEG decoder |
+| 0x0801f6f8 | `scope_mode_cursor` | `scope_measurement_engine` | Computes Vpp/Vrms/freq/period with 64-bit VFP accumulators — cursor is a minor output |
+| 0x0802f3e4 | `fmc_program_flash` | `option_bytes_write_optkeyr` | Writes FMC_OPTKEYR (option bytes), not FMC_KEYR (main flash). Stock firmware has no IAP path. |
+| 0x0802f5ec | `fmc_erase_page` | `option_bytes_erase` | Companion option-byte eraser, not a main-flash page eraser |
 
 ## Subsystem Summary
 
@@ -121,7 +131,7 @@
 | 0801e1e4 | 2232 | `scope_mode_trigger` | MEDIUM | Scope trigger configuration: calls USB related function (08028b80), display refresh; manages trigger level/slope/mode | 1 | 4 |
 | 0801eaac | 1288 | `scope_mode_measure` | MEDIUM | Scope measurement display: calls memset_zero, display_update; shows Vpp, Freq, etc. | 1 | 2 |
 | 0801efc0 | 1794 | `scope_mode_math` | MEDIUM | Scope math mode (CH1+CH2, CH1-CH2, FFT): calls FP operations, display routines | 1 | 9 |
-| 0801f6f8 | 4616 | `scope_mode_cursor` | MEDIUM | Scope cursor measurement: complex FP math for delta-V, delta-T calculations; calls display routines and FP library | 1 | 10 |
+| 0801f6f8 | 4616 | `scope_measurement_engine` | **HIGH (corrected 2026-04-04)** | NOT just a cursor drawer — this is a full measurement engine computing Vpp, Vmax, Vmin, Vavg, Vrms, zero-crossing frequency, 10-sample ring-buffer median period, and 64-bit VFP accumulators for auto-timebase. Cursor Δt/ΔV is only one of many outputs. See `scope_render_monsters_annotated.c`. | 1 | 10 |
 | 08020930 | 4558 | `scope_mode_display_settings` | MEDIUM | Scope display settings: persistence, intensity, grid style; large switch with display calls | 1 | 2 |
 | 08021b40 | 516 | `scope_draw_trigger_overlay` | MEDIUM | Draws trigger level overlay on scope screen; calls scope_draw_trigger_marker | 0 | 1 |
 | 08021de4 | 1492 | `scope_draw_channel_info` | MEDIUM | Draws channel info text (V/div, coupling, bandwidth); called by scope FSM and timebase handler | 2 | 0 |
@@ -177,15 +187,15 @@
 | 0802f2ac | 152 | `spi2_page_write_loop` | HIGH | Page-aligned write loop: splits writes at 256-byte page boundaries | 1 | 1 |
 | 0802f344 | 38 | `spi2_write_enable` | HIGH | SPI flash write enable (cmd 0x06): assert CS, send 0x06, deassert CS; PB12 for chip select | 2 | 1 |
 | 0802f36c | 118 | `spi2_page_program` | HIGH | SPI flash page program (cmd 0x02): write-enable, assert CS, send address + data bytes, deassert, wait-busy | 1 | 3 |
-| 0802f3e4 | 518 | `fmc_program_flash` | HIGH | Flash memory controller operations: writes FMC_KEY (0x40022008) = 0xCDEF89AB unlock sequence, checks FMC_STAT busy, programs internal flash; accesses 0x40022000+ | 1 | 0 |
-| 0802f5ec | 236 | `fmc_erase_page` | MEDIUM | FMC page erase: sets erase bit, writes address, starts operation, waits for completion | 1 | 0 |
+| 0802f3e4 | 518 | `option_bytes_write_optkeyr` | **HIGH (corrected 2026-04-04)** | NOT a flash programming function — writes 0xCDEF89AB to FMC_OPTKEYR (0x40022008), not FMC_KEYR (0x40022004). This is the option-byte unlock key (single key, not the two-key sequence used for main flash programming). Used to set EOPB0=0xFE for 224KB SRAM mode at factory provisioning. Stock firmware has no IAP path — the real flash-programming primitives only exist in our custom bootloader. See `stock_iap_bootloader.md`. | 1 | 0 |
+| 0802f5ec | 236 | `option_bytes_erase` | **MEDIUM (corrected 2026-04-04)** | Companion to the option-byte writer — erases the option byte region, not regular flash pages. Accesses the OPTWE path, not the FPEG/ERASE path for main flash. See `stock_iap_bootloader.md`. | 1 | 0 |
 | 0802f6d8 | 1196 | `spi_flash_fat_update` | MEDIUM | Updates FAT table entries on SPI flash: reads FAT sector, modifies chain, writes back | 5 | 4 |
 | 0802ff18 | 994 | `spi_flash_cluster_io` | MEDIUM | Cluster-level I/O: reads/writes data blocks at cluster addresses, handles cluster chain following | 11 | 2 |
 | 080302fc | 482 | `gpio_pin_config` | MEDIUM | Generic GPIO pin configuration: writes CRL/CRH registers based on pin mode/speed parameters; address 0x40010C00 (GPIOB) passed as param | 1 | 0 |
 | 080304e0 | 14 | `gpio_read_input` | MEDIUM | Reads GPIO input data register (IDR) for specified port | 1 | 0 |
 | 080304f0 | 50 | `fs_close_file` | MEDIUM | Closes filesystem handle: flushes writes (spi_flash_read_dir_entry + spi_flash_write_sectors) | 0 | 2 |
-| 08030524 | 6632 | `waveform_render_ch1` | MEDIUM | Channel 1 waveform rendering: 6.6KB, processes sample buffer, draws lines between points; calls memset_zero | 1 | 1 |
-| 08031f20 | 4110 | `waveform_render_ch2` | MEDIUM | Channel 2 waveform rendering: similar structure to ch1; 4.1KB | 1 | 1 |
+| 08030524 | 6632 | `jpeg_huffman_decode_1` | **HIGH (corrected 2026-04-04)** | NOT a waveform renderer — it's a JFIF/JPEG Huffman decoder. Contains SOI markers, DHT tables, and IDCT butterfly constants (0x16A0, 0x1D90, 0x29CF). Decodes UI assets (boot logo, icons) from SPI flash. Real waveform draw is FUN_08019470 + FUN_08018DA0 + FUN_08015F50. See `scope_render_monsters_annotated.c`. | 1 | 1 |
+| 08031f20 | 4110 | `jpeg_huffman_decode_2` | **HIGH (corrected 2026-04-04)** | Sibling JPEG decoder to FUN_08030524. Same module, different asset entry point. | 1 | 1 |
 | 08032f6c | 520 | `measurement_dispatch` | HIGH | Measurement dispatch hub: called by 11 mode handlers, calls memset_zero, display_update, waveform render, flash cache read; coordinates rendering pipeline | 11 | 6 |
 | 08033174 | 196 | `display_color_fill` | LOW | Fills display buffer region with solid color; no callers (indirect) | 0 | 0 |
 | 0803340c | 222 | `font_get_glyph_index` | MEDIUM | Looks up glyph index in font table; called by display_render_engine | 1 | 0 |
