@@ -216,9 +216,37 @@ $(BUILD_DIR)/$(TARGET).elf: $(OBJECTS) Makefile $(LDSCRIPT)
 	$(CC) $(OBJECTS) $(LDFLAGS) -o $@
 	$(SZ) $@
 
-$(BUILD_DIR)/$(TARGET).bin: $(BUILD_DIR)/$(TARGET).elf
+$(BUILD_DIR)/$(TARGET).bin: $(BUILD_DIR)/$(TARGET).elf $(BUILD_DIR)/option_bytes48.bin
 	$(CP) -O binary $< $@
 	@echo "Built: $@ ($$(wc -c < $@ | tr -d ' ') bytes)"
+
+# One-shot option-byte blob for first-time DFU setup.
+# Writes the AT32F403A User System Data region at 0x1FFFF800 so EOPB0 = 0xFE,
+# enabling 224KB SRAM mode (default is 96KB, which is too small for our heap).
+#
+# The file MUST be exactly 48 bytes — the AT32 ROM DFU descriptor reports the
+# USD region as "01*048 e" (one 48-byte sector) and rejects any shorter write
+# with "address out of range". The "48" in the filename is literally the byte
+# count, not a version suffix.
+#
+# Layout (byte + 1's complement pairs, per AT32F403A RM + usd_type struct):
+#   0x00 FAP      = A5 / 5A   (unlocked — required to write other bytes)
+#   0x02 SSB      = FF / 00   (watchdog/standby/stop defaults)
+#   0x04 DATA0    = FF / 00
+#   0x06 DATA1    = FF / 00
+#   0x08 EPP0     = FF / 00   (no write-protected sectors)
+#   0x0A EPP1     = FF / 00
+#   0x0C EPP2     = FF / 00
+#   0x0E EPP3     = FF / 00
+#   0x10 EOPB0    = FE / 01   ← 224KB SRAM mode (the only non-default value)
+#   0x12 reserved = FF / 00
+#   0x14 DATA2..DATA7 = FF / 00  (×6 pairs)
+#   0x20 ext_flash_key[8] = 16 × FF  (external flash encryption keys, unused)
+#
+# Flashed via: dfu-util -a 1 -d 2e3c:df11 -s 0x1FFFF800 -D build/option_bytes48.bin
+$(BUILD_DIR)/option_bytes48.bin: Makefile | $(BUILD_DIR)
+	@printf '\xA5\x5A\xFF\x00\xFF\x00\xFF\x00\xFF\x00\xFF\x00\xFF\x00\xFF\x00\xFE\x01\xFF\x00\xFF\x00\xFF\x00\xFF\x00\xFF\x00\xFF\x00\xFF\x00\xFF\xFF\xFF\xFF\xFF\xFF\xFF\xFF\xFF\xFF\xFF\xFF\xFF\xFF\xFF\xFF' > $@
+	@echo "Built: $@ ($$(wc -c < $@ | tr -d ' ') bytes) — EOPB0=0xFE, 224KB SRAM"
 
 $(BUILD_DIR)/$(TARGET).hex: $(BUILD_DIR)/$(TARGET).elf
 	$(CP) -O ihex $< $@
