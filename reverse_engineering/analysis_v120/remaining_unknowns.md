@@ -325,16 +325,47 @@ detection pin.
 | **0x29** | Mode 6 (duty cycle) | Duty cycle measurement mode (standalone) |
 | **0x2C** | Mode 8 (continuity) | Continuity/diode test mode |
 
-### USART TX frame format (10 bytes)
+### USART TX frame format (10 bytes) -- CORRECTED 2026-04-04
 
-From `fpga_task_annotated.c` usart_tx_frame_builder:
+Full trace of `dvom_tx_task` @ 0x080373F4 (decomp line 30822) confirms
+the 10-byte TX buffer lives at `0x20000005..0x2000000E`, indexed by
+`usart2_tx_byte_index` and pumped out by the USART2 ISR at line 13703.
+
+**Only three bytes are ever written. The other seven are permanently
+zero** (BSS-initialized, never touched in any code path I can find):
+
 ```
-[0],[1] = Header bytes (0x00 from BSS)
-[2]     = Command high byte (from queue item >> 8)
-[3]     = Command low byte (queue item & 0xFF)
-[4]-[8] = Parameters (set by callers, context-dependent)
-[9]     = Checksum = (cmd_high + cmd_low) & 0xFF
+[0] = 0x00          (BSS, never written — address 0x20000005)
+[1] = 0x00          (BSS, never written — address 0x20000006)
+[2] = cmd_hi        (cRam20000007 = auStack_2[1], queue item high byte)
+[3] = cmd_lo        (DAT_20000008  = auStack_2[0], queue item low byte)
+[4] = 0x00          (BSS, never written — address 0x20000009)
+[5] = 0x00          (BSS, never written — address 0x2000000A)
+[6] = 0x00          (BSS, never written — address 0x2000000B)
+[7] = 0x00          (BSS, never written — address 0x2000000C)
+[8] = 0x00          (BSS, never written — address 0x2000000D)
+[9] = cmd_hi+cmd_lo (cRam2000000e, checksum — address 0x2000000E)
 ```
+
+**The prior "[4]-[8] = Parameters, context-dependent" hypothesis was
+wrong.** A grep of the full decomp for any write to addresses
+`0x20000009..0x2000000D` (direct, symbolic, or via the
+`(&usart2_tx_buffer)[N]` pattern) returns zero hits.
+
+**Implications for the FPGA protocol:**
+- Every TX command carries exactly 2 bytes of meaningful payload
+  (cmd_hi, cmd_lo). No per-command parameter bytes.
+- The 5 zero bytes between cmd and checksum are pure timing/sync
+  padding for the FPGA's USART receiver.
+- Multi-byte protocols like the 411-byte boot cal (cmds 0x3B/0x3A)
+  must be a **stream of separate single-command frames**, not a
+  single frame with embedded params. 411 bytes = 411 frames if
+  each frame carries 1 byte of cal data — this is consistent with
+  the boot-time SysTick delays described in `FPGA_BOOT_SEQUENCE.md`.
+
+**Our firmware (`firmware/src/drivers/fpga.c:260-265`) already
+matches stock exactly:** it writes `[2]=cmd_hi`, `[3]=cmd_lo`,
+`[9]=cmd_hi+cmd_lo`, and clears the rest via `memset`.
 
 ### SPI3 data queue trigger bytes
 

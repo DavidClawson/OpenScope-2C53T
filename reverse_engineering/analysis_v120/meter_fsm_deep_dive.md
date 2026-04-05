@@ -8,7 +8,7 @@
 
 ## Summary
 
-1. **rx_integrity_marker is frame[7] (status byte)**, not a hardware register or checksum. It carries 4 key bits that control decimal position and variant state across all submodes.
+1. **rx_integrity_marker is frame[7] (status byte)**, not a hardware register or checksum. It carries 4 key bits that control decimal position and variant state across all submodes. **[CORRECTION 2026-04-04]** Q1 below treats `rx_integrity_marker` (RAM 0x20004E18) as a single semantic value. In reality the USART2 ISR shares one RX buffer between two frame types (12-byte data with header 0x5A 0xA5, and 10-byte echo with header 0xAA 0x55), so byte index 7 means different things in each context. The `!= 0xAA` validation at line 13691 runs only in the echo-frame branch (where byte[7] is a fixed integrity constant); the bit extractions at lines 30433+ run on data frames (where byte[7] is the status-flags field with values like 0x00/0x20/0x28 confirmed by bench capture). Both uses are correct — they just address the same RAM cell under two different frame interpretations. See `usart2_isr_state_machine.md` for the full ISR state machine.
 
 2. **DAT_2000102e (unit_variant) is written in 4 places**, all within the FSM at lines 30425-30464. It's not pre-computed; it's set **only in DCV (case 0)** and persists across frames as a multi-frame state machine flag.
 
