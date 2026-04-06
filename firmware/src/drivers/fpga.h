@@ -151,6 +151,20 @@ typedef struct {
     /* Acquisition mode (set by mode switch, read by acq task) */
     volatile uint8_t acq_mode;         /* fpga_acq_mode_t */
 
+    /* SPI3 acquisition diagnostics */
+    volatile uint16_t spi3_ok_count;       /* Successful acquisitions */
+    volatile uint16_t spi3_timeout_count;  /* Consecutive timeouts (resets on success) */
+    volatile uint16_t spi3_total_timeouts; /* Lifetime timeout count */
+    volatile uint8_t  spi3_first_byte;     /* First byte from last probe */
+    volatile bool     spi3_probing;        /* Currently attempting acquisition */
+
+    /* Init handshake diagnostic (captured during fpga_init) */
+    volatile uint8_t  init_hs[8];          /* Handshake response bytes */
+    volatile uint32_t diag_remap5;         /* IOMUX remap5 (spi3_gmux) */
+    volatile uint32_t diag_remap7;         /* IOMUX remap7 (swjtag_gmux) */
+    volatile uint32_t diag_spi_ctrl1;      /* SPI3 CTRL1 after init */
+    volatile uint32_t diag_spi_sts;        /* SPI3 STS after init */
+
 } fpga_state_t;
 
 /* Global FPGA state (defined in fpga.c) */

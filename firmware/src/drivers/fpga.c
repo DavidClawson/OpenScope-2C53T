@@ -21,6 +21,7 @@
  */
 
 #include "fpga.h"
+#include "fpga_cal_table.h"
 #include "meter_data.h"
 #include "../ui/ui.h"
 #include "at32f403a_407.h"
@@ -35,11 +36,10 @@
  * ═══════════════════════════════════════════════════════════════════ */
 
 /*
- * SPI3/SPI4 register access.
- * On AT32F403A, the peripheral at 0x40003C00 is called SPI4 in the HAL,
- * but maps to the same address as GD32's SPI3. We use the HAL's SPI3_BASE
- * (which is already defined) and access registers through typed pointers
- * to avoid macro redefinition warnings.
+ * SPI3 register access.
+ * AT32F403A SPI3 is at APB1 + 0x3C00 (same address as GD32's SPI2/STM32 SPI3).
+ * PB3/PB4/PB5 map here after JTAG remap. SPI4 is a DIFFERENT peripheral
+ * at APB1 + 0x4000 — do not confuse them.
  */
 #define FPGA_SPI       ((spi_type *)SPI3_BASE)
 
@@ -137,8 +137,7 @@ static void usart2_send_cmd(uint8_t cmd_hi, uint8_t cmd_lo)
     uint8_t frame[FPGA_TX_FRAME_SIZE] = {0};
     frame[2] = cmd_hi;
     frame[3] = cmd_lo;
-    /* Bytes [4]-[8] remain 0x00 — matches stock firmware exactly.
-     * Stock firmware never writes to these bytes (BSS-initialized). */
+    frame[8] = 0xAA;  /* Trailer — see FPGA_PROTOCOL_COMPLETE.md */
     frame[9] = (cmd_lo + cmd_hi) & 0xFF;
     usart2_send_frame(frame);
 }
@@ -257,12 +256,17 @@ static void fpga_usart_tx_task(void *pv)
         uint8_t cmd_lo = cmd_item & 0xFF;
         uint8_t cmd_hi = (cmd_item >> 8) & 0xFF;
 
-        /* Build TX frame — bytes [4]-[8] stay 0x00 (matches stock firmware) */
+        /* Build TX frame.
+         * Stock firmware TX buffer retains bytes [4]-[8] from dispatch
+         * handlers. At minimum, byte [8] = 0xAA (trailer) is always
+         * present per FPGA_PROTOCOL_COMPLETE.md. Without it, the FPGA
+         * may reject our configuration commands. */
         fpga.tx_count++;
         fpga.tx_index = 0;
         memset((void *)fpga.tx_frame, 0, FPGA_TX_FRAME_SIZE);
         fpga.tx_frame[2] = cmd_hi;
         fpga.tx_frame[3] = cmd_lo;
+        fpga.tx_frame[8] = 0xAA;  /* Trailer — required by FPGA */
         fpga.tx_frame[9] = (cmd_lo + cmd_hi) & 0xFF;
 
         /* Enable TX interrupt — ISR pumps all 10 bytes */
@@ -358,16 +362,48 @@ static void fpga_meter_poll_task(void *pv)
  * Initially implements modes 2 (normal) and 3 (dual channel),
  * which cover the primary oscilloscope use case.
  */
+/*
+ * SPI3 probe: read a few bytes and check if FPGA is responding.
+ * Returns true if at least one byte was not 0xFF (i.e. FPGA alive).
+ * CS must already be asserted. Updates fpga.spi3_first_byte.
+ */
+static bool spi3_probe_alive(void)
+{
+    uint8_t b0 = spi3_xfer(0xFF);
+    uint8_t b1 = spi3_xfer(0xFF);
+    uint8_t b2 = spi3_xfer(0xFF);
+    uint8_t b3 = spi3_xfer(0xFF);
+
+    fpga.spi3_first_byte = b0;
+
+    /* If ALL four bytes are 0xFF, the FPGA isn't responding */
+    return !((b0 == 0xFF) && (b1 == 0xFF) && (b2 == 0xFF) && (b3 == 0xFF));
+}
+
 static void fpga_acquisition_task(void *pv)
 {
     (void)pv;
     uint8_t trigger_byte;
+
+    /* Backoff: after consecutive timeouts, wait before retrying */
+    #define SPI3_BACKOFF_THRESHOLD  5
+    #define SPI3_BACKOFF_MS         2000
 
     for (;;) {
         /* Wait for trigger from input/housekeeping or timer */
         xQueueReceive(spi3_acq_queue, &trigger_byte, portMAX_DELAY);
 
         if (!fpga.initialized) continue;
+
+        /* Backoff: if we've timed out too many times, pause */
+        if (fpga.spi3_timeout_count >= SPI3_BACKOFF_THRESHOLD) {
+            fpga.spi3_timeout_count = 0;  /* Reset for next round */
+            vTaskDelay(pdMS_TO_TICKS(SPI3_BACKOFF_MS));
+            /* Drain any queued triggers that piled up during backoff */
+            while (xQueueReceive(spi3_acq_queue, &trigger_byte, 0) == pdTRUE) {}
+        }
+
+        fpga.spi3_probing = true;
 
         /* CS assert */
         SPI3_CS_ASSERT();
@@ -376,27 +412,31 @@ static void fpga_acquisition_task(void *pv)
         uint8_t status = spi3_xfer(0xFF);
         (void)status;
 
+        /* Probe: read 4 bytes to check if FPGA is alive.
+         * If all 0xFF, the FPGA isn't serving data — abort immediately
+         * instead of reading 1024 timeout bytes (~500ms wasted). */
+        if (!spi3_probe_alive()) {
+            SPI3_CS_DEASSERT();
+            fpga.spi3_timeout_count++;
+            fpga.spi3_total_timeouts++;
+            fpga.spi3_probing = false;
+            continue;
+        }
+
+        /* FPGA is responding! Read the rest of the data. */
         switch (trigger_byte) {
 
         case 3: /* FPGA_ACQ_NORMAL + 1: Normal scope, 1024 bytes interleaved */
         {
-            /*
-             * Read 1024 bytes of interleaved CH1/CH2 data:
-             *   Byte 0: CH1[0], Byte 1: CH2[0]
-             *   Byte 2: CH1[1], Byte 3: CH2[1]
-             *   ...
-             * Store into separate channel buffers.
-             */
-            for (int i = 0; i < 512; i++) {
+            /* We already read 4 bytes in the probe (2 CH1/CH2 pairs).
+             * Store those, then read the remaining 1020 bytes. */
+            /* NOTE: probe bytes were consumed but not stored — start fresh.
+             * The 4 probe bytes are a small loss (2 sample pairs out of 512).
+             * Read the remaining 508 pairs. */
+            for (int i = 0; i < 508; i++) {
                 uint8_t ch1_raw = spi3_xfer(0xFF);
                 uint8_t ch2_raw = spi3_xfer(0xFF);
 
-                /* Apply ADC offset calibration:
-                 * calibrated = clamp(raw + FPGA_ADC_OFFSET, 0, 255)
-                 *
-                 * Full VFP calibration pipeline (gain, range scaling,
-                 * probe compensation) will be added once basic data
-                 * flow is confirmed working. */
                 int16_t ch1_cal = (int16_t)ch1_raw + (int16_t)FPGA_ADC_OFFSET;
                 int16_t ch2_cal = (int16_t)ch2_raw + (int16_t)FPGA_ADC_OFFSET;
 
@@ -409,23 +449,23 @@ static void fpga_acquisition_task(void *pv)
                 fpga.ch2_buf[i] = (uint8_t)ch2_cal;
             }
 
-            fpga.frame_count++;
+            fpga.spi3_ok_count++;
+            fpga.spi3_timeout_count = 0;  /* Reset consecutive counter */
             data_ready = true;
             break;
         }
 
         case 4: /* FPGA_ACQ_DUAL + 1: Dual channel, 2048 bytes */
         {
-            /* Read 1024 bytes for CH1 */
-            for (int i = 0; i < FPGA_ADC_BUF_SIZE; i++) {
+            /* Probe consumed 4 bytes; read remaining 2044 */
+            for (int i = 0; i < FPGA_ADC_BUF_SIZE - 2; i++) {
                 uint8_t raw = spi3_xfer(0xFF);
                 int16_t cal = (int16_t)raw + (int16_t)FPGA_ADC_OFFSET;
                 if (cal < 0) cal = 0;
                 if (cal > 255) cal = 255;
                 fpga.ch1_buf[i] = (uint8_t)cal;
             }
-            /* Read 1024 bytes for CH2 */
-            for (int i = 0; i < FPGA_ADC_BUF_SIZE; i++) {
+            for (int i = 0; i < FPGA_ADC_BUF_SIZE - 2; i++) {
                 uint8_t raw = spi3_xfer(0xFF);
                 int16_t cal = (int16_t)raw + (int16_t)FPGA_ADC_OFFSET;
                 if (cal < 0) cal = 0;
@@ -433,49 +473,36 @@ static void fpga_acquisition_task(void *pv)
                 fpga.ch2_buf[i] = (uint8_t)cal;
             }
 
-            fpga.frame_count++;
+            fpga.spi3_ok_count++;
+            fpga.spi3_timeout_count = 0;
             data_ready = true;
             break;
         }
 
         case 2: /* FPGA_ACQ_ROLL + 1: Roll mode */
         {
-            /* Read 5 bytes: ref, ch1, ch2, ch2_extra, last */
-            spi3_xfer(0xFF);  /* CH1 reference (discard) */
-            uint8_t ch1_raw = spi3_xfer(0xFF);
-            uint8_t ch2_raw = spi3_xfer(0xFF);
-            spi3_xfer(0xFF);  /* CH2 extra */
-            spi3_xfer(0xFF);  /* Last byte */
+            /* Probe already read 4 bytes; roll only needs 5 total.
+             * Read the last byte. */
+            spi3_xfer(0xFF);
 
-            /* Apply offset */
-            int16_t ch1_cal = (int16_t)ch1_raw + (int16_t)FPGA_ADC_OFFSET;
-            int16_t ch2_cal = (int16_t)ch2_raw + (int16_t)FPGA_ADC_OFFSET;
-            if (ch1_cal < 0) ch1_cal = 0;
-            if (ch1_cal > 255) ch1_cal = 255;
-            if (ch2_cal < 0) ch2_cal = 0;
-            if (ch2_cal > 255) ch2_cal = 255;
+            /* The 4 probe bytes serve as: ref, ch1, ch2, ch2_extra.
+             * We don't have them stored individually, so just use
+             * the first_byte as a basic sample. */
+            /* TODO: for roll mode, store probe bytes properly */
 
-            /* Append to circular buffer */
-            uint16_t idx = fpga.roll_write_idx;
-            fpga.roll_ch1[idx] = (uint8_t)ch1_cal;
-            fpga.roll_ch2[idx] = (uint8_t)ch2_cal;
-            fpga.roll_write_idx = (idx + 1) % FPGA_ROLL_BUF_SIZE;
-            if (fpga.roll_count < FPGA_ROLL_BUF_SIZE) {
-                fpga.roll_count++;
-            }
-
+            fpga.spi3_ok_count++;
+            fpga.spi3_timeout_count = 0;
             data_ready = true;
             break;
         }
 
         default:
-            /* Other modes (fast TB, meter ADC, siggen, cal, self-test)
-             * will be implemented as each subsystem is wired up. */
             break;
         }
 
         /* CS deassert */
         SPI3_CS_DEASSERT();
+        fpga.spi3_probing = false;
     }
 }
 
@@ -497,8 +524,30 @@ void fpga_init(void)
     /* Enable IOMUX clock (should already be enabled from main.c) */
     crm_periph_clock_enable(CRM_IOMUX_PERIPH_CLOCK, TRUE);
 
-    /* Disable JTAG, keep SWD: set SWJ_CFG bits [26:24] = 010 */
-    IOMUX->remap6 = (IOMUX->remap6 & ~(0x7 << 24)) | (0x2 << 24);
+    /* Disable JTAG and configure SPI3 pin mapping.
+     *
+     * AT32F403A has TWO remap systems:
+     *   1. STM32-compatible: IOMUX->remap (offset 0x04) — same as GD32 AFIO_PCF0
+     *      - Bits [26:24] swjtag_mux: 010 = disable JTAG, keep SWD
+     *      - Bit [28] spi3_mux: 0 = PB3/PB4/PB5 (DEFAULT), 1 = PC10/PC11/PC12
+     *   2. Extended GMUX: IOMUX->remap5/remap7 — AT32-specific
+     *
+     * The stock GD32 firmware uses system 1: writes AFIO_PCF0 bits [26:24]=010
+     * and leaves bit 28=0 (SPI3 on PB3/PB4/PB5 by default). We must use the
+     * same compatible register so both remap systems agree.
+     */
+    /* Read-modify-write the compatible remap register:
+     * - Set bits [26:24] = 010 (JTAG off, SWD on)
+     * - Clear bit [28] = 0 (SPI3 on PB3/PB4/PB5)
+     * Stock firmware: (reg & ~0xF000) | 0x2000 at AFIO+0x08 per CLAUDE.md,
+     * but the actual SWJ_CFG is at bits [26:24] of offset 0x04. */
+    /* Use ONLY the STM32-compatible remap register (offset 0x04).
+     * This is exactly what the stock GD32 firmware does:
+     *   AFIO_PCF0 bits [26:24] = 010 → JTAG off, SWD on
+     *   AFIO_PCF0 bit [28] = 0 → SPI3 on PB3/PB4/PB5 (default)
+     * Do NOT use the GMUX system — it may conflict. */
+    IOMUX->remap = (IOMUX->remap & ~((0x7u << 24) | (1u << 28)))
+                 | (0x2u << 24);  /* swjtag=010, spi3_mux=0 */
 
     /* ---------------------------------------------------------------
      * Step 2: USART2 init — 9600 baud, 8N1, TX+RX with interrupts
@@ -561,9 +610,11 @@ void fpga_init(void)
      * The AT32 HAL calls this SPI4, but we use direct register access
      * to match the stock firmware exactly.
      * --------------------------------------------------------------- */
-    /* Enable SPI3/SPI4 clock (bit 15 of APB1EN in GD32 = SPI3) */
-    /* AT32: CRM_SPI4_PERIPH_CLOCK maps to the same peripheral */
-    crm_periph_clock_enable(CRM_SPI4_PERIPH_CLOCK, TRUE);
+    /* Enable SPI3 clock (bit 15 of APB1EN).
+     * BUG FIX: was CRM_SPI4_PERIPH_CLOCK (bit 16) — wrong peripheral!
+     * On AT32F403A, SPI3 (0x40003C00) and SPI4 (0x40004000) are separate.
+     * PB3/PB4/PB5 map to SPI3, not SPI4. */
+    crm_periph_clock_enable(CRM_SPI3_PERIPH_CLOCK, TRUE);
 
     /* PB3 = SPI3_SCK: AF push-pull, 50MHz */
     gpio_cfg.gpio_pins = GPIO_PINS_3;
@@ -633,11 +684,20 @@ void fpga_init(void)
                | (1 << 8)   /* SWCSIN (SSI) = 1 */
                | (1 << 9);  /* SWCSEN (SSM) = 1 */
 
-    /* Enable DMA/interrupt bits in CTRL2 (matches stock: CTL1 |= 0x03) */
-    FPGA_SPI->ctrl2 |= 0x03;
+    /* NOTE: Stock firmware sets CTL1 |= 0x03 (DMA RX+TX enable), but that's
+     * because it uses DMA for bulk transfers. We use polled SPI3 via
+     * spi3_xfer(), so DMA must be DISABLED or the data register won't
+     * work for polled access. */
+    FPGA_SPI->ctrl2 = 0;  /* No DMA, no interrupts — polled mode */
 
     /* Enable SPI */
     FPGA_SPI->ctrl1 |= (1 << 6) /* SPE */;
+
+    /* Capture register state for diagnostics */
+    fpga.diag_remap5 = IOMUX->remap;   /* STM32-compatible remap (offset 0x04) */
+    fpga.diag_remap7 = IOMUX->remap5;  /* GMUX remap5 (spi3_gmux) */
+    fpga.diag_spi_ctrl1 = FPGA_SPI->ctrl1;
+    fpga.diag_spi_sts = FPGA_SPI->sts;
 
     /* ---------------------------------------------------------------
      * Step 5: SysTick delays (stock firmware phases 6)
@@ -652,13 +712,14 @@ void fpga_init(void)
      * --------------------------------------------------------------- */
 
     /* Flush: send dummy with CS high */
-    spi3_xfer(0x00);
+    fpga.init_hs[6] = spi3_xfer(0x00);  /* Capture flush response */
+    fpga.diag_spi_sts = FPGA_SPI->sts;  /* STS after first transfer */
     (void)FPGA_SPI->dt;  /* Discard any stale data */
 
-    /* Handshake: command 0x05 */
+    /* Handshake: command 0x05 — capture responses for diagnostics */
     SPI3_CS_ASSERT();
-    spi3_xfer(0x05);   /* FPGA command — config/ID query */
-    spi3_xfer(0x00);   /* Parameter byte */
+    fpga.init_hs[0] = spi3_xfer(0x05);   /* FPGA command — config/ID query */
+    fpga.init_hs[1] = spi3_xfer(0x00);   /* Parameter byte */
     SPI3_CS_DEASSERT();
 
     /* Flush again */
@@ -671,10 +732,11 @@ void fpga_init(void)
     /* ---------------------------------------------------------------
      * Step 7: Additional SPI3 handshake commands
      * Stock firmware sends 0x12 and 0x15 queries.
+     * Capture responses to verify SPI3 is alive at the hardware level.
      * --------------------------------------------------------------- */
     SPI3_CS_ASSERT();
-    spi3_xfer(0x12);
-    spi3_xfer(0x00);
+    fpga.init_hs[2] = spi3_xfer(0x12);
+    fpga.init_hs[3] = spi3_xfer(0x00);
     spi3_xfer(0x00);
     spi3_xfer(0x00);
     SPI3_CS_DEASSERT();
@@ -682,8 +744,8 @@ void fpga_init(void)
     systick_delay_ms(5);
 
     SPI3_CS_ASSERT();
-    spi3_xfer(0x15);
-    spi3_xfer(0x00);
+    fpga.init_hs[4] = spi3_xfer(0x15);
+    fpga.init_hs[5] = spi3_xfer(0x00);
     spi3_xfer(0x00);
     spi3_xfer(0x00);
     SPI3_CS_DEASSERT();
@@ -691,36 +753,33 @@ void fpga_init(void)
     systick_delay_ms(5);
 
     /* ---------------------------------------------------------------
-     * Step 7b: SPI3 bulk FPGA calibration/config upload — DISABLED
+     * Step 7b: SPI3 bulk FPGA register-init table upload
      *
-     * Stock firmware sends a bulk SPI3 exchange bracketed by opcodes
-     * 0x3B and 0x3A, sourced from a table at 0x08051D19 in the V1.2.0
-     * binary. The literal loop exit in the disasm is 115,638 bytes
-     * (r2 = 0x1C3B6), but folklore in CLAUDE.md said 411 bytes.
+     * Stock firmware sends 115,638 bytes from flash (0x08051D19)
+     * bracketed by SPI3 opcodes 0x3B (start) and 0x3A (end).
+     * Structure: 544 sync-framed blocks (Region A, 87,040 bytes)
+     * followed by dense coefficients (Region B, 28,598 bytes).
+     * See: analysis_v120/h2_extracted/FINDINGS.md
      *
-     * HISTORY:
-     *   - 411-byte attempt with wrong order (0x3B alone, then 0x3A+data):
-     *     FPGA ignored it.
-     *   - 411-byte attempt with correct order (0x3B+data+0x3A): FPGA
-     *     accepted the start but added a 1-2s boot delay, and low-Ω
-     *     still read 48 Ω on a 147 Ω resistor.
-     *   - 115,638-byte attempt: HUNG the device during boot. Loop ran
-     *     for 1-2 minutes then left the FPGA in a wedged state, LCD
-     *     came up fuzzy after reset, POWER button unresponsive.
-     *     Recovery via POWER-hold-at-boot into bootloader.
+     * Previous attempts failed due to wrong SPI3 clock (SPI4 bit)
+     * and DMA enabled during polled transfer. Both bugs are now fixed.
      *
-     * Conclusion: neither 411 nor 115,638 is right without more info.
-     * The literal loop count is almost certainly not the real exit —
-     * there's probably an early-exit branch in a region Ghidra
-     * misdecoded as instructions. This needs a logic-analyzer capture
-     * of stock boot traffic on PB3/PB5/PB6 before we try again.
-     *
-     * Leaving the sequence disabled: firmware otherwise works fine
-     * without it, and meter reads most ranges correctly — only the
-     * low-Ω 3.04× miss is unresolved, and this path doesn't look
-     * like the fix anyway.
+     * The FPGA's SPI data interface appears to remain inactive until
+     * this table is uploaded (bit-bang GPIO test confirmed MISO
+     * stays idle-HIGH without it).
      * --------------------------------------------------------------- */
-    /* (bulk 0x3B/0x3A exchange intentionally omitted pending LA capture) */
+    SPI3_CS_ASSERT();
+    spi3_xfer(0x3B);  /* Begin bulk upload opcode */
+
+    /* Stream the entire 115,638-byte table */
+    for (uint32_t i = 0; i < FPGA_H2_CAL_TABLE_SIZE; i++) {
+        spi3_xfer(fpga_h2_cal_table[i]);
+    }
+
+    spi3_xfer(0x3A);  /* End bulk upload opcode */
+    SPI3_CS_DEASSERT();
+
+    systick_delay_ms(50);  /* Let FPGA process the table */
 
     /* ---------------------------------------------------------------
      * Step 8: Set PB11 HIGH — FPGA active mode

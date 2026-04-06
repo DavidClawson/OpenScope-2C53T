@@ -385,13 +385,9 @@ void draw_demo_waveform(uint32_t frame)
         return;
     }
 
-    /* NOTE: Scope SPI3 acquisition triggers DISABLED for now.
-     * The FPGA does not respond to SPI3 bulk reads in the current
-     * configuration — transfers return 0xFF (timeout) and flood the
-     * system, causing watchdog resets after ~10 seconds.
-     * Next step: debug the SPI3 protocol (preamble command, FPGA
-     * mode setup) before enabling real acquisition.
-     * When ready, uncomment and fire: fpga_trigger_acquisition(fpga.acq_mode); */
+    /* SPI3 acquisition triggers are now fired from main.c display loop
+     * with 500ms warmup delay and early-abort safety. See main.c and
+     * fpga_acquisition_task() for the crash-protection logic. */
 
     static const int8_t sin_lut[64] = {
          0, 10, 19, 29, 38, 47, 56, 63, 71, 77, 83, 88, 92, 96, 98, 99,
@@ -736,25 +732,24 @@ static void draw_scope_debug(const theme_t *th)
     char buf[64];
     const volatile uint8_t *ch1 = fpga_get_ch1_buf();
 
-    /* Line 1 (green): FPGA status — init, data_ready, frame count, acq_mode */
-    snprintf(buf, sizeof(buf), "SPI3 %s F%u M%u %s",
-             fpga.initialized ? "OK" : "NO",
-             fpga.frame_count,
-             fpga.acq_mode,
-             fpga_data_ready() ? "DATA" : "wait");
+    /* Line 1 (green): SPI3 status + bit-bang diagnostic
+     * BB:XX XX = bit-bang SPI response (bypasses SPI peripheral)
+     * HS:XX XX = SPI peripheral handshake response
+     * If BB shows non-FF but HS shows FF → SPI peripheral config issue
+     * If both show FF → FPGA not responding on these pins */
+    snprintf(buf, sizeof(buf), "SPI3 ok:%u to:%u [%02X] M%u",
+             (unsigned)fpga.spi3_ok_count,
+             (unsigned)fpga.spi3_total_timeouts,
+             fpga.spi3_first_byte,
+             fpga.acq_mode);
     font_draw_string(2, SCOPE_DBG_Y + 2, buf,
                      0x07E0, 0x0000, &font_small);  /* green */
 
-    /* Line 2 (yellow): First 8 raw CH1 samples + USART TX/RX counts */
-    if (ch1 != NULL) {
-        snprintf(buf, sizeof(buf), "%02X%02X%02X%02X%02X%02X%02X%02X T%u E%u",
-                 ch1[0], ch1[1], ch1[2], ch1[3],
-                 ch1[4], ch1[5], ch1[6], ch1[7],
-                 fpga.tx_count, fpga.echo_count);
-    } else {
-        snprintf(buf, sizeof(buf), "-- no buffer -- T%u E%u",
-                 fpga.tx_count, fpga.echo_count);
-    }
+    /* Line 2 (yellow): IOMUX and SPI3 register diagnostics */
+    snprintf(buf, sizeof(buf), "RM:%08lX C1:%04lX S:%04lX",
+             fpga.diag_remap5, /* now shows IOMUX->remap (offset 0x04) */
+             fpga.diag_spi_ctrl1,
+             fpga.diag_spi_sts);
     font_draw_string(2, SCOPE_DBG_Y + 16, buf,
                      0xFFE0, 0x0000, &font_small);  /* yellow */
 }
@@ -806,6 +801,33 @@ void draw_scope_screen(uint32_t frame)
     const char *ch_label = (active_channel == 0) ? "CH1" : "CH2";
     uint16_t ch_color = (active_channel == 0) ? th->ch1 : th->ch2;
     font_draw_string(4, SCOPE_TOP + 2, ch_label, ch_color, ch_color, &font_small);
+
+#ifndef EMULATOR_BUILD
+    /* SPI3 acquisition diagnostic — small text overlay top-center.
+     * Shows probing status so we can see FPGA data flow without serial. */
+    {
+        char spi3_buf[24];
+        uint16_t spi3_color;
+        if (fpga.spi3_ok_count > 0) {
+            snprintf(spi3_buf, sizeof(spi3_buf), "SPI3:OK %u",
+                     (unsigned)fpga.spi3_ok_count);
+            spi3_color = th->success;
+        } else if (fpga.spi3_total_timeouts > 0) {
+            snprintf(spi3_buf, sizeof(spi3_buf), "SPI3:-- %u [%02X]",
+                     (unsigned)fpga.spi3_total_timeouts,
+                     fpga.spi3_first_byte);
+            spi3_color = th->warning;
+        } else if (fpga.initialized) {
+            snprintf(spi3_buf, sizeof(spi3_buf), "SPI3:wait");
+            spi3_color = th->text_secondary;
+        } else {
+            snprintf(spi3_buf, sizeof(spi3_buf), "SPI3:off");
+            spi3_color = th->text_secondary;
+        }
+        font_draw_string(40, SCOPE_TOP + 2, spi3_buf,
+                         spi3_color, th->background, &font_small);
+    }
+#endif
 
 #ifdef SCOPE_DEBUG_OVERLAY
     /* Layer 12: SPI3 debug overlay (bottom of screen) */

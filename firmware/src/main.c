@@ -194,6 +194,15 @@ static void vDisplayTask(void *pvParameters)
         /* Check in with health monitor */
         health_checkin(health_slot_display);
 
+        /* Track mode transitions for SPI3 acquisition warmup */
+        static device_mode_t last_rendered_mode = (device_mode_t)0xFF;
+        static uint32_t scope_entered_frame = 0;
+        if (current_mode != last_rendered_mode) {
+            if (current_mode == MODE_OSCILLOSCOPE)
+                scope_entered_frame = frame;
+            last_rendered_mode = current_mode;
+        }
+
         /* Periodic redraws for active modes.
          *
          * All modes receive explicit redraws via queue commands above
@@ -208,13 +217,29 @@ static void vDisplayTask(void *pvParameters)
         if (current_mode == MODE_OSCILLOSCOPE) {
             const scope_state_t *ss_anim = scope_state_get();
             if (ss_anim->running) {
-                /* Redraw when the popup overlay is counting down (needs
-                 * frame ticks to auto-dismiss), or on a ~1s safety tick
-                 * for time-based UI elements. When FPGA SPI3 data
-                 * acquisition is working, this branch will also trigger
-                 * on new ADC data arrival (gated like the meter path). */
+                /* ── SPI3 acquisition triggers ──────────────────────
+                 * Fire at ~3Hz (every 7 frames at 20fps), but only
+                 * after a 500ms warmup delay for FPGA to process the
+                 * USART scope config commands sent by fpga_enter_scope_mode().
+                 * The acquisition task has its own early-abort and backoff
+                 * logic so this is safe even if the FPGA doesn't respond. */
+#ifndef EMULATOR_BUILD
+                if ((frame - scope_entered_frame) >= 10 /* 500ms warmup */
+                    && (frame % 7) == 0
+                    && fpga.initialized) {
+                    fpga_trigger_acquisition(fpga.acq_mode);
+                }
+#endif
+
+                /* Redraw when: popup counting down, new SPI3 data arrived,
+                 * or ~1s safety tick for time-based UI elements. */
                 static uint32_t last_scope_frame = 0;
-                if (scope_popup_active() || (frame - last_scope_frame) >= 20) {
+                static uint16_t last_spi3_ok = 0;
+                bool new_data = (fpga.spi3_ok_count != last_spi3_ok);
+                if (new_data) last_spi3_ok = fpga.spi3_ok_count;
+
+                if (scope_popup_active() || new_data
+                    || (frame - last_scope_frame) >= 20) {
 #ifdef FEATURE_FFT
                     if (scope_view == SCOPE_VIEW_FFT)
                         draw_fft_screen();
