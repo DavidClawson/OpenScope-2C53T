@@ -12,7 +12,7 @@
 | **Ghidra false positives** | 61 (halt_baddata in data region 0x0803F268+) |
 | **Function naming** | ~97% complete (42 LOW confidence remain) |
 | **FPGA protocol** | **100% decoded** — all ~40 commands mapped, ADC format, state machine |
-| **Button input** | **14/15 HARDWARE CONFIRMED** — bidirectional 4x3 matrix, TMR3 at 500Hz. Only PRM (PB7) unresolved. |
+| **Button input** | **15/15 HARDWARE CONFIRMED** — bidirectional 4x3 matrix + 3 passive, TMR3 at 500Hz. PRM (PB7) pull-down fix confirmed 2026-04-06. |
 | **Battery ADC** | 100% — ADC1 Channel 9, PB1 |
 | **Overall understanding** | **~99%** — buttons hardware-confirmed, USART frames flowing |
 
@@ -231,7 +231,7 @@ USART1 (PA9/PA10), USART2 (PA2/PA3), USART3 (PB10/PB11), SPI2 (PB12-15), USB (PA
   - **Stock firmware now ~98% understood.** Only remaining: PLL startup assembly, 42 low-confidence names, hardware verification.
 - **2026-04-01 (session 2)**: Hardware verification on real device.
   - Built `fulltest.c` (FPGA init + passive GPIO) — USART frames flowing (0x5A A5 E4 2E 63 25 07 = meter data), SPI3 still 0xFF, passive GPIO reads show no button changes
-  - Built `fulltest2.c` (TMR3 500Hz + bidirectional matrix scan) — **14/15 buttons hardware-confirmed!** Complete bit→button mapping established. Only PRM (PB7, active HIGH) unresolved.
+  - Built `fulltest2.c` (TMR3 500Hz + bidirectional matrix scan) — **14/15 buttons hardware-confirmed!** Complete bit→button mapping established. PRM (PB7) unresolved at this point (fixed 2026-04-04, bench-confirmed 2026-04-06).
   - Discovered buttons need ACTIVE bidirectional scanning (gpio_init reconfiguration each phase), not passive IDR reads
   - USART data confirmed: FPGA sends measurement frames continuously
   - SPI3 still needs work: TMR3 USART exchange running but FPGA not yet entering active data mode

@@ -437,7 +437,7 @@ scope_main_fsm (13.3KB)
   +-- scope_mode_trigger (2.2KB)
   +-- scope_mode_measure (1.3KB)
   +-- scope_mode_math (1.8KB)
-  +-- scope_mode_cursor (4.6KB)
+  +-- scope_measurement_engine (4.6KB)  # was scope_mode_cursor — actually computes Vpp/Vrms/freq/period
   +-- scope_mode_display_settings (4.6KB)
   +-- siggen_configure (1.6KB)
   +-- scope_display_refresh (626B)
@@ -448,8 +448,8 @@ meter_data_process (768B)
   +-- xQueueGenericSend (sends to display task)
 
 measurement_dispatch (520B) -- central hub, 11 callers
-  +-- waveform_render_ch1 (6.6KB)
-  +-- waveform_render_ch2 (4.1KB)
+  +-- jpeg_huffman_decode_1 (6.6KB)  # was waveform_render_ch1 — actually a JPEG decoder for UI assets
+  +-- jpeg_huffman_decode_2 (4.1KB)  # was waveform_render_ch2 — sibling JPEG decoder
   +-- spi_flash_read_with_cache
   +-- display_alloc_buffer
 

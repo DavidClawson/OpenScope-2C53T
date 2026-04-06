@@ -30,7 +30,7 @@
 // FUN_0801e1e4  scope_mode_trigger       — trigger edge/level/source UI
 // FUN_08020930  scope_mode_display_settings — display options UI (grid, persist, etc.)
 // FUN_0801eaac  scope_mode_measure       — measurement readout (Vpp, Freq, etc.)
-// FUN_0801f6f8  scope_mode_cursor        — cursor position/delta display
+// FUN_0801f6f8  scope_measurement_engine — Vpp/Vrms/Vmax/Vmin/Vavg/freq/period (was mislabeled scope_mode_cursor; cursor is a minor output)
 // FUN_0801d2ec  scope_mode_timebase      — timebase/sample rate display
 
 /* Hardware config */
@@ -137,7 +137,7 @@ void scope_main_fsm(void) {
             scope_mode_trigger();
             scope_mode_display_settings();
             scope_mode_measure();
-            scope_mode_cursor();
+            scope_measurement_engine();
         }
         goto exit_epilog;
     }
@@ -176,7 +176,7 @@ void scope_main_fsm(void) {
         scope_mode_trigger();
         scope_mode_display_settings();
         scope_mode_measure();
-        scope_mode_cursor();
+        scope_measurement_engine();
     }
 
 

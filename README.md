@@ -17,7 +17,7 @@ The FNIRSI 2C53T is a capable $75 handheld 3-in-1 instrument held back by buggy 
 - 4 color themes (Dark Blue, Classic Green, High Contrast, Night Red)
 - Variable-width bitmap fonts at 4 sizes (12/16/24/48px)
 - FreeRTOS with display + input tasks
-- 14/15 button matrix scanning at 500Hz
+- 15/15 button matrix scanning at 500Hz
 - Battery monitor with percentage, USB charge detection, low-battery auto-off
 - Soft power management (3-2-1 countdown shutdown)
 - Watchdog and health monitoring

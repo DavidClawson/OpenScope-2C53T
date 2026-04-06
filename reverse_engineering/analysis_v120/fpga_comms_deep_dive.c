@@ -576,7 +576,10 @@
  *   │    Checks: state[0xDB0] == 1 → NEW DATA available                    │
  *   │    Calls scope_mode_timebase() → updates FPGA config                  │
  *   │    Runs acquisition_phase state machine (auto-range, auto-timebase)   │
- *   │    Calls waveform_render_ch1/ch2 → Bresenham line draw → LCD          │
+ *   │    Calls scope capsule-draw pipeline (FUN_08019470 + FUN_08018DA0 +   │
+ *   │      FUN_08015F50, amber 0xFB43) → framebuffer → LCD                  │
+ *   │    (Note: FUN_08030524/FUN_08031f20, previously mislabeled             │
+ *   │     waveform_render_ch1/ch2, are actually JPEG decoders for UI assets) │
  *   │                                                                       │
  *   ├─ display: EXIT EPILOG sends cmd 3 (heartbeat) to usart_cmd_queue      │
  *   │                                                                       │

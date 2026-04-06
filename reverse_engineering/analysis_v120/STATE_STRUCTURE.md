@@ -87,15 +87,15 @@ Dynamic state that changes during oscilloscope operation.
 
 ---
 
-## Section 4: Cursor Data (offsets 0x50 – 0x230)
+## Section 4: Scope Measurement Scratch (offsets 0x50 – 0x230)
 
-This region is exclusively used by `scope_mode_cursor` (FUN_0801f6f8, 4616 bytes). It stores cursor positions, measurement results, and display coordinates.
+This region is exclusively used by `scope_measurement_engine` (FUN_0801f6f8, 4616 bytes — previously labeled `scope_mode_cursor`; 2026-04-04 RE session reclassified it as a full Vpp/Vrms/Vmax/Vmin/Vavg/frequency/period measurement engine with 64-bit VFP accumulators. Cursor readout is one minor output). It stores the per-channel measurement accumulators and intermediate coordinates.
 
 | Offset | Abs Address | Name | Type | Refs | Description |
 |--------|-------------|------|------|------|-------------|
 | +0x50 | 20000148 | `cursor_data[0]` | uint32 | 4 | Cursor position / measurement array |
 | +0x54 | 2000014C | `cursor_data[1]` | uint32 | 6 | (4-byte stride, 120 entries) |
-| +0x58–0x230 | ... | `cursor_data[2..119]` | uint32[] | 2-4 each | 120-entry array of 4-byte cursor/measurement values. Accessed exclusively by scope_mode_cursor. Stores cursor X/Y positions, delta calculations, and readout values for both channels. |
+| +0x58–0x230 | ... | `measurement_scratch[2..119]` | uint32[] | 2-4 each | 120-entry array of 4-byte scope measurement values. Accessed exclusively by `scope_measurement_engine`. Stores Vpp/Vrms/freq/period accumulators, delta calculations, and readout values for both channels. |
 | +0x230 | 20000328 | `trigger_state_prev` | uint8 | 1 | Previous trigger crossing state (for edge detection) |
 | +0x231 | 20000329 | `trigger_state_curr` | uint8 | 2 | Current trigger crossing state |
 
@@ -331,7 +331,7 @@ The structure spans approximately **4KB** of SRAM starting at 0x200000F8, ending
 |----------|------|---------------------|
 | FUN_08019e98 | `scope_main_fsm` | +0x04, +0x05, +0x14, +0x2C, +0x2D, +0x2E, +0x2F, +0x30, +0x32, +0x260-0x33C (cal tables), +0xDB0, +0xDBA-DBB, +0xDBC-0xE0C |
 | FUN_0801d2ec | `scope_mode_timebase` | +0x04, +0x05, +0x14, +0x15, +0x16, +0x17, +0x1A, +0x1C, +0x2D, +0x2E, +0xDB4-DB6 |
-| FUN_0801f6f8 | `scope_mode_cursor` | +0x04, +0x05, +0x15, +0x2D, +0x2E, +0x50-0x230 (cursor data array) |
+| FUN_0801f6f8 | `scope_measurement_engine` | +0x04, +0x05, +0x15, +0x2D, +0x2E, +0x50-0x230 (measurement scratch array) |
 | FUN_08020930 | `scope_mode_display_settings` | +0x14, +0x34, +0x35, +0x38 (menu_state) |
 | FUN_08001c60 | `siggen_configure` | +0x02, +0x03, +0x04, +0x05, +0x14, +0x15, +0x16, +0x2D, +0x2F, +0x31 |
 | FUN_080018a4 | `gpio_mux_portc_porte` | +0x04, +0x14, +0x2D, +0x260-0x2C4 (cal tables) |

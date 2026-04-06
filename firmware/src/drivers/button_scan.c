@@ -30,7 +30,7 @@ static const button_id_t bit_to_button[15] = {
     BTN_MOVE,     /* bit 3:  PB0 + PA8 */
     BTN_SELECT,   /* bit 4:  PC5 + PA8 */
     BTN_TRIGGER,  /* bit 5:  PA7 + PA8 */
-    BTN_PRM,      /* bit 6:  PB7 passive (active HIGH — detection WIP) */
+    BTN_PRM,      /* bit 6:  PB7 passive (active HIGH, pull-down) */
     BTN_CH2,      /* bit 7:  PA7 + PE3 */
     BTN_SAVE,     /* bit 8:  PB0 + PE3 */
     BTN_MENU,     /* bit 9:  PE2 + PE3 */
@@ -72,6 +72,15 @@ static void pin_input_pullup(gpio_type *port, uint16_t pin) {
     cfg.gpio_pins = pin;
     cfg.gpio_mode = GPIO_MODE_INPUT;
     cfg.gpio_pull = GPIO_PULL_UP;
+    gpio_init(port, &cfg);
+}
+
+static void pin_input_pulldown(gpio_type *port, uint16_t pin) {
+    gpio_init_type cfg;
+    gpio_default_para_init(&cfg);
+    cfg.gpio_pins = pin;
+    cfg.gpio_mode = GPIO_MODE_INPUT;
+    cfg.gpio_pull = GPIO_PULL_DOWN;
     gpio_init(port, &cfg);
 }
 
@@ -191,8 +200,6 @@ void TMR3_GLOBAL_IRQHandler(void) {
     BaseType_t any_woken = pdFALSE;
 
     for (int i = 0; i < NUM_BUTTONS; i++) {
-        if (i == 6) continue;  /* skip PRM (bit 6) — always HIGH, WIP */
-
         uint16_t mask = (1 << i);
         if (events & mask) {
             if (s_debounce[i] < 0xFF) s_debounce[i]++;
@@ -233,10 +240,17 @@ void button_scan_init(QueueHandle_t button_queue) {
     crm_periph_clock_enable(CRM_GPIOC_PERIPH_CLOCK, TRUE);
     crm_periph_clock_enable(CRM_GPIOE_PERIPH_CLOCK, TRUE);
 
-    /* Configure passive button pins as inputs */
-    pin_input_pullup(GPIOC, GPIO_PINS_8);   /* PC8: POWER */
-    pin_input_pullup(GPIOB, GPIO_PINS_7);   /* PB7: PRM */
-    pin_input_pullup(GPIOC, GPIO_PINS_13);  /* PC13: UP */
+    /* Configure passive button pins as inputs.
+     *
+     * PB7 (PRM) is active-HIGH, unlike PC8/PC13 which are active-LOW. It
+     * needs a PULL-DOWN so the idle state reads 0 and a press reads 1.
+     * Previously this was configured pull-up (copied from fulltest2.c),
+     * which made PB7 always read HIGH → press was undetectable. Working
+     * config confirmed against btntest2.c @ line 176 (2026-04-01 bench test).
+     */
+    pin_input_pullup  (GPIOC, GPIO_PINS_8);   /* PC8: POWER (active LOW) */
+    pin_input_pulldown(GPIOB, GPIO_PINS_7);   /* PB7: PRM   (active HIGH) */
+    pin_input_pullup  (GPIOC, GPIO_PINS_13);  /* PC13: UP   (active LOW) */
 
     /* Configure TMR3: 500Hz (PSC=11999, ARR=19, APB1=120MHz) */
     crm_periph_clock_enable(CRM_TMR3_PERIPH_CLOCK, TRUE);

@@ -1,4 +1,4 @@
-# FNIRSI 2C53T Button Map — Hardware Confirmed (2026-04-01)
+# FNIRSI 2C53T Button Map — Hardware Confirmed (2026-04-01, PRM fix 2026-04-04)
 
 Verified on real hardware using `fulltest2.c` with bidirectional 4x3 GPIO matrix scan
 at 500Hz (TMR3 ISR). Every button tested individually with visual confirmation on LCD.
@@ -13,7 +13,7 @@ at 500Hz (TMR3 ISR). Every button tested individually with visual confirmation o
 | 3 | 0x0008 | **MOVE** | PB0 + PA8 | Row PB0, Col PA8 | YES |
 | 4 | 0x0010 | **SELECT** | PC5 + PA8 | Row PC5, Col PA8 | YES |
 | 5 | 0x0020 | **TRIGGER** | PA7 + PA8 | Row PA7, Col PA8 | YES |
-| 6 | 0x0040 | **PRM** (?) | PB7 | Passive (active HIGH) | PARTIAL — PB7 reads HIGH always, PRM press not detected with current logic |
+| 6 | 0x0040 | **PRM** | PB7 | Passive (active HIGH, pull-down) | YES (2026-04-04 — pull-down fix) |
 | 7 | 0x0080 | **CH2** | PA7 + PE3 | Row PA7, Col PE3 | YES |
 | 8 | 0x0100 | **SAVE** | PB0 + PE3 | Row PB0, Col PE3 | YES |
 | 9 | 0x0200 | **MENU** | PE2 + PE3 | Row PE2, Col PE3 | YES |
@@ -25,8 +25,8 @@ at 500Hz (TMR3 ISR). Every button tested individually with visual confirmation o
 
 ## Summary
 
-- **14 of 15 buttons fully confirmed** on hardware
-- **PRM (bit 6, PB7)** — PB7 reads HIGH always; PRM press doesn't visibly change bit 6. Earlier test (`btntest2.c`) confirmed PB7 IS wired to PRM with active-HIGH polarity, but the current matrix scan doesn't detect the transition. May need: inverted logic (detect PB7 going LOW), separate interrupt (EXTI7), or different scan timing. This is the only unresolved button.
+- **15 of 15 buttons fully confirmed** on hardware
+- **PRM (bit 6, PB7)** — active HIGH. Root cause of earlier detection failure: `button_scan.c` initialized PB7 with **pull-up** (copied from `fulltest2.c`), so the MCU's own pull-up forced idle HIGH and a press couldn't be distinguished from idle. Fix (2026-04-04): initialize PB7 with **pull-down**, matching `btntest2.c:176`. Idle now reads LOW, press reads HIGH, debounce logic already handles it correctly once the skip-bit-6 workaround is removed.
 
 ## Matrix Wiring Diagram
 
@@ -39,7 +39,7 @@ Row PE2 (8):     MENU (0x0200)      RIGHT (0x2000)        AUTO (0x0002)
 
 Passive:
   PC8  → POWER (0x0001, active LOW)
-  PB7  → PRM   (0x0040, active HIGH — detection issue)
+  PB7  → PRM   (0x0040, active HIGH, pull-down)
   PC13 → UP    (0x0400, active LOW)
 ```
 

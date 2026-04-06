@@ -547,9 +547,10 @@
  *         │   ├── display_render_engine (2612B)
  *         │   │   ├── glyph_render_single (414B)
  *         │   │   └── framebuffer_alloc (FUN_08033cfc)
- *         │   ├── waveform_coordinator (520B)
- *         │   │   ├── waveform_render_ch1 (6632B)
- *         │   │   └── waveform_render_ch2 (4110B)
+ *         │   ├── measurement_dispatch (520B)  [was "waveform_coordinator"]
+ *         │   │   ├── jpeg_huffman_decode_1 (6632B)  [was waveform_render_ch1 — actually a JPEG decoder]
+ *         │   │   └── jpeg_huffman_decode_2 (4110B)  [was waveform_render_ch2 — sibling JPEG decoder]
+ *         │   ├── scope_capsule_draw (FUN_08019470 + FUN_08018DA0 + FUN_08015F50, amber 0xFB43)
  *         │   ├── scope_draw_fft_bars (276B)
  *         │   └── scope_ui_draw_* (headers, lists, trigger info)
  *         ├── meter_ui_draw_* (multimeter screens)
@@ -568,10 +569,15 @@
  * DATA FLOW SUMMARY (ADC to Pixel):
  *
  *   FPGA ADC → SPI3 → adc_buf_ch1/ch2 → VFP calibration →
- *   waveform_render_ch1/ch2 → framebuffer → LCD via EXMC
+ *   scope capsule-draw pipeline (FUN_08019470 + FUN_08018DA0 + FUN_08015F50,
+ *   filled Bresenham capsule, amber 0xFB43) → framebuffer → LCD via EXMC
+ *
+ *   NOTE: FUN_08030524 / FUN_08031f20, previously labeled waveform_render_ch1/ch2
+ *   in function_names.md, are actually JPEG Huffman decoders for UI assets
+ *   (2026-04-04 correction). They play no part in the scope waveform path.
  *
  *   The scope_mode_timebase function controls the INPUT side (how fast
- *   and how many samples). The waveform renderers control the OUTPUT
+ *   and how many samples). The capsule-draw pipeline controls the OUTPUT
  *   side (how samples map to pixels). The scope_main_fsm coordinates
  *   both sides.
  *

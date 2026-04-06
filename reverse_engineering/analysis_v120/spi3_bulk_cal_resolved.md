@@ -5,6 +5,13 @@
 **Binary:** `APP_2C53T_V1.2.0_251015.bin` (751,232 bytes)
 **Sources:** `init_function_decompile.txt` lines 4180–5060; raw binary at offsets 0x26B3A–0x26C32, 0x51D19–0x6E0CF
 
+> **Update 2026-04-04 (later same day):** The table has since been extracted and
+> independently audited — every top-line stat in §4 below verified exactly.
+> New structural findings (two-regime split, per-block 16-bit tags, fixed
+> post-sentinel marker) are in `h2_extracted/FINDINGS.md`. The replay plan in
+> §8 below has been superseded by a graduated 3-step experiment described in
+> that file. Start there before planning a replay.
+
 ---
 
 ## 1. Executive Summary

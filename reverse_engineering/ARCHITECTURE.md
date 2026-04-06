@@ -570,7 +570,7 @@ The firmware's entire runtime state lives in a single ~4KB structure at RAM addr
 
 Key regions within the structure:
 - **+0x00 – 0x3F**: Core config (channels, trigger, voltage range, timebase, mode)
-- **+0x50 – 0x230**: Cursor data array (120 entries, scope_mode_cursor exclusive)
+- **+0x50 – 0x230**: Measurement scratch array (120 entries, `scope_measurement_engine` exclusive — was labeled "cursor data" / `scope_mode_cursor`; actually stores Vpp/Vrms/freq/period VFP accumulators)
 - **+0x260 – 0x33C**: Calibration tables (12 gain/offset pairs from SPI flash)
 - **+0x356 – 0x5AF**: Roll mode circular buffers (301 bytes × 2 channels)
 - **+0x5B0 – 0xDAF**: ADC sample buffers (1024 bytes × 2 channels)

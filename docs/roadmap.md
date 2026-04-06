@@ -8,7 +8,7 @@ Everything in this section runs on the real FNIRSI 2C53T, tested on AT32F403A @ 
 - **LCD driver** — ST7789V via 16-bit EXMC, variable-width bitmap fonts (4 sizes from SF Pro + Menlo)
 - **4 UI modes** — Oscilloscope, multimeter, signal generator, settings — all navigable via buttons
 - **4 color themes** — Dark Blue, Classic Green, High Contrast, Night Red — switchable in settings
-- **Button matrix** — 14/15 buttons hardware-confirmed, bidirectional 4x3 scan at 500Hz via TMR3 ISR
+- **Button matrix** — 15/15 buttons hardware-confirmed, bidirectional 4x3 scan at 500Hz via TMR3 ISR
 - **Battery monitor** — PB1 ADC with 16-sample averaging, percentage display, USB charge detection ("CHG"), low-battery auto-off at 3.3V
 - **Power management** — PC9 hold, PB8 backlight, POWER button 3-2-1 countdown shutdown
 - **USB HID bootloader** — Closed-case firmware updates via `make flash`, LCD status screen, auto-reboot after flash
