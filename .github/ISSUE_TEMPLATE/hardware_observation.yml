@@ -1,0 +1,77 @@
+name: Hardware Observation
+description: Something about your 2C53T unit that differs from the docs, or that we might not know yet
+title: "[Hardware]: "
+labels: ["hardware-observation", "needs-triage"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Hardware observations are one of the most valuable contributions you can make to this project. The firmware is developed against a single bench unit, so reports of differences between units, board revisions, or batches help us find assumptions that don't generalize.
+
+        **This is not for bug reports in the firmware** — if a feature isn't working the way the docs say it should, that's a [bug report](https://github.com/DavidClawson/OpenScope-2C53T/issues/new?template=bug_report.yml) instead. Use this template for things like:
+
+        - Your unit's PCB looks different from the photos in the docs
+        - A component has a different marking or value than expected
+        - Button layout, test-point locations, or connector positions differ
+        - The stock firmware on your unit behaves differently from what's documented
+        - You found a test point, jumper, or signal that isn't mapped yet
+
+  - type: input
+    id: board-revision
+    attributes:
+      label: Board revision
+      description: The silkscreen version printed on the PCB (e.g. `2C53T-V1.4`). If you can't find one, say so.
+      placeholder: "2C53T-V1.4"
+    validations:
+      required: true
+
+  - type: input
+    id: purchase-info
+    attributes:
+      label: Purchase info (approximate)
+      description: Roughly when and where did you buy it? Helps us correlate observations to production batches. Month/year + seller is enough.
+      placeholder: "e.g. February 2026, AliExpress"
+    validations:
+      required: false
+
+  - type: input
+    id: stock-firmware-version
+    attributes:
+      label: Stock firmware version
+      description: The version the device shipped with, if you checked before flashing custom firmware. Visible in Settings on the stock firmware.
+      placeholder: "e.g. V1.2.0"
+    validations:
+      required: false
+
+  - type: textarea
+    id: observation
+    attributes:
+      label: What did you observe?
+      description: Describe the difference as precisely as you can. Photos are extremely helpful — drag them in to upload.
+    validations:
+      required: true
+
+  - type: textarea
+    id: docs-reference
+    attributes:
+      label: Which docs does this relate to?
+      description: If your observation contradicts something in the docs, link to the file and section. Example — `reverse_engineering/HARDWARE_PINOUT.md`, the "Confirmed Pin Assignments" table.
+      placeholder: "e.g. docs/dfu_mode_guide.md — 'Locating the Test Points' section"
+    validations:
+      required: false
+
+  - type: textarea
+    id: photos
+    attributes:
+      label: Photos
+      description: Drag photos in here. Top-down shots of the PCB, close-ups of the area you're describing, and photos with a ruler or coin for scale are all helpful.
+    validations:
+      required: false
+
+  - type: textarea
+    id: additional-context
+    attributes:
+      label: Anything else?
+      description: Measurements, probing results, comparisons to other units you own, links to similar observations on other 2C53T communities.
+    validations:
+      required: false

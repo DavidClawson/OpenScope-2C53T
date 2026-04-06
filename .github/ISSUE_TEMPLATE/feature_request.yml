@@ -1,0 +1,74 @@
+name: Feature Request
+description: Suggest a new feature, measurement, UI improvement, or module
+title: "[Feature]: "
+labels: ["enhancement", "needs-triage"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for wanting to make the project better. Before you file, two things worth knowing:
+
+        1. **Pre-1.0 status.** The oscilloscope doesn't scope yet — FPGA data acquisition is the current critical path. Feature requests that depend on live ADC data are welcome, but they'll wait until that pipeline is working. That's not a rejection, just a scheduling reality.
+        2. **Describe the use case first, the feature second.** "I want to do X" tells us a lot more than "add feature Y." We may already have a different way to solve X, or the feature that best solves X may not be the one you're proposing.
+
+  - type: dropdown
+    id: category
+    attributes:
+      label: What kind of request is this?
+      options:
+        - New measurement or analysis (FFT variant, math channel, protocol decoder, etc.)
+        - UI improvement (layout, theme, navigation, visual clarity)
+        - New mode or subsystem (component tester, data logger, etc.)
+        - Module contribution (domain-specific JSON procedure file)
+        - Translation / localization
+        - Build system, tooling, or developer experience
+        - Documentation
+        - Other
+    validations:
+      required: true
+
+  - type: textarea
+    id: use-case
+    attributes:
+      label: What are you trying to do?
+      description: Describe the real-world scenario you're trying to solve. Be specific about the device, measurement, or workflow involved.
+      placeholder: "e.g. I'm trying to diagnose an intermittent K-Line bus on a 2000 Toyota 4Runner and I need to..."
+    validations:
+      required: true
+
+  - type: textarea
+    id: proposed-solution
+    attributes:
+      label: What do you think the feature should look like?
+      description: Your best guess at how it would work. Sketches, mockups, or references to how other instruments handle this are welcome. It's fine if you're not sure — describe the use case above and we can figure out the shape together.
+    validations:
+      required: false
+
+  - type: textarea
+    id: alternatives
+    attributes:
+      label: Alternatives you've considered
+      description: Other ways to solve the same problem, or workarounds you're currently using.
+    validations:
+      required: false
+
+  - type: dropdown
+    id: willing-to-help
+    attributes:
+      label: Would you be willing to help build this?
+      description: No pressure — this just helps us figure out how to prioritize. "No" is a completely valid answer.
+      options:
+        - "Yes — I can write code and test on hardware"
+        - "Yes — I can test on hardware but not write code"
+        - "Yes — I can contribute a module (JSON) or docs, not core firmware"
+        - "Maybe — with guidance"
+        - "No — just suggesting"
+    validations:
+      required: true
+
+  - type: textarea
+    id: additional-context
+    attributes:
+      label: Anything else?
+    validations:
+      required: false

@@ -1,0 +1,8 @@
+blank_issues_enabled: true
+contact_links:
+  - name: Contributing guide
+    url: https://github.com/DavidClawson/OpenScope-2C53T/blob/main/CONTRIBUTING.md
+    about: Read this before opening a pull request or taking on a larger change.
+  - name: First-time flash trouble
+    url: https://github.com/DavidClawson/OpenScope-2C53T/blob/main/docs/dfu_mode_guide.md
+    about: DFU mode walkthrough with platform-specific notes. Most "I can't flash" issues are covered here.

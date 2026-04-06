@@ -192,14 +192,16 @@ No FNIRSI source code is distributed in this repository. See [reverse_engineerin
 
 ## Contributing
 
-This is a solo project in active development. The core architecture is still taking shape, so I'm not accepting code contributions right now.
+Contributions are welcome! This is a solo-maintained project, so some areas are more open than others. See **[CONTRIBUTING.md](CONTRIBUTING.md)** for the full guide, including what's open, what needs discussion first, and how to submit.
 
-**If you own a 2C53T and want to help:**
-- Open an issue with hardware observations, bug reports, or feature requests
-- Test firmware builds and report what works / what doesn't
-- Share logic analyzer captures of FPGA communication
+**The most valuable things you can do right now:**
+- **Test on your hardware** — different 2C53T units reveal things a single bench unit can't
+- **Share logic analyzer captures** of FPGA communication on your unit
+- **Contribute modules** (`modules/*.json`) for your domain (automotive, HVAC, ham radio, etc.)
+- **Document what worked** — if you got a first-flash working on Linux or Windows, write it up
+- **Translate** — we have users in Korea and Russia already; localization help is welcome
 
-Code contributions may be accepted once the data acquisition pipeline stabilizes.
+Bug reports and feature requests are always welcome via the issue tracker.
 
 ## Related Projects
 

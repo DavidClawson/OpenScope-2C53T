@@ -1,0 +1,98 @@
+name: Bug Report
+description: Something in the firmware isn't working the way it should
+title: "[Bug]: "
+labels: ["bug", "needs-triage"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for taking the time to file a bug report. The more specific you can be, the faster this can get fixed.
+
+        **Before you file:** please search [existing issues](https://github.com/DavidClawson/OpenScope-2C53T/issues?q=is%3Aissue) to see if this has already been reported.
+
+  - type: input
+    id: firmware-version
+    attributes:
+      label: Firmware version
+      description: |
+        The release tag you're running (e.g. `v0.1.0`), or if you built from source, the output of `git describe --tags --always` from the `firmware/` directory.
+      placeholder: "v0.1.0"
+    validations:
+      required: true
+
+  - type: dropdown
+    id: subsystem
+    attributes:
+      label: Which part of the firmware?
+      description: Pick the one that best matches. If you're not sure, pick "Not sure / other."
+      options:
+        - Oscilloscope UI
+        - Multimeter UI / readings
+        - Signal generator
+        - Settings / menus
+        - Button input
+        - Battery / power management
+        - Display / rendering
+        - USB bootloader / flashing
+        - Build system (Makefile, toolchain)
+        - Emulator
+        - Documentation
+        - Not sure / other
+    validations:
+      required: true
+
+  - type: dropdown
+    id: environment
+    attributes:
+      label: Where did you see this?
+      options:
+        - Real hardware (2C53T)
+        - Emulator (Renode / SDL3 viewer)
+        - Both
+    validations:
+      required: true
+
+  - type: textarea
+    id: steps-to-reproduce
+    attributes:
+      label: Steps to reproduce
+      description: What exactly did you do? Include button presses, menu navigation, probe connections, signal sources — anything a second person would need to reproduce it.
+      placeholder: |
+        1. Power on the device
+        2. Press BUTTON X
+        3. Connect probe to ...
+        4. ...
+    validations:
+      required: true
+
+  - type: textarea
+    id: expected
+    attributes:
+      label: What did you expect to happen?
+    validations:
+      required: true
+
+  - type: textarea
+    id: actual
+    attributes:
+      label: What actually happened?
+      description: Include exact readings, error messages, or a description of the visual glitch. Photos and videos are extremely helpful — drag them into this field to upload.
+    validations:
+      required: true
+
+  - type: input
+    id: board-revision
+    attributes:
+      label: Board revision (if known)
+      description: The silkscreen version printed on the PCB if you've opened the case. Leave blank if you haven't looked.
+      placeholder: "2C53T-V1.4"
+    validations:
+      required: false
+
+  - type: textarea
+    id: additional-context
+    attributes:
+      label: Anything else?
+      description: Logic analyzer captures, serial output, steps you already tried, guesses at the root cause — anything that might help.
+    validations:
+      required: false
