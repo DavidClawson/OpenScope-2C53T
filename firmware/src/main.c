@@ -194,26 +194,44 @@ static void vDisplayTask(void *pvParameters)
         /* Check in with health monitor */
         health_checkin(health_slot_display);
 
-        /* Animate the active mode (only scope and siggen have animation).
-         * When scope is stopped, skip continuous redraws — waveform is
-         * frozen and redraws only on explicit commands (V/div, timebase
-         * changes send DCMD_REDRAW_ALL via the queue above). */
+        /* Periodic redraws for active modes.
+         *
+         * All modes receive explicit redraws via queue commands above
+         * (DCMD_DRAW_SCOPE, DCMD_DRAW_SIGGEN, etc.) when button presses
+         * or data events require it. The code below only handles cases
+         * that need continuous or periodic updates beyond those events.
+         *
+         * Before the meter fix (2026-04-04), scope and siggen both
+         * redrew unconditionally every 50ms tick, causing visible
+         * flicker from the full-area lcd_fill_rect + repaint sequence.
+         * Now all three data modes are gated the same way. */
         if (current_mode == MODE_OSCILLOSCOPE) {
             const scope_state_t *ss_anim = scope_state_get();
             if (ss_anim->running) {
+                /* Redraw when the popup overlay is counting down (needs
+                 * frame ticks to auto-dismiss), or on a ~1s safety tick
+                 * for time-based UI elements. When FPGA SPI3 data
+                 * acquisition is working, this branch will also trigger
+                 * on new ADC data arrival (gated like the meter path). */
+                static uint32_t last_scope_frame = 0;
+                if (scope_popup_active() || (frame - last_scope_frame) >= 20) {
 #ifdef FEATURE_FFT
-                if (scope_view == SCOPE_VIEW_FFT)
-                    draw_fft_screen();
-                else if (scope_view == SCOPE_VIEW_SPLIT)
-                    draw_split_screen(frame);
-                else if (scope_view == SCOPE_VIEW_WATERFALL)
-                    draw_waterfall_screen();
-                else
+                    if (scope_view == SCOPE_VIEW_FFT)
+                        draw_fft_screen();
+                    else if (scope_view == SCOPE_VIEW_SPLIT)
+                        draw_split_screen(frame);
+                    else if (scope_view == SCOPE_VIEW_WATERFALL)
+                        draw_waterfall_screen();
+                    else
 #endif
-                    draw_scope_screen(frame);
+                        draw_scope_screen(frame);
+                    last_scope_frame = frame;
+                }
             }
         } else if (current_mode == MODE_SIGNAL_GEN) {
-            draw_siggen_screen(frame);
+            /* Siggen UI is static — redraws only on parameter changes
+             * via DCMD_DRAW_SIGGEN queue commands from input_handler.
+             * No continuous animation needed. */
         } else if (current_mode == MODE_MULTIMETER) {
             /* Only redraw the meter when new FPGA data has arrived, or
              * every second as a safety tick for time-based UI elements

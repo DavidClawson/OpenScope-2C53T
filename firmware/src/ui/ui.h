@@ -134,6 +134,7 @@ void draw_scope_grid(void);
 void draw_demo_waveform(uint32_t frame);
 void draw_scope_screen(uint32_t frame);
 void scope_show_popup(const char *text);
+bool scope_popup_active(void);
 #ifdef FEATURE_FFT
 void draw_fft_screen(void);
 void draw_split_screen(uint32_t frame);

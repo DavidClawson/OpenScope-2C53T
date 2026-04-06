@@ -63,6 +63,11 @@ void scope_show_popup(const char *text)
     popup_frames = POPUP_DURATION;
 }
 
+bool scope_popup_active(void)
+{
+    return popup_frames > 0;
+}
+
 /* ═══════════════════════════════════════════════════════════════════
  * Grid
  * ═══════════════════════════════════════════════════════════════════ */
