@@ -176,6 +176,10 @@ typedef struct {
     volatile uint32_t diag_spi_ctrl1;      /* SPI3 CTRL1 after init */
     volatile uint32_t diag_spi_sts;        /* SPI3 STS after init */
 
+    /* H2 cal table upload diagnostic */
+    volatile uint32_t h2_bytes_sent;       /* Bytes uploaded (should be 115638) */
+    volatile uint8_t  h2_upload_done;      /* 1 = upload completed without error */
+
 } fpga_state_t;
 
 /* Global FPGA state (defined in fpga.c) */
@@ -276,5 +280,12 @@ void fpga_enter_siggen_mode(void);
  * Call when the meter submode changes (LEFT/RIGHT buttons).
  */
 void fpga_set_meter_mode(uint8_t submode);
+
+/*
+ * Send a raw 10-byte USART2 frame to the FPGA (bypasses queue).
+ * Used by the USB debug shell for interactive protocol exploration.
+ * frame must point to exactly 10 bytes.
+ */
+void fpga_send_raw_frame(const uint8_t *frame);
 
 #endif /* FPGA_H */

@@ -137,7 +137,11 @@ static void usart2_send_cmd(uint8_t cmd_hi, uint8_t cmd_lo)
     uint8_t frame[FPGA_TX_FRAME_SIZE] = {0};
     frame[2] = cmd_hi;
     frame[3] = cmd_lo;
-    frame[8] = 0xAA;  /* Trailer — see FPGA_PROTOCOL_COMPLETE.md */
+    /* NOTE: byte[8] was previously 0xAA based on protocol doc, but the
+     * stock frame builder does NOT set bytes[4-8] — they carry over from
+     * command dispatchers (0 for simple commands). The 0xAA may have been
+     * causing checksum validation failures on the FPGA side, explaining
+     * zero echo frames. Now matches stock: bytes[4-8] = 0 for basic cmds. */
     frame[9] = (cmd_lo + cmd_hi) & 0xFF;
     usart2_send_frame(frame);
 }
@@ -276,15 +280,14 @@ static void fpga_usart_tx_task(void *pv)
 
         /* Build TX frame.
          * Stock firmware TX buffer retains bytes [4]-[8] from dispatch
-         * handlers. At minimum, byte [8] = 0xAA (trailer) is always
-         * present per FPGA_PROTOCOL_COMPLETE.md. Without it, the FPGA
-         * may reject our configuration commands. */
+         * handlers — for simple commands they're all 0 (BSS init).
+         * We previously hardcoded byte[8]=0xAA based on protocol doc,
+         * but this likely caused checksum failures (zero echo frames). */
         fpga.tx_count++;
         fpga.tx_index = 0;
         memset((void *)fpga.tx_frame, 0, FPGA_TX_FRAME_SIZE);
         fpga.tx_frame[2] = cmd_hi;
         fpga.tx_frame[3] = cmd_lo;
-        fpga.tx_frame[8] = 0xAA;  /* Trailer — required by FPGA */
         fpga.tx_frame[9] = (cmd_lo + cmd_hi) & 0xFF;
 
         /* Enable TX interrupt — ISR pumps all 10 bytes */
@@ -805,11 +808,20 @@ void fpga_init(void)
 
     /* ---------------------------------------------------------------
      * Step 6: SPI3 FPGA handshake
-     * Stock firmware sends 4 bytes per CS transaction:
-     *   CS HIGH → 0x00 (flush) → CS LOW → 0x05, 0x00, 0x00 → CS HIGH
-     * Compliance audit (2026-04-06): we were sending only 2 bytes
-     * (0x05, 0x00) in group 1. Stock sends a leading 0x00 dummy and
-     * a trailing 0x00 parameter. Match stock exactly.
+     * Unicorn trace (2026-04-06) shows EXACTLY this sequence:
+     *   CS HIGH → send 0x00 flush
+     *   CS LOW  → send 0x05, 0x00 (2 bytes only!)
+     *   CS HIGH → send 0x00 flush
+     *   [delay]
+     *   CS LOW  → send 0x12, 0x00 (2 bytes)
+     *   CS HIGH → send 0x00 flush
+     *   [delay]
+     *   CS LOW  → send 0x15, 0x00 (2 bytes)
+     *   CS HIGH → send 0x00 flush
+     *
+     * CORRECTION: The earlier compliance audit agents said 4 bytes per
+     * CS transaction. The Unicorn trace proves it's 2. Extra bytes
+     * within CS could confuse the FPGA's SPI slave state machine.
      * --------------------------------------------------------------- */
 
     /* Flush: send dummy with CS high */
@@ -818,41 +830,35 @@ void fpga_init(void)
     fpga.diag_spi_sts = FPGA_SPI->sts;  /* STS after first transfer */
     (void)FPGA_SPI->dt;  /* Discard any stale data */
 
-    /* Handshake: command 0x05 with 4 bytes like stock */
+    /* Handshake: command 0x05 — exactly 2 bytes within CS LOW */
     SPI3_CS_ASSERT();
-    spi3_xfer(0x00);                      /* Leading dummy (stock step 30-31) */
     fpga.init_hs[0] = spi3_xfer(0x05);   /* FPGA command — config/ID query */
-    fpga.init_hs[1] = spi3_xfer(0x00);   /* Parameter byte 1 */
-    spi3_xfer(0x00);                      /* Parameter byte 2 (stock step 33-34) */
+    fpga.init_hs[1] = spi3_xfer(0x00);   /* Parameter byte */
     SPI3_CS_DEASSERT();
 
-    /* Flush with CS high (stock steps 36-39) */
-    spi3_xfer(0x00);
+    /* Flush with CS high */
     spi3_xfer(0x00);
 
-    /* Post-handshake delay — stock has another ~10ms timed loop */
+    /* Post-handshake delay */
     systick_delay_ms(10);
 
     /* ---------------------------------------------------------------
-     * Step 7: Additional SPI3 handshake commands
-     * Stock firmware sends 0x12 and 0x15 queries.
-     * Capture responses to verify SPI3 is alive at the hardware level.
+     * Step 7: Additional SPI3 commands (0x12, 0x15)
+     * Unicorn confirmed: 2 bytes per CS transaction + flush.
      * --------------------------------------------------------------- */
     SPI3_CS_ASSERT();
     fpga.init_hs[2] = spi3_xfer(0x12);
     fpga.init_hs[3] = spi3_xfer(0x00);
-    spi3_xfer(0x00);
-    spi3_xfer(0x00);
     SPI3_CS_DEASSERT();
+    spi3_xfer(0x00);  /* flush */
 
     systick_delay_ms(5);
 
     SPI3_CS_ASSERT();
     fpga.init_hs[4] = spi3_xfer(0x15);
     fpga.init_hs[5] = spi3_xfer(0x00);
-    spi3_xfer(0x00);
-    spi3_xfer(0x00);
     SPI3_CS_DEASSERT();
+    spi3_xfer(0x00);  /* flush */
 
     systick_delay_ms(5);
 
@@ -874,14 +880,18 @@ void fpga_init(void)
      * --------------------------------------------------------------- */
     SPI3_CS_ASSERT();
     spi3_xfer(0x3B);  /* Begin bulk upload opcode */
+    spi3_xfer(0x00);  /* Flush byte (stock firmware sends this after opcode) */
 
     /* Stream the entire 115,638-byte table */
     for (uint32_t i = 0; i < FPGA_H2_CAL_TABLE_SIZE; i++) {
         spi3_xfer(fpga_h2_cal_table[i]);
+        fpga.h2_bytes_sent = i + 1;
     }
 
     spi3_xfer(0x3A);  /* End bulk upload opcode */
+    spi3_xfer(0x00);  /* Flush byte (stock firmware sends this after close) */
     SPI3_CS_DEASSERT();
+    fpga.h2_upload_done = 1;
 
     systick_delay_ms(50);  /* Let FPGA process the table */
 
@@ -1292,4 +1302,9 @@ void fpga_set_meter_mode(uint8_t submode)
         fpga_send_cmd(0x00, 0x19);
         break;
     }
+}
+
+void fpga_send_raw_frame(const uint8_t *frame)
+{
+    usart2_send_frame(frame);
 }

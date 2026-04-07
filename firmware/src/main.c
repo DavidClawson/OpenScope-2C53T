@@ -35,6 +35,7 @@ extern void system_clock_config(void);
 #include "fpga.h"
 #include "meter_data.h"
 #include "flash_fs.h"
+#include "usb_debug.h"
 
 /* ═══════════════════════════════════════════════════════════════════
  * Global State (extern'd via ui.h for UI modules)
@@ -493,6 +494,12 @@ int main(void)
      * Must happen after clock init and GPIO clocks are enabled.
      * Sends boot commands, configures SPI3 Mode 3, performs handshake,
      * sets PB11 HIGH (FPGA active mode) and PC6 HIGH (SPI enable). */
+    /* Initialize USB CDC debug shell (HICK 48MHz clock + CDC class).
+     * Must happen after clock init. Enables USB pull-up so device
+     * appears on the bus immediately — the debug task handles data
+     * once the scheduler starts. */
+    usb_debug_init();
+
     wdt_counter_reload();
     fpga_init();
     wdt_counter_reload();
@@ -519,6 +526,10 @@ int main(void)
     /* Create FPGA communication tasks (USART TX/RX + SPI3 acquisition).
      * These match the stock firmware's dvom_TX, dvom_RX, and fpga tasks. */
     fpga_create_tasks();
+
+    /* Create USB debug shell task (CDC virtual serial port).
+     * Priority 2 — above display (1) but below input (4) and FPGA tasks. */
+    usb_debug_create_task();
 
     /* Device boots into oscilloscope mode — send scope FPGA commands and
      * queue initial SPI3 acquisition triggers. The triggers will be waiting

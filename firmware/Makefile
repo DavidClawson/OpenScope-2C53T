@@ -52,6 +52,7 @@ C_SOURCES += src/drivers/fpga.c
 C_SOURCES += src/drivers/fpga_scanner.c
 C_SOURCES += src/drivers/dac_output.c
 C_SOURCES += src/drivers/meter_data.c
+C_SOURCES += src/drivers/usb_debug.c
 C_SOURCES += src/dsp/signal_gen.c
 C_SOURCES += src/dsp/shared_mem.c
 C_SOURCES += src/ui/persistence.c
@@ -114,6 +115,17 @@ C_SOURCES += $(AT32_DRV)/src/at32f403a_407_wdt.c
 C_SOURCES += $(AT32_DRV)/src/at32f403a_407_adc.c
 C_SOURCES += $(AT32_DRV)/src/at32f403a_407_dac.c
 C_SOURCES += $(AT32_DRV)/src/at32f403a_407_tmr.c
+C_SOURCES += $(AT32_DRV)/src/at32f403a_407_usb.c
+C_SOURCES += $(AT32_DRV)/src/at32f403a_407_acc.c
+
+# USB Device Middleware (CDC virtual COM port)
+AT32_USBD = at32f403a_lib/middlewares/usbd_drivers
+AT32_CDC  = at32f403a_lib/middlewares/usbd_class/cdc
+C_SOURCES += $(AT32_USBD)/src/usbd_core.c
+C_SOURCES += $(AT32_USBD)/src/usbd_int.c
+C_SOURCES += $(AT32_USBD)/src/usbd_sdr.c
+C_SOURCES += $(AT32_CDC)/cdc_class.c
+C_SOURCES += $(AT32_CDC)/cdc_desc.c
 
 # FreeRTOS kernel
 C_SOURCES += $(FREERTOS)/tasks.c
@@ -149,6 +161,8 @@ C_INCLUDES += -I$(AT32_CMSIS)/device_support
 C_INCLUDES += -I$(AT32_CMSIS)/core_support
 C_INCLUDES += -I$(FREERTOS)/include
 C_INCLUDES += -I$(FREERTOS)/portable/GCC/ARM_CM4F
+C_INCLUDES += -I$(AT32_USBD)/inc
+C_INCLUDES += -I$(AT32_CDC)
 
 ######################################################################
 # Compiler flags
