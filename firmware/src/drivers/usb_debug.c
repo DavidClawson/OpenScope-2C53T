@@ -677,6 +677,63 @@ static void dispatch_command(char *line)
         cmd_fpga_acq(line[8] == ' ' ? line + 9 : "");
     } else if (strncmp(line, "spi3 read", 9) == 0) {
         cmd_spi3_read(line[9] == ' ' ? line + 10 : "");
+    } else if (strcmp(line, "spi3 probe") == 0) {
+        /* Bit-bang SPI3 probe: disable SPI peripheral, manually toggle
+         * SCK and read MISO to test if the FPGA drives the line. */
+        usb_send_str("=== SPI3 Bit-Bang Probe ===\r\n");
+
+        /* Read PB4 (MISO) idle state */
+        uint32_t miso_idle = (GPIOB->idt & (1 << 4)) ? 1 : 0;
+        usb_debug_printf("MISO idle (CS high): %lu\r\n", miso_idle);
+
+        /* Assert CS (PB6 LOW) */
+        GPIOB->clr = (1 << 6);
+        for (volatile int d = 0; d < 1000; d++);  /* brief delay */
+        uint32_t miso_cs = (GPIOB->idt & (1 << 4)) ? 1 : 0;
+        usb_debug_printf("MISO after CS assert: %lu\r\n", miso_cs);
+
+        /* Try reading through SPI peripheral */
+        volatile uint32_t *spi_sts = (volatile uint32_t *)0x40003C08;
+        volatile uint32_t *spi_dt  = (volatile uint32_t *)0x40003C0C;
+
+        /* Clear any pending RX data */
+        if (*spi_sts & 0x01) { (void)*spi_dt; }
+
+        /* Send 0x00 and read response */
+        uint32_t timeout = 100000;
+        while (!(*spi_sts & 0x02) && --timeout);  /* Wait TXE */
+        *spi_dt = 0x00;  /* Send dummy byte */
+        timeout = 100000;
+        while (!(*spi_sts & 0x01) && --timeout);  /* Wait RXNE */
+        uint8_t rx = (uint8_t)*spi_dt;
+        usb_debug_printf("SPI3 xfer(0x00) = 0x%02X (timeout=%lu)\r\n", rx, timeout);
+
+        /* Send 0x05 (FPGA query cmd) */
+        timeout = 100000;
+        while (!(*spi_sts & 0x02) && --timeout);
+        *spi_dt = 0x05;
+        timeout = 100000;
+        while (!(*spi_sts & 0x01) && --timeout);
+        rx = (uint8_t)*spi_dt;
+        usb_debug_printf("SPI3 xfer(0x05) = 0x%02X (timeout=%lu)\r\n", rx, timeout);
+
+        /* Send another 0x00 */
+        timeout = 100000;
+        while (!(*spi_sts & 0x02) && --timeout);
+        *spi_dt = 0x00;
+        timeout = 100000;
+        while (!(*spi_sts & 0x01) && --timeout);
+        rx = (uint8_t)*spi_dt;
+        usb_debug_printf("SPI3 xfer(0x00) = 0x%02X (timeout=%lu)\r\n", rx, timeout);
+
+        /* Deassert CS */
+        GPIOB->scr = (1 << 6);
+        usb_debug_printf("SPI3 STS: 0x%08lX  CTRL1: 0x%08lX\r\n",
+                         *spi_sts, *(volatile uint32_t *)0x40003C00);
+
+        /* Also check PC6 state */
+        usb_debug_printf("PC6 (SPI enable): %d\r\n",
+                         (GPIOC->idt & (1 << 6)) ? 1 : 0);
     } else if (strcmp(line, "uptime") == 0) {
         cmd_uptime();
     } else {

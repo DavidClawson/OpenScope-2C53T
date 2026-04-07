@@ -621,9 +621,20 @@ void fpga_init(void)
         IOMUX->remap = remap;
     }
 
-    /* GMUX remap (AT32-specific, controls actual pin mux) */
+    /* GMUX remap (AT32-specific, controls actual pin mux).
+     *
+     * CRITICAL: Stock firmware NEVER writes SPI3_GMUX (remap5).
+     * It leaves bits [27:24] at reset default 0000, which means
+     * "use legacy remap path." The legacy remap + JTAG disable
+     * is sufficient to route SPI3 to PB3/PB4/PB5.
+     *
+     * Our previous SPI3_GMUX_0010 call was WRONG — it actively
+     * overrode the legacy path with a GMUX value that may resolve
+     * pin routing differently on the AT32, causing MISO to be
+     * disconnected. Discovered 2026-04-07 by comparing register
+     * writes in stock master_init decompilation. */
     gpio_pin_remap_config(SWJTAG_GMUX_010, TRUE);
-    gpio_pin_remap_config(SPI3_GMUX_0010, TRUE);
+    /* SPI3_GMUX_0010 deliberately NOT called — match stock firmware */
 
     /* ---------------------------------------------------------------
      * Step 2: USART2 init — 9600 baud, 8N1, TX+RX with interrupts
