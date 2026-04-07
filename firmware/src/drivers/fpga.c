@@ -237,6 +237,24 @@ void USART2_IRQHandler(void)
 }
 
 /* ═══════════════════════════════════════════════════════════════════
+ * SPI3 IRQ Handler (stub)
+ *
+ * Stock firmware enables SPI3 IRQ #51 (NVIC_ISER1 bit 19).
+ * We use polled SPI3, but enable the interrupt to match stock config.
+ * This stub just clears any pending flags to prevent IRQ storms.
+ * Compliance audit (2026-04-06): added to match stock init.
+ * ═══════════════════════════════════════════════════════════════════ */
+
+void SPI3_I2S3EXT_IRQHandler(void)
+{
+    /* Read STS and DR to clear any pending RXNE/TXE/OVR flags */
+    volatile uint32_t sts = FPGA_SPI->sts;
+    volatile uint32_t dr  = FPGA_SPI->dt;
+    (void)sts;
+    (void)dr;
+}
+
+/* ═══════════════════════════════════════════════════════════════════
  * FreeRTOS Tasks
  * ═══════════════════════════════════════════════════════════════════ */
 
@@ -400,17 +418,32 @@ static void fpga_acquisition_task(void *pv)
         fpga.spi3_probing = true;
 
         /*
-         * SPI3 Acquisition Protocol:
+         * SPI3 Acquisition Protocol (stock firmware fpga_task_annotated.c):
          *
-         * Stock firmware case 2 (SCOPE_NORMAL) at fpga_task_annotated.c:888:
-         *   CS_ASSERT → spi3_xfer(0xFF) [discard echo] →
+         * Transaction 1 — tell FPGA what to acquire:
+         *   CS_ASSERT → spi3_xfer(command_code) → CS_DEASSERT
+         *   command_code = 0x80 | (voltage_range & 0x7F)
+         *
+         * Transaction 2 — bulk data read:
+         *   CS_ASSERT → spi3_xfer(0xFF) [discard] →
          *   512× { spi3_xfer(0xFF) [CH1], spi3_xfer(0xFF) [CH2] } →
          *   CS_DEASSERT
          *
-         * Tested: 0x80 (command_code) as first byte produces same constant
-         * data as 0xFF. The issue isn't the first byte — the FPGA's ADC
-         * isn't actually acquiring new samples into its buffer.
+         * Previously we skipped transaction 1 because "it didn't matter"
+         * — but that was tested when PC6 was HIGH (FPGA SPI disabled).
+         * Now that PC6 is LOW and compliance fixes are in, the FPGA may
+         * need the command_code to arm its sample buffer.
          */
+
+        /* Transaction 1: Pre-acquisition command */
+        SPI3_CS_ASSERT();
+        spi3_xfer(0x80);  /* command_code = 0x80 | voltage_range(0) */
+        SPI3_CS_DEASSERT();
+
+        /* Brief pause between transactions (stock firmware has a few cycles) */
+        for (volatile int d = 0; d < 100; d++) {}
+
+        /* Transaction 2: Bulk data read */
         SPI3_CS_ASSERT();
 
         /* First byte: 0xFF (stock firmware case 2), echo is discarded */
@@ -623,24 +656,33 @@ void fpga_init(void)
 
     /* ---------------------------------------------------------------
      * Step 3: Send FPGA boot commands via USART2
-     * Stock firmware sends: 0x01, 0x02, 0x06, 0x07, 0x08
-     * with delays between each for FPGA processing time.
+     * Stock firmware sends ALL of 0x01-0x08 during boot.
+     * Compliance audit (2026-04-06) found we were missing 0x03-0x05.
      * --------------------------------------------------------------- */
     systick_delay_ms(100);  /* Wait for FPGA power-up */
 
-    usart2_send_cmd(0x00, FPGA_CMD_INIT_01);
+    usart2_send_cmd(0x00, FPGA_CMD_INIT_01);  /* 0x01: Channel init */
     systick_delay_ms(50);
 
-    usart2_send_cmd(0x00, FPGA_CMD_INIT_02);
+    usart2_send_cmd(0x00, FPGA_CMD_INIT_02);  /* 0x02: Signal gen setup */
     systick_delay_ms(50);
 
-    usart2_send_cmd(0x00, FPGA_CMD_INIT_06);
+    usart2_send_cmd(0x00, 0x03);  /* 0x03: Trigger config */
     systick_delay_ms(50);
 
-    usart2_send_cmd(0x00, FPGA_CMD_INIT_07);
+    usart2_send_cmd(0x00, 0x04);  /* 0x04: Vertical scale */
     systick_delay_ms(50);
 
-    usart2_send_cmd(0x00, FPGA_CMD_INIT_08);
+    usart2_send_cmd(0x00, 0x05);  /* 0x05: Channel enable */
+    systick_delay_ms(50);
+
+    usart2_send_cmd(0x00, FPGA_CMD_INIT_06);  /* 0x06: Signal gen setup */
+    systick_delay_ms(50);
+
+    usart2_send_cmd(0x00, FPGA_CMD_INIT_07);  /* 0x07: Meter probe detect */
+    systick_delay_ms(50);
+
+    usart2_send_cmd(0x00, FPGA_CMD_INIT_08);  /* 0x08: Meter configure */
     systick_delay_ms(100);  /* Longer delay after last boot command */
 
     /* ---------------------------------------------------------------
@@ -692,7 +734,7 @@ void fpga_init(void)
     gpio_cfg.gpio_out_type = GPIO_OUTPUT_PUSH_PULL;
     gpio_cfg.gpio_drive_strength = GPIO_DRIVE_STRENGTH_STRONGER;
     gpio_init(GPIOC, &gpio_cfg);
-    GPIOC->scr = PC6_MASK;  /* PC6 HIGH — enable FPGA SPI */
+    GPIOC->scr = PC6_MASK;  /* PC6 HIGH — FPGA SPI enable (match stock) */
 
     /* PB11 = FPGA active mode: output push-pull (set HIGH later) */
     gpio_cfg.gpio_pins = GPIO_PINS_11;
@@ -720,18 +762,30 @@ void fpga_init(void)
     FPGA_SPI->ctrl1 = (1 << 0)   /* CPHA = 1 */
                | (1 << 1)   /* CPOL = 1 */
                | (1 << 2)   /* MSTEN = 1 */
-               | (1 << 3)   /* MDIV = /4 (stock uses /4 = 30MHz) */
+               /* BR[2:0] = 000 → /2 prescaler = 60MHz from 120MHz APB1.
+                * Compliance audit (2026-04-06): stock uses /2 (60MHz),
+                * confirmed by fpga_task_annotated.c, FPGA_TASK_ANALYSIS.md,
+                * and remaining_unknowns.md. We had (1<<3) = /4 = 30MHz
+                * which was WRONG — half the expected clock rate. */
                | (1 << 8)   /* SWCSIN (SSI) = 1 */
                | (1 << 9);  /* SWCSEN (SSM) = 1 */
 
-    /* NOTE: Stock firmware sets CTL1 |= 0x03 (DMA RX+TX enable), but that's
-     * because it uses DMA for bulk transfers. We use polled SPI3 via
-     * spi3_xfer(), so DMA must be DISABLED or the data register won't
-     * work for polled access. */
-    FPGA_SPI->ctrl2 = 0;  /* No DMA, no interrupts — polled mode */
+    /* Stock firmware sets CTL1 |= 0x03 (RXDMAEN + TXDMAEN).
+     * Compliance audit (2026-04-06): our previous comment that "DMA must
+     * be DISABLED or the data register won't work" was WRONG. On AT32/STM32F1,
+     * setting DMA enable bits without configuring DMA channels just causes
+     * ignored DMA requests — polled DR access still works fine. The FPGA
+     * may depend on seeing these DMA request signals as part of its SPI
+     * slave handshake. Match stock exactly. */
+    FPGA_SPI->ctrl2 = 0x03;  /* RXDMAEN + TXDMAEN (match stock) */
 
     /* Enable SPI */
     FPGA_SPI->ctrl1 |= (1 << 6) /* SPE */;
+
+    /* Enable SPI3 interrupt in NVIC (stock enables IRQ #51).
+     * We use polled transfers, but the stock firmware enables this and the
+     * FPGA may expect it. Stub handler below clears any pending flags. */
+    NVIC_EnableIRQ(SPI3_I2S3EXT_IRQn);
 
     /* Capture register state for diagnostics */
     fpga.diag_remap5 = IOMUX->remap;   /* STM32-compatible remap (offset 0x04) */
@@ -742,31 +796,41 @@ void fpga_init(void)
     /* ---------------------------------------------------------------
      * Step 5: SysTick delays (stock firmware phases 6)
      * The FPGA needs time after SPI3 activation before handshake.
+     * Stock firmware has ~20ms of multi-phase SysTick delays here.
+     * Compliance audit (2026-04-06): we had 10ms, stock has ~20ms.
      * --------------------------------------------------------------- */
     systick_delay_ms(10);
+    systick_delay_ms(5);
+    systick_delay_ms(5);
 
     /* ---------------------------------------------------------------
      * Step 6: SPI3 FPGA handshake
-     * Stock firmware: CS deassert, flush, CS assert, send 0x05, read
-     * response, send 0x00, read, CS deassert, flush, delay.
+     * Stock firmware sends 4 bytes per CS transaction:
+     *   CS HIGH → 0x00 (flush) → CS LOW → 0x05, 0x00, 0x00 → CS HIGH
+     * Compliance audit (2026-04-06): we were sending only 2 bytes
+     * (0x05, 0x00) in group 1. Stock sends a leading 0x00 dummy and
+     * a trailing 0x00 parameter. Match stock exactly.
      * --------------------------------------------------------------- */
 
     /* Flush: send dummy with CS high */
-    fpga.init_hs[6] = spi3_xfer(0x00);  /* Capture flush response */
+    SPI3_CS_DEASSERT();  /* Ensure CS is HIGH */
+    fpga.init_hs[6] = spi3_xfer(0x00);  /* Dummy flush (CS high) */
     fpga.diag_spi_sts = FPGA_SPI->sts;  /* STS after first transfer */
     (void)FPGA_SPI->dt;  /* Discard any stale data */
 
-    /* Handshake: command 0x05 — capture responses for diagnostics */
+    /* Handshake: command 0x05 with 4 bytes like stock */
     SPI3_CS_ASSERT();
+    spi3_xfer(0x00);                      /* Leading dummy (stock step 30-31) */
     fpga.init_hs[0] = spi3_xfer(0x05);   /* FPGA command — config/ID query */
-    fpga.init_hs[1] = spi3_xfer(0x00);   /* Parameter byte */
+    fpga.init_hs[1] = spi3_xfer(0x00);   /* Parameter byte 1 */
+    spi3_xfer(0x00);                      /* Parameter byte 2 (stock step 33-34) */
     SPI3_CS_DEASSERT();
 
-    /* Flush again */
+    /* Flush with CS high (stock steps 36-39) */
     spi3_xfer(0x00);
     spi3_xfer(0x00);
 
-    /* Post-handshake delay */
+    /* Post-handshake delay — stock has another ~10ms timed loop */
     systick_delay_ms(10);
 
     /* ---------------------------------------------------------------
@@ -821,14 +885,13 @@ void fpga_init(void)
 
     systick_delay_ms(50);  /* Let FPGA process the table */
 
-    /* ---------------------------------------------------------------
-     * Step 8: Set PB11 HIGH — FPGA active mode
-     * Stock firmware does this in step 52, just before scheduler start.
-     * --------------------------------------------------------------- */
-    GPIOB->scr = PB11_MASK;  /* PB11 HIGH — FPGA active */
+    /* PB11 HIGH (FPGA active mode) deferred to after all configuration.
+     * Stock firmware sets PB11 in step 52, just before vTaskStartScheduler().
+     * Compliance audit (2026-04-06): we were setting it too early — moved
+     * to after analog frontend, meter commands, and gain/offset init. */
 
     /* ---------------------------------------------------------------
-     * Step 9: Analog frontend + Meter IC activation
+     * Step 8: Analog frontend + Meter IC activation
      * Stock firmware configures PB9 and PA6 as outputs during init
      * (discovered in master_init Phase 1 decompilation).
      * These pins may control the analog MUX or meter IC enable.
@@ -885,7 +948,12 @@ void fpga_init(void)
     gpio_init(GPIOB, &gpio_cfg);
     GPIOB->clr = (1U << 10);  /* PB10 LOW — gain bit */
 
-    /* PC11 — meter analog MUX enable */
+    /* PC11 — meter analog MUX enable.
+     * Compliance audit (2026-04-06): was missing gpio_init() — PC11
+     * defaults to floating input on reset, so the scr write was silently
+     * ignored. The meter MUX was never actually enabled. */
+    gpio_cfg.gpio_pins = GPIO_PINS_11;
+    gpio_init(GPIOC, &gpio_cfg);
     GPIOC->scr = (1U << 11);
 
     systick_delay_ms(50);  /* Let relays settle */
@@ -935,14 +1003,16 @@ void fpga_init(void)
     systick_delay_ms(50);
 
     /* ---------------------------------------------------------------
-     * Step 10: Post-init SPI3 probe + GPIO bit-bang test
-     *
-     * Test 1: Normal SPI3 peripheral probe (init_hs[6-7])
-     * Test 2: GPIO bit-bang — disable SPI3, read PB4 directly as GPIO
-     *         while toggling PB3 (SCK) and PB6 (CS) manually.
-     *         This bypasses the SPI peripheral entirely.
-     *         If PB4 changes → FPGA is responding, SPI peripheral is wrong
-     *         If PB4 stays HIGH → FPGA not driving MISO at all
+     * Step 9b: Set PB11 HIGH — FPGA active mode
+     * Stock firmware does this in step 52, just before scheduler start,
+     * AFTER all peripheral config, timer setup, and FPGA commands.
+     * Compliance audit (2026-04-06): moved from before analog frontend
+     * to after all configuration is complete.
+     * --------------------------------------------------------------- */
+    GPIOB->scr = PB11_MASK;  /* PB11 HIGH — FPGA active */
+
+    /* ---------------------------------------------------------------
+     * Step 10: Post-init SPI3 probe
      * --------------------------------------------------------------- */
     systick_delay_ms(100);  /* Give FPGA time to settle */
 

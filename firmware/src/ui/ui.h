@@ -96,7 +96,7 @@ extern volatile bool          math_enabled;
 extern volatile uint8_t       math_op;        /* math_op_t cast */
 extern volatile bool          persist_enabled;
 
-#define SETTINGS_ITEM_COUNT     11
+#define SETTINGS_ITEM_COUNT     12
 #define SETTINGS_OSC_ITEM_COUNT 8
 #define SETTINGS_ABOUT_LINES    5
 #define METER_SUBMODE_COUNT     10

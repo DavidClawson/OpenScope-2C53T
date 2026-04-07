@@ -49,6 +49,7 @@ C_SOURCES += src/drivers/button_scan.c
 C_SOURCES += src/drivers/dfu_boot.c
 C_SOURCES += src/drivers/battery.c
 C_SOURCES += src/drivers/fpga.c
+C_SOURCES += src/drivers/fpga_scanner.c
 C_SOURCES += src/drivers/dac_output.c
 C_SOURCES += src/drivers/meter_data.c
 C_SOURCES += src/dsp/signal_gen.c

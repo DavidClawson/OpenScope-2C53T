@@ -29,6 +29,7 @@ static const char *settings_items[SETTINGS_ITEM_COUNT] = {
     "Bode Plot",
     "Startup on Boot",
     "About",
+    "FPGA SPI Scanner",
     "Firmware Update",
     "Factory Reset",
 };
