@@ -18,6 +18,7 @@
 #include "math_channel.h"
 #include "persistence.h"
 #include "fpga.h"
+#include "at32f403a_407.h"  /* GPIO port access for pin scanner */
 #include <stdio.h>
 #include <math.h>
 
@@ -722,36 +723,161 @@ static void draw_math_waveform(uint32_t frame)
 #ifdef SCOPE_DEBUG_OVERLAY
 
 #define SCOPE_DBG_Y   (LCD_HEIGHT - 48)
-#define SCOPE_DBG_H   30
+#define SCOPE_DBG_H   44
+
+/*
+ * GPIO Pin Scanner — "poor man's logic analyzer"
+ *
+ * Continuously reads all GPIO port input registers (IDT) and tracks
+ * which pins have toggled at least once since boot. Displays a
+ * toggle mask for each port (A-E).
+ *
+ * Any pin showing unexpected toggle activity could be the FPGA's
+ * actual SPI data output — which might NOT be PB4 if the published
+ * firmware doesn't match this V1.4 board hardware.
+ *
+ * Known toggling pins (expected):
+ *   PA2 (USART2 TX), PA3 (USART2 RX)
+ *   PA7,PA8 (button matrix)
+ *   PB0 (button matrix), PB7 (PRM button)
+ *   PC5,PC8,PC10,PC13 (buttons)
+ *   PE2,PE3 (button matrix)
+ *
+ * Interesting if toggling (possible FPGA SPI data out):
+ *   Any pin NOT in the known list above
+ */
+
+/* Accumulated toggle masks — bits set = pin toggled at least once */
+static uint16_t gpio_toggle_a = 0, gpio_toggle_b = 0;
+static uint16_t gpio_toggle_c = 0, gpio_toggle_d = 0, gpio_toggle_e = 0;
+static uint16_t gpio_prev_a = 0, gpio_prev_b = 0;
+static uint16_t gpio_prev_c = 0, gpio_prev_d = 0, gpio_prev_e = 0;
+static bool gpio_scan_started = false;
+
+/* Rapid-sample toggle counters (prev_state = 0xFF means "not initialized") */
+static uint32_t pa1_toggle_count = 0;
+static uint8_t  pa1_prev_state = 0xFF;
+static uint32_t pb3_toggle_count = 0;  /* SPI3 SCK — should toggle if GMUX works */
+static uint8_t  pb3_prev_state = 0xFF;
+static uint32_t pb4_toggle_count = 0;  /* SPI3 MISO — should toggle if FPGA responds */
+static uint8_t  pb4_prev_state = 0xFF;
+
+static void gpio_scan_update(void)
+{
+    uint16_t a = (uint16_t)GPIOA->idt;
+    uint16_t b = (uint16_t)GPIOB->idt;
+    uint16_t c = (uint16_t)GPIOC->idt;
+    uint16_t d = (uint16_t)GPIOD->idt;
+    uint16_t e = (uint16_t)GPIOE->idt;
+
+    if (gpio_scan_started) {
+        gpio_toggle_a |= (a ^ gpio_prev_a);
+        gpio_toggle_b |= (b ^ gpio_prev_b);
+        gpio_toggle_c |= (c ^ gpio_prev_c);
+        gpio_toggle_d |= (d ^ gpio_prev_d);
+        gpio_toggle_e |= (e ^ gpio_prev_e);
+    }
+
+    /* In-context SPI3 "MISO finder" — slow SPI clock to catch all ports.
+     * Normal SPI at 30-60MHz is too fast to sample during a transfer.
+     * Temporarily switch to /256 prescaler (~1MHz) so each byte takes
+     * ~8μs = ~1920 CPU cycles, giving us hundreds of GPIO samples. */
+    {
+        #define SPI3_REG ((spi_type *)0x40003C00)
+        static uint16_t spi_xor_a = 0, spi_xor_b = 0, spi_xor_c = 0;
+        static uint16_t spi_xor_d = 0, spi_xor_e = 0;
+
+        /* Slow down SPI3: disable, set /256, re-enable */
+        SPI3_REG->ctrl1 &= ~(1 << 6);  /* SPE off */
+        uint32_t saved_ctrl1 = SPI3_REG->ctrl1;
+        SPI3_REG->ctrl1 = (saved_ctrl1 & ~(0x7u << 3)) | (0x7u << 3);  /* MDIV=/256 */
+        SPI3_REG->ctrl1 |= (1 << 6);   /* SPE on */
+
+        /* Snapshot all ports BEFORE transfer */
+        uint16_t a0 = (uint16_t)GPIOA->idt;
+        uint16_t b0 = (uint16_t)GPIOB->idt;
+        uint16_t c0 = (uint16_t)GPIOC->idt;
+        uint16_t d0 = (uint16_t)GPIOD->idt;
+        uint16_t e0 = (uint16_t)GPIOE->idt;
+
+        /* Assert CS and transfer 4 bytes at slow speed */
+        GPIOB->clr = (1 << 6);  /* CS LOW */
+
+        for (int byte = 0; byte < 4; byte++) {
+            while (!(SPI3_REG->sts & (1 << 1))) {}  /* Wait TDBE */
+            SPI3_REG->dt = 0xFF;
+
+            /* Sample all ports — at ~1MHz we get hundreds of samples per byte */
+            for (int i = 0; i < 500; i++) {
+                spi_xor_a |= (uint16_t)GPIOA->idt ^ a0;
+                spi_xor_b |= (uint16_t)GPIOB->idt ^ b0;
+                spi_xor_c |= (uint16_t)GPIOC->idt ^ c0;
+                spi_xor_d |= (uint16_t)GPIOD->idt ^ d0;
+                spi_xor_e |= (uint16_t)GPIOE->idt ^ e0;
+            }
+
+            while (!(SPI3_REG->sts & (1 << 0))) {}  /* Wait RDBF */
+            (void)SPI3_REG->dt;
+        }
+
+        GPIOB->scr = (1 << 6);  /* CS HIGH */
+
+        /* Restore normal SPI speed */
+        SPI3_REG->ctrl1 &= ~(1 << 6);  /* SPE off */
+        SPI3_REG->ctrl1 = saved_ctrl1;  /* Restore original MDIV */
+        SPI3_REG->ctrl1 |= (1 << 6);   /* SPE on */
+
+        /* Merge into toggle maps */
+        gpio_toggle_a |= spi_xor_a;
+        gpio_toggle_b |= spi_xor_b;
+        gpio_toggle_c |= spi_xor_c;
+        gpio_toggle_d |= spi_xor_d;
+        gpio_toggle_e |= spi_xor_e;
+
+        pb3_toggle_count = (spi_xor_b >> 3) & 1;  /* 1 if SCK seen toggling */
+        pb4_toggle_count = (spi_xor_b >> 4) & 1;  /* 1 if MISO seen toggling */
+    }
+
+    gpio_prev_a = a; gpio_prev_b = b;
+    gpio_prev_c = c; gpio_prev_d = d; gpio_prev_e = e;
+    gpio_scan_started = true;
+}
 
 static void draw_scope_debug(const theme_t *th)
 {
-    /* Dark background strip at bottom of screen */
+    /* Update toggle masks */
+    gpio_scan_update();
+
+    /* Dark background strip */
     lcd_fill_rect(0, SCOPE_DBG_Y, LCD_WIDTH, SCOPE_DBG_H, 0x0000);
 
     char buf[64];
-    const volatile uint8_t *ch1 = fpga_get_ch1_buf();
 
-    /* Line 1 (green): SPI3 status + bit-bang diagnostic
-     * BB:XX XX = bit-bang SPI response (bypasses SPI peripheral)
-     * HS:XX XX = SPI peripheral handshake response
-     * If BB shows non-FF but HS shows FF → SPI peripheral config issue
-     * If both show FF → FPGA not responding on these pins */
-    snprintf(buf, sizeof(buf), "SPI3 ok:%u to:%u [%02X] M%u",
+    /* Line 1 (green): PA1 analysis + SPI3 GMUX remap register
+     * PA1T: total PA1 toggles (if ~4Hz = USART RTS, if faster = data)
+     * R5: IOMUX remap5 — bits[6:4] = SPI3_GMUX (000=PB3/4/5, 001=PC10/11/12) */
+    /* SCK/MISO toggle counts + SPI3 ok counter */
+    snprintf(buf, sizeof(buf), "SCK:%lu MI:%lu OK:%u [%02X]",
+             (unsigned long)pb3_toggle_count,
+             (unsigned long)pb4_toggle_count,
              (unsigned)fpga.spi3_ok_count,
-             (unsigned)fpga.spi3_total_timeouts,
-             fpga.spi3_first_byte,
-             fpga.acq_mode);
+             fpga.spi3_first_byte);
     font_draw_string(2, SCOPE_DBG_Y + 2, buf,
                      0x07E0, 0x0000, &font_small);  /* green */
 
-    /* Line 2 (yellow): IOMUX and SPI3 register diagnostics */
-    snprintf(buf, sizeof(buf), "RM:%08lX C1:%04lX S:%04lX",
-             fpga.diag_remap5, /* now shows IOMUX->remap (offset 0x04) */
-             fpga.diag_spi_ctrl1,
-             fpga.diag_spi_sts);
-    font_draw_string(2, SCOPE_DBG_Y + 16, buf,
-                     0xFFE0, 0x0000, &font_small);  /* yellow */
+    /* Line 2 (cyan): GPIO toggle map — find the REAL MISO pin!
+     * Now that SCK works, FPGA may be sending data on an unexpected pin */
+    snprintf(buf, sizeof(buf), "A:%04X B:%04X C:%04X",
+             gpio_toggle_a, gpio_toggle_b, gpio_toggle_c);
+    font_draw_string(2, SCOPE_DBG_Y + 15, buf,
+                     0x07FF, 0x0000, &font_small);  /* cyan */
+
+    /* Line 3 (cyan): ports D, E + live PB */
+    snprintf(buf, sizeof(buf), "D:%04X E:%04X PB:%04X",
+             gpio_toggle_d, gpio_toggle_e,
+             (uint16_t)GPIOB->idt);
+    font_draw_string(2, SCOPE_DBG_Y + 28, buf,
+                     0x07FF, 0x0000, &font_small);  /* cyan */
 }
 
 #endif /* SCOPE_DEBUG_OVERLAY */

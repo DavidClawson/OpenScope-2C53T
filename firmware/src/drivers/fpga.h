@@ -158,6 +158,17 @@ typedef struct {
     volatile uint8_t  spi3_first_byte;     /* First byte from last probe */
     volatile bool     spi3_probing;        /* Currently attempting acquisition */
 
+    /* Raw sample diagnostics (first 4 bytes of each channel, updated each read) */
+    volatile uint8_t  diag_ch1_raw[4];     /* First 4 raw CH1 bytes (before cal) */
+    volatile uint8_t  diag_ch2_raw[4];     /* First 4 raw CH2 bytes (before cal) */
+    volatile uint8_t  diag_data_varies;    /* 1 if data varies within read, 0 if constant */
+
+    /* Bit-bang GPIO test results (set once during init, never overwritten) */
+    volatile uint8_t  bb_idle;             /* PB4 before CS assert (expect 1) */
+    volatile uint8_t  bb_cs;              /* PB4 after CS assert (0 = FPGA responds!) */
+    volatile uint8_t  bb_byte;            /* 8-bit MISO from manual SCK toggle */
+    volatile uint8_t  bb_marker;          /* 0xBB = bit-bang test ran */
+
     /* Init handshake diagnostic (captured during fpga_init) */
     volatile uint8_t  init_hs[8];          /* Handshake response bytes */
     volatile uint32_t diag_remap5;         /* IOMUX remap5 (spi3_gmux) */
