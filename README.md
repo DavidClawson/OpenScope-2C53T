@@ -8,6 +8,8 @@
 
 The FNIRSI 2C53T is a capable $75 handheld 3-in-1 instrument held back by buggy stock firmware. This project is a complete clean-room firmware rewrite built from reverse engineering the original binary.
 
+> **Looking for contributors with test equipment.** The firmware runs on real hardware — UI, meter, bootloader, and button input all work. The next milestones (live oscilloscope waveforms, factory calibration) need hardware captures we can't do with a single bench unit. If you have a 2C53T and a logic analyzer, or experience with Gowin FPGAs, [see how you can help](#help-wanted).
+
 ## Current Status
 
 **Custom firmware runs on real hardware.** The UI, button input, battery management, and USB bootloader all work. Active development is focused on getting live oscilloscope data from the FPGA.
@@ -190,18 +192,26 @@ The stock firmware was reverse-engineered using [Ghidra](https://ghidra-sre.org/
 
 No FNIRSI source code is distributed in this repository. See [reverse_engineering/README.md](reverse_engineering/README.md) for methodology and legal basis.
 
-## Contributing
+## Help Wanted
 
-Contributions are welcome! This is a solo-maintained project, so some areas are more open than others. See **[CONTRIBUTING.md](CONTRIBUTING.md)** for the full guide, including what's open, what needs discussion first, and how to submit.
+The firmware is functionally complete for the UI layer, but the next milestones are blocked on hardware captures and experimentation that a single bench unit can't provide. **You don't need to write code to make a big contribution here.**
 
-**The most valuable things you can do right now:**
-- **Test on your hardware** — different 2C53T units reveal things a single bench unit can't
-- **Share logic analyzer captures** of FPGA communication on your unit
+### 1. Logic analyzer captures of the stock firmware boot sequence
+The FPGA needs a 115,638-byte calibration table uploaded over SPI3 at boot (commands `0x3B`/`0x3A`). We've extracted the table from the stock binary, but we need to verify the exact SPI timing and sequence against a live boot. If you have a logic analyzer (Saleae, DSLogic, even a cheap fx2lafw 24MHz) and can capture PB3/PB4/PB5/PB6 during a stock firmware power-on, that would directly unblock oscilloscope waveform display.
+
+### 2. FPGA command experimentation
+The FPGA currently ignores all USART TX commands from our firmware (zero echo frames). The stock firmware gets responses. If you're comfortable with serial protocols and want to help figure out what init sequence the FPGA expects before it starts listening, open an issue and we'll coordinate. See [FPGA Protocol](reverse_engineering/FPGA_PROTOCOL_COMPLETE.md) for the full command table.
+
+### 3. Board variant documentation
+We've confirmed one board revision (V1.4) and one user has reported a different layout with no version marking. If your 2C53T looks different from [our photos](docs/images/), photos of your PCB (top and bottom) are extremely valuable — especially near the FPGA, SPI flash, and analog frontend.
+
+### 4. Everything else
+- **Test on your hardware** — different units reveal things a single bench unit can't
+- **Document what worked** — first-flash walkthroughs for Linux or Windows are always welcome
 - **Contribute modules** (`modules/*.json`) for your domain (automotive, HVAC, ham radio, etc.)
-- **Document what worked** — if you got a first-flash working on Linux or Windows, write it up
 - **Translate** — we have users in Korea and Russia already; localization help is welcome
 
-Bug reports and feature requests are always welcome via the issue tracker.
+See **[CONTRIBUTING.md](CONTRIBUTING.md)** for the full guide. Bug reports and feature requests are always welcome via the [issue tracker](https://github.com/DavidClawson/OpenScope-2C53T/issues).
 
 ## Related Projects
 
