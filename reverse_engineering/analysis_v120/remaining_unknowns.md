@@ -297,6 +297,13 @@ The init function DOES configure TIM1 (Advanced Timer 1) via addresses in the
 From the mode switch function (FUN_0800735c in `interrupt_handlers.c`), here are
 all USART command byte values organized by meter mode (DAT_20001060):
 
+Update 2026-04-08:
+- the same bank pattern now also appears in the adjacent helper cluster around
+  `0x08006418`; current best read is that this cluster owns the concrete bank
+  emission, while the older wrapper view in `interrupt_handlers.c` shows a
+  cleaner exported slice of the same behavior. See
+  [enclosing_helper_cluster_2026_04_08.md](/Users/david/Desktop/osc/reverse_engineering/analysis_v120/enclosing_helper_cluster_2026_04_08.md).
+
 | Mode | Name | Queue sends (byte values) |
 |------|------|--------------------------|
 | 0 | Oscilloscope CH1 | 0x00, 0x01, 0x0B, 0x0C, 0x0D, 0x0E, 0x0F, 0x10, 0x11 |

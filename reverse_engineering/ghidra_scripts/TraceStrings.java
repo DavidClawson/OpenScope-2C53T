@@ -25,15 +25,18 @@ public class TraceStrings extends GhidraScript {
                 String value = val.toString();
                 if (value.length() < 3) continue;
 
-                Reference[] refs = refMgr.getReferencesTo(data.getAddress());
-                for (Reference ref : refs) {
+                ReferenceIterator refs = refMgr.getReferencesTo(data.getAddress());
+                int refCount = 0;
+                while (refs.hasNext()) {
+                    Reference ref = refs.next();
                     Address fromAddr = ref.getFromAddress();
                     Function func = funcMgr.getFunctionContaining(fromAddr);
                     String funcName = func != null ? func.getName() + " @ " + func.getEntryPoint() : "unknown";
                     println(String.format("STRING 0x%s: \"%s\" -> USED BY %s (ref at 0x%s)",
                         data.getAddress(), value, funcName, fromAddr));
+                    refCount++;
                 }
-                if (refs.length == 0) {
+                if (refCount == 0) {
                     println(String.format("STRING 0x%s: \"%s\" -> NO REFERENCES FOUND",
                         data.getAddress(), value));
                 }

@@ -18,6 +18,10 @@ AT32_STARTUP = $(AT32_CMSIS)/device_support/startup/gcc
 # Source files
 # Default test program (override with: make -f Makefile.hwtest TEST=uartsniff)
 TEST ?= hwtest
+APP_SLOT ?= 0
+
+VARIANT_SUFFIX =
+C_DEFS =
 
 C_SOURCES = \
 	src/attic/$(TEST).c \
@@ -33,8 +37,16 @@ C_SOURCES = \
 
 ASM_SOURCES = $(AT32_STARTUP)/startup_at32f403a_407.s
 
+ifeq ($(APP_SLOT),1)
+VARIANT_SUFFIX = _app
+C_DEFS += -DHWTEST_APP_SLOT
+C_SOURCES += src/drivers/dfu_boot.c
+endif
+
 # Include paths
 C_INCLUDES = \
+	-Iinclude \
+	-Isrc/drivers \
 	-Iat32f403a_gcc/user \
 	-I$(AT32_DRV)/inc \
 	-I$(AT32_CMSIS)/device_support \
@@ -45,14 +57,23 @@ C_INCLUDES = \
 MCU = -mcpu=cortex-m4 -mthumb -mfpu=fpv4-sp-d16 -mfloat-abi=hard
 
 # C flags
-CFLAGS = $(MCU) $(C_INCLUDES) -DAT32F403AVGT7 -Os -Wall -fdata-sections -ffunction-sections
+CFLAGS = $(MCU) $(C_INCLUDES) $(C_DEFS) -DAT32F403AVGT7 -Os -Wall -fdata-sections -ffunction-sections
 
 # Linker
+ifeq ($(APP_SLOT),1)
+LDSCRIPT = ld/at32f403a_app.ld
+FLASH_DFU_ADDR = 0x08004000
+else
 LDSCRIPT = $(AT32_STARTUP)/linker/AT32F403AxG_FLASH.ld
+FLASH_DFU_ADDR = 0x08000000
+endif
+
 LDFLAGS = $(MCU) -specs=nano.specs -specs=nosys.specs -T$(LDSCRIPT) -Wl,--gc-sections -Wl,-Map=$(BUILD_DIR)/hwtest.map,--cref
 
 # Build targets
-all: $(BUILD_DIR)/$(TEST).bin
+TARGET_NAME = $(TEST)$(VARIANT_SUFFIX)
+
+all: $(BUILD_DIR)/$(TARGET_NAME).bin
 
 OBJECTS = $(addprefix $(BUILD_DIR)/,$(notdir $(C_SOURCES:.c=.o)))
 OBJECTS += $(addprefix $(BUILD_DIR)/,$(notdir $(ASM_SOURCES:.s=.o)))
@@ -65,11 +86,11 @@ $(BUILD_DIR)/%.o: %.c | $(BUILD_DIR)
 $(BUILD_DIR)/%.o: %.s | $(BUILD_DIR)
 	$(AS) -c $(MCU) $< -o $@
 
-$(BUILD_DIR)/$(TEST).elf: $(OBJECTS)
+$(BUILD_DIR)/$(TARGET_NAME).elf: $(OBJECTS)
 	$(CC) $(OBJECTS) $(LDFLAGS) -o $@
 	$(SZ) $@
 
-$(BUILD_DIR)/$(TEST).bin: $(BUILD_DIR)/$(TEST).elf
+$(BUILD_DIR)/$(TARGET_NAME).bin: $(BUILD_DIR)/$(TARGET_NAME).elf
 	$(CP) -O binary $< $@
 	@echo "Built: $@ ($$(wc -c < $@) bytes)"
 
@@ -79,7 +100,14 @@ $(BUILD_DIR):
 clean:
 	rm -rf $(BUILD_DIR)
 
-flash: $(BUILD_DIR)/$(TEST).bin
-	dfu-util -a 0 -d 2e3c:df11 -s 0x08000000:leave -D $<
+flash: $(BUILD_DIR)/$(TARGET_NAME).bin
+ifeq ($(APP_SLOT),1)
+	uv run ../scripts/hid_flash.py $<
+else
+	dfu-util -a 0 -d 2e3c:df11 -s $(FLASH_DFU_ADDR):leave -D $<
+endif
 
-.PHONY: all clean flash
+flash-dfu: $(BUILD_DIR)/$(TARGET_NAME).bin
+	dfu-util -a 0 -d 2e3c:df11 -s $(FLASH_DFU_ADDR):leave -D $<
+
+.PHONY: all clean flash flash-dfu

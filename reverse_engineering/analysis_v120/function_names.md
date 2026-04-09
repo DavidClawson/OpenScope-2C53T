@@ -283,9 +283,9 @@
 | 0803b06c | 46 | `freertos_queue_notify_from_isr` | MEDIUM | Task notification from ISR; lightweight IPC mechanism | 0 | 2 |
 | 0803b09c | 316 | `xQueueReceiveFromISR` | HIGH | FreeRTOS xQueueReceiveFromISR: non-blocking queue receive from ISR; called by USART2 ISR | 1 | 2 |
 | 0803b1d8 | 462 | `xQueueReceive` | HIGH | FreeRTOS xQueueReceive: blocking queue receive with timeout; 12 callees; used by all task loops | 1 | 12 |
-| 0803b3a8 | 548 | `xTaskCreate` | HIGH | FreeRTOS xTaskCreate: allocates TCB + stack, initializes task, adds to ready list; 15 callees; called by meter mode init functions | 3 | 15 |
+| 0803b3a8 | 548 | `xQueueSemaphoreTake` | HIGH | FreeRTOS semaphore/queue take with timeout; used by task loops waiting on semaphores and queues | 3 | 15 |
 | 0803b5cc | 210 | `freertos_task_remove_from_event` | MEDIUM | Removes task from event wait list and adds to ready list; 3 callers from queue operations | 3 | 3 |
-| 0803b6a0 | 144 | `freertos_timer_daemon_process` | MEDIUM | Timer daemon processing loop: handles queued timer commands; called from timer daemon task | 2 | 4 |
+| 0803b6a0 | 144 | `xTaskCreate` | HIGH | FreeRTOS 5-argument xTaskCreate wrapper: allocates stack + TCB, hardcodes pvParameters=NULL, initializes task via FUN_08034f44, and readies it | 2 | 4 |
 | 0803b730 | 56 | `freertos_scheduler_running_check` | MEDIUM | Returns whether scheduler is running (for assertions); 4 callers | 4 | 0 |
 | 0803b768 | 20 | `freertos_queue_get_count_from_isr` | LOW | Returns number of items in queue from ISR; called from scheduler suspend | 1 | 0 |
 | 0803b77c | 440 | `freertos_task_yield_if_needed` | MEDIUM | Checks if context switch is needed after unblocking a task; called after queue operations | 1 | 3 |

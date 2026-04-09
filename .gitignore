@@ -64,6 +64,9 @@ reverse_engineering/decompiled_*.c
 *.swp
 *~
 
+# Community directory (private, never committed)
+community.md
+
 # Environment files (API keys, secrets)
 .env
 scripts/.env

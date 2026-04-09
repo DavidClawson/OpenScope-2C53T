@@ -1,0 +1,3 @@
+# Memory Blocks
+# Name | Start | End | Length | Initialized | R | W | X | Volatile | Overlay
+ram | 08000000 | 080b767f | 0xB7680 | true | true | true | true | false | false

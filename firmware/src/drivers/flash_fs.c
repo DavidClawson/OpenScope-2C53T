@@ -13,6 +13,7 @@
  */
 
 #include "flash_fs.h"
+#include "at32f403a_407.h"
 #include "FreeRTOS.h"
 #include "semphr.h"
 
@@ -24,6 +25,12 @@
 
 static SemaphoreHandle_t fs_mutex  = NULL;
 static bool              fs_ready  = false;
+static bool              raw_spi_ready = false;
+
+#define SPI_FLASH_SPI       ((spi_type *)SPI2_BASE)
+#define SPI_FLASH_SIZE      FLASH_FS_RAW_MAX_ADDR
+#define SPI_FLASH_CS_ASSERT()   (GPIOB->clr = GPIO_PINS_12)
+#define SPI_FLASH_CS_DEASSERT() (GPIOB->scr = GPIO_PINS_12)
 
 /* Mutex timeout: 5 seconds should be more than enough for any
  * single filesystem operation on SPI flash. */
@@ -46,6 +53,70 @@ static bool make_tmp_path(const char *path, char *tmp_path, uint32_t tmp_path_si
     memcpy(tmp_path, path, len);
     memcpy(tmp_path + len, ".tmp", 5);  /* includes null terminator */
     return true;
+}
+
+static void flash_fs_raw_spi_init_once(void)
+{
+    if (raw_spi_ready) {
+        return;
+    }
+
+    crm_periph_clock_enable(CRM_GPIOB_PERIPH_CLOCK, TRUE);
+    crm_periph_clock_enable(CRM_IOMUX_PERIPH_CLOCK, TRUE);
+    crm_periph_clock_enable(CRM_SPI2_PERIPH_CLOCK, TRUE);
+
+    gpio_init_type gpio_cfg;
+    gpio_default_para_init(&gpio_cfg);
+
+    /* PB13 = SPI2_SCK, PB15 = SPI2_MOSI */
+    gpio_cfg.gpio_pins = GPIO_PINS_13 | GPIO_PINS_15;
+    gpio_cfg.gpio_mode = GPIO_MODE_MUX;
+    gpio_cfg.gpio_out_type = GPIO_OUTPUT_PUSH_PULL;
+    gpio_cfg.gpio_drive_strength = GPIO_DRIVE_STRENGTH_STRONGER;
+    gpio_init(GPIOB, &gpio_cfg);
+
+    /* PB14 = SPI2_MISO */
+    gpio_cfg.gpio_pins = GPIO_PINS_14;
+    gpio_cfg.gpio_mode = GPIO_MODE_INPUT;
+    gpio_cfg.gpio_pull = GPIO_PULL_NONE;
+    gpio_init(GPIOB, &gpio_cfg);
+
+    /* PB12 = SPI flash CS */
+    gpio_cfg.gpio_pins = GPIO_PINS_12;
+    gpio_cfg.gpio_mode = GPIO_MODE_OUTPUT;
+    gpio_cfg.gpio_out_type = GPIO_OUTPUT_PUSH_PULL;
+    gpio_cfg.gpio_drive_strength = GPIO_DRIVE_STRENGTH_STRONGER;
+    gpio_init(GPIOB, &gpio_cfg);
+    SPI_FLASH_CS_DEASSERT();
+
+    /* SPI mode 0, master, software CS, conservative /16 clock. */
+    SPI_FLASH_SPI->ctrl1 = (1U << 2)   /* master */
+                         | (3U << 3)   /* /16 prescaler */
+                         | (1U << 8)   /* internal CS high */
+                         | (1U << 9);  /* software CS enable */
+    SPI_FLASH_SPI->ctrl2 = 0;
+    SPI_FLASH_SPI->ctrl1 |= (1U << 6); /* enable SPI */
+
+    raw_spi_ready = true;
+}
+
+static uint8_t flash_fs_raw_spi_xfer(uint8_t tx)
+{
+    uint32_t timeout = 1000000;
+    while (!(SPI_FLASH_SPI->sts & (1U << 1)) && --timeout) {}
+    if (!timeout) {
+        return 0xFF;
+    }
+
+    SPI_FLASH_SPI->dt = tx;
+
+    timeout = 1000000;
+    while (!(SPI_FLASH_SPI->sts & (1U << 0)) && --timeout) {}
+    if (!timeout) {
+        return 0xFF;
+    }
+
+    return (uint8_t)SPI_FLASH_SPI->dt;
 }
 
 /* ═══════════════════════════════════════════════════════════════════
@@ -199,6 +270,72 @@ flash_fs_error_t flash_fs_delete(const char *path)
 bool flash_fs_is_ready(void)
 {
     return fs_ready;
+}
+
+flash_fs_error_t flash_fs_raw_read_jedec(uint8_t *manufacturer,
+                                         uint8_t *memory_type,
+                                         uint8_t *capacity)
+{
+    if (manufacturer == NULL || memory_type == NULL || capacity == NULL) {
+        return FLASH_FS_ERR_READ;
+    }
+    if (fs_mutex == NULL) {
+        return FLASH_FS_ERR_MUTEX;
+    }
+
+    flash_fs_raw_spi_init_once();
+
+    if (xSemaphoreTake(fs_mutex, pdMS_TO_TICKS(FS_MUTEX_TIMEOUT_MS)) != pdTRUE) {
+        return FLASH_FS_ERR_MUTEX;
+    }
+
+    SPI_FLASH_CS_ASSERT();
+    flash_fs_raw_spi_xfer(0x9F);
+    *manufacturer = flash_fs_raw_spi_xfer(0xFF);
+    *memory_type  = flash_fs_raw_spi_xfer(0xFF);
+    *capacity     = flash_fs_raw_spi_xfer(0xFF);
+    SPI_FLASH_CS_DEASSERT();
+
+    xSemaphoreGive(fs_mutex);
+    return FLASH_FS_OK;
+}
+
+flash_fs_error_t flash_fs_raw_read_bytes(uint32_t addr, void *buf, uint32_t len)
+{
+    uint8_t *out = (uint8_t *)buf;
+
+    if (buf == NULL) {
+        return FLASH_FS_ERR_READ;
+    }
+    if (len == 0) {
+        return FLASH_FS_OK;
+    }
+    if (fs_mutex == NULL) {
+        return FLASH_FS_ERR_MUTEX;
+    }
+    if (addr >= SPI_FLASH_SIZE || len > (SPI_FLASH_SIZE - addr)) {
+        return FLASH_FS_ERR_READ;
+    }
+
+    flash_fs_raw_spi_init_once();
+
+    if (xSemaphoreTake(fs_mutex, pdMS_TO_TICKS(FS_MUTEX_TIMEOUT_MS)) != pdTRUE) {
+        return FLASH_FS_ERR_MUTEX;
+    }
+
+    SPI_FLASH_CS_ASSERT();
+    flash_fs_raw_spi_xfer(0x03);
+    flash_fs_raw_spi_xfer((uint8_t)(addr >> 16));
+    flash_fs_raw_spi_xfer((uint8_t)(addr >> 8));
+    flash_fs_raw_spi_xfer((uint8_t)(addr));
+
+    for (uint32_t i = 0; i < len; i++) {
+        out[i] = flash_fs_raw_spi_xfer(0xFF);
+    }
+
+    SPI_FLASH_CS_DEASSERT();
+    xSemaphoreGive(fs_mutex);
+    return FLASH_FS_OK;
 }
 
 /* ═══════════════════════════════════════════════════════════════════

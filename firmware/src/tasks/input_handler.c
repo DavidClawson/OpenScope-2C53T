@@ -294,17 +294,20 @@ uint8_t input_handle_button(button_id_t button, QueueHandle_t dq)
     /* -- Save (screenshot) ---------------------------------------- */
 
     case BTN_SAVE:
-        /* TODO: On real hardware, capture shadow framebuffer to SPI flash.
-         * For now, show confirmation popup — the emulator's lcd_viewer
-         * independently saves screenshots on 'S' key via its own BMP writer. */
-        {
+        if (current_mode == MODE_MULTIMETER) {
+            meter_toggle_debug_overlay();
+            send_cmd(dq, cmd);
+        } else {
+            /* TODO: On real hardware, capture shadow framebuffer to SPI flash.
+             * For now, show confirmation popup — the emulator's lcd_viewer
+             * independently saves screenshots on 'S' key via its own BMP writer. */
             static uint16_t screenshot_num = 0;
             screenshot_num++;
             char sb[24];
             snprintf(sb, sizeof(sb), "SAVED #%d", screenshot_num);
             scope_show_popup(sb);
+            send_cmd(dq, cmd);
         }
-        send_cmd(dq, cmd);
         break;
 
     /* -- Auto ----------------------------------------------------- */

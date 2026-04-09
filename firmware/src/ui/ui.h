@@ -146,6 +146,7 @@ void draw_meter_screen(void);
 void meter_reset_minmaxavg(void);
 void meter_toggle_relative(void);
 void meter_toggle_hold(void);
+void meter_toggle_debug_overlay(void);
 
 /* fuse_ui.c */
 void draw_fuse_screen(float voltage_drop_mv);

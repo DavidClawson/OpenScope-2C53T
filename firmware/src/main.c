@@ -204,6 +204,12 @@ static void vDisplayTask(void *pvParameters)
             last_rendered_mode = current_mode;
         }
 
+#ifndef EMULATOR_BUILD
+        if (fpga_service_requests()) {
+            scope_entered_frame = frame;
+        }
+#endif
+
         /* Periodic redraws for active modes.
          *
          * All modes receive explicit redraws via queue commands above
@@ -218,17 +224,16 @@ static void vDisplayTask(void *pvParameters)
         if (current_mode == MODE_OSCILLOSCOPE) {
             const scope_state_t *ss_anim = scope_state_get();
             if (ss_anim->running) {
-                /* ── SPI3 acquisition triggers ──────────────────────
-                 * Fire at ~3Hz (every 7 frames at 20fps), but only
-                 * after a 500ms warmup delay for FPGA to process the
-                 * USART scope config commands sent by fpga_enter_scope_mode().
-                 * The acquisition task has its own early-abort and backoff
-                 * logic so this is safe even if the FPGA doesn't respond. */
+                /* ── Scope heartbeat / acquisition re-arm ───────────
+                 * Keep the existing warmup and cadence for now, but use the
+                 * stock-like cmd-3 path instead of a bare SPI trigger. That
+                 * re-applies timebase state before each queued read, matching
+                 * the live shell experiments more closely. */
 #ifndef EMULATOR_BUILD
                 if ((frame - scope_entered_frame) >= 10 /* 500ms warmup */
                     && (frame % 7) == 0
                     && fpga.initialized) {
-                    fpga_trigger_acquisition(fpga.acq_mode);
+                    fpga_scope_heartbeat();
                 }
 #endif
 

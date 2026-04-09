@@ -801,45 +801,43 @@ static void draw_scope_debug(const theme_t *th)
 
     char buf[64];
 
-    /* Line 1 (green): PA1 analysis + SPI3 GMUX remap register
-     * PA1T: total PA1 toggles (if ~4Hz = USART RTS, if faster = data)
-     * R5: IOMUX remap5 — bits[6:4] = SPI3_GMUX (000=PB3/4/5, 001=PC10/11/12) */
-    /* Line 1 (green): SPI3 status + first byte */
-    snprintf(buf, sizeof(buf), "OK:%u 1st:%02X PC0:%c PC6:%c",
-             (unsigned)fpga.spi3_ok_count,
-             fpga.spi3_first_byte,
-             (GPIOC->idt & (1 << 0)) ? 'H' : 'L',  /* PC0=FPGA data ready (LOW=ready) */
-             (GPIOC->odt & (1 << 6)) ? 'H' : 'L');
+    /* Line 1 (green): transport counters from the real FPGA path */
+    snprintf(buf, sizeof(buf), "TX:%u RX:%u DF:%u EF:%u",
+             (unsigned)fpga.tx_count,
+             (unsigned)fpga.rx_byte_count,
+             (unsigned)fpga.frame_count,
+             (unsigned)fpga.echo_count);
     font_draw_string(2, SCOPE_DBG_Y + 2, buf,
                      0x07E0, 0x0000, &font_small);  /* green */
 
-    /* Line 2 (cyan): Raw CH1 bytes (first 4 samples before calibration) */
-    snprintf(buf, sizeof(buf), "C1:%02X %02X %02X %02X  C2:%02X %02X %02X %02X",
-             fpga.diag_ch1_raw[0], fpga.diag_ch1_raw[1],
-             fpga.diag_ch1_raw[2], fpga.diag_ch1_raw[3],
-             fpga.diag_ch2_raw[0], fpga.diag_ch2_raw[1],
-             fpga.diag_ch2_raw[2], fpga.diag_ch2_raw[3]);
+    /* Line 2 (cyan): acquisition state and critical control pins */
+    snprintf(buf, sizeof(buf), "OK:%u TO:%u 1:%02X P0:%c P6:%c B:%c",
+             (unsigned)fpga.spi3_ok_count,
+             (unsigned)fpga.spi3_total_timeouts,
+             fpga.spi3_first_byte,
+             (GPIOC->idt & (1 << 0)) ? 'H' : 'L',
+             (GPIOC->odt & (1 << 6)) ? 'H' : 'L',
+             (GPIOB->odt & (1 << 11)) ? 'H' : 'L');
     font_draw_string(2, SCOPE_DBG_Y + 15, buf,
                      0x07FF, 0x0000, &font_small);  /* cyan */
 
     /* Line 3 (yellow): Init handshake responses + raw PB4 state
-     * HS[0-1] = 0x05 response, HS[2-3] = 0x12, HS[4-5] = 0x15
-     * PB4: raw GPIO read of the MISO pin (1=HIGH/floating, 0=driven LOW)
-     * SPI: CTRL1 and STS register values for diagnostics */
-    snprintf(buf, sizeof(buf), "HS:%02X%02X %02X%02X %02X%02X PB4:%d",
-             fpga.init_hs[0], fpga.init_hs[1],
-             fpga.init_hs[2], fpga.init_hs[3],
-             fpga.init_hs[4], fpga.init_hs[5],
+     * G1[0-3] = sync+0x05+pad, G2[4-6] = 0x12+pad, G3[7-10] = 0x15+pad+0x3B
+     * PB4: raw GPIO read of the MISO pin (1=HIGH/floating, 0=driven LOW) */
+    snprintf(buf, sizeof(buf), "G1:%02X%02X G2:%02X G3:%02X%02X PB4:%d",
+             fpga.init_hs[1], fpga.init_hs[3],
+             fpga.init_hs[4],
+             fpga.init_hs[7], fpga.init_hs[10],
              (GPIOB->idt & (1 << 4)) ? 1 : 0);
     font_draw_string(2, SCOPE_DBG_Y + 28, buf,
                      0xFFE0, 0x0000, &font_small);  /* yellow */
 
-    /* Line 4 (magenta): SPI3 register state + CTRL1 value */
-    snprintf(buf, sizeof(buf), "S1:%04X S2:%04X ST:%04X 1st:%02X",
+    /* Line 4 (magenta): live SPI3 register state + H2 upload flag */
+    snprintf(buf, sizeof(buf), "S1:%04X S2:%04X ST:%04X H2:%c",
              (uint16_t)fpga.diag_spi_ctrl1,
              (uint16_t)(*(volatile uint32_t *)0x40003C04),  /* live CTRL2 */
              (uint16_t)(*(volatile uint32_t *)0x40003C08),  /* live STS */
-             fpga.spi3_first_byte);
+             fpga.h2_upload_done ? 'Y' : 'N');
     font_draw_string(2, SCOPE_DBG_Y + 41, buf,
                      0xF81F, 0x0000, &font_small);  /* magenta */
 }

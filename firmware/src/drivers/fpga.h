@@ -109,6 +109,23 @@ typedef enum {
 } fpga_acq_mode_t;
 
 /* ═══════════════════════════════════════════════════════════════════
+ * Stock-State Bench Shadow
+ * ═══════════════════════════════════════════════════════════════════ */
+
+typedef struct {
+    uint8_t visible_state;  /* Stock DAT_20001060 / 0xF68 */
+    uint8_t phase;          /* Stock DAT_20001061 / 0xF69 */
+    uint8_t substate;       /* Stock DAT_20001062 / 0xF6A */
+    uint8_t flags;          /* Stock DAT_20001063 / 0xF6B */
+    uint8_t e1a;            /* Staged-detail latch */
+    uint8_t e1b;            /* Panel count / non-empty gate */
+    uint8_t e1c;            /* Panel handoff byte */
+    uint8_t e1d;            /* Panel selection index */
+    uint8_t latch_355;      /* Preset-consume latch */
+    uint8_t detail_bits[8]; /* Bench shadow for stock +0xE12..+0xE19 bitmap */
+} fpga_stock_shadow_t;
+
+/* ═══════════════════════════════════════════════════════════════════
  * FPGA State
  * ═══════════════════════════════════════════════════════════════════ */
 
@@ -170,7 +187,7 @@ typedef struct {
     volatile uint8_t  bb_marker;          /* 0xBB = bit-bang test ran */
 
     /* Init handshake diagnostic (captured during fpga_init) */
-    volatile uint8_t  init_hs[8];          /* Handshake response bytes */
+    volatile uint8_t  init_hs[12];         /* Handshake response bytes (11 used + probe) */
     volatile uint32_t diag_remap5;         /* IOMUX remap5 (spi3_gmux) */
     volatile uint32_t diag_remap7;         /* IOMUX remap7 (swjtag_gmux) */
     volatile uint32_t diag_spi_ctrl1;      /* SPI3 CTRL1 after init */
@@ -179,6 +196,12 @@ typedef struct {
     /* H2 cal table upload diagnostic */
     volatile uint32_t h2_bytes_sent;       /* Bytes uploaded (should be 115638) */
     volatile uint8_t  h2_upload_done;      /* 1 = upload completed without error */
+
+    /* Experimental stock runtime shadow for scope-mode bench work.
+     * These are NOT the original firmware RAM locations. They are a small
+     * explicit mirror we can inspect and stage from the shell while testing
+     * stock-like right-panel and packed-state flows. */
+    volatile fpga_stock_shadow_t stock_shadow;
 
 } fpga_state_t;
 
@@ -233,6 +256,12 @@ BaseType_t fpga_send_cmd(uint8_t cmd_high, uint8_t cmd_low);
 BaseType_t fpga_trigger_acquisition(uint8_t mode);
 
 /*
+ * Trigger a scope acquisition using the current scope-mode policy.
+ * For bulk/dual captures this may queue more than one low-level SPI3 mode.
+ */
+BaseType_t fpga_trigger_scope_read(void);
+
+/*
  * Check if valid ADC data is available.
  * Returns true after at least one successful SPI3 acquisition.
  */
@@ -261,6 +290,25 @@ void fpga_set_active(bool active);
 void fpga_enter_scope_mode(void);
 
 /*
+ * Re-apply the current oscilloscope configuration to the FPGA and
+ * analog frontend. Safe to call from the USB debug shell while the
+ * device is already in scope mode.
+ */
+void fpga_scope_reinit(void);
+
+/*
+ * Queue a scope reinit to be serviced asynchronously from the display loop.
+ * This is safe to invoke from the USB debug shell.
+ */
+void fpga_request_scope_reinit(void);
+
+/*
+ * Service deferred FPGA requests. Returns true if work was performed.
+ * Call periodically from a non-USB task.
+ */
+bool fpga_service_requests(void);
+
+/*
  * Enter signal generator mode: send FPGA siggen configuration commands
  * (0x02-0x06, 0x08) and switch analog MUX to route DAC output to BNC.
  *
@@ -282,10 +330,101 @@ void fpga_enter_siggen_mode(void);
 void fpga_set_meter_mode(uint8_t submode);
 
 /*
+ * Re-apply the known-good meter frontend baseline and meter command
+ * sequence for the requested submode. Intended for live bench recovery
+ * from the USB debug shell after scope experiments.
+ */
+void fpga_meter_reinit(uint8_t submode);
+
+/*
+ * Send the stock-like meter wake preamble, then re-apply the current
+ * scope configuration. Intended for testing whether the FPGA needs a
+ * meter-side wakeup before it will accept scope commands.
+ */
+void fpga_scope_wake(void);
+
+/*
+ * Recompute the current scope acquisition mode block (0x20/0x21) from
+ * live UI state and send it to the FPGA. Mirrors stock internal cmd 2.
+ */
+void fpga_scope_refresh_acq_mode(void);
+
+/*
+ * Recompute the current scope timebase block (0x26/0x27/0x28), update the
+ * local acquisition policy, and queue the next SPI read. Mirrors stock
+ * internal cmd 3 as closely as our current architecture allows.
+ */
+void fpga_scope_heartbeat(void);
+
+/*
  * Send a raw 10-byte USART2 frame to the FPGA (bypasses queue).
  * Used by the USB debug shell for interactive protocol exploration.
  * frame must point to exactly 10 bytes.
  */
 void fpga_send_raw_frame(const uint8_t *frame);
+
+/*
+ * Reset the stock-state bench shadow to a conservative base-scope posture.
+ */
+void fpga_stock_diag_reset(void);
+
+/*
+ * Override the entire stock-state bench shadow.
+ */
+void fpga_stock_diag_set(uint8_t visible_state,
+                         uint8_t phase,
+                         uint8_t substate,
+                         uint8_t flags,
+                         uint8_t e1a,
+                         uint8_t e1b,
+                         uint8_t e1c,
+                         uint8_t e1d,
+                         uint8_t latch_355);
+
+/*
+ * Seed common stock-like scope postures for bench experiments.
+ */
+void fpga_stock_diag_seed_base2(void);
+void fpga_stock_diag_seed_state5(uint8_t e1b, uint8_t e1d);
+void fpga_stock_diag_seed_state6(uint8_t e1b, uint8_t e1d);
+void fpga_stock_diag_seed_preset(uint8_t visible_state,
+                                 uint8_t phase,
+                                 uint8_t substate,
+                                 uint8_t flags,
+                                 uint8_t latch_355);
+
+/*
+ * Drive the recovered right-panel / packed-preset families against the current
+ * stock shadow. These are best-effort bench stand-ins for the stock event
+ * owners, not claims of exact wire-level equivalence.
+ */
+void fpga_stock_diag_prev(void);
+void fpga_stock_diag_next(void);
+void fpga_stock_diag_select(void);
+void fpga_stock_diag_toggle(void);
+void fpga_stock_diag_commit(void);
+void fpga_stock_diag_consume(void);
+void fpga_stock_diag_bridge_fixed(void);
+void fpga_stock_diag_bridge_dynamic(uint8_t bank_mode);
+
+/*
+ * Bench helpers for candidate final 16-bit wire words recovered from the
+ * stock TX-word queue path.
+ *
+ * bank_mode:
+ *   0 = CH1 candidate bank
+ *   1 = CH2 candidate bank
+ *   2 = CH1 + CH2 candidate banks
+ */
+void fpga_wire_send_word(uint16_t word, uint32_t delay_ms);
+void fpga_wire_entry(uint8_t bank_mode);
+void fpga_wire_scope_sequence(uint8_t bank_mode);
+
+/*
+ * Re-enter the current clean-room scope bring-up path while preserving the
+ * staged stock shadow. This is a conservative stand-in for the stock shared
+ * bank-emitter re-entry used during scope-mode experiments.
+ */
+void fpga_stock_diag_reenter(void);
 
 #endif /* FPGA_H */

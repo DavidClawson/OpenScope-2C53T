@@ -97,6 +97,11 @@ static uint8_t meter_stats_valid;
  * (2026-04-04) — see meter_data.c for the band override story. */
 static bool meter_debug_overlay = false;
 
+void meter_toggle_debug_overlay(void)
+{
+    meter_debug_overlay = !meter_debug_overlay;
+}
+
 /* Strip chart ring buffer */
 static float chart_buf[CHART_SAMPLES];
 static uint16_t chart_head;         /* Next write position */

@@ -1,0 +1,16 @@
+Stock flash trace via Unicorn
+binary: /Users/david/Desktop/osc/archive/2C53T Firmware V1.2.0/APP_2C53T_V1.2.0_251015.bin
+dump:   /Users/david/Desktop/osc/archive/w25q128_dump.bin
+entry:  0x0802E7BD
+instructions: 13
+systick_skips: 0
+stop_pc: 0x00000000
+last_pc: 0x08033D16
+last_lr: 0x0802E7C9
+run_error: Invalid instruction (UC_ERR_INSN_INVALID)
+transactions: 0
+
+Opcode summary:
+  <none>
+
+First 40 transactions:

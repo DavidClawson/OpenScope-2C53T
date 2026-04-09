@@ -1,0 +1,180 @@
+Stock flash trace via Unicorn
+binary: /Users/david/Desktop/osc/archive/2C53T Firmware V1.2.0/APP_2C53T_V1.2.0_251015.bin
+dump:   /Users/david/Desktop/osc/archive/w25q128_dump.bin
+entry:  0x0802E7BD
+stages: ['0x0802E7BD', '0x08036085']
+seed_display_alloc: True
+seed_high_flash_fs: True
+fs_profile: roots_plus_dirs
+second_entry: 0x08036085
+seed_u8: {536874761: 1}
+seed_cstr: {'0x80bcad2': '2:/Screenshot file/%d.bmp', '0x80bcae5': '%d.bmp', '0x20008360': '2:/Screenshot file/1.bmp'}
+seeded_fs_entries: 7
+instructions: 27664158
+systick_skips: 0
+completed_stages: 2/2
+stop_pc: 0x08FFFFF0
+stop_r0: 0x00000000
+last_pc: 0x08FFFFF0
+last_lr: 0x08033CEF
+transactions: 2254
+page_programs: 688
+sector_erases: 43
+programmed_bytes: 176128
+skipped_calls:
+  preview_dispatcher_stage_stub: 8
+
+Opcode summary:
+  0x02: 688
+  0x03: 61
+  0x05: 731
+  0x06: 731
+  0x20: 43
+
+First 40 transactions:
+00: pc=0x0802F060 op=0x03 addr=0x200000 read_len=4096 mosi=[03 20 00 00 FF FF FF FF FF FF FF FF ...]
+01: pc=0x0802F060 op=0x03 addr=0x205000 read_len=4096 mosi=[03 20 50 00 FF FF FF FF FF FF FF FF ...]
+02: pc=0x0802F060 op=0x03 addr=0x206000 read_len=4096 mosi=[03 20 60 00 FF FF FF FF FF FF FF FF ...]
+03: pc=0x0802F060 op=0x03 addr=0x207000 read_len=4096 mosi=[03 20 70 00 FF FF FF FF FF FF FF FF ...]
+04: pc=0x0802F060 op=0x03 addr=0x205000 read_len=4096 mosi=[03 20 50 00 FF FF FF FF FF FF FF FF ...]
+05: pc=0x0802F060 op=0x03 addr=0x206000 read_len=4096 mosi=[03 20 60 00 FF FF FF FF FF FF FF FF ...]
+06: pc=0x0802F060 op=0x03 addr=0x207000 read_len=4096 mosi=[03 20 70 00 FF FF FF FF FF FF FF FF ...]
+07: pc=0x0802F060 op=0x03 addr=0x205000 read_len=4096 mosi=[03 20 50 00 FF FF FF FF FF FF FF FF ...]
+08: pc=0x0802F060 op=0x03 addr=0x206000 read_len=4096 mosi=[03 20 60 00 FF FF FF FF FF FF FF FF ...]
+09: pc=0x0802F060 op=0x03 addr=0x207000 read_len=4096 mosi=[03 20 70 00 FF FF FF FF FF FF FF FF ...]
+10: pc=0x0802F060 op=0x03 addr=0x207000 read_len=4096 mosi=[03 20 70 00 FF FF FF FF FF FF FF FF ...]
+11: pc=0x0802F354 op=0x06 addr=0x-------- read_len=0 mosi=[06]
+12: pc=0x0802EEB4 op=0x20 addr=0x207000 read_len=0 mosi=[20 20 70 00]
+13: pc=0x0802F132 op=0x05 addr=0x-------- read_len=0 mosi=[05 FF]
+14: pc=0x0802F354 op=0x06 addr=0x-------- read_len=0 mosi=[06]
+15: pc=0x0802F388 op=0x02 addr=0x207000 read_len=0 mosi=[02 20 70 00 4C 4F 47 4F 20 20 20 20 ...]
+16: pc=0x0802F132 op=0x05 addr=0x-------- read_len=0 mosi=[05 FF]
+17: pc=0x0802F354 op=0x06 addr=0x-------- read_len=0 mosi=[06]
+18: pc=0x0802F388 op=0x02 addr=0x207100 read_len=0 mosi=[02 20 71 00 00 00 00 00 00 00 00 00 ...]
+19: pc=0x0802F132 op=0x05 addr=0x-------- read_len=0 mosi=[05 FF]
+20: pc=0x0802F354 op=0x06 addr=0x-------- read_len=0 mosi=[06]
+21: pc=0x0802F388 op=0x02 addr=0x207200 read_len=0 mosi=[02 20 72 00 00 00 00 00 00 00 00 00 ...]
+22: pc=0x0802F132 op=0x05 addr=0x-------- read_len=0 mosi=[05 FF]
+23: pc=0x0802F354 op=0x06 addr=0x-------- read_len=0 mosi=[06]
+24: pc=0x0802F388 op=0x02 addr=0x207300 read_len=0 mosi=[02 20 73 00 00 00 00 00 00 00 00 00 ...]
+25: pc=0x0802F132 op=0x05 addr=0x-------- read_len=0 mosi=[05 FF]
+26: pc=0x0802F354 op=0x06 addr=0x-------- read_len=0 mosi=[06]
+27: pc=0x0802F388 op=0x02 addr=0x207400 read_len=0 mosi=[02 20 74 00 00 00 00 00 00 00 00 00 ...]
+28: pc=0x0802F132 op=0x05 addr=0x-------- read_len=0 mosi=[05 FF]
+29: pc=0x0802F354 op=0x06 addr=0x-------- read_len=0 mosi=[06]
+30: pc=0x0802F388 op=0x02 addr=0x207500 read_len=0 mosi=[02 20 75 00 00 00 00 00 00 00 00 00 ...]
+31: pc=0x0802F132 op=0x05 addr=0x-------- read_len=0 mosi=[05 FF]
+32: pc=0x0802F354 op=0x06 addr=0x-------- read_len=0 mosi=[06]
+33: pc=0x0802F388 op=0x02 addr=0x207600 read_len=0 mosi=[02 20 76 00 00 00 00 00 00 00 00 00 ...]
+34: pc=0x0802F132 op=0x05 addr=0x-------- read_len=0 mosi=[05 FF]
+35: pc=0x0802F354 op=0x06 addr=0x-------- read_len=0 mosi=[06]
+36: pc=0x0802F388 op=0x02 addr=0x207700 read_len=0 mosi=[02 20 77 00 00 00 00 00 00 00 00 00 ...]
+37: pc=0x0802F132 op=0x05 addr=0x-------- read_len=0 mosi=[05 FF]
+38: pc=0x0802F354 op=0x06 addr=0x-------- read_len=0 mosi=[06]
+39: pc=0x0802F388 op=0x02 addr=0x207800 read_len=0 mosi=[02 20 78 00 00 00 00 00 00 00 00 00 ...]
+
+Read transactions:
+00: op=0x03 start=0x200000 len=4096 end=0x200FFF
+01: op=0x03 start=0x205000 len=4096 end=0x205FFF
+02: op=0x03 start=0x206000 len=4096 end=0x206FFF
+03: op=0x03 start=0x207000 len=4096 end=0x207FFF
+04: op=0x03 start=0x205000 len=4096 end=0x205FFF
+05: op=0x03 start=0x206000 len=4096 end=0x206FFF
+06: op=0x03 start=0x207000 len=4096 end=0x207FFF
+07: op=0x03 start=0x205000 len=4096 end=0x205FFF
+08: op=0x03 start=0x206000 len=4096 end=0x206FFF
+09: op=0x03 start=0x207000 len=4096 end=0x207FFF
+10: op=0x03 start=0x207000 len=4096 end=0x207FFF
+11: op=0x03 start=0x000000 len=4096 end=0x000FFF
+12: op=0x03 start=0x003000 len=4096 end=0x003FFF
+13: op=0x03 start=0x205000 len=4096 end=0x205FFF
+14: op=0x03 start=0x206000 len=4096 end=0x206FFF
+15: op=0x03 start=0x207000 len=4096 end=0x207FFF
+16: op=0x03 start=0x212000 len=4096 end=0x212FFF
+17: op=0x03 start=0x212000 len=4096 end=0x212FFF
+18: op=0x03 start=0x201000 len=4096 end=0x201FFF
+19: op=0x03 start=0x214000 len=4096 end=0x214FFF
+20: op=0x03 start=0x215000 len=4096 end=0x215FFF
+21: op=0x03 start=0x216000 len=4096 end=0x216FFF
+22: op=0x03 start=0x217000 len=4096 end=0x217FFF
+23: op=0x03 start=0x218000 len=4096 end=0x218FFF
+24: op=0x03 start=0x219000 len=4096 end=0x219FFF
+25: op=0x03 start=0x21A000 len=4096 end=0x21AFFF
+26: op=0x03 start=0x21B000 len=4096 end=0x21BFFF
+27: op=0x03 start=0x21C000 len=4096 end=0x21CFFF
+28: op=0x03 start=0x21D000 len=4096 end=0x21DFFF
+29: op=0x03 start=0x21E000 len=4096 end=0x21EFFF
+30: op=0x03 start=0x21F000 len=4096 end=0x21FFFF
+31: op=0x03 start=0x220000 len=4096 end=0x220FFF
+32: op=0x03 start=0x221000 len=4096 end=0x221FFF
+33: op=0x03 start=0x222000 len=4096 end=0x222FFF
+34: op=0x03 start=0x223000 len=4096 end=0x223FFF
+35: op=0x03 start=0x224000 len=4096 end=0x224FFF
+36: op=0x03 start=0x225000 len=4096 end=0x225FFF
+37: op=0x03 start=0x226000 len=4096 end=0x226FFF
+38: op=0x03 start=0x227000 len=4096 end=0x227FFF
+39: op=0x03 start=0x228000 len=4096 end=0x228FFF
+
+Sector erases:
+00: 0x207000
+01: 0x212000
+02: 0x214000
+03: 0x215000
+04: 0x216000
+05: 0x217000
+06: 0x218000
+07: 0x219000
+08: 0x21A000
+09: 0x21B000
+10: 0x21C000
+11: 0x21D000
+12: 0x21E000
+13: 0x21F000
+14: 0x220000
+15: 0x221000
+16: 0x222000
+17: 0x223000
+18: 0x224000
+19: 0x225000
+
+Page programs:
+00: start=0x207000 len=256
+01: start=0x207100 len=256
+02: start=0x207200 len=256
+03: start=0x207300 len=256
+04: start=0x207400 len=256
+05: start=0x207500 len=256
+06: start=0x207600 len=256
+07: start=0x207700 len=256
+08: start=0x207800 len=256
+09: start=0x207900 len=256
+10: start=0x207A00 len=256
+11: start=0x207B00 len=256
+12: start=0x207C00 len=256
+13: start=0x207D00 len=256
+14: start=0x207E00 len=256
+15: start=0x207F00 len=256
+16: start=0x212000 len=256
+17: start=0x212100 len=256
+18: start=0x212200 len=256
+19: start=0x212300 len=256
+20: start=0x212400 len=256
+21: start=0x212500 len=256
+22: start=0x212600 len=256
+23: start=0x212700 len=256
+24: start=0x212800 len=256
+25: start=0x212900 len=256
+26: start=0x212A00 len=256
+27: start=0x212B00 len=256
+28: start=0x212C00 len=256
+29: start=0x212D00 len=256
+30: start=0x212E00 len=256
+31: start=0x212F00 len=256
+32: start=0x214000 len=256
+33: start=0x214100 len=256
+34: start=0x214200 len=256
+35: start=0x214300 len=256
+36: start=0x214400 len=256
+37: start=0x214500 len=256
+38: start=0x214600 len=256
+39: start=0x214700 len=256

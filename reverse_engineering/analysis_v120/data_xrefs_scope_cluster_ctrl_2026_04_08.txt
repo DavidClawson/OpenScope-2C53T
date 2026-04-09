@@ -1,0 +1,19 @@
+# Data Xref Trace
+
+## Target: 0x20000f08
+Address: 20000f08
+- from 080156d0 | type READ | code ldrb.w r0,[r9,#0xe10]
+- from 080157b4 | type READ | code ldrb.w r0,[r9,#0xe10]
+- from 0801583e | function FUN_080157d0 @ 080157d0 | type WRITE | code strb.w r0,[r9,#0xe10]
+
+## Target: 0x20000f09
+Address: 20000f09
+- from 08034982 | function FUN_08034878 @ 08034878 | type WRITE | code strb.w r0,[r1,#0xe11]
+- from 08034992 | function FUN_08034878 @ 08034878 | type WRITE | code strb.w r1,[r0,#0xe11]
+- from 08035ef8 | function FUN_08035ed4 @ 08035ed4 | type READ | code ldrb.w r2,[r0,#0xe11]
+- from 0801580e | function FUN_080157d0 @ 080157d0 | type READ | code ldrb.w r2,[r9,#0xe11]
+
+## Target: 0x20000f13
+Address: 20000f13
+- from 080157ec | function FUN_080157d0 @ 080157d0 | type WRITE | code strb.w r0,[r9,#0xe1b]
+

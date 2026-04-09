@@ -1,0 +1,20 @@
+Stock flash trace via Unicorn
+binary: /Users/david/Desktop/osc/archive/2C53T Firmware V1.2.0/APP_2C53T_V1.2.0_251015.bin
+dump:   /Users/david/Desktop/osc/archive/w25q128_dump.bin
+entry:  0x08035ED5
+seed_display_alloc: True
+seed_high_flash_fs: True
+fs_profile: overlay_formats
+seed_u8: {536874761: 1}
+seeded_fs_entries: 3
+instructions: 2397
+systick_skips: 0
+stop_pc: 0x08FFFFF0
+last_pc: 0x08036082
+last_lr: 0x08033CEF
+transactions: 0
+
+Opcode summary:
+  <none>
+
+First 40 transactions:

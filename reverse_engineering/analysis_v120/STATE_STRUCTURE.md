@@ -22,7 +22,7 @@ Absolute address = `0x200000F8 + offset`
 | +0x15 | 2000010D | `channel_config` | uint8 | **24** | Packed: hi nibble=active_ch, lo nibble=num_channels |
 | +0x2D | 20000125 | `timebase_index` | uint8 | **63** | Timebase setting (0x00-0x13, index into speed table) |
 | +0x30 | 20000128 | `scope_sub_mode` | uint8 | **37** | Scope sub-mode selector (scope_main_fsm exclusive) |
-| +0xF68 | 20001060 | `system_mode` | uint8 | 7 | System mode (0x02 = scope active) |
+| +0xF68 | 20001060 | `system_mode` | uint8 | 7 | Overloaded mode / command-bank selector (scope code checks `0x02`, helper cluster also uses low-byte banks `0..9`) |
 
 ---
 
@@ -78,12 +78,12 @@ Dynamic state that changes during oscilloscope operation.
 | +0x31 | 20000129 | `siggen_config_byte` | uint8 | **1** | siggen_configure | Signal generator configuration (waveform type or output state) |
 | +0x32 | 2000012A | `acquisition_counter` | uint8 | **12** | scope_fsm | Acquisition sample counter. Compared to 0x27 (39) in auto-range logic. When > 39, triggers auto-range evaluation. Reset on timebase change. |
 | +0x33 | 2000012B | `cal_bypass` | uint8 | **5** | scope_fsm, spi3_acq | Calibration bypass flag. 0=normal (cal active), nonzero=skip calibration. SPI3 acquisition checks: `if (state[0x33] == 0)` before applying VFP cal. |
-| +0x34 | 2000012C | `display_mode` | uint8 | **21** | waveform_render, scope_measure, display_settings, math, trigger | Display mode configuration. Controls what gets rendered (waveform, grid, measurements). Accessed by many UI-side functions. |
-| +0x35 | 2000012D | `display_sub_config` | uint8 | **3** | display_settings | Display sub-configuration |
+| +0x34 | 2000012C | `display_mode` | uint8 | **21** | waveform_render, scope_measure, display_settings, math, trigger | Current label retained, but newer trace shows it is likely a downstream render/overlay latch set and cleared by the broader scope controller before the later right-panel redraw/resource owner runs. Still affects what gets rendered, but probably is not a top-level owner byte by itself. |
+| +0x35 | 2000012D | `display_sub_config` | uint8 | **3** | display_settings | Current label retained only provisionally. Recent raw trace shows this byte is compared against `F6B` and cleared when they match inside the downstream trigger-side posture cluster, so it may be a local preview/posture mirror rather than a simple display sub-setting. |
 | +0x38 | 20000130 | `menu_state` | uint32 | **49** | display_settings + many unknown handlers | Menu/settings state. At 49 refs, this is heavily used — likely encodes which menu is open, which item is highlighted, scroll position, etc. |
-| +0x3C | 20000134 | `measurement_config` | uint8 | **5** | scope_measure | Measurement mode configuration |
+| +0x3C | 20000134 | `measurement_config` | uint8 | **5** | scope_measure | Current label is now shaky. In the `0x080095AE..0x08009B1E` posture cluster this byte is mirrored against `F6B`, toggled between `0` and `F6B`, and gates pointer/list handling via `+0x40`, so it likely participates in a local preview/control posture beyond plain measurement config. |
 | +0x3D | 20000135 | `frame_counter` | uint8 | **1** | — | Frame/update counter (wraps at 99) |
-| +0x40 | 20000138 | `measurement_state` | uint32 | **25** | scope_measure + many unknowns | Active measurement state (Vpp, Freq, Period, etc. selection) |
+| +0x40 | 20000138 | `measurement_state` | uint32 | **25** | scope_measure + many unknowns | Current label is provisional. In the newer posture-cluster trace this field behaves like a pointer/list head with elements at offsets `+4`, `+8`, and `+16`, and is cleared to `0` when exhausted. That looks more structured than a plain scalar measurement selector. |
 
 ---
 
@@ -235,12 +235,23 @@ Dynamic state managed by the SPI3 acquisition task and TMR3 ISR.
 
 ## Section 11: Power & System (offsets 0xE10 – 0xE30)
 
+Update 2026-04-08:
+- the old power-management labels in this subsection are no longer trustworthy
+  for `+0xE10..+0xE1C`
+- recent objdump and forced decompiles show this byte family participating in a
+  right-panel redraw / file-resource overlay path rather than plain power state
+  handling
+- see
+  [scope_cluster_control_bytes_2026_04_08.md](/Users/david/Desktop/osc/reverse_engineering/analysis_v120/scope_cluster_control_bytes_2026_04_08.md)
+  and
+  [scope_state_commit_bridge_2026_04_08.md](/Users/david/Desktop/osc/reverse_engineering/analysis_v120/scope_state_commit_bridge_2026_04_08.md)
+
 | Offset | Abs Address | Name | Type | Refs | Description |
 |--------|-------------|------|------|------|-------------|
-| +0xE10 | 20000F08 | `auto_power_mode` | uint8 | **3** | Auto power-off mode (0xFF=disabled, 2+=timed) |
-| +0xE11 | 20000F09 | `power_config` | uint8 | **4** | Power configuration byte |
-| +0xE1B | 20000F13 | `spi_flash_byte` | uint8 | **1** | Byte read from SPI flash at 0x080BC18B during init |
-| +0xE1C | 20000F14 | `display_brightness` | uint8 | **2** | Display brightness setting |
+| +0xE10 | 20000F08 | `panel_overlay_state` | uint8 | **3** | Transient redraw / overlay branch selector. The `0x08015780..0x08015A14` ladder branches on `1 / 2 / 3 / 0xFF`, and the decompiled key-loop slice at `0x08039008` clears the `2 / 3` family back to `0` before normal dispatch. When comparing that loop against the archived raw app image, use the app-slot correction from [raw_app_base_offset_2026_04_08.md](/Users/david/Desktop/osc/reverse_engineering/analysis_v120/raw_app_base_offset_2026_04_08.md): raw `0x0803D008` corresponds to decompiled `0x08039008`. Not a stable top-level mode byte. |
+| +0xE11 | 20000F09 | `panel_entry_index` | uint8 | **4** | Current resource/list index for the same overlay path. `FUN_08034878` writes it as `last_item + 1` or `1` by default, and the redraw ladder reads it while formatting right-panel content. |
+| +0xE1B | 20000F13 | `panel_entry_count` | uint8 | **1** | Entry count / append cursor for the overlay list state. The special `*(base + 0xE10) == 1` path stores the `FUN_08034878(...)` return byte here, and the success path appends `+0xE11` into `+0xE25[]` using this byte as an index. |
+| +0xE1C | 20000F14 | `panel_subview_state` | uint8 | **2** | Right-panel subview / toggle byte. Raw code repeatedly tests and writes `0 / 1 / 2`, and `FUN_0801819C` renders different right-panel strings/colors from this value. |
 
 ---
 
@@ -267,6 +278,12 @@ Separate from scope state — this is the multimeter's operating state.
 
 Used by `lcd_draw_bitmap_from_flash` (FUN_08022e14) for drawing UI assets from SPI flash.
 
+Update 2026-04-08:
+- boot restore code at `0x08026F50` reads `base + 0xF64` and can copy that byte
+  into `DAT_20001060`, so this subsection now needs a focused re-audit before
+  `+0xF64` is trusted as pure display state. See
+  [mode_selector_writer_map_2026_04_08.md](/Users/david/Desktop/osc/reverse_engineering/analysis_v120/mode_selector_writer_map_2026_04_08.md).
+
 | Offset | Abs Address | Name | Type | Refs | Description |
 |--------|-------------|------|------|------|-------------|
 | +0xF59 | 20000F51 | `draw_bitmap_flag` | uint8 | **2** | Bitmap drawing active flag |
@@ -283,10 +300,10 @@ Used by `lcd_draw_bitmap_from_flash` (FUN_08022e14) for drawing UI assets from S
 | Offset | Abs Address | Name | Type | Refs | Description |
 |--------|-------------|------|------|------|-------------|
 | +0xF60 | 20001058 | `ui_state` | uint8 | **52** | **UI state byte** — heavily accessed by display functions (23 accessor functions). Controls which screen/mode the UI is currently rendering. |
-| +0xF68 | 20001060 | `system_mode` | uint8 | **7** | **System operating mode.** scope_main_fsm checks `== 0x02` at entry (scope mode). Values: 0=boot, 1=meter, 2=scope, 3=siggen, etc. |
-| +0xF69 | 20001061 | `mode_transition_flags` | uint16 | **15** | Mode transition state flags |
-| +0xF6A | 20001062 | `display_refresh_mode` | uint8 | **9** | Display refresh strategy selector |
-| +0xF6B | 20001063 | `mode_flags` | uint8 | **15** | Mode-specific flags |
+| +0xF68 | 20001060 | `system_mode` | uint8 | **7** | **Overloaded mode / command-bank selector byte.** scope-side code checks `== 0x02` in some paths, but the same low byte is also reused by the helper cluster around `0x08006418` to select command banks `0..9`. See [enclosing_helper_cluster_2026_04_08.md](/Users/david/Desktop/osc/reverse_engineering/analysis_v120/enclosing_helper_cluster_2026_04_08.md). |
+| +0xF69 | 20001061 | `mode_transition_flags` | uint16 | **15** | Packed mode-transition / phase gate. Reader-side code treats value `2` as a special draw-state condition, and raw objdump now shows concrete decrement/increment/reset writers at `0x08003036`, `0x08004236`, and `0x08004806`. See [scope_state_commit_bridge_2026_04_08.md](/Users/david/Desktop/osc/reverse_engineering/analysis_v120/scope_state_commit_bridge_2026_04_08.md) and [packed_scope_state_writers_2026_04_08.md](/Users/david/Desktop/osc/reverse_engineering/analysis_v120/packed_scope_state_writers_2026_04_08.md). |
+| +0xF6A | 20001062 | `scope_ui_state_flags` | uint8 | **9** | Packed scope UI / subview selector byte. Scope-side draw paths split high/low nibbles for list selection and `scope_ui_draw_main` switches on `& 0xF`. Also used by the helper cluster's `9 -> 2` collapse check. Current exact-byte xrefs show reads plus a boot/config restore write at `0x08027006`; runtime mutation may happen through a wider packed-state helper rather than a simple standalone `strb`. See [scope_low_byte_2_path_2026_04_08.md](/Users/david/Desktop/osc/reverse_engineering/analysis_v120/scope_low_byte_2_path_2026_04_08.md) and [scope_state_commit_bridge_2026_04_08.md](/Users/david/Desktop/osc/reverse_engineering/analysis_v120/scope_state_commit_bridge_2026_04_08.md). |
+| +0xF6B | 20001063 | `mode_flags` | uint8 | **15** | Packed display / marker mode byte. Nearby scope-panel helpers branch on `== 3` and decode its high bits into marker/highlight positions, and raw objdump now shows real normalization/step writers at `0x080030F6`, `0x0800311E`, `0x0800440E`, and `0x0800450C`. See [scope_state_commit_bridge_2026_04_08.md](/Users/david/Desktop/osc/reverse_engineering/analysis_v120/scope_state_commit_bridge_2026_04_08.md) and [packed_scope_state_writers_2026_04_08.md](/Users/david/Desktop/osc/reverse_engineering/analysis_v120/packed_scope_state_writers_2026_04_08.md). |
 
 ---
 

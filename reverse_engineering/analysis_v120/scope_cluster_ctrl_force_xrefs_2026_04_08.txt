@@ -1,0 +1,35 @@
+# Function Xref Trace
+
+## Requested: 0x0800a660
+Function: FUN_0800a660 @ 0800a660
+Size: 1 bytes
+Caller count: 0
+Callee count: 0
+
+## Requested: 0x08035ed4
+Function: FUN_08035ed4 @ 08035ed4
+Size: 432 bytes
+Caller count: 0
+Callee count: 8
+Calls:
+- FUN_0802d8b8 @ 0802d8b8
+- FUN_0802d014 @ 0802d014
+- FUN_0802e530 @ 0802e530
+- FUN_08033cbc @ 08033cbc
+- FUN_0802d1e8 @ 0802d1e8
+- FUN_08000370 @ 08000370
+- FUN_0802e12c @ 0802e12c
+- FUN_08033cfc @ 08033cfc
+
+## Requested: 0x08039058
+Function: FUN_08039058 @ 08039058
+Size: 1 bytes
+Caller count: 0
+Callee count: 0
+
+## Requested: 0x08039544
+Function: FUN_08039544 @ 08039544
+Size: 1 bytes
+Caller count: 0
+Callee count: 0
+

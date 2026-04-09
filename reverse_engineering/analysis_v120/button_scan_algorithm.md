@@ -647,6 +647,16 @@ The table at 0x08046528 has 30 bytes (15 entries for long-press/release + 15 ent
 xxd -s $((0x08046528 - 0x08000000)) -l 30 APP_2C53T_V120.bin
 ```
 
+Update 2026-04-08:
+- The downloaded vendor app image `APP_2C53T_V1.2.0_251015.bin` does **not**
+  appear to contain a usable table at this location. A raw dump from that file is
+  mostly zeros/sentinel-like bytes (`00 ... 0f ff ff f4 ... 04 ef`), and the
+  adjacent `key_task` dispatch table at `0x08046544` also does not look like a
+  valid Thumb function-pointer table.
+- So for this specific vendor download, "just dump `0x08046528`" is **not**
+  enough to recover the logical key mapping. A real stock dump or runtime trace
+  is likely required.
+
 Alternatively, run the scan algorithm with debug output and press each button to map bit positions to physical buttons empirically.
 
 ## References

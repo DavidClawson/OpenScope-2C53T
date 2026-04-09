@@ -1,0 +1,15 @@
+# Data Xref Trace
+
+## Target: 0x20001061
+Address: 20001061
+- from 080090b2 | function FUN_08009014 @ 08009014 | type READ | code ldrsb.w r0,[r5,#0xf69]
+- from 0800e03c | type READ | code ldrb.w r0,[r3,#0xf69]
+- from 0800d83c | type READ | code ldrb.w r0,[r3,#0xf69]
+
+## Target: 0x20001063
+Address: 20001063
+- from 0800c972 | type READ | code ldrb.w r4,[r6,#0xf6b]
+- from 0800e042 | type READ | code ldrb.w r0,[r3,#0xf6b]
+- from 0800e550 | type READ | code ldrb.w r1,[r0,#0xf6b]
+- from 0800d846 | type READ | code ldrb.w r1,[r3,#0xf6b]
+

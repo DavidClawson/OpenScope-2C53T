@@ -70,6 +70,15 @@ SKIP_FUNCTIONS = {
     0x080022DC: "lcd_palette_init",
 }
 
+PREVIEW_DISPATCHER = 0x0800BCD4
+PREVIEW_STATE = 0x20008350
+PREVIEW_STATE_SIZE = 12
+PREVIEW_FAST_LOOPS = {
+    0x08036290: (0x08036304, 0x0C),
+    0x080363E2: (0x08036456, 0x08),
+    0x080364EC: (0x08036560, 0x04),
+}
+
 # Expensive in-line display/pacing blocks inside master_init that are safe to
 # fast-forward when the goal is external-flash traversal.
 SKIP_JUMPS = {
@@ -522,6 +531,59 @@ class StockFlashTracer:
             else:
                 uc.mem_write(address, struct.pack("<B", val & 0xFF))
 
+    def _stub_preview_dispatcher(self, uc) -> bool:
+        # `FUN_0800BCD4` is a jump-table preview dispatcher used by
+        # `FUN_08036084()`. During chained BMP-side experiments we only need it
+        # to leave a deterministic framebuffer behind so the later FAT write
+        # path can proceed.
+        if self.stage == 0:
+            return False
+
+        viewport = self.mu.mem_read(PREVIEW_STATE, PREVIEW_STATE_SIZE)
+        viewport_x, viewport_y, width, height, framebuffer_ptr = struct.unpack("<HHHHI", viewport)
+        pixel_count = width * height
+        byte_count = pixel_count * 2
+
+        if pixel_count == 0 or byte_count > 0x40000:
+            return False
+        if framebuffer_ptr < RAM_BASE or framebuffer_ptr + byte_count > RAM_BASE + RAM_SIZE:
+            return False
+
+        code = uc.reg_read(UC_ARM_REG_R0) & 0xFF
+        pixels = bytearray(byte_count)
+        for idx in range(pixel_count):
+            x = idx % width
+            y = idx // width
+            red = ((x + viewport_x + code * 3) >> 3) & 0x1F
+            green = ((y + viewport_y + code * 5) >> 2) & 0x3F
+            blue = ((x ^ y ^ code) >> 1) & 0x1F
+            pixel = (red << 11) | (green << 5) | blue
+            struct.pack_into("<H", pixels, idx * 2, pixel)
+
+        self.mu.mem_write(framebuffer_ptr, bytes(pixels))
+        self.skipped_calls["preview_dispatcher_stage_stub"] += 1
+        uc.reg_write(UC_ARM_REG_PC, uc.reg_read(UC_ARM_REG_LR))
+        return True
+
+    def _fast_forward_preview_loop(self, uc, address: int) -> bool:
+        if self.stage == 0:
+            return False
+
+        jump = PREVIEW_FAST_LOOPS.get(address & ~1)
+        if jump is None:
+            return False
+
+        target, sp_offset = jump
+        viewport = self.mu.mem_read(PREVIEW_STATE, PREVIEW_STATE_SIZE)
+        _, _, width, height, _ = struct.unpack("<HHHHI", viewport)
+        pixel_count = width * height
+
+        sp = uc.reg_read(UC_ARM_REG_SP)
+        self.mu.mem_write(sp + sp_offset, struct.pack("<H", pixel_count & 0xFFFF))
+        self.skipped_blocks[f"preview_loop_{address & ~1:08x}"] += 1
+        uc.reg_write(UC_ARM_REG_PC, target | 1)
+        return True
+
     def _hook_code(self, uc, address, size, user_data):
         self.last_pc = address
         self.last_lr = uc.reg_read(UC_ARM_REG_LR)
@@ -531,6 +593,12 @@ class StockFlashTracer:
             target, name = jump
             self.skipped_blocks[name] += 1
             uc.reg_write(UC_ARM_REG_PC, target | 1)
+            return
+
+        if (address & ~1) == PREVIEW_DISPATCHER and self._stub_preview_dispatcher(uc):
+            return
+
+        if self._fast_forward_preview_loop(uc, address):
             return
 
         func = SKIP_FUNCTIONS.get(address & ~1)

@@ -24,6 +24,7 @@
 #include "fpga_cal_table.h"
 #include "meter_data.h"
 #include "../ui/ui.h"
+#include "../ui/scope_state.h"
 #include "at32f403a_407.h"
 #include "FreeRTOS.h"
 #include "task.h"
@@ -73,6 +74,89 @@ static TaskHandle_t      rx_task_handle  = NULL;
 
 /* Track whether we've received at least one valid acquisition */
 static volatile bool data_ready = false;
+static volatile bool scope_reinit_pending = false;
+
+/* ═══════════════════════════════════════════════════════════════════
+ * Stock-State Bench Shadow
+ * ═══════════════════════════════════════════════════════════════════ */
+
+static void fpga_stock_shadow_write(uint8_t visible_state,
+                                    uint8_t phase,
+                                    uint8_t substate,
+                                    uint8_t flags,
+                                    uint8_t e1a,
+                                    uint8_t e1b,
+                                    uint8_t e1c,
+                                    uint8_t e1d,
+                                    uint8_t latch_355)
+{
+    fpga.stock_shadow.visible_state = visible_state;
+    fpga.stock_shadow.phase = phase;
+    fpga.stock_shadow.substate = substate;
+    fpga.stock_shadow.flags = flags;
+    fpga.stock_shadow.e1a = e1a;
+    fpga.stock_shadow.e1b = e1b;
+    fpga.stock_shadow.e1c = e1c;
+    fpga.stock_shadow.e1d = e1d;
+    fpga.stock_shadow.latch_355 = latch_355;
+    memset((void *)fpga.stock_shadow.detail_bits, 0, sizeof(fpga.stock_shadow.detail_bits));
+}
+
+void fpga_stock_diag_set(uint8_t visible_state,
+                         uint8_t phase,
+                         uint8_t substate,
+                         uint8_t flags,
+                         uint8_t e1a,
+                         uint8_t e1b,
+                         uint8_t e1c,
+                         uint8_t e1d,
+                         uint8_t latch_355)
+{
+    fpga_stock_shadow_write(visible_state, phase, substate, flags,
+                            e1a, e1b, e1c, e1d, latch_355);
+}
+
+void fpga_stock_diag_seed_base2(void)
+{
+    /* Conservative base-scope posture from the recovered compact owner:
+     * visible state 2, no packed preset active, no staged right-panel handoff.
+     * We intentionally leave no implied right-panel selection armed. */
+    fpga_stock_shadow_write(2, 0, 0, 0, 0, 0, 0, 0, 0);
+}
+
+void fpga_stock_diag_reset(void)
+{
+    fpga_stock_diag_seed_base2();
+}
+
+void fpga_stock_diag_seed_state5(uint8_t e1b, uint8_t e1d)
+{
+    /* Stable right-panel editor posture. Use a small nonzero default entry
+     * count in shell helpers so state-6 gating experiments have something to
+     * work with, but keep the packed preset bytes inactive. */
+    fpga_stock_shadow_write(5, 0, 0, 0, 0, e1b, 0, e1d, 0);
+}
+
+void fpga_stock_diag_seed_state6(uint8_t e1b, uint8_t e1d)
+{
+    /* Transient state above the right-panel editor. Stock only appears to
+     * reach this when E1B is nonzero, so callers should seed it accordingly. */
+    fpga_stock_shadow_write(6, 0, 0, 0, 0, e1b, 0, e1d, 0);
+}
+
+void fpga_stock_diag_seed_preset(uint8_t visible_state,
+                                 uint8_t phase,
+                                 uint8_t substate,
+                                 uint8_t flags,
+                                 uint8_t latch_355)
+{
+    fpga.stock_shadow.visible_state = visible_state;
+    fpga.stock_shadow.phase = phase;
+    fpga.stock_shadow.substate = substate;
+    fpga.stock_shadow.flags = flags;
+    fpga.stock_shadow.latch_355 = latch_355;
+    memset((void *)fpga.stock_shadow.detail_bits, 0, sizeof(fpga.stock_shadow.detail_bits));
+}
 
 /* ═══════════════════════════════════════════════════════════════════
  * SPI3 Low-Level Transfer
@@ -167,6 +251,700 @@ static void systick_delay_ms(uint32_t ms)
     while (ms--) {
         systick_delay_us(1000);
     }
+}
+
+static void fpga_scope_delay_ms(uint32_t ms)
+{
+    if (ms == 0) return;
+
+    if (xTaskGetSchedulerState() == taskSCHEDULER_RUNNING) {
+        vTaskDelay(pdMS_TO_TICKS(ms));
+    } else {
+        systick_delay_ms(ms);
+    }
+}
+
+static void fpga_timed_send_cmd(uint8_t cmd_hi, uint8_t cmd_lo, uint32_t delay_ms)
+{
+    if (xTaskGetSchedulerState() == taskSCHEDULER_RUNNING && usart_tx_queue != NULL) {
+        uint16_t item = ((uint16_t)cmd_hi << 8) | cmd_lo;
+
+        /* Scope reinit is a deliberate control path, so it's worth waiting
+         * briefly for queue space instead of silently dropping commands. */
+        (void)xQueueSend(usart_tx_queue, &item, pdMS_TO_TICKS(100));
+    } else {
+        usart2_send_cmd(cmd_hi, cmd_lo);
+    }
+
+    fpga_scope_delay_ms(delay_ms);
+}
+
+static void fpga_scope_select_timing(const scope_state_t *ss,
+                                     uint8_t *run_mode,
+                                     uint8_t *sample_depth,
+                                     uint8_t *tb_prescaler,
+                                     uint8_t *tb_period,
+                                     uint8_t *tb_mode,
+                                     uint8_t *acq_mode);
+static void fpga_send_scope_range_block(const scope_state_t *ss);
+static uint8_t fpga_scope_trigger_lsb(const scope_state_t *ss);
+static uint8_t fpga_scope_trigger_mode_byte(const scope_state_t *ss);
+static uint8_t fpga_scope_prefix_cmd(const scope_state_t *ss);
+
+void fpga_wire_send_word(uint16_t word, uint32_t delay_ms)
+{
+    fpga_timed_send_cmd((uint8_t)(word >> 8), (uint8_t)(word & 0xFF), delay_ms);
+}
+
+static void fpga_wire_send_bank_words(uint8_t bank_mode)
+{
+    static const uint16_t ch1_words[] = { 0x050C, 0x050E, 0x0510, 0x0511 };
+    static const uint16_t ch2_words[] = { 0x050D, 0x0517, 0x0516, 0x0515 };
+
+    if (bank_mode == 0 || bank_mode == 2) {
+        for (size_t i = 0; i < sizeof(ch1_words) / sizeof(ch1_words[0]); i++) {
+            fpga_wire_send_word(ch1_words[i], 15);
+        }
+    }
+
+    if (bank_mode == 1 || bank_mode == 2) {
+        for (size_t i = 0; i < sizeof(ch2_words) / sizeof(ch2_words[0]); i++) {
+            fpga_wire_send_word(ch2_words[i], 15);
+        }
+    }
+}
+
+static void fpga_send_scope_runtime_blocks(const scope_state_t *ss)
+{
+    uint8_t run_mode;
+    uint8_t sample_depth;
+    uint8_t tb_prescaler;
+    uint8_t tb_period;
+    uint8_t tb_mode;
+    uint8_t acq_mode;
+    uint8_t trigger_prefix;
+
+    fpga_scope_select_timing(ss, &run_mode, &sample_depth,
+                             &tb_prescaler, &tb_period, &tb_mode, &acq_mode);
+    fpga.acq_mode = acq_mode;
+
+    fpga_send_scope_range_block(ss);
+
+    fpga_timed_send_cmd(run_mode, FPGA_CMD_FREQ_20, 15);
+    fpga_timed_send_cmd(sample_depth, FPGA_CMD_FREQ_21, 15);
+    fpga_timed_send_cmd(tb_prescaler, 0x26, 15);
+    fpga_timed_send_cmd(tb_period, 0x27, 15);
+    fpga_timed_send_cmd(tb_mode, 0x28, 20);
+
+    trigger_prefix = fpga_scope_prefix_cmd(ss);
+    fpga_timed_send_cmd(0x00, trigger_prefix, 15);
+    fpga_timed_send_cmd(fpga_scope_trigger_lsb(ss), 0x16, 15);
+    fpga_timed_send_cmd(0x00, 0x17, 15);
+    fpga_timed_send_cmd(fpga_scope_trigger_mode_byte(ss), 0x18, 15);
+    fpga_timed_send_cmd(0x00, 0x19, 20);
+}
+
+void fpga_wire_entry(uint8_t bank_mode)
+{
+    if (!fpga.initialized) return;
+
+    fpga_wire_send_word(0x02A0, 20);
+    fpga_wire_send_word(0x0501, 15);
+    fpga_wire_send_bank_words(bank_mode);
+    fpga_wire_send_word(0x0503, 20);
+}
+
+void fpga_wire_scope_sequence(uint8_t bank_mode)
+{
+    const scope_state_t *ss;
+
+    if (!fpga.initialized) return;
+
+    ss = scope_state_get();
+    fpga_wire_entry(bank_mode);
+    fpga_send_scope_runtime_blocks(ss);
+}
+
+/* ═══════════════════════════════════════════════════════════════════
+ * Stock-State Bench Drivers
+ * ═══════════════════════════════════════════════════════════════════ */
+
+static void fpga_stock_shadow_clear_detail(void)
+{
+    memset((void *)fpga.stock_shadow.detail_bits, 0, sizeof(fpga.stock_shadow.detail_bits));
+}
+
+static bool fpga_stock_shadow_detail_nonzero(void)
+{
+    for (size_t i = 0; i < sizeof(fpga.stock_shadow.detail_bits); i++) {
+        if (fpga.stock_shadow.detail_bits[i] != 0) return true;
+    }
+    return false;
+}
+
+static void fpga_stock_shadow_seed_detail_from_cursor(void)
+{
+    uint8_t max_items = fpga.stock_shadow.e1b;
+    uint8_t index = fpga.stock_shadow.e1d;
+    uint8_t byte_index;
+    uint8_t bit_index;
+
+    fpga_stock_shadow_clear_detail();
+    if (max_items == 0) return;
+
+    if (index >= max_items) index = (uint8_t)(max_items - 1);
+    if (index > 47) index = 47;
+
+    byte_index = index / 6;
+    bit_index = index % 6;
+    fpga.stock_shadow.detail_bits[byte_index] = (uint8_t)(1U << bit_index);
+}
+
+static void fpga_stock_shadow_fill_detail(void)
+{
+    uint8_t max_items = fpga.stock_shadow.e1b;
+    uint8_t remaining = (max_items > 48) ? 48 : max_items;
+
+    fpga_stock_shadow_clear_detail();
+    for (size_t i = 0; i < sizeof(fpga.stock_shadow.detail_bits) && remaining > 0; i++) {
+        uint8_t bits = (remaining >= 6) ? 6 : remaining;
+        fpga.stock_shadow.detail_bits[i] = (uint8_t)((1U << bits) - 1U);
+        remaining = (remaining > bits) ? (uint8_t)(remaining - bits) : 0;
+    }
+}
+
+static void fpga_stock_shadow_adjust(bool next)
+{
+    uint8_t limit = fpga.stock_shadow.e1b;
+
+    if (!fpga.initialized) return;
+    if (limit == 0) return;
+
+    if (fpga.stock_shadow.e1d >= limit) {
+        fpga.stock_shadow.e1d = (uint8_t)(limit - 1);
+    } else if (next) {
+        if ((uint8_t)(fpga.stock_shadow.e1d + 1U) < limit) {
+            fpga.stock_shadow.e1d++;
+        }
+    } else if (fpga.stock_shadow.e1d > 0) {
+        fpga.stock_shadow.e1d--;
+    }
+
+    if (fpga.stock_shadow.visible_state == 5 && fpga.stock_shadow.e1c == 0) {
+        fpga_timed_send_cmd(0x00, 0x27, 15);
+        fpga_timed_send_cmd(0x00, 0x28, 20);
+    } else if (fpga.stock_shadow.visible_state == 6) {
+        fpga_timed_send_cmd(0x00, 0x29, 20);
+    }
+}
+
+void fpga_stock_diag_prev(void)
+{
+    fpga_stock_shadow_adjust(false);
+}
+
+void fpga_stock_diag_next(void)
+{
+    fpga_stock_shadow_adjust(true);
+}
+
+void fpga_stock_diag_select(void)
+{
+    if (!fpga.initialized) return;
+    if (fpga.stock_shadow.visible_state != 5) return;
+    if (fpga.stock_shadow.e1c != 0 || fpga.stock_shadow.e1b == 0) return;
+
+    if (fpga.stock_shadow.e1a == 0) {
+        fpga.stock_shadow.e1a = 1;
+        fpga_stock_shadow_seed_detail_from_cursor();
+    } else {
+        fpga.stock_shadow.e1a = 0;
+        fpga_stock_shadow_clear_detail();
+    }
+
+    fpga_timed_send_cmd(0x00, 0x28, 15);
+    fpga_timed_send_cmd(0x00, 0x26, 20);
+}
+
+void fpga_stock_diag_toggle(void)
+{
+    if (!fpga.initialized) return;
+    if (fpga.stock_shadow.visible_state != 5) return;
+    if (fpga.stock_shadow.e1c != 0 || fpga.stock_shadow.e1b == 0) return;
+
+    if (fpga.stock_shadow.e1a == 2) {
+        fpga.stock_shadow.e1a = 1;
+        fpga_stock_shadow_seed_detail_from_cursor();
+    } else {
+        fpga.stock_shadow.e1a = 2;
+        fpga_stock_shadow_fill_detail();
+    }
+
+    fpga_timed_send_cmd(0x00, 0x26, 15);
+    fpga_timed_send_cmd(0x00, 0x28, 20);
+}
+
+void fpga_stock_diag_commit(void)
+{
+    if (!fpga.initialized) return;
+
+    if (fpga.stock_shadow.visible_state == 5 &&
+        fpga.stock_shadow.e1c == 0 &&
+        fpga.stock_shadow.e1a != 0 &&
+        fpga_stock_shadow_detail_nonzero()) {
+        fpga.stock_shadow.e1c = 2;
+        fpga_timed_send_cmd(0x00, 0x2A, 20);
+        return;
+    }
+
+    if (fpga.stock_shadow.visible_state == 5 && fpga.stock_shadow.e1c == 2) {
+        fpga.stock_shadow.e1c = 1;
+        fpga_timed_send_cmd(0x00, 0x2A, 20);
+        return;
+    }
+
+    if (fpga.stock_shadow.visible_state == 5 && fpga.stock_shadow.e1c == 1) {
+        fpga_timed_send_cmd(0x00, 0x2B, 20);
+    }
+}
+
+void fpga_stock_diag_consume(void)
+{
+    if (!fpga.initialized) return;
+    if (fpga.stock_shadow.visible_state != 9 || fpga.stock_shadow.latch_355 == 0) return;
+
+    if (fpga.stock_shadow.substate == 2) {
+        fpga_stock_diag_seed_base2();
+        return;
+    }
+
+    fpga.stock_shadow.phase = 1;
+    fpga.stock_shadow.substate = 2;
+    fpga.stock_shadow.flags = 0;
+    fpga_timed_send_cmd(0x00, 0x13, 15);
+    fpga_timed_send_cmd(0x00, 0x14, 20);
+}
+
+void fpga_stock_diag_bridge_fixed(void)
+{
+    if (!fpga.initialized) return;
+
+    /* Candidate downstream branch after the detailed sub2=5 path stages
+     * 0x0501 at F69 and queues 0x13, then 0x14. We do not claim this is
+     * exact stock control flow; it is a bounded bench probe of the fixed
+     * 0x0501 materializer family around 0x08006060. */
+    fpga_timed_send_cmd(0x00, 0x13, 15);
+    fpga_timed_send_cmd(0x00, 0x14, 20);
+    fpga_wire_send_word(0x0501, 15);
+    fpga_timed_send_cmd(0x00, 0x1D, 15);
+    fpga_timed_send_cmd(0x00, 0x1B, 20);
+}
+
+void fpga_stock_diag_bridge_dynamic(uint8_t bank_mode)
+{
+    if (!fpga.initialized) return;
+
+    /* Alternate candidate downstream branch: after 0x13/0x14, land in the
+     * dynamic 0x050x family materializer around 0x08006120 instead of the
+     * fixed 0x0501 sibling. */
+    fpga_timed_send_cmd(0x00, 0x13, 15);
+    fpga_timed_send_cmd(0x00, 0x14, 20);
+    fpga_wire_send_bank_words(bank_mode);
+    fpga_timed_send_cmd(0x00, 0x1B, 20);
+}
+
+void fpga_stock_diag_reenter(void)
+{
+    if (!fpga.initialized) return;
+
+    /* Conservative stock-ish bridging:
+     * - visible state 6 enters the editor by collapsing to state 5
+     * - visible state 9 can consume its packed preset before we re-enter the
+     *   current clean-room scope configuration path
+     */
+    if (fpga.stock_shadow.visible_state == 9 && fpga.stock_shadow.latch_355 != 0) {
+        fpga_stock_diag_consume();
+    }
+
+    if (fpga.stock_shadow.visible_state == 6 && fpga.stock_shadow.e1b != 0) {
+        fpga.stock_shadow.visible_state = 5;
+    }
+
+    fpga_scope_reinit();
+}
+
+/* ═══════════════════════════════════════════════════════════════════
+ * Scope Reinit Helpers
+ * ═══════════════════════════════════════════════════════════════════ */
+
+static uint8_t fpga_scope_channel_mask(const scope_state_t *ss)
+{
+    uint8_t mask = 0;
+
+    if (ss->ch1.enabled) mask |= 0x01;
+    if (ss->ch2.enabled) mask |= 0x02;
+
+    return mask ? mask : 0x01;
+}
+
+static uint8_t fpga_scope_primary_range(const scope_state_t *ss)
+{
+    const channel_state_t *ch;
+
+    if (ss->trigger.source == TRIG_SRC_CH2 && ss->ch2.enabled) {
+        ch = &ss->ch2;
+    } else if (ss->ch1.enabled) {
+        ch = &ss->ch1;
+    } else {
+        ch = &ss->ch2;
+    }
+
+    return (ch->vdiv_idx < VDIV_COUNT) ? ch->vdiv_idx : (VDIV_COUNT - 1);
+}
+
+static void fpga_set_scope_frontend_range(uint8_t range_idx)
+{
+    /* Approximate gpio_mux_portc_porte / gpio_mux_porta_portb using the
+     * reconstructed truth table from core_subsystems_annotated.c. This is
+     * intentionally simple: we want a stable, obviously scope-like relay
+     * state instead of inheriting meter or siggen leftovers. */
+    switch (range_idx) {
+    case 0:
+    case 1:
+        GPIOC->clr = (1U << 12);
+        GPIOE->scr = (1U << 4);
+        GPIOE->clr = (1U << 5);
+        GPIOE->clr = (1U << 6);
+        GPIOA->clr = (1U << 15);
+        GPIOA->clr = (1U << 10);
+        GPIOB->clr = (1U << 10);
+        break;
+
+    case 2:
+    case 3:
+    case 4:
+        GPIOC->clr = (1U << 12);
+        GPIOE->scr = (1U << 4);
+        if ((range_idx & 1U) != 0) GPIOE->scr = (1U << 5);
+        else                       GPIOE->clr = (1U << 5);
+        GPIOE->clr = (1U << 6);
+        GPIOA->scr = (1U << 15);
+        GPIOA->scr = (1U << 10);
+        GPIOB->clr = (1U << 10);
+        break;
+
+    case 5:
+    case 6:
+        GPIOC->clr = (1U << 12);
+        GPIOE->clr = (1U << 4);
+        if ((range_idx & 1U) != 0) GPIOE->scr = (1U << 5);
+        else                       GPIOE->clr = (1U << 5);
+        GPIOE->scr = (1U << 6);
+        GPIOA->clr = (1U << 15);
+        GPIOA->clr = (1U << 10);
+        GPIOB->clr = (1U << 10);
+        break;
+
+    case 7:
+        GPIOC->scr = (1U << 12);
+        GPIOE->clr = (1U << 4);
+        GPIOE->scr = (1U << 5);
+        GPIOE->scr = (1U << 6);
+        GPIOA->clr = (1U << 15);
+        GPIOA->clr = (1U << 10);
+        GPIOB->clr = (1U << 10);
+        break;
+
+    case 8:
+        GPIOC->clr = (1U << 12);
+        GPIOE->scr = (1U << 4);
+        GPIOE->clr = (1U << 5);
+        GPIOE->scr = (1U << 6);
+        GPIOA->clr = (1U << 15);
+        GPIOA->clr = (1U << 10);
+        GPIOB->scr = (1U << 10);
+        break;
+
+    case 9:
+    default:
+        GPIOC->clr = (1U << 12);
+        GPIOE->scr = (1U << 4);
+        GPIOE->scr = (1U << 5);
+        GPIOE->scr = (1U << 6);
+        GPIOA->clr = (1U << 15);
+        GPIOA->clr = (1U << 10);
+        GPIOB->clr = (1U << 10);
+        break;
+    }
+
+    /* Shared analog enables stay asserted in scope mode. */
+    GPIOB->scr = (1U << 9);
+    GPIOA->scr = (1U << 6);
+}
+
+static uint8_t fpga_probe_cmd_byte(void)
+{
+    return (GPIOC->idt & (1U << 7)) ? 0x07 : FPGA_CMD_METER_NOPROBE;
+}
+
+static void fpga_set_meter_frontend_baseline(void)
+{
+    /* Restore the known-good meter posture from boot init so shell-driven
+     * meter recovery doesn't depend on whichever scope range ran last. */
+    GPIOB->scr = PB11_MASK;   /* FPGA active */
+    GPIOC->scr = PC6_MASK;    /* SPI path enabled */
+    GPIOC->scr = (1U << 11);  /* Meter MUX on */
+    GPIOC->scr = (1U << 12);  /* Route probe to meter path */
+
+    GPIOE->scr = (1U << 4);
+    GPIOE->clr = (1U << 5);
+    GPIOE->scr = (1U << 6);
+
+    GPIOB->scr = (1U << 9);
+    GPIOA->scr = (1U << 6);
+    GPIOA->scr = (1U << 15);
+    GPIOA->scr = (1U << 10);
+    GPIOB->clr = (1U << 10);
+}
+
+static void fpga_send_meter_wake_preamble(void)
+{
+    uint8_t probe_cmd = fpga_probe_cmd_byte();
+
+    fpga_set_meter_frontend_baseline();
+    fpga_scope_delay_ms(20);
+
+    /* Boot-time meter bring-up uses cmd_hi=0x05 for this block. Keep that
+     * path available as a live experiment before scope mode re-entry. */
+    fpga_timed_send_cmd(0x05, 0x08, 10);
+    fpga_timed_send_cmd(0x05, FPGA_CMD_METER_START, 10);
+    fpga_timed_send_cmd(0x05, probe_cmd, 10);
+    fpga_timed_send_cmd(0x05, FPGA_CMD_METER_VAR_14, 20);
+}
+
+static uint8_t fpga_scope_trigger_lsb(const scope_state_t *ss)
+{
+    int level = 128 - ss->trigger.level;
+
+    if (level < 0) level = 0;
+    if (level > 255) level = 255;
+
+    return (uint8_t)level;
+}
+
+static uint8_t fpga_scope_trigger_mode_byte(const scope_state_t *ss)
+{
+    uint8_t mode = 0;
+
+    if (ss->trigger.source == TRIG_SRC_CH2) mode |= 0x01;
+    if (ss->trigger.edge == TRIG_FALLING)   mode |= 0x80;
+
+    switch (ss->trigger.mode) {
+    case TRIG_SINGLE: mode |= 0x20; break;
+    case TRIG_NORMAL: mode |= 0x10; break;
+    case TRIG_AUTO:
+    default:          mode |= 0x00; break;
+    }
+
+    return mode;
+}
+
+static uint8_t fpga_scope_prefix_cmd(const scope_state_t *ss)
+{
+    return (ss->trigger.source == TRIG_SRC_CH2) ? 0x0A : 0x07;
+}
+
+static uint8_t fpga_scope_gain_param(const channel_state_t *ch)
+{
+    uint8_t param = ch->vdiv_idx & 0x0F;
+
+    if (ch->probe == PROBE_10X) param |= 0x10;
+    if (!ch->enabled)           param |= 0x80;
+
+    return param;
+}
+
+static uint8_t fpga_scope_offset_param(const channel_state_t *ch)
+{
+    int offset = 128 - ch->position;
+
+    if (offset < 0)   offset = 0;
+    if (offset > 255) offset = 255;
+
+    return (uint8_t)offset;
+}
+
+static uint8_t fpga_scope_coupling_param(const scope_state_t *ss)
+{
+    uint8_t param = 0;
+
+    param |= (uint8_t)(ss->ch1.coupling & 0x03);
+    param |= (uint8_t)((ss->ch2.coupling & 0x03) << 2);
+
+    if (ss->ch1.bw_limit) param |= 0x10;
+    if (ss->ch2.bw_limit) param |= 0x20;
+
+    return param;
+}
+
+static void fpga_send_scope_range_block(const scope_state_t *ss)
+{
+    /* Stock range/coupling updates dispatch a channel-bank prefix followed by
+     * 0x1A..0x1E. We still do not have the original state-packer that filled
+     * bytes[4..8], so keep this as a best-effort projection of live UI state
+     * into the single-byte hi params our current queue transport supports. */
+    fpga_timed_send_cmd(0x00, fpga_scope_prefix_cmd(ss), 10);
+    fpga_timed_send_cmd(fpga_scope_gain_param(&ss->ch1), FPGA_CMD_CH1_GAIN, 10);
+    fpga_timed_send_cmd(fpga_scope_offset_param(&ss->ch1), FPGA_CMD_CH1_OFFSET, 10);
+    fpga_timed_send_cmd(fpga_scope_gain_param(&ss->ch2), FPGA_CMD_CH2_GAIN, 10);
+    fpga_timed_send_cmd(fpga_scope_offset_param(&ss->ch2), FPGA_CMD_CH2_OFFSET, 10);
+    fpga_timed_send_cmd(fpga_scope_coupling_param(ss), FPGA_CMD_COUPLING, 20);
+}
+
+static void fpga_scope_select_timing(const scope_state_t *ss,
+                                     uint8_t *run_mode,
+                                     uint8_t *sample_depth,
+                                     uint8_t *tb_prescaler,
+                                     uint8_t *tb_period,
+                                     uint8_t *tb_mode,
+                                     uint8_t *acq_mode)
+{
+    if (!ss->running) {
+        *run_mode = 0x00;
+    } else {
+        switch (ss->trigger.mode) {
+        case TRIG_SINGLE: *run_mode = 0x01; break;
+        case TRIG_NORMAL: *run_mode = 0x02; break;
+        case TRIG_AUTO:
+        default:          *run_mode = 0x03; break;
+        }
+    }
+
+    if (ss->timebase_idx <= 3) {
+        *sample_depth = 0x01;
+        *tb_prescaler = 0x20;
+        *tb_period    = 0x80;
+        *tb_mode      = 0x00;
+        *acq_mode     = FPGA_ACQ_ROLL + 1;
+    } else if (ss->timebase_idx <= 9) {
+        *sample_depth = 0x02;
+        *tb_prescaler = 0x08;
+        *tb_period    = 0x40;
+        *tb_mode      = 0x01;
+        *acq_mode     = FPGA_ACQ_NORMAL + 1;
+    } else {
+        *sample_depth = 0x02;
+        *tb_prescaler = 0x04;
+        *tb_period    = 0x20;
+        *tb_mode      = 0x01;
+        *acq_mode     = FPGA_ACQ_DUAL + 1;
+    }
+}
+
+static void fpga_send_scope_sequence(const scope_state_t *ss)
+{
+    uint8_t run_mode;
+    uint8_t sample_depth;
+    uint8_t tb_prescaler;
+    uint8_t tb_period;
+    uint8_t tb_mode;
+    uint8_t acq_mode;
+    uint8_t trigger_prefix;
+
+    fpga_scope_select_timing(ss, &run_mode, &sample_depth,
+                             &tb_prescaler, &tb_period, &tb_mode, &acq_mode);
+
+    fpga.acq_mode = acq_mode;
+
+    /* Scope entry block. The 0x0B..0x11 bytes are still partly guessed, so
+     * keep the empirically least-bad bank-2 defaults and pair them with
+     * explicit trigger/timebase commands derived from live UI state. */
+    fpga_timed_send_cmd(0x00, FPGA_CMD_RESET, 20);
+    fpga_timed_send_cmd(fpga_scope_channel_mask(ss), FPGA_CMD_SCOPE_CH, 15);
+    fpga_timed_send_cmd(0x01, FPGA_CMD_SCOPE_CFG_0B, 15);
+    fpga_timed_send_cmd(ss->ch2.enabled ? 0x01 : 0x00, FPGA_CMD_SCOPE_CFG_0C, 15);
+    fpga_timed_send_cmd(0x03, FPGA_CMD_SCOPE_CFG_0D, 15);
+    fpga_timed_send_cmd(0x80, FPGA_CMD_SCOPE_CFG_0E, 15);
+    fpga_timed_send_cmd(0x04, FPGA_CMD_SCOPE_CFG_0F, 15);
+    fpga_timed_send_cmd(0x02, FPGA_CMD_SCOPE_CFG_10, 15);
+    fpga_timed_send_cmd(0x01, FPGA_CMD_SCOPE_CFG_11, 20);
+
+    /* Stock scope setup also pushes a channel range/coupling block via
+     * 0x07/0x0A + 0x1A..0x1E when the frontend changes. Re-apply that here
+     * so scope entry does not rely only on local relay writes. */
+    fpga_send_scope_range_block(ss);
+
+    /* Runtime acquisition and timebase config. */
+    fpga_timed_send_cmd(run_mode, FPGA_CMD_FREQ_20, 15);
+    fpga_timed_send_cmd(sample_depth, FPGA_CMD_FREQ_21, 15);
+    fpga_timed_send_cmd(tb_prescaler, 0x26, 15);
+    fpga_timed_send_cmd(tb_period, 0x27, 15);
+    fpga_timed_send_cmd(tb_mode, 0x28, 20);
+
+    /* Scope trigger block follows the stock runtime trigger builder:
+     * channel prefix (0x07/0x0A), then 0x16..0x19. */
+    trigger_prefix = fpga_scope_prefix_cmd(ss);
+    fpga_timed_send_cmd(0x00, trigger_prefix, 15);
+    fpga_timed_send_cmd(fpga_scope_trigger_lsb(ss), 0x16, 15);
+    fpga_timed_send_cmd(0x00, 0x17, 15);
+    fpga_timed_send_cmd(fpga_scope_trigger_mode_byte(ss), 0x18, 15);
+    fpga_timed_send_cmd(0x00, 0x19, 20);
+}
+
+static void fpga_scope_select_runtime(const scope_state_t *ss,
+                                      uint8_t *run_mode,
+                                      uint8_t *sample_depth,
+                                      uint8_t *tb_prescaler,
+                                      uint8_t *tb_period,
+                                      uint8_t *tb_mode,
+                                      uint8_t *acq_mode)
+{
+    fpga_scope_select_timing(ss, run_mode, sample_depth,
+                             tb_prescaler, tb_period, tb_mode, acq_mode);
+    fpga.acq_mode = *acq_mode;
+}
+
+void fpga_scope_refresh_acq_mode(void)
+{
+    const scope_state_t *ss;
+    uint8_t run_mode;
+    uint8_t sample_depth;
+    uint8_t tb_prescaler;
+    uint8_t tb_period;
+    uint8_t tb_mode;
+    uint8_t acq_mode;
+
+    if (!fpga.initialized) return;
+
+    ss = scope_state_get();
+    fpga_scope_select_runtime(ss, &run_mode, &sample_depth,
+                              &tb_prescaler, &tb_period, &tb_mode, &acq_mode);
+
+    fpga_timed_send_cmd(run_mode, FPGA_CMD_FREQ_20, 15);
+    fpga_timed_send_cmd(sample_depth, FPGA_CMD_FREQ_21, 20);
+}
+
+void fpga_scope_heartbeat(void)
+{
+    const scope_state_t *ss;
+    uint8_t run_mode;
+    uint8_t sample_depth;
+    uint8_t tb_prescaler;
+    uint8_t tb_period;
+    uint8_t tb_mode;
+    uint8_t acq_mode;
+
+    if (!fpga.initialized) return;
+
+    ss = scope_state_get();
+    fpga_scope_select_runtime(ss, &run_mode, &sample_depth,
+                              &tb_prescaler, &tb_period, &tb_mode, &acq_mode);
+
+    /* Stock cmd 3 re-applies timebase state, then re-arms acquisition. */
+    fpga_timed_send_cmd(tb_prescaler, 0x26, 15);
+    fpga_timed_send_cmd(tb_period, 0x27, 15);
+    fpga_timed_send_cmd(tb_mode, 0x28, 20);
+    (void)fpga_trigger_scope_read();
 }
 
 /* ═══════════════════════════════════════════════════════════════════
@@ -440,7 +1218,11 @@ static void fpga_acquisition_task(void *pv)
 
         /* Transaction 1: Pre-acquisition command */
         SPI3_CS_ASSERT();
-        spi3_xfer(0x80);  /* command_code = 0x80 | voltage_range(0) */
+        {
+            const scope_state_t *ss = scope_state_get();
+            uint8_t voltage_range = fpga_scope_primary_range(ss) & 0x7F;
+            spi3_xfer(0x80 | voltage_range);
+        }
         SPI3_CS_DEASSERT();
 
         /* Brief pause between transactions (stock firmware has a few cycles) */
@@ -564,6 +1346,7 @@ void fpga_init(void)
 {
     /* Clear state */
     memset(&fpga, 0, sizeof(fpga));
+    fpga_stock_diag_reset();
 
     /* ---------------------------------------------------------------
      * Step 1: AFIO remap — disable JTAG-DP, keep SW-DP
@@ -634,7 +1417,12 @@ void fpga_init(void)
      * disconnected. Discovered 2026-04-07 by comparing register
      * writes in stock master_init decompilation. */
     gpio_pin_remap_config(SWJTAG_GMUX_010, TRUE);
-    /* SPI3_GMUX_0010 deliberately NOT called — match stock firmware */
+    /* SPI3_GMUX_0010: Route SPI3 to PB3(SCK)/PB4(MISO)/PB5(MOSI).
+     * 2026-04-07 analysis claimed stock never writes this, but
+     * 2026-04-06 bench test proved SCK doesn't toggle without it.
+     * Empirical evidence wins over analysis. Without this call,
+     * GMUX defaults to 0000 = SPI3 disconnected from pins. */
+    gpio_pin_remap_config(SPI3_GMUX_0010, TRUE);
 
     /* ---------------------------------------------------------------
      * Step 2: USART2 init — 9600 baud, 8N1, TX+RX with interrupts
@@ -669,35 +1457,21 @@ void fpga_init(void)
     NVIC_SetPriority(USART2_IRQn, 5);  /* Below FreeRTOS max syscall priority */
 
     /* ---------------------------------------------------------------
-     * Step 3: Send FPGA boot commands via USART2
-     * Stock firmware sends ALL of 0x01-0x08 during boot.
-     * Compliance audit (2026-04-06) found we were missing 0x03-0x05.
+     * Step 3: USART boot commands — DEFERRED to after SPI3 upload
+     *
+     * Stock firmware (ripcord disassembly of FUN_08027a50) sends USART
+     * commands 1, 2, 6, 7, 8 AFTER the entire SPI3 handshake + H2
+     * upload + post-upload cleanup completes. They are queued via
+     * xQueueSend at addresses 0x0802ADCE+, after the last SPI3_DT
+     * access at 0x0802ADC6.
+     *
+     * Previously we sent commands 0x01-0x08 here (before SPI3 init).
+     * Commands 0x03-0x05 were also not in the stock boot sequence.
+     * Sending commands before SPI3 may put the FPGA in a state where
+     * it disables its SPI slave interface.
+     *
+     * Moved to Step 7c below, after SPI3 post-upload cleanup.
      * --------------------------------------------------------------- */
-    systick_delay_ms(100);  /* Wait for FPGA power-up */
-
-    usart2_send_cmd(0x00, FPGA_CMD_INIT_01);  /* 0x01: Channel init */
-    systick_delay_ms(50);
-
-    usart2_send_cmd(0x00, FPGA_CMD_INIT_02);  /* 0x02: Signal gen setup */
-    systick_delay_ms(50);
-
-    usart2_send_cmd(0x00, 0x03);  /* 0x03: Trigger config */
-    systick_delay_ms(50);
-
-    usart2_send_cmd(0x00, 0x04);  /* 0x04: Vertical scale */
-    systick_delay_ms(50);
-
-    usart2_send_cmd(0x00, 0x05);  /* 0x05: Channel enable */
-    systick_delay_ms(50);
-
-    usart2_send_cmd(0x00, FPGA_CMD_INIT_06);  /* 0x06: Signal gen setup */
-    systick_delay_ms(50);
-
-    usart2_send_cmd(0x00, FPGA_CMD_INIT_07);  /* 0x07: Meter probe detect */
-    systick_delay_ms(50);
-
-    usart2_send_cmd(0x00, FPGA_CMD_INIT_08);  /* 0x08: Meter configure */
-    systick_delay_ms(100);  /* Longer delay after last boot command */
 
     /* ---------------------------------------------------------------
      * Step 4: SPI3 peripheral init — Mode 3, Master, /2 prescaler
@@ -750,12 +1524,20 @@ void fpga_init(void)
     gpio_init(GPIOC, &gpio_cfg);
     GPIOC->scr = PC6_MASK;  /* PC6 HIGH — FPGA SPI enable (match stock) */
 
-    /* PB11 = FPGA active mode: output push-pull (set HIGH later) */
-    gpio_cfg.gpio_pins = GPIO_PINS_11;
-    gpio_cfg.gpio_mode = GPIO_MODE_OUTPUT;
-    gpio_cfg.gpio_out_type = GPIO_OUTPUT_PUSH_PULL;
-    gpio_cfg.gpio_drive_strength = GPIO_DRIVE_STRENGTH_STRONGER;
-    gpio_init(GPIOB, &gpio_cfg);
+    /* PB11 = FPGA active mode — DO NOT configure as output yet!
+     *
+     * Stock firmware sets PB11 HIGH in "step 52" (just before
+     * vTaskStartScheduler), but critically does NOT configure PB11
+     * as a GPIO output before SPI3 init. On reset, PB11 defaults
+     * to floating input. If the FPGA has an internal pull-up on its
+     * PB11-connected pin, floating = HIGH = active mode.
+     *
+     * Previously we configured PB11 as output push-pull here, which
+     * drives it LOW (GPIO output default). If the FPGA gates its
+     * SPI slave interface on PB11, this would explain MISO stuck at
+     * 0xFF and zero USART echo frames.
+     *
+     * PB11 gpio_init + set HIGH is deferred to Step 9b below. */
 
     /*
      * SPI3 register configuration (direct, matching stock firmware):
@@ -808,108 +1590,139 @@ void fpga_init(void)
     fpga.diag_spi_sts = FPGA_SPI->sts;
 
     /* ---------------------------------------------------------------
-     * Step 5: SysTick delays (stock firmware phases 6)
-     * The FPGA needs time after SPI3 activation before handshake.
-     * Stock firmware has ~20ms of multi-phase SysTick delays here.
-     * Compliance audit (2026-04-06): we had 10ms, stock has ~20ms.
+     * Step 5: SysTick delay
+     * Stock firmware has ~100ms delay after SPI3 enable before
+     * handshake. Previous value was 20ms total — too short.
      * --------------------------------------------------------------- */
-    systick_delay_ms(10);
-    systick_delay_ms(5);
-    systick_delay_ms(5);
+    systick_delay_ms(100);
 
     /* ---------------------------------------------------------------
-     * Step 6: SPI3 FPGA handshake
-     * Unicorn trace (2026-04-06) shows EXACTLY this sequence:
-     *   CS HIGH → send 0x00 flush
-     *   CS LOW  → send 0x05, 0x00 (2 bytes only!)
-     *   CS HIGH → send 0x00 flush
-     *   [delay]
-     *   CS LOW  → send 0x12, 0x00 (2 bytes)
-     *   CS HIGH → send 0x00 flush
-     *   [delay]
-     *   CS LOW  → send 0x15, 0x00 (2 bytes)
-     *   CS HIGH → send 0x00 flush
+     * Step 6: SPI3 FPGA handshake — 11 bytes in 3 groups
      *
-     * CORRECTION: The earlier compliance audit agents said 4 bytes per
-     * CS transaction. The Unicorn trace proves it's 2. Extra bytes
-     * within CS could confuse the FPGA's SPI slave state machine.
+     * Byte-accurate disassembly (2026-04-09) of FUN_08027a50 from
+     * objdump on raw binary. The Ghidra decompiler had dropped all
+     * SPI3_DT write values (treats volatile MMIO stores as dead).
+     *
+     * Stock sends 11 bytes as a continuous stream — NO CS toggles
+     * between groups, only delays. The prior "2 bytes per CS frame"
+     * was from Unicorn trace which also missed the movs immediates.
+     *
+     * Group 1: 00 05 00 00   (~100ms delay)
+     * Group 2: 12 00 00      (calibrated delay)
+     * Group 3: 15 00 00 3B
+     *
+     * See: SPI3_HANDSHAKE_BYTE_ACCURATE.md
      * --------------------------------------------------------------- */
 
-    /* Flush: send dummy with CS high */
-    SPI3_CS_DEASSERT();  /* Ensure CS is HIGH */
-    fpga.init_hs[6] = spi3_xfer(0x00);  /* Dummy flush (CS high) */
-    fpga.diag_spi_sts = FPGA_SPI->sts;  /* STS after first transfer */
-    (void)FPGA_SPI->dt;  /* Discard any stale data */
+    (void)FPGA_SPI->dt;  /* Discard any stale RX data */
+    fpga.diag_spi_sts = FPGA_SPI->sts;  /* STS before handshake */
 
-    /* Handshake: command 0x05 — exactly 2 bytes within CS LOW */
+    /* Assert CS for the entire handshake + bulk upload sequence.
+     * The byte-accurate disassembly tracked SPI3 register xrefs but
+     * not GPIO operations in the handshake range. Normal SPI requires
+     * CS LOW for the slave to drive MISO. Stock likely asserts CS
+     * before Group 1 and keeps it asserted through the bulk upload,
+     * then does the CS toggle dance in post-upload cleanup. */
     SPI3_CS_ASSERT();
-    fpga.init_hs[0] = spi3_xfer(0x05);   /* FPGA command — config/ID query */
-    fpga.init_hs[1] = spi3_xfer(0x00);   /* Parameter byte */
-    SPI3_CS_DEASSERT();
 
-    /* Flush with CS high */
-    spi3_xfer(0x00);
+    /* Group 1: sync + command 0x05 + 2 padding */
+    fpga.init_hs[0]  = spi3_xfer(0x00);   /* Sync/reset */
+    fpga.init_hs[1]  = spi3_xfer(0x05);   /* Command */
+    fpga.init_hs[2]  = spi3_xfer(0x00);   /* Padding */
+    fpga.init_hs[3]  = spi3_xfer(0x00);   /* Padding */
 
-    /* Post-handshake delay */
-    systick_delay_ms(10);
+    systick_delay_ms(100);
+
+    /* Group 2: command 0x12 + 2 padding */
+    fpga.init_hs[4]  = spi3_xfer(0x12);   /* Command */
+    fpga.init_hs[5]  = spi3_xfer(0x00);   /* Padding */
+    fpga.init_hs[6]  = spi3_xfer(0x00);   /* Padding */
+
+    systick_delay_ms(100);
+
+    /* Group 3: command 0x15 + 2 padding + 0x3B (begin upload) */
+    fpga.init_hs[7]  = spi3_xfer(0x15);   /* Command */
+    fpga.init_hs[8]  = spi3_xfer(0x00);   /* Padding */
+    fpga.init_hs[9]  = spi3_xfer(0x00);   /* Padding */
+    fpga.init_hs[10] = spi3_xfer(0x3B);   /* Begin bulk upload */
 
     /* ---------------------------------------------------------------
-     * Step 7: Additional SPI3 commands (0x12, 0x15)
-     * Unicorn confirmed: 2 bytes per CS transaction + flush.
-     * --------------------------------------------------------------- */
-    SPI3_CS_ASSERT();
-    fpga.init_hs[2] = spi3_xfer(0x12);
-    fpga.init_hs[3] = spi3_xfer(0x00);
-    SPI3_CS_DEASSERT();
-    spi3_xfer(0x00);  /* flush */
-
-    systick_delay_ms(5);
-
-    SPI3_CS_ASSERT();
-    fpga.init_hs[4] = spi3_xfer(0x15);
-    fpga.init_hs[5] = spi3_xfer(0x00);
-    SPI3_CS_DEASSERT();
-    spi3_xfer(0x00);  /* flush */
-
-    systick_delay_ms(5);
-
-    /* ---------------------------------------------------------------
-     * Step 7b: SPI3 bulk FPGA register-init table upload
+     * Step 7: SPI3 bulk FPGA register-init table upload
      *
      * Stock firmware sends 115,638 bytes from flash (0x08051D19)
-     * bracketed by SPI3 opcodes 0x3B (start) and 0x3A (end).
+     * in 3-byte frames (38,546 iterations). Each iteration:
+     *   TX flash[offset+0], read RX
+     *   TX flash[offset+1], read RX
+     *   TX flash[offset+2], read RX
+     *   offset += 3
+     *
      * Structure: 544 sync-framed blocks (Region A, 87,040 bytes)
      * followed by dense coefficients (Region B, 28,598 bytes).
      * See: analysis_v120/h2_extracted/FINDINGS.md
+     * --------------------------------------------------------------- */
+
+    /* Stream the entire 115,638-byte table in 3-byte frames */
+    for (uint32_t i = 0; i < FPGA_H2_CAL_TABLE_SIZE; i += 3) {
+        spi3_xfer(fpga_h2_cal_table[i]);
+        spi3_xfer(fpga_h2_cal_table[i + 1]);
+        spi3_xfer(fpga_h2_cal_table[i + 2]);
+    }
+    fpga.h2_bytes_sent = FPGA_H2_CAL_TABLE_SIZE;
+    fpga.h2_upload_done = 1;
+
+    /* ---------------------------------------------------------------
+     * Step 7b: Post-upload cleanup — 3-phase CS toggle dance
      *
-     * Previous attempts failed due to wrong SPI3 clock (SPI4 bit)
-     * and DMA enabled during polled transfer. Both bugs are now fixed.
+     * Stock firmware (byte-accurate disassembly, 2026-04-09):
+     *   CS_LO → TX 0x00 → CS_HI
+     *   TX 0x3A (with CS HIGH!) → TX 0x00
+     *   CS_LO → TX 0x00 → CS_HI
+     *   TX 0x00
+     *   CS_LO → TX 0x00 (flush)
      *
-     * The FPGA's SPI data interface appears to remain inactive until
-     * this table is uploaded (bit-bang GPIO test confirmed MISO
-     * stays idle-HIGH without it).
+     * The 0x3A "transfer complete" byte is sent with CS HIGH,
+     * suggesting the FPGA treats it as an out-of-band command.
+     * CS edges delimit framing.
      * --------------------------------------------------------------- */
     SPI3_CS_ASSERT();
-    spi3_xfer(0x3B);  /* Begin bulk upload opcode */
-    spi3_xfer(0x00);  /* Flush byte (stock firmware sends this after opcode) */
-
-    /* Stream the entire 115,638-byte table */
-    for (uint32_t i = 0; i < FPGA_H2_CAL_TABLE_SIZE; i++) {
-        spi3_xfer(fpga_h2_cal_table[i]);
-        fpga.h2_bytes_sent = i + 1;
-    }
-
-    spi3_xfer(0x3A);  /* End bulk upload opcode */
-    spi3_xfer(0x00);  /* Flush byte (stock firmware sends this after close) */
+    spi3_xfer(0x00);
     SPI3_CS_DEASSERT();
-    fpga.h2_upload_done = 1;
+
+    spi3_xfer(0x3A);   /* End/commit — sent with CS HIGH */
+    spi3_xfer(0x00);
+
+    SPI3_CS_ASSERT();
+    spi3_xfer(0x00);
+    SPI3_CS_DEASSERT();
+
+    spi3_xfer(0x00);
+
+    SPI3_CS_ASSERT();
+    spi3_xfer(0x00);   /* Final flush */
 
     systick_delay_ms(50);  /* Let FPGA process the table */
 
-    /* PB11 HIGH (FPGA active mode) deferred to after all configuration.
-     * Stock firmware sets PB11 in step 52, just before vTaskStartScheduler().
-     * Compliance audit (2026-04-06): we were setting it too early — moved
-     * to after analog frontend, meter commands, and gain/offset init. */
+    /* ---------------------------------------------------------------
+     * Step 7c: USART boot commands — sent AFTER SPI3 upload
+     *
+     * Stock firmware (FUN_08027a50) queues these via xQueueSend at
+     * 0x0802ADCE-0x0802ADDA, after all SPI3 operations complete.
+     * Only commands 1, 2, 6, 7, 8 — no 3/4/5 in the stock boot.
+     * --------------------------------------------------------------- */
+    usart2_send_cmd(0x00, FPGA_CMD_INIT_01);  /* 0x01: Channel init */
+    systick_delay_ms(50);
+
+    usart2_send_cmd(0x00, FPGA_CMD_INIT_02);  /* 0x02: Signal gen setup */
+    systick_delay_ms(50);
+
+    usart2_send_cmd(0x00, FPGA_CMD_INIT_06);  /* 0x06: Signal gen setup */
+    systick_delay_ms(50);
+
+    usart2_send_cmd(0x00, FPGA_CMD_INIT_07);  /* 0x07: Meter probe detect */
+    systick_delay_ms(50);
+
+    usart2_send_cmd(0x00, FPGA_CMD_INIT_08);  /* 0x08: Meter configure */
+    systick_delay_ms(100);
 
     /* ---------------------------------------------------------------
      * Step 8: Analog frontend + Meter IC activation
@@ -1024,12 +1837,20 @@ void fpga_init(void)
     systick_delay_ms(50);
 
     /* ---------------------------------------------------------------
-     * Step 9b: Set PB11 HIGH — FPGA active mode
-     * Stock firmware does this in step 52, just before scheduler start,
-     * AFTER all peripheral config, timer setup, and FPGA commands.
-     * Compliance audit (2026-04-06): moved from before analog frontend
-     * to after all configuration is complete.
+     * Step 9b: Configure and set PB11 HIGH — FPGA active mode
+     *
+     * PB11 gpio_init is intentionally deferred to HERE, not before
+     * SPI3 init. On reset, PB11 is floating input. If the FPGA has
+     * an internal pull-up, floating = HIGH = active mode, which is
+     * the state during stock firmware's SPI3 upload. Configuring
+     * PB11 as output push-pull before SPI3 drives it LOW, which
+     * may gate the FPGA's SPI slave interface (MISO stuck 0xFF).
      * --------------------------------------------------------------- */
+    gpio_cfg.gpio_pins = GPIO_PINS_11;
+    gpio_cfg.gpio_mode = GPIO_MODE_OUTPUT;
+    gpio_cfg.gpio_out_type = GPIO_OUTPUT_PUSH_PULL;
+    gpio_cfg.gpio_drive_strength = GPIO_DRIVE_STRENGTH_STRONGER;
+    gpio_init(GPIOB, &gpio_cfg);
     GPIOB->scr = PB11_MASK;  /* PB11 HIGH — FPGA active */
 
     /* ---------------------------------------------------------------
@@ -1039,8 +1860,7 @@ void fpga_init(void)
 
     /* Test 1: SPI peripheral probe */
     SPI3_CS_ASSERT();
-    fpga.init_hs[6] = spi3_xfer(0xFF);  /* Post-init probe byte 1 */
-    fpga.init_hs[7] = spi3_xfer(0xFF);  /* Post-init probe byte 2 */
+    fpga.init_hs[11] = spi3_xfer(0xFF);  /* Post-init probe byte */
     SPI3_CS_DEASSERT();
 
     systick_delay_ms(10);
@@ -1105,6 +1925,24 @@ BaseType_t fpga_trigger_acquisition(uint8_t mode)
     return xQueueSend(spi3_acq_queue, &mode, 0);
 }
 
+BaseType_t fpga_trigger_scope_read(void)
+{
+    BaseType_t ok;
+
+    if (spi3_acq_queue == NULL) return pdFALSE;
+
+    if (fpga.acq_mode == (FPGA_ACQ_DUAL + 1)) {
+        /* Stock firmware queues two back-to-back reads for the bulk/dual
+         * acquisition path. Keep the first half explicit so the second
+         * transfer has fresh data to consume. */
+        ok = xQueueSend(spi3_acq_queue, &(uint8_t){FPGA_ACQ_NORMAL + 1}, 0);
+        if (ok != pdTRUE) return ok;
+        return xQueueSend(spi3_acq_queue, &(uint8_t){FPGA_ACQ_DUAL + 1}, 0);
+    }
+
+    return xQueueSend(spi3_acq_queue, (const void *)&fpga.acq_mode, 0);
+}
+
 bool fpga_data_ready(void)
 {
     return data_ready;
@@ -1130,6 +1968,43 @@ void fpga_set_active(bool active)
     fpga.spi3_active = active;
 }
 
+void fpga_scope_reinit(void)
+{
+    const scope_state_t *ss;
+
+    if (!fpga.initialized) return;
+
+    ss = scope_state_get();
+
+    /* Reset data_ready so display shows demo waveform until real data arrives */
+    data_ready = false;
+
+    /* Exit meter posture explicitly before sending scope-side commands. */
+    GPIOC->clr = (1U << 11);  /* PC11 LOW — meter MUX off */
+    GPIOB->scr = PB11_MASK;   /* PB11 HIGH — FPGA active */
+
+    fpga_set_scope_frontend_range(fpga_scope_primary_range(ss));
+    fpga_scope_delay_ms(10);
+    fpga_send_scope_sequence(ss);
+}
+
+void fpga_request_scope_reinit(void)
+{
+    scope_reinit_pending = true;
+}
+
+bool fpga_service_requests(void)
+{
+    extern volatile device_mode_t current_mode;
+
+    if (!scope_reinit_pending || !fpga.initialized) return false;
+    if (current_mode != MODE_OSCILLOSCOPE) return false;
+
+    scope_reinit_pending = false;
+    fpga_scope_reinit();
+    return true;
+}
+
 void fpga_enter_scope_mode(void)
 {
     if (!fpga.initialized) return;
@@ -1141,37 +2016,12 @@ void fpga_enter_scope_mode(void)
         if (dac_output_is_running()) dac_output_stop();
     }
 
-    /* Reset data_ready so display shows demo waveform until real data arrives */
-    data_ready = false;
-
-    /* Send scope init command sequence.
-     * Stock firmware mode init dispatcher (FUN_0800b908, case 0) sends:
-     *   0x00, 0x01, 0x0B, 0x0C, 0x0D, 0x0E, 0x0F, 0x10, 0x11
-     *
-     * In the stock firmware, these go through the dispatch table which reads
-     * current scope state (coupling, V/div, trigger, timebase) and computes
-     * the parameter byte for each. We send param=0 for now — the FPGA
-     * will use default configuration. Once we see data flowing, we can
-     * encode proper params from scope_state. */
-    fpga_send_cmd(0x00, FPGA_CMD_RESET);
-    fpga_send_cmd(0x00, FPGA_CMD_SCOPE_CH);
-    fpga_send_cmd(0x00, FPGA_CMD_SCOPE_CFG_0B);
-    fpga_send_cmd(0x00, FPGA_CMD_SCOPE_CFG_0C);
-    fpga_send_cmd(0x00, FPGA_CMD_SCOPE_CFG_0D);
-    fpga_send_cmd(0x00, FPGA_CMD_SCOPE_CFG_0E);
-    fpga_send_cmd(0x00, FPGA_CMD_SCOPE_CFG_0F);
-    fpga_send_cmd(0x00, FPGA_CMD_SCOPE_CFG_10);
-    fpga_send_cmd(0x00, FPGA_CMD_SCOPE_CFG_11);
-
-    /* Set acquisition mode for normal scope (1024 bytes interleaved) */
-    fpga.acq_mode = FPGA_ACQ_NORMAL + 1;
+    fpga_stock_diag_seed_base2();
+    fpga_scope_reinit();
 
     /* NOTE: Do NOT fire acquisition triggers here. The scope USART commands
-     * need ~180ms to transmit at 9600 baud (9 cmds x 20ms each). If we
-     * trigger SPI3 reads before the FPGA has processed them, spi3_xfer()
-     * hangs in its polling loop and the watchdog resets the device.
-     * Instead, the display task (scope_ui.c) fires the first trigger
-     * after a short delay, once the FPGA has had time to configure. */
+     * take a few hundred milliseconds, and the display task already waits
+     * before kicking the first acquisition. */
 }
 
 void fpga_enter_siggen_mode(void)
@@ -1220,26 +2070,16 @@ void fpga_enter_siggen_mode(void)
 /* Helper: send probe detect command (shared by meter modes) */
 static void fpga_send_probe_detect(void)
 {
-    if (GPIOC->idt & (1U << 7)) {
+    if (fpga_probe_cmd_byte() == 0x07) {
         fpga_send_cmd(0x00, 0x07);  /* PC7 HIGH: probe detected */
     } else {
         fpga_send_cmd(0x00, FPGA_CMD_METER_NOPROBE);
     }
 }
 
-void fpga_set_meter_mode(uint8_t submode)
+static void fpga_send_meter_mode_sequence(uint8_t submode)
 {
-    if (!fpga.initialized) return;
-
-    /* Stop DAC output if signal gen was running */
-    {
-        extern void dac_output_stop(void);
-        extern bool dac_output_is_running(void);
-        if (dac_output_is_running()) dac_output_stop();
-    }
-
-    /* Ensure meter MUX is enabled */
-    GPIOC->scr = (1U << 11);  /* PC11 HIGH — meter MUX on */
+    if (submode >= METER_SUBMODE_COUNT) submode = 0;
 
     /* Send mode-specific FPGA command sequence.
      * Mapping from RE analysis of mode init dispatcher (FUN_0800b908):
@@ -1313,6 +2153,41 @@ void fpga_set_meter_mode(uint8_t submode)
         fpga_send_cmd(0x00, 0x19);
         break;
     }
+}
+
+void fpga_set_meter_mode(uint8_t submode)
+{
+    if (!fpga.initialized) return;
+
+    /* Stop DAC output if signal gen was running */
+    {
+        extern void dac_output_stop(void);
+        extern bool dac_output_is_running(void);
+        if (dac_output_is_running()) dac_output_stop();
+    }
+
+    fpga_set_meter_frontend_baseline();
+    fpga_scope_delay_ms(10);
+    fpga_send_meter_mode_sequence(submode);
+}
+
+void fpga_meter_reinit(uint8_t submode)
+{
+    if (!fpga.initialized) return;
+
+    fpga_send_meter_wake_preamble();
+    fpga_scope_delay_ms(10);
+    fpga_send_meter_mode_sequence(submode);
+    fpga_timed_send_cmd(0x00, FPGA_CMD_METER_START, 20);
+}
+
+void fpga_scope_wake(void)
+{
+    if (!fpga.initialized) return;
+
+    fpga_send_meter_wake_preamble();
+    fpga_scope_delay_ms(10);
+    fpga_scope_reinit();
 }
 
 void fpga_send_raw_frame(const uint8_t *frame)

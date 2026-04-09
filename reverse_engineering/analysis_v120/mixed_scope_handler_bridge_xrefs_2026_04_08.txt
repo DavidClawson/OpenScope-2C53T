@@ -1,0 +1,8 @@
+# Function Xref Trace
+
+## Requested: 0x08002fe8
+Function: FUN_08002fe8 @ 08002fe8
+Size: 1 bytes
+Caller count: 0
+Callee count: 0
+

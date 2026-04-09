@@ -29,6 +29,21 @@ flash_fs_error_t flash_fs_delete(const char *path);
 bool flash_fs_is_ready(void);
 
 /* ═══════════════════════════════════════════════════════════════════
+ * Raw SPI flash access
+ *
+ * These helpers bypass the filesystem layer and talk directly to the
+ * external W25Q128 over SPI2. They are read-only and intended for
+ * diagnostics, recovery, and bring-up over the USB CDC shell.
+ * ═══════════════════════════════════════════════════════════════════ */
+
+#define FLASH_FS_RAW_MAX_ADDR  (16u * 1024u * 1024u)
+
+flash_fs_error_t flash_fs_raw_read_jedec(uint8_t *manufacturer,
+                                         uint8_t *memory_type,
+                                         uint8_t *capacity);
+flash_fs_error_t flash_fs_raw_read_bytes(uint32_t addr, void *buf, uint32_t len);
+
+/* ═══════════════════════════════════════════════════════════════════
  * Factory calibration
  *
  * The stock firmware stores per-channel calibration as 301 bytes

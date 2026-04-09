@@ -1,0 +1,15 @@
+Stock flash trace via Unicorn
+binary: /Users/david/Desktop/osc/archive/2C53T Firmware V1.2.0/APP_2C53T_V1.2.0_251015.bin
+dump:   /Users/david/Desktop/osc/archive/w25q128_dump.bin
+instructions: 17009372
+systick_skips: 8
+stop_pc: 0x08033EC4
+last_pc: 0x08033EC4
+last_lr: 0x08032F8F
+transactions: 1
+
+Opcode summary:
+  0x90: 1
+
+First 40 transactions:
+00: pc=0x0802EF00 op=0x90 addr=0x000000 read_len=0 mosi=[90 00 00 00 FF FF]

@@ -1,0 +1,38 @@
+# Data Xref Trace
+
+## Target: 0x20001060
+Address: 20001060
+- from 08009020 | function FUN_08009014 @ 08009014 | type READ | code ldrb.w r0,[r5,#0xf68]
+- from 08019eac | function FUN_08019e98 @ 08019e98 | type READ | code ldrb.w r0,[r10,#0xf68]
+- from 0801b4b2 | function FUN_08019e98 @ 08019e98 | type READ | code ldrb.w r0,[r10,#0xf68]
+- from 0800b914 | function FUN_0800b914 @ 0800b914 | type READ | code ldrb.w r0,[r0,#0xf68]
+- from 08009320 | function FUN_08009314 @ 08009314 | type READ | code ldrb.w r0,[r5,#0xf68]
+- from 08015848 | function FUN_08015848 @ 08015848 | type WRITE | code strb.w r0,[r9,#0xf68]
+- from 080096f4 | function FUN_080096e8 @ 080096e8 | type READ | code ldrb.w r0,[r5,#0xf68]
+- from 08009aa0 | function FUN_08009a94 @ 08009a94 | type READ | code ldrb.w r0,[r5,#0xf68]
+
+## Target: 0x20001061
+Address: 20001061
+- from 080090b2 | function FUN_08009014 @ 08009014 | type READ | code ldrsb.w r0,[r5,#0xf69]
+- from 0800e03c | function FUN_0800e03c @ 0800e03c | type READ | code ldrb.w r0,[r3,#0xf69]
+- from 0800d83c | function FUN_0800d83c @ 0800d83c | type READ | code ldrb.w r0,[r3,#0xf69]
+
+## Target: 0x20001062
+Address: 20001062
+- from 08015d66 | function FUN_08015d58 @ 08015d58 | type READ | code ldrb.w r0,[r4,#0xf6a]
+- from 0800e7ae | function FUN_0800e79c @ 0800e79c | type READ | code ldrb.w r7,[r4,#0xf6a]
+- from 0800bdee | function FUN_0800bde0 @ 0800bde0 | type READ | code ldrb.w r0,[r9,#0xf6a]
+- from 0800be6a | function FUN_0800bde0 @ 0800bde0 | type READ | code ldrb.w r0,[r9,#0xf6a]
+- from 0800bebc | function FUN_0800bde0 @ 0800bde0 | type READ | code ldrb.w r0,[r9,#0xf6a]
+- from 0800bf08 | function FUN_0800bde0 @ 0800bde0 | type READ | code ldrb.w r0,[r9,#0xf6a]
+- from 0800bf54 | function FUN_0800bde0 @ 0800bde0 | type READ | code ldrb.w r0,[r9,#0xf6a]
+- from 0800bfa2 | function FUN_0800bde0 @ 0800bde0 | type READ | code ldrb.w r0,[r9,#0xf6a]
+- from 08015f5e | function FUN_08015f50 @ 08015f50 | type READ | code ldrb.w r0,[r3,#0xf6a]
+
+## Target: 0x20001063
+Address: 20001063
+- from 0800c972 | function FUN_0800c972 @ 0800c972 | type READ | code ldrb.w r4,[r6,#0xf6b]
+- from 0800e042 | function FUN_0800e042 @ 0800e042 | type READ | code ldrb.w r0,[r3,#0xf6b]
+- from 0800e550 | function FUN_0800e550 @ 0800e550 | type READ | code ldrb.w r1,[r0,#0xf6b]
+- from 0800d846 | function FUN_0800d83c @ 0800d83c | type READ | code ldrb.w r1,[r3,#0xf6b]
+

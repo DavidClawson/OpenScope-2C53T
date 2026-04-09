@@ -1,0 +1,54 @@
+Stock flash trace via Unicorn
+binary: /Users/david/Desktop/osc/archive/2C53T Firmware V1.2.0/APP_2C53T_V1.2.0_251015.bin
+dump:   /Users/david/Desktop/osc/archive/w25q128_dump.bin
+entry:  0x0802E7BD
+seed_display_alloc: True
+seed_high_flash_fs: True
+instructions: 3000001
+systick_skips: 0
+stop_pc: 0x0802F108
+last_pc: 0x0802F108
+last_lr: 0x0802F103
+transactions: 18
+
+Opcode summary:
+  0x03: 14
+  0x05: 1
+  0x06: 2
+  0x20: 1
+
+First 40 transactions:
+00: pc=0x0802F060 op=0x03 addr=0x200000 read_len=4096 mosi=[03 20 00 00 FF FF FF FF FF FF FF FF ...]
+01: pc=0x0802F060 op=0x03 addr=0x205000 read_len=4096 mosi=[03 20 50 00 FF FF FF FF FF FF FF FF ...]
+02: pc=0x0802F060 op=0x03 addr=0x206000 read_len=4096 mosi=[03 20 60 00 FF FF FF FF FF FF FF FF ...]
+03: pc=0x0802F060 op=0x03 addr=0x207000 read_len=4096 mosi=[03 20 70 00 FF FF FF FF FF FF FF FF ...]
+04: pc=0x0802F060 op=0x03 addr=0x205000 read_len=4096 mosi=[03 20 50 00 FF FF FF FF FF FF FF FF ...]
+05: pc=0x0802F060 op=0x03 addr=0x206000 read_len=4096 mosi=[03 20 60 00 FF FF FF FF FF FF FF FF ...]
+06: pc=0x0802F060 op=0x03 addr=0x207000 read_len=4096 mosi=[03 20 70 00 FF FF FF FF FF FF FF FF ...]
+07: pc=0x0802F060 op=0x03 addr=0x205000 read_len=4096 mosi=[03 20 50 00 FF FF FF FF FF FF FF FF ...]
+08: pc=0x0802F060 op=0x03 addr=0x206000 read_len=4096 mosi=[03 20 60 00 FF FF FF FF FF FF FF FF ...]
+09: pc=0x0802F060 op=0x03 addr=0x207000 read_len=4096 mosi=[03 20 70 00 FF FF FF FF FF FF FF FF ...]
+10: pc=0x0802F060 op=0x03 addr=0x205000 read_len=4096 mosi=[03 20 50 00 FF FF FF FF FF FF FF FF ...]
+11: pc=0x0802F060 op=0x03 addr=0x206000 read_len=4096 mosi=[03 20 60 00 FF FF FF FF FF FF FF FF ...]
+12: pc=0x0802F060 op=0x03 addr=0x207000 read_len=4096 mosi=[03 20 70 00 FF FF FF FF FF FF FF FF ...]
+13: pc=0x0802F060 op=0x03 addr=0x207000 read_len=4096 mosi=[03 20 70 00 FF FF FF FF FF FF FF FF ...]
+14: pc=0x0802F354 op=0x06 addr=0x-------- read_len=0 mosi=[06]
+15: pc=0x0802EEB4 op=0x20 addr=0x-------- read_len=0 mosi=[20 20 70 00]
+16: pc=0x0802F132 op=0x05 addr=0x-------- read_len=0 mosi=[05 FF]
+17: pc=0x0802F354 op=0x06 addr=0x-------- read_len=0 mosi=[06]
+
+Read transactions:
+00: op=0x03 start=0x200000 len=4096 end=0x200FFF
+01: op=0x03 start=0x205000 len=4096 end=0x205FFF
+02: op=0x03 start=0x206000 len=4096 end=0x206FFF
+03: op=0x03 start=0x207000 len=4096 end=0x207FFF
+04: op=0x03 start=0x205000 len=4096 end=0x205FFF
+05: op=0x03 start=0x206000 len=4096 end=0x206FFF
+06: op=0x03 start=0x207000 len=4096 end=0x207FFF
+07: op=0x03 start=0x205000 len=4096 end=0x205FFF
+08: op=0x03 start=0x206000 len=4096 end=0x206FFF
+09: op=0x03 start=0x207000 len=4096 end=0x207FFF
+10: op=0x03 start=0x205000 len=4096 end=0x205FFF
+11: op=0x03 start=0x206000 len=4096 end=0x206FFF
+12: op=0x03 start=0x207000 len=4096 end=0x207FFF
+13: op=0x03 start=0x207000 len=4096 end=0x207FFF

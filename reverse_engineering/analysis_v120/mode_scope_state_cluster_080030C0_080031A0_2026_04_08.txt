@@ -1,0 +1,80 @@
+
+/Users/david/Desktop/osc/archive/2C53T Firmware V1.2.0/APP_2C53T_V1.2.0_251015.bin:     file format binary
+
+
+Disassembly of section .data:
+
+080030c0 <.data+0x30c0>:
+ 80030c0:	32ff      	adds	r2, #255	@ 0xff
+ 80030c2:	7023      	strb	r3, [r4, #0]
+ 80030c4:	e8bd 40b0 	ldmia.w	sp!, {r4, r5, r7, lr}
+ 80030c8:	f037 be12 	b.w	0x803acf0
+ 80030cc:	2100      	movs	r1, #0
+ 80030ce:	2202      	movs	r2, #2
+ 80030d0:	f880 1355 	strb.w	r1, [r0, #853]	@ 0x355
+ 80030d4:	f880 2f68 	strb.w	r2, [r0, #3944]	@ 0xf68
+ 80030d8:	f8a0 1f69 	strh.w	r1, [r0, #3945]	@ 0xf69
+ 80030dc:	f880 1f6b 	strb.w	r1, [r0, #3947]	@ 0xf6b
+ 80030e0:	e8bd 40b0 	ldmia.w	sp!, {r4, r5, r7, lr}
+ 80030e4:	f008 bc10 	b.w	0x800b908
+ 80030e8:	f890 2f6b 	ldrb.w	r2, [r0, #3947]	@ 0xf6b
+ 80030ec:	2101      	movs	r1, #1
+ 80030ee:	f880 1f69 	strb.w	r1, [r0, #3945]	@ 0xf69
+ 80030f2:	f002 010f 	and.w	r1, r2, #15
+ 80030f6:	f880 1f6b 	strb.w	r1, [r0, #3947]	@ 0xf6b
+ 80030fa:	f642 506c 	movw	r0, #11628	@ 0x2d6c
+ 80030fe:	f2c2 0000 	movt	r0, #8192	@ 0x2000
+ 8003102:	f642 5153 	movw	r1, #11603	@ 0x2d53
+ 8003106:	6800      	ldr	r0, [r0, #0]
+ 8003108:	f2c2 0100 	movt	r1, #8192	@ 0x2000
+ 800310c:	2319      	movs	r3, #25
+ 800310e:	e012      	b.n	0x8003136
+ 8003110:	f890 2f6b 	ldrb.w	r2, [r0, #3947]	@ 0xf6b
+ 8003114:	2101      	movs	r1, #1
+ 8003116:	f880 1f69 	strb.w	r1, [r0, #3945]	@ 0xf69
+ 800311a:	f002 010f 	and.w	r1, r2, #15
+ 800311e:	f880 1f6b 	strb.w	r1, [r0, #3947]	@ 0xf6b
+ 8003122:	f642 506c 	movw	r0, #11628	@ 0x2d6c
+ 8003126:	f2c2 0000 	movt	r0, #8192	@ 0x2000
+ 800312a:	f642 5153 	movw	r1, #11603	@ 0x2d53
+ 800312e:	6800      	ldr	r0, [r0, #0]
+ 8003130:	f2c2 0100 	movt	r1, #8192	@ 0x2000
+ 8003134:	2314      	movs	r3, #20
+ 8003136:	f04f 32ff 	mov.w	r2, #4294967295	@ 0xffffffff
+ 800313a:	700b      	strb	r3, [r1, #0]
+ 800313c:	e8bd 40b0 	ldmia.w	sp!, {r4, r5, r7, lr}
+ 8003140:	f037 bdd6 	b.w	0x803acf0
+ 8003144:	0000      	movs	r0, r0
+ 8003146:	0000      	movs	r0, r0
+ 8003148:	b5f0      	push	{r4, r5, r6, r7, lr}
+ 800314a:	b081      	sub	sp, #4
+ 800314c:	ed2d 8b02 	vpush	{d8}
+ 8003150:	f240 05f8 	movw	r5, #248	@ 0xf8
+ 8003154:	f2c2 0500 	movt	r5, #8192	@ 0x2000
+ 8003158:	f895 0f68 	ldrb.w	r0, [r5, #3944]	@ 0xf68
+ 800315c:	3801      	subs	r0, #1
+ 800315e:	2808      	cmp	r0, #8
+ 8003160:	f200 83b3 	bhi.w	0x80038ca
+ 8003164:	e8df f010 	tbh	[pc, r0, lsl #1]
+ 8003168:	0009      	movs	r1, r1
+ 800316a:	001a      	movs	r2, r3
+ 800316c:	0043      	lsls	r3, r0, #1
+ 800316e:	008c      	lsls	r4, r1, #2
+ 8003170:	00b7      	lsls	r7, r6, #2
+ 8003172:	00d9      	lsls	r1, r3, #3
+ 8003174:	03b1      	lsls	r1, r6, #14
+ 8003176:	00ec      	lsls	r4, r5, #3
+ 8003178:	00ff      	lsls	r7, r7, #3
+ 800317a:	f895 0f2d 	ldrb.w	r0, [r5, #3885]	@ 0xf2d
+ 800317e:	f895 1f5d 	ldrb.w	r1, [r5, #3933]	@ 0xf5d
+ 8003182:	2805      	cmp	r0, #5
+ 8003184:	f001 00f0 	and.w	r0, r1, #240	@ 0xf0
+ 8003188:	bf08      	it	eq
+ 800318a:	28b0      	cmpeq	r0, #176	@ 0xb0
+ 800318c:	f000 811d 	beq.w	0x80033ca
+ 8003190:	28b0      	cmp	r0, #176	@ 0xb0
+ 8003192:	bf1c      	itt	ne
+ 8003194:	2000      	movne	r0, #0
+ 8003196:	f885 0f5d 	strbne.w	r0, [r5, #3933]	@ 0xf5d
+ 800319a:	e396      	b.n	0x80038ca
+ 800319c:	f895 0354 	ldrb.w	r0, [r5, #852]	@ 0x354
