@@ -322,6 +322,7 @@ static void draw_meter_wave_line(uint16_t x0, uint16_t y0,
 static void draw_voltage_wave_panel(uint16_t x, uint16_t y,
                                     uint16_t w, uint16_t h,
                                     uint8_t mode, float current_val,
+                                    const char *current_unit,
                                     const theme_t *th)
 {
     static meter_voltage_wave_snapshot_t snap;
@@ -382,16 +383,26 @@ static void draw_voltage_wave_panel(uint16_t x, uint16_t y,
                          th->background, &font_small);
     }
 
+    float current_volts = current_val;
+    if (current_unit != NULL && strcmp(current_unit, "mV") == 0) {
+        current_volts = current_val / 1000.0f;
+    }
+
     meter_voltage_wave_scale_t scale =
-        meter_voltage_wave_scale_from_dmm_rms(&snap, current_val);
+        meter_voltage_wave_scale_from_dmm_rms(&snap, current_volts);
     if (mode == 1 && scale.valid) {
         float est_pp = meter_voltage_wave_peak_to_peak_volts(&snap, scale);
+        const char *pp_unit = "V";
+        if (est_pp < 1.0f) {
+            est_pp *= 1000.0f;
+            pp_unit = "mV";
+        }
         fmt_float(buf, sizeof(buf), est_pp, est_pp < 10.0f ? 2 : 1);
         font_draw_string(x, y + h + 2, "P-P~",
                          th->text_secondary, th->background, &font_small);
         font_draw_string(x + 30, y + h + 2, buf,
                          th->text_secondary, th->background, &font_small);
-        font_draw_string(x + 72, y + h + 2, "V",
+        font_draw_string(x + 72, y + h + 2, pp_unit,
                          th->text_secondary, th->background, &font_small);
     } else {
         font_draw_string(x, y + h + 2, mode == 0 ? "ripple shape" : "shape only",
@@ -531,7 +542,8 @@ static void draw_meter_full(const meter_mode_info_t *m, uint8_t mode,
                            th->text_secondary, th->background, &font_small);
 
     if (mode == 0 || mode == 1) {
-        draw_voltage_wave_panel(10, 118, 300, 74, mode, current_val, th);
+        draw_voltage_wave_panel(10, 118, 300, 74, mode, current_val,
+                                unit_str, th);
         font_draw_string(200, SECONDARY_Y, m->range_label,
                          th->ch1, th->background, &font_small);
         return;

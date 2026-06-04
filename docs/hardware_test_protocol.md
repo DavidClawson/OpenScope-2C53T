@@ -87,6 +87,11 @@ Simplest real-world measurement — use the built-in DMM to measure a battery.
       (isolated function generator or low-voltage transformer output, not
       mains). AC Voltage shows the normal numeric DMM voltage plus a compact
       waveform panel.
+- [ ] In the USB debug shell, run `meter wave` while the safe source is
+      connected. Capture `samples_total`, `delta_250ms`, raw min/max/RMS,
+      estimated frequency, and the decoded DMM reading. `delta_250ms` should
+      show the case-5 sample path advancing much faster than the few-hertz
+      decoded DMM frames.
 - [ ] The waveform shape changes when the same safe source is changed from
       sine to stepped/modified-square, clipped, or chopped output.
 - [ ] Numeric DMM voltage remains the authoritative reading; the waveform is a

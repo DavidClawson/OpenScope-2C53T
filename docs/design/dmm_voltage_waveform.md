@@ -32,6 +32,9 @@ then this feature cannot truthfully draw multi-hertz waveform shape from the
 DMM path and must remain blocked rather than falling back to CH1/CH2 scope
 inputs.
 
+The USB debug shell command `meter wave` reports the current waveform buffer
+stats and the decoded DMM reading for this validation pass.
+
 The module has a narrow scaling abstraction for v1 calibration:
 `meter_voltage_wave_scale_from_dmm_rms()` derives raw-count-to-volt scaling from
 the decoded DMM RMS voltage, keeping the numeric DMM reading authoritative.

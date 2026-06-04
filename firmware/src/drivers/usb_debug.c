@@ -36,8 +36,10 @@
 #endif
 #include "scope_trigger.h"
 #include "fpga.h"
+#include "meter_data.h"
 #include "ui.h"
 #include "../ui/scope_state.h"
+#include "../ui/meter_voltage_wave.h"
 
 #include "fpga_cal_table.h"
 #include "FreeRTOS.h"
@@ -457,6 +459,7 @@ static void cmd_help(void)
         "fpga scope entry <8 bytes>      Reset + send 0x01,0B..11 params\r\n"
         "fpga scope timing <5 bytes>     Send 0x20,0x21,0x26..0x28 params\r\n"
         "fpga scope trig <4 bytes>       Send 0x07/0x0A,0x16..0x19\r\n"
+        "meter wave                      Show DMM voltage waveform sample stats\r\n"
         "fpga acq [mode]                 Trigger SPI3 acquisition\r\n"
         "spi3 read [len]                 Raw SPI3 read + hex dump\r\n"
         "spi3 xfer <hex...>              Send arbitrary MOSI bytes, dump MISO\r\n"
@@ -1656,6 +1659,63 @@ static void cmd_spi3_read(const char *args)
     }
 }
 
+static int32_t scaled_i100(float value)
+{
+    float scaled = value * 100.0f;
+    if (scaled >= 0.0f) return (int32_t)(scaled + 0.5f);
+    return (int32_t)(scaled - 0.5f);
+}
+
+static void print_i100(const char *label, float value, const char *suffix)
+{
+    int32_t scaled = scaled_i100(value);
+    int32_t abs_scaled = scaled < 0 ? -scaled : scaled;
+    usb_debug_printf("%s%s%ld.%02ld%s\r\n",
+                     label,
+                     scaled < 0 ? "-" : "",
+                     abs_scaled / 100,
+                     abs_scaled % 100,
+                     suffix ? suffix : "");
+}
+
+static void cmd_meter_wave(void)
+{
+    extern volatile device_mode_t current_mode;
+    extern volatile uint8_t meter_submode;
+
+    uint32_t before = meter_voltage_wave_sample_count();
+    vTaskDelay(pdMS_TO_TICKS(250));
+    uint32_t after = meter_voltage_wave_sample_count();
+
+    meter_voltage_wave_snapshot_t snap;
+    meter_voltage_wave_snapshot(&snap, METER_VOLTAGE_WAVE_RENDER_POINTS, 0.0f);
+
+    usb_send_str("=== DMM Voltage Waveform ===\r\n");
+    usb_debug_printf("mode=%lu meter_submode=%u (%s)\r\n",
+                     (uint32_t)current_mode,
+                     (unsigned)meter_submode,
+                     meter_submode_name(meter_submode));
+    usb_debug_printf("samples_total=%lu delta_250ms=%lu approx_rate=%lu Hz\r\n",
+                     after, after - before, (after - before) * 4U);
+    usb_debug_printf("snapshot_count=%u raw_last=%u raw_min=%u raw_max=%u p2p=%u synced=%u\r\n",
+                     (unsigned)snap.count,
+                     (unsigned)snap.raw_last,
+                     (unsigned)snap.raw_min,
+                     (unsigned)snap.raw_max,
+                     (unsigned)snap.peak_to_peak_raw,
+                     snap.synced ? 1U : 0U);
+    print_i100("mean_raw=", snap.mean_raw, "");
+    print_i100("rms_raw=", snap.rms_raw, "");
+    print_i100("freq=", snap.freq_hz, " Hz");
+    usb_debug_printf("dmm=%s %s class=%u updates=%lu valid=%u\r\n",
+                     meter_reading.display_str,
+                     meter_reading.unit_suffix ? meter_reading.unit_suffix : "",
+                     (unsigned)meter_reading.result_class,
+                     meter_reading.update_count,
+                     meter_reading.valid ? 1U : 0U);
+    usb_send_str("Use in DMM DC/AC voltage mode with leads on COM + V/Ohm/C; this is not CH1/CH2 evidence.\r\n");
+}
+
 static void cmd_uptime(void)
 {
     extern volatile uint32_t uptime_seconds;
@@ -2553,6 +2613,8 @@ static void dispatch_command(char *line)
         cmd_fpga_scope_timing(line + 18);
     } else if (strncmp(line, "fpga scope trig ", 16) == 0) {
         cmd_fpga_scope_trig(line + 16);
+    } else if (strcmp(line, "meter wave") == 0) {
+        cmd_meter_wave();
     } else if (strncmp(line, "fpga acq", 8) == 0) {
         cmd_fpga_acq(line[8] == ' ' ? line + 9 : "");
     } else if (strncmp(line, "fpga reinit", 11) == 0) {

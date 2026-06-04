@@ -1499,6 +1499,22 @@ static void fpga_meter_poll_task(void *pv)
     }
 }
 
+static uint8_t fpga_meter_adc_select_byte(void)
+{
+    /* Stock case 5 sends ms[0x16], annotated as active_channel in the
+     * recovered scope state. In meter voltage mode this is only the command
+     * selector byte for METER_ADC_READ; the analog source remains the DMM
+     * frontend routed to COM + V/Ohm/C. */
+    return active_channel & 0x01;
+}
+
+static uint8_t fpga_preacq_command_byte(void)
+{
+    const scope_state_t *ss = scope_state_get();
+    uint8_t voltage_range = fpga_scope_primary_range(ss) & 0x7F;
+    return (uint8_t)(0x80 | voltage_range);
+}
+
 /*
  * Meter ADC Waveform Sampler
  *
@@ -1587,10 +1603,16 @@ static void fpga_acquisition_task(void *pv)
             uint8_t sample;
 
             fpga.spi3_probing = true;
+
             SPI3_CS_ASSERT();
-            /* Stock case 5 is a single-byte DMM ADC read:
-             * CS_ASSERT; spi3_xfer(active_channel); CS_DEASSERT. */
-            sample = spi3_xfer(active_channel & 0x01);
+            spi3_xfer(fpga_preacq_command_byte());
+            SPI3_CS_DEASSERT();
+
+            for (volatile int d = 0; d < 100; d++) {}
+
+            SPI3_CS_ASSERT();
+            /* Stock case 5 is a single-byte DMM ADC read after pre-acq arm. */
+            sample = spi3_xfer(fpga_meter_adc_select_byte());
             SPI3_CS_DEASSERT();
 
             meter_voltage_wave_add_sample(sample);
@@ -1628,11 +1650,7 @@ static void fpga_acquisition_task(void *pv)
 
         /* Transaction 1: Pre-acquisition command */
         SPI3_CS_ASSERT();
-        {
-            const scope_state_t *ss = scope_state_get();
-            uint8_t voltage_range = fpga_scope_primary_range(ss) & 0x7F;
-            spi3_xfer(0x80 | voltage_range);
-        }
+        spi3_xfer(fpga_preacq_command_byte());
         SPI3_CS_DEASSERT();
 
         /* Brief pause between transactions (stock firmware has a few cycles) */
