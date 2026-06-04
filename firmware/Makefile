@@ -64,6 +64,7 @@ C_SOURCES += src/ui/theme.c
 C_SOURCES += src/ui/xy_mode.c
 C_SOURCES += src/ui/roll_mode.c
 C_SOURCES += src/ui/trend_plot.c
+C_SOURCES += src/ui/meter_voltage_wave.c
 C_SOURCES += src/dsp/math_channel.c
 C_SOURCES += src/dsp/bode.c
 C_SOURCES += src/tasks/component_test.c

@@ -78,6 +78,25 @@ Simplest real-world measurement — use the built-in DMM to measure a battery.
 - [ ] Reading displayed on screen (verify it's in the right ballpark)
 - [ ] LEFT/RIGHT cycles through sub-modes (all 10 render without crash)
 
+### 2.1a DMM voltage waveform overlay
+- [ ] Keep the multimeter leads in COM and V/Ω/C. Do not connect the
+      oscilloscope CH1/CH2 probes for this test.
+- [ ] In DC Voltage, Full layout shows the normal numeric DMM voltage plus a
+      compact ripple/shape panel.
+- [ ] Apply a safe low-voltage AC sine source through the DMM voltage jacks
+      (isolated function generator or low-voltage transformer output, not
+      mains). AC Voltage shows the normal numeric DMM voltage plus a compact
+      waveform panel.
+- [ ] The waveform shape changes when the same safe source is changed from
+      sine to stepped/modified-square, clipped, or chopped output.
+- [ ] Numeric DMM voltage remains the authoritative reading; the waveform is a
+      shape/ripple aid, not a calibrated oscilloscope measurement.
+- [ ] Resistance, continuity, diode, capacitance, and current modes do not show
+      the waveform overlay.
+- [ ] Only after the low-voltage DMM-jack test passes, repeat with mains-rated
+      leads and normal mains safety practice if mains waveform inspection is
+      needed.
+
 ### 2.2 Meter layouts
 - [ ] OK cycles: Full → Chart → Stats → Full
 - [ ] Chart layout shows strip chart updating

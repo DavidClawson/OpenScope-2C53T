@@ -19,6 +19,7 @@
 #include "theme.h"
 #include "meter_data.h"
 #include "fpga.h"
+#include "meter_voltage_wave.h"
 #include "at32f403a_407.h"
 #include <string.h>
 
@@ -305,6 +306,99 @@ static void draw_bar_graph(uint16_t x, uint16_t y, uint16_t w, uint16_t h,
     }
 }
 
+static void draw_meter_wave_line(uint16_t x0, uint16_t y0,
+                                 uint16_t x1, uint16_t y1,
+                                 uint16_t color)
+{
+    uint16_t y_min = y0 < y1 ? y0 : y1;
+    uint16_t y_max = y0 < y1 ? y1 : y0;
+
+    lcd_set_pixel(x1, y1, color);
+    for (uint16_t y = y_min + 1; y < y_max; y++) {
+        lcd_set_pixel(x0, y, color);
+    }
+}
+
+static void draw_voltage_wave_panel(uint16_t x, uint16_t y,
+                                    uint16_t w, uint16_t h,
+                                    uint8_t mode, float current_val,
+                                    const theme_t *th)
+{
+    static meter_voltage_wave_snapshot_t snap;
+    char buf[16];
+
+    /* Voltage-mode USART frames do not expose a companion Hz estimate yet.
+     * Until that exists, the waveform module derives sync from raw samples. */
+    meter_voltage_wave_snapshot(&snap, w, 0.0f);
+
+    lcd_fill_rect(x - 1, y - 1, w + 2, 1, th->grid_center);
+    lcd_fill_rect(x - 1, y + h, w + 2, 1, th->grid_center);
+    lcd_fill_rect(x - 1, y, 1, h, th->grid_center);
+    lcd_fill_rect(x + w, y, 1, h, th->grid_center);
+    lcd_fill_rect(x, y, w, h, th->background);
+
+    for (int g = 1; g < 4; g++) {
+        uint16_t gy = y + (h * g) / 4;
+        for (uint16_t gx = x; gx < x + w; gx += 4) {
+            lcd_set_pixel(gx, gy, th->grid);
+        }
+    }
+    for (uint16_t gx = x; gx < x + w; gx += 2) {
+        lcd_set_pixel(gx, y + h / 2, th->grid_center);
+    }
+
+    font_draw_string(x, y - 13, "DMM voltage waveform",
+                     th->text_secondary, th->background, &font_small);
+
+    if (snap.count < 2) {
+        font_draw_string(x + 70, y + h / 2 - 6, "Waiting for samples",
+                         th->text_secondary, th->background, &font_small);
+        return;
+    }
+
+    uint16_t prev_y = 0;
+    for (uint16_t i = 0; i < snap.count && i < w; i++) {
+        uint16_t px = x + i;
+        uint16_t py = y + h - 1 - (uint16_t)((uint32_t)snap.y[i] * (h - 2) / 255U);
+        uint16_t ey_min = y + h - 1 - (uint16_t)((uint32_t)snap.env_min[i] * (h - 2) / 255U);
+        uint16_t ey_max = y + h - 1 - (uint16_t)((uint32_t)snap.env_max[i] * (h - 2) / 255U);
+
+        draw_meter_wave_line(px, ey_min, px, ey_max, th->grid_center);
+        if (i > 0) {
+            draw_meter_wave_line(px - 1, prev_y, px, py, th->ch1);
+        } else {
+            lcd_set_pixel(px, py, th->ch1);
+        }
+        prev_y = py;
+    }
+
+    if (snap.freq_hz >= 1.0f) {
+        fmt_float(buf, sizeof(buf), snap.freq_hz, 1);
+        font_draw_string_right(x + w - 16, y - 13, buf,
+                               snap.synced ? th->success : th->text_secondary,
+                               th->background, &font_small);
+        font_draw_string(x + w - 12, y - 13, "Hz",
+                         snap.synced ? th->success : th->text_secondary,
+                         th->background, &font_small);
+    }
+
+    meter_voltage_wave_scale_t scale =
+        meter_voltage_wave_scale_from_dmm_rms(&snap, current_val);
+    if (mode == 1 && scale.valid) {
+        float est_pp = meter_voltage_wave_peak_to_peak_volts(&snap, scale);
+        fmt_float(buf, sizeof(buf), est_pp, est_pp < 10.0f ? 2 : 1);
+        font_draw_string(x, y + h + 2, "P-P~",
+                         th->text_secondary, th->background, &font_small);
+        font_draw_string(x + 30, y + h + 2, buf,
+                         th->text_secondary, th->background, &font_small);
+        font_draw_string(x + 72, y + h + 2, "V",
+                         th->text_secondary, th->background, &font_small);
+    } else {
+        font_draw_string(x, y + h + 2, mode == 0 ? "ripple shape" : "shape only",
+                         th->text_secondary, th->background, &font_small);
+    }
+}
+
 /* Live unit string: prefer the suffix decoded by meter_data from the
  * current frame (reflects auto-ranging), fall back to the static mode
  * table when meter data hasn't arrived yet or the suffix is empty. */
@@ -435,6 +529,13 @@ static void draw_meter_full(const meter_mode_info_t *m, uint8_t mode,
                      th->text_secondary, th->background, &font_small);
     font_draw_string_right(BAR_X + BAR_W, BAR_Y + BAR_H + 2, m->bar_max_label,
                            th->text_secondary, th->background, &font_small);
+
+    if (mode == 0 || mode == 1) {
+        draw_voltage_wave_panel(10, 118, 300, 74, mode, current_val, th);
+        font_draw_string(200, SECONDARY_Y, m->range_label,
+                         th->ch1, th->background, &font_small);
+        return;
+    }
 
     /* Secondary readings: Min / Max / Avg */
     char val_buf[16];

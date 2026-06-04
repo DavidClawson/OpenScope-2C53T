@@ -26,6 +26,7 @@
 #include "scope_trigger.h"
 #include "../ui/ui.h"
 #include "../ui/scope_state.h"
+#include "../ui/meter_voltage_wave.h"
 #include "at32f403a_407.h"
 #include "FreeRTOS.h"
 #include "task.h"
@@ -1499,6 +1500,51 @@ static void fpga_meter_poll_task(void *pv)
 }
 
 /*
+ * Meter ADC Waveform Sampler
+ *
+ * The decoded DMM value arrives over USART2 at a few hertz. Stock RE also
+ * shows SPI3 acquisition case 5: a single raw meter-path ADC byte. Poll that
+ * path at the FreeRTOS tick rate only in voltage modes, giving the meter
+ * screen a scope-like shape/ripple trace from the same DMM jacks.
+ */
+static void fpga_meter_adc_sampler_task(void *pv)
+{
+    (void)pv;
+    extern volatile device_mode_t current_mode;
+    extern volatile uint8_t meter_submode;
+    uint8_t last_submode = 0xFF;
+    bool was_voltage_mode = false;
+
+    for (;;) {
+        uint8_t trigger = FPGA_ACQ_METER_ADC + 1;
+        bool voltage_mode;
+
+        vTaskDelay(pdMS_TO_TICKS(1));  /* ~1 ksample/s with a 1 kHz tick. */
+        if (!fpga.initialized) continue;
+
+        voltage_mode = (current_mode == MODE_MULTIMETER) &&
+                       (meter_submode == 0 || meter_submode == 1);
+
+        if (!voltage_mode) {
+            if (was_voltage_mode) {
+                meter_voltage_wave_reset();
+                was_voltage_mode = false;
+                last_submode = 0xFF;
+            }
+            continue;
+        }
+
+        if (!was_voltage_mode || meter_submode != last_submode) {
+            meter_voltage_wave_reset();
+            last_submode = meter_submode;
+            was_voltage_mode = true;
+        }
+
+        (void)xQueueSend(spi3_acq_queue, &trigger, 0);
+    }
+}
+
+/*
  * SPI3 Acquisition Task (fpga equivalent)
  * Waits on spi3_acq_queue for trigger events, then performs SPI3
  * transfers to read ADC sample data from FPGA.
@@ -1536,6 +1582,21 @@ static void fpga_acquisition_task(void *pv)
         /* Bus handed to an external SSPI master (fpga_bus_release) — stay
          * off SPI3 entirely to avoid contention with the ESP32. */
         if (fpga.bus_released) continue;
+
+        if (trigger_byte == (FPGA_ACQ_METER_ADC + 1)) {
+            uint8_t sample;
+
+            fpga.spi3_probing = true;
+            SPI3_CS_ASSERT();
+            /* Stock case 5 is a single-byte DMM ADC read:
+             * CS_ASSERT; spi3_xfer(active_channel); CS_DEASSERT. */
+            sample = spi3_xfer(active_channel & 0x01);
+            SPI3_CS_DEASSERT();
+
+            meter_voltage_wave_add_sample(sample);
+            fpga.spi3_probing = false;
+            continue;
+        }
 
         /* Backoff: if we've timed out too many times, pause */
         if (fpga.spi3_timeout_count >= SPI3_BACKOFF_THRESHOLD) {
@@ -3525,6 +3586,7 @@ QueueHandle_t fpga_create_tasks(void)
     xTaskCreate(fpga_usart_rx_task,    "dvom_RX",   128, NULL, 3, &rx_task_handle);
     xTaskCreate(fpga_acquisition_task, "fpga",      256, NULL, 3, &acq_task_handle);
     xTaskCreate(fpga_meter_poll_task,  "meter_poll", 64, NULL, 2, NULL);
+    xTaskCreate(fpga_meter_adc_sampler_task, "mtr_wave", 64, NULL, 2, NULL);
 #endif
 
     return spi3_acq_queue;

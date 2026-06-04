@@ -34,6 +34,7 @@ extern void system_clock_config(void);
 #include "battery.h"
 #include "fpga.h"
 #include "meter_data.h"
+#include "meter_voltage_wave.h"
 #include "flash_fs.h"
 #include "usb_debug.h"
 #include "rtt.h"
@@ -56,7 +57,7 @@ volatile int8_t        settings_depth = 0;
 volatile int8_t        settings_sub_selected = 0;
 volatile uint8_t       active_channel = 0;  /* 0=CH1, 1=CH2 */
 volatile uint8_t       meter_submode = 0;   /* 0-9: current meter sub-mode */
-volatile uint8_t       meter_layout = 0;   /* 0=full, 1=chart, 2=stats */
+volatile uint8_t       meter_layout = 0;   /* 0=full, 1=chart, 2=stats, 3=fuse */
 volatile bool          meter_rel_enabled = false;  /* Relative/delta mode */
 volatile float         meter_rel_reference = 0.0f;
 volatile bool          meter_hold_enabled = false;  /* Auto-hold mode */
@@ -537,6 +538,7 @@ int main(void)
 
     /* Initialize meter data parser */
     meter_data_init();
+    meter_voltage_wave_init();
 
     /* Factory calibration stub: initializes the flash_fs mutex and
      * attempts to load per-channel cal blobs from SPI flash into the

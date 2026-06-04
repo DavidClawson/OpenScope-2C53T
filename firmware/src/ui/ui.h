@@ -80,7 +80,7 @@ extern volatile int8_t        settings_depth;      /* 0=top, 1=sub-menu, 2=about
 extern volatile int8_t        settings_sub_selected; /* Sub-menu selection */
 extern volatile uint8_t       active_channel;      /* 0=CH1, 1=CH2 (for scope adjustments) */
 extern volatile uint8_t       meter_submode;       /* 0-9: current meter sub-mode */
-extern volatile uint8_t       meter_layout;        /* 0=full, 1=chart, 2=stats */
+extern volatile uint8_t       meter_layout;        /* 0=full, 1=chart, 2=stats, 3=fuse */
 extern volatile bool          meter_rel_enabled;   /* Relative/delta mode */
 extern volatile float         meter_rel_reference; /* Zero reference value */
 extern volatile bool          meter_hold_enabled;  /* Auto-hold mode */

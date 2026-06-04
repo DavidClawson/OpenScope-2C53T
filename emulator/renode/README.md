@@ -50,6 +50,19 @@ will likely stall waiting for hardware responses. This is expected and useful fo
 - Understanding the boot sequence before peripheral communication begins
 - Identifying which peripherals the firmware probes first
 
+## DVOM and DMM Waveform Limits
+
+`fpga_dvom_sim.py` is a USART2 protocol responder for the numeric DVOM frame
+path. It can help with boot and meter-frame smoke tests, but it does not model
+the SPI3 acquisition case 5 `METER_ADC_READ` byte that the DMM voltage waveform
+overlay samples.
+
+For the voltage waveform feature, use native unit tests for the waveform math
+and rendering-window logic. Renode can still be used for boot/UI smoke, but it
+is not evidence that SPI3 samples are coming from the real COM + V/Ω/C DMM
+frontend. That proof requires either a future custom SPI3 peripheral model in
+Renode or hardware validation with the DMM leads connected to the voltage jacks.
+
 ## Debugging Tips
 
 In the Renode monitor:
