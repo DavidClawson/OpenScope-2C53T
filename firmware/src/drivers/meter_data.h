@@ -76,6 +76,7 @@ typedef struct {
     bool     is_hold;            /* Hold mode active */
 
     /* Meter mode handler state (from frame[6]/[7] status bits) */
+    uint8_t  submode;            /* UI submode that produced this reading */
     uint8_t  probe_type;         /* 0, 1, or 2 — from frame[7] bit pattern */
     uint8_t  range_indicator;    /* from frame[6] bits 4-5: range band */
     uint8_t  range_cmd;          /* Parameter for auto-range FPGA commands */

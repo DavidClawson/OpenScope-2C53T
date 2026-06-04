@@ -123,30 +123,6 @@ static uint32_t hist_total;
 static float hold_prev_value;
 static uint8_t hold_stable_count;
 
-static float simple_atof(const char *s)
-{
-    float result = 0.0f;
-    float frac = 0.0f;
-    float div = 1.0f;
-    int after_dot = 0;
-    int negative = 0;
-
-    if (*s == '-') { negative = 1; s++; }
-    while (*s) {
-        if (*s == '.') { after_dot = 1; s++; continue; }
-        if (*s < '0' || *s > '9') break;
-        if (after_dot) {
-            div *= 10.0f;
-            frac += (*s - '0') / div;
-        } else {
-            result = result * 10.0f + (*s - '0');
-        }
-        s++;
-    }
-    result += frac;
-    return negative ? -result : result;
-}
-
 void meter_reset_minmaxavg(void)
 {
     meter_stats_valid = 0;
@@ -410,12 +386,20 @@ static void draw_voltage_wave_panel(uint16_t x, uint16_t y,
     }
 }
 
-/* Live unit string: prefer the suffix decoded by meter_data from the
- * current frame (reflects auto-ranging), fall back to the static mode
- * table when meter data hasn't arrived yet or the suffix is empty. */
-static const char *live_unit(const meter_mode_info_t *m)
+static bool live_reading_for_mode(uint8_t mode)
 {
-    if (meter_reading.valid &&
+    return meter_reading.valid &&
+           meter_reading.submode == mode &&
+           meter_reading.result_class != METER_RESULT_NONE;
+}
+
+/* Live unit string: prefer the suffix decoded by meter_data from the
+ * current frame only when that frame belongs to the displayed submode.
+ * Otherwise stale voltage readings can be relabeled as amps/ohms/Hz while
+ * the meter frontend is still settling after a mode change. */
+static const char *live_unit(const meter_mode_info_t *m, uint8_t mode)
+{
+    if (live_reading_for_mode(mode) &&
         meter_reading.unit_suffix != NULL &&
         meter_reading.unit_suffix[0] != '\0') {
         return meter_reading.unit_suffix;
@@ -426,9 +410,10 @@ static const char *live_unit(const meter_mode_info_t *m)
 /* Draw the main reading (shared by all layouts)
  * value_str: the string to display (real or demo) */
 static void draw_main_reading(const meter_mode_info_t *m, const theme_t *th,
-                              uint16_t y, bool compact, const char *value_str)
+                              uint8_t mode, uint16_t y, bool compact,
+                              const char *value_str)
 {
-    const char *unit_str = live_unit(m);
+    const char *unit_str = live_unit(m, mode);
     if (!compact) {
         /* Mode indicator arrows (show L/R navigation) */
         font_draw_string(4, y, "<",
@@ -519,9 +504,9 @@ static void draw_meter_full(const meter_mode_info_t *m, uint8_t mode,
                             float bar_pct)
 {
     const theme_t *th = theme_get();
-    const char *unit_str = live_unit(m);
+    const char *unit_str = live_unit(m, mode);
 
-    draw_main_reading(m, th, MAIN_READING_Y, false, value_str);
+    draw_main_reading(m, th, mode, MAIN_READING_Y, false, value_str);
 
     /* Special indicators for continuity and diode modes */
     if (mode == 7) {
@@ -626,7 +611,7 @@ static void draw_meter_chart(const meter_mode_info_t *m, uint8_t mode,
     (void)mode;
 
     /* Compact main reading at top */
-    draw_main_reading(m, th, METER_TOP + 2, true, value_str);
+    draw_main_reading(m, th, mode, METER_TOP + 2, true, value_str);
 
     /* Current value + unit below reading */
     font_draw_string(16, METER_TOP + 40, m->range_label,
@@ -758,7 +743,7 @@ static void draw_meter_stats(const meter_mode_info_t *m, uint8_t mode,
     (void)current_val;
 
     /* Compact main reading at top */
-    draw_main_reading(m, th, METER_TOP + 2, true, value_str);
+    draw_main_reading(m, th, mode, METER_TOP + 2, true, value_str);
 
     /* Statistics panel */
     uint16_t sy = METER_TOP + 42;
@@ -873,10 +858,10 @@ void meter_toggle_relative(void)
         /* Enable: capture current reading as reference */
         uint8_t mode = meter_submode;
         if (mode >= METER_SUBMODE_COUNT) mode = 0;
-        if (meter_data_valid()) {
+        if (live_reading_for_mode(mode)) {
             meter_rel_reference = meter_data_get_value();
         } else {
-            meter_rel_reference = simple_atof(meter_modes[mode].demo_value);
+            meter_rel_reference = 0.0f;
         }
         meter_rel_enabled = true;
     } else {
@@ -915,20 +900,22 @@ void draw_meter_screen(void)
      * the two. See fpga.c:fpga_meter_poll_task and
      * analysis_v120/usart2_isr_state_machine.md. */
 
-    /* Use real FPGA meter data if available, otherwise fall back to demo */
+    /* Use real FPGA meter data only when it belongs to the currently
+     * displayed submode. Never relabel stale voltage data as current,
+     * resistance, capacitance, etc. */
     float current_val;
     const char *value_str;
     float bar_pct;
 
-    if (meter_data_valid() &&
-        meter_reading.result_class != METER_RESULT_NONE) {
+    bool has_live_reading = live_reading_for_mode(mode);
+    if (has_live_reading) {
         current_val = meter_reading.value;
         value_str = meter_reading.display_str;
         bar_pct = meter_reading.bar_fraction;
     } else {
-        current_val = simple_atof(m->demo_value);
-        value_str = m->demo_value;
-        bar_pct = m->demo_bar_pct;
+        current_val = 0.0f;
+        value_str = "---";
+        bar_pct = 0.0f;
     }
 
     /* Apply relative offset if enabled */
@@ -945,7 +932,9 @@ void draw_meter_screen(void)
         }
     }
 
-    meter_update_stats(current_val);
+    if (has_live_reading) {
+        meter_update_stats(current_val);
+    }
 
     /* Continuity visual indicator: flash the entire background green
      * when continuity is detected (resistance < 50 ohms).
@@ -953,8 +942,9 @@ void draw_meter_screen(void)
     bool continuity_flash = false;
     if (mode == 7) {
         /* Flash green only for real short (exclude 0, which means open) */
-        continuity_flash = (current_val > 0.01f && current_val < 50.0f) ||
-                           meter_reading.continuity_beep;
+        continuity_flash = has_live_reading &&
+                           ((current_val > 0.01f && current_val < 50.0f) ||
+                            meter_reading.continuity_beep);
     }
 
     /* Clear content area (green flash for continuity, normal otherwise) */
@@ -1008,8 +998,7 @@ void draw_meter_screen(void)
         draw_meter_stats(m, mode, current_val, value_str);
         break;
     case METER_LAYOUT_FUSE:
-        /* Fuse tester uses the mV reading as voltage drop.
-         * In demo mode, simulate a 1.5 mV drop (typical parasitic draw). */
+        /* Fuse tester uses the mV reading as voltage drop. */
         draw_fuse_screen(current_val);
         break;
     default:

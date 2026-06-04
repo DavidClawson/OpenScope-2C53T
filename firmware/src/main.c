@@ -297,11 +297,16 @@ static void vDisplayTask(void *pvParameters)
              * pattern, gated on the meter_reading.update_count field. */
             static uint32_t last_meter_update = 0xFFFFFFFFu;
             static uint32_t last_meter_frame  = 0;
+            static uint8_t  last_meter_submode = 0xFFu;
             uint32_t uc = meter_reading.update_count;
-            if (uc != last_meter_update || (frame - last_meter_frame) >= 20) {
+            bool submode_changed = (meter_submode != last_meter_submode);
+            bool enough_time = (frame - last_meter_frame) >= 5;  /* 20Hz loop -> max 4Hz redraw */
+            if (submode_changed || ((uc != last_meter_update) && enough_time) ||
+                (frame - last_meter_frame) >= 20) {
                 draw_meter_screen();
                 last_meter_update = uc;
                 last_meter_frame  = frame;
+                last_meter_submode = meter_submode;
             }
         }
 

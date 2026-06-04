@@ -345,6 +345,7 @@ void meter_data_process_frame(const volatile uint8_t *frame, uint8_t submode)
 
     /* Save raw frame for debug display */
     for (int i = 0; i < 12; i++) r->dbg_frame[i] = frame[i];
+    r->submode = submode;
 
     /* Extract cross-byte nibble pairs */
     uint8_t b2 = frame[2], b3 = frame[3], b4 = frame[4];
