@@ -84,7 +84,19 @@ Harmless warnings you can ignore during step 1:
 
 The line that matters is `Download done. / File downloaded successfully`.
 
-After this, close the case. All future updates use the USB HID bootloader:
+If the bootloader flash succeeds but the application flash ends with
+`File downloaded successfully` followed by an error while submitting `leave`,
+the device may boot only to the USB HID bootloader. That still means the
+one-time ROM DFU work succeeded. Remove the BOOT0 jumper, reset the device, and
+flash the application through the bootloader:
+
+```bash
+cd firmware
+make flash
+```
+
+Only close the case after the application, not just the bootloader screen, has
+booted. All future updates use the USB HID bootloader:
 1. On the device: **Settings > Firmware Update**
 2. On your computer: `cd firmware && make flash`
 
@@ -227,4 +239,22 @@ make flash-all
 - **Device doesn't enumerate as DFU:** Make sure you're touching the correct side of the resistor (MCU side, not ground side). Try again — the timing can be tricky.
 - **`dfu-util` not found:** Install with `brew install dfu-util` (macOS) or `apt install dfu-util` (Linux).
 - **Permission denied:** On Linux, you may need udev rules for the AT32 DFU device. Try running with `sudo` first.
+- **`option_bytes48.bin` is not 48 bytes on Linux:** some `/bin/sh`
+  implementations do not interpret `printf '\xHH'` escapes the way bash does.
+  Regenerate the blob with `make SHELL=/bin/bash build/option_bytes48.bin` and
+  confirm `wc -c build/option_bytes48.bin` prints `48`.
+- **`SET_ADDRESS not correctly executed` for option bytes or internal flash:**
+  the ROM DFU can be stuck in a protected/error state. No external programmer is
+  required for this recovery path. With the device in ROM DFU, run:
+  ```bash
+  dfu-util -a 0 -d 2e3c:df11 -s :unprotect:force:will-reset -D /dev/null
+  ```
+  It is normal for `dfu-util` to complain about the final state or for the
+  device to disappear from USB. Keep BOOT0 high, press pinhole reset or
+  unplug/replug USB, verify `dfu-util -l` again, then retry the option-byte and
+  flash commands. This erases the application flash.
+- **Device shows only `BOOTLOADER MODE` after first-time setup:** ROM DFU
+  installed the USB HID bootloader, but the application did not boot. Leave
+  BOOT0 disconnected and run `cd firmware && make flash` while the bootloader
+  screen is visible.
 - **Bricked after a bad flash:** You can always re-enter DFU mode with the BOOT0 procedure above. The ROM bootloader is permanent and cannot be overwritten.
