@@ -20,6 +20,7 @@
  */
 
 #include "meter_data.h"
+#include "fpga_meter_plan.h"
 #include <string.h>
 
 /* ═══════════════════════════════════════════════════════════════════
@@ -407,20 +408,7 @@ static const char * const unit_suffix_table[11][3] = {
 
 static uint8_t stock_mode_from_ui_submode(uint8_t submode)
 {
-    switch (submode) {
-    case 0: return 0;  /* DC voltage */
-    case 1: return 1;  /* AC voltage */
-    case 2: return 2;  /* small DC current */
-    case 3: return 2;  /* large DC current, same stock formatter family */
-    case 4: return 3;  /* small AC current */
-    case 5: return 3;  /* large AC current, same stock formatter family */
-    case 6: return 4;  /* resistance */
-    case 7: return 6;  /* continuity */
-    case 8: return 7;  /* diode */
-    case 9:  return 5; /* capacitance */
-    case 10: return 5; /* temperature, same recovered extended formatter slot */
-    default: return 0;
-    }
+    return fpga_meter_stock_mode_for_submode(submode);
 }
 
 static void meter_stock_fsm_reset(uint8_t stock_mode)

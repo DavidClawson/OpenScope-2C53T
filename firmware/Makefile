@@ -404,8 +404,8 @@ soak-test: emu
 soak-quick: emu
 	python3 ../scripts/soak_test.py --no-build --duration 30 --seed $(SOAK_SEED) --verbose
 
-$(BUILD_DIR)/test_meter_data: tests/test_meter_data.c src/drivers/meter_data.c src/drivers/meter_data.h | $(BUILD_DIR)
-	$(HOST_CC) -std=gnu11 -Wall -Wextra -Isrc/drivers $< src/drivers/meter_data.c -lm -o $@
+$(BUILD_DIR)/test_meter_data: tests/test_meter_data.c src/drivers/meter_data.c src/drivers/meter_data.h src/drivers/fpga_meter_plan.c src/drivers/fpga_meter_plan.h | $(BUILD_DIR)
+	$(HOST_CC) -std=gnu11 -Wall -Wextra -Isrc/drivers $< src/drivers/meter_data.c src/drivers/fpga_meter_plan.c -lm -o $@
 
 test-meter-data: $(BUILD_DIR)/test_meter_data
 	$<

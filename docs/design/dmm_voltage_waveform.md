@@ -148,8 +148,11 @@ that is different evidence.
 
 Current custom firmware now ports the stock DMM display-state machine into
 `meter_data.c` and translates its display format/unit outputs into the local
-renderer fields. For ACV, this means it uses the stock `frame[7]` format
-selector instead of using `extra` as a range hint:
+renderer fields. The parser stock-family state and the frontend transition
+sequence both derive their UI-submode mapping from `fpga_meter_plan`, so one
+tested table controls selector/apply words, mux metadata, and parser debug
+state. For ACV, this means it uses the stock `frame[7]` format selector instead
+of using `extra` as a range hint:
 
 - `frame[7] bit0 set` maps to stock ACV format index `0`, rendered locally as
   `X.XXX V`.

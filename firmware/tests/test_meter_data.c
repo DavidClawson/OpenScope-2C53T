@@ -9,6 +9,7 @@
 #include <stdio.h>
 #include <string.h>
 
+#include "fpga_meter_plan.h"
 #include "meter_data.h"
 
 static int tests_run = 0;
@@ -377,6 +378,30 @@ static int test_invalidate_clears_stale_reading_for_every_submode(void)
         for (unsigned i = 0; i < sizeof(meter_reading.dbg_frame); i++) {
             ASSERT(meter_reading.dbg_frame[i] == 0);
         }
+    }
+    return 1;
+}
+
+static int test_parser_stock_mode_tracks_transition_plan_for_every_submode(void)
+{
+    uint8_t frame[12];
+
+    build_segment_frame(frame, 1, 2, 3, 4, 0x00, 0x00, 0x00, 0x00, 0);
+
+    for (uint8_t mode = 0; mode < FPGA_METER_LOCAL_SUBMODE_COUNT; mode++) {
+        fpga_meter_transition_plan_t plan =
+            fpga_meter_transition_plan_for_submode(mode);
+
+        meter_data_init();
+        meter_data_invalidate(mode);
+        ASSERT(meter_reading.stock_mode == plan.stock_mode);
+        ASSERT(meter_reading.submode == mode);
+        ASSERT(!meter_reading.valid);
+
+        process_frame(frame, mode);
+        ASSERT(meter_reading.valid);
+        ASSERT(meter_reading.submode == mode);
+        ASSERT(meter_reading.stock_mode == plan.stock_mode);
     }
     return 1;
 }
@@ -872,6 +897,7 @@ int main(void)
     TEST(resistance_band_overrides_have_regression_fixtures);
     TEST(invalidate_clears_stale_reading_before_mode_transition);
     TEST(invalidate_clears_stale_reading_for_every_submode);
+    TEST(parser_stock_mode_tracks_transition_plan_for_every_submode);
     TEST(voltage_mode_mains_frequency_frame_overrides_dcv_0f_rule);
     TEST(dcv_high_range_frame_stays_voltage_across_current_transition);
     TEST(voltage_mode_mains_rotating_frames_stay_high_voltage);
