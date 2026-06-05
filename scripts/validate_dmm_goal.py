@@ -242,6 +242,50 @@ def verify_transition_plan_property_contract() -> dict[str, Any]:
     }
 
 
+def verify_autoscan_property_contract() -> dict[str, Any]:
+    """Anchor auto-selection scoring so AC/current modes need real evidence."""
+    rel = "firmware/tests/test_meter_auto.c"
+    text = (REPO / rel).read_text(encoding="utf-8", errors="replace")
+    required_tests = [
+        "candidate_order_keeps_voltage_before_passive_and_current",
+        "wrong_submode_never_scores",
+        "dirty_frame_family_state_never_scores",
+        "dc_voltage_scores_without_frequency_or_nonzero_magnitude",
+        "ac_voltage_requires_frequency_evidence",
+        "current_auto_scores_respect_ac_evidence",
+        "temperature_scores_as_passive_candidate",
+        "continuity_marker_beats_resistance_normal",
+    ]
+    required_snippets = [
+        "meter_auto_score(1, &r) == 0",
+        "r.aux_freq_hz = 49.9f",
+        "r.is_ac = true",
+        "meter_auto_score(4, &r) == 0",
+        "meter_auto_score(5, &r) == 0",
+        "r.observed_frame_family = (uint8_t)FPGA_METER_FRAME_FAMILY_VOLTAGE",
+        "r.reject_reason = METER_REJECT_WRONG_FRAME_FAMILY",
+        "r.bcd_value = 0",
+        "dc_voltage_scores_without_frequency_or_nonzero_magnitude",
+    ]
+
+    missing_tests = [
+        name for name in required_tests
+        if f"static int test_{name}" not in text or f"TEST({name});" not in text
+    ]
+    missing_snippets = [snippet for snippet in required_snippets if snippet not in text]
+    if missing_tests or missing_snippets:
+        raise GateError(
+            "autoscan property contract check failed: "
+            f"missing_tests={missing_tests} "
+            f"missing_snippets={missing_snippets}"
+        )
+    return {
+        "file": rel,
+        "tests": required_tests,
+        "snippet_anchors": required_snippets,
+    }
+
+
 def verify_re_coverage() -> dict[str, Any]:
     required_docs = [
         "reverse_engineering/analysis_v120/meter_stock_multiplier_tables_2026_06_05.md",
@@ -532,6 +576,7 @@ def main(argv: list[str] | None = None) -> int:
             report["flash_preflight"] = preflight_current_firmware_image()
         report["state_machine_property_contract"] = verify_state_machine_property_contract()
         report["transition_plan_property_contract"] = verify_transition_plan_property_contract()
+        report["autoscan_property_contract"] = verify_autoscan_property_contract()
         report["re_comment_coverage"] = verify_re_coverage()
         report["no_unrecovered_meter_coefficients"] = verify_no_unrecovered_meter_coefficients()
 

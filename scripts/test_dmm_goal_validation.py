@@ -189,6 +189,19 @@ class DmmGoalValidationTests(unittest.TestCase):
                       result["regex_anchors"])
         self.assertIn("stable frame accepted", result["snippet_anchors"])
 
+    def test_autoscan_property_contract_is_anchored(self) -> None:
+        result = validate_dmm_goal.verify_autoscan_property_contract()
+        self.assertEqual(result["file"], "firmware/tests/test_meter_auto.c")
+        self.assertIn("ac_voltage_requires_frequency_evidence", result["tests"])
+        self.assertIn("current_auto_scores_respect_ac_evidence", result["tests"])
+        self.assertIn(
+            "dc_voltage_scores_without_frequency_or_nonzero_magnitude",
+            result["tests"],
+        )
+        self.assertIn("meter_auto_score(1, &r) == 0", result["snippet_anchors"])
+        self.assertIn("meter_auto_score(4, &r) == 0", result["snippet_anchors"])
+        self.assertIn("r.bcd_value = 0", result["snippet_anchors"])
+
     def test_live_validation_only_switches_dcv_acv_without_current_probe(self) -> None:
         calls: list[list[str]] = []
         meter_dumps = [GOOD_DCV, GOOD_ACV_REJECT]
