@@ -157,7 +157,7 @@ until a stock writer or bench trace proves the corresponding hardware state.
 
 1. **Oscilloscope channel controls** — trigger, coupling, probe, timebase, v/div. Bread-and-butter scope controls.
 2. **Settings sub-menus** — nested menus for osc settings, channel config, trigger config.
-3. **Multimeter sub-modes** — 10 modes. Mostly hardware-dependent, but UI scaffolding can be built now.
+3. **Multimeter sub-modes** — 11 local submodes mapped onto recovered stock selector families. Several ranges remain hardware-dependent, so keep UI scaffolding distinct from physically validated behavior.
 4. **Signal generator missing waveforms** — full-wave, half-wave, pulse, Lorentz.
 5. **Wire remaining buttons** — CH1, CH2, MOVE, TRIGGER, SAVE handlers.
 6. **Connect backend features to UI** — persistence, roll mode, XY mode, trend plot, cursor, auto-measurement, component tester, Bode, mask test.
