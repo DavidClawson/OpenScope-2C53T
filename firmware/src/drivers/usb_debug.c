@@ -467,7 +467,9 @@ static void cmd_help(void)
         "mode startup [scope|meter]      Get/set Settings > Startup on Boot\r\n"
         "meter dump [delay_ms]           Show parsed DMM/UI/raw frame state\r\n"
         "meter frontend                  Show DMM analog frontend GPIO state\r\n"
+        "meter mux-stream [count] [ms]   Stream DMM frames plus frontend GPIOs\r\n"
         "meter stream [count] [delay_ms] Print compact DMM frame stream\r\n"
+        "meter adc-snapshot              Show read-only DMM waveform sampler state\r\n"
         "ui dump                         Show current UI mode/redraw state\r\n"
         "meter wave                      Show DMM voltage waveform sample stats\r\n"
         "meter wave reset                Reset DMM waveform diagnostics\r\n"
@@ -2006,10 +2008,47 @@ static uint8_t gpio_level(gpio_type *port, uint16_t pin)
     return (port->idt & (1U << pin)) ? 1U : 0U;
 }
 
+static int parse_stream_args(const char *args, uint32_t *count, uint32_t *delay_ms,
+                             const char *usage)
+{
+    char buf[32];
+    char *tok;
+    char *saveptr = NULL;
+
+    if (args == NULL || *args == '\0') return 0;
+    if (strlen(args) >= sizeof(buf)) {
+        usb_send_str(usage);
+        return -1;
+    }
+
+    strcpy(buf, args);
+    tok = strtok_r(buf, " \t", &saveptr);
+    if (tok && (parse_int(tok, count) != 0 || *count > 200)) {
+        usb_send_str(usage);
+        return -1;
+    }
+    tok = strtok_r(NULL, " \t", &saveptr);
+    if (tok && (parse_int(tok, delay_ms) != 0 || *delay_ms > 5000)) {
+        usb_send_str(usage);
+        return -1;
+    }
+    tok = strtok_r(NULL, " \t", &saveptr);
+    if (tok) {
+        usb_send_str(usage);
+        return -1;
+    }
+    return 0;
+}
+
+static uint16_t meter_dbg_extra(void)
+{
+    return ((uint16_t)meter_reading.dbg_frame[10] << 8) |
+           meter_reading.dbg_frame[11];
+}
+
 static void cmd_meter_frontend(void)
 {
-    uint16_t extra = ((uint16_t)meter_reading.dbg_frame[10] << 8) |
-                     meter_reading.dbg_frame[11];
+    uint16_t extra = meter_dbg_extra();
 
     usb_send_str("=== DMM Frontend ===\r\n");
     usb_debug_printf("mode=%lu startup=%s meter_submode=%u (%s) reading_submode=%u valid=%u class=%u updates=%lu\r\n",
@@ -2053,32 +2092,73 @@ static void cmd_meter_frontend(void)
                      gpio_level(GPIOA, 6));
 }
 
+static void print_meter_mux_stream_line(uint32_t index)
+{
+    bool live = current_mode == MODE_MULTIMETER &&
+                meter_reading.valid &&
+                meter_reading.submode == meter_submode;
+
+    usb_debug_printf("t=%lu upd=%lu ui_sub=%u rd_sub=%u live=%u cls=%u "
+                     "disp=%s unit=%s raw=%d dp=%u f6=%02X f7=%02X f8=%02X f9=%02X "
+                     "extra=%04X discard=%u PC6=%u PB11=%u PC11=%u PC12=%u "
+                     "PE4=%u PE5=%u PE6=%u PA15=%u PA10=%u PB10=%u PB9=%u PA6=%u\r\n",
+                     index,
+                     meter_reading.update_count,
+                     (unsigned)meter_submode,
+                     (unsigned)meter_reading.submode,
+                     live ? 1U : 0U,
+                     (unsigned)meter_reading.result_class,
+                     meter_reading.valid ? meter_reading.display_str : "---",
+                     (meter_reading.valid && meter_reading.unit_suffix) ? meter_reading.unit_suffix : "",
+                     meter_reading.raw_bcd,
+                     (unsigned)meter_reading.decimal_pos,
+                     (unsigned)meter_reading.dbg_frame[6],
+                     (unsigned)meter_reading.dbg_frame[7],
+                     (unsigned)meter_reading.dbg_frame[8],
+                     (unsigned)meter_reading.dbg_frame[9],
+                     (unsigned)meter_dbg_extra(),
+                     (unsigned)meter_frame_discard_count,
+                     gpio_level(GPIOC, 6),
+                     gpio_level(GPIOB, 11),
+                     gpio_level(GPIOC, 11),
+                     gpio_level(GPIOC, 12),
+                     gpio_level(GPIOE, 4),
+                     gpio_level(GPIOE, 5),
+                     gpio_level(GPIOE, 6),
+                     gpio_level(GPIOA, 15),
+                     gpio_level(GPIOA, 10),
+                     gpio_level(GPIOB, 10),
+                     gpio_level(GPIOB, 9),
+                     gpio_level(GPIOA, 6));
+}
+
+static void cmd_meter_mux_stream(const char *args)
+{
+    uint32_t count = 16;
+    uint32_t delay_ms = 250;
+    uint32_t last_update = 0xFFFFFFFFu;
+    const char *usage = "Usage: meter mux-stream [count<=200] [delay_ms<=5000]\r\n";
+
+    if (parse_stream_args(args, &count, &delay_ms, usage) != 0) return;
+
+    usb_debug_printf("mux-stream count=%lu delay_ms=%lu\r\n", count, delay_ms);
+    for (uint32_t i = 0; i < count; i++) {
+        if (meter_reading.update_count != last_update) {
+            last_update = meter_reading.update_count;
+            print_meter_mux_stream_line(i);
+        }
+        if (delay_ms > 0) vTaskDelay(pdMS_TO_TICKS(delay_ms));
+    }
+}
+
 static void cmd_meter_stream(const char *args)
 {
     uint32_t count = 16;
     uint32_t delay_ms = 250;
-    char buf[32];
-    char *tok;
-    char *saveptr = NULL;
     uint32_t last_update = 0xFFFFFFFFu;
+    const char *usage = "Usage: meter stream [count<=200] [delay_ms<=5000]\r\n";
 
-    if (args && *args) {
-        if (strlen(args) >= sizeof(buf)) {
-            usb_send_str("Usage: meter stream [count<=200] [delay_ms<=5000]\r\n");
-            return;
-        }
-        strcpy(buf, args);
-        tok = strtok_r(buf, " \t", &saveptr);
-        if (tok && (parse_int(tok, &count) != 0 || count > 200)) {
-            usb_send_str("Usage: meter stream [count<=200] [delay_ms<=5000]\r\n");
-            return;
-        }
-        tok = strtok_r(NULL, " \t", &saveptr);
-        if (tok && (parse_int(tok, &delay_ms) != 0 || delay_ms > 5000)) {
-            usb_send_str("Usage: meter stream [count<=200] [delay_ms<=5000]\r\n");
-            return;
-        }
-    }
+    if (parse_stream_args(args, &count, &delay_ms, usage) != 0) return;
 
     usb_debug_printf("stream count=%lu delay_ms=%lu\r\n", count, delay_ms);
     for (uint32_t i = 0; i < count; i++) {
@@ -2107,6 +2187,51 @@ static void cmd_meter_stream(const char *args)
         }
         if (delay_ms > 0) vTaskDelay(pdMS_TO_TICKS(delay_ms));
     }
+}
+
+static void cmd_meter_adc_snapshot(void)
+{
+    meter_voltage_wave_snapshot(&usb_meter_wave_snap, METER_VOLTAGE_WAVE_RENDER_POINTS,
+                                meter_reading.aux_freq_hz);
+
+    usb_send_str("=== DMM ADC Snapshot ===\r\n");
+    usb_debug_printf("mode=%lu meter_submode=%u (%s) wave_samples=%lu\r\n",
+                     (uint32_t)current_mode,
+                     (unsigned)meter_submode,
+                     meter_submode_name(meter_submode),
+                     meter_voltage_wave_sample_count());
+    usb_debug_printf("spi_path=%s selector_override=%d last_preacq=%02X last_selector=%02X "
+                     "last_sample=%02X min_sample=%02X max_sample=%02X samples=%lu ff_samples=%lu "
+                     "zero_samples=%lu enq_attempts=%lu enq_success=%lu enq_drops=%lu\r\n",
+                     fpga_meter_adc_use_preacq ? "preacq" : "direct",
+                     (int)fpga_meter_adc_selector_override,
+                     (unsigned)fpga_meter_adc_last_preacq,
+                     (unsigned)fpga_meter_adc_last_selector,
+                     (unsigned)fpga_meter_adc_last_sample,
+                     (unsigned)fpga_meter_adc_min_sample,
+                     (unsigned)fpga_meter_adc_max_sample,
+                     fpga_meter_adc_samples,
+                     fpga_meter_adc_ff_samples,
+                     fpga_meter_adc_zero_samples,
+                     fpga_meter_adc_enqueue_attempts,
+                     fpga_meter_adc_enqueue_success,
+                     fpga_meter_adc_enqueue_drops);
+    usb_debug_printf("snapshot_count=%u raw_last=%u raw_min=%u raw_max=%u p2p=%u synced=%u\r\n",
+                     (unsigned)usb_meter_wave_snap.count,
+                     (unsigned)usb_meter_wave_snap.raw_last,
+                     (unsigned)usb_meter_wave_snap.raw_min,
+                     (unsigned)usb_meter_wave_snap.raw_max,
+                     (unsigned)usb_meter_wave_snap.peak_to_peak_raw,
+                     usb_meter_wave_snap.synced ? 1U : 0U);
+    print_i100("mean_raw=", usb_meter_wave_snap.mean_raw, "");
+    print_i100("rms_raw=", usb_meter_wave_snap.rms_raw, "");
+    print_i100("freq=", usb_meter_wave_snap.freq_hz, " Hz");
+    usb_debug_printf("dmm_display=%s dmm_unit=%s dmm_class=%u dmm_updates=%lu dmm_valid=%u\r\n",
+                     meter_reading.valid ? meter_reading.display_str : "---",
+                     (meter_reading.valid && meter_reading.unit_suffix) ? meter_reading.unit_suffix : "",
+                     (unsigned)meter_reading.result_class,
+                     meter_reading.update_count,
+                     meter_reading.valid ? 1U : 0U);
 }
 
 static void cmd_ui_dump(void)
@@ -3171,10 +3296,16 @@ static void dispatch_command(char *line)
         cmd_meter_dump(line + 11);
     } else if (strcmp(line, "meter frontend") == 0) {
         cmd_meter_frontend();
+    } else if (strcmp(line, "meter mux-stream") == 0) {
+        cmd_meter_mux_stream("");
+    } else if (strncmp(line, "meter mux-stream ", 17) == 0) {
+        cmd_meter_mux_stream(line + 17);
     } else if (strcmp(line, "meter stream") == 0) {
         cmd_meter_stream("");
     } else if (strncmp(line, "meter stream ", 13) == 0) {
         cmd_meter_stream(line + 13);
+    } else if (strcmp(line, "meter adc-snapshot") == 0) {
+        cmd_meter_adc_snapshot();
     } else if (strcmp(line, "ui dump") == 0) {
         cmd_ui_dump();
     } else if (strcmp(line, "meter wave") == 0) {

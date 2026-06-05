@@ -7,10 +7,14 @@ Examples:
     python3 scripts/openscope_live_debug.py command "status"
     python3 scripts/openscope_live_debug.py command "meter wave" --timeout 4
     python3 scripts/openscope_live_debug.py meter-dump --interval 0.25 --count 20
+    python3 scripts/openscope_live_debug.py meter-mux-stream --count 32 --delay-ms 250
+    python3 scripts/openscope_live_debug.py meter-adc-snapshot
     python3 scripts/openscope_live_debug.py poll "meter wave" --duration 10 --log tmp/meter-wave.log
 
-The script opens the selected USB CDC serial port only for command/poll modes.
-Use list mode first when another process may already own the device.
+Except for list/help, commands open the selected USB CDC serial port. The meter
+frontend, mux stream, ADC snapshot, dump, and poll helpers are read-only; modes
+that intentionally change device state should be run through the generic
+command path so the command text is explicit.
 """
 
 from __future__ import annotations
@@ -496,17 +500,41 @@ def build_parser() -> argparse.ArgumentParser:
     meter_parser.add_argument("--command", default=DEFAULT_COMMAND, help=f"DMM dump command, default {DEFAULT_COMMAND!r}")
     add_poll_args(meter_parser)
 
+    frontend_parser = subparsers.add_parser("meter-frontend", help="read current DMM analog frontend GPIO state")
+    add_common_serial_args(frontend_parser)
+    frontend_parser.add_argument("--log", type=Path, help="optional log file for the single frontend response")
+
     stream_parser = subparsers.add_parser("meter-stream", help='run firmware-side compact stream, default "meter stream"')
     add_common_serial_args(stream_parser)
     stream_parser.add_argument("--count", type=int, default=32, help="firmware stream count, default 32")
     stream_parser.add_argument("--delay-ms", type=int, default=250, help="firmware stream delay in milliseconds, default 250")
     stream_parser.add_argument("--log", type=Path, help="optional log file for the single stream response")
 
-    screen_parser = subparsers.add_parser("screen-capture", help="save LCD GRAM dump as a BMP file")
+    mux_stream_parser = subparsers.add_parser(
+        "meter-mux-stream",
+        help="run firmware-side stream with DMM frame and frontend GPIO state",
+    )
+    add_common_serial_args(mux_stream_parser)
+    mux_stream_parser.add_argument("--count", type=int, default=32, help="firmware stream count, default 32")
+    mux_stream_parser.add_argument("--delay-ms", type=int, default=250, help="firmware stream delay in milliseconds, default 250")
+    mux_stream_parser.add_argument("--log", type=Path, help="optional log file for the single stream response")
+
+    adc_parser = subparsers.add_parser("meter-adc-snapshot", help="read DMM voltage waveform sampler state")
+    add_common_serial_args(adc_parser)
+    adc_parser.add_argument("--log", type=Path, help="optional log file for the single ADC snapshot response")
+
+    screen_parser = subparsers.add_parser("screen-capture", help="save current LCD GRAM dump as a BMP file")
     add_common_serial_args(screen_parser)
     screen_parser.add_argument("--output", type=Path, default=Path("tmp/screen.bmp"), help="output BMP path, default tmp/screen.bmp")
     screen_parser.add_argument("--region", nargs=4, type=int, metavar=("X", "Y", "W", "H"), help="optional capture rectangle")
-    screen_parser.add_argument("--no-rle", action="store_true", help="request plain RGB565 rows instead of RLE")
+    screen_parser.add_argument("--no-rle", action="store_false", dest="use_rle", help="deprecated no-op: plain RGB565 is the default")
+    screen_parser.add_argument(
+        "--rle-shadow",
+        action="store_true",
+        dest="use_rle",
+        help="use indexed shadow capture; mutates screen shadow state and switches to ACV meter screen",
+    )
+    screen_parser.set_defaults(use_rle=False)
 
     return parser
 
@@ -546,6 +574,13 @@ def print_ports(ports: Iterable[str], plain: bool) -> int:
     return 0
 
 
+def validate_stream_args(count: int, delay_ms: int) -> None:
+    if not 0 <= count <= 200:
+        raise ValueError("stream count must be between 0 and 200")
+    if not 0 <= delay_ms <= 5000:
+        raise ValueError("stream delay must be between 0 and 5000 ms")
+
+
 def main(argv: list[str] | None = None) -> int:
     args = build_parser().parse_args(argv)
 
@@ -553,6 +588,8 @@ def main(argv: list[str] | None = None) -> int:
         return print_ports(discover_ports(), args.plain)
 
     try:
+        if args.mode in ("meter-stream", "meter-mux-stream"):
+            validate_stream_args(args.count, args.delay_ms)
         port = choose_port(args.port)
         with serial_device_lock(port):
             if args.mode == "command":
@@ -585,6 +622,13 @@ def main(argv: list[str] | None = None) -> int:
                         log_file,
                     )
 
+            if args.mode == "meter-frontend":
+                response = run_command(port, args.baud, "meter frontend", args.timeout)
+                print(response)
+                with log_context(args.log) as log_file:
+                    write_log_line(log_file, response)
+                return 0
+
             if args.mode == "meter-stream":
                 command = f"meter stream {args.count} {args.delay_ms}"
                 timeout = max(args.timeout, (args.count * args.delay_ms / 1000.0) + 2.0)
@@ -594,10 +638,26 @@ def main(argv: list[str] | None = None) -> int:
                     write_log_line(log_file, response)
                 return 0
 
+            if args.mode == "meter-mux-stream":
+                command = f"meter mux-stream {args.count} {args.delay_ms}"
+                timeout = max(args.timeout, (args.count * args.delay_ms / 1000.0) + 2.0)
+                response = run_command(port, args.baud, command, timeout)
+                print(response)
+                with log_context(args.log) as log_file:
+                    write_log_line(log_file, response)
+                return 0
+
+            if args.mode == "meter-adc-snapshot":
+                response = run_command(port, args.baud, "meter adc-snapshot", args.timeout)
+                print(response)
+                with log_context(args.log) as log_file:
+                    write_log_line(log_file, response)
+                return 0
+
             if args.mode == "screen-capture":
                 region = tuple(args.region) if args.region is not None else None
                 timeout = max(args.timeout, 45.0)
-                print(capture_screen(port, args.baud, timeout, args.output, region, not args.no_rle))
+                print(capture_screen(port, args.baud, timeout, args.output, region, args.use_rle))
                 return 0
 
     except TimeoutError as exc:
