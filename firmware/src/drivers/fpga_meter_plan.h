@@ -8,6 +8,8 @@
 #define FPGA_METER_STOCK_MODE_COUNT    8u
 #define FPGA_METER_TRANSITION_DISCARD_FRAMES 2u
 #define FPGA_METER_TRANSITION_SETTLE_MS      20u
+#define FPGA_METER_INVALID_STOCK_MODE        0xFFu
+#define FPGA_METER_INVALID_SELECTOR_WORD     0x0000u
 
 typedef enum {
     FPGA_METER_FRAME_FAMILY_VOLTAGE = 0,
@@ -16,6 +18,7 @@ typedef enum {
     FPGA_METER_FRAME_FAMILY_CONTINUITY = 3,
     FPGA_METER_FRAME_FAMILY_DIODE = 4,
     FPGA_METER_FRAME_FAMILY_EXTENDED = 5,
+    FPGA_METER_FRAME_FAMILY_INVALID = 0xFF,
 } fpga_meter_frame_family_t;
 
 typedef struct {
@@ -37,6 +40,7 @@ typedef struct {
     bool voltage_function_axis;
 } fpga_meter_transition_plan_t;
 
+bool fpga_meter_submode_is_valid(uint8_t submode);
 uint8_t fpga_meter_stock_mode_for_submode(uint8_t submode);
 uint8_t fpga_meter_stock_cmd_low_for_mode(uint8_t stock_mode);
 uint16_t fpga_meter_stock_cmd_word_for_submode(uint8_t submode);

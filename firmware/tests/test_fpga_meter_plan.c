@@ -164,16 +164,33 @@ static void test_fallbacks(void)
     fpga_meter_transition_plan_t plan =
         fpga_meter_transition_plan_for_submode(99);
 
-    EXPECT_EQ_U8("bad stock mode falls back", fpga_meter_stock_cmd_low_for_mode(99), 0x14);
-    EXPECT_EQ_U8("bad submode stock mode", fpga_meter_stock_mode_for_submode(99), 0);
-    EXPECT_EQ_U16("bad submode word", fpga_meter_stock_cmd_word_for_submode(99), 0x0514);
+    EXPECT_EQ_U8("bad stock mode is invalid",
+                 fpga_meter_stock_cmd_low_for_mode(99), 0);
+    EXPECT_EQ_U8("bad submode valid",
+                 fpga_meter_submode_is_valid(99) ? 1U : 0U, 0U);
+    EXPECT_EQ_U8("good submode valid",
+                 fpga_meter_submode_is_valid(10) ? 1U : 0U, 1U);
+    EXPECT_EQ_U8("bad submode stock mode",
+                 fpga_meter_stock_mode_for_submode(99),
+                 FPGA_METER_INVALID_STOCK_MODE);
+    EXPECT_EQ_U16("bad submode word",
+                  fpga_meter_stock_cmd_word_for_submode(99),
+                  FPGA_METER_INVALID_SELECTOR_WORD);
     EXPECT_EQ_U8("bad submode no apply word",
                  fpga_meter_stock_apply_cmd_word_for_submode(99, NULL) ? 1U : 0U, 0U);
-    EXPECT_EQ_U8("bad plan stock", plan.stock_mode, 0);
+    EXPECT_EQ_U8("bad plan stock", plan.stock_mode,
+                 FPGA_METER_INVALID_STOCK_MODE);
+    EXPECT_EQ_U8("bad plan mux", plan.mux_index,
+                 FPGA_METER_INVALID_STOCK_MODE);
     EXPECT_EQ_U8("bad plan family", plan.frame_family,
-                 FPGA_METER_FRAME_FAMILY_VOLTAGE);
-    EXPECT_EQ_U16("bad plan selector", plan.selector_word, 0x0514);
+                 FPGA_METER_FRAME_FAMILY_INVALID);
+    EXPECT_EQ_U16("bad plan selector", plan.selector_word,
+                  FPGA_METER_INVALID_SELECTOR_WORD);
     EXPECT_EQ_U8("bad plan has no apply", plan.has_apply_word ? 1U : 0U, 0U);
+    EXPECT_EQ_U8("bad plan discard", plan.discard_frames, 0U);
+    EXPECT_EQ_U16("bad plan settle", plan.settle_ms, 0U);
+    EXPECT_EQ_U8("bad plan voltage axis",
+                 plan.voltage_function_axis ? 1U : 0U, 0U);
 }
 
 int main(void)

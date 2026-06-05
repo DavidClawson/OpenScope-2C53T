@@ -33,6 +33,7 @@ typedef enum {
 typedef enum {
     METER_REJECT_NONE = 0,
     METER_REJECT_WRONG_FRAME_FAMILY = 1,
+    METER_REJECT_INVALID_SUBMODE = 2,
 } meter_reject_reason_t;
 
 /* ═══════════════════════════════════════════════════════════════════

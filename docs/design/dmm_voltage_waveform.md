@@ -164,6 +164,13 @@ metadata), so DC payloads are not promoted into AC modes. For ACV, this means
 the display formatter still uses the stock `frame[7]` format selector instead
 of using `extra` as a range hint:
 
+Out-of-range local submodes fail closed. The shared plan API marks them with an
+invalid stock mode/frame family, emits no selector/apply word, and the parser
+rejects any frame with `METER_REJECT_INVALID_SUBMODE` instead of silently
+falling back to DCV. USB `mode meter` already bounds user input, but the parser
+and plan layer keep this guard so future callers cannot arm the voltage
+frontend by accident.
+
 - `frame[7] bit0 set` maps to stock ACV format index `0`, rendered locally as
   `X.XXX V`.
 - `frame[7] bit0 clear` maps to stock ACV format index `1`, rendered locally

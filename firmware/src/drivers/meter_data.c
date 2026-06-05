@@ -684,7 +684,8 @@ static uint8_t decimal_pos_from_stock(uint8_t ui_submode,
     case 7:
         return (fmt == 0) ? 0U : ((fmt == 1) ? 1U : 3U);
     default:
-        return default_decimal_pos[ui_submode];
+        return (ui_submode < FPGA_METER_LOCAL_SUBMODE_COUNT) ?
+               default_decimal_pos[ui_submode] : 0U;
     }
 }
 
@@ -732,6 +733,11 @@ static bool frame_is_voltage_payload(uint8_t submode,
 static bool frame_family_mismatch(const meter_reading_t *r)
 {
     return r->observed_frame_family != r->expected_frame_family;
+}
+
+static bool meter_submode_invalid(uint8_t submode)
+{
+    return !fpga_meter_submode_is_valid(submode);
 }
 
 /* ═══════════════════════════════════════════════════════════════════
@@ -989,6 +995,12 @@ void meter_data_process_frame(const volatile uint8_t *frame, uint8_t submode)
     r->range_cmd = r->probe_type;
 
     /* --- Special value detection --- */
+
+    if (meter_submode_invalid(submode)) {
+        r->reject_reason = METER_REJECT_INVALID_SUBMODE;
+        METER_REJECT_FRAME();
+        return;
+    }
 
     if (frame_is_voltage_payload(submode, frame) ||
         frame_family_mismatch(r)) {

@@ -35,6 +35,7 @@ static bool reading_has_clean_frame_family(uint8_t submode,
 
 uint8_t meter_auto_score(uint8_t submode, const meter_reading_t *r)
 {
+    if (!fpga_meter_submode_is_valid(submode)) return 0;
     if (!r || !r->valid || r->submode != submode) return 0;
     if (!reading_has_clean_frame_family(submode, r)) return 0;
 

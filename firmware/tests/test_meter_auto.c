@@ -59,6 +59,11 @@ static int test_wrong_submode_never_scores(void)
 
     ASSERT(meter_auto_score(1, &r) == 0);
     ASSERT(meter_auto_score(2, &r) == 0);
+
+    r = normal_reading(99, 4997);
+    r.expected_frame_family = (uint8_t)FPGA_METER_FRAME_FAMILY_INVALID;
+    r.observed_frame_family = (uint8_t)FPGA_METER_FRAME_FAMILY_INVALID;
+    ASSERT(meter_auto_score(99, &r) == 0);
     return 1;
 }
 

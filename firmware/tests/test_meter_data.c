@@ -420,6 +420,27 @@ static int test_parser_stock_mode_tracks_transition_plan_for_every_submode(void)
     return 1;
 }
 
+static int test_invalid_submode_rejects_without_becoming_dcv(void)
+{
+    uint8_t frame[12];
+
+    build_segment_frame(frame, 5, 0, 0, 8, 0x00,
+                        0x00, 0x02, 0x00, 0x014E);
+    meter_data_init();
+    process_frame(frame, 99);
+
+    ASSERT(!meter_reading.valid);
+    ASSERT(meter_reading.submode == 99);
+    ASSERT(meter_reading.result_class == METER_RESULT_NONE);
+    ASSERT(expect_payload_cleared("---"));
+    ASSERT(meter_reading.stock_mode == FPGA_METER_INVALID_STOCK_MODE);
+    ASSERT(expect_family_debug(
+        (uint8_t)FPGA_METER_FRAME_FAMILY_INVALID,
+        (uint8_t)FPGA_METER_FRAME_FAMILY_VOLTAGE,
+        METER_REJECT_INVALID_SUBMODE));
+    return 1;
+}
+
 static int test_voltage_mode_mains_frequency_frame_overrides_dcv_0f_rule(void)
 {
     static const uint8_t frame[12] = {
@@ -965,6 +986,7 @@ int main(void)
     TEST(invalidate_clears_stale_reading_before_mode_transition);
     TEST(invalidate_clears_stale_reading_for_every_submode);
     TEST(parser_stock_mode_tracks_transition_plan_for_every_submode);
+    TEST(invalid_submode_rejects_without_becoming_dcv);
     TEST(voltage_mode_mains_frequency_frame_overrides_dcv_0f_rule);
     TEST(dcv_high_range_frame_stays_voltage_across_current_transition);
     TEST(voltage_mode_mains_rotating_frames_stay_high_voltage);
