@@ -201,6 +201,39 @@ static void test_fallbacks(void)
                  plan.voltage_function_axis ? 1U : 0U, 0U);
 }
 
+static void test_rx_frame_gate_preserves_discard_budget_while_busy(void)
+{
+    uint8_t discard = FPGA_METER_TRANSITION_DISCARD_FRAMES;
+    uint32_t transition_skips = 0;
+
+    EXPECT_EQ_U8("busy frame does not parse",
+                 fpga_meter_rx_frame_should_parse(true, &discard, &transition_skips) ? 1U : 0U,
+                 0U);
+    EXPECT_EQ_U8("busy frame keeps discard budget",
+                 discard, FPGA_METER_TRANSITION_DISCARD_FRAMES);
+    EXPECT_EQ_U8("busy frame increments transition skips",
+                 transition_skips, 1U);
+
+    EXPECT_EQ_U8("first post-transition frame is discarded",
+                 fpga_meter_rx_frame_should_parse(false, &discard, &transition_skips) ? 1U : 0U,
+                 0U);
+    EXPECT_EQ_U8("first discard consumed", discard, 1U);
+    EXPECT_EQ_U8("discard does not increment transition skips",
+                 transition_skips, 1U);
+
+    EXPECT_EQ_U8("second post-transition frame is discarded",
+                 fpga_meter_rx_frame_should_parse(false, &discard, &transition_skips) ? 1U : 0U,
+                 0U);
+    EXPECT_EQ_U8("discard budget drained", discard, 0U);
+
+    EXPECT_EQ_U8("next stable frame parses",
+                 fpga_meter_rx_frame_should_parse(false, &discard, &transition_skips) ? 1U : 0U,
+                 1U);
+    EXPECT_EQ_U8("stable frame keeps discard drained", discard, 0U);
+    EXPECT_EQ_U8("stable frame keeps transition skips",
+                 transition_skips, 1U);
+}
+
 int main(void)
 {
     test_stock_table_bytes();
@@ -209,6 +242,7 @@ int main(void)
     test_stock_apply_words_for_runtime_family_switch();
     test_transition_plan_covers_mux_family_and_settle_policy();
     test_fallbacks();
+    test_rx_frame_gate_preserves_discard_budget_while_busy();
 
     if (failures) {
         printf("%d fpga meter plan test(s) failed\n", failures);

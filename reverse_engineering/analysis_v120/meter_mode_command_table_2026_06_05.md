@@ -65,10 +65,12 @@ Stock master init calls the two GPIO mux functions from saved meter state:
 
 The same pair repeats after the later probe/attenuation restore block at
 `0x0802723e..0x0802724a`. `gpio_mux_portc_porte` controls PC12 and PE4/PE5/PE6;
-`gpio_mux_porta_portb` controls PA15, PA10/PB10/PB11 according to the current
-pinout notes. The current open-firmware transition plan now represents these as
-separate `portc_porte_mux` and `porta_portb_mux` fields instead of treating the
-stock function/range selectors as one generic mux.
+`gpio_mux_porta_portb` controls PA15, PA10, PB10, and PB11: the decompile at
+`0x08001a58..0x08001bba` writes GPIOA bit `0x8000`, GPIOA bit `0x400`, GPIOB bit
+`0x400`, and GPIOB bit `0x800` through the BOP/BCR registers. The current
+open-firmware transition plan now represents these as separate
+`portc_porte_mux` and `porta_portb_mux` fields instead of treating the stock
+function/range selectors as one generic mux.
 
 The unresolved part is the live/runtime writer for `ms[0x03]` during local
 small-current versus A-range operation. Until that is recovered or bench-proven,

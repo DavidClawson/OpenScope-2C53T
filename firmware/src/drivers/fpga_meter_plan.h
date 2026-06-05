@@ -49,5 +49,8 @@ uint16_t fpga_meter_stock_cmd_word_for_submode(uint8_t submode);
 bool fpga_meter_stock_apply_cmd_word_for_submode(uint8_t submode, uint16_t *word);
 fpga_meter_frame_family_t fpga_meter_frame_family_for_submode(uint8_t submode);
 fpga_meter_transition_plan_t fpga_meter_transition_plan_for_submode(uint8_t submode);
+bool fpga_meter_rx_frame_should_parse(bool transition_busy,
+                                      volatile uint8_t *discard_count,
+                                      volatile uint32_t *transition_skip_count);
 
 #endif /* FPGA_METER_PLAN_H */

@@ -483,38 +483,9 @@ def capture_screen(
     use_rle: bool,
 ) -> str:
     if use_rle:
-        capture_region = region or (0, 0, 320, 240)
-        rx, ry, rw, rh = capture_region
-        if rx < 0 or ry < 0 or rw <= 0 or rh <= 0 or rx + rw > 320 or ry + rh > 240:
-            raise ValueError("screen region must satisfy 0<=x,y and x+w<=320 y+h<=240")
-
-        full_rows: list[list[int]] = []
-        cursor_y = ry
-        end_y = ry + rh
-        while cursor_y < end_y:
-            page_y = min(cursor_y, 240 - 16)
-            page_h = min(end_y - cursor_y, page_y + 16 - cursor_y)
-            if page_h <= 0:
-                raise ValueError(f"internal shadow page error at y={cursor_y}")
-            run_command(port, baud, "screen shadow page %u" % page_y, timeout)
-            time.sleep(0.1)
-            run_command(port, baud, "mode meter 1 0", timeout)
-            time.sleep(0.5)
-            response = run_command(
-                port,
-                baud,
-                "screen dump shadow %u %u %u %u" % (rx, cursor_y, rw, page_h),
-                timeout,
-            )
-            _x, _y, _w, _h, dump_format, rows = parse_screen_dump(response)
-            if dump_format != "indexed4":
-                raise ValueError(f"expected indexed4 shadow dump, got {dump_format}")
-            full_rows.extend(rows)
-            cursor_y += page_h
-        write_bmp_rgb565(output, rw, rh, full_rows)
-        return (
-            f"saved {output} from stitched LCD shadow region "
-            f"x={rx} y={ry} w={rw} h={rh} format=indexed4"
+        raise ValueError(
+            "--rle-shadow is disabled because it mutates LCD shadow state and "
+            "switches meter mode; use the default read-only screen dumpbin path"
         )
 
     prefix = "screen dumpbin"
@@ -664,7 +635,7 @@ def build_parser() -> argparse.ArgumentParser:
         "--rle-shadow",
         action="store_true",
         dest="use_rle",
-        help="deprecated debug path: page-stitches indexed shadow and switches to ACV meter screen",
+        help="disabled deprecated debug path; default dumpbin capture is read-only",
     )
     screen_parser.set_defaults(use_rle=False)
 

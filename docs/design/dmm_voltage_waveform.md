@@ -71,8 +71,8 @@ subcommands for `meter-dump`, `meter-frontend`, `meter-stream`,
 which returns a `SCREENBIN` header, exact-length packed indexed4 payload, and
 CRC32. The host reads the payload by `len`, verifies the CRC, and writes a BMP
 through the same palette path used by text dumps. The older `--rle-shadow` path
-is only a deprecated diagnostic fallback because it clears/paginates shadow
-state and switches the UI to ACV while stitching pages.
+is now disabled because it cleared/paginated shadow state and switched the UI to
+ACV while stitching pages.
 
 The module has a narrow scaling abstraction for v1 calibration:
 `meter_voltage_wave_scale_from_dmm_rms()` derives raw-count-to-volt scaling from

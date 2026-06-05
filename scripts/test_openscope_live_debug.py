@@ -107,6 +107,18 @@ class ScreenDumpBinTests(unittest.TestCase):
                     False,
                 )
 
+    def test_rle_shadow_capture_is_disabled_because_it_mutates_state(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            with self.assertRaisesRegex(ValueError, "mutates LCD shadow state"):
+                openscope_live_debug.capture_screen(
+                    "/dev/fake",
+                    115200,
+                    1.0,
+                    Path(tmp) / "screen.bmp",
+                    None,
+                    True,
+                )
+
 
 if __name__ == "__main__":
     unittest.main()

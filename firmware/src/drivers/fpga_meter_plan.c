@@ -138,3 +138,20 @@ fpga_meter_transition_plan_t fpga_meter_transition_plan_for_submode(uint8_t subm
         (plan.frame_family == FPGA_METER_FRAME_FAMILY_VOLTAGE);
     return plan;
 }
+
+bool fpga_meter_rx_frame_should_parse(bool transition_busy,
+                                      volatile uint8_t *discard_count,
+                                      volatile uint32_t *transition_skip_count)
+{
+    if (transition_busy) {
+        if (transition_skip_count != 0) {
+            (*transition_skip_count)++;
+        }
+        return false;
+    }
+    if (discard_count != 0 && *discard_count > 0) {
+        (*discard_count)--;
+        return false;
+    }
+    return true;
+}

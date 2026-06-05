@@ -36,8 +36,8 @@
 | PA6 | CH2 trigger ref (TMR13_CH1 PWM-DAC) — **candidate, unconfirmed** | AF-PP | -- | -- | master_init TMR13 init flash 0x0802B0FE; C1DT write 0x08008C3A; ripcord contract 38 | TMR13_CH1 default pin (tmr13_mux=0, stock never remaps). PWM-DAC → RC → CH2 comparator ref, CH1-DAC1 analog. Confirm on bench (`guest-warmtest-ch2`) |
 | PA7 | Button matrix row | Input | Pull-up | -- | `peripheral_map.md`; `input_and_housekeeping` at 0x08039188 | CH2 button row pin |
 | PA8 | Button matrix row | Input | Pull-up | -- | `peripheral_map.md`; `input_and_housekeeping` | Right button row pin |
-| PA9 | USART1 TX | AF | -- | -- | Probed: dead (0 bytes) | Not used by stock firmware |
-| PA10 | USART1 RX | Input | -- | -- | Probed: dead (0 bytes) | Not used by stock firmware |
+| PA9 | USART1 TX | AF | -- | -- | Probed: dead (0 bytes) | Not used by stock USART firmware |
+| PA10 | Analog MUX control | Output | Push-pull | 50 MHz | `gpio_mux_porta_portb` at 0x08001A58 writes GPIOA bit 0x400; USART1 RX probed dead | Dual-use pad; not used as USART1 RX |
 | PA11 | USB D- | AF | -- | -- | `usb_endpoint_handler` at 0x080278E4 | USB FS device |
 | PA12 | USB D+ | AF | -- | -- | `usb_endpoint_handler` at 0x080278E4 | USB FS device |
 | PA13 | SWDIO | AF | -- | -- | JTAG disabled via AFIO remap; SWD preserved | Debug header |
@@ -204,6 +204,7 @@ Two 10-mode GPIO multiplexing functions control analog signal routing:
 | Pin | Function | Evidence |
 |-----|----------|----------|
 | PA15 | MUX control | Writes to GPIOA BOP/BCR (0x40010810/0x40010814) |
+| PA10 | MUX control | Writes GPIOA bit 0x400 through BOP/BCR in `gpio_mux_porta_portb` |
 | PB10 | MUX control | Writes to GPIOB BOP/BCR (0x40010C10/0x40010C14) |
 | PB11 | MUX control / FPGA active | Dual use: MUX routing + FPGA active mode |
 
@@ -506,7 +507,7 @@ The oscilloscope input passes through an analog front-end controlled by 10-mode 
 
 **`gpio_mux_portc_porte`** (0x080018A4, 422 bytes): 10-way switch writing to GPIOC and GPIOE BOP/BCR registers. Controls PC12, PE4, PE5, PE6 for relay and MUX IC switching. After switching, computes a DAC calibration value and writes to DAC CH2.
 
-**`gpio_mux_porta_portb`** (0x08001A58, 506 bytes): 10-way switch writing to GPIOA and GPIOB BOP/BCR registers. Controls PA15, PB10, PB11 for analog range/gain selection.
+**`gpio_mux_porta_portb`** (0x08001A58, 506 bytes): 10-way switch writing to GPIOA and GPIOB BOP/BCR registers. Controls PA15, PA10, PB10, and PB11 for analog range/gain selection.
 
 Both functions are called by `siggen_configure` (0x08001C60) and `scope_main_fsm` (0x08019E98).
 
@@ -561,7 +562,7 @@ SWD is available because JTAG is disabled via AFIO remap (`AFIO_PCF0 = (AFIO_PCF
 
 **Location:** Through-hole pads on PCB (not near any connector).
 **Signals:** RX, TX, GND.
-**Note:** The RX debug pad carries the same FPGA heartbeat signal as PA3 (USART2 RX). The MCU pins driving the debug TX pad have not been identified (not PA9/PA10, which were probed dead).
+**Note:** The RX debug pad carries the same FPGA heartbeat signal as PA3 (USART2 RX). The MCU pins driving the debug TX pad have not been identified. PA9/PA10 were probed dead as USART1, but PA10 is still used by stock firmware as an analog MUX GPIO.
 
 ### FPGA Programming Header
 

@@ -1701,12 +1701,9 @@ static void fpga_usart_rx_task(void *pv)
         /* Parse the meter data from the RX frame.
          * meter_submode is the global from main.c (via ui.h extern). */
         extern volatile uint8_t meter_submode;
-        if (meter_transition_busy) {
-            meter_transition_frame_skip_count++;
-            continue;
-        }
-        if (meter_frame_discard_count > 0) {
-            meter_frame_discard_count--;
+        if (!fpga_meter_rx_frame_should_parse(meter_transition_busy,
+                                              &meter_frame_discard_count,
+                                              &meter_transition_frame_skip_count)) {
             continue;
         }
         meter_data_process_frame(fpga.rx_frame, meter_submode);

@@ -48,7 +48,7 @@ After switching, applies **floating-point ADC calibration**:
 
 ### FUN_08001a58 — Port A/B MUX (10 modes)
 
-Controls PA15, PB10, PB11 for analog range/MUX selection. Same 10-case structure as Port C/E MUX.
+Controls PA15, PA10, PB10, and PB11 for analog range/MUX selection. Same 10-case structure as Port C/E MUX.
 
 ### ADC Calibration Tables (RAM)
 
