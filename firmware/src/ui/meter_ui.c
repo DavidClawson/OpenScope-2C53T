@@ -773,7 +773,7 @@ void meter_screen_invalidate(void)
 
 bool meter_screen_needs_periodic_redraw(void)
 {
-    return meter_debug_overlay;
+    return meter_debug_overlay || (meter_hold_enabled && !meter_hold_locked);
 }
 
 /* ═══════════════════════════════════════════════════════════════════
