@@ -59,13 +59,19 @@ The software contract proves parser/state safety only:
 - wrong-family voltage frames clear stale current/passive readings
 - low-DCV `frame[8]=0x80` and `frame[8]=0x82` class-4 voltage frames clear
   stale current/passive readings outside voltage modes
+- marker-visible wrong-family frames are now covered as an explicit matrix:
+  stock voltage metadata and continuity segment markers must clear stale
+  payloads in every local submode whose expected frame family differs
 - AC modes fail closed without line-frequency evidence
 - mode invalidation clears stale payloads before transition
 - the first post-transition frames are discarded before parsing
 - local current and extended splits remain local policy over shared stock slots
 
 Physical correctness for arbitrary DMM inputs still requires deeper stock xrefs
-or repeatable live traces of the analog frontend/range path. The 2026-06-06 mux
+or repeatable live traces of the analog frontend/range path. The parser still
+does not invent frame-family markers for unmarked current/resistance/diode/
+extended BCD frames, because doing so would require value-shape or mode-guessing
+logic rather than recovered stock metadata. The 2026-06-06 mux
 xref audit in `meter_mode_command_table_2026_06_05.md` classifies the recovered
 `FUN_080018a4`/`FUN_08001a58` runtime callers as scope/siggen paths, not DMM
 runtime selector proof. The known open items are still the DMM-specific writers

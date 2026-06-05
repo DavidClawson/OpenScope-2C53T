@@ -852,6 +852,88 @@ static int test_state_machine_property_matrix_covers_all_submodes(void)
     return 1;
 }
 
+static void build_valid_frame_for_mode(uint8_t frame[12], uint8_t mode)
+{
+    switch (mode) {
+    case 1:
+    case 4:
+    case 5:
+        build_segment_frame(frame, 1, 2, 3, 4, 0x00, 0x00, 0x00, 0x00, 0x0031);
+        break;
+    case 6:
+        build_segment_frame(frame, 3, 3, 0, 0, 0x40, 0x00, 0x00, 0x00, 0);
+        break;
+    case 7:
+        build_segment_frame(frame, 0, 0x12, 0x0A, 5, 0x00, 0x00, 0x00, 0x00, 0);
+        break;
+    default:
+        build_segment_frame(frame, 1, 2, 3, 4, 0x00, 0x00, 0x00, 0x00, 0);
+        break;
+    }
+}
+
+static int test_marker_visible_family_mismatch_matrix_clears_stale_payload(void)
+{
+    struct marker_case {
+        uint8_t family;
+        const char *name;
+        uint8_t frame[12];
+    };
+    static const struct marker_case markers[] = {
+        {
+            FPGA_METER_FRAME_FAMILY_VOLTAGE,
+            "low-dcv-voltage",
+            { 0x5A, 0xA5, 0x44, 0x8E, 0xEF, 0xE7,
+              0x07, 0x24, 0x80, 0x00, 0x01, 0x89 },
+        },
+        {
+            FPGA_METER_FRAME_FAMILY_CONTINUITY,
+            "continuity-segment",
+            { 0 },
+        },
+    };
+    uint8_t continuity_frame[12];
+    uint8_t good[12];
+
+    build_segment_frame(continuity_frame, 0, 0x12, 0x0A, 5,
+                        0x00, 0x00, 0x00, 0x00, 0);
+
+    for (uint8_t mode = 0; mode < FPGA_METER_LOCAL_SUBMODE_COUNT; mode++) {
+        uint8_t expected =
+            (uint8_t)fpga_meter_frame_family_for_submode(mode);
+
+        for (unsigned m = 0; m < sizeof(markers) / sizeof(markers[0]); m++) {
+            const uint8_t *foreign =
+                (markers[m].family == FPGA_METER_FRAME_FAMILY_CONTINUITY) ?
+                continuity_frame : markers[m].frame;
+            uint32_t display_updates_after_good;
+
+            if (expected == markers[m].family) {
+                continue;
+            }
+
+            meter_data_init();
+            build_valid_frame_for_mode(good, mode);
+            process_frame(good, mode);
+            ASSERT(meter_reading.valid);
+            ASSERT(meter_reading.result_class == METER_RESULT_NORMAL ||
+                   meter_reading.result_class == METER_RESULT_CONTINUITY);
+            display_updates_after_good = meter_reading.display_update_count;
+
+            process_frame(foreign, mode);
+            (void)markers[m].name;
+            ASSERT(!meter_reading.valid);
+            ASSERT(meter_reading.submode == mode);
+            ASSERT(meter_reading.result_class == METER_RESULT_NONE);
+            ASSERT(meter_reading.display_update_count == display_updates_after_good + 1);
+            ASSERT(expect_payload_cleared("---"));
+            ASSERT(expect_family_debug(expected, markers[m].family,
+                                       METER_REJECT_WRONG_FRAME_FAMILY));
+        }
+    }
+    return 1;
+}
+
 static int test_voltage_mode_mains_frame_uses_stock_range_hint(void)
 {
     static const uint8_t frame[12] = {
@@ -1475,6 +1557,7 @@ int main(void)
     TEST(parser_stock_mode_tracks_transition_plan_for_every_submode);
     TEST(invalid_submode_rejects_without_becoming_dcv);
     TEST(state_machine_property_matrix_covers_all_submodes);
+    TEST(marker_visible_family_mismatch_matrix_clears_stale_payload);
     TEST(voltage_mode_mains_frame_uses_stock_range_hint);
     TEST(dcv_high_range_frame_stays_voltage_across_current_transition);
     TEST(voltage_mode_mains_rotating_frames_stay_high_voltage);
