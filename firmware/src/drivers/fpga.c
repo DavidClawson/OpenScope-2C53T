@@ -1063,24 +1063,59 @@ static uint8_t fpga_probe_cmd_byte(void)
     return (GPIOC->idt & (1U << 7)) ? 0x07 : FPGA_CMD_METER_NOPROBE;
 }
 
-static void fpga_set_meter_frontend_baseline(void)
+static void gpio_write_pin(gpio_type *port, uint16_t pin, bool high)
 {
-    /* Restore the known-good meter posture from boot init so shell-driven
-     * meter recovery doesn't depend on whichever scope range ran last. */
+    if (high) port->scr = (1U << pin);
+    else      port->clr = (1U << pin);
+}
+
+typedef struct {
+    bool pc12;
+    bool pe4;
+    bool pe5;
+    bool pe6;
+    bool pa15;
+    bool pa10;
+    bool pb10;
+} meter_frontend_state_t;
+
+static const meter_frontend_state_t meter_frontend_states[METER_SUBMODE_COUNT] = {
+    /* 0: DCV */      { true,  true,  false, true,  true,  true,  false },
+    /* 1: ACV */      { true,  true,  true,  true,  true,  true,  true  },
+    /* 2: DC mA */    { true,  true,  true,  false, true,  false, true  },
+    /* 3: DC A */     { true,  true,  true,  false, true,  false, false },
+    /* 4: AC mA */    { true,  true,  true,  false, true,  false, true  },
+    /* 5: AC A */     { false, true,  false, true,  false, true,  false },
+    /* 6: Ohm */      { false, true,  true,  true,  false, true,  true  },
+    /* 7: Continuity */ { false, false, true,  true,  false, true,  true  },
+    /* 8: Diode */    { false, true,  true,  false, false, false, false },
+    /* 9: Cap */      { false, true,  true,  false, false, false, true  },
+};
+
+static void fpga_set_meter_frontend_for_submode(uint8_t submode)
+{
+    if (submode >= METER_SUBMODE_COUNT) submode = 0;
+    const meter_frontend_state_t *s = &meter_frontend_states[submode];
+
     GPIOB->scr = PB11_MASK;   /* FPGA active */
     GPIOC->scr = PC6_MASK;    /* SPI path enabled */
     GPIOC->scr = (1U << 11);  /* Meter MUX on */
-    GPIOC->scr = (1U << 12);  /* Route probe to meter path */
 
-    GPIOE->scr = (1U << 4);
-    GPIOE->clr = (1U << 5);
-    GPIOE->scr = (1U << 6);
+    gpio_write_pin(GPIOC, 12, s->pc12);
+    gpio_write_pin(GPIOE, 4, s->pe4);
+    gpio_write_pin(GPIOE, 5, s->pe5);
+    gpio_write_pin(GPIOE, 6, s->pe6);
+    gpio_write_pin(GPIOA, 15, s->pa15);
+    gpio_write_pin(GPIOA, 10, s->pa10);
+    gpio_write_pin(GPIOB, 10, s->pb10);
 
     GPIOB->scr = (1U << 9);
     GPIOA->scr = (1U << 6);
-    GPIOA->scr = (1U << 15);
-    GPIOA->scr = (1U << 10);
-    GPIOB->clr = (1U << 10);
+}
+
+static void fpga_set_meter_frontend_baseline(void)
+{
+    fpga_set_meter_frontend_for_submode(0);
 }
 
 static void fpga_send_meter_wake_preamble(void)
@@ -3940,8 +3975,7 @@ static void fpga_send_meter_mode_sequence(uint8_t submode)
     /* Send mode-specific FPGA command sequence.
      * Mapping from RE analysis of mode init dispatcher (FUN_0800b908):
      *
-     * Submodes 0-4 (DCV, ACV, DCA, ACA, unused) → system_mode 1 (basic meter)
-     * Submode 5 (Frequency)                      → system_mode 4 (freq counter)
+     * Submodes 0-5 (DCV, ACV, DC/AC current)     → system_mode 1 (basic meter)
      * Submode 6 (Resistance)                     → system_mode 9 (meter variant)
      * Submode 7 (Continuity)                     → system_mode 8 (cont/diode)
      * Submode 8 (Diode)                          → system_mode 8 (cont/diode)
@@ -3951,9 +3985,10 @@ static void fpga_send_meter_mode_sequence(uint8_t submode)
 
     case 0: /* DCV */
     case 1: /* ACV */
-    case 2: /* DCA */
-    case 3: /* ACA */
-    case 4: /* (unused) */
+    case 2: /* DC mA */
+    case 3: /* DC A */
+    case 4: /* AC mA */
+    case 5: /* AC A */
     default:
         /* System mode 1: basic meter.
          * Commands: 0x00, 0x09, probe, 0x1A-0x1E */
@@ -3965,16 +4000,6 @@ static void fpga_send_meter_mode_sequence(uint8_t submode)
         fpga_send_cmd(0x00, FPGA_CMD_CH2_GAIN);
         fpga_send_cmd(0x00, FPGA_CMD_CH2_OFFSET);
         fpga_send_cmd(0x00, FPGA_CMD_COUPLING);
-        break;
-
-    case 5: /* Frequency */
-        /* System mode 4: frequency counter.
-         * Commands: 0x00, 0x1F, 0x09, 0x20, 0x21 */
-        fpga_send_cmd(0x00, FPGA_CMD_RESET);
-        fpga_send_cmd(0x00, FPGA_CMD_FREQ_CFG);
-        fpga_send_cmd(0x00, FPGA_CMD_METER_START);
-        fpga_send_cmd(0x00, FPGA_CMD_FREQ_20);
-        fpga_send_cmd(0x00, FPGA_CMD_FREQ_21);
         break;
 
     case 6: /* Resistance */
@@ -4030,7 +4055,7 @@ void fpga_set_meter_mode(uint8_t submode)
 
     meter_data_invalidate(submode);
     fpga_meter_discard_next_frames(METER_MODE_SWITCH_DISCARD_FRAMES);
-    fpga_set_meter_frontend_baseline();
+    fpga_set_meter_frontend_for_submode(submode);
     fpga_scope_delay_ms(10);
     fpga_send_meter_mode_sequence(submode);
 }
@@ -4046,6 +4071,7 @@ void fpga_meter_reinit(uint8_t submode)
     meter_data_invalidate(submode);
     fpga_meter_discard_next_frames(METER_MODE_SWITCH_DISCARD_FRAMES);
     fpga_send_meter_wake_preamble();
+    fpga_set_meter_frontend_for_submode(submode);
     fpga_scope_delay_ms(10);
     fpga_send_meter_mode_sequence(submode);
     fpga_timed_send_cmd(0x00, FPGA_CMD_METER_START, 20);

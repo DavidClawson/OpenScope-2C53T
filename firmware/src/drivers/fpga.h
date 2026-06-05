@@ -558,12 +558,13 @@ void fpga_enter_siggen_mode(void);
 
 /*
  * Configure FPGA for a specific meter submode.
- * Sends the appropriate FPGA init command sequence:
- *   - DCV/ACV (0,1): system_mode 1 → 0x00, 0x09, probe, 0x1A-0x1E
+ * Applies the matching DMM analog frontend GPIO selector, then sends the
+ * appropriate FPGA init command sequence:
+ *   - DCV/ACV/current (0..5): system_mode 1 → 0x00, 0x09, probe, 0x1A-0x1E
  *   - Resistance (6): system_mode 9 → 0x00, 0x12-0x14, 0x09, probe
  *   - Continuity (7): system_mode 8 → 0x00, 0x2C
  *   - Diode (8): system_mode 8 → 0x00, 0x2C
- *   - Frequency (5): system_mode 4 → 0x00, 0x1F, 0x09, 0x20, 0x21
+ *   - Capacitance (9): system_mode 3 → 0x00, 0x08, 0x09, probe, 0x16-0x19
  *
  * Call when the meter submode changes (LEFT/RIGHT buttons).
  */
