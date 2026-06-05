@@ -2110,6 +2110,13 @@ static void cmd_meter_frontend(void)
                      (unsigned)selectors.function_selector,
                      (unsigned)selectors.range_selector,
                      selectors.voltage_function_axis ? 1U : 0U);
+    usb_debug_printf("mode_sequence count=%u submode=%u selector=%04X apply=%04X probe=%04X start=%04X\r\n",
+                     (unsigned)fpga.meter_mode_sequence_count,
+                     (unsigned)fpga.meter_mode_sequence_submode,
+                     (unsigned)fpga.meter_mode_selector_word,
+                     (unsigned)fpga.meter_mode_apply_word,
+                     (unsigned)fpga.meter_mode_probe_word,
+                     (unsigned)fpga.meter_mode_start_word);
     usb_debug_printf("display=%s unit=%s raw_bcd=%d dp=%u f6=%02X f7=%02X f8=%02X f9=%02X extra=%04X aux_freq_i10=%ld beep=%u discard=%u\r\n",
                      meter_reading.valid ? meter_reading.display_str : "---",
                      (meter_reading.valid && meter_reading.unit_suffix) ? meter_reading.unit_suffix : "",
@@ -2161,6 +2168,7 @@ static void print_meter_mux_stream_line(uint32_t index)
 
     usb_debug_printf("t=%lu upd=%lu ui_sub=%u rd_sub=%u live=%u cls=%u "
                      "stock_mode=%u raw_low=%02X "
+                     "seq=%u seq_sub=%u seq_word=%04X seq_apply=%04X "
                      "disp=%s unit=%s raw=%d dp=%u f6=%02X f7=%02X f8=%02X f9=%02X "
                      "extra=%04X discard=%u PC6=%u PB11=%u PC11=%u PC12=%u "
                      "PE4=%u PE5=%u PE6=%u PA15=%u PA10=%u PB10=%u PB9=%u PA6=%u\r\n",
@@ -2172,6 +2180,10 @@ static void print_meter_mux_stream_line(uint32_t index)
                      (unsigned)meter_reading.result_class,
                      (unsigned)selectors.function_selector,
                      (unsigned)selectors.range_selector,
+                     (unsigned)fpga.meter_mode_sequence_count,
+                     (unsigned)fpga.meter_mode_sequence_submode,
+                     (unsigned)fpga.meter_mode_selector_word,
+                     (unsigned)fpga.meter_mode_apply_word,
                      meter_reading.valid ? meter_reading.display_str : "---",
                      (meter_reading.valid && meter_reading.unit_suffix) ? meter_reading.unit_suffix : "",
                      meter_reading.raw_bcd,

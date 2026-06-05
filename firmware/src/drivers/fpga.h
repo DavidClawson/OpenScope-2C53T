@@ -183,6 +183,15 @@ typedef struct {
     volatile uint8_t  tx_frame_history_head;
     volatile uint8_t  tx_frame_history_count;
 
+    /* DMM mode-sequence diagnostics. Polling quickly overwrites tx_recent
+     * with 0x0509, so keep the last explicit mode switch separately. */
+    volatile uint16_t meter_mode_sequence_count;
+    volatile uint8_t  meter_mode_sequence_submode;
+    volatile uint16_t meter_mode_selector_word;
+    volatile uint16_t meter_mode_apply_word;
+    volatile uint16_t meter_mode_probe_word;
+    volatile uint16_t meter_mode_start_word;
+
     /* Acquisition mode (set by mode switch, read by acq task) */
     volatile uint8_t acq_mode;         /* fpga_acq_mode_t */
 

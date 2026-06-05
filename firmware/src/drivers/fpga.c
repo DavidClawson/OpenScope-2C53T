@@ -4132,10 +4132,18 @@ static void fpga_timed_send_probe_detect(uint32_t delay_ms)
 static void fpga_send_meter_mode_sequence(uint8_t submode)
 {
     uint16_t word = fpga_meter_stock_cmd_word_for_submode(submode);
-    uint16_t apply_word;
+    uint16_t apply_word = 0;
+    uint16_t probe_word = (uint16_t)(0x0500U | fpga_probe_cmd_byte());
 
+    fpga.meter_mode_sequence_count++;
+    fpga.meter_mode_sequence_submode = submode;
+    fpga.meter_mode_selector_word = word;
+    fpga.meter_mode_apply_word = 0;
+    fpga.meter_mode_probe_word = probe_word;
+    fpga.meter_mode_start_word = (uint16_t)(0x0500U | FPGA_CMD_METER_START);
     fpga_wire_send_word(word, 20);
     if (fpga_meter_stock_apply_cmd_word_for_submode(submode, &apply_word)) {
+        fpga.meter_mode_apply_word = apply_word;
         fpga_wire_send_word(apply_word, 20);
     }
     fpga_timed_send_probe_detect(10);
