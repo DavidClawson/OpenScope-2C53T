@@ -65,10 +65,13 @@ The software contract proves parser/state safety only:
 - local current and extended splits remain local policy over shared stock slots
 
 Physical correctness for arbitrary DMM inputs still requires deeper stock xrefs
-or repeatable live traces of the analog frontend/range path. The known open
-items are the writers for stock `ms[0x02]` and `ms[0x03]`, the exact effect and
-commit semantics of the H2 SPI3 bulk replay, and any real factory calibration
-source in W25Q/system files/SPI bulk tables.
+or repeatable live traces of the analog frontend/range path. The 2026-06-06 mux
+xref audit in `meter_mode_command_table_2026_06_05.md` classifies the recovered
+`FUN_080018a4`/`FUN_08001a58` runtime callers as scope/siggen paths, not DMM
+runtime selector proof. The known open items are still the DMM-specific writers
+for stock `ms[0x02]` and `ms[0x03]`, the exact effect and commit semantics of
+the H2 SPI3 bulk replay, and any real factory calibration source in
+W25Q/system files/SPI bulk tables.
 
 ## Validation Direction
 

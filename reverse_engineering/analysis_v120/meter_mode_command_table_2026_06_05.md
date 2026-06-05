@@ -165,9 +165,27 @@ local submodes 2/3 and 4/5 share the same recovered stock current slot and are
 split only by parser/UI range state. Treat current readings that still look like
 voltage payloads as a frontend activation failure, not a decimal decoder issue.
 
-A read-only follow-up pass searched the text decompile for `ms[0x02]`/`ms[0x03]`
-stores and the two mux calls. It found boot-time restore/apply sites and scope
-runtime range writers, but no stock DMM runtime table that maps every DMM
-selector slot to unique `ms[0x02]`/`ms[0x03]` values. The next useful evidence is
-either a Ghidra data-xref pass around the saved-config writers or a stock-runtime
-trace that watches `0x200000fa/0x200000fb` while switching stock DMM modes.
+### Mux Writer Xref Audit, 2026-06-06
+
+The text decompile/xref pass found no DMM-specific runtime writer that maps the
+eight recovered DMM selector words directly to unique `ms[0x02]` and `ms[0x03]`
+bytes. The evidence splits like this:
+
+| Evidence | Stock offsets / files | Classification |
+|---|---|---|
+| `gpio_mux_portc_porte` body | `FUN_080018a4`, `full_decompile.c:2206..2295`; 10-way `param_1` switch writing GPIOC/E plus DAC calibration tables | hardware writer, stock-proven |
+| `gpio_mux_porta_portb` body | `FUN_08001a58`, `full_decompile.c:2300..2365`; 10-way `param_1` switch writing GPIOA/B pins including PB11 | hardware writer, stock-proven |
+| saved-state restore/apply | `0x08025544..0x0802554c` and `0x0802723e..0x0802724a` load saved `ms[0x02]`/`ms[0x03]` then call both mux writers | DMM-relevant boot/saved-state evidence |
+| direct decompile callers | `function_names.md` lists `FUN_08001c60` as `siggen_configure` and `FUN_08019e98` as `scope_main_fsm`; `function_map_complete.txt` lists only callers `08001c60,08019e98` for both mux writers | scope/siggen runtime evidence, not DMM selector proof |
+| clipping auto-range write | `full_decompile.c:2564..2574` increments `(&DAT_200000fa)[uVar20]`, then calls `FUN_080018a4(DAT_200000fa)` for channel 0 or `FUN_08001a58(DAT_200000fb)` for channel 1 and queues command `4` | scope/siggen auto-range path inside `FUN_08001c60`; not DMM |
+| scope main auto-range write | `full_decompile.c:6880..6999` scans sample buffers, enters range selection, then reuses `DAT_200000fa/DAT_200000fb` for DAC/calibration recompute | oscilloscope acquisition path; not DMM |
+| explicit scope-submode mux calls | `full_decompile.c:7564..7565` and `7988..7989` call both mux writers with `DAT_20000128 & 0xf`; `scope_main_fsm_annotated.c` names `DAT_20000128`/state `+0x30` as scope sub-mode | scope runtime reconfiguration, not DMM |
+| waveform calibration/render use | `full_decompile.c:8611..8624`, `9840..9971` index `DAT_080465cc` and calibration deltas through current and saved `DAT_200000fa/DAT_200000fb` | scope display/calibration path, not DMM selector proof |
+
+This means the open firmware can legitimately project the recovered stock DMM
+slots into the two mux bytes, but it must keep that projection marked as a local
+policy until either Ghidra data-xrefs recover the DMM saved-state writers or a
+stock-runtime trace records `0x200000fa/0x200000fb` while switching DMM modes.
+Do not treat scope auto-range writes as evidence for DMM current/voltage range
+decoding, and do not repair a surprising DMM reading by adding a numeric
+coefficient on top of those scope paths.
