@@ -57,6 +57,7 @@ C_SOURCES += src/drivers/dac_output.c
 C_SOURCES += src/drivers/scope_trigger.c
 C_SOURCES += src/drivers/meter_data.c
 C_SOURCES += src/drivers/meter_auto.c
+C_SOURCES += src/drivers/meter_autoselect.c
 C_SOURCES += src/drivers/usb_debug.c
 C_SOURCES += src/drivers/rtt.c
 C_SOURCES += src/drivers/fault.c

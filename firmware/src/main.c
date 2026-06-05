@@ -33,6 +33,7 @@ extern void system_clock_config(void);
 #include "dfu_boot.h"
 #include "battery.h"
 #include "fpga.h"
+#include "meter_autoselect.h"
 #include "meter_data.h"
 #include "meter_voltage_wave.h"
 #include "flash_fs.h"
@@ -687,6 +688,7 @@ int main(void)
     /* Create USB debug shell task (CDC virtual serial port).
      * Priority 2 — above display (1) but below input (4) and FPGA tasks. */
     usb_debug_create_task();
+    meter_autoselect_create_task();
 
     if (current_mode == MODE_MULTIMETER) {
         fpga_set_meter_mode(meter_submode);

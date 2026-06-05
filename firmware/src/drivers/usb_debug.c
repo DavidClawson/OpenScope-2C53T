@@ -38,6 +38,7 @@
 #include "fpga.h"
 #include "lcd.h"
 #include "meter_auto.h"
+#include "meter_autoselect.h"
 #include "meter_data.h"
 #include "ui.h"
 #include "../ui/scope_state.h"
@@ -501,6 +502,7 @@ static void cmd_help(void)
         "mode startup [scope|meter]      Get/set Settings > Startup on Boot\r\n"
         "meter dump [delay_ms]           Show parsed DMM/UI/raw frame state\r\n"
         "meter autoscan [settle_ms]      Probe DMM submodes and select best live mode\r\n"
+        "meter auto [start|status|cancel] Async DMM function auto-select\r\n"
         "meter frontend                  Show DMM analog frontend GPIO state\r\n"
         "meter mux-stream [count] [ms]   Stream DMM frames plus frontend GPIOs\r\n"
         "meter stream [count] [delay_ms] Print compact DMM frame stream\r\n"
@@ -1943,6 +1945,7 @@ static void cmd_mode(const char *args)
 static void cmd_meter_dump(const char *args)
 {
     uint32_t delay = 0;
+    meter_autoselect_status_t auto_st;
 
     if (args && *args) {
         if (parse_int(args, &delay) != 0 || delay > 5000) {
@@ -1953,6 +1956,7 @@ static void cmd_meter_dump(const char *args)
     if (delay > 0) vTaskDelay(pdMS_TO_TICKS(delay));
 
     bool live = meter_reading.valid && meter_reading.submode == meter_submode;
+    meter_autoselect_get_status(&auto_st);
 
     usb_send_str("=== DMM State ===\r\n");
     usb_debug_printf("mode=%lu startup=%s meter_submode=%u (%s) layout=%u (%s)\r\n",
@@ -1962,6 +1966,17 @@ static void cmd_meter_dump(const char *args)
                      meter_submode_name(meter_submode),
                      (unsigned)meter_layout,
                      meter_layout_name(meter_layout));
+    usb_debug_printf("autoselect state=%s current=%u (%s) index=%u/%u best=%u (%s) best_score=%u last_score=%u cancel=%u\r\n",
+                     meter_autoselect_state_name(auto_st.state),
+                     (unsigned)auto_st.current_submode,
+                     meter_submode_name(auto_st.current_submode),
+                     (unsigned)auto_st.current_index,
+                     (unsigned)auto_st.candidate_count,
+                     (unsigned)auto_st.best_submode,
+                     meter_submode_name(auto_st.best_submode),
+                     (unsigned)auto_st.best_score,
+                     (unsigned)auto_st.last_score,
+                     auto_st.cancel_pending ? 1U : 0U);
     usb_debug_printf("ui_draws=%lu full_clears=%lu partial_clears=%lu draw_us=%lu max_draw_us=%lu over_budget=%lu rendered_update=%lu last_full=%u ui_live=%u continuity_flash=%u live_same_submode=%u\r\n",
                      meter_screen_draw_count,
                      meter_screen_full_clear_count,
@@ -2119,6 +2134,56 @@ static void cmd_meter_autoscan(const char *args)
                      (unsigned)best_mode,
                      meter_submode_name(best_mode),
                      (unsigned)best_score);
+}
+
+static void cmd_meter_auto_async(const char *args)
+{
+    meter_autoselect_status_t st;
+
+    while (args && *args == ' ') args++;
+    if (args == NULL || *args == '\0' || strcmp(args, "start") == 0) {
+        if (meter_autoselect_start(700U)) {
+            usb_send_str("meter auto started settle_ms=700\r\n");
+        } else {
+            usb_send_str("meter auto start failed\r\n");
+        }
+    } else if (strncmp(args, "start ", 6) == 0) {
+        uint32_t settle_ms;
+        if (parse_int(args + 6, &settle_ms) != 0 || settle_ms > 3000U) {
+            usb_send_str("Usage: meter auto [start [settle_ms<=3000]|status|cancel]\r\n");
+            return;
+        }
+        if (meter_autoselect_start(settle_ms)) {
+            usb_debug_printf("meter auto started settle_ms=%lu\r\n", settle_ms);
+        } else {
+            usb_send_str("meter auto start failed\r\n");
+        }
+    } else if (strcmp(args, "status") == 0) {
+        /* handled below */
+    } else if (strcmp(args, "cancel") == 0) {
+        meter_autoselect_cancel();
+        usb_send_str("meter auto cancel requested\r\n");
+    } else {
+        usb_send_str("Usage: meter auto [start [settle_ms<=3000]|status|cancel]\r\n");
+        return;
+    }
+
+    meter_autoselect_get_status(&st);
+    usb_debug_printf("meter auto state=%s current=%u (%s) index=%u/%u "
+                     "best=%u (%s) best_score=%u last_score=%u "
+                     "settle_ms=%lu wait_budget_ms=%lu cancel=%u\r\n",
+                     meter_autoselect_state_name(st.state),
+                     (unsigned)st.current_submode,
+                     meter_submode_name(st.current_submode),
+                     (unsigned)st.current_index,
+                     (unsigned)st.candidate_count,
+                     (unsigned)st.best_submode,
+                     meter_submode_name(st.best_submode),
+                     (unsigned)st.best_score,
+                     (unsigned)st.last_score,
+                     st.settle_ms,
+                     st.wait_budget_ms,
+                     st.cancel_pending ? 1U : 0U);
 }
 
 static uint8_t gpio_level(gpio_type *port, uint16_t pin)
@@ -2386,6 +2451,9 @@ static void cmd_meter_adc_snapshot(void)
 
 static void cmd_ui_dump(void)
 {
+    meter_autoselect_status_t auto_st;
+    meter_autoselect_get_status(&auto_st);
+
     usb_debug_printf("mode=%lu startup=%s meter_submode=%u (%s) layout=%u (%s) "
                      "settings_depth=%d selected=%d sub_selected=%d\r\n",
                      (uint32_t)current_mode,
@@ -2413,6 +2481,17 @@ static void cmd_ui_dump(void)
                      (unsigned)meter_reading.submode,
                      meter_reading.update_count,
                      meter_reading.display_update_count);
+    usb_debug_printf("autoselect state=%s current=%u (%s) index=%u/%u best=%u (%s) best_score=%u last_score=%u cancel=%u\r\n",
+                     meter_autoselect_state_name(auto_st.state),
+                     (unsigned)auto_st.current_submode,
+                     meter_submode_name(auto_st.current_submode),
+                     (unsigned)auto_st.current_index,
+                     (unsigned)auto_st.candidate_count,
+                     (unsigned)auto_st.best_submode,
+                     meter_submode_name(auto_st.best_submode),
+                     (unsigned)auto_st.best_score,
+                     (unsigned)auto_st.last_score,
+                     auto_st.cancel_pending ? 1U : 0U);
 }
 
 static void cmd_meter_wave(void)
@@ -3450,6 +3529,10 @@ static void dispatch_command(char *line)
         cmd_meter_autoscan("");
     } else if (strncmp(line, "meter autoscan ", 15) == 0) {
         cmd_meter_autoscan(line + 15);
+    } else if (strcmp(line, "meter auto") == 0) {
+        cmd_meter_auto_async("");
+    } else if (strncmp(line, "meter auto ", 11) == 0) {
+        cmd_meter_auto_async(line + 11);
     } else if (strcmp(line, "meter frontend") == 0) {
         cmd_meter_frontend();
     } else if (strcmp(line, "meter mux-stream") == 0) {
