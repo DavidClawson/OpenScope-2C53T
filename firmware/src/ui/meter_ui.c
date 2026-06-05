@@ -99,8 +99,64 @@ static uint8_t meter_stats_valid;
 static bool meter_debug_overlay = false;
 
 volatile uint32_t meter_screen_draw_count;
+volatile uint32_t meter_screen_full_clear_count;
+volatile uint32_t meter_screen_partial_clear_count;
+volatile uint32_t meter_screen_last_draw_us;
+volatile uint32_t meter_screen_max_draw_us;
+volatile uint32_t meter_screen_over_budget_count;
+volatile uint8_t  meter_screen_last_full_clear;
 volatile uint8_t  meter_screen_last_live;
 volatile uint8_t  meter_screen_last_continuity_flash;
+
+static bool       meter_screen_retained_valid;
+static uint8_t    meter_screen_last_mode;
+static uint8_t    meter_screen_last_layout;
+static theme_id_t meter_screen_last_theme;
+static bool       meter_screen_last_rel_enabled;
+static bool       meter_screen_last_hold_enabled;
+static bool       meter_screen_last_hold_locked;
+static bool       meter_screen_last_debug_overlay;
+
+#define METER_LCD_FRAME_BUDGET_US 16667U
+
+static uint32_t meter_draw_cycles_now(void)
+{
+#ifdef EMULATOR_BUILD
+    return 0;
+#else
+    static bool dwt_ready;
+
+    if (!dwt_ready) {
+        CoreDebug->DEMCR |= CoreDebug_DEMCR_TRCENA_Msk;
+        DWT->CYCCNT = 0;
+        DWT->CTRL |= DWT_CTRL_CYCCNTENA_Msk;
+        dwt_ready = true;
+    }
+    return DWT->CYCCNT;
+#endif
+}
+
+static void meter_record_draw_time(uint32_t start_cycles, bool full_clear)
+{
+#ifdef EMULATOR_BUILD
+    (void)start_cycles;
+    (void)full_clear;
+#else
+    uint32_t elapsed_cycles = DWT->CYCCNT - start_cycles;
+    uint32_t cycles_per_us = system_core_clock / 1000000U;
+    if (cycles_per_us == 0U) cycles_per_us = 1U;
+
+    uint32_t elapsed_us = elapsed_cycles / cycles_per_us;
+    meter_screen_last_draw_us = elapsed_us;
+    if (elapsed_us > meter_screen_max_draw_us) {
+        meter_screen_max_draw_us = elapsed_us;
+    }
+    if (elapsed_us > METER_LCD_FRAME_BUDGET_US) {
+        meter_screen_over_budget_count++;
+    }
+    meter_screen_last_full_clear = full_clear ? 1U : 0U;
+#endif
+}
 
 void meter_toggle_debug_overlay(void)
 {
@@ -510,6 +566,41 @@ static void draw_diode_indicator(uint16_t x, uint16_t y, const theme_t *th)
     font_draw_string(x, y, "|>|", th->ch1, th->background, &font_medium);
 }
 
+static void meter_clear_dynamic_areas(uint8_t layout, uint8_t mode,
+                                      uint16_t clear_bg)
+{
+    /* Normal meter updates used to blank y=18..221 in one large write before
+     * repainting the value. On the live ST7789 this visible blanking is the
+     * flicker. Keep the static frame retained and only erase regions whose
+     * contents change on ordinary sample updates. */
+    lcd_fill_rect(0, METER_TOP, LCD_WIDTH, 66, clear_bg);
+
+    switch (layout) {
+    case METER_LAYOUT_CHART:
+        lcd_fill_rect(CHART_X - 1, CHART_Y - 14,
+                      CHART_W + 2, METER_BOTTOM - (CHART_Y - 14),
+                      clear_bg);
+        break;
+    case METER_LAYOUT_STATS:
+        lcd_fill_rect(0, METER_TOP + 42,
+                      LCD_WIDTH, METER_BOTTOM - (METER_TOP + 42),
+                      clear_bg);
+        break;
+    case METER_LAYOUT_FUSE:
+        break;
+    default:
+        lcd_fill_rect(BAR_X, BAR_Y - 2, BAR_W, BAR_H + 18, clear_bg);
+        if (mode == 0 || mode == 1) {
+            lcd_fill_rect(8, SECONDARY_Y - 12, 304,
+                          METER_BOTTOM - (SECONDARY_Y - 12), clear_bg);
+        } else {
+            lcd_fill_rect(0, SECONDARY_Y - 4,
+                          LCD_WIDTH, 82, clear_bg);
+        }
+        break;
+    }
+}
+
 /* Layout name for info display */
 static const char *layout_names[METER_LAYOUT_COUNT] = {
     "Full", "Chart", "Stats", "Fuse"
@@ -912,6 +1003,7 @@ void meter_toggle_hold(void)
 
 void draw_meter_screen(void)
 {
+    uint32_t draw_start_cycles = meter_draw_cycles_now();
     const theme_t *th = theme_get();
     uint8_t mode = meter_submode;
     if (mode >= METER_SUBMODE_COUNT) mode = 0;
@@ -975,11 +1067,40 @@ void draw_meter_screen(void)
                            ((current_val > 0.01f && current_val < 50.0f) ||
                             meter_reading.continuity_beep);
     }
-    meter_screen_last_continuity_flash = continuity_flash ? 1U : 0U;
+    uint8_t continuity_flash_u = continuity_flash ? 1U : 0U;
 
-    /* Clear content area (green flash for continuity, normal otherwise) */
+    bool full_clear =
+        !meter_screen_retained_valid ||
+        meter_screen_last_mode != mode ||
+        meter_screen_last_layout != meter_layout ||
+        meter_screen_last_theme != theme_get_id() ||
+        meter_screen_last_rel_enabled != meter_rel_enabled ||
+        meter_screen_last_hold_enabled != meter_hold_enabled ||
+        meter_screen_last_hold_locked != meter_hold_locked ||
+        meter_screen_last_continuity_flash != continuity_flash_u ||
+        meter_screen_last_debug_overlay != meter_debug_overlay;
+
+    /* Clear content area (green flash for continuity, normal otherwise). Keep
+     * the big visible blank only for structural changes; ordinary reading
+     * updates retain the frame and erase just the dynamic regions. */
     uint16_t clear_bg = continuity_flash ? th->success : th->background;
-    lcd_fill_rect(0, METER_TOP, LCD_WIDTH, METER_BOTTOM - METER_TOP, clear_bg);
+    if (full_clear) {
+        lcd_fill_rect(0, METER_TOP, LCD_WIDTH, METER_BOTTOM - METER_TOP, clear_bg);
+        meter_screen_full_clear_count++;
+    } else {
+        meter_clear_dynamic_areas(meter_layout, mode, clear_bg);
+        meter_screen_partial_clear_count++;
+    }
+
+    meter_screen_retained_valid = true;
+    meter_screen_last_mode = mode;
+    meter_screen_last_layout = meter_layout;
+    meter_screen_last_theme = theme_get_id();
+    meter_screen_last_rel_enabled = meter_rel_enabled;
+    meter_screen_last_hold_enabled = meter_hold_enabled;
+    meter_screen_last_hold_locked = meter_hold_locked;
+    meter_screen_last_continuity_flash = continuity_flash_u;
+    meter_screen_last_debug_overlay = meter_debug_overlay;
 
     /* Mode indicators (top of content area) */
     uint16_t ind_x = 4;
@@ -1160,4 +1281,6 @@ void draw_meter_screen(void)
             font_draw_string(4, dy + 30, db3, 0x07FF, dbg_bg, &font_small);
         }
     }
+
+    meter_record_draw_time(draw_start_cycles, full_clear);
 }

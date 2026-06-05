@@ -75,6 +75,39 @@ draws a compact waveform panel below them:
 This feature is a visual aid for ripple and waveform shape on the DMM voltage
 jacks. It is not a calibrated oscilloscope replacement.
 
+## Meter Render Timing Budget
+
+Stock V1.2.0 initializes the ST7789 normal-mode frame-rate register
+`FRCTRL2` (`0xC6`) to `0x0F`, annotated in the local reverse-engineering notes
+as 60 Hz. That gives one visible LCD frame every 16.67 ms. The stock display
+path also renders through RAM buffers and blits pixels to the EXMC LCD data
+register with DMA, rather than doing every UI primitive as a visible direct LCD
+write.
+
+This firmware currently has no proven LCD TE/vsync path. The stock analysis has
+not shown a `TEON` (`0x35`) setup or a LCD tearing-effect interrupt to synchronize
+draws with panel blanking. Until a real TE pin/interrupt is proven, the meter
+anti-flicker requirement is:
+
+- normal steady-state meter redraws must avoid full-screen visible clears;
+- normal steady-state redraw time must stay below one 60 Hz LCD frame
+  (`16667 us`);
+- the engineering target for retained/partial meter redraws is `<=12000 us`,
+  leaving margin for FreeRTOS scheduling and interrupts;
+- structural redraws after mode/layout/theme/REL/HOLD/continuity-flash changes
+  may exceed that target, but should not occur continuously.
+
+The firmware measures `draw_meter_screen()` with the Cortex-M4 DWT cycle counter
+and exposes the result through USB debug:
+
+- `meter dump [delay_ms]`
+- `ui dump`
+
+Relevant fields are `draw_us`, `max_draw_us`, `over_budget`, `last_full`,
+`full_clears`, and `partial_clears`. During a stable AC/DC voltage measurement,
+`last_full` should settle to `0`, `partial_clears` should advance, and
+`over_budget` should not increase after the initial structural redraws.
+
 ## 2026-06-05 Live Status
 
 Official V1.2.0 firmware was downloaded from FNIRSI's published Shopify CDN

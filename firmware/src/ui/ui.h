@@ -89,6 +89,12 @@ extern volatile uint8_t       active_channel;      /* 0=CH1, 1=CH2 (for scope ad
 extern volatile uint8_t       meter_submode;       /* 0-9: current meter sub-mode */
 extern volatile uint8_t       meter_layout;        /* 0=full, 1=chart, 2=stats, 3=fuse */
 extern volatile uint32_t      meter_screen_draw_count; /* Incremented by draw_meter_screen() */
+extern volatile uint32_t      meter_screen_full_clear_count;
+extern volatile uint32_t      meter_screen_partial_clear_count;
+extern volatile uint32_t      meter_screen_last_draw_us;
+extern volatile uint32_t      meter_screen_max_draw_us;
+extern volatile uint32_t      meter_screen_over_budget_count;
+extern volatile uint8_t       meter_screen_last_full_clear;
 extern volatile uint8_t       meter_screen_last_live;  /* Last draw used same-submode data */
 extern volatile uint8_t       meter_screen_last_continuity_flash;
 extern volatile bool          meter_rel_enabled;   /* Relative/delta mode */
