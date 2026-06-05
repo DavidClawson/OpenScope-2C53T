@@ -102,8 +102,6 @@ static volatile bool scope_reinit_pending = false;
 static volatile bool meter_transition_busy = false;
 volatile uint8_t meter_frame_discard_count;
 
-#define METER_MODE_SWITCH_DISCARD_FRAMES 2U
-
 static void fpga_scope_delay_ms(uint32_t ms);
 
 void fpga_meter_adc_diag_reset(void)
@@ -1147,12 +1145,13 @@ static uint8_t fpga_probe_cmd_byte(void)
 
 fpga_meter_selector_t fpga_meter_expected_selectors(uint8_t submode)
 {
+    fpga_meter_transition_plan_t plan =
+        fpga_meter_transition_plan_for_submode(submode);
     fpga_meter_selector_t selectors;
 
-    selectors.function_selector = fpga_meter_stock_mode_for_submode(submode);
-    selectors.range_selector =
-        fpga_meter_stock_cmd_low_for_mode(selectors.function_selector);
-    selectors.voltage_function_axis = (submode == 0 || submode == 1);
+    selectors.function_selector = plan.stock_mode;
+    selectors.range_selector = fpga_meter_stock_cmd_low_for_mode(plan.stock_mode);
+    selectors.voltage_function_axis = plan.voltage_function_axis;
     return selectors;
 }
 
@@ -1278,7 +1277,8 @@ static void fpga_apply_meter_porta_portb_mux(uint8_t mux)
 
 static void fpga_set_meter_frontend_for_submode(uint8_t submode)
 {
-    uint8_t stock_mode = fpga_meter_stock_mode_for_submode(submode);
+    fpga_meter_transition_plan_t plan =
+        fpga_meter_transition_plan_for_submode(submode);
 
     GPIOB->scr = PB11_MASK;
     GPIOC->scr = PC6_MASK;
@@ -1295,8 +1295,8 @@ static void fpga_set_meter_frontend_for_submode(uint8_t submode)
     GPIOA->scr = (1U << 10);
     GPIOB->clr = (1U << 10);
 
-    fpga_apply_meter_portc_porte_mux(stock_mode);
-    fpga_apply_meter_porta_portb_mux(stock_mode);
+    fpga_apply_meter_portc_porte_mux(plan.mux_index);
+    fpga_apply_meter_porta_portb_mux(plan.mux_index);
 }
 
 static void fpga_send_meter_wake_preamble(void)
@@ -4167,23 +4167,23 @@ static void fpga_timed_send_probe_detect(uint32_t delay_ms)
 
 static void fpga_send_meter_mode_sequence(uint8_t submode)
 {
-    uint16_t word = fpga_meter_stock_cmd_word_for_submode(submode);
-    uint16_t apply_word = 0;
+    fpga_meter_transition_plan_t plan =
+        fpga_meter_transition_plan_for_submode(submode);
     uint16_t probe_word = (uint16_t)(0x0500U | fpga_probe_cmd_byte());
 
     fpga.meter_mode_sequence_count++;
     fpga.meter_mode_sequence_submode = submode;
-    fpga.meter_mode_selector_word = word;
+    fpga.meter_mode_selector_word = plan.selector_word;
     fpga.meter_mode_apply_word = 0;
     fpga.meter_mode_probe_word = probe_word;
     fpga.meter_mode_start_word = (uint16_t)(0x0500U | FPGA_CMD_METER_START);
-    fpga_wire_send_word(word, 20);
-    if (fpga_meter_stock_apply_cmd_word_for_submode(submode, &apply_word)) {
-        fpga.meter_mode_apply_word = apply_word;
-        fpga_wire_send_word(apply_word, 20);
+    fpga_wire_send_word(plan.selector_word, plan.settle_ms);
+    if (plan.has_apply_word) {
+        fpga.meter_mode_apply_word = plan.apply_word;
+        fpga_wire_send_word(plan.apply_word, plan.settle_ms);
     }
     fpga_timed_send_probe_detect(10);
-    fpga_timed_send_cmd(0x05, FPGA_CMD_METER_START, 20);
+    fpga_timed_send_cmd(0x05, FPGA_CMD_METER_START, plan.settle_ms);
 }
 
 void fpga_set_meter_mode(uint8_t submode)
@@ -4195,6 +4195,8 @@ void fpga_set_meter_mode(uint8_t submode)
     return;
 #endif
     if (!fpga.initialized) return;
+    fpga_meter_transition_plan_t plan =
+        fpga_meter_transition_plan_for_submode(submode);
     meter_transition_busy = true;
 
     /* Stop DAC output if signal gen was running */
@@ -4205,10 +4207,10 @@ void fpga_set_meter_mode(uint8_t submode)
     }
 
     meter_data_invalidate(submode);
-    fpga_meter_discard_next_frames(METER_MODE_SWITCH_DISCARD_FRAMES);
+    fpga_meter_discard_next_frames(plan.discard_frames);
     fpga_meter_reset_transport();
     fpga_set_meter_frontend_for_submode(submode);
-    fpga_scope_delay_ms(20);
+    fpga_scope_delay_ms(plan.settle_ms);
     fpga_send_meter_mode_sequence(submode);
     meter_transition_busy = false;
 }
@@ -4220,14 +4222,16 @@ void fpga_meter_reinit(uint8_t submode)
     return;
 #endif
     if (!fpga.initialized) return;
+    fpga_meter_transition_plan_t plan =
+        fpga_meter_transition_plan_for_submode(submode);
     meter_transition_busy = true;
 
     meter_data_invalidate(submode);
-    fpga_meter_discard_next_frames(METER_MODE_SWITCH_DISCARD_FRAMES);
+    fpga_meter_discard_next_frames(plan.discard_frames);
     fpga_meter_reset_transport();
     fpga_send_meter_wake_preamble();
     fpga_set_meter_frontend_for_submode(submode);
-    fpga_scope_delay_ms(20);
+    fpga_scope_delay_ms(plan.settle_ms);
     fpga_send_meter_mode_sequence(submode);
     meter_transition_busy = false;
 }

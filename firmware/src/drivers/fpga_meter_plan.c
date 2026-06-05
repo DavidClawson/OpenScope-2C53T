@@ -70,3 +70,49 @@ bool fpga_meter_stock_apply_cmd_word_for_submode(uint8_t submode, uint16_t *word
     }
     return true;
 }
+
+fpga_meter_frame_family_t fpga_meter_frame_family_for_submode(uint8_t submode)
+{
+    switch (submode) {
+    case 0:
+    case 1:
+        return FPGA_METER_FRAME_FAMILY_VOLTAGE;
+    case 2:
+    case 3:
+    case 4:
+    case 5:
+        return FPGA_METER_FRAME_FAMILY_CURRENT;
+    case 6:
+        return FPGA_METER_FRAME_FAMILY_RESISTANCE;
+    case 7:
+        return FPGA_METER_FRAME_FAMILY_CONTINUITY;
+    case 8:
+        return FPGA_METER_FRAME_FAMILY_DIODE;
+    case 9:
+    case 10:
+        return FPGA_METER_FRAME_FAMILY_EXTENDED;
+    default:
+        return FPGA_METER_FRAME_FAMILY_VOLTAGE;
+    }
+}
+
+fpga_meter_transition_plan_t fpga_meter_transition_plan_for_submode(uint8_t submode)
+{
+    fpga_meter_transition_plan_t plan;
+
+    plan.submode = submode;
+    plan.stock_mode = fpga_meter_stock_mode_for_submode(submode);
+    plan.mux_index = plan.stock_mode;
+    plan.frame_family = (uint8_t)fpga_meter_frame_family_for_submode(submode);
+    plan.discard_frames = FPGA_METER_TRANSITION_DISCARD_FRAMES;
+    plan.settle_ms = FPGA_METER_TRANSITION_SETTLE_MS;
+    plan.selector_word = fpga_meter_stock_cmd_word_for_submode(submode);
+    plan.has_apply_word =
+        fpga_meter_stock_apply_cmd_word_for_submode(submode, &plan.apply_word);
+    if (!plan.has_apply_word) {
+        plan.apply_word = 0;
+    }
+    plan.voltage_function_axis =
+        (plan.frame_family == FPGA_METER_FRAME_FAMILY_VOLTAGE);
+    return plan;
+}

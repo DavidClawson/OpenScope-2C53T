@@ -98,13 +98,82 @@ static void test_stock_apply_words_for_runtime_family_switch(void)
     }
 }
 
+static void test_transition_plan_covers_mux_family_and_settle_policy(void)
+{
+    static const uint8_t expected_stock_mode[FPGA_METER_LOCAL_SUBMODE_COUNT] = {
+        0, 1, 2, 2, 3, 3, 4, 6, 7, 5, 5
+    };
+    static const uint8_t expected_family[FPGA_METER_LOCAL_SUBMODE_COUNT] = {
+        FPGA_METER_FRAME_FAMILY_VOLTAGE,
+        FPGA_METER_FRAME_FAMILY_VOLTAGE,
+        FPGA_METER_FRAME_FAMILY_CURRENT,
+        FPGA_METER_FRAME_FAMILY_CURRENT,
+        FPGA_METER_FRAME_FAMILY_CURRENT,
+        FPGA_METER_FRAME_FAMILY_CURRENT,
+        FPGA_METER_FRAME_FAMILY_RESISTANCE,
+        FPGA_METER_FRAME_FAMILY_CONTINUITY,
+        FPGA_METER_FRAME_FAMILY_DIODE,
+        FPGA_METER_FRAME_FAMILY_EXTENDED,
+        FPGA_METER_FRAME_FAMILY_EXTENDED,
+    };
+    static const uint16_t expected_selector[FPGA_METER_LOCAL_SUBMODE_COUNT] = {
+        0x0514, 0x050C, 0x0517, 0x0517, 0x050B,
+        0x050B, 0x050A, 0x0511, 0x0510, 0x0512,
+        0x0512
+    };
+    static const uint16_t expected_apply[FPGA_METER_LOCAL_SUBMODE_COUNT] = {
+        0x0000, 0x050D, 0x050E, 0x050E, 0x0000,
+        0x0000, 0x0000, 0x0516, 0x0515, 0x0000,
+        0x0000
+    };
+
+    for (uint8_t i = 0; i < FPGA_METER_LOCAL_SUBMODE_COUNT; i++) {
+        char name[48];
+        fpga_meter_transition_plan_t plan =
+            fpga_meter_transition_plan_for_submode(i);
+
+        snprintf(name, sizeof(name), "plan submode %u", (unsigned)i);
+        EXPECT_EQ_U8(name, plan.submode, i);
+        snprintf(name, sizeof(name), "plan stock %u", (unsigned)i);
+        EXPECT_EQ_U8(name, plan.stock_mode, expected_stock_mode[i]);
+        snprintf(name, sizeof(name), "plan mux %u", (unsigned)i);
+        EXPECT_EQ_U8(name, plan.mux_index, expected_stock_mode[i]);
+        snprintf(name, sizeof(name), "plan family %u", (unsigned)i);
+        EXPECT_EQ_U8(name, plan.frame_family, expected_family[i]);
+        snprintf(name, sizeof(name), "plan discard %u", (unsigned)i);
+        EXPECT_EQ_U8(name, plan.discard_frames,
+                     FPGA_METER_TRANSITION_DISCARD_FRAMES);
+        snprintf(name, sizeof(name), "plan settle %u", (unsigned)i);
+        EXPECT_EQ_U16(name, plan.settle_ms, FPGA_METER_TRANSITION_SETTLE_MS);
+        snprintf(name, sizeof(name), "plan selector %u", (unsigned)i);
+        EXPECT_EQ_U16(name, plan.selector_word, expected_selector[i]);
+        snprintf(name, sizeof(name), "plan apply exists %u", (unsigned)i);
+        EXPECT_EQ_U8(name, plan.has_apply_word ? 1U : 0U,
+                     expected_apply[i] != 0 ? 1U : 0U);
+        snprintf(name, sizeof(name), "plan apply word %u", (unsigned)i);
+        EXPECT_EQ_U16(name, plan.apply_word, expected_apply[i]);
+        snprintf(name, sizeof(name), "plan voltage axis %u", (unsigned)i);
+        EXPECT_EQ_U8(name, plan.voltage_function_axis ? 1U : 0U,
+                     expected_family[i] == FPGA_METER_FRAME_FAMILY_VOLTAGE ?
+                     1U : 0U);
+    }
+}
+
 static void test_fallbacks(void)
 {
+    fpga_meter_transition_plan_t plan =
+        fpga_meter_transition_plan_for_submode(99);
+
     EXPECT_EQ_U8("bad stock mode falls back", fpga_meter_stock_cmd_low_for_mode(99), 0x14);
     EXPECT_EQ_U8("bad submode stock mode", fpga_meter_stock_mode_for_submode(99), 0);
     EXPECT_EQ_U16("bad submode word", fpga_meter_stock_cmd_word_for_submode(99), 0x0514);
     EXPECT_EQ_U8("bad submode no apply word",
                  fpga_meter_stock_apply_cmd_word_for_submode(99, NULL) ? 1U : 0U, 0U);
+    EXPECT_EQ_U8("bad plan stock", plan.stock_mode, 0);
+    EXPECT_EQ_U8("bad plan family", plan.frame_family,
+                 FPGA_METER_FRAME_FAMILY_VOLTAGE);
+    EXPECT_EQ_U16("bad plan selector", plan.selector_word, 0x0514);
+    EXPECT_EQ_U8("bad plan has no apply", plan.has_apply_word ? 1U : 0U, 0U);
 }
 
 int main(void)
@@ -113,6 +182,7 @@ int main(void)
     test_local_submode_mapping();
     test_wire_words_are_raw_05_family();
     test_stock_apply_words_for_runtime_family_switch();
+    test_transition_plan_covers_mux_family_and_settle_policy();
     test_fallbacks();
 
     if (failures) {

@@ -2341,6 +2341,8 @@ static void cmd_meter_frontend(void)
 {
     uint16_t extra = meter_dbg_extra();
     fpga_meter_selector_t selectors = fpga_meter_expected_selectors(meter_submode);
+    fpga_meter_transition_plan_t plan =
+        fpga_meter_transition_plan_for_submode(meter_submode);
     uint8_t tx_count = fpga.tx_cmd_history_count;
 
     usb_send_str("=== DMM Frontend ===\r\n");
@@ -2357,6 +2359,14 @@ static void cmd_meter_frontend(void)
                      (unsigned)selectors.function_selector,
                      (unsigned)selectors.range_selector,
                      selectors.voltage_function_axis ? 1U : 0U);
+    usb_debug_printf("transition_plan family=%u mux=%u discard=%u settle_ms=%u selector=%04X apply=%04X has_apply=%u\r\n",
+                     (unsigned)plan.frame_family,
+                     (unsigned)plan.mux_index,
+                     (unsigned)plan.discard_frames,
+                     (unsigned)plan.settle_ms,
+                     (unsigned)plan.selector_word,
+                     (unsigned)plan.apply_word,
+                     plan.has_apply_word ? 1U : 0U);
     usb_debug_printf("mode_sequence count=%u submode=%u selector=%04X apply=%04X probe=%04X start=%04X\r\n",
                      (unsigned)fpga.meter_mode_sequence_count,
                      (unsigned)fpga.meter_mode_sequence_submode,
@@ -2412,9 +2422,11 @@ static void print_meter_mux_stream_line(uint32_t index)
                 meter_reading.valid &&
                 meter_reading.submode == meter_submode;
     fpga_meter_selector_t selectors = fpga_meter_expected_selectors(meter_submode);
+    fpga_meter_transition_plan_t plan =
+        fpga_meter_transition_plan_for_submode(meter_submode);
 
     usb_debug_printf("t=%lu upd=%lu ui_sub=%u rd_sub=%u live=%u cls=%u "
-                     "stock_mode=%u raw_low=%02X "
+                     "stock_mode=%u raw_low=%02X family=%u mux=%u settle=%u "
                      "seq=%u seq_sub=%u seq_word=%04X seq_apply=%04X "
                      "disp=%s unit=%s raw=%d dp=%u f6=%02X f7=%02X f8=%02X f9=%02X "
                      "extra=%04X discard=%u PC6=%u PB11=%u PC11=%u PC12=%u "
@@ -2427,6 +2439,9 @@ static void print_meter_mux_stream_line(uint32_t index)
                      (unsigned)meter_reading.result_class,
                      (unsigned)selectors.function_selector,
                      (unsigned)selectors.range_selector,
+                     (unsigned)plan.frame_family,
+                     (unsigned)plan.mux_index,
+                     (unsigned)plan.settle_ms,
                      (unsigned)fpga.meter_mode_sequence_count,
                      (unsigned)fpga.meter_mode_sequence_submode,
                      (unsigned)fpga.meter_mode_selector_word,

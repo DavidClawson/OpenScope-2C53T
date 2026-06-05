@@ -19,6 +19,7 @@
 
 #include <stdint.h>
 #include <stdbool.h>
+#include "fpga_meter_plan.h"
 #include "FreeRTOS.h"
 #include "queue.h"
 
@@ -108,12 +109,6 @@ typedef enum {
     FPGA_ACQ_CALIBRATE   = 7,  /* Calibration readback */
     FPGA_ACQ_SELF_TEST   = 8,  /* Self test */
 } fpga_acq_mode_t;
-
-typedef struct {
-    uint8_t function_selector;  /* Stock DMM mode index used by the raw 0x05xx table. */
-    uint8_t range_selector;     /* Low byte from the recovered stock DMM command table. */
-    bool    voltage_function_axis;
-} fpga_meter_selector_t;
 
 /* ═══════════════════════════════════════════════════════════════════
  * Stock-State Bench Shadow
