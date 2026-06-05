@@ -389,6 +389,27 @@ class DmmGoalValidationTests(unittest.TestCase):
             sequences["scope_preset_mux_decrement_portab_branch"]["bytes"],
         )
 
+    def test_stock_scope_ui_mux_lut_consumers_are_binary_grounded(self) -> None:
+        result = stock_meter_literals.verify_scope_ui_mux_lut_consumer_sequences()
+        sequences = result["sequences"]
+
+        self.assertEqual(
+            sequences["scope_ui_draw_main_mux_lut_consumer"]["addr"],
+            "0x080151b0",
+        )
+        self.assertIn(
+            "98 f8 16 00",
+            sequences["scope_ui_draw_main_mux_lut_consumer"]["bytes"],
+        )
+        self.assertIn(
+            "40 44 81 78",
+            sequences["scope_ui_draw_main_mux_lut_consumer"]["bytes"],
+        )
+        self.assertIn(
+            "4b f6 b8 71 c0 b2 c0 f6 04 01 31 f8 10 00",
+            sequences["scope_ui_draw_main_mux_lut_consumer"]["bytes"],
+        )
+
 
 if __name__ == "__main__":
     unittest.main()

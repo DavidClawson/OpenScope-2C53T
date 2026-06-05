@@ -276,6 +276,18 @@ EXPECTED_SCOPE_PRESET_MUX_OWNER_SEQUENCES = {
         ),
     ),
 }
+EXPECTED_SCOPE_UI_MUX_LUT_CONSUMER_SEQUENCES = {
+    "scope_ui_draw_main_mux_lut_consumer": (
+        0x080151B0,
+        bytes.fromhex(
+            "40 f2 f8 08 c2 f2 00 08 98 f8 16 00 4a f6 ab 23 "
+            "40 44 81 78 ca f6 aa 23 ca b2 a2 fb 03 23 b8 f9 "
+            "1c 20 90 f9 04 00 5c 08 10 1a 00 ee 10 0a a4 eb "
+            "84 00 08 44 4b f6 b8 71 c0 b2 c0 f6 04 01 31 f8 "
+            "10 00"
+        ),
+    ),
+}
 
 
 def read(addr: int, size: int) -> bytes:
@@ -532,6 +544,30 @@ def verify_scope_preset_mux_owner_sequences() -> dict[str, object]:
     return {"sequences": checked}
 
 
+def verify_scope_ui_mux_lut_consumer_sequences() -> dict[str, object]:
+    """Check stock scope UI scale/LUT reads that consume current mux state.
+
+    `FUN_08015f50` (`scope_ui_draw_main`) reads `DAT_2000010e` as a channel
+    index, loads `(&DAT_200000fa)[idx]`, derives the modulo-3 LUT index, and
+    reads `DAT_0804bfb8` before scope display math.  This is a scope render
+    consumer of the mux-state pair, not a DMM range writer or calibration
+    source.
+    """
+    checked: dict[str, dict[str, str]] = {}
+    for name, (addr, expected) in EXPECTED_SCOPE_UI_MUX_LUT_CONSUMER_SEQUENCES.items():
+        actual = read(addr, len(expected))
+        if actual != expected:
+            raise AssertionError(
+                f"{name} {addr:#010x}: expected {expected.hex(' ')}, "
+                f"got {actual.hex(' ')}"
+            )
+        checked[name] = {
+            "addr": f"{addr:#010x}",
+            "bytes": actual.hex(" "),
+        }
+    return {"sequences": checked}
+
+
 def main() -> None:
     if not BIN.exists():
         print(f"stock meter literal pools: skipped; missing {BIN}", file=sys.stderr)
@@ -576,6 +612,7 @@ def main() -> None:
     runtime_mux_writers = verify_runtime_mux_state_writer_sequences()
     scope_snapshots = verify_scope_snapshot_consumer_sequences()
     scope_preset_mux_owners = verify_scope_preset_mux_owner_sequences()
+    scope_ui_mux_lut_consumers = verify_scope_ui_mux_lut_consumer_sequences()
     print(f"stock meter selector table: {selector['bytes']}")
     print("stock meter selector xref sites: " +
           ", ".join(selector_xrefs["sequences"].keys()))
@@ -594,6 +631,8 @@ def main() -> None:
           ", ".join(item["addr"] for item in scope_snapshots["sequences"].values()))
     print("stock scope/preset mux owner sites: " +
           ", ".join(item["addr"] for item in scope_preset_mux_owners["sequences"].values()))
+    print("stock scope UI mux-LUT consumer sites: " +
+          ", ".join(item["addr"] for item in scope_ui_mux_lut_consumers["sequences"].values()))
     print("stock meter literal pools: ok")
 
 

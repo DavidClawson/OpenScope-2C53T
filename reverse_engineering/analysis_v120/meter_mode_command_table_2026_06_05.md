@@ -258,6 +258,7 @@ The evidence splits like this:
 | direct decompile callers | `function_names.md` lists `FUN_08001c60` as `siggen_configure` and `FUN_08019e98` as `scope_main_fsm`; `function_map_complete.txt` lists only callers `08001c60,08019e98` for both mux writers even though the binary guard proves more BL sites | decompile/function-map limitation; not enough for DMM selector proof |
 | `FUN_08001c60` scope/siggen channel setup | `0x08001F06` / `0x080020B2`; `full_decompile.c:2564..2574` increments `(&DAT_200000fa)[uVar20]`, then calls `FUN_080018a4(DAT_200000fa)` for channel 0 or `FUN_08001a58(DAT_200000fb)` for channel 1 and queues command `4` | scope/siggen auto-range path; not DMM |
 | scope/preset mux owner handlers | `0x08003148` and `0x08003900` wrap the callsites `0x080031E8` / `0x08003644` and `0x080039A2` / `0x08003E3A`; binary disassembly shows they increment/decrement `(&DAT_200000fa)[DAT_2000044c >> 7]`, call `FUN_080018a4` for channel 0 or `FUN_08001a58` for channel 1, then queue command `4` | scope/preset UI mux owners; not DMM runtime range proof |
+| scope UI mux-LUT consumer | `0x080151B0..0x080151F2` in `FUN_08015f50`/`scope_ui_draw_main`; reads `DAT_2000010e`, loads `(&DAT_200000fa)[idx]`, derives the modulo-3 scale index, then reads `DAT_0804bfb8` | scope render/scale consumer; not a DMM range writer |
 | scope main auto-range write | `0x0801A534` / `0x0801A53E`; `full_decompile.c:6880..6999` scans sample buffers, enters range selection, then reuses `DAT_200000fa/DAT_200000fb` for DAC/calibration recompute; `full_decompile.c:8744..8752` performs the actual mux call after `(&DAT_200000fa)[uVar70] = bVar37 + 1` | oscilloscope acquisition path; not DMM |
 | explicit scope-submode mux calls | `full_decompile.c:7564..7565` and `7988..7989` call both mux writers with `DAT_20000128 & 0xf`; `scope_main_fsm_annotated.c` names `DAT_20000128`/state `+0x30` as scope sub-mode | scope runtime reconfiguration, not DMM |
 | DAC1 writes | `FUN_080018a4` at `0x080018A4..0x08001A52` and inline recomputes at `full_decompile.c:2603..2624`, `6960..7020`, `7771..7990` write `0x40007408` from scope calibration tables | scope trigger/comparator threshold; not DMM calibration |
@@ -436,3 +437,45 @@ This resolves the "additional early UI/scope-owner mux sites" row from the
 previous audit: these are stock scope/preset UI mux owners. They prove another
 runtime owner of the shared mux-state pair, but they are not tied to the
 eight-entry DMM selector table and are not DMM runtime range proof.
+
+### Scope UI Mux-LUT Consumer Guard, 2026-06-06
+
+The `ram_map.txt` entry `unknown@080151c2` for `DAT_200000fa` resolves into
+`FUN_08015f50`, already named `scope_ui_draw_main` in `function_names.md`. The
+stock decompile around `full_decompile.c:11411..11438` reads the selected
+channel's mux byte and uses it to index the scope scale table:
+
+```text
+full_decompile.c:11411  pbVar19 = &DAT_200000fa + uVar22;
+full_decompile.c:11418  FUN_0803e5da(*(undefined2 *)(&DAT_0804bfb8 + ...), ...)
+full_decompile.c:11438  uVar6 = *(undefined2 *)(&DAT_0804bfb8 + ...);
+```
+
+The corresponding stock instruction slice starts at `0x080151B0`:
+
+```text
+0x080151B0: movw r8,#0xf8
+0x080151B4: movt r8,#0x2000
+0x080151B8: ldrb.w r0,[r8,#22]      ; DAT_2000010e channel/index
+0x080151C0: add r0,r8
+0x080151C2: ldrb r1,[r0,#2]         ; (&DAT_200000fa)[idx]
+0x080151E4: movw r1,#0xbfb8
+0x080151E8: movt r1,#0x804          ; DAT_0804bfb8
+0x080151EE: ldrh.w r0,[r1,r0,lsl #1]
+```
+
+`scripts/test_stock_meter_literals.py` binary-guards that mux-LUT consumer:
+
+```text
+0x080151B0:
+  40 f2 f8 08 c2 f2 00 08 98 f8 16 00 4a f6 ab 23
+  40 44 81 78 ca f6 aa 23 ca b2 a2 fb 03 23 b8 f9
+  1c 20 90 f9 04 00 5c 08 10 1a 00 ee 10 0a a4 eb
+  84 00 08 44 4b f6 b8 71 c0 b2 c0 f6 04 01 31 f8
+  10 00
+```
+
+This is scope render/scale math. It consumes `DAT_200000fa` and
+`DAT_0804bfb8`, but it performs no mux writer call, no DMM selector-table
+transition, and no meter calibration. Do not use this xref to justify a DMM
+range correction.
