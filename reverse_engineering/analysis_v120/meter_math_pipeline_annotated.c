@@ -44,7 +44,12 @@
  *   All offsets below are BYTE offsets from that base.
  *
  *   +0xF2C (0x20001024) = reserved / cleared each frame
- *   +0xF2D (0x20001025) = meter_mode         uint8  0-8: DCV,ACV,Ω,Cont,Diode,Cap,Freq,Period,Duty
+ *   +0xF2D (0x20001025) = stock meter/display mode uint8.
+ *                                      The recovered raw selector table has
+ *                                      eight slots; the open firmware's eleven
+ *                                      UI submodes are a porting map layered
+ *                                      onto those slots, not proof that stock
+ *                                      exposes eleven separate front-end modes.
  *   +0xF2E (0x20001026) = meter_display_cmd  uint8  FPGA command code for next TX
  *   +0xF2F (0x20001027) = meter_sub_mode     uint8  sub-mode within meter_mode
  *   +0xF30 (0x20001028) = meter_raw_value    float  raw BCD count as float, updated each frame
@@ -783,6 +788,11 @@ void fpga_state_update(void)
      * TBB switch on meter_mode (0-7) at 0x08002AB0.
      * Each case sets meter_display_cmd (+0xF2E) and meter_unit_index (+0xF38).
      * meter_unit_index = meter_decimal_pos + <constant> (mode-specific offset).
+     *
+     * Case labels below are stock display/FSM slots, not the open firmware's
+     * local UI submode numbers. For the current local-to-stock porting map and
+     * the evidence boundaries around current/cap/temp splits, see
+     * meter_mode_command_table_2026_06_05.md.
      *
      * Case 0 (DCV):   sub-TBB on meter_sub_mode (0-3)
      *   sub_mode 0: display_cmd = 0,  unit_index = 0xFF

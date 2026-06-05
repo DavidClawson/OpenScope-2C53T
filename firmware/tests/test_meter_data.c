@@ -888,8 +888,14 @@ static int test_non_voltage_modes_reject_voltage_payloads(void)
         0x5A, 0xA5, 0xA5, 0xAD, 0xED, 0x9F,
         0x0F, 0x00, 0x02, 0x00, 0x00, 0x31,
     };
+    static const uint8_t dcv_low_frame[12] = {
+        0x5A, 0xA5, 0x4E, 0xCE, 0x8F, 0x8A,
+        0x0A, 0x00, 0x82, 0x00, 0x01, 0x7F,
+    };
     static const uint8_t wrong_family_modes[] = { 2, 3, 4, 5, 6, 7, 8, 9, 10 };
-    const uint8_t *voltage_frames[] = { mains_frame, dcv_frame, dcv_high_frame };
+    const uint8_t *voltage_frames[] = {
+        mains_frame, dcv_frame, dcv_high_frame, dcv_low_frame
+    };
 
     for (unsigned f = 0; f < sizeof(voltage_frames) / sizeof(voltage_frames[0]); f++) {
         for (unsigned i = 0; i < sizeof(wrong_family_modes); i++) {
@@ -925,8 +931,14 @@ static int test_voltage_payload_clears_stale_reading_in_all_non_voltage_modes(vo
         0x5A, 0xA5, 0xA5, 0xAD, 0xED, 0x9F,
         0x0F, 0x00, 0x02, 0x00, 0x00, 0x31,
     };
+    static const uint8_t dcv_low_frame[12] = {
+        0x5A, 0xA5, 0x4E, 0xCE, 0x8F, 0x8A,
+        0x0A, 0x00, 0x82, 0x00, 0x01, 0x7F,
+    };
     static const uint8_t modes[] = { 2, 3, 4, 5, 6, 7, 8, 9, 10 };
-    const uint8_t *voltage_frames[] = { mains_frame, dcv_frame, dcv_high_frame };
+    const uint8_t *voltage_frames[] = {
+        mains_frame, dcv_frame, dcv_high_frame, dcv_low_frame
+    };
     uint8_t normal[12];
 
     for (unsigned m = 0; m < sizeof(modes); m++) {
@@ -1054,6 +1066,37 @@ static int test_voltage_payload_clears_stale_current_reading(void)
         ASSERT(meter_reading.display_update_count == display_updates_after_current);
         ASSERT_STR_EQ(meter_reading.display_str, "---");
     }
+    return 1;
+}
+
+static int test_low_dcv_voltage_payload_clears_stale_current_reading(void)
+{
+    static const uint8_t low_dcv_frame[12] = {
+        0x5A, 0xA5, 0x4E, 0xCE, 0x8F, 0x8A,
+        0x0A, 0x00, 0x82, 0x00, 0x01, 0x7F,
+    };
+    uint8_t current_frame[12];
+    uint32_t updates_after_current;
+    uint32_t display_updates_after_current;
+
+    build_segment_frame(current_frame, 1, 8, 6, 7, 0x4A, 0x20, 0x00, 0x00, 0);
+
+    meter_data_init();
+    process_frame(current_frame, 2);
+    ASSERT(expect_normal_reading("18.67", "mA", 18.67f, 0.001f));
+    updates_after_current = meter_reading.update_count;
+    display_updates_after_current = meter_reading.display_update_count;
+
+    process_frame(low_dcv_frame, 2);
+    ASSERT(!meter_reading.valid);
+    ASSERT(meter_reading.update_count == updates_after_current + 1);
+    ASSERT(meter_reading.display_update_count == display_updates_after_current + 1);
+    ASSERT(meter_reading.submode == 2);
+    ASSERT(meter_reading.result_class == METER_RESULT_NONE);
+    ASSERT(expect_payload_cleared("---"));
+    ASSERT(expect_family_debug((uint8_t)FPGA_METER_FRAME_FAMILY_CURRENT,
+                               (uint8_t)FPGA_METER_FRAME_FAMILY_VOLTAGE,
+                               METER_REJECT_WRONG_FRAME_FAMILY));
     return 1;
 }
 
@@ -1194,6 +1237,7 @@ int main(void)
     TEST(voltage_payload_clears_stale_reading_in_all_non_voltage_modes);
     TEST(special_voltage_family_frames_are_rejected_outside_voltage);
     TEST(voltage_payload_clears_stale_current_reading);
+    TEST(low_dcv_voltage_payload_clears_stale_current_reading);
     TEST(stock_fsm_debug_fields_follow_mode_and_frames);
     TEST(large_current_submodes_use_active_local_range_state);
     TEST(snapshot_returns_coherent_latest_completed_reading);

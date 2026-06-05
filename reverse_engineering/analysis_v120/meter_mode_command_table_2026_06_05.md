@@ -69,6 +69,17 @@ command-table slots. Until the runtime writer for the stock range state is
 recovered or bench-proven, local uA and AC A labels are parser/UI policy on top
 of the two recovered current slots.
 
+## Voltage Frame-Family Marker Boundary
+
+The low-DCV live failure frame uses `frame[8]=0x82`: low seven bits still carry
+the stock DCV/voltage marker `0x02`, while bit 7 is the stock range/status input
+that routes the value into the local low-DCV calibrated band. Therefore `0x82`
+must be treated as a voltage-family payload for wrong-mode rejection even though
+it is not byte-equal to the common `0x02` DCV frame.
+
+This is a frame-metadata rule, not a value-recognition rule. The decoder must not
+infer voltage/current/passive family from the BCD count looking plausible.
+
 ## Extended Slot 5 Evidence Boundary
 
 Stock slot 5 is solidly recovered as selector `0x0512`. The meaning of the
@@ -129,3 +140,10 @@ small-current versus A-range operation. Until that is recovered or bench-proven,
 local submodes 2/3 and 4/5 share the same recovered stock current slot and are
 split only by parser/UI range state. Treat current readings that still look like
 voltage payloads as a frontend activation failure, not a decimal decoder issue.
+
+A read-only follow-up pass searched the text decompile for `ms[0x02]`/`ms[0x03]`
+stores and the two mux calls. It found boot-time restore/apply sites and scope
+runtime range writers, but no stock DMM runtime table that maps every DMM
+selector slot to unique `ms[0x02]`/`ms[0x03]` values. The next useful evidence is
+either a Ghidra data-xref pass around the saved-config writers or a stock-runtime
+trace that watches `0x200000fa/0x200000fb` while switching stock DMM modes.
