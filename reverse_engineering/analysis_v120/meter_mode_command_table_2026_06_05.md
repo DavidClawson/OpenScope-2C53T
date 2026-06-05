@@ -67,6 +67,55 @@ USART2 command path, not the display queue. It is still digital command-path
 evidence only: it does not recover the DMM-specific `ms[0x02]`/`ms[0x03]`
 analog mux writers, relay/range timing, or calibration.
 
+The stock transport transition is now binary-guarded too. This
+`meter transport transition guard` covers the two boot/config branches that
+enable/resume or disable/drain the DMM USART2 path:
+
+```text
+0x08026F8E: USART2 CTRL1 |= 0x2000
+0x08026F9E: load task handle 0x20002DA0, call vTaskResume
+0x08026FAC: load task handle 0x20002DA4, call vTaskResume
+0x08026FBA: prepare GPIOC BOP base
+0x08026FC6: write 0x800 to GPIOC_BOP, setting PC11
+0x08026FCE..0x08026FDA: reset max/min/avg sentinels to 0x7FC00000
+0x08026FDE..0x08026FF6: reset selector/shadow/display state
+
+0x0802700A: USART2 CTRL1 &= ~0x2000
+0x0802701A: load task handle 0x20002DA0, call task suspend helper
+0x08027028: load task handle 0x20002DA4, call task suspend helper
+0x08027036..0x0802703A: write 0x800 to GPIOC clear register, clearing PC11
+0x0802703E..0x0802704A: reset meter semaphore/queue 0x20002D7C
+0x0802704E..0x0802705A: reset raw TX-word queue 0x20002D74
+```
+
+The guarded byte slices are:
+
+```text
+0x08026F8E:
+  44 f2 0c 41 c4 f2 00 01 08 68 40 f4 00 50 08 60
+  42 f6 a0 50 c2 f2 00 00 00 68 13 f0 32 fb
+  42 f6 a4 50 c2 f2 00 00 00 68 13 f0 2b fb
+  41 f2 00 01 4f f4 00 60 c4 f2 01 01 08 61
+  00 20 c7 f6 c0 70 40 f2 01 11 ca f8 48 0f
+  ca f8 4c 0f ca f8 50 0f 00 20 aa f8 35 1f
+  ff 21 8a f8 5d 0f 8a f8 2d 0f 8a f8 2f 0f
+  8a f8 38 1f aa f8 3c 0f
+
+0x0802700A:
+  44 f2 0c 41 c4 f2 00 01 08 68 20 f4 00 50 08 60
+  42 f6 a0 50 c2 f2 00 00 00 68 13 f0 b2 fb
+  42 f6 a4 50 c2 f2 00 00 00 68 13 f0 ab fb
+  4f f4 00 60 c8 f8 00 00 42 f6 7c 50 c2 f2 00 00
+  00 68 00 21 14 f0 ad f9 42 f6 74 50 c2 f2 00 00
+  00 68 00 21 13 f0 ed fd
+```
+
+This is stock evidence for the transport side of DMM transitions: pause/drain
+via task suspension and queue reset, then resume with USART2 and PC11 active.
+It does not recover the exact local settle delay or frame-discard count, so the
+open firmware must keep those constants documented as conservative local
+policy until a stock runtime trace proves them.
+
 The same script now also carries a selector state writer guard for the stock
 digital DMM state machine. These sites prove stock RAM coupling around
 `DAT_20001025` (`0x20001025`, selector), `DAT_2000102E` (`0x2000102e`, mode/range

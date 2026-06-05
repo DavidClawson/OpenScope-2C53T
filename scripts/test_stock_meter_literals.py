@@ -40,6 +40,32 @@ EXPECTED_DVOM_TX_QUEUE_CONSUMER_SEQUENCES = {
         ),
     ),
 }
+EXPECTED_METER_TRANSPORT_TRANSITION_SEQUENCES = {
+    "meter_transport_enable_resume_reset": (
+        0x08026F8E,
+        bytes.fromhex(
+            "44 f2 0c 41 c4 f2 00 01 08 68 40 f4 00 50 08 60 "
+            "42 f6 a0 50 c2 f2 00 00 00 68 13 f0 32 fb "
+            "42 f6 a4 50 c2 f2 00 00 00 68 13 f0 2b fb "
+            "41 f2 00 01 4f f4 00 60 c4 f2 01 01 08 61 "
+            "00 20 c7 f6 c0 70 40 f2 01 11 ca f8 48 0f "
+            "ca f8 4c 0f ca f8 50 0f 00 20 aa f8 35 1f "
+            "ff 21 8a f8 5d 0f 8a f8 2d 0f 8a f8 2f 0f "
+            "8a f8 38 1f aa f8 3c 0f"
+        ),
+    ),
+    "meter_transport_disable_suspend_drain": (
+        0x0802700A,
+        bytes.fromhex(
+            "44 f2 0c 41 c4 f2 00 01 08 68 20 f4 00 50 08 60 "
+            "42 f6 a0 50 c2 f2 00 00 00 68 13 f0 b2 fb "
+            "42 f6 a4 50 c2 f2 00 00 00 68 13 f0 ab fb "
+            "4f f4 00 60 c8 f8 00 00 42 f6 7c 50 c2 f2 00 00 "
+            "00 68 00 21 14 f0 ad f9 42 f6 74 50 c2 f2 00 00 "
+            "00 68 00 21 13 f0 ed fd"
+        ),
+    ),
+}
 EXPECTED_METER_SELECTOR_STATE_SEQUENCES = {
     "init_selector_reset": (
         0x08026FDE,
@@ -404,6 +430,31 @@ def verify_dvom_tx_queue_consumer_sequences() -> dict[str, object]:
     return {"sequences": checked}
 
 
+def verify_meter_transport_transition_sequences() -> dict[str, object]:
+    """Check stock DMM transport enable/resume and disable/drain slices.
+
+    The boot/config transition code enables USART2 and resumes the two DVOM
+    tasks before resetting meter display/selector state.  Its paired disable
+    path clears USART2 enable, suspends the same task handles, clears PC11,
+    resets the meter semaphore, and drains the raw TX-word queue at
+    `0x20002D74`.  Guard these as stock transport sequencing evidence; the
+    exact local settle/discard constants remain OpenScope policy.
+    """
+    checked: dict[str, dict[str, str]] = {}
+    for name, (addr, expected) in EXPECTED_METER_TRANSPORT_TRANSITION_SEQUENCES.items():
+        actual = read(addr, len(expected))
+        if actual != expected:
+            raise AssertionError(
+                f"{name} {addr:#010x}: expected {expected.hex(' ')}, "
+                f"got {actual.hex(' ')}"
+            )
+        checked[name] = {
+            "addr": f"{addr:#010x}",
+            "bytes": actual.hex(" "),
+        }
+    return {"sequences": checked}
+
+
 def verify_meter_selector_state_sequences() -> dict[str, object]:
     """Check stock selector/shadow-state writers used by the DMM FSM.
 
@@ -645,6 +696,7 @@ def main() -> None:
     selector = verify_meter_selector_table()
     selector_xrefs = verify_meter_selector_xref_sequences()
     dvom_tx_consumers = verify_dvom_tx_queue_consumer_sequences()
+    transport_transitions = verify_meter_transport_transition_sequences()
     selector_state = verify_meter_selector_state_sequences()
     mux_restore = verify_meter_mux_restore_sequences()
     mux_calls = verify_meter_mux_callsite_sequences()
@@ -658,6 +710,8 @@ def main() -> None:
           ", ".join(selector_xrefs["sequences"].keys()))
     print("stock dvom_TX raw-word consumer sites: " +
           ", ".join(item["addr"] for item in dvom_tx_consumers["sequences"].values()))
+    print("stock meter transport transition sites: " +
+          ", ".join(item["addr"] for item in transport_transitions["sequences"].values()))
     print("stock meter selector state sites: " +
           ", ".join(item["addr"] for item in selector_state["sequences"].values()))
     print("stock meter mux restore sites: " +

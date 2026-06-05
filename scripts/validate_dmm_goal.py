@@ -217,6 +217,8 @@ def verify_re_coverage() -> dict[str, Any]:
         "selector consumer xrefs", "0x080042E2", "0x080048BA", "0x20002D54",
         "dvom_TX raw-word consumer guard", "0x080373F4", "0x20002D74",
         "USART2 command path",
+        "meter transport transition guard", "0x08026F8E", "0x0802700A",
+        "pause/drain", "task suspension and queue reset",
         "selector state writer guard", "0x08036D14", "0x08036D50",
         "0x080373A8", "digital stock DMM FSM",
         "32-case range-class matrix", "all 16 combinations",

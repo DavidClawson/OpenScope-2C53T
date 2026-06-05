@@ -265,6 +265,44 @@ class DmmGoalValidationTests(unittest.TestCase):
             sequences["dvom_tx_raw_word_consumer"]["bytes"],
         )
 
+    def test_stock_meter_transport_transitions_are_binary_grounded(self) -> None:
+        result = stock_meter_literals.verify_meter_transport_transition_sequences()
+        sequences = result["sequences"]
+
+        self.assertEqual(
+            sequences["meter_transport_enable_resume_reset"]["addr"],
+            "0x08026f8e",
+        )
+        self.assertIn(
+            "08 68 40 f4 00 50 08 60",
+            sequences["meter_transport_enable_resume_reset"]["bytes"],
+        )
+        self.assertIn(
+            "42 f6 a0 50 c2 f2 00 00 00 68 13 f0 32 fb",
+            sequences["meter_transport_enable_resume_reset"]["bytes"],
+        )
+        self.assertIn(
+            "4f f4 00 60 c4 f2 01 01 08 61",
+            sequences["meter_transport_enable_resume_reset"]["bytes"],
+        )
+
+        self.assertEqual(
+            sequences["meter_transport_disable_suspend_drain"]["addr"],
+            "0x0802700a",
+        )
+        self.assertIn(
+            "08 68 20 f4 00 50 08 60",
+            sequences["meter_transport_disable_suspend_drain"]["bytes"],
+        )
+        self.assertIn(
+            "42 f6 a0 50 c2 f2 00 00 00 68 13 f0 b2 fb",
+            sequences["meter_transport_disable_suspend_drain"]["bytes"],
+        )
+        self.assertIn(
+            "42 f6 74 50 c2 f2 00 00 00 68 00 21 13 f0 ed fd",
+            sequences["meter_transport_disable_suspend_drain"]["bytes"],
+        )
+
     def test_stock_meter_selector_state_writers_are_binary_grounded(self) -> None:
         result = stock_meter_literals.verify_meter_selector_state_sequences()
         sequences = result["sequences"]
