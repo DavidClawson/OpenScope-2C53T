@@ -563,7 +563,9 @@ void phase2g_spi3_fpga_handshake(void) {
     // PB11 HIGH enables FPGA active mode
     // NO DMA — fully polled SPI transfers
     // Handshake: queries FPGA ID (0x00, 0x05, 0x12, 0x15)
-    // Calibration: 137 entries × 3 bytes exchanged via 0x3B/0x3A
+    // H2 SPI3 table: later extraction resolved this as 115,638 bytes
+    // at 0x08051D19 bracketed by 0x3B/0x3A, not 137 entries.
+    // Byte count is proven; FPGA acceptance/apply semantics are not.
 }
 
 
@@ -892,10 +894,10 @@ void phase2l_final_init_and_launch(void) {
 //    mode. This means button scanning doesn't begin until the mode logic
 //    decides it's needed.
 //
-// 5. SPI3 calibration exchange: 137 entries × 3 bytes of calibration data
-//    are exchanged with the FPGA during handshake. Table at 0x0804D7C1.
-//    This is separate from the USART command sequence and provides per-ADC
-//    correction factors that the FPGA applies to raw samples.
+// 5. H2 SPI3 exchange: a 115,638-byte table at 0x08051D19 is sent to the
+//    FPGA during handshake, bracketed by 0x3B/0x3A. This is separate from
+//    the USART command sequence. The table/evidence are stock-proven, but
+//    FPGA acceptance and exact DMM calibration effect are not recovered.
 //
 // 6. DMA for LCD only: DMA is configured ONLY for LCD pixel blitting
 //    (memory-to-memory via EXMC). SPI3 and ADC are fully polled.

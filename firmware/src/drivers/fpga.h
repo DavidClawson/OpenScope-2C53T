@@ -215,9 +215,12 @@ typedef struct {
     volatile uint32_t diag_spi_ctrl1;      /* SPI3 CTRL1 after init */
     volatile uint32_t diag_spi_sts;        /* SPI3 STS after init */
 
-    /* H2 bitstream upload diagnostic */
+    /* H2 SPI3 bitstream upload diagnostics. h2_bytes_sent/upload_done prove only
+     * that local firmware streamed the stock 115638-byte table; the FPGA has no
+     * recovered ACK/apply signal, so this is not proof the table was accepted,
+     * applied, or a DMM calibration source. */
     volatile uint32_t h2_bytes_sent;       /* Bytes uploaded (should be 115638) */
-    volatile uint8_t  h2_upload_done;      /* 1 = upload completed without error */
+    volatile uint8_t  h2_upload_done;      /* 1 = TX completed without error */
     volatile uint8_t  h2_close_status;     /* MISO byte after 0x3A close (stock: 0xF8) */
     volatile uint8_t  scope_status[4];     /* MISO from post-upload 0x03 read
                                             * (stock boot: 00 01 42 2E — issue-#18 capture) */

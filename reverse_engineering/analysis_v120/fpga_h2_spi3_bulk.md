@@ -7,6 +7,12 @@ bench verification. Derived from `init_function_decompile.txt`
 lines 4754-5100 and the stock V1.2.0 binary at
 `archive/2C53T Firmware V1.2.0/APP_2C53T_V1.2.0_251015.bin`.
 
+> Update 2026-06-06: this early note is superseded by
+> `spi3_bulk_cal_resolved.md` and `h2_extracted/FINDINGS.md` for size and
+> structure. The transfer is 115,638 bytes, not 411 bytes. What remains
+> unresolved is FPGA acceptance/apply semantics and the DMM calibration effect
+> of replaying the table in custom firmware.
+
 ## What's definitively confirmed
 
 ### 1. It's SPI3, not USART2

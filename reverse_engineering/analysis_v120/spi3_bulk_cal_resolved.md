@@ -35,6 +35,13 @@ consistent with a missing ADC gain factor that this transfer provides.
 `0x51D19`–`0x6E0CF`, sent as 38,546 × 3-byte records via SPI3 between opcode 0x3B and
 opcode 0x3A, with CS (PB6) held LOW for the entire transaction.
 
+**Acceptance/effect boundary, updated 2026-06-06:** byte count and source table
+are proven; FPGA acceptance and DMM calibration effect are not. Stock drains or
+ignores MISO during the transfer, and no ACK/apply status has been recovered.
+Therefore a custom firmware diagnostic such as "115,638 bytes sent" is TX
+evidence only. It must not be used as proof that arbitrary DMM voltage/current
+ranges are calibrated.
+
 ---
 
 ## 2. Hand-Decoded Disassembly: Lines 4798–4833

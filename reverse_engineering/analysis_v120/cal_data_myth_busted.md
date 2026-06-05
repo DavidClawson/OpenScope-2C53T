@@ -177,25 +177,16 @@ fix path.
 > missing FPGA-side boot exchange may carry calibration state remains plausible;
 > the size/framing/test plan below is historical.
 
-`CLAUDE.md` mentions a 411-byte cal exchange (137 entries × 3 bytes)
-sent via commands `0x3B`/`0x3A` during boot from a table at
-`0x08051D19` in the V1.2.0 binary. This is **FPGA-side** cal — it
-configures the FPGA meter IC's internal correction tables.
+The later H2 extraction proved a 115,638-byte SPI3 table at `0x08051D19`
+in the V1.2.0 binary, bracketed by SPI3 opcodes `0x3B`/`0x3A`. This is
+not USART2, and it is not 411 bytes. The table may carry FPGA-side meter
+pipeline state, but stock also ignores/drains MISO, so a custom replay's
+byte count is only TX evidence.
 
-Our boot sequence (`fpga.c`, the `usart2_send_cmd(0x00, FPGA_CMD_INIT_*)`
-calls) does **not** send this exchange. If the FPGA has sensible
-defaults for most ranges but relies on the 411-byte table for low-Ω
-correction, that would produce exactly the symptom we see.
-
-**Test**: extract the 411-byte table from the stock binary, replay it
-over USART2 at boot via cmds 0x3B/0x3A, and re-bench.
-
-**Decomp target**: trace where `FPGA_CMD_INIT_3B` / `0x3B` is sent,
-and how the 411 bytes are paged out via the 2-byte TX frame payload.
-Given our confirmed TX frame layout (only cmd_hi/cmd_lo carry
-payload), sending 411 bytes requires 411 separate 10-byte frames,
-~43 seconds at 9600 baud. That's consistent with the long "boot
-pause" we observe on stock.
+**Current test target**: prove FPGA acceptance/apply semantics or bench
+the replay across multiple DMM modes/ranges. Do not treat a complete
+115,638-byte upload as proof that low-Ω, low-DCV, or current ranges are
+calibrated.
 
 ### H3: Stock firmware applies an MCU-side post-decode scale factor
 
@@ -224,9 +215,9 @@ LCD string formatter.
    scope trigger comparator, which has no role in meter accuracy.
    Stock does not re-call it at runtime in meter mode.
 
-2. **H2 (now the leading hypothesis)**: Extract the 411-byte table
-   and add the boot-time cal exchange. This is FPGA-side cal that
-   directly configures the meter IC's internal correction tables.
+2. **H2 (now the leading hypothesis)**: The 115,638-byte SPI3 table is
+   extracted and replayable; the remaining work is ACK/apply evidence
+   or broad bench proof across DMM modes/ranges.
 
 3. **H3**: Trace the stock display path only if H2 fails.
 

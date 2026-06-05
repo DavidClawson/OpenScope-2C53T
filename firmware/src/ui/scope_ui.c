@@ -1059,8 +1059,9 @@ static void draw_scope_debug(const theme_t *th)
      *      Exp H demoted this from "the wall" to a non-discriminator: stock reads
      *      the same 0x00039020 here and still configures. Compare CFG's D flag.
      * Dropped S2/ST here — CTRL2 and STS were static (0003 / 0002) across every
-     * run so far, and ED is the number this experiment turns on. */
-    snprintf(buf, sizeof(buf), "S1:%04X ED:%02X%02X%02X%02X H2:%c",
+     * run so far, and ED is the number this experiment turns on.
+     * H2T means bytes streamed, not recovered FPGA acceptance. */
+    snprintf(buf, sizeof(buf), "S1:%04X ED:%02X%02X%02X%02X H2T:%c",
              (uint16_t)fpga.diag_spi_ctrl1,
              fpga.edit_mode_status[0], fpga.edit_mode_status[1],
              fpga.edit_mode_status[2], fpga.edit_mode_status[3],

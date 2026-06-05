@@ -73,6 +73,12 @@ for stock `ms[0x02]` and `ms[0x03]`, the exact effect and commit semantics of
 the H2 SPI3 bulk replay, and any real factory calibration source in
 W25Q/system files/SPI bulk tables.
 
+The H2 boundary is deliberately strict: stock proves a 115,638-byte SPI3 table
+from `0x08051D19` bracketed by `0x3B`/`0x3A`, and the open firmware can report
+that those bytes were transmitted. That byte count is not acceptance proof. No
+recovered stock path shows an FPGA ACK/apply status, and no current live trace
+proves that the table fixes low-DCV or current-mode correctness.
+
 ## Validation Direction
 
 Use unit/state-machine/property tests for the broad mode matrix first. Use the

@@ -612,7 +612,7 @@ static void cmd_status(void)
     usb_debug_printf(
         "\r\n=== H2 Bitstream Upload ===\r\n"
         "Bytes sent: %lu / 115638\r\n"
-        "Upload done: %s\r\n"
+        "TX complete: %s (no recovered FPGA ACK)\r\n"
         "0x3A close status: %02X (stock: F8)\r\n"
         "0x03 scope status: %02X %02X %02X %02X (stock: 00 01 42 2E)\r\n",
         fpga.h2_bytes_sent,
@@ -2871,7 +2871,8 @@ static void cmd_spi3_acqtest(void)
     usb_debug_printf("SPI3 CTRL1: 0x%08lX\r\n", *(volatile uint32_t *)0x40003C00);
     usb_debug_printf("SPI3 CTRL2: 0x%08lX\r\n", *(volatile uint32_t *)0x40003C04);
     usb_debug_printf("SPI3 STS:   0x%08lX\r\n", *(volatile uint32_t *)0x40003C08);
-    usb_debug_printf("H2 done: %d  bytes: %lu\r\n", fpga.h2_upload_done, fpga.h2_bytes_sent);
+    usb_debug_printf("H2 tx:   %d  bytes: %lu (no ACK proof)\r\n",
+                     fpga.h2_upload_done, fpga.h2_bytes_sent);
 
     /* --- Test 1: Raw read with CS LOW (16 bytes) --- */
     usb_send_str("\r\n-- T1: Raw SPI3 read (CS low, 16x 0xFF) --\r\n");

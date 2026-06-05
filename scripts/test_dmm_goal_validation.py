@@ -68,6 +68,19 @@ class DmmGoalValidationTests(unittest.TestCase):
         selected = validate_dmm_goal.select_acv_reject_dump(GOOD_ACV_REJECT + blank)
         self.assertEqual(selected["reject"], 3)
 
+    def test_re_coverage_requires_h2_acceptance_boundary(self) -> None:
+        coverage = validate_dmm_goal.verify_re_coverage()
+        self.assertIn(
+            "reverse_engineering/analysis_v120/spi3_bulk_cal_resolved.md",
+            coverage["docs"],
+        )
+        self.assertIn(
+            "reverse_engineering/analysis_v120/h2_extracted/FINDINGS.md",
+            coverage["docs"],
+        )
+        self.assertIn("acceptance proof", coverage["terms"])
+        self.assertIn("unproven", coverage["terms"])
+
 
 if __name__ == "__main__":
     unittest.main()

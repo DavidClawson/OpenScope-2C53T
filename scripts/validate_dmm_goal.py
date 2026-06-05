@@ -96,6 +96,9 @@ def verify_re_coverage() -> dict[str, Any]:
         "reverse_engineering/analysis_v120/meter_mode_command_table_2026_06_05.md",
         "reverse_engineering/analysis_v120/meter_acv_stock_case_2026_06_05.md",
         "reverse_engineering/analysis_v120/meter_math_pipeline_annotated.c",
+        "reverse_engineering/analysis_v120/dmm_state_machine_contract_2026_06_05.md",
+        "reverse_engineering/analysis_v120/spi3_bulk_cal_resolved.md",
+        "reverse_engineering/analysis_v120/h2_extracted/FINDINGS.md",
     ]
     required_code = [
         "firmware/src/drivers/meter_data.c",
@@ -107,7 +110,8 @@ def verify_re_coverage() -> dict[str, Any]:
         "DC voltage", "AC voltage", "DC current", "AC current",
         "resistance", "continuity", "diode", "capacitance",
         "temperature", "selector", "mux", "settle", "discard",
-        "empirical", "stock",
+        "empirical", "stock", "H2", "SPI3", "115,638",
+        "acceptance proof", "unproven",
     ]
 
     haystack = ""

@@ -257,6 +257,12 @@ Both the bin and the analysis report are reproducible by running
 
 ## 10. Confidence assessment
 
+The extraction proves the table and structure, not the FPGA's acceptance of a
+custom replay. Current firmware diagnostics can prove only TX byte count unless
+a future stock xref or MISO/live trace recovers an ACK/apply condition. Treat
+the DMM calibration effect as unproven until bench evidence covers multiple DMM
+modes/ranges.
+
 | Claim | Confidence |
 |---|---|
 | Table size = 115,638 bytes at `0x08051D19` | **CERTAIN** (byte-verified) |

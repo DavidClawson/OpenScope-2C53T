@@ -562,8 +562,11 @@ void calibration_loader(uint8_t *dest, uint16_t count, uint8_t offset_key) {
      * (derived from the per-channel ADC offset XOR'd with 0x80).
      *
      * Internal implementation likely reads from a calibration table
-     * in RAM that was previously loaded from SPI flash during the
-     * 411-byte calibration exchange (commands 0x3B/0x3A). */
+     * in RAM that was previously loaded from SPI flash during the H2
+     * SPI3 exchange. Later extraction resolved that exchange as a
+     * 115,638-byte table at 0x08051D19 bracketed by 0x3B/0x3A, not
+     * the older 411-byte folklore. Its exact FPGA acceptance/apply
+     * semantics remain unresolved. */
     for (uint16_t i = 0; i < count; i++) {
         dest[i] = cal_table_lookup(offset_key, i);
     }
