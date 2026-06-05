@@ -1934,6 +1934,8 @@ static void cmd_meter_dump(const char *args)
                      meter_reading.update_count,
                      live ? meter_reading.display_str : "---",
                      (live && meter_reading.unit_suffix) ? meter_reading.unit_suffix : "");
+    usb_debug_printf("transition_discard_remaining=%u\r\n",
+                     (unsigned)meter_frame_discard_count);
     usb_debug_printf("raw_bcd=%d decimal_pos=%u negative=%u unit_variant=%u bar_i100=%ld aux_freq_i10=%ld\r\n",
                      meter_reading.raw_bcd,
                      (unsigned)meter_reading.decimal_pos,

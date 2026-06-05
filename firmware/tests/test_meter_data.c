@@ -287,6 +287,40 @@ static int test_resistance_band_overrides_have_regression_fixtures(void)
     return 1;
 }
 
+static int test_invalidate_clears_stale_reading_before_mode_transition(void)
+{
+    static const uint8_t mains_frame[12] = {
+        0x5A, 0xA5, 0xA5, 0xAD, 0xED, 0xBF,
+        0x0D, 0x00, 0x02, 0x00, 0x00, 0x31,
+    };
+    uint8_t ohms_frame[12];
+    uint32_t updates_after_frame;
+
+    build_segment_frame(ohms_frame, 3, 3, 0, 0, 0x40, 0x00, 0x00, 0x00, 0);
+
+    meter_data_init();
+    process_frame(mains_frame, 1);
+    ASSERT(expect_normal_reading("228.2", "V", 228.2f, 0.05f));
+    ASSERT(close_to(meter_reading.aux_freq_hz, 49.0f, 0.1f));
+    updates_after_frame = meter_reading.update_count;
+
+    meter_data_invalidate(6);
+    ASSERT(!meter_reading.valid);
+    ASSERT(meter_reading.submode == 6);
+    ASSERT(meter_reading.result_class == METER_RESULT_NONE);
+    ASSERT_STR_EQ(meter_reading.display_str, "---");
+    ASSERT_STR_EQ(meter_reading.unit_suffix, "");
+    ASSERT(close_to(meter_reading.value, 0.0f, 0.001f));
+    ASSERT(close_to(meter_reading.aux_freq_hz, 0.0f, 0.001f));
+    ASSERT(!meter_reading.continuity_beep);
+    ASSERT(meter_reading.update_count == updates_after_frame + 1);
+
+    process_frame(ohms_frame, 6);
+    ASSERT(expect_normal_reading("3.300", "kOhm", 3.300f, 0.001f));
+    ASSERT(meter_reading.submode == 6);
+    return 1;
+}
+
 static int test_voltage_mode_mains_frequency_frame_overrides_dcv_0f_rule(void)
 {
     static const uint8_t frame[12] = {
@@ -449,6 +483,7 @@ int main(void)
     TEST(acv_mains_frame_uses_high_voltage_scale_and_frequency);
     TEST(stock_formatter_families_have_regression_fixtures);
     TEST(resistance_band_overrides_have_regression_fixtures);
+    TEST(invalidate_clears_stale_reading_before_mode_transition);
     TEST(voltage_mode_mains_frequency_frame_overrides_dcv_0f_rule);
     TEST(voltage_mode_mains_rotating_frames_stay_high_voltage);
     TEST(acv_repeated_rotating_range_frames_do_not_drop_to_2v);

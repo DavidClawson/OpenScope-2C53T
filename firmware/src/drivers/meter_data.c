@@ -669,6 +669,38 @@ void meter_data_init(void)
     meter_stock_fsm.stock_mode = 0xFF;
 }
 
+void meter_data_invalidate(uint8_t submode)
+{
+    meter_reading_t *r = &meter_reading;
+
+    r->value = 0.0f;
+    r->raw_bcd = 0;
+    memset(r->digits, 0, sizeof(r->digits));
+    r->decimal_pos = 0;
+    r->negative = false;
+    strcpy(r->display_str, "---");
+    r->unit_suffix = "";
+    r->unit_variant = 0;
+    r->bar_fraction = 0.0f;
+    r->aux_freq_hz = 0.0f;
+    r->result_class = METER_RESULT_NONE;
+    r->is_ac = false;
+    r->is_auto_range = false;
+    r->is_hold = false;
+    r->submode = submode;
+    r->probe_type = 0;
+    r->range_indicator = 0;
+    r->range_cmd = 0;
+    r->continuity_beep = false;
+    r->valid = false;
+    memset(r->dbg_frame, 0, sizeof(r->dbg_frame));
+    memset(r->dbg_nibbles, 0, sizeof(r->dbg_nibbles));
+    memset(r->dbg_raw_digits, 0, sizeof(r->dbg_raw_digits));
+
+    meter_stock_fsm_reset(stock_mode_from_ui_submode(submode));
+    r->update_count++;
+}
+
 void meter_data_process_frame(const volatile uint8_t *frame, uint8_t submode)
 {
     meter_reading_t *r = &meter_reading;

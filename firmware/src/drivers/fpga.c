@@ -91,6 +91,9 @@ static TaskHandle_t      rx_task_handle  = NULL;
 /* Track whether we've received at least one valid acquisition */
 static volatile bool data_ready = false;
 static volatile bool scope_reinit_pending = false;
+volatile uint8_t meter_frame_discard_count;
+
+#define METER_MODE_SWITCH_DISCARD_FRAMES 2U
 
 void fpga_meter_adc_diag_reset(void)
 {
@@ -105,6 +108,11 @@ void fpga_meter_adc_diag_reset(void)
     fpga_meter_adc_last_sample = 0;
     fpga_meter_adc_min_sample = 255;
     fpga_meter_adc_max_sample = 0;
+}
+
+static void fpga_meter_discard_next_frames(uint8_t count)
+{
+    meter_frame_discard_count = count;
 }
 
 /* ═══════════════════════════════════════════════════════════════════
@@ -1472,6 +1480,10 @@ static void fpga_usart_rx_task(void *pv)
         /* Parse the meter data from the RX frame.
          * meter_submode is the global from main.c (via ui.h extern). */
         extern volatile uint8_t meter_submode;
+        if (meter_frame_discard_count > 0) {
+            meter_frame_discard_count--;
+            continue;
+        }
         meter_data_process_frame(fpga.rx_frame, meter_submode);
 
         /* Auto-range feedback commands (0x1B, 0x1C, 0x1E) DISABLED.
@@ -4016,6 +4028,8 @@ void fpga_set_meter_mode(uint8_t submode)
         if (dac_output_is_running()) dac_output_stop();
     }
 
+    meter_data_invalidate(submode);
+    fpga_meter_discard_next_frames(METER_MODE_SWITCH_DISCARD_FRAMES);
     fpga_set_meter_frontend_baseline();
     fpga_scope_delay_ms(10);
     fpga_send_meter_mode_sequence(submode);
@@ -4029,6 +4043,8 @@ void fpga_meter_reinit(uint8_t submode)
 #endif
     if (!fpga.initialized) return;
 
+    meter_data_invalidate(submode);
+    fpga_meter_discard_next_frames(METER_MODE_SWITCH_DISCARD_FRAMES);
     fpga_send_meter_wake_preamble();
     fpga_scope_delay_ms(10);
     fpga_send_meter_mode_sequence(submode);

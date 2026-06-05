@@ -139,6 +139,13 @@ extern uint8_t meter_frame_history_head;
 void meter_data_init(void);
 
 /*
+ * Invalidate the current reading during meter mode/range transitions.
+ * This prevents the UI and USB debug shell from relabeling the previous
+ * mode's last valid frame while the FPGA/meter IC settles into the new mode.
+ */
+void meter_data_invalidate(uint8_t submode);
+
+/*
  * Process a complete FPGA USART2 RX data frame (12 bytes).
  * Extracts BCD digits, detects special codes (OL, continuity, blank),
  * assembles the measurement value, and updates meter_reading.
