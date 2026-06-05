@@ -114,6 +114,75 @@ def verify_no_unrecovered_meter_coefficients() -> dict[str, Any]:
     return {"checked": checked, "forbidden": forbidden}
 
 
+def verify_state_machine_property_contract() -> dict[str, Any]:
+    """Anchor the broad DMM software model so the gate cannot pass a thin harness.
+
+    The C tests are still the executable proof.  This static check makes sure
+    the goal gate is tied to the adversarial state-machine tests themselves,
+    not just to a green aggregate test target whose contents could drift.
+    """
+    rel = "firmware/tests/test_meter_data.c"
+    text = (REPO / rel).read_text(encoding="utf-8", errors="replace")
+    required_tests = [
+        "dcv_stock_range_class_priority_all_bit_combinations",
+        "acv_rejects_dc_voltage_without_ac_evidence",
+        "ac_current_rejects_current_frame_without_ac_evidence",
+        "invalid_submode_rejects_without_becoming_dcv",
+        "state_machine_property_matrix_covers_all_submodes",
+        "invalidate_clears_stale_payload_for_every_ordered_mode_transition",
+        "marker_visible_family_mismatch_matrix_clears_stale_payload",
+        "voltage_payload_clears_stale_reading_in_all_non_voltage_modes",
+        "large_current_submodes_use_active_local_range_state",
+        "current_submodes_do_not_expose_unproven_microamp_unit",
+    ]
+    required_regexes = {
+        "all local submodes 0..10 are enumerated":
+            r"static const uint8_t modes\[FPGA_METER_LOCAL_SUBMODE_COUNT\]\s*=\s*"
+            r"\{\s*0,\s*1,\s*2,\s*3,\s*4,\s*5,\s*6,\s*7,\s*8,\s*9,\s*10\s*\};",
+        "range class bits cover all 16 combinations":
+            r"for \(uint8_t bits = 0; bits < 16; bits\+\+\)",
+        "range class +10000 extension is covered":
+            r"for \(uint8_t extend = 0; extend < 2; extend\+\+\)",
+        "ordered source submodes are exhaustive":
+            r"for \(uint8_t source = 0; source < FPGA_METER_LOCAL_SUBMODE_COUNT; source\+\+\)",
+        "ordered destination submodes are exhaustive":
+            r"for \(uint8_t dest = 0; dest < FPGA_METER_LOCAL_SUBMODE_COUNT; dest\+\+\)",
+        "all non-voltage modes reject voltage frames":
+            r"static const uint8_t (wrong_family_)?modes\[\]\s*=\s*"
+            r"\{\s*2,\s*3,\s*4,\s*5,\s*6,\s*7,\s*8,\s*9,\s*10\s*\};",
+    }
+    required_snippets = [
+        "METER_REJECT_MISSING_AC_EVIDENCE",
+        "METER_REJECT_WRONG_FRAME_FAMILY",
+        "low-dcv-voltage",
+        "FPGA_METER_FRAME_FAMILY_CONTINUITY",
+        "uA",
+    ]
+
+    missing_tests = [
+        name for name in required_tests
+        if f"static int test_{name}" not in text or f"TEST({name});" not in text
+    ]
+    missing_regexes = [
+        name for name, pattern in required_regexes.items()
+        if re.search(pattern, text, re.MULTILINE) is None
+    ]
+    missing_snippets = [snippet for snippet in required_snippets if snippet not in text]
+    if missing_tests or missing_regexes or missing_snippets:
+        raise GateError(
+            "state-machine property contract check failed: "
+            f"missing_tests={missing_tests} "
+            f"missing_regexes={missing_regexes} "
+            f"missing_snippets={missing_snippets}"
+        )
+    return {
+        "file": rel,
+        "tests": required_tests,
+        "regex_anchors": list(required_regexes),
+        "snippet_anchors": required_snippets,
+    }
+
+
 def verify_re_coverage() -> dict[str, Any]:
     required_docs = [
         "reverse_engineering/analysis_v120/meter_stock_multiplier_tables_2026_06_05.md",
@@ -150,6 +219,8 @@ def verify_re_coverage() -> dict[str, Any]:
         "0x080373A8", "digital stock DMM FSM",
         "32-case range-class matrix", "all 16 combinations",
         "ordered mode-transition stale matrix", "every source submode",
+        "state-machine property anchors", "all local submodes 0..10",
+        "live validation only switches DCV/ACV",
         "mux callsite guard", "0x080020B2", "0x0801A53E", "0x0802724A",
         "complete direct mux callsite list", "scope/siggen mux callers are not DMM runtime range proof",
     ]
@@ -383,6 +454,7 @@ def main(argv: list[str] | None = None) -> int:
             report["software_gate"] = run_software_gate()
             report["firmware_changed_since_upstream"] = firmware_changed_since_upstream()
             report["flash_preflight"] = preflight_current_firmware_image()
+        report["state_machine_property_contract"] = verify_state_machine_property_contract()
         report["re_comment_coverage"] = verify_re_coverage()
         report["no_unrecovered_meter_coefficients"] = verify_no_unrecovered_meter_coefficients()
 

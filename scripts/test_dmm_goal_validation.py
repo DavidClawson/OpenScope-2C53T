@@ -150,6 +150,75 @@ class DmmGoalValidationTests(unittest.TestCase):
         self.assertIn("firmware/src/drivers/meter_data.c", result["checked"])
         self.assertIn("METER_CAL_LOW_OHM_FACTOR", result["forbidden"])
 
+    def test_state_machine_property_contract_is_anchored(self) -> None:
+        result = validate_dmm_goal.verify_state_machine_property_contract()
+        self.assertEqual(result["file"], "firmware/tests/test_meter_data.c")
+        self.assertIn(
+            "state_machine_property_matrix_covers_all_submodes",
+            result["tests"],
+        )
+        self.assertIn(
+            "invalidate_clears_stale_payload_for_every_ordered_mode_transition",
+            result["tests"],
+        )
+        self.assertIn(
+            "marker_visible_family_mismatch_matrix_clears_stale_payload",
+            result["tests"],
+        )
+        self.assertIn("range class bits cover all 16 combinations",
+                      result["regex_anchors"])
+        self.assertIn("all non-voltage modes reject voltage frames",
+                      result["regex_anchors"])
+        self.assertIn("METER_REJECT_MISSING_AC_EVIDENCE",
+                      result["snippet_anchors"])
+
+    def test_live_validation_only_switches_dcv_acv_without_current_probe(self) -> None:
+        calls: list[list[str]] = []
+        meter_dumps = [GOOD_DCV, GOOD_ACV_REJECT]
+        old_live_debug = validate_dmm_goal.live_debug
+        old_capture_webcam = validate_dmm_goal.capture_webcam
+        old_sleep = validate_dmm_goal.time.sleep
+
+        def fake_capture_webcam(device: str, output: Path, size: str) -> dict[str, object]:
+            return {"device": device, "path": str(output), "bytes": 1, "size": size}
+
+        def fake_live_debug(args: list[str]) -> str:
+            calls.append(args)
+            if args and args[0] == "meter-dump":
+                return meter_dumps.pop(0)
+            return "ok"
+
+        try:
+            validate_dmm_goal.live_debug = fake_live_debug
+            validate_dmm_goal.capture_webcam = fake_capture_webcam
+            validate_dmm_goal.time.sleep = lambda seconds: None
+            args = validate_dmm_goal.argparse.Namespace(
+                observed_source_voltage=0.4365,
+                voltage_tolerance=0.01,
+                webcam="/dev/video-test",
+                webcam_size="1x1",
+                timeout=0.1,
+                port=None,
+                settle_seconds=0.0,
+            )
+
+            result = validate_dmm_goal.run_live_validation(
+                args, Path("tmp/test_live_validation_only_dcv_acv")
+            )
+        finally:
+            validate_dmm_goal.live_debug = old_live_debug
+            validate_dmm_goal.capture_webcam = old_capture_webcam
+            validate_dmm_goal.time.sleep = old_sleep
+
+        mode_commands = [call[1] for call in calls if call and call[0] == "command"]
+        self.assertEqual(
+            mode_commands,
+            ["mode meter 0 0", "mode meter 1 0", "mode meter 0 0"],
+        )
+        self.assertTrue(result["passed"])
+        self.assertIn("not probed", result["current_live"])
+        self.assertIn("not probed", result["passive_live"])
+
     def test_stock_meter_selector_table_is_binary_grounded(self) -> None:
         result = stock_meter_literals.verify_meter_selector_table()
         self.assertEqual(result["runtime_addr"], 0x080BB3FC)

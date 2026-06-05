@@ -97,6 +97,20 @@ The software contract proves parser/state safety only:
   every destination submode, so a valid prior-mode payload cannot survive a
   transition just because it remains numerically plausible
 
+The goal gate now has explicit state-machine property anchors in
+`scripts/validate_dmm_goal.py`, so passing the final command is tied to these
+C invariants and not just to a thin live harness. The static anchors require
+all local submodes 0..10, the 16 range-class bit combinations with both
+`frame[2].3` extension states, AC-evidence rejection, wrong-family rejection,
+the marker-visible low-DCV/continuity cases, and the all-source/all-destination
+transition stale matrix to remain present and registered in `main()`.
+
+Live validation only switches DCV/ACV on the energized bench input. Passive and
+current modes stay unprobed in that live path: passive voltage-payload rejection
+and current voltage-payload rejection are software/property-test obligations
+until a current jack, series circuit, and load-limited source are explicitly set
+up for a safe current-mode run.
+
 Physical correctness for arbitrary DMM inputs still requires deeper stock xrefs
 or repeatable live traces of the analog frontend/range path. The parser still
 does not invent frame-family markers for unmarked current/resistance/diode/
