@@ -528,6 +528,41 @@ static int test_continuity_frame_sets_beep_from_segment_pattern(void)
     ASSERT(meter_reading.dbg_raw_digits[1] == 0x12);
     ASSERT(meter_reading.dbg_raw_digits[2] == 0x0A);
     ASSERT(meter_reading.dbg_raw_digits[3] == 5);
+    ASSERT(expect_family_debug((uint8_t)FPGA_METER_FRAME_FAMILY_CONTINUITY,
+                               (uint8_t)FPGA_METER_FRAME_FAMILY_CONTINUITY,
+                               METER_REJECT_NONE));
+    return 1;
+}
+
+static int test_continuity_marker_rejected_outside_continuity_mode(void)
+{
+    uint8_t continuity[12];
+    uint8_t normal[12];
+    static const uint8_t modes[] = { 0, 1, 2, 3, 4, 5, 6, 8, 9, 10 };
+
+    build_segment_frame(continuity, 0, 0x12, 0x0A, 5,
+                        0x00, 0x00, 0x00, 0x00, 0);
+    build_segment_frame(normal, 1, 2, 3, 4,
+                        0x00, 0x00, 0x00, 0x00, 0);
+
+    for (unsigned i = 0; i < sizeof(modes); i++) {
+        uint8_t mode = modes[i];
+
+        meter_data_init();
+        process_frame(normal, mode);
+        ASSERT(meter_reading.valid);
+        ASSERT(meter_reading.result_class == METER_RESULT_NORMAL);
+
+        process_frame(continuity, mode);
+        ASSERT(!meter_reading.valid);
+        ASSERT(meter_reading.submode == mode);
+        ASSERT(meter_reading.result_class == METER_RESULT_NONE);
+        ASSERT(expect_payload_cleared("---"));
+        ASSERT(expect_family_debug(
+            (uint8_t)fpga_meter_frame_family_for_submode(mode),
+            (uint8_t)FPGA_METER_FRAME_FAMILY_CONTINUITY,
+            METER_REJECT_WRONG_FRAME_FAMILY));
+    }
     return 1;
 }
 
@@ -935,6 +970,7 @@ int main(void)
     TEST(voltage_mode_mains_rotating_frames_stay_high_voltage);
     TEST(acv_repeated_rotating_range_frames_do_not_drop_to_2v);
     TEST(continuity_frame_sets_beep_from_segment_pattern);
+    TEST(continuity_marker_rejected_outside_continuity_mode);
     TEST(non_continuity_terminal_frames_clear_stale_beep);
     TEST(special_frames_clear_stale_aux_frequency);
     TEST(special_frames_clear_stale_payload_fields);

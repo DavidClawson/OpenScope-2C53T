@@ -428,6 +428,12 @@ static bool frame_has_voltage_payload_marker(const volatile uint8_t *frame)
     return frame[8] == 0x02 && frame[9] == 0x00;
 }
 
+static bool raw_digits_are_continuity_marker(const uint8_t raw_digits[4])
+{
+    return raw_digits[1] == 0x12 && raw_digits[2] == 0x0A &&
+           raw_digits[3] == 5;
+}
+
 static uint8_t observed_frame_family(uint8_t expected_family,
                                      const volatile uint8_t *frame)
 {
@@ -723,6 +729,11 @@ static bool frame_is_voltage_payload(uint8_t submode,
            frame_has_voltage_payload_marker(frame);
 }
 
+static bool frame_family_mismatch(const meter_reading_t *r)
+{
+    return r->observed_frame_family != r->expected_frame_family;
+}
+
 /* ═══════════════════════════════════════════════════════════════════
  * Format value into display string
  * ═══════════════════════════════════════════════════════════════════ */
@@ -919,6 +930,11 @@ void meter_data_process_frame(const volatile uint8_t *frame, uint8_t submode)
     r->dbg_raw_digits[1] = digit1;
     r->dbg_raw_digits[2] = digit2;
     r->dbg_raw_digits[3] = digit3;
+    if (!frame_has_voltage_payload_marker(frame) &&
+        raw_digits_are_continuity_marker(r->dbg_raw_digits)) {
+        r->observed_frame_family =
+            (uint8_t)FPGA_METER_FRAME_FAMILY_CONTINUITY;
+    }
 
     /* Parse status flags from byte [7]. The stock parser treats this as the
      * status byte for data frames and as an integrity marker for echo frames. */
@@ -974,7 +990,8 @@ void meter_data_process_frame(const volatile uint8_t *frame, uint8_t submode)
 
     /* --- Special value detection --- */
 
-    if (frame_is_voltage_payload(submode, frame)) {
+    if (frame_is_voltage_payload(submode, frame) ||
+        frame_family_mismatch(r)) {
         r->reject_reason = METER_REJECT_WRONG_FRAME_FAMILY;
         METER_REJECT_FRAME();
         return;
