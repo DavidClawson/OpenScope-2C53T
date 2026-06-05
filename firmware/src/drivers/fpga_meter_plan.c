@@ -40,3 +40,31 @@ uint16_t fpga_meter_stock_cmd_word_for_submode(uint8_t submode)
     return (uint16_t)(FPGA_METER_STOCK_WORD_BASE |
                       fpga_meter_stock_cmd_low_for_mode(stock_mode));
 }
+
+bool fpga_meter_stock_apply_cmd_word_for_submode(uint8_t submode, uint16_t *word)
+{
+    uint8_t stock_mode = fpga_meter_stock_mode_for_submode(submode);
+    uint8_t low;
+
+    switch (stock_mode) {
+    case 1:
+        low = 0x0D;
+        break;
+    case 2:
+        low = 0x0E;
+        break;
+    case 6:
+        low = 0x16;
+        break;
+    case 7:
+        low = 0x15;
+        break;
+    default:
+        return false;
+    }
+
+    if (word != 0) {
+        *word = (uint16_t)(FPGA_METER_STOCK_WORD_BASE | low);
+    }
+    return true;
+}

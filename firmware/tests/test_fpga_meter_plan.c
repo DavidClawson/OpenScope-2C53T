@@ -1,4 +1,5 @@
 #include <stdint.h>
+#include <stdbool.h>
 #include <stdio.h>
 #include <stdlib.h>
 
@@ -69,11 +70,39 @@ static void test_wire_words_are_raw_05_family(void)
     }
 }
 
+static void test_stock_apply_words_for_runtime_family_switch(void)
+{
+    static const uint16_t expected_apply[FPGA_METER_LOCAL_SUBMODE_COUNT] = {
+        0x0000, 0x050D, 0x0000, 0x0000, 0x0000,
+        0x0000, 0x050E, 0x0516, 0x0515, 0x0000
+    };
+
+    for (uint8_t i = 0; i < FPGA_METER_LOCAL_SUBMODE_COUNT; i++) {
+        char name[32];
+        uint16_t word = 0xAAAA;
+        bool have_word = fpga_meter_stock_apply_cmd_word_for_submode(i, &word);
+
+        snprintf(name, sizeof(name), "apply exists %u", (unsigned)i);
+        EXPECT_EQ_U8(name, have_word ? 1U : 0U,
+                     expected_apply[i] != 0 ? 1U : 0U);
+        if (expected_apply[i] != 0) {
+            snprintf(name, sizeof(name), "apply word %u", (unsigned)i);
+            EXPECT_EQ_U16(name, word, expected_apply[i]);
+            EXPECT_EQ_U8("apply raw family", (uint8_t)(word >> 8), 0x05);
+        } else {
+            snprintf(name, sizeof(name), "apply untouched %u", (unsigned)i);
+            EXPECT_EQ_U16(name, word, 0xAAAA);
+        }
+    }
+}
+
 static void test_fallbacks(void)
 {
     EXPECT_EQ_U8("bad stock mode falls back", fpga_meter_stock_cmd_low_for_mode(99), 0x14);
     EXPECT_EQ_U8("bad submode stock mode", fpga_meter_stock_mode_for_submode(99), 0);
     EXPECT_EQ_U16("bad submode word", fpga_meter_stock_cmd_word_for_submode(99), 0x0514);
+    EXPECT_EQ_U8("bad submode no apply word",
+                 fpga_meter_stock_apply_cmd_word_for_submode(99, NULL) ? 1U : 0U, 0U);
 }
 
 int main(void)
@@ -81,6 +110,7 @@ int main(void)
     test_stock_table_bytes();
     test_local_submode_mapping();
     test_wire_words_are_raw_05_family();
+    test_stock_apply_words_for_runtime_family_switch();
     test_fallbacks();
 
     if (failures) {

@@ -4117,8 +4117,12 @@ static void fpga_timed_send_probe_detect(uint32_t delay_ms)
 static void fpga_send_meter_mode_sequence(uint8_t submode)
 {
     uint16_t word = fpga_meter_stock_cmd_word_for_submode(submode);
+    uint16_t apply_word;
 
     fpga_wire_send_word(word, 20);
+    if (fpga_meter_stock_apply_cmd_word_for_submode(submode, &apply_word)) {
+        fpga_wire_send_word(apply_word, 20);
+    }
     fpga_timed_send_probe_detect(10);
     fpga_timed_send_cmd(0x05, FPGA_CMD_METER_START, 20);
 }
