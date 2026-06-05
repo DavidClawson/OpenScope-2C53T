@@ -1123,29 +1123,154 @@ fpga_meter_selector_t fpga_meter_expected_selectors(uint8_t submode)
     return selectors;
 }
 
-static void fpga_set_meter_frontend_baseline(void)
+static void fpga_apply_meter_portc_porte_mux(uint8_t mux)
 {
+    switch (mux) {
+    case 0:
+        GPIOC->scr = (1U << 12);
+        GPIOE->clr = (1U << 5);
+        GPIOE->scr = (1U << 6);
+        break;
+    case 1:
+        GPIOC->scr = (1U << 12);
+        GPIOE->scr = (1U << 6);
+        break;
+    case 2:
+        GPIOC->scr = (1U << 12);
+        GPIOE->scr = (1U << 5);
+        GPIOE->clr = (1U << 6);
+        break;
+    case 3:
+        GPIOC->scr = (1U << 12);
+        GPIOE->scr = (1U << 4);
+        GPIOE->clr = (1U << 6);
+        break;
+    case 4:
+        GPIOC->scr = (1U << 12);
+        GPIOE->scr = (1U << 5);
+        GPIOE->clr = (1U << 6);
+        break;
+    case 5:
+        GPIOC->clr = (1U << 12);
+        GPIOE->clr = (1U << 5);
+        GPIOE->scr = (1U << 6);
+        break;
+    case 6:
+        GPIOC->clr = (1U << 12);
+        GPIOE->scr = (1U << 6);
+        break;
+    case 7:
+        GPIOC->clr = (1U << 12);
+        GPIOE->clr = (1U << 4);
+        GPIOE->scr = (1U << 6);
+        break;
+    case 8:
+        GPIOC->clr = (1U << 12);
+        GPIOE->scr = (1U << 4);
+        GPIOE->clr = (1U << 6);
+        break;
+    case 9:
+        GPIOC->clr = (1U << 12);
+        GPIOE->scr = (1U << 5);
+        GPIOE->clr = (1U << 6);
+        break;
+    default:
+        break;
+    }
+}
+
+static void fpga_apply_meter_porta_portb_mux(uint8_t mux)
+{
+    switch (mux) {
+    case 0:
+        GPIOA->scr = (1U << 15);
+        GPIOB->scr = PB11_MASK;
+        GPIOB->clr = (1U << 10);
+        GPIOA->scr = (1U << 10);
+        break;
+    case 1:
+        GPIOA->scr = (1U << 15);
+        GPIOB->scr = (1U << 10);
+        GPIOA->scr = (1U << 10);
+        break;
+    case 2:
+        GPIOB->clr = PB11_MASK;
+        GPIOA->scr = (1U << 15);
+        GPIOB->scr = (1U << 10);
+        GPIOA->clr = (1U << 10);
+        break;
+    case 3:
+        GPIOA->scr = (1U << 15);
+        GPIOB->scr = PB11_MASK;
+        GPIOB->clr = (1U << 10);
+        GPIOA->clr = (1U << 10);
+        break;
+    case 4:
+        GPIOA->scr = (1U << 15);
+        GPIOB->scr = (1U << 10);
+        GPIOA->clr = (1U << 10);
+        break;
+    case 5:
+        GPIOA->clr = (1U << 15);
+        GPIOB->scr = PB11_MASK;
+        GPIOB->clr = (1U << 10);
+        GPIOA->scr = (1U << 10);
+        break;
+    case 6:
+        GPIOA->clr = (1U << 15);
+        GPIOB->scr = (1U << 10);
+        GPIOA->scr = (1U << 10);
+        break;
+    case 7:
+        GPIOB->clr = PB11_MASK;
+        GPIOA->clr = (1U << 15);
+        GPIOB->scr = (1U << 10);
+        GPIOA->scr = (1U << 10);
+        break;
+    case 8:
+        GPIOA->clr = (1U << 15);
+        GPIOB->scr = PB11_MASK;
+        GPIOB->clr = (1U << 10);
+        GPIOA->clr = (1U << 10);
+        break;
+    case 9:
+        GPIOA->clr = (1U << 15);
+        GPIOB->scr = (1U << 10);
+        GPIOA->clr = (1U << 10);
+        break;
+    default:
+        break;
+    }
+}
+
+static void fpga_set_meter_frontend_for_submode(uint8_t submode)
+{
+    uint8_t stock_mode = fpga_meter_stock_mode_for_submode(submode);
+
     GPIOB->scr = PB11_MASK;
     GPIOC->scr = PC6_MASK;
     GPIOC->scr = (1U << 11);
-    GPIOC->scr = (1U << 12);
-
-    GPIOE->scr = (1U << 4);
-    GPIOE->clr = (1U << 5);
-    GPIOE->scr = (1U << 6);
 
     GPIOB->scr = (1U << 9);
     GPIOA->scr = (1U << 6);
+
+    GPIOC->scr = (1U << 12);
+    GPIOE->scr = (1U << 4);
+    GPIOE->clr = (1U << 5);
+    GPIOE->scr = (1U << 6);
     GPIOA->scr = (1U << 15);
     GPIOA->scr = (1U << 10);
     GPIOB->clr = (1U << 10);
+
+    fpga_apply_meter_portc_porte_mux(stock_mode);
+    fpga_apply_meter_porta_portb_mux(stock_mode);
 }
 
 static void fpga_send_meter_wake_preamble(void)
 {
     uint8_t probe_cmd = fpga_probe_cmd_byte();
 
-    fpga_set_meter_frontend_baseline();
+    fpga_set_meter_frontend_for_submode(0);
     fpga_scope_delay_ms(20);
 
     /* Boot-time meter bring-up uses cmd_hi=0x05 for this block. Keep that
@@ -4019,7 +4144,7 @@ void fpga_set_meter_mode(uint8_t submode)
     meter_data_invalidate(submode);
     fpga_meter_discard_next_frames(METER_MODE_SWITCH_DISCARD_FRAMES);
     fpga_meter_reset_transport();
-    fpga_set_meter_frontend_baseline();
+    fpga_set_meter_frontend_for_submode(submode);
     fpga_scope_delay_ms(20);
     fpga_send_meter_mode_sequence(submode);
     meter_transition_busy = false;
@@ -4038,7 +4163,7 @@ void fpga_meter_reinit(uint8_t submode)
     fpga_meter_discard_next_frames(METER_MODE_SWITCH_DISCARD_FRAMES);
     fpga_meter_reset_transport();
     fpga_send_meter_wake_preamble();
-    fpga_set_meter_frontend_baseline();
+    fpga_set_meter_frontend_for_submode(submode);
     fpga_scope_delay_ms(20);
     fpga_send_meter_mode_sequence(submode);
     meter_transition_busy = false;
