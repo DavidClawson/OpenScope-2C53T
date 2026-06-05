@@ -380,23 +380,20 @@ static void vDisplayTask(void *pvParameters)
              * via DCMD_DRAW_SIGGEN queue commands from input_handler.
              * No continuous animation needed. */
         } else if (current_mode == MODE_MULTIMETER) {
-            /* Only redraw the meter when new FPGA data has arrived, or
-             * every second as a safety tick for time-based UI elements
-             * (HOLD indicator animations, REL clock, etc.). The display
-             * loop runs at 20 Hz but the FPGA meter poll task only
-             * produces data at ~4 Hz — drawing every loop iteration
-             * caused visible flicker from the content-area clear +
-             * redraw sequence. Settings doesn't flicker because it has
-             * no unconditional redraw branch; meter now matches that
-             * pattern, gated on the meter_reading.update_count field. */
+            /* Redraw the meter when the visible reading changes, when the
+             * submode changes, or when a debug/animated panel explicitly
+             * needs a heartbeat. Rejected frames still advance raw counters,
+             * but they must not clear/repaint the LCD. */
             static uint32_t last_meter_update = 0xFFFFFFFFu;
             static uint32_t last_meter_frame  = 0;
             static uint8_t  last_meter_submode = 0xFFu;
             uint32_t uc = meter_reading.display_update_count;
             bool submode_changed = (meter_submode != last_meter_submode);
             bool enough_time = (frame - last_meter_frame) >= 5;  /* 20Hz loop -> max 4Hz redraw */
+            bool periodic_due = meter_screen_needs_periodic_redraw() &&
+                                ((frame - last_meter_frame) >= 20);
             if (submode_changed || ((uc != last_meter_update) && enough_time) ||
-                (frame - last_meter_frame) >= 20) {
+                periodic_due) {
                 draw_meter_screen();
                 last_meter_update = uc;
                 last_meter_frame  = frame;

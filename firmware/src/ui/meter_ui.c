@@ -771,6 +771,11 @@ void meter_screen_invalidate(void)
     meter_wave_panel_retained = false;
 }
 
+bool meter_screen_needs_periodic_redraw(void)
+{
+    return meter_debug_overlay;
+}
+
 /* ═══════════════════════════════════════════════════════════════════
  * Layout 0: Full (classic DMM)
  * ═══════════════════════════════════════════════════════════════════ */
