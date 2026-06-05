@@ -17,6 +17,11 @@ const uint8_t *meter_auto_candidates(size_t *count)
     return meter_auto_candidate_order;
 }
 
+static bool reading_has_ac_evidence(const meter_reading_t *r)
+{
+    return r->is_ac || r->aux_freq_hz >= 1.0f;
+}
+
 uint8_t meter_auto_score(uint8_t submode, const meter_reading_t *r)
 {
     if (!r || !r->valid || r->submode != submode) return 0;
@@ -26,7 +31,7 @@ uint8_t meter_auto_score(uint8_t submode, const meter_reading_t *r)
         case 0:
             return (r->bcd_value > 0) ? 90U : 0U;
         case 1:
-            return (r->bcd_value > 0 && r->aux_freq_hz >= 1.0f) ? 90U : 0U;
+            return (r->bcd_value > 0 && reading_has_ac_evidence(r)) ? 90U : 0U;
         case 6:
         case 7:
             return (r->bcd_value > 0) ? 70U : 0U;
@@ -36,9 +41,10 @@ uint8_t meter_auto_score(uint8_t submode, const meter_reading_t *r)
             return (r->bcd_value > 0) ? 60U : 0U;
         case 2:
         case 3:
+            return (r->bcd_value > 0 && !reading_has_ac_evidence(r)) ? 50U : 0U;
         case 4:
         case 5:
-            return (r->bcd_value > 0) ? 50U : 0U;
+            return (r->bcd_value > 0 && reading_has_ac_evidence(r)) ? 50U : 0U;
         default:
             return 10U;
         }
