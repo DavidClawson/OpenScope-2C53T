@@ -337,6 +337,48 @@ static int test_dcv_live_0200_frame_preserves_stock_math_as_unresolved_frontend(
     return 1;
 }
 
+static int test_dcv_stock_range_class_priority_table(void)
+{
+    struct range_case {
+        uint8_t frame3_or;
+        uint8_t frame4_or;
+        uint8_t frame5_or;
+        uint8_t frame8_or;
+        int bcd;
+        const char *display;
+        float value;
+    };
+    static const struct range_case cases[] = {
+        { 0x00, 0x00, 0x00, 0x00, 1234, "1234",   1234.0f },
+        { 0x00, 0x00, 0x10, 0x00, 1234, "123.4",   123.4f },
+        { 0x00, 0x10, 0x10, 0x00, 1234, "12.34",    12.34f },
+        { 0x10, 0x10, 0x10, 0x00, 1234, "1.234",     1.234f },
+        { 0x10, 0x10, 0x10, 0x80, 1234, "0.1234",    0.1234f },
+    };
+
+    for (unsigned i = 0; i < sizeof(cases) / sizeof(cases[0]); i++) {
+        uint8_t frame[12];
+
+        build_segment_frame(frame, 1, 2, 3, 4,
+                            0x00, 0x00, 0x02, 0x00, 0);
+        frame[3] |= cases[i].frame3_or;
+        frame[4] |= cases[i].frame4_or;
+        frame[5] |= cases[i].frame5_or;
+        frame[8] |= cases[i].frame8_or;
+
+        meter_data_init();
+        process_frame(frame, 0);
+
+        ASSERT(meter_reading.valid);
+        ASSERT(meter_reading.result_class == METER_RESULT_NORMAL);
+        ASSERT(meter_reading.bcd_value == cases[i].bcd);
+        ASSERT_STR_EQ(meter_reading.display_str, cases[i].display);
+        ASSERT_STR_EQ(meter_reading.unit_suffix, "V");
+        ASSERT(close_to(meter_reading.value, cases[i].value, 0.0002f));
+    }
+    return 1;
+}
+
 static int test_dcv_class4_priority_requires_frame8_bit7(void)
 {
     static const uint8_t frame[12] = {
@@ -708,6 +750,93 @@ static int test_invalid_submode_rejects_without_becoming_dcv(void)
         (uint8_t)FPGA_METER_FRAME_FAMILY_INVALID,
         (uint8_t)FPGA_METER_FRAME_FAMILY_VOLTAGE,
         METER_REJECT_INVALID_SUBMODE));
+    return 1;
+}
+
+static int test_state_machine_property_matrix_covers_all_submodes(void)
+{
+    static const uint8_t modes[FPGA_METER_LOCAL_SUBMODE_COUNT] = {
+        0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10
+    };
+    uint8_t voltage_frame[12];
+    uint8_t low_dcv_frame[12] = {
+        0x5A, 0xA5, 0x44, 0x8E, 0xEF, 0xE7,
+        0x07, 0x24, 0x80, 0x00, 0x01, 0x89,
+    };
+    uint8_t ac_voltage_frame[12];
+    uint8_t current_frame[12];
+    uint8_t ac_current_frame[12];
+    uint8_t resistance_frame[12];
+    uint8_t continuity_frame[12];
+    uint8_t extended_frame[12];
+
+    build_segment_frame(voltage_frame, 1, 2, 3, 4,
+                        0x00, 0x00, 0x02, 0x00, 0);
+    build_segment_frame(ac_voltage_frame, 1, 2, 3, 4,
+                        0x00, 0x00, 0x02, 0x00, 0x0031);
+    build_segment_frame(current_frame, 2, 2, 6, 1,
+                        0x00, 0x00, 0x00, 0x00, 0);
+    build_segment_frame(ac_current_frame, 2, 2, 6, 1,
+                        0x00, 0x00, 0x00, 0x00, 0x0031);
+    build_segment_frame(resistance_frame, 3, 3, 0, 0,
+                        0x40, 0x00, 0x00, 0x00, 0);
+    build_segment_frame(continuity_frame, 0, 0x12, 0x0A, 5,
+                        0x00, 0x00, 0x00, 0x00, 0);
+    build_segment_frame(extended_frame, 1, 2, 3, 4,
+                        0x00, 0x00, 0x00, 0x00, 0);
+
+    for (unsigned i = 0; i < sizeof(modes); i++) {
+        uint8_t mode = modes[i];
+        const uint8_t *good =
+            (mode == 0) ? voltage_frame :
+            (mode == 1) ? ac_voltage_frame :
+            (mode == 2 || mode == 3) ? current_frame :
+            (mode == 4 || mode == 5) ? ac_current_frame :
+            (mode == 6) ? resistance_frame :
+            (mode == 7) ? continuity_frame :
+            extended_frame;
+        fpga_meter_transition_plan_t plan =
+            fpga_meter_transition_plan_for_submode(mode);
+
+        meter_data_init();
+        meter_data_invalidate(mode);
+        ASSERT(!meter_reading.valid);
+        ASSERT(meter_reading.submode == mode);
+        ASSERT(meter_reading.stock_mode == plan.stock_mode);
+        ASSERT(meter_reading.expected_frame_family == plan.frame_family);
+        ASSERT(meter_reading.reject_reason == METER_REJECT_NONE);
+
+        if (mode == 1 || mode == 4 || mode == 5) {
+            process_frame((mode == 1) ? voltage_frame : current_frame, mode);
+            ASSERT(!meter_reading.valid);
+            ASSERT(meter_reading.reject_reason == METER_REJECT_MISSING_AC_EVIDENCE);
+            ASSERT(expect_payload_cleared("---"));
+        }
+
+        process_frame(good, mode);
+        ASSERT(meter_reading.valid);
+        ASSERT(meter_reading.submode == mode);
+        ASSERT(meter_reading.stock_mode == plan.stock_mode);
+        ASSERT(meter_reading.expected_frame_family == plan.frame_family);
+        ASSERT(meter_reading.reject_reason == METER_REJECT_NONE);
+
+        if (mode != 7) {
+            process_frame(continuity_frame, mode);
+            ASSERT(!meter_reading.valid);
+            ASSERT(meter_reading.reject_reason == METER_REJECT_WRONG_FRAME_FAMILY);
+            ASSERT(expect_payload_cleared("---"));
+            process_frame(good, mode);
+            ASSERT(meter_reading.valid);
+        }
+
+        if (plan.frame_family != FPGA_METER_FRAME_FAMILY_VOLTAGE) {
+            process_frame(low_dcv_frame, mode);
+            ASSERT(!meter_reading.valid);
+            ASSERT(meter_reading.submode == mode);
+            ASSERT(meter_reading.reject_reason == METER_REJECT_WRONG_FRAME_FAMILY);
+            ASSERT(expect_payload_cleared("---"));
+        }
+    }
     return 1;
 }
 
@@ -1310,6 +1439,7 @@ int main(void)
     TEST(dcv_live_1v5_frame_uses_stock_extended_raw_and_class4);
     TEST(dcv_live_1v5_rotating_frames_keep_stock_class4);
     TEST(dcv_live_0200_frame_preserves_stock_math_as_unresolved_frontend);
+    TEST(dcv_stock_range_class_priority_table);
     TEST(dcv_class4_priority_requires_frame8_bit7);
     TEST(dcv_synthetic_5008_without_class_bits_stays_class0);
     TEST(dcv_extra_frequency_hint_does_not_set_voltage_range);
@@ -1325,6 +1455,7 @@ int main(void)
     TEST(invalidate_clears_stale_reading_for_every_submode);
     TEST(parser_stock_mode_tracks_transition_plan_for_every_submode);
     TEST(invalid_submode_rejects_without_becoming_dcv);
+    TEST(state_machine_property_matrix_covers_all_submodes);
     TEST(voltage_mode_mains_frame_uses_stock_range_hint);
     TEST(dcv_high_range_frame_stays_voltage_across_current_transition);
     TEST(voltage_mode_mains_rotating_frames_stay_high_voltage);

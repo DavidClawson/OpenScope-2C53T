@@ -57,6 +57,8 @@ slot stops being represented by the local model.
 The software contract proves parser/state safety only:
 
 - wrong-family voltage frames clear stale current/passive readings
+- low-DCV `frame[8]=0x80` and `frame[8]=0x82` class-4 voltage frames clear
+  stale current/passive readings outside voltage modes
 - AC modes fail closed without line-frequency evidence
 - mode invalidation clears stale payloads before transition
 - the first post-transition frames are discarded before parsing

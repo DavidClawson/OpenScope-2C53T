@@ -94,11 +94,12 @@ of the two recovered current slots.
 
 ## Voltage Frame-Family Marker Boundary
 
-The low-DCV live failure frame uses `frame[8]=0x82`: low seven bits still carry
-the stock DCV/voltage marker `0x02`, while bit 7 is the stock range/status input
-that selects stock decimal class `4`. Therefore `0x82`
-must be treated as a voltage-family payload for wrong-mode rejection even though
-it is not byte-equal to the common `0x02` DCV frame.
+Low-DCV live and synthetic failure frames use both `frame[8]=0x80` and
+`frame[8]=0x82` forms. In both, bit 7 is the stock range/status input that
+selects stock decimal class `4`; in the `0x82` form the low seven bits also
+carry the common DCV/voltage marker `0x02`. Therefore both `0x80` and `0x82`
+with `frame[9]=0x00` must be treated as voltage-family payloads for wrong-mode
+rejection unless a later stock xref proves another family owns that bit.
 
 This is a frame-metadata rule, not a value-recognition rule. The decoder must not
 infer voltage/current/passive family from the BCD count looking plausible.

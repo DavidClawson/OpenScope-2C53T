@@ -442,13 +442,15 @@ static void meter_stock_fsm_reset(uint8_t stock_mode)
 
 static bool frame_has_voltage_payload_marker(const volatile uint8_t *frame)
 {
-    /* Stock USART2 DMM frames carry the active voltage family in frame[8]'s low
-     * bits (`0x02` for DCV-class payloads); frame[8].7 is the highest-priority
-     * stock decimal class bit. Therefore a `0x82` class-4 DCV frame is still a
-     * voltage-family payload when it leaks into current/passive UI modes.
-     * This classification is metadata-based: it must not depend on whether the
-     * BCD count happens to look like a plausible voltage/current/resistance. */
-    return ((frame[8] & 0x7FU) == 0x02U) && frame[9] == 0x00;
+    /* Stock USART2 DMM frames carry voltage family metadata in frame[8]:
+     * `0x02` for common DCV-class payloads, and bit 7 as the highest-priority
+     * stock voltage decimal-class bit. Live low-DCV frames can arrive as
+     * `0x80` (class bit only) or `0x82` (class bit plus the low DCV marker).
+     * Both forms must clear stale current/passive readings when they leak into
+     * the wrong local mode. This is metadata-based fail-closed behavior; it
+     * must not depend on whether the BCD count happens to resemble any unit. */
+    return (((frame[8] & 0x7FU) == 0x02U) || ((frame[8] & 0x80U) != 0)) &&
+           frame[9] == 0x00;
 }
 
 static bool raw_digits_are_continuity_marker(const uint8_t raw_digits[4])
