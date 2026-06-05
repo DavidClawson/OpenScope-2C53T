@@ -37,6 +37,7 @@
 #include "scope_trigger.h"
 #include "fpga.h"
 #include "lcd.h"
+#include "meter_auto.h"
 #include "meter_data.h"
 #include "ui.h"
 #include "../ui/scope_state.h"
@@ -2048,41 +2049,14 @@ static void cmd_meter_dump(const char *args)
     }
 }
 
-static uint8_t meter_autoscan_score(uint8_t submode, const meter_reading_t *r)
-{
-    if (!r->valid || r->submode != submode) return 0;
-    if (r->result_class == METER_RESULT_NORMAL) {
-        switch (submode) {
-        case 0:
-            return (r->raw_bcd > 0) ? 90U : 0U;
-        case 1:
-            return (r->raw_bcd > 0 && r->aux_freq_hz >= 1.0f) ? 90U : 0U;
-        case 6:
-        case 7:
-            return (r->raw_bcd > 0) ? 70U : 0U;
-        case 8:
-        case 9:
-            return (r->raw_bcd > 0) ? 60U : 0U;
-        case 2:
-        case 3:
-        case 4:
-        case 5:
-            return (r->raw_bcd > 0) ? 50U : 0U;
-        default:
-            return 10U;
-        }
-    }
-    if (r->result_class == METER_RESULT_CONTINUITY) return 80U;
-    return 0;
-}
-
 static void cmd_meter_autoscan(const char *args)
 {
-    static const uint8_t candidates[] = { 0, 1, 6, 7, 8, 9, 2, 4, 3, 5 };
     uint32_t settle_ms = 2500;
     uint32_t wait_budget_ms;
     uint8_t best_mode = meter_submode;
     uint8_t best_score = 0;
+    size_t candidate_count = 0;
+    const uint8_t *candidates = meter_auto_candidates(&candidate_count);
 
     if (args && *args) {
         if (parse_int(args, &settle_ms) != 0 || settle_ms > 3000) {
@@ -2097,9 +2071,9 @@ static void cmd_meter_autoscan(const char *args)
     usb_debug_printf("autoscan settle_ms=%lu wait_budget_ms=%lu candidates=%u\r\n",
                      settle_ms,
                      wait_budget_ms,
-                     (unsigned)(sizeof(candidates) / sizeof(candidates[0])));
+                     (unsigned)candidate_count);
 
-    for (uint8_t i = 0; i < sizeof(candidates) / sizeof(candidates[0]); i++) {
+    for (uint8_t i = 0; i < candidate_count; i++) {
         uint8_t submode = candidates[i];
         uint8_t score;
 
@@ -2111,7 +2085,7 @@ static void cmd_meter_autoscan(const char *args)
         score = 0;
         for (uint32_t waited = 0; waited < wait_budget_ms; waited += 100U) {
             vTaskDelay(pdMS_TO_TICKS(100));
-            score = meter_autoscan_score(submode, (const meter_reading_t *)&meter_reading);
+            score = meter_auto_score(submode, (const meter_reading_t *)&meter_reading);
             if (score > 0) break;
         }
         usb_debug_printf("auto candidate sub=%u (%s) score=%u valid=%u cls=%u "

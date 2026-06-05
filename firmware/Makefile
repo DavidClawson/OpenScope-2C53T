@@ -56,6 +56,7 @@ C_SOURCES += src/drivers/fpga_scanner.c
 C_SOURCES += src/drivers/dac_output.c
 C_SOURCES += src/drivers/scope_trigger.c
 C_SOURCES += src/drivers/meter_data.c
+C_SOURCES += src/drivers/meter_auto.c
 C_SOURCES += src/drivers/usb_debug.c
 C_SOURCES += src/drivers/rtt.c
 C_SOURCES += src/drivers/fault.c
@@ -408,6 +409,12 @@ $(BUILD_DIR)/test_meter_data: tests/test_meter_data.c src/drivers/meter_data.c s
 test-meter-data: $(BUILD_DIR)/test_meter_data
 	$<
 
+$(BUILD_DIR)/test_meter_auto: tests/test_meter_auto.c src/drivers/meter_auto.c src/drivers/meter_auto.h src/drivers/meter_data.h | $(BUILD_DIR)
+	$(HOST_CC) -std=gnu11 -Wall -Wextra -Isrc/drivers $< src/drivers/meter_auto.c -lm -o $@
+
+test-meter-auto: $(BUILD_DIR)/test_meter_auto
+	$<
+
 $(BUILD_DIR)/test_meter_voltage_wave: tests/test_meter_voltage_wave.c src/ui/meter_voltage_wave.c src/ui/meter_voltage_wave.h | $(BUILD_DIR)
 	$(HOST_CC) -std=gnu11 -Wall -Wextra -Isrc/ui $< src/ui/meter_voltage_wave.c -lm -o $@
 
@@ -420,9 +427,9 @@ $(BUILD_DIR)/test_fpga_meter_plan: tests/test_fpga_meter_plan.c src/drivers/fpga
 test-fpga-meter-plan: $(BUILD_DIR)/test_fpga_meter_plan
 	$<
 
-test-meter: test-meter-data test-meter-voltage-wave test-fpga-meter-plan
+test-meter: test-meter-data test-meter-auto test-meter-voltage-wave test-fpga-meter-plan
 
-.PHONY: all clean disasm size renode soak-test soak-quick flash flash-dfu bootloader flash-bootloader flash-all guest guest-warmtest guest-usart-silent emu test-meter-data test-meter-voltage-wave test-fpga-meter-plan test-meter
+.PHONY: all clean disasm size renode soak-test soak-quick flash flash-dfu bootloader flash-bootloader flash-all guest guest-warmtest guest-usart-silent emu test-meter-data test-meter-auto test-meter-voltage-wave test-fpga-meter-plan test-meter
 
 # Experiment E (2026-07-27): park in fpga_init at the exact config-enable instant
 # (prelude 05/12 sent, CS LOW, 0x15 not yet clocked) so SWD can dump peripheral
