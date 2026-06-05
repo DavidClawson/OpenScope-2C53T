@@ -28,6 +28,12 @@ visual source/load display: 0.200 V
 That mismatch is unresolved frontend/range/calibration behavior. It is not
 evidence for a one-point low-voltage multiplier.
 
+The range-class guard is now exhaustive over the stock-visible bits: `all 16 combinations`
+of `frame[8].7`, `frame[3].4`, `frame[4].4`, and `frame[5].4` are tested both
+with and without the `frame[2].3` `+10000` extension. The expected class is
+always the stock priority order above; no decoded magnitude may select or
+override the class.
+
 ## Exhaustive Local Mode Contract
 
 `firmware/tests/test_fpga_meter_plan.c` now asserts that the local DMM
@@ -74,6 +80,8 @@ The software contract proves parser/state safety only:
 - wrong-family voltage frames clear stale current/passive readings
 - low-DCV `frame[8]=0x80` and `frame[8]=0x82` class-4 voltage frames clear
   stale current/passive readings outside voltage modes
+- the 32-case range-class matrix covers all stock bit combinations and the
+  optional `+10000` extension
 - marker-visible wrong-family frames are now covered as an explicit matrix:
   stock voltage metadata and continuity segment markers must clear stale
   payloads in every local submode whose expected frame family differs

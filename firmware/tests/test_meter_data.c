@@ -379,6 +379,57 @@ static int test_dcv_stock_range_class_priority_table(void)
     return 1;
 }
 
+static int test_dcv_stock_range_class_priority_all_bit_combinations(void)
+{
+    static const char *display_no_extend[] = {
+        "1234", "123.4", "12.34", "1.234", "0.1234"
+    };
+    static const char *display_extend[] = {
+        "11234", "1123.4", "112.34", "11.234", "1.1234"
+    };
+    static const float expected_no_extend[] = {
+        1234.0f, 123.4f, 12.34f, 1.234f, 0.1234f
+    };
+    static const float expected_extend[] = {
+        11234.0f, 1123.4f, 112.34f, 11.234f, 1.1234f
+    };
+
+    for (uint8_t bits = 0; bits < 16; bits++) {
+        for (uint8_t extend = 0; extend < 2; extend++) {
+            uint8_t frame[12];
+            uint8_t expected_class =
+                (bits & 0x8U) ? 4U :
+                (bits & 0x4U) ? 3U :
+                (bits & 0x2U) ? 2U :
+                (bits & 0x1U) ? 1U : 0U;
+
+            build_segment_frame(frame, 1, 2, 3, 4,
+                                0x00, 0x00, 0x02, 0x00, 0);
+            if (bits & 0x1U) frame[5] |= 0x10U;
+            if (bits & 0x2U) frame[4] |= 0x10U;
+            if (bits & 0x4U) frame[3] |= 0x10U;
+            if (bits & 0x8U) frame[8] |= 0x80U;
+            if (extend) frame[2] |= 0x08U;
+
+            meter_data_init();
+            process_frame(frame, 0);
+
+            ASSERT(meter_reading.valid);
+            ASSERT(meter_reading.result_class == METER_RESULT_NORMAL);
+            ASSERT(meter_reading.bcd_value == (extend ? 11234 : 1234));
+            ASSERT_STR_EQ(meter_reading.display_str,
+                          extend ? display_extend[expected_class]
+                                 : display_no_extend[expected_class]);
+            ASSERT_STR_EQ(meter_reading.unit_suffix, "V");
+            ASSERT(close_to(meter_reading.value,
+                            extend ? expected_extend[expected_class]
+                                   : expected_no_extend[expected_class],
+                            0.0003f));
+        }
+    }
+    return 1;
+}
+
 static int test_dcv_class4_priority_requires_frame8_bit7(void)
 {
     static const uint8_t frame[12] = {
@@ -1567,6 +1618,7 @@ int main(void)
     TEST(dcv_live_1v5_rotating_frames_keep_stock_class4);
     TEST(dcv_live_0200_frame_preserves_stock_math_as_unresolved_frontend);
     TEST(dcv_stock_range_class_priority_table);
+    TEST(dcv_stock_range_class_priority_all_bit_combinations);
     TEST(dcv_class4_priority_requires_frame8_bit7);
     TEST(dcv_synthetic_5008_without_class_bits_stays_class0);
     TEST(dcv_extra_frequency_hint_does_not_set_voltage_range);
