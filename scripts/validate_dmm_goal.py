@@ -147,6 +147,7 @@ def verify_re_coverage() -> dict[str, Any]:
         "transition phase matrix", "busy transition frame", "stable frame",
         "selector consumer xrefs", "0x080042E2", "0x080048BA", "0x20002D54",
         "32-case range-class matrix", "all 16 combinations",
+        "ordered mode-transition stale matrix", "every source submode",
     ]
 
     haystack = ""

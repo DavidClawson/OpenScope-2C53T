@@ -93,6 +93,9 @@ The software contract proves parser/state safety only:
   `busy transition frame` is rejected without consuming the discard budget,
   then each planned discard frame drains in order, and only the following
   stable frame is accepted
+- the ordered mode-transition stale matrix now covers every source submode to
+  every destination submode, so a valid prior-mode payload cannot survive a
+  transition just because it remains numerically plausible
 
 Physical correctness for arbitrary DMM inputs still requires deeper stock xrefs
 or repeatable live traces of the analog frontend/range path. The parser still

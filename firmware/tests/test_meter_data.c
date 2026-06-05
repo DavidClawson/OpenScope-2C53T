@@ -923,6 +923,44 @@ static void build_valid_frame_for_mode(uint8_t frame[12], uint8_t mode)
     }
 }
 
+static int test_invalidate_clears_stale_payload_for_every_ordered_mode_transition(void)
+{
+    uint8_t source_frame[12];
+
+    for (uint8_t source = 0; source < FPGA_METER_LOCAL_SUBMODE_COUNT; source++) {
+        for (uint8_t dest = 0; dest < FPGA_METER_LOCAL_SUBMODE_COUNT; dest++) {
+            uint32_t updates_after_source;
+            uint32_t display_updates_after_source;
+            fpga_meter_transition_plan_t dest_plan =
+                fpga_meter_transition_plan_for_submode(dest);
+
+            meter_data_init();
+            build_valid_frame_for_mode(source_frame, source);
+            process_frame(source_frame, source);
+            ASSERT(meter_reading.valid);
+            ASSERT(meter_reading.submode == source);
+            ASSERT(meter_reading.result_class == METER_RESULT_NORMAL ||
+                   meter_reading.result_class == METER_RESULT_CONTINUITY);
+            updates_after_source = meter_reading.update_count;
+            display_updates_after_source = meter_reading.display_update_count;
+
+            meter_data_invalidate(dest);
+            ASSERT(!meter_reading.valid);
+            ASSERT(meter_reading.submode == dest);
+            ASSERT(meter_reading.result_class == METER_RESULT_NONE);
+            ASSERT(expect_payload_cleared("---"));
+            ASSERT(meter_reading.stock_mode == dest_plan.stock_mode);
+            ASSERT(meter_reading.expected_frame_family == dest_plan.frame_family);
+            ASSERT(meter_reading.observed_frame_family == dest_plan.frame_family);
+            ASSERT(meter_reading.reject_reason == METER_REJECT_NONE);
+            ASSERT(meter_reading.update_count == updates_after_source + 1);
+            ASSERT(meter_reading.display_update_count ==
+                   display_updates_after_source + 1);
+        }
+    }
+    return 1;
+}
+
 static int test_marker_visible_family_mismatch_matrix_clears_stale_payload(void)
 {
     struct marker_case {
@@ -1635,6 +1673,7 @@ int main(void)
     TEST(parser_stock_mode_tracks_transition_plan_for_every_submode);
     TEST(invalid_submode_rejects_without_becoming_dcv);
     TEST(state_machine_property_matrix_covers_all_submodes);
+    TEST(invalidate_clears_stale_payload_for_every_ordered_mode_transition);
     TEST(marker_visible_family_mismatch_matrix_clears_stale_payload);
     TEST(voltage_mode_mains_frame_uses_stock_range_hint);
     TEST(dcv_high_range_frame_stays_voltage_across_current_transition);
