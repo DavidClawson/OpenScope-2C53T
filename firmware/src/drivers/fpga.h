@@ -521,6 +521,7 @@ extern volatile uint8_t  fpga_meter_adc_first_sample_after_reset;
 extern volatile uint8_t  fpga_meter_adc_min_sample;
 extern volatile uint8_t  fpga_meter_adc_max_sample;
 extern volatile uint8_t  meter_frame_discard_count;
+extern volatile uint32_t meter_transition_frame_skip_count;
 
 void fpga_meter_adc_diag_reset(void);
 bool fpga_meter_transition_busy(void);

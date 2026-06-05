@@ -2104,8 +2104,9 @@ static void cmd_meter_dump(const char *args)
                      meter_reading.update_count,
                      live ? meter_reading.display_str : "---",
                      (live && meter_reading.unit_suffix) ? meter_reading.unit_suffix : "");
-    usb_debug_printf("transition_discard_remaining=%u\r\n",
-                     (unsigned)meter_frame_discard_count);
+    usb_debug_printf("transition_discard_remaining=%u transition_frame_skips=%lu\r\n",
+                     (unsigned)meter_frame_discard_count,
+                     meter_transition_frame_skip_count);
     usb_debug_printf("bcd_value=%d decimal_pos=%u negative=%u unit_variant=%u bar_i100=%ld aux_freq_i10=%ld\r\n",
                      meter_reading.bcd_value,
                      (unsigned)meter_reading.decimal_pos,
@@ -2386,7 +2387,7 @@ static void cmd_meter_frontend(void)
                      (unsigned)fpga.meter_mode_apply_word,
                      (unsigned)fpga.meter_mode_probe_word,
                      (unsigned)fpga.meter_mode_start_word);
-    usb_debug_printf("display=%s unit=%s bcd_value=%d dp=%u f6=%02X f7=%02X f8=%02X f9=%02X extra=%04X aux_freq_i10=%ld beep=%u discard=%u\r\n",
+    usb_debug_printf("display=%s unit=%s bcd_value=%d dp=%u f6=%02X f7=%02X f8=%02X f9=%02X extra=%04X aux_freq_i10=%ld beep=%u discard=%u trans_skips=%lu\r\n",
                      meter_reading.valid ? meter_reading.display_str : "---",
                      (meter_reading.valid && meter_reading.unit_suffix) ? meter_reading.unit_suffix : "",
                      meter_reading.bcd_value,
@@ -2398,7 +2399,8 @@ static void cmd_meter_frontend(void)
                      (unsigned)extra,
                      (long)scaled_i100(meter_reading.aux_freq_hz) / 10L,
                      meter_reading.continuity_beep ? 1U : 0U,
-                     (unsigned)meter_frame_discard_count);
+                     (unsigned)meter_frame_discard_count,
+                     meter_transition_frame_skip_count);
     usb_debug_printf("frame_family expected=%u observed=%u reject=%u\r\n",
                      (unsigned)meter_reading.expected_frame_family,
                      (unsigned)meter_reading.observed_frame_family,

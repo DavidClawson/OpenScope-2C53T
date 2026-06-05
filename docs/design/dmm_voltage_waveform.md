@@ -48,7 +48,8 @@ The USB debug shell commands used for validation are:
   frontend GPIO state.
 - `meter frontend`: one-shot DMM selector, transition plan, GPIO, parsed
   reading, frame-family rejection state, recent USART command pairs, buzzer,
-  and discard-window state.
+  discard-window state, and frames skipped while a mode transition was still
+  busy.
 - `meter adc-snapshot`: read-only DMM waveform sampler counters and summary.
 - `meter wave`: waveform buffer stats, SPI3 meter-ADC diagnostics, and the
   decoded DMM reading.

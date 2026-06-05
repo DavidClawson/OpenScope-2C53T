@@ -101,6 +101,7 @@ static volatile bool data_ready = false;
 static volatile bool scope_reinit_pending = false;
 static volatile bool meter_transition_busy = false;
 volatile uint8_t meter_frame_discard_count;
+volatile uint32_t meter_transition_frame_skip_count;
 
 static void fpga_scope_delay_ms(uint32_t ms);
 
@@ -1698,6 +1699,10 @@ static void fpga_usart_rx_task(void *pv)
         /* Parse the meter data from the RX frame.
          * meter_submode is the global from main.c (via ui.h extern). */
         extern volatile uint8_t meter_submode;
+        if (meter_transition_busy) {
+            meter_transition_frame_skip_count++;
+            continue;
+        }
         if (meter_frame_discard_count > 0) {
             meter_frame_discard_count--;
             continue;
@@ -4207,11 +4212,11 @@ void fpga_set_meter_mode(uint8_t submode)
     }
 
     meter_data_invalidate(submode);
-    fpga_meter_discard_next_frames(plan.discard_frames);
     fpga_meter_reset_transport();
     fpga_set_meter_frontend_for_submode(submode);
     fpga_scope_delay_ms(plan.settle_ms);
     fpga_send_meter_mode_sequence(submode);
+    fpga_meter_discard_next_frames(plan.discard_frames);
     meter_transition_busy = false;
 }
 
@@ -4227,12 +4232,12 @@ void fpga_meter_reinit(uint8_t submode)
     meter_transition_busy = true;
 
     meter_data_invalidate(submode);
-    fpga_meter_discard_next_frames(plan.discard_frames);
     fpga_meter_reset_transport();
     fpga_send_meter_wake_preamble();
     fpga_set_meter_frontend_for_submode(submode);
     fpga_scope_delay_ms(plan.settle_ms);
     fpga_send_meter_mode_sequence(submode);
+    fpga_meter_discard_next_frames(plan.discard_frames);
     meter_transition_busy = false;
 }
 
