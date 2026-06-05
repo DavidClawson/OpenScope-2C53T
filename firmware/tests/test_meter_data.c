@@ -741,6 +741,35 @@ static int test_stock_fsm_debug_fields_follow_mode_and_frames(void)
     return 1;
 }
 
+static int test_snapshot_returns_coherent_latest_completed_reading(void)
+{
+    uint8_t ol_frame[12];
+    uint8_t current_frame[12];
+    meter_reading_t snap;
+
+    build_segment_frame(ol_frame, 0x0A, 0x0B, 0, 0, 0x00, 0x00, 0x00, 0x00, 0);
+    build_segment_frame(current_frame, 1, 8, 6, 3, 0x40, 0x00, 0x00, 0x00, 0);
+
+    meter_data_init();
+    process_frame(ol_frame, 2);
+    ASSERT(meter_data_snapshot(&snap));
+    ASSERT(snap.valid);
+    ASSERT(snap.result_class == METER_RESULT_OVERLOAD);
+    ASSERT_STR_EQ(snap.display_str, "OL");
+    ASSERT_STR_EQ(snap.unit_suffix, "");
+
+    process_frame(current_frame, 2);
+    ASSERT(meter_data_snapshot(&snap));
+    ASSERT(snap.valid);
+    ASSERT(snap.result_class == METER_RESULT_NORMAL);
+    ASSERT(snap.submode == 2);
+    ASSERT_STR_EQ(snap.display_str, "18.63");
+    ASSERT_STR_EQ(snap.unit_suffix, "mA");
+    ASSERT(close_to(snap.value, 18.63f, 0.001f));
+    ASSERT(snap.display_update_count == meter_reading.display_update_count);
+    return 1;
+}
+
 int main(void)
 {
     printf("Meter data frame tests\n");
@@ -767,6 +796,7 @@ int main(void)
     TEST(special_voltage_family_frames_are_rejected_outside_voltage);
     TEST(voltage_payload_clears_stale_current_reading);
     TEST(stock_fsm_debug_fields_follow_mode_and_frames);
+    TEST(snapshot_returns_coherent_latest_completed_reading);
 
     printf("\n%d/%d tests passed\n", tests_passed, tests_run);
     return (tests_passed == tests_run) ? 0 : 1;

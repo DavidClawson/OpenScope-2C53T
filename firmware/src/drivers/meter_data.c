@@ -36,6 +36,25 @@ meter_frame_history_t meter_frame_history[METER_FRAME_HISTORY_LEN];
 uint8_t meter_frame_history_count;
 uint8_t meter_frame_history_head;
 
+static volatile uint32_t meter_reading_seq;
+
+static void meter_data_barrier(void)
+{
+    __asm volatile ("" ::: "memory");
+}
+
+static void meter_reading_write_begin(void)
+{
+    meter_reading_seq++;
+    meter_data_barrier();
+}
+
+static void meter_reading_write_end(void)
+{
+    meter_data_barrier();
+    meter_reading_seq++;
+}
+
 typedef struct {
     uint8_t stock_mode;
     uint8_t variant;
@@ -98,6 +117,7 @@ static uint16_t meter_aux_freq_i10(const meter_reading_t *r)
         strcmp(old_unit_suffix, r->unit_suffix ? r->unit_suffix : "") != 0) { \
         r->display_update_count++; \
     } \
+    meter_reading_write_end(); \
     meter_record_history(); \
 } while (0)
 
@@ -125,6 +145,7 @@ static uint16_t meter_aux_freq_i10(const meter_reading_t *r)
         strcmp(old_unit_suffix, r->unit_suffix ? r->unit_suffix : "") != 0) { \
         r->display_update_count++; \
     } \
+    meter_reading_write_end(); \
 } while (0)
 
 static void meter_clear_payload(meter_reading_t *r)
@@ -731,6 +752,7 @@ static void format_reading(meter_reading_t *r, uint8_t submode)
 
 void meter_data_init(void)
 {
+    meter_reading_seq = 0;
     memset(&meter_reading, 0, sizeof(meter_reading));
     memset(&meter_stock_fsm, 0, sizeof(meter_stock_fsm));
     memset(meter_frame_history, 0, sizeof(meter_frame_history));
@@ -744,10 +766,30 @@ void meter_data_init(void)
     meter_stock_fsm.stock_mode = 0xFF;
 }
 
+bool meter_data_snapshot(meter_reading_t *out)
+{
+    if (out == NULL) return false;
+
+    for (int attempt = 0; attempt < 8; attempt++) {
+        uint32_t before = meter_reading_seq;
+        meter_data_barrier();
+        if ((before & 1U) != 0U) continue;
+
+        *out = meter_reading;
+
+        meter_data_barrier();
+        uint32_t after = meter_reading_seq;
+        if (before == after && (after & 1U) == 0U) return true;
+    }
+
+    return false;
+}
+
 void meter_data_invalidate(uint8_t submode)
 {
     meter_reading_t *r = &meter_reading;
 
+    meter_reading_write_begin();
     r->value = 0.0f;
     r->raw_bcd = 0;
     memset(r->digits, 0, sizeof(r->digits));
@@ -776,6 +818,7 @@ void meter_data_invalidate(uint8_t submode)
     meter_stock_fsm_reset(stock_mode_from_ui_submode(submode));
     meter_sync_stock_fsm_debug(r);
     r->update_count++;
+    meter_reading_write_end();
 }
 
 void meter_data_process_frame(const volatile uint8_t *frame, uint8_t submode)
@@ -800,6 +843,8 @@ void meter_data_process_frame(const volatile uint8_t *frame, uint8_t submode)
     strncpy(old_unit_suffix, r->unit_suffix ? r->unit_suffix : "",
             sizeof(old_unit_suffix) - 1);
     old_unit_suffix[sizeof(old_unit_suffix) - 1] = '\0';
+
+    meter_reading_write_begin();
 
     /* Save raw frame for debug display */
     for (int i = 0; i < 12; i++) r->dbg_frame[i] = frame[i];

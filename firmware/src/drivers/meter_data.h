@@ -123,6 +123,13 @@ typedef struct {
 /* Global meter reading (defined in meter_data.c) */
 extern meter_reading_t meter_reading;
 
+/*
+ * Copy the current reading as one coherent UI/debug snapshot.
+ * The parser updates meter_reading from another task; direct multi-field reads
+ * can otherwise mix an old special state (for example OL) with a newer value.
+ */
+bool meter_data_snapshot(meter_reading_t *out);
+
 /* Debug: distinct values of frame[6] seen since boot.
  * Up to 8 unique byte values stored; new values push out the oldest.
  * Used by the Phase 1 meter UI debug strip to visualize how many

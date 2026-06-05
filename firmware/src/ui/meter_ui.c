@@ -412,6 +412,7 @@ static void draw_voltage_wave_panel(uint16_t x, uint16_t y,
                                     uint16_t w, uint16_t h,
                                     uint8_t mode, float current_val,
                                     const char *current_unit,
+                                    float aux_freq_hz,
                                     const theme_t *th,
                                     bool force_redraw)
 {
@@ -421,7 +422,7 @@ static void draw_voltage_wave_panel(uint16_t x, uint16_t y,
     uint16_t *panel = NULL;
     uint32_t panel_pixels = (uint32_t)w * h;
 
-    meter_voltage_wave_snapshot(&snap, w, meter_reading.aux_freq_hz);
+    meter_voltage_wave_snapshot(&snap, w, aux_freq_hz);
 
     float current_volts = current_val;
     if (current_unit != NULL && strcmp(current_unit, "mV") == 0) {
@@ -590,56 +591,65 @@ static void draw_voltage_wave_panel(uint16_t x, uint16_t y,
     meter_wave_last_synced = snap.synced;
 }
 
-static bool live_reading_for_mode(uint8_t mode)
+static bool live_reading_for_mode(const meter_reading_t *reading, uint8_t mode)
 {
-    return meter_reading.valid &&
-           meter_reading.submode == mode &&
-           meter_reading.result_class != METER_RESULT_NONE;
+    return reading->valid &&
+           reading->submode == mode &&
+           reading->result_class != METER_RESULT_NONE;
 }
 
 /* Live unit string: prefer the suffix decoded by meter_data from the
  * current frame only when that frame belongs to the displayed submode.
  * Otherwise stale voltage readings can be relabeled as amps/ohms/Hz while
  * the meter frontend is still settling after a mode change. */
-static const char *live_unit(const meter_mode_info_t *m, uint8_t mode)
+static const char *live_unit(const meter_mode_info_t *m,
+                             const meter_reading_t *reading,
+                             uint8_t mode)
 {
-    if (live_reading_for_mode(mode) &&
-        meter_reading.unit_suffix != NULL &&
-        meter_reading.unit_suffix[0] != '\0') {
-        return meter_reading.unit_suffix;
+    if (live_reading_for_mode(reading, mode) &&
+        reading->unit_suffix != NULL &&
+        reading->unit_suffix[0] != '\0') {
+        return reading->unit_suffix;
     }
     return m->unit;
 }
 
-static bool live_voltage_auto_ac(uint8_t mode)
+static bool live_voltage_auto_ac(const meter_reading_t *reading, uint8_t mode)
 {
     return mode == 0 &&
-           live_reading_for_mode(mode) &&
-           meter_reading.aux_freq_hz >= 1.0f;
+           live_reading_for_mode(reading, mode) &&
+           reading->aux_freq_hz >= 1.0f;
 }
 
-static const char *live_ac_dc(const meter_mode_info_t *m, uint8_t mode)
+static const char *live_ac_dc(const meter_mode_info_t *m,
+                              const meter_reading_t *reading,
+                              uint8_t mode)
 {
-    return live_voltage_auto_ac(mode) ? "AC" : m->ac_dc;
+    return live_voltage_auto_ac(reading, mode) ? "AC" : m->ac_dc;
 }
 
-static const char *live_symbol(const meter_mode_info_t *m, uint8_t mode)
+static const char *live_symbol(const meter_mode_info_t *m,
+                               const meter_reading_t *reading,
+                               uint8_t mode)
 {
-    return live_voltage_auto_ac(mode) ? "~" : m->symbol;
+    return live_voltage_auto_ac(reading, mode) ? "~" : m->symbol;
 }
 
-static const char *live_range_label(const meter_mode_info_t *m, uint8_t mode)
+static const char *live_range_label(const meter_mode_info_t *m,
+                                    const meter_reading_t *reading,
+                                    uint8_t mode)
 {
-    return live_voltage_auto_ac(mode) ? "Auto ACV" : m->range_label;
+    return live_voltage_auto_ac(reading, mode) ? "Auto ACV" : m->range_label;
 }
 
 /* Draw the main reading (shared by all layouts)
  * value_str: the string to display (real or demo) */
 static void draw_main_reading(const meter_mode_info_t *m, const theme_t *th,
+                              const meter_reading_t *reading,
                               uint8_t mode, uint16_t y, bool compact,
                               const char *value_str)
 {
-    const char *unit_str = live_unit(m, mode);
+    const char *unit_str = live_unit(m, reading, mode);
     /* Main reading
      *
      * font_xlarge only has the numeric subset 0-9, '.', '-', '+', ':', ' '
@@ -683,8 +693,8 @@ static void draw_main_reading(const meter_mode_info_t *m, const theme_t *th,
                      compact ? &font_medium : &font_large);
 
     /* AC/DC indicator */
-    const char *ac_dc = live_ac_dc(m, mode);
-    const char *symbol = live_symbol(m, mode);
+    const char *ac_dc = live_ac_dc(m, reading, mode);
+    const char *symbol = live_symbol(m, reading, mode);
     if (ac_dc[0] != '\0') {
         uint16_t ac_y = compact ? y + 18 : y + 30;
         font_draw_string(UNIT_X, ac_y, ac_dc,
@@ -781,13 +791,14 @@ bool meter_screen_needs_periodic_redraw(void)
  * ═══════════════════════════════════════════════════════════════════ */
 
 static void draw_meter_full(const meter_mode_info_t *m, uint8_t mode,
+                            const meter_reading_t *reading,
                             float current_val, const char *value_str,
                             float bar_pct, bool force_redraw)
 {
     const theme_t *th = theme_get();
-    const char *unit_str = live_unit(m, mode);
+    const char *unit_str = live_unit(m, reading, mode);
 
-    draw_main_reading(m, th, mode, MAIN_READING_Y, false, value_str);
+    draw_main_reading(m, th, reading, mode, MAIN_READING_Y, false, value_str);
 
     /* Special indicators for continuity and diode modes */
     if (mode == 7) {
@@ -809,8 +820,9 @@ static void draw_meter_full(const meter_mode_info_t *m, uint8_t mode,
 
     if (mode == 0 || mode == 1) {
         draw_voltage_wave_panel(10, 118, 300, 74, mode, current_val,
-                                unit_str, th, force_redraw);
-        font_draw_string(200, SECONDARY_Y, live_range_label(m, mode),
+                                unit_str, reading->aux_freq_hz, th,
+                                force_redraw);
+        font_draw_string(200, SECONDARY_Y, live_range_label(m, reading, mode),
                          th->ch1, th->background, &font_small);
         return;
     }
@@ -858,7 +870,7 @@ static void draw_meter_full(const meter_mode_info_t *m, uint8_t mode,
     /* Range info */
     font_draw_string(200, SECONDARY_Y, "Range:",
                      th->text_secondary, th->background, &font_small);
-    font_draw_string(200, SECONDARY_Y + 16, live_range_label(m, mode),
+    font_draw_string(200, SECONDARY_Y + 16, live_range_label(m, reading, mode),
                      th->ch1, th->background, &font_medium);
 
     /* Sub-mode index indicator */
@@ -885,6 +897,7 @@ static void draw_meter_full(const meter_mode_info_t *m, uint8_t mode,
  * ═══════════════════════════════════════════════════════════════════ */
 
 static void draw_meter_chart(const meter_mode_info_t *m, uint8_t mode,
+                             const meter_reading_t *reading,
                              float current_val, const char *value_str)
 {
     const theme_t *th = theme_get();
@@ -892,10 +905,10 @@ static void draw_meter_chart(const meter_mode_info_t *m, uint8_t mode,
     (void)mode;
 
     /* Compact main reading at top */
-    draw_main_reading(m, th, mode, METER_TOP + 2, true, value_str);
+    draw_main_reading(m, th, reading, mode, METER_TOP + 2, true, value_str);
 
     /* Current value + unit below reading */
-    font_draw_string(16, METER_TOP + 40, live_range_label(m, mode),
+    font_draw_string(16, METER_TOP + 40, live_range_label(m, reading, mode),
                      th->text_secondary, th->background, &font_small);
 
     /* Min/Max labels on right side of reading area */
@@ -1016,6 +1029,7 @@ static void draw_meter_chart(const meter_mode_info_t *m, uint8_t mode,
  * ═══════════════════════════════════════════════════════════════════ */
 
 static void draw_meter_stats(const meter_mode_info_t *m, uint8_t mode,
+                             const meter_reading_t *reading,
                              float current_val, const char *value_str)
 {
     const theme_t *th = theme_get();
@@ -1024,7 +1038,7 @@ static void draw_meter_stats(const meter_mode_info_t *m, uint8_t mode,
     (void)current_val;
 
     /* Compact main reading at top */
-    draw_main_reading(m, th, mode, METER_TOP + 2, true, value_str);
+    draw_main_reading(m, th, reading, mode, METER_TOP + 2, true, value_str);
 
     /* Statistics panel */
     uint16_t sy = METER_TOP + 42;
@@ -1138,9 +1152,11 @@ void meter_toggle_relative(void)
     if (!meter_rel_enabled) {
         /* Enable: capture current reading as reference */
         uint8_t mode = meter_submode;
+        meter_reading_t reading;
         if (mode >= METER_SUBMODE_COUNT) mode = 0;
-        if (live_reading_for_mode(mode)) {
-            meter_rel_reference = meter_data_get_value();
+        if (meter_data_snapshot(&reading) &&
+            live_reading_for_mode(&reading, mode)) {
+            meter_rel_reference = reading.value;
         } else {
             meter_rel_reference = 0.0f;
         }
@@ -1173,6 +1189,7 @@ void draw_meter_screen(void)
     if (mode >= METER_SUBMODE_COUNT) mode = 0;
 
     const meter_mode_info_t *m = &meter_modes[mode];
+    meter_reading_t reading;
 
     /* Meter IC polling is now handled by fpga_meter_poll_task at ~4 Hz.
      * Previously, this function called fpga_send_cmd(0x00, 0x09) on every
@@ -1191,12 +1208,21 @@ void draw_meter_screen(void)
 
     meter_screen_draw_count++;
 
-    bool has_live_reading = live_reading_for_mode(mode);
+    if (!meter_data_snapshot(&reading)) {
+        memset(&reading, 0, sizeof(reading));
+        reading.display_str[0] = '-';
+        reading.display_str[1] = '-';
+        reading.display_str[2] = '-';
+        reading.display_str[3] = '\0';
+        reading.unit_suffix = "";
+    }
+
+    bool has_live_reading = live_reading_for_mode(&reading, mode);
     meter_screen_last_live = has_live_reading ? 1U : 0U;
     if (has_live_reading) {
-        current_val = meter_reading.value;
-        value_str = meter_reading.display_str;
-        bar_pct = meter_reading.bar_fraction;
+        current_val = reading.value;
+        value_str = reading.display_str;
+        bar_pct = reading.bar_fraction;
     } else {
         current_val = 0.0f;
         value_str = "---";
@@ -1229,7 +1255,7 @@ void draw_meter_screen(void)
         /* Flash green only for real short (exclude 0, which means open) */
         continuity_flash = has_live_reading &&
                            ((current_val > 0.01f && current_val < 50.0f) ||
-                            meter_reading.continuity_beep);
+                            reading.continuity_beep);
     }
     uint8_t continuity_flash_u = continuity_flash ? 1U : 0U;
 
@@ -1307,17 +1333,18 @@ void draw_meter_screen(void)
 
     switch (meter_layout) {
     case METER_LAYOUT_CHART:
-        draw_meter_chart(m, mode, current_val, value_str);
+        draw_meter_chart(m, mode, &reading, current_val, value_str);
         break;
     case METER_LAYOUT_STATS:
-        draw_meter_stats(m, mode, current_val, value_str);
+        draw_meter_stats(m, mode, &reading, current_val, value_str);
         break;
     case METER_LAYOUT_FUSE:
         /* Fuse tester uses the mV reading as voltage drop. */
         draw_fuse_screen(current_val);
         break;
     default:
-        draw_meter_full(m, mode, current_val, value_str, bar_pct, full_clear);
+        draw_meter_full(m, mode, &reading, current_val, value_str, bar_pct,
+                        full_clear);
         break;
     }
 
@@ -1372,7 +1399,7 @@ void draw_meter_screen(void)
             /* Nibble pairs (pre-lookup) */
             db2[j++] = 'N';
             for (int k = 0; k < 4; k++) {
-                uint8_t n = meter_reading.dbg_nibbles[k];
+                uint8_t n = reading.dbg_nibbles[k];
                 db2[j++] = hex[(n >> 4) & 0xF];
                 db2[j++] = hex[n & 0xF];
                 db2[j++] = ' ';
@@ -1381,7 +1408,7 @@ void draw_meter_screen(void)
             /* Decoded digits (post-lookup) */
             db2[j++] = 'D';
             for (int k = 0; k < 4; k++) {
-                uint8_t d = meter_reading.dbg_raw_digits[k];
+                uint8_t d = reading.dbg_raw_digits[k];
                 db2[j++] = hex[(d >> 4) & 0xF];
                 db2[j++] = hex[d & 0xF];
                 db2[j++] = ' ';
@@ -1389,15 +1416,15 @@ void draw_meter_screen(void)
 
             /* Probe type and range */
             db2[j++] = 'P';
-            db2[j++] = '0' + meter_reading.probe_type;
+            db2[j++] = '0' + reading.probe_type;
             db2[j++] = ' ';
             db2[j++] = 'R';
-            db2[j++] = '0' + meter_reading.range_indicator;
+            db2[j++] = '0' + reading.range_indicator;
             db2[j++] = ' ';
 
             /* Raw BCD */
             db2[j++] = '=';
-            { int bcd = meter_reading.raw_bcd; char tmp[6]; int t = 0;
+            { int bcd = reading.raw_bcd; char tmp[6]; int t = 0;
               if (bcd == 0) tmp[t++] = '0';
               else { int v = bcd; while (v > 0 && t < 5) { tmp[t++] = '0' + (v % 10); v /= 10; } }
               for (int q = t - 1; q >= 0; q--) db2[j++] = tmp[q]; }
@@ -1410,9 +1437,9 @@ void draw_meter_screen(void)
             db2[j++] = ' ';
             db2[j++] = 'd';
             db2[j++] = 'p';
-            db2[j++] = '0' + (meter_reading.decimal_pos & 7);
+            db2[j++] = '0' + (reading.decimal_pos & 7);
             db2[j++] = ' ';
-            const char *us = meter_reading.unit_suffix;
+            const char *us = reading.unit_suffix;
             if (us != NULL) {
                 while (*us && j < (int)sizeof(db2) - 1) db2[j++] = *us++;
             }
