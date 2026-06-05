@@ -609,19 +609,22 @@ static int test_stock_formatter_families_have_regression_fixtures(void)
     return 1;
 }
 
-static int test_resistance_band_overrides_have_regression_fixtures(void)
+static int test_resistance_low_ohm_fails_closed_without_factory_cal(void)
 {
     uint8_t frame[12];
 
     meter_data_init();
     build_segment_frame(frame, 4, 8, 2, 4, 0x00, 0x00, 0x00, 0x00, 0);
     process_frame(frame, 6);
-    ASSERT_STR_EQ(meter_reading.unit_suffix, "Ohm");
-    ASSERT(close_to(meter_reading.value, 146.6496f, 0.001f));
-    ASSERT_STR_EQ(meter_reading.display_str, "146.6");
+    ASSERT(!meter_reading.valid);
+    ASSERT(meter_reading.reject_reason == METER_REJECT_UNRESOLVED_CALIBRATION);
+    ASSERT_STR_EQ(meter_reading.display_str, "---");
+    ASSERT(meter_reading.result_class == METER_RESULT_NONE);
 
     build_segment_frame(frame, 3, 3, 0, 0, 0x40, 0x00, 0x00, 0x00, 0);
     process_frame(frame, 6);
+    ASSERT(meter_reading.valid);
+    ASSERT(meter_reading.reject_reason == METER_REJECT_NONE);
     ASSERT_STR_EQ(meter_reading.unit_suffix, "kOhm");
     ASSERT(close_to(meter_reading.value, 3.300f, 0.001f));
     ASSERT_STR_EQ(meter_reading.display_str, "3.300");
@@ -709,13 +712,23 @@ static int test_parser_stock_mode_tracks_transition_plan_for_every_submode(void)
 {
     uint8_t frame[12];
     uint8_t ac_frame[12];
+    uint8_t resistance_frame[12];
+    uint8_t continuity_frame[12];
 
     build_segment_frame(frame, 1, 2, 3, 4, 0x00, 0x00, 0x00, 0x00, 0);
     build_segment_frame(ac_frame, 1, 2, 3, 4, 0x00, 0x00, 0x00, 0x00, 0x0031);
+    build_segment_frame(resistance_frame, 1, 2, 3, 4, 0x40, 0x00, 0x00, 0x00, 0);
+    build_segment_frame(continuity_frame, 0, 0x12, 0x0A, 5,
+                        0x00, 0x00, 0x00, 0x00, 0);
 
     for (uint8_t mode = 0; mode < FPGA_METER_LOCAL_SUBMODE_COUNT; mode++) {
         fpga_meter_transition_plan_t plan =
             fpga_meter_transition_plan_for_submode(mode);
+        const uint8_t *good =
+            (mode == 1 || mode == 4 || mode == 5) ? ac_frame :
+            (mode == 6) ? resistance_frame :
+            (mode == 7) ? continuity_frame :
+            frame;
 
         meter_data_init();
         meter_data_invalidate(mode);
@@ -723,8 +736,7 @@ static int test_parser_stock_mode_tracks_transition_plan_for_every_submode(void)
         ASSERT(meter_reading.submode == mode);
         ASSERT(!meter_reading.valid);
 
-        process_frame((mode == 1 || mode == 4 || mode == 5) ?
-                      ac_frame : frame, mode);
+        process_frame(good, mode);
         ASSERT(meter_reading.valid);
         ASSERT(meter_reading.submode == mode);
         ASSERT(meter_reading.stock_mode == plan.stock_mode);
@@ -972,6 +984,13 @@ static int test_continuity_marker_rejected_outside_continuity_mode(void)
         uint8_t mode = modes[i];
 
         meter_data_init();
+        if (mode == 6) {
+            build_segment_frame(normal, 1, 2, 3, 4,
+                                0x40, 0x00, 0x00, 0x00, 0);
+        } else {
+            build_segment_frame(normal, 1, 2, 3, 4,
+                                0x00, 0x00, 0x00, 0x00, 0);
+        }
         process_frame((mode == 1 || mode == 4 || mode == 5) ?
                       ac_normal : normal, mode);
         ASSERT(meter_reading.valid);
@@ -1000,7 +1019,7 @@ static int test_non_continuity_terminal_frames_clear_stale_beep(void)
     build_segment_frame(continuity, 0, 0x12, 0x0A, 5, 0x00, 0x00, 0x00, 0x00, 0);
     build_segment_frame(partial_blank, 0x10, 0x11, 0x10, 0x10, 0x00, 0x00, 0x00, 0x00, 0);
     build_segment_frame(invalid, 0xFF, 0, 0, 0, 0x00, 0x00, 0x00, 0x00, 0);
-    build_segment_frame(normal, 0, 0, 1, 0, 0x00, 0x00, 0x00, 0x00, 0);
+    build_segment_frame(normal, 0, 0, 1, 0, 0x40, 0x00, 0x00, 0x00, 0);
 
     meter_data_init();
     process_frame(continuity, 7);
@@ -1450,7 +1469,7 @@ int main(void)
     TEST(acv_rejects_live_low_dcv_status24_without_frequency_hint);
     TEST(ac_current_rejects_current_frame_without_ac_evidence);
     TEST(stock_formatter_families_have_regression_fixtures);
-    TEST(resistance_band_overrides_have_regression_fixtures);
+    TEST(resistance_low_ohm_fails_closed_without_factory_cal);
     TEST(invalidate_clears_stale_reading_before_mode_transition);
     TEST(invalidate_clears_stale_reading_for_every_submode);
     TEST(parser_stock_mode_tracks_transition_plan_for_every_submode);

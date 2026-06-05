@@ -928,9 +928,10 @@ void fpga_state_update(void)
  *
  *   ROOT CAUSE: Missing factory calibration coefficients from SPI flash or the
  *   FPGA-side initialization/calibration exchange. The exact stock source for
- *   resistance/current factory coefficients is still unresolved; current
- *   resistance coefficients are bench-unit stand-ins with explicit evidence
- *   boundaries. The low-DCV path was later corrected to stock raw extension
+ *   resistance/current factory coefficients is still unresolved. Custom
+ *   firmware now rejects low-Ω normal frames with
+ *   METER_REJECT_UNRESOLVED_CALIBRATION instead of applying a one-unit bench
+ *   coefficient. The low-DCV path was later corrected to stock raw extension
  *   plus decimal class, not a physical coefficient.
  *
  *   WHY kΩ RANGE IS FINE:
@@ -941,23 +942,24 @@ void fpga_state_update(void)
  *   RAW COUNTS from the FPGA are calibration-dependent and require a per-range
  *   gain multiplier that only lives in the SPI flash cal table.
  *
- *   HYPOTHESIS (HIGH CONFIDENCE, from fpga_comms_deep_dive.c):
- *   Stock firmware divides low-Ω raw counts by factory_cal_coeff[low_ohm_range]
- *   before display. Our firmware skips this division, reading the raw count directly.
- *   The factory coefficient for the low-Ω range is approximately 3.04 (from hardware data).
- *   This coefficient varies per device (factory calibrated) so a hardcoded 3.04 is wrong.
+ *   HYPOTHESIS (UNRESOLVED):
+ *   Stock firmware or the FPGA meter path applies a per-range low-Ω factory
+ *   coefficient before display. The source may be W25Q/system-file data or an
+ *   FPGA-side state table. Until that source is recovered, a hardcoded
+ *   coefficient is wrong even if it matches one resistor on one device.
  *
  *   WHAT TO CHANGE IN CUSTOM FIRMWARE (do NOT modify code, just note):
  *   File: firmware/src/drivers/flash_fs.c
  *   Fix needed: recover and load the stock factory calibration source, then
- *               replace the remaining resistance/current bench-unit
+ *               replace any remaining empirical resistance/current
  *               coefficients. Do not invent a low-DCV coefficient; stock
  *               evidence uses frame[2].3 +10000 and class bits.
  *
  *   File: firmware/src/drivers/meter_data.c
  *   Current local port: uses stock frame/mode metadata to select DCV decimal
  *                       class, with live fixtures for low-DCV, 5V, 32V,
- *                       mains-class frames, low-Ω, and kΩ.
+ *                       mains-class frames, low-Ω fail-closed behavior, and
+ *                       kΩ unit normalization.
  *
  *   LIKELIHOOD RANKING:
  *   1. (95%) Missing SPI flash cal load → explains ~3x error on low-Ω

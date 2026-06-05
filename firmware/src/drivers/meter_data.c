@@ -287,40 +287,21 @@ static const float bar_full_scale[11] = {
     100.0f,   /* Temp: 100 C */
 };
 
-/* ═══════════════════════════════════════════════════════════════════
- * Low-Ω band factory calibration
+/* Resistance band boundary.
  *
- * Bench truth on unit #1 (2026-04-04):
- *   147 Ω ref → bcd_value ≈ 4830/4831 → true_ohms = bcd_value × 0.0304
+ * Stock-visible frame metadata separates at least two resistance regimes:
+ *   frame[6] upper nibble 0: low-Ohm band, factory coefficient unresolved
+ *   frame[6] upper nibble 4: kOhm band, raw counts are already Ohm and need
+ *                            only the unit shift bcd_value * 0.001 kOhm
  *
- * The FPGA meter IC's low-Ω range outputs raw BCD counts that need a
- * fixed linear correction. The correction factor is independent of
- * whichever dp/unit interpretation the frame's f6 byte happens to
- * suggest — for a 147 Ω input this unit reports raw 4830/4831 and
- * we apply the same factor regardless.
- *
- * Detection: resistance/continuity submode (6 or 7) with frame[6]
- * upper nibble == 0. Bench captures (2026-04-04) show the FPGA
- * rotates through 0x07, 0x0A, 0x0B, 0x0D, 0x0E, 0x0F in this band.
- * Upper nibble 4 (0x40, 0x4B, 0x4D) is the kΩ band and is already
- * accurate without correction.
- *
- * The 0.0304 factor is per-device (factory calibrated). When the
- * SPI flash driver lands it should come from "3:/System file/..."
- * — see flash_fs.c:220 and the open question in
- * analysis_v120/fpga_h2_spi3_bulk.md about whether the stock boot's
- * 115,638-byte SPI3 bulk cal upload is what supplies these values.
- *
- * Bench data:
- *   147 Ω ref  → pre-fix: 48.36 Ω / 4.831 kΩ (flickering)
- *                post-fix: 147 Ω (stable)
- *   3.3 kΩ ref → 3.230 kΩ (unchanged, f6 upper nibble 4)
- *   10 kΩ ref  → 9.840 kΩ (unchanged)
- *   5 V DC ref → 5.008 V  (unchanged, different submode)
- * ═══════════════════════════════════════════════════════════════════ */
-
-#define METER_CAL_LOW_OHM_FACTOR  0.0304f   /* bcd_value × this = Ω, low band */
-#define METER_CAL_KOHM_FACTOR     0.001f    /* bcd_value × this = kΩ, mid band */
+ * A prior branch used a one-unit bench factor for the low-Ohm band. That made
+ * one resistor look right but violated the stock-evidence rule used for the
+ * DMM state machine: if a physical coefficient is not recovered from
+ * stock/W25Q/H2 evidence, do not invent it. Low-Ohm normal frames therefore
+ * fail closed until the factory calibration source is recovered. Continuity
+ * marker frames are handled earlier as a distinct stock frame family.
+ */
+#define METER_KOHM_UNIT_FACTOR  0.001f
 
 typedef struct {
     uint8_t class_id;
@@ -923,6 +904,12 @@ static bool frame_has_ac_evidence(uint8_t submode,
            frame_extra_is_empirical_line_frequency_hint(extra);
 }
 
+static bool resistance_low_ohm_calibration_unresolved(uint8_t submode,
+                                                      uint8_t flags)
+{
+    return (submode == 6 || submode == 7) && ((flags & 0xF0U) == 0x00U);
+}
+
 /* ═══════════════════════════════════════════════════════════════════
  * Format value into display string
  * ═══════════════════════════════════════════════════════════════════ */
@@ -1259,6 +1246,12 @@ void meter_data_process_frame(const volatile uint8_t *frame, uint8_t submode)
         return;
     }
 
+    if (resistance_low_ohm_calibration_unresolved(submode, flags)) {
+        r->reject_reason = METER_REJECT_UNRESOLVED_CALIBRATION;
+        METER_REJECT_FRAME();
+        return;
+    }
+
     /* --- Normal BCD value --- */
 
     /* Mask off special code high bits for assembly */
@@ -1302,7 +1295,7 @@ void meter_data_process_frame(const volatile uint8_t *frame, uint8_t submode)
     format_reading(r, submode);
     (void)apply_stock_dcv_voltage_multiplier(r, submode, frame);
 
-    /* ── Resistance band factory calibration override ──
+    /* ── Resistance kOhm band unit normalization ──
      *
      * For resistance/continuity submodes, the FPGA meter IC rotates
      * through multiple frame variants per measurement, each claiming
@@ -1311,22 +1304,14 @@ void meter_data_process_frame(const volatile uint8_t *frame, uint8_t submode)
      * the display flickers between e.g. "9.821 kOhm" and "98.24 kOhm"
      * for the SAME 10 kΩ resistor.
      *
-     * The FIX is to compute resistance from bcd_value at the band level,
-     * ignoring the per-frame dp hint entirely:
+     * Only the kOhm band is normalized here:
      *
-     *   Low-Ω band  (frame[6] upper nibble 0): value = bcd_value × 0.0304 Ω
-     *   kΩ    band  (frame[6] upper nibble 4): value = bcd_value × 0.001  kΩ
+     *   kOhm band (frame[6] upper nibble 4): value = bcd_value * 0.001 kOhm
      *
-     * Bench data (2026-04-04, unit #1):
-     *   147 Ω ref  → raw ≈ 4824 → 4824 × 0.0304 = 146.6 Ω  ✓
-     *   3.3 kΩ ref → raw ≈ 3230 → 3230 × 0.001  = 3.230 kΩ ✓
-     *   10 kΩ ref  → raw ≈ 9821 → 9821 × 0.001  = 9.821 kΩ ✓
-     *
-     * The 0.0304 factor is per-device (factory calibrated). When the
-     * SPI flash driver lands it should come from "3:/System file/..."
-     * — see flash_fs.c:220. The 0.001 kΩ factor is a geometric
-     * identity (raw counts already expressed in Ω, shifted to kΩ) and
-     * should be stable across units.
+     * The low-Ohm band is rejected above until its factory calibration source is
+     * recovered. The 0.001 kOhm factor is a geometric identity (raw counts
+     * already expressed in Ohm, shifted to kOhm) and should be stable across
+     * units.
      *
      * Higher bands (MΩ, autorange to 200 kΩ / 2 MΩ) are not yet
      * characterized — those will need additional upper-nibble cases.
@@ -1341,8 +1326,7 @@ void meter_data_process_frame(const volatile uint8_t *frame, uint8_t submode)
         const char *unit  = NULL;
 
         switch (flags & 0xF0) {
-        case 0x00:  scale = METER_CAL_LOW_OHM_FACTOR; unit = "Ohm";  break;
-        case 0x40:  scale = METER_CAL_KOHM_FACTOR;    unit = "kOhm"; break;
+        case 0x40:  scale = METER_KOHM_UNIT_FACTOR; unit = "kOhm"; break;
         default:    break;  /* Unknown band — leave format_reading's output */
         }
 

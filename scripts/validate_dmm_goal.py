@@ -90,6 +90,28 @@ def run_software_gate() -> list[dict[str, Any]]:
     return results
 
 
+def verify_no_unrecovered_meter_coefficients() -> dict[str, Any]:
+    forbidden = [
+        "METER_CAL_LOW_OHM_FACTOR",
+        "0.0304f",
+        "bench-unit stand-in",
+    ]
+    checked = [
+        "firmware/src/drivers/meter_data.c",
+        "firmware/src/drivers/meter_data.h",
+    ]
+    hits: list[str] = []
+    for rel in checked:
+        text = (REPO / rel).read_text(encoding="utf-8", errors="replace")
+        for needle in forbidden:
+            if needle in text:
+                hits.append(f"{rel}: {needle}")
+    if hits:
+        raise GateError("unrecovered meter calibration coefficient still present: " +
+                        "; ".join(hits))
+    return {"checked": checked, "forbidden": forbidden}
+
+
 def verify_re_coverage() -> dict[str, Any]:
     required_docs = [
         "reverse_engineering/analysis_v120/meter_stock_multiplier_tables_2026_06_05.md",
@@ -113,7 +135,8 @@ def verify_re_coverage() -> dict[str, Any]:
         "temperature", "selector", "mux", "settle", "discard",
         "empirical", "stock", "H2", "SPI3", "115,638",
         "acceptance proof", "unproven", "DAC1", "scope trigger",
-        "not DMM calibration",
+        "not DMM calibration", "METER_REJECT_UNRESOLVED_CALIBRATION",
+        "low-Ohm normal frames therefore",
     ]
 
     haystack = ""
@@ -343,9 +366,10 @@ def main(argv: list[str] | None = None) -> int:
     try:
         if not args.skip_software:
             report["software_gate"] = run_software_gate()
-            report["re_comment_coverage"] = verify_re_coverage()
             report["firmware_changed_since_upstream"] = firmware_changed_since_upstream()
             report["flash_preflight"] = preflight_current_firmware_image()
+        report["re_comment_coverage"] = verify_re_coverage()
+        report["no_unrecovered_meter_coefficients"] = verify_no_unrecovered_meter_coefficients()
 
         if not args.skip_live:
             if args.observed_source_voltage is None:

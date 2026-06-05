@@ -91,6 +91,11 @@ class DmmGoalValidationTests(unittest.TestCase):
         self.assertIn("scope trigger", coverage["terms"])
         self.assertIn("not DMM calibration", coverage["terms"])
 
+    def test_unrecovered_meter_coefficients_are_absent(self) -> None:
+        result = validate_dmm_goal.verify_no_unrecovered_meter_coefficients()
+        self.assertIn("firmware/src/drivers/meter_data.c", result["checked"])
+        self.assertIn("METER_CAL_LOW_OHM_FACTOR", result["forbidden"])
+
 
 if __name__ == "__main__":
     unittest.main()
