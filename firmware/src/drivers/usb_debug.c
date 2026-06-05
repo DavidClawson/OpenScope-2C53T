@@ -354,6 +354,26 @@ static void usb_print_last_tx_frame(void)
     usb_send_str("\r\n");
 }
 
+static void usb_print_recent_tx_frames(void)
+{
+    uint8_t count = fpga.tx_frame_history_count;
+
+    usb_send_str("tx_frames_recent:");
+    for (uint8_t i = 0; i < count; i++) {
+        uint8_t idx = (uint8_t)((fpga.tx_frame_history_head +
+                                 FPGA_TX_FRAME_HISTORY - count + i) %
+                                FPGA_TX_FRAME_HISTORY);
+        usb_send_str(" [");
+        for (int j = 0; j < FPGA_TX_FRAME_SIZE; j++) {
+            usb_debug_printf("%s%02X",
+                             j == 0 ? "" : " ",
+                             (unsigned)fpga.tx_frame_history[idx][j]);
+        }
+        usb_send_str("]");
+    }
+    usb_send_str("\r\n");
+}
+
 static void fpga_diag_clear(void)
 {
     taskENTER_CRITICAL();
@@ -366,6 +386,10 @@ static void fpga_diag_clear(void)
     fpga.spi3_total_timeouts = 0;
     fpga.rx_frame_valid = false;
     memset((void *)fpga.rx_frame, 0, sizeof(fpga.rx_frame));
+    memset((void *)fpga.last_tx_frame, 0, sizeof(fpga.last_tx_frame));
+    memset((void *)fpga.tx_frame_history, 0, sizeof(fpga.tx_frame_history));
+    fpga.tx_frame_history_head = 0;
+    fpga.tx_frame_history_count = 0;
     memset((void *)fpga.diag_ch1_raw, 0, sizeof(fpga.diag_ch1_raw));
     memset((void *)fpga.diag_ch2_raw, 0, sizeof(fpga.diag_ch2_raw));
     fpga.diag_data_varies = 0;
@@ -545,6 +569,7 @@ static void cmd_status(void)
         fpga.spi3_first_byte
     );
     usb_print_last_tx_frame();
+    usb_print_recent_tx_frames();
 
     /* Split FPGA diag into separate printf to avoid buffer overflow */
     usb_debug_printf(
@@ -2098,6 +2123,7 @@ static void cmd_meter_frontend(void)
     }
     usb_send_str("\r\n");
     usb_print_last_tx_frame();
+    usb_print_recent_tx_frames();
     usb_debug_printf("control PC6_spi=%u PB11_active=%u PC11_meter_mux=%u PC7_probe=%u PC0_ready=%u\r\n",
                      gpio_level(GPIOC, 6),
                      gpio_level(GPIOB, 11),

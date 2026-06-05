@@ -35,6 +35,7 @@
 
 #define FPGA_USART_BAUD       9600
 #define FPGA_TX_FRAME_SIZE    10
+#define FPGA_TX_FRAME_HISTORY 16
 #define FPGA_RX_FRAME_SIZE    12
 
 /* RX frame headers */
@@ -178,6 +179,9 @@ typedef struct {
     volatile uint8_t  tx_cmd_history_head;   /* Next history slot */
     volatile uint8_t  tx_cmd_history_count;  /* Valid history entries */
     volatile uint8_t  last_tx_frame[FPGA_TX_FRAME_SIZE]; /* Last full 10-byte USART frame sent */
+    volatile uint8_t  tx_frame_history[FPGA_TX_FRAME_HISTORY][FPGA_TX_FRAME_SIZE];
+    volatile uint8_t  tx_frame_history_head;
+    volatile uint8_t  tx_frame_history_count;
 
     /* Acquisition mode (set by mode switch, read by acq task) */
     volatile uint8_t acq_mode;         /* fpga_acq_mode_t */
