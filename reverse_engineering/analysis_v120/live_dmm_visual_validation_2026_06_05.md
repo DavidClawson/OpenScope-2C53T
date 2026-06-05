@@ -83,3 +83,44 @@ tmp/dmm_goal_validation_live_0200_report/webcam_source_load.jpg
 tmp/dmm_goal_validation_live_0200_report/openscope_screen.bmp
 tmp/dmm_goal_validation_live_0200_report/report.json
 ```
+
+## ACV False-Confidence Regression
+
+After flashing the `2026-06-05 23:37:30` OpenScope app build, the same visual
+source/load state was rechecked. The webcam frame again showed:
+
+```text
+0.200 V
+0.000 A
+0.000 W
+```
+
+The live gate still failed DCV because the DMM frame decoded to about `0.4366 V`
+instead of the visually observed `0.200 V`:
+
+```text
+display=0.4366 unit=V valid=1 reject=0
+frame=5A A5 44 8E EF E7 07 24 80 00 01 89
+```
+
+However, ACV on the same DC input now fails closed with missing-AC-evidence
+instead of rendering a confident voltage:
+
+```text
+display=--- unit= valid=0 reject=3
+frame=5A A5 44 8E EF C7 07 24 80 00 01 88
+```
+
+This is why `frame[7]` bit 2 is not treated as AC-present evidence in the local
+decoder. Stock evidence in `meter_acv_stock_case_2026_06_05.md` proves
+`frame[7]` bit 0 as an ACV decimal-format selector; it does not prove bit 2 as
+an AC-valid flag. The local AC confidence rule remains fail-closed until a stock
+xref or repeatable live capture proves a better AC evidence bit.
+
+Artifacts:
+
+```text
+tmp/dmm_goal_validation_live_after_acfix/webcam_source_load.jpg
+tmp/dmm_goal_validation_live_after_acfix/openscope_screen.bmp
+tmp/dmm_goal_validation_live_after_acfix/report.json
+```

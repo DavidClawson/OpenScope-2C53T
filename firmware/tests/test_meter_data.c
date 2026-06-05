@@ -448,6 +448,25 @@ static int test_acv_rejects_dc_voltage_without_ac_evidence(void)
     return 1;
 }
 
+static int test_acv_rejects_live_low_dcv_status24_without_frequency_hint(void)
+{
+    static const uint8_t dcv_frame[12] = {
+        0x5A, 0xA5, 0x44, 0x8E, 0xEF, 0xE7,
+        0x0F, 0x24, 0x80, 0x00, 0x01, 0x8B,
+    };
+
+    meter_data_init();
+    process_frame(dcv_frame, 1);
+
+    ASSERT(!meter_reading.valid);
+    ASSERT(meter_reading.submode == 1);
+    ASSERT(expect_payload_cleared("---"));
+    ASSERT(expect_family_debug((uint8_t)FPGA_METER_FRAME_FAMILY_VOLTAGE,
+                               (uint8_t)FPGA_METER_FRAME_FAMILY_VOLTAGE,
+                               METER_REJECT_MISSING_AC_EVIDENCE));
+    return 1;
+}
+
 static int test_ac_current_rejects_current_frame_without_ac_evidence(void)
 {
     uint8_t current_frame[12];
@@ -1267,6 +1286,7 @@ int main(void)
     TEST(dcv_range_frames_are_not_latched_from_acv_mains);
     TEST(acv_mains_frame_uses_high_voltage_scale_and_frequency);
     TEST(acv_rejects_dc_voltage_without_ac_evidence);
+    TEST(acv_rejects_live_low_dcv_status24_without_frequency_hint);
     TEST(ac_current_rejects_current_frame_without_ac_evidence);
     TEST(stock_formatter_families_have_regression_fixtures);
     TEST(resistance_band_overrides_have_regression_fixtures);

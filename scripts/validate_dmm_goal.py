@@ -258,6 +258,7 @@ def run_live_validation(args: argparse.Namespace, outdir: Path) -> dict[str, Any
         "passive_live": "not probed on energized voltage input; parser tests cover stale/wrong-family rejection",
         "current_live": "not probed without correct jack and load-limited series wiring; parser tests cover voltage rejection",
     }
+    errors: list[str] = []
     webcam = capture_webcam(args.webcam, outdir / "webcam_source_load.jpg", args.webcam_size)
     result["webcam"] = webcam
     screen_path = outdir / "openscope_screen.bmp"
@@ -281,9 +282,7 @@ def run_live_validation(args: argparse.Namespace, outdir: Path) -> dict[str, Any
     try:
         assert_dcv_matches_observed(dcv, args.observed_source_voltage, args.voltage_tolerance)
     except GateError as exc:
-        result["passed"] = False
-        result["error"] = str(exc)
-        return result
+        errors.append(str(exc))
 
     live_debug(["command", "mode meter 1 0", "--timeout", str(args.timeout),
                 *([] if args.port is None else ["--port", args.port])])
@@ -298,11 +297,15 @@ def run_live_validation(args: argparse.Namespace, outdir: Path) -> dict[str, Any
     try:
         assert_acv_rejects_dc(acv)
     except GateError as exc:
-        result["passed"] = False
-        result["error"] = str(exc)
-        return result
+        errors.append(str(exc))
 
-    result["passed"] = True
+    live_debug(["command", "mode meter 0 0", "--timeout", str(args.timeout),
+                *([] if args.port is None else ["--port", args.port])])
+
+    result["passed"] = not errors
+    if errors:
+        result["errors"] = errors
+        result["error"] = "; ".join(errors)
     return result
 
 

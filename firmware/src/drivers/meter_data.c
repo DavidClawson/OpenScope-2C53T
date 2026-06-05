@@ -907,7 +907,16 @@ static bool frame_has_ac_evidence(uint8_t submode,
                                   uint8_t status,
                                   uint16_t extra)
 {
-    if ((status & (1U << 2)) != 0) return true;
+    (void)status;
+    /*
+     * AC confidence is deliberately narrower than the stock display-format
+     * status byte. Live DCV frames at a visually confirmed 0.200 V can carry
+     * frame[7]=0x24 while the source/load display is DC; treating bit 2 alone
+     * as "AC present" lets ACV render a confident but false 436.x V. The stock
+     * ACV formatter evidence only proves frame[7].0 as a decimal-format
+     * selector. Until a stock xref proves a separate AC-valid flag, require the
+     * empirical companion line-frequency hint and fail closed otherwise.
+     */
     return submode_requires_ac_evidence(submode) &&
            frame_extra_is_empirical_line_frequency_hint(extra);
 }
