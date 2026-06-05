@@ -324,3 +324,37 @@ coefficient on top of those scope paths.
 The same boundary applies to DAC1 (`0x40007408`). Stock DAC1 writes are real
 and table-backed, but current xrefs tie them to the scope trigger/comparator
 path. They are not a recovered meter reference or low-DCV correction source.
+
+### Scope Snapshot Consumer Guard, 2026-06-06
+
+`FUN_08034078` is another easy place to draw the wrong conclusion. The stock
+decompile copies the current scope/mux state into the `DAT_20000eb8..` snapshot
+block before scope measurement/display math:
+
+```text
+full_decompile.c:26144  DAT_20000eb8 = DAT_20000125;
+full_decompile.c:26145  DAT_20000eb9 = DAT_200000fa;
+full_decompile.c:26155  _DAT_20000eba = _DAT_200000fb;
+```
+
+Those snapshot bytes are later consumed by scope scale/table paths such as
+`full_decompile.c:8613`, `9087`, and `9847..10066`, where
+`DAT_080465cc` is indexed by the saved mux state. The function is named
+`scope_display_refresh` in `function_names.md`, is called from `scope_main_fsm`
+and scope render paths, and does not call `FUN_080018a4` or `FUN_08001a58`.
+
+`scripts/test_stock_meter_literals.py` binary-guards the opening snapshot block:
+
+```text
+0x08034078:
+  2d e9 f0 4f 81 b0 2d ed 04 8b 40 f2 f8 05 c2 f2
+  00 05 95 f8 2d 00 4a f6 ab 27 ca f6 aa 27 a0 fb
+  07 12 a9 78 85 f8 c0 0d 85 f8 c1 1d d5 f8 1a 10
+  b5 f8 b4 0d 4f ea 31 41 c5 f8 c6 1d a9 8a 6b 79
+  a5 f8 be 1d b5 f8 b6 1d a5 f8 e0 0d
+```
+
+This is a scope snapshot consumer guard. It proves that stock reads the current
+mux-state pair into a measurement/display snapshot, then uses that snapshot in
+scope math. It is explicitly a consumer/snapshot path, not a DMM mux writer,
+not a DMM mode/range transition, and not a factory meter calibration source.

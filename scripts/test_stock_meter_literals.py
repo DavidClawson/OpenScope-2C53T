@@ -213,6 +213,19 @@ EXPECTED_RUNTIME_MUX_STATE_WRITER_SEQUENCES = {
         ),
     ),
 }
+EXPECTED_SCOPE_SNAPSHOT_CONSUMER_SEQUENCES = {
+    "scope_measurement_snapshot_from_mux_state": (
+        0x08034078,
+        bytes.fromhex(
+            "2d e9 f0 4f 81 b0 2d ed 04 8b 40 f2 f8 05 c2 f2 "
+            "00 05 95 f8 2d 00 4a f6 ab 27 ca f6 aa 27 "
+            "a0 fb 07 12 a9 78 85 f8 c0 0d 85 f8 c1 1d "
+            "d5 f8 1a 10 b5 f8 b4 0d 4f ea 31 41 "
+            "c5 f8 c6 1d a9 8a 6b 79 a5 f8 be 1d "
+            "b5 f8 b6 1d a5 f8 e0 0d"
+        ),
+    ),
+}
 
 
 def read(addr: int, size: int) -> bytes:
@@ -421,6 +434,30 @@ def verify_runtime_mux_state_writer_sequences() -> dict[str, object]:
     return {"sequences": checked}
 
 
+def verify_scope_snapshot_consumer_sequences() -> dict[str, object]:
+    """Check stock scope measurement snapshots that consume current mux state.
+
+    `FUN_08034078` copies `DAT_20000125`, `DAT_200000fa`,
+    `DAT_2000010c`, `DAT_20000112`, `DAT_200000fd`, and `DAT_200000fb`
+    into the `DAT_20000eb8..DAT_20000ebe` snapshot block before scope
+    measurement/display math indexes waveform scale tables.  Guard it as a
+    consumer/snapshot path, not a DMM mux writer or calibration source.
+    """
+    checked: dict[str, dict[str, str]] = {}
+    for name, (addr, expected) in EXPECTED_SCOPE_SNAPSHOT_CONSUMER_SEQUENCES.items():
+        actual = read(addr, len(expected))
+        if actual != expected:
+            raise AssertionError(
+                f"{name} {addr:#010x}: expected {expected.hex(' ')}, "
+                f"got {actual.hex(' ')}"
+            )
+        checked[name] = {
+            "addr": f"{addr:#010x}",
+            "bytes": actual.hex(" "),
+        }
+    return {"sequences": checked}
+
+
 def main() -> None:
     if not BIN.exists():
         print(f"stock meter literal pools: skipped; missing {BIN}", file=sys.stderr)
@@ -463,6 +500,7 @@ def main() -> None:
     mux_calls = verify_meter_mux_callsite_sequences()
     mux_bodies = verify_meter_mux_writer_body_sequences()
     runtime_mux_writers = verify_runtime_mux_state_writer_sequences()
+    scope_snapshots = verify_scope_snapshot_consumer_sequences()
     print(f"stock meter selector table: {selector['bytes']}")
     print("stock meter selector xref sites: " +
           ", ".join(selector_xrefs["sequences"].keys()))
@@ -477,6 +515,8 @@ def main() -> None:
               ", ".join(info["slices"].keys()))
     print("stock runtime mux-state writer sites: " +
           ", ".join(item["addr"] for item in runtime_mux_writers["sequences"].values()))
+    print("stock scope snapshot consumer sites: " +
+          ", ".join(item["addr"] for item in scope_snapshots["sequences"].values()))
     print("stock meter literal pools: ok")
 
 

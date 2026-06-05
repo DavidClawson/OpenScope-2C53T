@@ -339,6 +339,27 @@ class DmmGoalValidationTests(unittest.TestCase):
             sequences["scope_main_autorange_increment"]["bytes"],
         )
 
+    def test_stock_scope_snapshot_consumers_are_binary_grounded(self) -> None:
+        result = stock_meter_literals.verify_scope_snapshot_consumer_sequences()
+        sequences = result["sequences"]
+
+        self.assertEqual(
+            sequences["scope_measurement_snapshot_from_mux_state"]["addr"],
+            "0x08034078",
+        )
+        self.assertIn(
+            "95 f8 2d 00",
+            sequences["scope_measurement_snapshot_from_mux_state"]["bytes"],
+        )
+        self.assertIn(
+            "a9 78 85 f8 c0 0d",
+            sequences["scope_measurement_snapshot_from_mux_state"]["bytes"],
+        )
+        self.assertIn(
+            "6b 79 a5 f8 be 1d",
+            sequences["scope_measurement_snapshot_from_mux_state"]["bytes"],
+        )
+
 
 if __name__ == "__main__":
     unittest.main()
