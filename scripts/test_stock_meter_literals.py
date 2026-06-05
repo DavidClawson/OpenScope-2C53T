@@ -329,6 +329,55 @@ EXPECTED_BOOT_MODE_INIT_DMM_SEQUENCES = {
         ),
     ),
 }
+EXPECTED_RUNTIME_MODE_INIT_DISPATCH_CALLER_SEQUENCES = {
+    "runtime_mode_init_forward_dispatcher": (
+        0x08006418,
+        bytes.fromhex(
+            "b0 b5 40 f2 f8 00 c2 f2 00 00 90 f8 68 1f 01 39 "
+            "08 29 53 d8 df e8 01 f0 05 0f 52 52 1c 4e 52 52 53 00"
+        ),
+    ),
+    "runtime_mode_init_forward_state2_seed": (
+        0x0800644E,
+        bytes.fromhex(
+            "40 f2 09 11 c0 f2 05 01 c0 f8 68 1f 01 21 80 f8 "
+            "55 13 bd e8 b0 40 05 f0 50 ba"
+        ),
+    ),
+    "runtime_mode_init_forward_latch_collapse_to_state2": (
+        0x080064E0,
+        bytes.fromhex(
+            "90 f8 6a 1f 05 29 0d d1 00 21 02 22 80 f8 55 13 "
+            "80 f8 68 2f a0 f8 69 1f 80 f8 6b 1f bd e8 b0 40 "
+            "05 f0 02 ba"
+        ),
+    ),
+    "runtime_mode_init_reverse_dispatcher": (
+        0x08006548,
+        bytes.fromhex(
+            "b0 b5 40 f2 f8 00 c2 f2 00 00 90 f8 68 1f 01 39 "
+            "08 29 0c d8 df e8 01 f0 05 0c 0b 0b 19 29 0b 0b 30 00"
+        ),
+    ),
+    "runtime_mode_init_reverse_state2_seed": (
+        0x08006578,
+        bytes.fromhex(
+            "40 f2 09 11 c0 f2 02 01 c0 f8 68 1f 01 21 80 f8 "
+            "55 13 bd e8 b0 40 05 f0 bb b9"
+        ),
+    ),
+    "runtime_mode_init_reverse_state_clear_to_state2": (
+        0x08006592,
+        bytes.fromhex(
+            "02 21 80 f8 68 1f 00 21 a0 f8 1c 1e c0 f8 12 1e "
+            "c0 f8 16 1e 80 f8 1a 1e bd e8 b0 40 05 f0 ab b9"
+        ),
+    ),
+    "runtime_mode_init_reverse_state5_seed": (
+        0x080065B2,
+        bytes.fromhex("05 21 80 f8 68 1f bd e8 b0 40 05 f0 a4 b9"),
+    ),
+}
 EXPECTED_MUX_CALLS_BY_TARGET = {
     "gpio_mux_portc_porte": {
         "target": 0x080018A4,
@@ -944,6 +993,31 @@ def verify_boot_mode_init_dmm_sequences() -> dict[str, object]:
     return {"sequences": checked}
 
 
+def verify_runtime_mode_init_dispatch_caller_sequences() -> dict[str, object]:
+    """Check runtime helper slices that tail-call the mode-init dispatcher.
+
+    The guarded `0x08006418`/`0x08006548` helper pair reads the current
+    `ms[0xF68]` mode-init state, mutates `ms[0xF68]`, `ms[0xF69]`,
+    `ms[0xF6B]`, and latch bytes, then tail-calls `FUN_0800B908`.  This proves
+    runtime entry into the already guarded command-byte dispatcher.  It does
+    not turn the dispatcher into an analog range writer and does not recover
+    meter calibration.
+    """
+    checked: dict[str, dict[str, str]] = {}
+    for name, (addr, expected) in EXPECTED_RUNTIME_MODE_INIT_DISPATCH_CALLER_SEQUENCES.items():
+        actual = read(addr, len(expected))
+        if actual != expected:
+            raise AssertionError(
+                f"{name} {addr:#010x}: expected {expected.hex(' ')}, "
+                f"got {actual.hex(' ')}"
+            )
+        checked[name] = {
+            "addr": f"{addr:#010x}",
+            "bytes": actual.hex(" "),
+        }
+    return {"sequences": checked}
+
+
 def verify_meter_mux_callsite_sequences() -> dict[str, object]:
     """Check every stock direct BL callsite to the two mux writers.
 
@@ -1174,6 +1248,7 @@ def main() -> None:
     saved_config_pack_callers = verify_meter_saved_config_pack_caller_sequences()
     usart_tx_config_writer = verify_usart_tx_config_writer_meter_case_sequences()
     boot_mode_init = verify_boot_mode_init_dmm_sequences()
+    runtime_mode_init_callers = verify_runtime_mode_init_dispatch_caller_sequences()
     mux_calls = verify_meter_mux_callsite_sequences()
     mux_bodies = verify_meter_mux_writer_body_sequences()
     runtime_mux_writers = verify_runtime_mux_state_writer_sequences()
@@ -1208,6 +1283,8 @@ def main() -> None:
           ", ".join(item["addr"] for item in usart_tx_config_writer["callers"].values()))
     print("stock boot mode-init DMM sequence sites: " +
           ", ".join(item["addr"] for item in boot_mode_init["sequences"].values()))
+    print("stock runtime mode-init dispatcher caller sites: " +
+          ", ".join(item["addr"] for item in runtime_mode_init_callers["sequences"].values()))
     for name, info in mux_calls.items():
         print(f"stock {name} direct BL sites: " + ", ".join(info["calls"]))
     for name, info in mux_bodies.items():

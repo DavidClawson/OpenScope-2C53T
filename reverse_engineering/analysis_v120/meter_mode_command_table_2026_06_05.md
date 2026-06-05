@@ -225,6 +225,52 @@ runtime writer for `ms[0x02]`/`ms[0x03]`, does not prove exact settle/discard
 counts, and does not explain the `0.200 V` visual versus `0.4366 V` CDC low-DCV
 blocker.
 
+### Runtime Mode-Init Dispatcher Caller Guard, 2026-06-06
+
+The adjacent runtime helper pair at `0x08006418` and `0x08006548` is now
+binary-guarded as the stock runtime entry path into `FUN_0800B908`. These
+helpers read the mode-init state byte at `ms[0xF68]`, dispatch through TBB
+tables, mutate `ms[0xF68]` plus nearby latch/progress bytes, and tail-call
+`FUN_0800B908`. That makes them runtime mode-init dispatcher caller evidence:
+they select which already-guarded command bank will be queued to `0x20002D6C`.
+
+Guarded slices:
+
+```text
+0x08006418 runtime_mode_init_forward_dispatcher:
+  reads `[0x200000f8 + 0xf68]`, subtracts one, bounds the state to 1..9,
+  and dispatches through the forward helper TBB table.
+
+0x0800644E runtime_mode_init_forward_state2_seed:
+  writes `_ms[0xF68] = 0x00050109`, sets `ms[0x355] = 1`,
+  and tail-calls `FUN_0800B908`.
+
+0x080064E0 runtime_mode_init_forward_latch_collapse_to_state2:
+  when `ms[0xF6A] == 5`, clears `ms[0x355]`, writes `ms[0xF68] = 2`,
+  clears `ms[0xF69]`/`ms[0xF6B]`, and tail-calls `FUN_0800B908`.
+
+0x08006548 runtime_mode_init_reverse_dispatcher:
+  reads the same `[0x200000f8 + 0xf68]` byte and dispatches through the
+  reverse helper TBB table.
+
+0x08006578 runtime_mode_init_reverse_state2_seed:
+  writes `_ms[0xF68] = 0x00020109`, sets `ms[0x355] = 1`,
+  and tail-calls `FUN_0800B908`.
+
+0x08006592 runtime_mode_init_reverse_state_clear_to_state2:
+  writes `ms[0xF68] = 2`, clears `ms[0xE1C]`, `ms[0xE12]`,
+  `ms[0xE16]`, and `ms[0xE1A]`, then tail-calls `FUN_0800B908`.
+
+0x080065B2 runtime_mode_init_reverse_state5_seed:
+  writes `ms[0xF68] = 5` and tail-calls `FUN_0800B908`.
+```
+
+This replaces the looser old "runtime command-bank emitter" wording in the
+April notes with a narrower claim: the runtime helpers choose/normalize
+mode-init state, and `FUN_0800B908` performs the byte-command queueing. It is
+still not a DMM calibration source, not a runtime analog range writer for
+`ms[0x02]`/`ms[0x03]`, and not proof of exact settle/discard timing.
+
 The same script now also carries a selector state writer guard for the stock
 digital DMM state machine. These sites prove stock RAM coupling around
 `DAT_20001025` (`0x20001025`, selector), `DAT_2000102E` (`0x2000102e`, mode/range

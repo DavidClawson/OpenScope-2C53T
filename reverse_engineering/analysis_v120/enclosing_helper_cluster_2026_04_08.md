@@ -145,6 +145,15 @@ same family identified in the earlier dynamic-word pass.
 
 ## 5. `0x08006418`: command-bank emitter
 
+**2026-06-06 correction:** current binary guards in
+`meter_mode_command_table_2026_06_05.md` narrow this wording. The guarded
+runtime helper pair at `0x08006418` / `0x08006548` mutates `DAT_20001060`
+(`ms[0xF68]`) and latch/progress bytes, then tail-calls `FUN_0800B908`.
+`FUN_0800B908` is the byte-command queueing dispatcher for `0x20002D6C`.
+So the runtime cluster is runtime mode-init dispatcher caller evidence, not
+itself a direct proof that every listed command bank is emitted at `0x08006418`,
+and still not a DMM analog range writer or calibration source.
+
 This is the most useful new result.
 
 The helper branches on the low byte of `DAT_20001060` and then enqueues bytes to

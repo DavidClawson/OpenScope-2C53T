@@ -533,6 +533,43 @@ class DmmGoalValidationTests(unittest.TestCase):
             sequences["meter_variant_boot_tail"]["bytes"],
         )
 
+    def test_stock_runtime_mode_init_dispatch_callers_are_binary_grounded(self) -> None:
+        result = stock_meter_literals.verify_runtime_mode_init_dispatch_caller_sequences()
+        sequences = result["sequences"]
+
+        self.assertEqual(
+            sequences["runtime_mode_init_forward_dispatcher"]["addr"],
+            "0x08006418",
+        )
+        self.assertEqual(
+            sequences["runtime_mode_init_reverse_dispatcher"]["addr"],
+            "0x08006548",
+        )
+        self.assertIn(
+            "90 f8 68 1f 01 39 08 29",
+            sequences["runtime_mode_init_forward_dispatcher"]["bytes"],
+        )
+        self.assertIn(
+            "c0 f8 68 1f 01 21 80 f8 55 13 bd e8 b0 40",
+            sequences["runtime_mode_init_forward_state2_seed"]["bytes"],
+        )
+        self.assertIn(
+            "80 f8 68 2f a0 f8 69 1f 80 f8 6b 1f",
+            sequences["runtime_mode_init_forward_latch_collapse_to_state2"]["bytes"],
+        )
+        self.assertIn(
+            "c0 f8 68 1f 01 21 80 f8 55 13 bd e8 b0 40",
+            sequences["runtime_mode_init_reverse_state2_seed"]["bytes"],
+        )
+        self.assertIn(
+            "80 f8 68 1f 00 21 a0 f8 1c 1e c0 f8 12 1e",
+            sequences["runtime_mode_init_reverse_state_clear_to_state2"]["bytes"],
+        )
+        self.assertIn(
+            "05 21 80 f8 68 1f bd e8 b0 40",
+            sequences["runtime_mode_init_reverse_state5_seed"]["bytes"],
+        )
+
     def test_stock_meter_mux_direct_callsites_are_binary_grounded(self) -> None:
         result = stock_meter_literals.verify_meter_mux_callsite_sequences()
 
