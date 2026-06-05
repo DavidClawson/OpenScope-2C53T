@@ -360,6 +360,35 @@ class DmmGoalValidationTests(unittest.TestCase):
             sequences["scope_measurement_snapshot_from_mux_state"]["bytes"],
         )
 
+    def test_stock_scope_preset_mux_owners_are_binary_grounded(self) -> None:
+        result = stock_meter_literals.verify_scope_preset_mux_owner_sequences()
+        sequences = result["sequences"]
+
+        self.assertEqual(
+            sequences["scope_preset_mux_increment_prologue"]["addr"],
+            "0x08003148",
+        )
+        self.assertEqual(
+            sequences["scope_preset_mux_decrement_prologue"]["addr"],
+            "0x08003900",
+        )
+        self.assertIn(
+            "a8 78 fe f7 5c fb",
+            sequences["scope_preset_mux_increment_portc_branch"]["bytes"],
+        )
+        self.assertIn(
+            "e8 78 fe f7 08 fa",
+            sequences["scope_preset_mux_increment_portab_branch"]["bytes"],
+        )
+        self.assertIn(
+            "b0 78 fd f7 7f ff",
+            sequences["scope_preset_mux_decrement_portc_branch"]["bytes"],
+        )
+        self.assertIn(
+            "f0 78 fd f7 0d fe",
+            sequences["scope_preset_mux_decrement_portab_branch"]["bytes"],
+        )
+
 
 if __name__ == "__main__":
     unittest.main()

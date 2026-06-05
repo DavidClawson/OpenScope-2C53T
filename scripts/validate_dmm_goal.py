@@ -228,6 +228,8 @@ def verify_re_coverage() -> dict[str, Any]:
         "runtime mux-state writer guard", "0x08001EE8", "0x0801A526",
         "negative DMM evidence", "scope snapshot consumer guard",
         "0x08034078", "consumer/snapshot path, not a DMM mux writer",
+        "scope/preset mux owner guard", "0x08003148", "0x08003900",
+        "not DMM runtime range proof",
     ]
 
     haystack = ""

@@ -226,6 +226,56 @@ EXPECTED_SCOPE_SNAPSHOT_CONSUMER_SEQUENCES = {
         ),
     ),
 }
+EXPECTED_SCOPE_PRESET_MUX_OWNER_SEQUENCES = {
+    "scope_preset_mux_increment_prologue": (
+        0x08003148,
+        bytes.fromhex(
+            "f0 b5 81 b0 2d ed 02 8b 40 f2 f8 05 c2 f2 00 05 "
+            "95 f8 68 0f 01 38 08 28 00 f2 b3 83 df e8 10 f0"
+        ),
+    ),
+    "scope_preset_mux_increment_portc_branch": (
+        0x080031B6,
+        bytes.fromhex(
+            "05 eb d0 10 10 f8 02 1f 08 29 00 f2 83 83 01 31 "
+            "01 70 95 f8 54 03 05 eb d0 11 89 78 40 b2 "
+            "05 29 04 bf 0a 21 85 f8 bb 1d b0 f1 ff 3f "
+            "40 f3 2e 82 a8 78 fe f7 5c fb"
+        ),
+    ),
+    "scope_preset_mux_increment_portab_branch": (
+        0x08003642,
+        bytes.fromhex(
+            "e8 78 fe f7 08 fa 42 f6 6c 57 42 f6 53 54 "
+            "c2 f2 00 07 c2 f2 00 04 04 21 38 68 21 70 "
+            "21 46 4f f0 ff 32 37 f0 44 fb"
+        ),
+    ),
+    "scope_preset_mux_decrement_prologue": (
+        0x08003900,
+        bytes.fromhex(
+            "f0 b5 81 b0 2d ed 02 8b 40 f2 f8 06 c2 f2 00 06 "
+            "96 f8 68 0f 01 38 08 28 00 f2 4b 84 df e8 10 f0"
+        ),
+    ),
+    "scope_preset_mux_decrement_portc_branch": (
+        0x08003970,
+        bytes.fromhex(
+            "06 eb d0 10 10 f8 02 1f 00 29 00 f0 1a 84 01 39 "
+            "01 70 96 f8 54 03 06 eb d0 11 89 78 40 b2 "
+            "04 29 04 bf 0a 21 86 f8 bb 1d b0 f1 ff 3f "
+            "40 f3 4c 82 b0 78 fd f7 7f ff"
+        ),
+    ),
+    "scope_preset_mux_decrement_portab_branch": (
+        0x08003E38,
+        bytes.fromhex(
+            "f0 78 fd f7 0d fe 42 f6 6c 55 42 f6 53 54 "
+            "c2 f2 00 05 c2 f2 00 04 04 21 28 68 21 70 "
+            "21 46 4f f0 ff 32 36 f0 49 ff"
+        ),
+    ),
+}
 
 
 def read(addr: int, size: int) -> bytes:
@@ -458,6 +508,30 @@ def verify_scope_snapshot_consumer_sequences() -> dict[str, object]:
     return {"sequences": checked}
 
 
+def verify_scope_preset_mux_owner_sequences() -> dict[str, object]:
+    """Check stock scope/preset mux-owner handlers around 0x08003148/0x08003900.
+
+    These paired handlers increment/decrement `(&DAT_200000fa)[idx]` using
+    the selector byte at `DAT_2000044c`, then dispatch to `FUN_080018a4` for
+    channel 0 or `FUN_08001a58` for channel 1 and queue command `4`.  They are
+    scope/preset UI owners for the mux-state pair, not DMM runtime range
+    writers tied to the eight-entry meter selector table.
+    """
+    checked: dict[str, dict[str, str]] = {}
+    for name, (addr, expected) in EXPECTED_SCOPE_PRESET_MUX_OWNER_SEQUENCES.items():
+        actual = read(addr, len(expected))
+        if actual != expected:
+            raise AssertionError(
+                f"{name} {addr:#010x}: expected {expected.hex(' ')}, "
+                f"got {actual.hex(' ')}"
+            )
+        checked[name] = {
+            "addr": f"{addr:#010x}",
+            "bytes": actual.hex(" "),
+        }
+    return {"sequences": checked}
+
+
 def main() -> None:
     if not BIN.exists():
         print(f"stock meter literal pools: skipped; missing {BIN}", file=sys.stderr)
@@ -501,6 +575,7 @@ def main() -> None:
     mux_bodies = verify_meter_mux_writer_body_sequences()
     runtime_mux_writers = verify_runtime_mux_state_writer_sequences()
     scope_snapshots = verify_scope_snapshot_consumer_sequences()
+    scope_preset_mux_owners = verify_scope_preset_mux_owner_sequences()
     print(f"stock meter selector table: {selector['bytes']}")
     print("stock meter selector xref sites: " +
           ", ".join(selector_xrefs["sequences"].keys()))
@@ -517,6 +592,8 @@ def main() -> None:
           ", ".join(item["addr"] for item in runtime_mux_writers["sequences"].values()))
     print("stock scope snapshot consumer sites: " +
           ", ".join(item["addr"] for item in scope_snapshots["sequences"].values()))
+    print("stock scope/preset mux owner sites: " +
+          ", ".join(item["addr"] for item in scope_preset_mux_owners["sequences"].values()))
     print("stock meter literal pools: ok")
 
 

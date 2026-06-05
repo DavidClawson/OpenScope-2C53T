@@ -257,7 +257,7 @@ The evidence splits like this:
 | saved-state restore/apply | `0x08025544..0x0802554c` and `0x0802723e..0x0802724a` load saved `ms[0x02]`/`ms[0x03]` then call both mux writers | DMM-relevant boot/saved-state evidence |
 | direct decompile callers | `function_names.md` lists `FUN_08001c60` as `siggen_configure` and `FUN_08019e98` as `scope_main_fsm`; `function_map_complete.txt` lists only callers `08001c60,08019e98` for both mux writers even though the binary guard proves more BL sites | decompile/function-map limitation; not enough for DMM selector proof |
 | `FUN_08001c60` scope/siggen channel setup | `0x08001F06` / `0x080020B2`; `full_decompile.c:2564..2574` increments `(&DAT_200000fa)[uVar20]`, then calls `FUN_080018a4(DAT_200000fa)` for channel 0 or `FUN_08001a58(DAT_200000fb)` for channel 1 and queues command `4` | scope/siggen auto-range path; not DMM |
-| additional early UI/scope-owner mux sites | `0x080031E8` / `0x08003644` and `0x080039A2` / `0x08003E3A` are stock direct BL sites found by the binary sweep but not tied by current text decompile evidence to the eight-entry DMM selector table | unresolved owner; not DMM runtime range proof |
+| scope/preset mux owner handlers | `0x08003148` and `0x08003900` wrap the callsites `0x080031E8` / `0x08003644` and `0x080039A2` / `0x08003E3A`; binary disassembly shows they increment/decrement `(&DAT_200000fa)[DAT_2000044c >> 7]`, call `FUN_080018a4` for channel 0 or `FUN_08001a58` for channel 1, then queue command `4` | scope/preset UI mux owners; not DMM runtime range proof |
 | scope main auto-range write | `0x0801A534` / `0x0801A53E`; `full_decompile.c:6880..6999` scans sample buffers, enters range selection, then reuses `DAT_200000fa/DAT_200000fb` for DAC/calibration recompute; `full_decompile.c:8744..8752` performs the actual mux call after `(&DAT_200000fa)[uVar70] = bVar37 + 1` | oscilloscope acquisition path; not DMM |
 | explicit scope-submode mux calls | `full_decompile.c:7564..7565` and `7988..7989` call both mux writers with `DAT_20000128 & 0xf`; `scope_main_fsm_annotated.c` names `DAT_20000128`/state `+0x30` as scope sub-mode | scope runtime reconfiguration, not DMM |
 | DAC1 writes | `FUN_080018a4` at `0x080018A4..0x08001A52` and inline recomputes at `full_decompile.c:2603..2624`, `6960..7020`, `7771..7990` write `0x40007408` from scope calibration tables | scope trigger/comparator threshold; not DMM calibration |
@@ -358,3 +358,81 @@ This is a scope snapshot consumer guard. It proves that stock reads the current
 mux-state pair into a measurement/display snapshot, then uses that snapshot in
 scope math. It is explicitly a consumer/snapshot path, not a DMM mux writer,
 not a DMM mode/range transition, and not a factory meter calibration source.
+
+### Scope/Preset Mux Owner Guard, 2026-06-06
+
+The remaining early mux callsites from the direct BL sweep are now classified
+from stock binary disassembly instead of left as possible DMM evidence. The two
+paired handlers are:
+
+```text
+0x08003148: scope/preset mux increment handler
+0x08003900: scope/preset mux decrement handler
+```
+
+Both handlers read `DAT_20001060` (`[base+0xf68]`) for a UI/state switch and
+use `DAT_2000044c` (`[base+0x354]`) as the channel selector. The low nibble
+selects an action, while the sign/high bit selects which mux-state byte is
+edited:
+
+```text
+0x080031B6: add.w r0, r5, r0, lsr #7
+0x080031BA: ldrb.w r1, [r0, #2]!
+0x080031C4: adds r1, #1
+0x080031C6: strb r1, [r0, #0]
+...
+0x080031DE: cmp.w r0, #-1
+0x080031E2: ble.w 0x08003642
+0x080031E6: ldrb r0, [r5, #2]
+0x080031E8: bl 0x080018a4
+
+0x08003642: ldrb r0, [r5, #3]
+0x08003644: bl 0x08001a58
+0x08003658: movs r1, #4
+0x08003664: bl 0x0803acf0
+```
+
+The decrement-side handler mirrors the same ownership shape:
+
+```text
+0x08003970: add.w r0, r6, r0, lsr #7
+0x08003974: ldrb.w r1, [r0, #2]!
+0x0800397E: subs r1, #1
+0x08003980: strb r1, [r0, #0]
+...
+0x08003998: cmp.w r0, #-1
+0x0800399C: ble.w 0x08003E38
+0x080039A0: ldrb r0, [r6, #2]
+0x080039A2: bl 0x080018a4
+
+0x08003E38: ldrb r0, [r6, #3]
+0x08003E3A: bl 0x08001a58
+0x08003E4E: movs r1, #4
+0x08003E5A: bl 0x0803acf0
+```
+
+`scripts/test_stock_meter_literals.py` carries a scope/preset mux owner guard
+for the two prologues and all four mux branches:
+
+```text
+0x08003148 increment prologue:
+  f0 b5 81 b0 2d ed 02 8b 40 f2 f8 05 c2 f2 00 05
+  95 f8 68 0f 01 38 08 28 00 f2 b3 83 df e8 10 f0
+0x080031B6 increment Port C/E branch:
+  05 eb d0 10 10 f8 02 1f ... a8 78 fe f7 5c fb
+0x08003642 increment Port A/B branch:
+  e8 78 fe f7 08 fa ... 04 21 38 68 21 70 ... 37 f0 44 fb
+
+0x08003900 decrement prologue:
+  f0 b5 81 b0 2d ed 02 8b 40 f2 f8 06 c2 f2 00 06
+  96 f8 68 0f 01 38 08 28 00 f2 4b 84 df e8 10 f0
+0x08003970 decrement Port C/E branch:
+  06 eb d0 10 10 f8 02 1f ... b0 78 fd f7 7f ff
+0x08003E38 decrement Port A/B branch:
+  f0 78 fd f7 0d fe ... 04 21 28 68 21 70 ... 36 f0 49 ff
+```
+
+This resolves the "additional early UI/scope-owner mux sites" row from the
+previous audit: these are stock scope/preset UI mux owners. They prove another
+runtime owner of the shared mux-state pair, but they are not tied to the
+eight-entry DMM selector table and are not DMM runtime range proof.
