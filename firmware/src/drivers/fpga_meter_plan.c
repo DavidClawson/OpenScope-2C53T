@@ -144,6 +144,9 @@ fpga_meter_transition_plan_t fpga_meter_transition_plan_for_submode(uint8_t subm
      * port uses the recovered stock slot as both mux indices because no scoped
      * disassembly path has yet shown an extra writer that splits small current,
      * A-range current, capacitance, or temperature inside a shared slot.
+     * This is a software state-machine contract only. Physical correctness for
+     * low DCV and shared local ranges still needs stock xrefs or repeatable
+     * live traces; do not hide those gaps with decoder-side value-shape hacks.
      */
     plan.portc_porte_mux = plan.stock_mode;
     plan.porta_portb_mux = plan.stock_mode;

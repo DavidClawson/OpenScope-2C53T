@@ -163,6 +163,37 @@ static void test_transition_plan_covers_mux_family_and_settle_policy(void)
     }
 }
 
+static void test_state_machine_contract_is_exhaustive(void)
+{
+    uint16_t seen_local_submodes = 0;
+    uint16_t seen_stock_modes = 0;
+
+    for (uint8_t i = 0; i < FPGA_METER_LOCAL_SUBMODE_COUNT; i++) {
+        char name[56];
+        fpga_meter_transition_plan_t plan =
+            fpga_meter_transition_plan_for_submode(i);
+
+        seen_local_submodes |= (uint16_t)(1U << i);
+        if (plan.stock_mode < FPGA_METER_STOCK_MODE_COUNT) {
+            seen_stock_modes |= (uint16_t)(1U << plan.stock_mode);
+        }
+
+        snprintf(name, sizeof(name), "contract valid submode %u", (unsigned)i);
+        EXPECT_EQ_U8(name, fpga_meter_submode_is_valid(i) ? 1U : 0U, 1U);
+        snprintf(name, sizeof(name), "contract stock mode valid %u", (unsigned)i);
+        EXPECT_EQ_U8(name, plan.stock_mode < FPGA_METER_STOCK_MODE_COUNT ? 1U : 0U, 1U);
+        snprintf(name, sizeof(name), "contract frame family valid %u", (unsigned)i);
+        EXPECT_EQ_U8(name, plan.frame_family != FPGA_METER_FRAME_FAMILY_INVALID ? 1U : 0U, 1U);
+        snprintf(name, sizeof(name), "contract selector valid %u", (unsigned)i);
+        EXPECT_EQ_U8(name, plan.selector_word != FPGA_METER_INVALID_SELECTOR_WORD ? 1U : 0U, 1U);
+    }
+
+    EXPECT_EQ_U16("all local submodes covered", seen_local_submodes,
+                  (uint16_t)((1U << FPGA_METER_LOCAL_SUBMODE_COUNT) - 1U));
+    EXPECT_EQ_U16("all recovered stock slots covered", seen_stock_modes,
+                  (uint16_t)((1U << FPGA_METER_STOCK_MODE_COUNT) - 1U));
+}
+
 static void test_fallbacks(void)
 {
     fpga_meter_transition_plan_t plan =
@@ -241,6 +272,7 @@ int main(void)
     test_wire_words_are_raw_05_family();
     test_stock_apply_words_for_runtime_family_switch();
     test_transition_plan_covers_mux_family_and_settle_policy();
+    test_state_machine_contract_is_exhaustive();
     test_fallbacks();
     test_rx_frame_gate_preserves_discard_budget_while_busy();
 

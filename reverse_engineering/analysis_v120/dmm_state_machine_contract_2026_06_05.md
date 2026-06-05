@@ -1,0 +1,77 @@
+# DMM State-Machine Contract and Low-DCV Guardrail
+
+Date: 2026-06-05
+
+This note records the software validation direction after the live low-DCV
+failure. The decoder must stay stock-disassembly-grounded; it must not grow
+observed-value coefficient hacks or a webcam/OCR-driven multiplier loop.
+
+## Stock-Bound Contract
+
+Stock-visible DCV math remains:
+
+- raw digits are decoded as `d0*1000 + d1*100 + d2*10 + d3`
+- `frame[2].3` extends raw by `+10000`
+- voltage class priority is `frame[8].7`, then `frame[3].4`, then
+  `frame[4].4`, then `frame[5].4`, then default class 0
+- display value is `extended_raw / 10^class`
+
+The current firmware tests intentionally preserve that contract, including the
+live `0.200 V` failure frame:
+
+```text
+frame=5A A5 44 8E EF E7 07 24 80 00 01 89
+stock decode: raw=4366, class=4, display=0.4366 V
+visual source/load display: 0.200 V
+```
+
+That mismatch is unresolved frontend/range/calibration behavior. It is not
+evidence for a one-point low-voltage multiplier.
+
+## Exhaustive Local Mode Contract
+
+`firmware/tests/test_fpga_meter_plan.c` now asserts that the local DMM
+state-machine covers every local UI submode and every recovered stock selector
+slot:
+
+| local submode | local meaning | stock slot | frame family |
+| --- | --- | --- | --- |
+| 0 | DCV | 0 | voltage |
+| 1 | ACV | 1 | voltage |
+| 2 | DC mA | 2 | current |
+| 3 | DC A | 2 | current |
+| 4 | AC mA | 3 | current |
+| 5 | local AC A | 3 | current |
+| 6 | resistance | 4 | resistance |
+| 7 | continuity | 6 | continuity |
+| 8 | diode | 7 | diode |
+| 9 | capacitance | 5 | extended |
+| 10 | local temperature | 5 | extended |
+
+The test fails if a local submode has no valid stock slot, no valid frame
+family, or no valid selector word, and it also fails if any recovered stock
+slot stops being represented by the local model.
+
+## Current Evidence Boundary
+
+The software contract proves parser/state safety only:
+
+- wrong-family voltage frames clear stale current/passive readings
+- AC modes fail closed without line-frequency evidence
+- mode invalidation clears stale payloads before transition
+- the first post-transition frames are discarded before parsing
+- local current and extended splits remain local policy over shared stock slots
+
+Physical correctness for arbitrary DMM inputs still requires deeper stock xrefs
+or repeatable live traces of the analog frontend/range path. The known open
+items are the writers for stock `ms[0x02]` and `ms[0x03]`, the exact effect and
+commit semantics of the H2 SPI3 bulk replay, and any real factory calibration
+source in W25Q/system files/SPI bulk tables.
+
+## Validation Direction
+
+Use unit/state-machine/property tests for the broad mode matrix first. Use the
+physical device only after the software contract is stable, and then validate
+hard scenarios: low DCV, range boundaries, AC evidence on DC input, stale-frame
+transitions, and safe current-mode circuits with the correct jack and
+load-limited series wiring.

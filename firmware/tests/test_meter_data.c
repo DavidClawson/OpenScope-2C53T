@@ -307,6 +307,36 @@ static int test_dcv_live_1v5_rotating_frames_keep_stock_class4(void)
     return 1;
 }
 
+static int test_dcv_live_0200_frame_preserves_stock_math_as_unresolved_frontend(void)
+{
+    /*
+     * Live visual check on 2026-06-05: the PSU/load display showed 0.200 V,
+     * while this DCV frame rendered 0.4366 V. Keep that mismatch visible here:
+     * stock-visible decoder math is still raw 4366 / 10^4 from frame[8].7.
+     * Correcting the physical 0.200 V case belongs in recovered frontend/range
+     * or factory-calibration state, not in a one-point display coefficient.
+     */
+    static const uint8_t frame[12] = {
+        0x5A, 0xA5, 0x44, 0x8E, 0xEF, 0xE7,
+        0x07, 0x24, 0x80, 0x00, 0x01, 0x89,
+    };
+
+    meter_data_init();
+    process_frame(frame, 0);
+
+    ASSERT(meter_reading.valid);
+    ASSERT(meter_reading.result_class == METER_RESULT_NORMAL);
+    ASSERT(meter_reading.bcd_value == 4366);
+    ASSERT(meter_reading.decimal_pos == 1);
+    ASSERT_STR_EQ(meter_reading.display_str, "0.4366");
+    ASSERT_STR_EQ(meter_reading.unit_suffix, "V");
+    ASSERT(close_to(meter_reading.value, 0.4366f, 0.0001f));
+    ASSERT(!close_to(meter_reading.value, 0.2000f, 0.05f));
+    ASSERT((meter_reading.dbg_frame[2] & 0x08U) == 0);
+    ASSERT((meter_reading.dbg_frame[8] & 0x80U) != 0);
+    return 1;
+}
+
 static int test_dcv_class4_priority_requires_frame8_bit7(void)
 {
     static const uint8_t frame[12] = {
@@ -1279,6 +1309,7 @@ int main(void)
     TEST(dcv_1v4979_frame_uses_stock_extended_raw_and_class4);
     TEST(dcv_live_1v5_frame_uses_stock_extended_raw_and_class4);
     TEST(dcv_live_1v5_rotating_frames_keep_stock_class4);
+    TEST(dcv_live_0200_frame_preserves_stock_math_as_unresolved_frontend);
     TEST(dcv_class4_priority_requires_frame8_bit7);
     TEST(dcv_synthetic_5008_without_class_bits_stays_class0);
     TEST(dcv_extra_frequency_hint_does_not_set_voltage_range);
