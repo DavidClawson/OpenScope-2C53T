@@ -63,6 +63,17 @@ void meter_autoselect_cancel(void)
     taskEXIT_CRITICAL();
 }
 
+bool meter_autoselect_is_running(void)
+{
+    bool running;
+
+    taskENTER_CRITICAL();
+    running = autoselect_start_pending ||
+              autoselect_status.state == METER_AUTOSELECT_RUNNING;
+    taskEXIT_CRITICAL();
+    return running;
+}
+
 void meter_autoselect_get_status(meter_autoselect_status_t *out)
 {
     if (!out) return;

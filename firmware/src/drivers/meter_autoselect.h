@@ -31,6 +31,7 @@ typedef struct {
 void meter_autoselect_create_task(void);
 bool meter_autoselect_start(uint32_t settle_ms);
 void meter_autoselect_cancel(void);
+bool meter_autoselect_is_running(void);
 void meter_autoselect_get_status(meter_autoselect_status_t *out);
 const char *meter_autoselect_state_name(meter_autoselect_state_t state);
 
