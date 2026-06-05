@@ -395,6 +395,46 @@ boot/saved-state apply sequences only. They still do not prove a runtime DMM
 writer that changes `ms[0x02]`/`ms[0x03]` while the user switches local DMM
 ranges.
 
+The paired persistent pack path is now guarded as well. The
+`saved-config meter-state pack guard` covers `FUN_080223BC` (`0x080223BC`),
+which allocates a 512-byte save buffer and, when called with signature `0x55`,
+reads the current meter-state bytes from `0x200000F8`:
+
+```text
+0x0802241A: ldrb r2, [r7,#0]       ; ms[0x00]
+0x08022426: ldrb r6, [r7,#2]       ; ms[0x02]
+0x08022448: ldrb r3, [r7,#1]       ; ms[0x01]
+0x0802258A: orr.w r4, ip, lr       ; signature plus ms[0x00]
+0x08022594: str.w r6, [sl]         ; persistent word 0
+0x08022598: ldr.w r6, [r7,#3]      ; ms[0x03..0x06]
+0x0802259E: str.w r6, [sl,#4]      ; persistent word 1
+```
+
+The guarded stock byte slices are:
+
+```text
+0x08022410 saved_config_meter_state_pack_reads:
+  39 7e 97 f8 2d 90 05 91 79 8b 3a 78 06 91 4f ea
+  09 21 07 91 b9 8b be 78 09 04 0d 91 b7 f8 34 12
+  4f ea 02 2c 09 04 03 91 b7 f8 32 12 32 06 0a 92
+  fa 7d 04 91 b7 f8 36 12 7b 78 3d 7d bc 7d 12 06
+  00 91 b7 f8 38 12 1e 04
+
+0x080224A0 saved_config_meter_state_default_seed:
+  00 21 c0 f2 05 51 4c f6 32 62 c7 e9 00 12 03 22
+  3a 75 4f f4 80 72 fa 82
+
+0x0802258A saved_config_meter_state_pack_writes:
+  4c ea 0e 04 26 43 0a 9c 26 43 ca f8 00 60 d7 f8
+  03 60 09 9c ca f8 04 60 fe 79 26 43 32 43 08 9e
+  32 43 ca f8 08 20 07 9a 05 9e 32 43
+```
+
+The default seed branch at `0x080224A0` writes `0x05050000` to `[r7]`, so stock
+defaults `ms[0x02] = 5` and `ms[0x03] = 5` before later default fields are
+filled. This is a saved-config pack/default guard: it proves persistence layout
+and default mux-state bytes, but still not a runtime DMM range writer.
+
 The unresolved part is the live/runtime writer for `ms[0x03]` during local
 small-current versus A-range operation. Until that is recovered or bench-proven,
 local submodes 2/3 and 4/5 share the same recovered stock current slot and are

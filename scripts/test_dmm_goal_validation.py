@@ -357,6 +357,56 @@ class DmmGoalValidationTests(unittest.TestCase):
             "9a f8 02 00 da f7 2f fb 9a f8 03 00 da f7 05 fc",
         )
 
+    def test_stock_meter_saved_config_unpack_is_binary_grounded(self) -> None:
+        result = stock_meter_literals.verify_meter_saved_config_unpack_sequences()
+        sequences = result["sequences"]
+
+        self.assertEqual(
+            sequences["saved_config_meter_state_unpack"]["addr"],
+            "0x08025d92",
+        )
+        self.assertIn(
+            "55 29 c2 f2 00 0a 05 d0 aa 29",
+            sequences["saved_config_meter_state_unpack"]["bytes"],
+        )
+        self.assertIn(
+            "8a f8 02 00 60 68 ca f8 03 00",
+            sequences["saved_config_meter_state_unpack"]["bytes"],
+        )
+
+    def test_stock_meter_saved_config_pack_is_binary_grounded(self) -> None:
+        result = stock_meter_literals.verify_meter_saved_config_pack_sequences()
+        sequences = result["sequences"]
+
+        self.assertEqual(
+            sequences["saved_config_meter_state_pack_reads"]["addr"],
+            "0x08022410",
+        )
+        self.assertEqual(
+            sequences["saved_config_meter_state_default_seed"]["addr"],
+            "0x080224a0",
+        )
+        self.assertEqual(
+            sequences["saved_config_meter_state_pack_writes"]["addr"],
+            "0x0802258a",
+        )
+        self.assertIn(
+            "b9 8b be 78",
+            sequences["saved_config_meter_state_pack_reads"]["bytes"],
+        )
+        self.assertIn(
+            "00 21 c0 f2 05 51 4c f6 32 62 c7 e9 00 12",
+            sequences["saved_config_meter_state_default_seed"]["bytes"],
+        )
+        self.assertIn(
+            "ca f8 00 60 d7 f8 03 60",
+            sequences["saved_config_meter_state_pack_writes"]["bytes"],
+        )
+        self.assertIn(
+            "ca f8 04 60",
+            sequences["saved_config_meter_state_pack_writes"]["bytes"],
+        )
+
     def test_stock_meter_mux_direct_callsites_are_binary_grounded(self) -> None:
         result = stock_meter_literals.verify_meter_mux_callsite_sequences()
 

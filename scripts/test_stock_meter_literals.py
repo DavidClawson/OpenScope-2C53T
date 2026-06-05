@@ -187,6 +187,33 @@ EXPECTED_METER_SAVED_CONFIG_UNPACK_SEQUENCES = {
         ),
     ),
 }
+EXPECTED_METER_SAVED_CONFIG_PACK_SEQUENCES = {
+    "saved_config_meter_state_pack_reads": (
+        0x08022410,
+        bytes.fromhex(
+            "39 7e 97 f8 2d 90 05 91 79 8b 3a 78 06 91 4f ea "
+            "09 21 07 91 b9 8b be 78 09 04 0d 91 b7 f8 34 12 "
+            "4f ea 02 2c 09 04 03 91 b7 f8 32 12 32 06 0a 92 "
+            "fa 7d 04 91 b7 f8 36 12 7b 78 3d 7d bc 7d 12 06 "
+            "00 91 b7 f8 38 12 1e 04"
+        ),
+    ),
+    "saved_config_meter_state_default_seed": (
+        0x080224A0,
+        bytes.fromhex(
+            "00 21 c0 f2 05 51 4c f6 32 62 c7 e9 00 12 03 22 "
+            "3a 75 4f f4 80 72 fa 82"
+        ),
+    ),
+    "saved_config_meter_state_pack_writes": (
+        0x0802258A,
+        bytes.fromhex(
+            "4c ea 0e 04 26 43 0a 9c 26 43 ca f8 00 60 d7 f8 "
+            "03 60 09 9c ca f8 04 60 fe 79 26 43 32 43 08 9e "
+            "32 43 ca f8 08 20 07 9a 05 9e 32 43"
+        ),
+    ),
+}
 EXPECTED_MUX_CALLS_BY_TARGET = {
     "gpio_mux_portc_porte": {
         "target": 0x080018A4,
@@ -685,6 +712,34 @@ def verify_meter_saved_config_unpack_sequences() -> dict[str, object]:
     return {"sequences": checked}
 
 
+def verify_meter_saved_config_pack_sequences() -> dict[str, object]:
+    """Check stock saved-config pack/default path for `ms[0x02]`/`ms[0x03]`.
+
+    `FUN_080223BC` is the paired persistence packer for the unpack path at
+    `0x08025D92`: when called with signature `0x55`, it reads the current
+    `ms[0x00]`, `ms[0x01]`, `ms[0x02]` bytes and later stores
+    `ms[0x03..0x06]` as word 1 in the persistent config buffer.  Its invalid
+    config/default branch seeds word 0 with `0x05050000`, meaning default
+    `ms[0x02] = 5` and `ms[0x03] = 5` before later fields are populated.
+
+    This is persistence evidence only.  It proves what stock saves/restores for
+    the mux-state bytes, not a runtime DMM range writer.
+    """
+    checked: dict[str, dict[str, str]] = {}
+    for name, (addr, expected) in EXPECTED_METER_SAVED_CONFIG_PACK_SEQUENCES.items():
+        actual = read(addr, len(expected))
+        if actual != expected:
+            raise AssertionError(
+                f"{name} {addr:#010x}: expected {expected.hex(' ')}, "
+                f"got {actual.hex(' ')}"
+            )
+        checked[name] = {
+            "addr": f"{addr:#010x}",
+            "bytes": actual.hex(" "),
+        }
+    return {"sequences": checked}
+
+
 def verify_meter_mux_callsite_sequences() -> dict[str, object]:
     """Check every stock direct BL callsite to the two mux writers.
 
@@ -911,6 +966,7 @@ def main() -> None:
     acv_format = verify_acv_format_selector_sequences()
     mux_restore = verify_meter_mux_restore_sequences()
     saved_config_unpack = verify_meter_saved_config_unpack_sequences()
+    saved_config_pack = verify_meter_saved_config_pack_sequences()
     mux_calls = verify_meter_mux_callsite_sequences()
     mux_bodies = verify_meter_mux_writer_body_sequences()
     runtime_mux_writers = verify_runtime_mux_state_writer_sequences()
@@ -935,6 +991,8 @@ def main() -> None:
           ", ".join(mux_restore["sequences"].keys()))
     print("stock meter saved-config unpack sites: " +
           ", ".join(item["addr"] for item in saved_config_unpack["sequences"].values()))
+    print("stock meter saved-config pack sites: " +
+          ", ".join(item["addr"] for item in saved_config_pack["sequences"].values()))
     for name, info in mux_calls.items():
         print(f"stock {name} direct BL sites: " + ", ".join(info["calls"]))
     for name, info in mux_bodies.items():
