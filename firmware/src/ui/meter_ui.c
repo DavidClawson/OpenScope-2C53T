@@ -427,8 +427,11 @@ static void draw_voltage_wave_panel(uint16_t x, uint16_t y,
     if (current_unit != NULL && strcmp(current_unit, "mV") == 0) {
         current_volts = current_val / 1000.0f;
     }
+    meter_voltage_wave_scale_t scale =
+        meter_voltage_wave_scale_from_dmm_rms(&snap, current_volts);
     int freq_i10 = (int)(snap.freq_hz * 10.0f + 0.5f);
     int current_mv = (int)(current_volts * 1000.0f + (current_volts >= 0.0f ? 0.5f : -0.5f));
+    int scale_ref_mv = scale.valid ? current_mv : 0;
     uint32_t wave_hash = meter_wave_snapshot_hash(&snap);
     bool same_panel =
         !force_redraw && meter_wave_panel_retained &&
@@ -440,7 +443,7 @@ static void draw_voltage_wave_panel(uint16_t x, uint16_t y,
         meter_wave_last_raw_last == snap.raw_last &&
         meter_wave_last_peak_to_peak == snap.peak_to_peak_raw &&
         meter_wave_last_freq_i10 == freq_i10 &&
-        meter_wave_last_current_mv == current_mv &&
+        meter_wave_last_current_mv == scale_ref_mv &&
         meter_wave_last_hash == wave_hash &&
         meter_wave_last_synced == snap.synced;
 
@@ -507,7 +510,7 @@ static void draw_voltage_wave_panel(uint16_t x, uint16_t y,
         meter_wave_last_raw_last = snap.raw_last;
         meter_wave_last_peak_to_peak = snap.peak_to_peak_raw;
         meter_wave_last_freq_i10 = freq_i10;
-        meter_wave_last_current_mv = current_mv;
+        meter_wave_last_current_mv = scale_ref_mv;
         meter_wave_last_hash = wave_hash;
         meter_wave_last_synced = snap.synced;
         return;
@@ -551,8 +554,6 @@ static void draw_voltage_wave_panel(uint16_t x, uint16_t y,
                          th->background, &font_small);
     }
 
-    meter_voltage_wave_scale_t scale =
-        meter_voltage_wave_scale_from_dmm_rms(&snap, current_volts);
     if (mode == 1 && scale.valid) {
         float est_pp = meter_voltage_wave_peak_to_peak_volts(&snap, scale);
         const char *pp_unit = "V";
@@ -581,7 +582,7 @@ static void draw_voltage_wave_panel(uint16_t x, uint16_t y,
     meter_wave_last_raw_last = snap.raw_last;
     meter_wave_last_peak_to_peak = snap.peak_to_peak_raw;
     meter_wave_last_freq_i10 = freq_i10;
-    meter_wave_last_current_mv = current_mv;
+    meter_wave_last_current_mv = scale_ref_mv;
     meter_wave_last_hash = wave_hash;
     meter_wave_last_synced = snap.synced;
 }
