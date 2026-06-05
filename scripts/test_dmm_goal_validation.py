@@ -503,6 +503,47 @@ class DmmGoalValidationTests(unittest.TestCase):
             sequences["scope_ui_draw_main_mux_lut_consumer"]["bytes"],
         )
 
+    def test_stock_scope_mux_state_consumers_are_binary_grounded(self) -> None:
+        result = stock_meter_literals.verify_scope_mux_state_consumer_sequences()
+        sequences = result["sequences"]
+
+        self.assertEqual(
+            sequences["scope_timebase_ch1_mux_scale_consumer"]["addr"],
+            "0x0801d2ec",
+        )
+        self.assertEqual(
+            sequences["scope_timebase_ch2_mux_scale_consumer"]["addr"],
+            "0x0801d8b8",
+        )
+        self.assertEqual(
+            sequences["scope_math_delta_ch1_mux_scale_consumer"]["addr"],
+            "0x0801f51e",
+        )
+        self.assertEqual(
+            sequences["scope_math_delta_ch2_mux_scale_consumer"]["addr"],
+            "0x0801f5fc",
+        )
+        self.assertEqual(
+            sequences["scope_measurement_engine_mux_scale_consumer"]["addr"],
+            "0x0801fd66",
+        )
+        self.assertIn(
+            "98 f8 02 10 46 f2 cc 50",
+            sequences["scope_timebase_ch1_mux_scale_consumer"]["bytes"],
+        )
+        self.assertIn(
+            "98 f8 03 10 98 f9 05 20",
+            sequences["scope_timebase_ch2_mux_scale_consumer"]["bytes"],
+        )
+        self.assertIn(
+            "70 18 82 78 a2 fb 05 37",
+            sequences["scope_math_delta_ch1_mux_scale_consumer"]["bytes"],
+        )
+        self.assertIn(
+            "18 f8 02 1f 13 f9 04 2f",
+            sequences["scope_measurement_engine_mux_scale_consumer"]["bytes"],
+        )
+
 
 if __name__ == "__main__":
     unittest.main()

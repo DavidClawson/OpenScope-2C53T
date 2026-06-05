@@ -345,6 +345,8 @@ def verify_re_coverage() -> dict[str, Any]:
         "FUN_08015f50", "scope render/scale consumer",
         "ACV format selector guard", "0x080371C8", "0x08037228",
         "frame[7] bit 0", "not AC evidence",
+        "scope mux-state consumer guard", "0x0801D2EC", "0x0801EFC0",
+        "0x0801F6F8", "remaining RAM-map consumers", "not DMM range proof",
     ]
 
     haystack = ""

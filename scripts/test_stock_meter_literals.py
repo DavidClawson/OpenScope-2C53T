@@ -393,6 +393,48 @@ EXPECTED_SCOPE_UI_MUX_LUT_CONSUMER_SEQUENCES = {
         ),
     ),
 }
+EXPECTED_SCOPE_MUX_STATE_CONSUMER_SEQUENCES = {
+    "scope_timebase_ch1_mux_scale_consumer": (
+        0x0801D2EC,
+        bytes.fromhex(
+            "2d e9 f0 4f 87 b0 40 f2 f8 08 c2 f2 00 08 98 f8 "
+            "2c 00 00 28 00 f0 39 81 98 f8 2e 00 00 28 00 f0 "
+            "34 81 98 f8 02 10 46 f2 cc 50 c0 f6 04 00 30 f8 "
+            "11 10 98 f9 04 20 00 ee 10 1a b8 ee"
+        ),
+    ),
+    "scope_timebase_ch2_mux_scale_consumer": (
+        0x0801D8B8,
+        bytes.fromhex(
+            "98 f8 03 10 98 f9 05 20 30 f8 11 10 03 ee 10 2a "
+            "02 ee 10 1a"
+        ),
+    ),
+    "scope_math_delta_ch1_mux_scale_consumer": (
+        0x0801F51E,
+        bytes.fromhex(
+            "b1 7d 96 ed 93 1a 70 18 82 78 a2 fb 05 37 7b 08 "
+            "03 eb 43 03 d2 1a a2 5c 92 00 00 ee 10 2a b8 ee "
+            "c0 0a 21 ee 00 0a 86 ed 93 0a 80 78 03 28 04 d2"
+        ),
+    ),
+    "scope_math_delta_ch2_mux_scale_consumer": (
+        0x0801F5FC,
+        bytes.fromhex(
+            "b1 7d 96 ed 94 1a 70 18 82 78 a2 fb 05 37 7b 08 "
+            "03 eb 43 03 d2 1a a2 5c 92 00 00 ee 10 2a b8 ee "
+            "c0 0a 21 ee 00 0a 86 ed 94 0a 80 78 03 28 04 d2"
+        ),
+    ),
+    "scope_measurement_engine_mux_scale_consumer": (
+        0x0801FD66,
+        bytes.fromhex(
+            "09 90 0d f1 66 00 cd f8 30 80 18 f8 02 1f 13 f9 "
+            "04 2f 10 f8 0a 00 0d 93 cb b2 a3 fb 0b 37 80 1a "
+            "0a eb 4a 02 0e eb 02 1b 80 38 7c 08 cb f8 68 00"
+        ),
+    ),
+}
 
 
 def read(addr: int, size: int) -> bytes:
@@ -800,6 +842,31 @@ def verify_scope_ui_mux_lut_consumer_sequences() -> dict[str, object]:
     return {"sequences": checked}
 
 
+def verify_scope_mux_state_consumer_sequences() -> dict[str, object]:
+    """Check remaining RAM-map consumers of the shared mux-state pair.
+
+    `ram_map.txt` lists `FUN_0801d2ec`, `FUN_0801efc0`, and `FUN_0801f6f8`
+    as additional refs to `DAT_200000fa`/`DAT_200000fb`.  The guarded slices
+    classify those refs as scope timebase, scope math, and scope measurement
+    scale-table consumers.  They read mux bytes and scope offset bytes, then
+    index `DAT_080465cc`/`DAT_0804bfb8`-style scale tables; they do not call
+    the mux writers and are not DMM runtime range proof.
+    """
+    checked: dict[str, dict[str, str]] = {}
+    for name, (addr, expected) in EXPECTED_SCOPE_MUX_STATE_CONSUMER_SEQUENCES.items():
+        actual = read(addr, len(expected))
+        if actual != expected:
+            raise AssertionError(
+                f"{name} {addr:#010x}: expected {expected.hex(' ')}, "
+                f"got {actual.hex(' ')}"
+            )
+        checked[name] = {
+            "addr": f"{addr:#010x}",
+            "bytes": actual.hex(" "),
+        }
+    return {"sequences": checked}
+
+
 def main() -> None:
     if not BIN.exists():
         print(f"stock meter literal pools: skipped; missing {BIN}", file=sys.stderr)
@@ -850,6 +917,7 @@ def main() -> None:
     scope_snapshots = verify_scope_snapshot_consumer_sequences()
     scope_preset_mux_owners = verify_scope_preset_mux_owner_sequences()
     scope_ui_mux_lut_consumers = verify_scope_ui_mux_lut_consumer_sequences()
+    scope_mux_state_consumers = verify_scope_mux_state_consumer_sequences()
     print(f"stock meter selector table: {selector['bytes']}")
     print("stock meter selector xref sites: " +
           ", ".join(selector_xrefs["sequences"].keys()))
@@ -880,6 +948,8 @@ def main() -> None:
           ", ".join(item["addr"] for item in scope_preset_mux_owners["sequences"].values()))
     print("stock scope UI mux-LUT consumer sites: " +
           ", ".join(item["addr"] for item in scope_ui_mux_lut_consumers["sequences"].values()))
+    print("stock scope mux-state consumer sites: " +
+          ", ".join(item["addr"] for item in scope_mux_state_consumers["sequences"].values()))
     print("stock meter literal pools: ok")
 
 

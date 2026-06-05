@@ -663,3 +663,40 @@ This is scope render/scale math. It consumes `DAT_200000fa` and
 `DAT_0804bfb8`, but it performs no mux writer call, no DMM selector-table
 transition, and no meter calibration. Do not use this xref to justify a DMM
 range correction.
+
+### Scope Mux-State Consumer Guard, 2026-06-06
+
+The remaining RAM-map consumers for `DAT_200000fa`/`DAT_200000fb` are now
+classified and binary-guarded too. `ram_map.txt` lists `FUN_0801d2ec`
+(`0x0801D2EC`), `FUN_0801efc0` (`0x0801EFC0`), and `FUN_0801f6f8`
+(`0x0801F6F8`) as additional refs to the mux-state pair.
+Those functions are scope timebase, scope math, and scope measurement-engine
+paths, not DMM runtime range owners.
+
+`scripts/test_stock_meter_literals.py` carries the `scope mux-state consumer
+guard` for these sites:
+
+```text
+0x0801D2EC scope_timebase_ch1_mux_scale_consumer:
+  loads base `0x200000f8`, reads `DAT_200000fa`, then indexes
+  `DAT_080465cc` for scope scale math.
+
+0x0801D8B8 scope_timebase_ch2_mux_scale_consumer:
+  reads `DAT_200000fb` and `DAT_200000fd`, then indexes the same scope
+  scale table.
+
+0x0801F51E / 0x0801F5FC scope_math_delta_ch1/ch2_mux_scale_consumer:
+  `FUN_0801efc0` reads `DAT_2000010e`, `(&DAT_200000fa)[idx]`, and
+  `(&DAT_200000fc)[idx]` while formatting scope/math deltas.
+
+0x0801FD66 scope_measurement_engine_mux_scale_consumer:
+  `FUN_0801f6f8` reads the selected mux-state byte and offset byte while
+  computing scope measurement scale/position values.
+```
+
+These remaining RAM-map consumers are useful negative evidence. They consume
+the shared scope mux-state bytes and scope scale tables, but they do not call
+`FUN_080018a4` or `FUN_08001a58`, do not emit DMM selector words, and are not
+DMM range proof. The unresolved DMM path is still a runtime writer or trace that
+ties DMM selector/range transitions to `ms[0x02]` and `ms[0x03]`.
+Put tersely for future audits: these scope consumers are not DMM range proof.
