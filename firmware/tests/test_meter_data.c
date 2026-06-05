@@ -218,6 +218,68 @@ static int test_dcv_live_32v_frame_uses_stock_range_hint(void)
     return 1;
 }
 
+static int test_dcv_live_1v5_frame_uses_low_band_multiplier(void)
+{
+    static const uint8_t frame[12] = {
+        0x5A, 0xA5, 0x4E, 0xCE, 0x8F, 0x8A,
+        0x0A, 0x00, 0x82, 0x00, 0x01, 0x7F,
+    };
+
+    meter_data_init();
+    process_frame(frame, 0);
+
+    ASSERT(meter_reading.valid);
+    ASSERT(meter_reading.result_class == METER_RESULT_NORMAL);
+    ASSERT(meter_reading.bcd_value == 4977);
+    ASSERT(meter_reading.decimal_pos == 1);
+    ASSERT_STR_EQ(meter_reading.display_str, "1.500");
+    ASSERT_STR_EQ(meter_reading.unit_suffix, "V");
+    ASSERT(close_to(meter_reading.value, 1.500f, 0.002f));
+    ASSERT(meter_reading.dbg_frame[8] == 0x82);
+    return 1;
+}
+
+static int test_dcv_live_1v5_rotating_frames_keep_low_band_multiplier(void)
+{
+    static const uint8_t frames[][12] = {
+        { 0x5A, 0xA5, 0x4E, 0xCE, 0x8F, 0xEA, 0x0F, 0x00, 0x82, 0x00, 0x01, 0x7F },
+        { 0x5A, 0xA5, 0x4E, 0xCE, 0x8F, 0x8A, 0x0A, 0x00, 0x82, 0x00, 0x01, 0x7F },
+        { 0x5A, 0xA5, 0x4E, 0xCE, 0x8F, 0xEA, 0x07, 0x00, 0x82, 0x00, 0x01, 0x7F },
+    };
+
+    meter_data_init();
+    for (unsigned i = 0; i < sizeof(frames) / sizeof(frames[0]); i++) {
+        process_frame(frames[i], 0);
+        ASSERT(meter_reading.valid);
+        ASSERT(meter_reading.decimal_pos == 1);
+        ASSERT_STR_EQ(meter_reading.display_str, "1.500");
+        ASSERT_STR_EQ(meter_reading.unit_suffix, "V");
+        ASSERT(close_to(meter_reading.value, 1.500f, 0.002f));
+        ASSERT(meter_reading.dbg_frame[8] == 0x82);
+    }
+    return 1;
+}
+
+static int test_dcv_low_band_multiplier_requires_stock_range_bit(void)
+{
+    static const uint8_t frame[12] = {
+        0x5A, 0xA5, 0x4E, 0xCE, 0x8F, 0x8A,
+        0x0A, 0x00, 0x02, 0x00, 0x01, 0x7F,
+    };
+
+    meter_data_init();
+    process_frame(frame, 0);
+
+    ASSERT(meter_reading.valid);
+    ASSERT(meter_reading.bcd_value == 4977);
+    ASSERT(meter_reading.decimal_pos == 1);
+    ASSERT_STR_EQ(meter_reading.display_str, "4.977");
+    ASSERT_STR_EQ(meter_reading.unit_suffix, "V");
+    ASSERT(close_to(meter_reading.value, 4.977f, 0.001f));
+    ASSERT(meter_reading.dbg_frame[8] == 0x02);
+    return 1;
+}
+
 static int test_dcv_5v_synthetic_f6_0f_does_not_become_mains_range(void)
 {
     uint8_t frame[12];
@@ -1103,6 +1165,9 @@ int main(void)
     TEST(dcv_5v_frame_keeps_verified_decimal_and_unit);
     TEST(dcv_live_5v_frame_uses_stock_range_hint);
     TEST(dcv_live_32v_frame_uses_stock_range_hint);
+    TEST(dcv_live_1v5_frame_uses_low_band_multiplier);
+    TEST(dcv_live_1v5_rotating_frames_keep_low_band_multiplier);
+    TEST(dcv_low_band_multiplier_requires_stock_range_bit);
     TEST(dcv_5v_synthetic_f6_0f_does_not_become_mains_range);
     TEST(dcv_extra_frequency_hint_does_not_set_voltage_range);
     TEST(dcv_7v_f6_07_keeps_default_volt_scale);

@@ -10,7 +10,7 @@
  *   [2]-[6] = packed BCD nibble pairs (measurement digits)
  *   [7] = status flags (AC, auto-range, overload, polarity)
  *   [8]-[9] = additional status
- *   [10]-[11] = extra data (range info)
+ *   [10]-[11] = extra data (auxiliary meter status/frequency candidates)
  *
  * BCD extraction: digits are encoded as cross-byte nibble pairs:
  *   digit0 = lookup((rx[2] & 0xF0) | (rx[3] & 0x0F))
@@ -321,6 +321,21 @@ static const float bar_full_scale[11] = {
 
 #define METER_CAL_LOW_OHM_FACTOR  0.0304f   /* bcd_value × this = Ω, low band */
 #define METER_CAL_KOHM_FACTOR     0.001f    /* bcd_value × this = kΩ, mid band */
+#define METER_CAL_DCV_LOW_FACTOR  0.0003013864f
+
+typedef struct {
+    uint8_t hint;
+    uint8_t decimal_pos;
+    float volts_per_count;
+} dcv_voltage_range_t;
+
+static const dcv_voltage_range_t dcv_voltage_ranges[] = {
+    { 4, 1, METER_CAL_DCV_LOW_FACTOR },
+    { 3, 1, 0.001f                  },
+    { 2, 2, 0.01f                   },
+    { 1, 3, 0.1f                    },
+    { 0, 1, 0.001f                  },
+};
 
 /* ═══════════════════════════════════════════════════════════════════
  * 4-digit float → string formatter (newlib-nano has no %f support)
@@ -731,49 +746,100 @@ static uint8_t voltage_range_hint_from_stock_frame(const volatile uint8_t *frame
     return 0;
 }
 
+static const dcv_voltage_range_t *
+dcv_voltage_range_from_stock_frame(const volatile uint8_t *frame)
+{
+    uint8_t hint = voltage_range_hint_from_stock_frame(frame);
+
+    for (unsigned i = 0; i < sizeof(dcv_voltage_ranges) / sizeof(dcv_voltage_ranges[0]); i++) {
+        if (dcv_voltage_ranges[i].hint == hint) {
+            return &dcv_voltage_ranges[i];
+        }
+    }
+
+    return NULL;
+}
+
 static bool apply_stock_dcv_voltage_range_hint(meter_reading_t *r,
                                                uint8_t submode,
                                                const volatile uint8_t *frame)
 {
-    uint8_t range_hint;
+    const dcv_voltage_range_t *range;
 
     if (submode != 0) {
         return false;
     }
 
-    range_hint = voltage_range_hint_from_stock_frame(frame);
-
-    /*
-     * Local display mapping for the stock range hint. This is a general
-     * exponent mapping, not a classifier based on the decoded number: hints 0/3/2/1 are
-     * the stock meter-frame bands seen in default DCV, low-voltage, tens-
-     * voltage, and mains-voltage captures respectively. Class 4 is the stock
-     * highest bit and is retained as the natural continuation, but still needs
-     * a live sweep fixture before we can call its physical range fully
-     * characterized.
-     */
-    switch (range_hint) {
-    case 4:
-        r->decimal_pos = 0;
-        break;
-    case 3:
-        r->decimal_pos = 1;
-        break;
-    case 2:
-        r->decimal_pos = 2;
-        break;
-    case 1:
-        r->decimal_pos = 3;
-        break;
-    case 0:
-        r->decimal_pos = 1;
-        break;
-    default:
+    range = dcv_voltage_range_from_stock_frame(frame);
+    if (range == NULL) {
         return false;
     }
 
+    /*
+     * The range entry is selected only from stock frame status bits, before
+     * looking at the decoded digits. This mirrors the instrument contract:
+     * the meter IC/front-end declares its active range in the 12-byte USART2
+     * report, and the renderer converts the four display digits through that
+     * range's engineering coefficient. The coefficient table is therefore a
+     * range model, not a recognition table for convenient bench values.
+     */
+    r->decimal_pos = range->decimal_pos;
     r->unit_variant = 0;
     r->unit_suffix = "V";
+    return true;
+}
+
+static bool apply_stock_dcv_voltage_multiplier(meter_reading_t *r,
+                                               uint8_t submode,
+                                               const volatile uint8_t *frame)
+{
+    const dcv_voltage_range_t *range;
+
+    if (submode != 0) {
+        return false;
+    }
+
+    range = dcv_voltage_range_from_stock_frame(frame);
+    if (range == NULL) {
+        return false;
+    }
+
+    /*
+     * DCV value reconstruction.
+     *
+     * Source of truth: V1.2.0 stock receive-path notes identify the ordered
+     * range bits tested by voltage_range_hint_from_stock_frame(); live frames
+     * then bind those bit classes to physical ranges. Hints 3, 2, and 1 are
+     * geometric decade ranges proven by the 5 V, 32 V, and high-voltage
+     * fixtures. Hint 4 is the low-DCV calibrated band: the stock SPI/factory
+     * calibration path applies a per-unit coefficient here, and the current
+     * bench unit reports about 4977 counts for a 1.5 V cell. Until the factory
+     * calibration block is replayed, METER_CAL_DCV_LOW_FACTOR is the explicit
+     * per-unit stand-in for that stock coefficient.
+     *
+     * Keeping this as a table avoids the previous error where class 4 was
+     * treated as just another decimal-point position and rendered 1.5 V as
+     * about 4977 V. It also keeps the debug fields unchanged: bcd_value,
+     * digits[], decimal_pos, and dbg_frame continue to show the meter report,
+     * while value/display_str carry the calibrated engineering reading.
+     */
+    float v = (float)r->bcd_value * range->volts_per_count;
+    if (r->negative) v = -v;
+    r->value = v;
+    r->unit_variant = 0;
+    r->unit_suffix = "V";
+
+    char *s = r->display_str;
+    int pos = 0;
+    float av = v;
+    if (av < 0.0f) { s[pos++] = '-'; av = -av; }
+    format_4digit_unsigned(av, s + pos);
+
+    float abs_v = v < 0.0f ? -v : v;
+    float full_scale = (submode < 11) ? bar_full_scale[submode] : 1000.0f;
+    r->bar_fraction = abs_v / full_scale;
+    if (r->bar_fraction > 1.0f) r->bar_fraction = 1.0f;
+
     return true;
 }
 
@@ -1188,6 +1254,7 @@ void meter_data_process_frame(const volatile uint8_t *frame, uint8_t submode)
     r->result_class = METER_RESULT_NORMAL;
     r->continuity_beep = false;
     format_reading(r, submode);
+    (void)apply_stock_dcv_voltage_multiplier(r, submode, frame);
 
     /* ── Resistance band factory calibration override ──
      *

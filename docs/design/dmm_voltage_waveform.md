@@ -19,12 +19,17 @@ frames arrive only a few times per second, so they cannot be used to reconstruct
 a 50/60 Hz sine, inverter step waveform, or dimmer chop shape. They remain the
 authoritative calibrated value shown in large digits.
 
-DC voltage decimal/exponent selection follows the stock-analysis range hint bits
-in the meter frame (`frame[8].7`, `frame[3].4`, `frame[4].4`, `frame[5].4`),
-translated through the local stock-FSM display layer. AC voltage decimal format
-follows the cleaner stock `frame[7]` formatter path and still requires separate
-AC evidence. Bytes `[10..11]` may be exposed as a narrow empirical auxiliary
-frequency hint, but they are not used to choose the voltage exponent.
+DC voltage range selection follows the stock-analysis range hint bits in the
+meter frame (`frame[8].7`, `frame[3].4`, `frame[4].4`, `frame[5].4`). The local
+decoder now treats those bits as a range table with explicit volts-per-count
+multipliers, not only as decimal-point placement. The `frame[8].7` class is the
+low-DCV calibrated band on the bench unit: live 1.5 V frames report about 4977
+counts, so the port applies the temporary per-unit coefficient documented in
+`meter_data.c` until the stock factory-calibration block is loaded and replayed.
+AC voltage decimal format follows the cleaner stock `frame[7]` formatter path
+and still requires separate AC evidence. Bytes `[10..11]` may be exposed as a
+narrow empirical auxiliary frequency hint, but they are not used to choose the
+voltage range or multiplier.
 
 The waveform shape is based on the stock-documented SPI3 acquisition case 5
 (`METER_ADC_READ`), which is documented as a single-byte meter ADC read. The

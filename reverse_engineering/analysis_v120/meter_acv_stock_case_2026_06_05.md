@@ -85,13 +85,13 @@ does not prove these bits are literally written into `DAT_2000102c`; treat them
 as a voltage range hint, not as a renamed RAM variable. The annotated decompile
 records this priority:
 
-| Frame bit | Range hint | Local DCV decimal position | Evidence |
+| Frame bit | Range hint | Local DCV multiplier | Evidence |
 |---|---:|---:|---|
-| none set | 0 | 1 | default DCV synthetic fixtures, pending wider sweep |
-| `frame[5] & 0x10` | 1 | 3 | live/custom mains captures display about `228.x V` |
-| `frame[4] & 0x10` | 2 | 2 | live/custom 32 V capture displays `31.96 V` |
-| `frame[3] & 0x10` | 3 | 1 | live/custom 5 V capture displays `4.994 V` |
-| `frame[8] & 0x80` | 4 | 0 | stock highest-priority bit, physical range still unswept |
+| none set | 0 | `0.001 V/count` | default DCV synthetic fixtures, pending wider sweep |
+| `frame[5] & 0x10` | 1 | `0.1 V/count` | live/custom mains captures display about `228.x V` |
+| `frame[4] & 0x10` | 2 | `0.01 V/count` | live/custom 32 V capture displays `31.96 V` |
+| `frame[3] & 0x10` | 3 | `0.001 V/count` | live/custom 5 V capture displays `4.994 V` |
+| `frame[8] & 0x80` | 4 | `~0.000301386 V/count` | live/custom 1.5 V capture reports about `4977` counts and stock notes show this low band needs a factory-calibration coefficient |
 
 The 2026-06-05 32 V failure frame was:
 
@@ -104,6 +104,20 @@ The prior local decoder forced ordinary DCV to decimal position `1`, rendering
 `3.196 V`. The corrected local port uses the stock-analysis range hint (`2`) and renders
 `31.96 V`. The `[10..11]` value is intentionally ignored for voltage exponent
 selection; `03FF` is not stock evidence for a voltage range.
+
+The 2026-06-05 low-DCV failure frame was:
+
+```text
+5A A5 4E CE 8F 8A 0A 00 82 00 01 7F
+digits=4977, frame[8].7=1, extra=017F
+```
+
+The previous local decoder treated hint `4` as decimal position `0`, rendering
+about `4977 V` for a 1.5 V cell. That contradicted the stock calibration notes
+in `fpga_comms_deep_dive.c`, where low-DCV counts are converted through a
+calibration coefficient rather than only by moving the decimal point. The local
+port now selects the low-DCV multiplier from `frame[8].7`; it does not infer
+the multiplier from the numeric digits.
 
 ## Local Port
 

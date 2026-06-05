@@ -461,6 +461,24 @@ void dvom_rx_task(void)
         /* Store adjusted value back to meter_raw_value */
         *(float *)&ms[0xF30] = final_val;
 
+        /*
+         * 2026-06-05 correction from live low-DCV capture:
+         *
+         * The class bits above are range-status inputs to the later stock
+         * display/calibration pipeline, not a complete local display formula by
+         * themselves. A 1.5 V bench cell produced:
+         *
+         *   5A A5 4E CE 8F 8A 0A 00 82 00 01 7F
+         *   digits=4977, frame[8].7=1
+         *
+         * A local port that maps class 4 to decimal position 0 renders this as
+         * about 4977 V. The correct port must select the low-DCV calibrated
+         * range from frame[8].7 and then apply the factory/per-unit coefficient
+         * described in SECTION 5. The current firmware uses an explicit
+         * per-unit stand-in coefficient for this band until the stock SPI
+         * calibration block is loaded and replayed.
+         */
+
         /* Negate if frame[2] bit 4 is set (polarity flag) */
         if (b2 & 0x10) {   /* frame[2] bit 4, tested via lsls r1, r8, #0x1B at 0x08037166 */
             *(float *)&ms[0xF30] = -final_val;
