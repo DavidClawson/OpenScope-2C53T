@@ -594,6 +594,7 @@ static void meter_stock_fsm_apply(uint8_t ui_submode,
 
 static const char *unit_suffix_from_stock(uint8_t ui_submode, uint8_t unit_index)
 {
+    if (ui_submode == 3 || ui_submode == 5) return "A";
     if (ui_submode == 1) return "V";
     if (ui_submode == 7) return "Ohm";
     if (ui_submode == 8) return "V";
@@ -688,6 +689,11 @@ static bool frame_is_voltage_payload(uint8_t submode,
 {
     if (submode == 0 || submode == 1) return false;
     return frame[8] == 0x02 && frame[9] == 0x00;
+}
+
+static bool submode_is_current(uint8_t submode)
+{
+    return submode >= 2 && submode <= 5;
 }
 
 /* ═══════════════════════════════════════════════════════════════════
@@ -932,7 +938,7 @@ void meter_data_process_frame(const volatile uint8_t *frame, uint8_t submode)
 
     /* --- Special value detection --- */
 
-    if (frame_is_voltage_payload(submode, frame)) {
+    if (frame_is_voltage_payload(submode, frame) && !submode_is_current(submode)) {
         METER_REJECT_FRAME();
         return;
     }
@@ -944,6 +950,11 @@ void meter_data_process_frame(const volatile uint8_t *frame, uint8_t submode)
         strcpy(r->display_str, "OL");
         r->bar_fraction = 1.0f;
         METER_FINISH_FRAME();
+        return;
+    }
+
+    if (frame_is_voltage_payload(submode, frame)) {
+        METER_REJECT_FRAME();
         return;
     }
 

@@ -264,7 +264,7 @@ static int test_stock_formatter_families_have_regression_fixtures(void)
 
     process_frame(frame, 3);
     ASSERT(meter_reading.decimal_pos == 2);
-    ASSERT(expect_normal_reading("12.34", "mA", 12.34f, 0.001f));
+    ASSERT(expect_normal_reading("12.34", "A", 12.34f, 0.001f));
 
     process_frame(frame, 4);
     ASSERT(meter_reading.decimal_pos == 2);
@@ -272,7 +272,7 @@ static int test_stock_formatter_families_have_regression_fixtures(void)
 
     process_frame(frame, 5);
     ASSERT(meter_reading.decimal_pos == 2);
-    ASSERT(expect_normal_reading("12.34", "mA", 12.34f, 0.001f));
+    ASSERT(expect_normal_reading("12.34", "A", 12.34f, 0.001f));
 
     build_segment_frame(frame, 6, 7, 8, 9, 0x00, 0x00, 0x00, 0x00, 0);
     process_frame(frame, 8);
@@ -651,9 +651,9 @@ static int test_special_voltage_family_frames_are_rejected_outside_voltage(void)
 
     meter_data_init();
     process_frame(ol_voltage_frame, 2);
-    ASSERT(!meter_reading.valid);
-    ASSERT(meter_reading.result_class == METER_RESULT_NONE);
-    ASSERT_STR_EQ(meter_reading.display_str, "---");
+    ASSERT(meter_reading.valid);
+    ASSERT(meter_reading.result_class == METER_RESULT_OVERLOAD);
+    ASSERT_STR_EQ(meter_reading.display_str, "OL");
     ASSERT_STR_EQ(meter_reading.unit_suffix, "");
 
     meter_data_init();
