@@ -163,6 +163,14 @@ class DmmGoalValidationTests(unittest.TestCase):
             ],
         )
 
+    def test_stock_meter_selector_consumers_are_binary_grounded(self) -> None:
+        result = stock_meter_literals.verify_meter_selector_xref_sequences()
+        self.assertIn("0x080042e2", result["sequences"])
+        self.assertIn("0x080048ba", result["sequences"])
+        self.assertIn("4b f2 fc 32", result["sequences"]["0x080042e2"])
+        self.assertIn("c0 f6 0b 02", result["sequences"]["0x080048ba"])
+        self.assertIn("00 f5 a0 60", result["sequences"]["0x080048ba"])
+
     def test_stock_meter_mux_restore_sites_are_binary_grounded(self) -> None:
         result = stock_meter_literals.verify_meter_mux_restore_sequences()
         self.assertEqual(

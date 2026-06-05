@@ -15,6 +15,18 @@ BIN = REPO / "archive/2C53T Firmware V1.2.0/APP_2C53T_V1.2.0_251015.bin"
 BASE = 0x08000000
 EXPECTED_SHA256 = "a17c5c35c97bb898f15672a1747bc1041d8ed507c16999ddba0d1e4e2ec0c760"
 EXPECTED_METER_SELECTOR_TABLE = bytes.fromhex("14 0c 17 0b 0a 12 11 10")
+EXPECTED_METER_SELECTOR_XREF_SEQUENCES = {
+    0x080042E2: bytes.fromhex(
+        "95 f8 2d 0f 4b f2 fc 32 41 1e 00 28 08 bf 07 21 "
+        "c8 b2 c0 f6 0b 02 10 5c 85 f8 2d 1f 42 f6 54 51 "
+        "00 f5 a0 60 c2 f2 00 01 08 80"
+    ),
+    0x080048BA: bytes.fromhex(
+        "95 f8 2d 0f 00 21 4b f2 fc 32 07 28 38 bf 41 1c "
+        "c8 b2 c0 f6 0b 02 10 5c 85 f8 2d 1f 42 f6 54 51 "
+        "00 f5 a0 60 c2 f2 00 01 08 80"
+    ),
+}
 EXPECTED_MUX_RESTORE_SEQUENCES = {
     0x08025544: bytes.fromhex("a0 78 dc f7 ad f9 e0 78 dc f7 84 fa"),
     0x0802723E: bytes.fromhex(
@@ -75,6 +87,29 @@ def verify_meter_selector_table() -> dict[str, object]:
     }
 
 
+def verify_meter_selector_xref_sequences() -> dict[str, object]:
+    """Check stock code paths that consume the eight-entry selector table.
+
+    The two guarded sequences are the decrement/increment selector branches
+    documented in `high_flash_scope_indexing_2026_04_08.md`.  They load the
+    runtime literal `0x080BB3FC`, read one table byte indexed by
+    `DAT_20001025`, add `0x0500`, and store the raw UART halfword to
+    `0x20002D54` before queueing it through `0x20002D74`.
+
+    This proves the raw selector-table consumer path only.  It does not recover
+    the analog mux bytes `ms[0x02]`/`ms[0x03]` or any physical calibration.
+    """
+    checked: dict[str, str] = {}
+    for addr, expected in EXPECTED_METER_SELECTOR_XREF_SEQUENCES.items():
+        actual = read(addr, len(expected))
+        if actual != expected:
+            raise AssertionError(
+                f"{addr:#010x}: expected {expected.hex(' ')}, got {actual.hex(' ')}"
+            )
+        checked[f"{addr:#010x}"] = actual.hex(" ")
+    return {"sequences": checked}
+
+
 def verify_meter_mux_restore_sequences() -> dict[str, object]:
     """Check stock saved-state ms[0x02]/ms[0x03] mux apply call sites.
 
@@ -131,8 +166,11 @@ def main() -> None:
 
     expect_bytes(0x08036C8C, "00 bf 00 bf")
     selector = verify_meter_selector_table()
+    selector_xrefs = verify_meter_selector_xref_sequences()
     mux_restore = verify_meter_mux_restore_sequences()
     print(f"stock meter selector table: {selector['bytes']}")
+    print("stock meter selector xref sites: " +
+          ", ".join(selector_xrefs["sequences"].keys()))
     print("stock meter mux restore sites: " +
           ", ".join(mux_restore["sequences"].keys()))
     print("stock meter literal pools: ok")

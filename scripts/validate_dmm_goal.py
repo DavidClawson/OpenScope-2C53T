@@ -145,6 +145,7 @@ def verify_re_coverage() -> dict[str, Any]:
         "without binary stock evidence", "uA is unresolved and unexposed",
         "H2 table binary guard", "tail bytes", "0x1C340", "no ACK/apply proof",
         "transition phase matrix", "busy transition frame", "stable frame",
+        "selector consumer xrefs", "0x080042E2", "0x080048BA", "0x20002D54",
     ]
 
     haystack = ""

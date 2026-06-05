@@ -22,6 +22,14 @@ app-image address `0x080B43FC` (file offset `0x000B43FC`) while documenting the
 runtime/app-slot literal as `0x080BB3FC`, so local selector policy fails the
 software gate if the stock table evidence drifts.
 
+The same guard now also verifies the selector consumer xrefs at
+`0x080042E2..0x0800430A` and `0x080048BA..0x080048E2`.  These two stock code
+sequences load the runtime `0x080BB3FC` table, read one byte indexed by
+`DAT_20001025`, add `0x0500`, and store the raw UART halfword to `0x20002D54`
+before queueing through the `0x20002D74` raw-word path.  This is selector-table
+consumer evidence only; it still does not recover the analog mux bytes
+`ms[0x02]`/`ms[0x03]` or any physical correction coefficient.
+
 Local port:
 
 | Stock meter mode | Low byte | Raw word |
