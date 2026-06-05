@@ -20,6 +20,7 @@
 #include "meter_data.h"
 #include "fpga.h"
 #include "meter_voltage_wave.h"
+#include "shared_mem.h"
 #include "at32f403a_407.h"
 #include <string.h>
 
@@ -342,6 +343,28 @@ static void draw_bar_graph(uint16_t x, uint16_t y, uint16_t w, uint16_t h,
     }
 }
 
+static void panel_set_pixel(uint16_t *panel, uint16_t w, uint16_t h,
+                            uint16_t x, uint16_t y, uint16_t color)
+{
+    if (x < w && y < h) {
+        panel[(uint32_t)y * w + x] = color;
+    }
+}
+
+static void panel_draw_meter_wave_line(uint16_t *panel, uint16_t w, uint16_t h,
+                                       uint16_t x0, uint16_t y0,
+                                       uint16_t x1, uint16_t y1,
+                                       uint16_t color)
+{
+    uint16_t y_min = y0 < y1 ? y0 : y1;
+    uint16_t y_max = y0 < y1 ? y1 : y0;
+
+    panel_set_pixel(panel, w, h, x1, y1, color);
+    for (uint16_t yy = y_min + 1; yy < y_max; yy++) {
+        panel_set_pixel(panel, w, h, x0, yy, color);
+    }
+}
+
 static void draw_meter_wave_line(uint16_t x0, uint16_t y0,
                                  uint16_t x1, uint16_t y1,
                                  uint16_t color)
@@ -350,61 +373,172 @@ static void draw_meter_wave_line(uint16_t x0, uint16_t y0,
     uint16_t y_max = y0 < y1 ? y1 : y0;
 
     lcd_set_pixel(x1, y1, color);
-    for (uint16_t y = y_min + 1; y < y_max; y++) {
-        lcd_set_pixel(x0, y, color);
+    for (uint16_t yy = y_min + 1; yy < y_max; yy++) {
+        lcd_set_pixel(x0, yy, color);
     }
 }
+
+static uint32_t meter_wave_snapshot_hash(const meter_voltage_wave_snapshot_t *snap)
+{
+    uint32_t h = 2166136261u;
+    uint16_t count = snap->count;
+    if (count > METER_VOLTAGE_WAVE_RENDER_POINTS) {
+        count = METER_VOLTAGE_WAVE_RENDER_POINTS;
+    }
+
+    h ^= count; h *= 16777619u;
+    for (uint16_t i = 0; i < count; i++) {
+        h ^= snap->y[i]; h *= 16777619u;
+        h ^= snap->env_min[i]; h *= 16777619u;
+        h ^= snap->env_max[i]; h *= 16777619u;
+    }
+    return h;
+}
+
+static bool meter_wave_panel_retained;
+static uint8_t meter_wave_last_mode;
+static uint16_t meter_wave_last_w;
+static uint16_t meter_wave_last_h;
+static uint8_t meter_wave_last_raw_min;
+static uint8_t meter_wave_last_raw_max;
+static uint8_t meter_wave_last_raw_last;
+static uint16_t meter_wave_last_peak_to_peak;
+static int meter_wave_last_freq_i10;
+static int meter_wave_last_current_mv;
+static uint32_t meter_wave_last_hash;
+static bool meter_wave_last_synced;
 
 static void draw_voltage_wave_panel(uint16_t x, uint16_t y,
                                     uint16_t w, uint16_t h,
                                     uint8_t mode, float current_val,
                                     const char *current_unit,
-                                    const theme_t *th)
+                                    const theme_t *th,
+                                    bool force_redraw)
 {
     static meter_voltage_wave_snapshot_t snap;
     char buf[16];
+    shmem_owner_t owner = shared_mem_owner();
+    uint16_t *panel = NULL;
+    uint32_t panel_pixels = (uint32_t)w * h;
 
     meter_voltage_wave_snapshot(&snap, w, meter_reading.aux_freq_hz);
+
+    float current_volts = current_val;
+    if (current_unit != NULL && strcmp(current_unit, "mV") == 0) {
+        current_volts = current_val / 1000.0f;
+    }
+    int freq_i10 = (int)(snap.freq_hz * 10.0f + 0.5f);
+    int current_mv = (int)(current_volts * 1000.0f + (current_volts >= 0.0f ? 0.5f : -0.5f));
+    uint32_t wave_hash = meter_wave_snapshot_hash(&snap);
+    bool same_panel =
+        !force_redraw && meter_wave_panel_retained &&
+        meter_wave_last_mode == mode &&
+        meter_wave_last_w == w &&
+        meter_wave_last_h == h &&
+        meter_wave_last_raw_min == snap.raw_min &&
+        meter_wave_last_raw_max == snap.raw_max &&
+        meter_wave_last_raw_last == snap.raw_last &&
+        meter_wave_last_peak_to_peak == snap.peak_to_peak_raw &&
+        meter_wave_last_freq_i10 == freq_i10 &&
+        meter_wave_last_current_mv == current_mv &&
+        meter_wave_last_hash == wave_hash &&
+        meter_wave_last_synced == snap.synced;
+
+    if (same_panel) {
+        return;
+    }
 
     lcd_fill_rect(x - 1, y - 1, w + 2, 1, th->grid_center);
     lcd_fill_rect(x - 1, y + h, w + 2, 1, th->grid_center);
     lcd_fill_rect(x - 1, y, 1, h, th->grid_center);
     lcd_fill_rect(x + w, y, 1, h, th->grid_center);
-    lcd_fill_rect(x, y, w, h, th->background);
 
-    for (int g = 1; g < 4; g++) {
-        uint16_t gy = y + (h * g) / 4;
-        for (uint16_t gx = x; gx < x + w; gx += 4) {
-            lcd_set_pixel(gx, gy, th->grid);
+    if ((panel_pixels * sizeof(uint16_t)) <= shared_mem_size()) {
+        if (owner == SHMEM_OWNER_DISPLAY) {
+            panel = (uint16_t *)shared_mem_get(SHMEM_OWNER_DISPLAY);
+        } else if (owner == SHMEM_OWNER_NONE) {
+            panel = (uint16_t *)shared_mem_acquire(SHMEM_OWNER_DISPLAY);
         }
     }
-    for (uint16_t gx = x; gx < x + w; gx += 2) {
-        lcd_set_pixel(gx, y + h / 2, th->grid_center);
+
+    if (panel != NULL) {
+        for (uint32_t i = 0; i < panel_pixels; i++) {
+            panel[i] = th->background;
+        }
+    } else {
+        lcd_fill_rect(x, y, w, h, th->background);
     }
 
+    for (int g = 1; g < 4; g++) {
+        uint16_t gy = (uint16_t)((h * g) / 4);
+        for (uint16_t gx = 0; gx < w; gx += 4) {
+            if (panel != NULL) {
+                panel_set_pixel(panel, w, h, gx, gy, th->grid);
+            } else {
+                lcd_set_pixel(x + gx, y + gy, th->grid);
+            }
+        }
+    }
+    for (uint16_t gx = 0; gx < w; gx += 2) {
+        if (panel != NULL) {
+            panel_set_pixel(panel, w, h, gx, h / 2, th->grid_center);
+        } else {
+            lcd_set_pixel(x + gx, y + h / 2, th->grid_center);
+        }
+    }
+
+    lcd_fill_rect(x, y - 13, w, 13, th->background);
+    lcd_fill_rect(x, y + h + 2, 120, 13, th->background);
     font_draw_string(x, y - 13, "DMM voltage waveform",
                      th->text_secondary, th->background, &font_small);
 
     if (snap.count < 2) {
+        if (panel != NULL) {
+            lcd_blit_rect(x, y, w, h, panel);
+        }
         font_draw_string(x + 70, y + h / 2 - 6, "Waiting for samples",
                          th->text_secondary, th->background, &font_small);
+        meter_wave_panel_retained = true;
+        meter_wave_last_mode = mode;
+        meter_wave_last_w = w;
+        meter_wave_last_h = h;
+        meter_wave_last_raw_min = snap.raw_min;
+        meter_wave_last_raw_max = snap.raw_max;
+        meter_wave_last_raw_last = snap.raw_last;
+        meter_wave_last_peak_to_peak = snap.peak_to_peak_raw;
+        meter_wave_last_freq_i10 = freq_i10;
+        meter_wave_last_current_mv = current_mv;
+        meter_wave_last_hash = wave_hash;
+        meter_wave_last_synced = snap.synced;
         return;
     }
 
     uint16_t prev_y = 0;
     for (uint16_t i = 0; i < snap.count && i < w; i++) {
-        uint16_t px = x + i;
-        uint16_t py = y + h - 1 - (uint16_t)((uint32_t)snap.y[i] * (h - 2) / 255U);
-        uint16_t ey_min = y + h - 1 - (uint16_t)((uint32_t)snap.env_min[i] * (h - 2) / 255U);
-        uint16_t ey_max = y + h - 1 - (uint16_t)((uint32_t)snap.env_max[i] * (h - 2) / 255U);
+        uint16_t py = h - 1 - (uint16_t)((uint32_t)snap.y[i] * (h - 2) / 255U);
+        uint16_t ey_min = h - 1 - (uint16_t)((uint32_t)snap.env_min[i] * (h - 2) / 255U);
+        uint16_t ey_max = h - 1 - (uint16_t)((uint32_t)snap.env_max[i] * (h - 2) / 255U);
 
-        draw_meter_wave_line(px, ey_min, px, ey_max, th->grid_center);
-        if (i > 0) {
-            draw_meter_wave_line(px - 1, prev_y, px, py, th->ch1);
+        if (panel != NULL) {
+            panel_draw_meter_wave_line(panel, w, h, i, ey_min, i, ey_max, th->grid_center);
+            if (i > 0) {
+                panel_draw_meter_wave_line(panel, w, h, i - 1, prev_y, i, py, th->ch1);
+            } else {
+                panel_set_pixel(panel, w, h, i, py, th->ch1);
+            }
         } else {
-            lcd_set_pixel(px, py, th->ch1);
+            draw_meter_wave_line(x + i, y + ey_min, x + i, y + ey_max, th->grid_center);
+            if (i > 0) {
+                draw_meter_wave_line(x + i - 1, y + prev_y, x + i, y + py, th->ch1);
+            } else {
+                lcd_set_pixel(x + i, y + py, th->ch1);
+            }
         }
         prev_y = py;
+    }
+
+    if (panel != NULL) {
+        lcd_blit_rect(x, y, w, h, panel);
     }
 
     if (snap.freq_hz >= 1.0f) {
@@ -415,11 +549,6 @@ static void draw_voltage_wave_panel(uint16_t x, uint16_t y,
         font_draw_string(x + w - 12, y - 13, "Hz",
                          snap.synced ? th->success : th->text_secondary,
                          th->background, &font_small);
-    }
-
-    float current_volts = current_val;
-    if (current_unit != NULL && strcmp(current_unit, "mV") == 0) {
-        current_volts = current_val / 1000.0f;
     }
 
     meter_voltage_wave_scale_t scale =
@@ -442,6 +571,19 @@ static void draw_voltage_wave_panel(uint16_t x, uint16_t y,
         font_draw_string(x, y + h + 2, mode == 0 ? "ripple shape" : "shape only",
                          th->text_secondary, th->background, &font_small);
     }
+
+    meter_wave_panel_retained = true;
+    meter_wave_last_mode = mode;
+    meter_wave_last_w = w;
+    meter_wave_last_h = h;
+    meter_wave_last_raw_min = snap.raw_min;
+    meter_wave_last_raw_max = snap.raw_max;
+    meter_wave_last_raw_last = snap.raw_last;
+    meter_wave_last_peak_to_peak = snap.peak_to_peak_raw;
+    meter_wave_last_freq_i10 = freq_i10;
+    meter_wave_last_current_mv = current_mv;
+    meter_wave_last_hash = wave_hash;
+    meter_wave_last_synced = snap.synced;
 }
 
 static bool live_reading_for_mode(uint8_t mode)
@@ -494,14 +636,6 @@ static void draw_main_reading(const meter_mode_info_t *m, const theme_t *th,
                               const char *value_str)
 {
     const char *unit_str = live_unit(m, mode);
-    if (!compact) {
-        /* Mode indicator arrows (show L/R navigation) */
-        font_draw_string(4, y, "<",
-                         th->text_secondary, th->background, &font_small);
-        font_draw_string_right(LCD_WIDTH - 4, y, ">",
-                               th->text_secondary, th->background, &font_small);
-    }
-
     /* Main reading
      *
      * font_xlarge only has the numeric subset 0-9, '.', '-', '+', ':', ' '
@@ -522,6 +656,14 @@ static void draw_main_reading(const meter_mode_info_t *m, const theme_t *th,
         compact        ? &font_large :
         is_numeric     ? &font_xlarge :
                          &font_large;
+    if (!compact) {
+        lcd_fill_rect(0, y, 244, font_xlarge.height, th->background);
+        /* Mode indicator arrows (show L/R navigation) */
+        font_draw_string(4, y, "<",
+                         th->text_secondary, th->background, &font_small);
+        font_draw_string_right(LCD_WIDTH - 4, y, ">",
+                               th->text_secondary, th->background, &font_small);
+    }
     font_draw_string_right(240, y, value_str,
                            th->text_primary, th->background, main_font);
 
@@ -529,6 +671,9 @@ static void draw_main_reading(const meter_mode_info_t *m, const theme_t *th,
      * current USART frame. Falls back to the static mode table string
      * before any data has arrived. */
     uint16_t unit_y = compact ? y + 2 : y + 4;
+    if (!compact && (mode == 0 || mode == 1)) {
+        lcd_fill_rect(UNIT_X, unit_y, LCD_WIDTH - UNIT_X, 44, th->background);
+    }
     font_draw_string(UNIT_X, unit_y, unit_str,
                      th->ch1, th->background,
                      compact ? &font_medium : &font_large);
@@ -573,7 +718,12 @@ static void meter_clear_dynamic_areas(uint8_t layout, uint8_t mode,
      * repainting the value. On the live ST7789 this visible blanking is the
      * flicker. Keep the static frame retained and only erase regions whose
      * contents change on ordinary sample updates. */
-    lcd_fill_rect(0, METER_TOP, LCD_WIDTH, 66, clear_bg);
+    bool full_voltage = (layout == METER_LAYOUT_FULL) && (mode == 0 || mode == 1);
+    if (full_voltage) {
+        lcd_fill_rect(0, METER_TOP, LCD_WIDTH, 14, clear_bg);
+    } else {
+        lcd_fill_rect(0, METER_TOP, LCD_WIDTH, 66, clear_bg);
+    }
 
     switch (layout) {
     case METER_LAYOUT_CHART:
@@ -589,11 +739,10 @@ static void meter_clear_dynamic_areas(uint8_t layout, uint8_t mode,
     case METER_LAYOUT_FUSE:
         break;
     default:
-        lcd_fill_rect(BAR_X, BAR_Y - 2, BAR_W, BAR_H + 18, clear_bg);
         if (mode == 0 || mode == 1) {
-            lcd_fill_rect(8, SECONDARY_Y - 12, 304,
-                          METER_BOTTOM - (SECONDARY_Y - 12), clear_bg);
+            lcd_fill_rect(BAR_X, BAR_Y - 2, BAR_W, BAR_H + 6, clear_bg);
         } else {
+            lcd_fill_rect(BAR_X, BAR_Y - 2, BAR_W, BAR_H + 18, clear_bg);
             lcd_fill_rect(0, SECONDARY_Y - 4,
                           LCD_WIDTH, 82, clear_bg);
         }
@@ -612,13 +761,19 @@ const char *meter_submode_name(uint8_t submode)
     return meter_modes[submode].name;
 }
 
+void meter_screen_invalidate(void)
+{
+    meter_screen_retained_valid = false;
+    meter_wave_panel_retained = false;
+}
+
 /* ═══════════════════════════════════════════════════════════════════
  * Layout 0: Full (classic DMM)
  * ═══════════════════════════════════════════════════════════════════ */
 
 static void draw_meter_full(const meter_mode_info_t *m, uint8_t mode,
                             float current_val, const char *value_str,
-                            float bar_pct)
+                            float bar_pct, bool force_redraw)
 {
     const theme_t *th = theme_get();
     const char *unit_str = live_unit(m, mode);
@@ -645,7 +800,7 @@ static void draw_meter_full(const meter_mode_info_t *m, uint8_t mode,
 
     if (mode == 0 || mode == 1) {
         draw_voltage_wave_panel(10, 118, 300, 74, mode, current_val,
-                                unit_str, th);
+                                unit_str, th, force_redraw);
         font_draw_string(200, SECONDARY_Y, live_range_label(m, mode),
                          th->ch1, th->background, &font_small);
         return;
@@ -1153,7 +1308,7 @@ void draw_meter_screen(void)
         draw_fuse_screen(current_val);
         break;
     default:
-        draw_meter_full(m, mode, current_val, value_str, bar_pct);
+        draw_meter_full(m, mode, current_val, value_str, bar_pct, full_clear);
         break;
     }
 

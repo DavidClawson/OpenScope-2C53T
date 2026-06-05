@@ -250,6 +250,7 @@ static void vDisplayTask(void *pvParameters)
 #endif
                         draw_scope_screen(frame);
                 } else if (current_mode == MODE_MULTIMETER) {
+                    meter_screen_invalidate();
                     draw_meter_screen();
                 } else if (current_mode == MODE_SIGNAL_GEN) {
                     draw_siggen_screen(frame);

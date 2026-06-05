@@ -578,6 +578,26 @@ void lcd_set_pixel(uint16_t x, uint16_t y, uint16_t color)
     lcd_write_data(color);
 }
 
+void lcd_blit_rect(uint16_t x, uint16_t y, uint16_t w, uint16_t h, const uint16_t *pixels)
+{
+    if (pixels == 0) return;
+    if (w == 0 || h == 0) return;
+    if (x >= LCD_WIDTH || y >= LCD_HEIGHT) return;
+    uint16_t src_w = w;
+    if (x + w > LCD_WIDTH) w = LCD_WIDTH - x;
+    if (y + h > LCD_HEIGHT) h = LCD_HEIGHT - y;
+    if (w == 0 || h == 0) return;
+
+    lcd_set_window(x, y, w, h);
+
+    for (uint16_t row = 0; row < h; row++) {
+        const uint16_t *src = pixels + (uint32_t)row * src_w;
+        for (uint16_t col = 0; col < w; col++) {
+            lcd_write_data(src[col]);
+        }
+    }
+}
+
 void lcd_fill_rect(uint16_t x, uint16_t y, uint16_t w, uint16_t h, uint16_t color)
 {
     if (x >= LCD_WIDTH || y >= LCD_HEIGHT) return;
