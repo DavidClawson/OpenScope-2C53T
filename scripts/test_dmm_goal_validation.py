@@ -20,6 +20,14 @@ assert STOCK_SPEC is not None and STOCK_SPEC.loader is not None
 stock_meter_literals = importlib.util.module_from_spec(STOCK_SPEC)
 STOCK_SPEC.loader.exec_module(stock_meter_literals)
 
+STOCK_H2_PATH = Path(__file__).resolve().parent / "test_stock_h2_table.py"
+STOCK_H2_SPEC = importlib.util.spec_from_file_location(
+    "test_stock_h2_table", STOCK_H2_PATH
+)
+assert STOCK_H2_SPEC is not None and STOCK_H2_SPEC.loader is not None
+stock_h2_table = importlib.util.module_from_spec(STOCK_H2_SPEC)
+STOCK_H2_SPEC.loader.exec_module(stock_h2_table)
+
 
 GOOD_DCV = """=== DMM State ===
 mode=1 startup=Meter meter_submode=0 (DC Voltage) layout=0 (full)
@@ -88,6 +96,26 @@ class DmmGoalValidationTests(unittest.TestCase):
         )
         self.assertIn("acceptance proof", coverage["terms"])
         self.assertIn("unproven", coverage["terms"])
+        self.assertIn("H2 table binary guard", coverage["terms"])
+        self.assertIn("no ACK/apply proof", coverage["terms"])
+
+    def test_stock_h2_table_is_binary_grounded(self) -> None:
+        result = stock_h2_table.verify_h2_table()
+        self.assertEqual(result["file_offset"], "0x51d19")
+        self.assertEqual(result["flash_addr"], "0x08051d19")
+        self.assertEqual(result["stats"]["total_bytes"], 115638)
+        self.assertEqual(result["stats"]["records"], 38546)
+        self.assertEqual(result["stats"]["sentinel_blocks"], 546)
+        self.assertEqual(result["tail_range"], (0x1C340, 0x1C3B5, 118))
+        self.assertEqual(
+            result["sentinel_runs"],
+            [
+                (0, 543, True, 0x00000, 0x153FF, 87040),
+                (544, 567, False, 0x15400, 0x162FF, 3840),
+                (568, 569, True, 0x16300, 0x1643F, 320),
+                (570, 721, False, 0x16440, 0x1C33F, 24320),
+            ],
+        )
 
     def test_re_coverage_requires_dac1_scope_boundary(self) -> None:
         coverage = validate_dmm_goal.verify_re_coverage()

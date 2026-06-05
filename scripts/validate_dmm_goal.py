@@ -51,9 +51,11 @@ def run_software_gate() -> list[dict[str, Any]]:
          "scripts/openscope_live_debug.py",
          "scripts/flash_preflight.py",
          "scripts/hid_flash.py",
-         "scripts/validate_dmm_goal.py"],
+         "scripts/validate_dmm_goal.py",
+         "scripts/test_stock_h2_table.py"],
         ["python3", "scripts/test_openscope_live_debug.py"],
         ["python3", "scripts/test_flash_preflight.py"],
+        ["python3", "scripts/test_stock_h2_table.py"],
         ["python3", "scripts/test_dmm_goal_validation.py"],
         ["make", "-C", "firmware", "test-meter"],
         ["make", "-C", "firmware", "clean"],
@@ -141,6 +143,7 @@ def verify_re_coverage() -> dict[str, Any]:
         "size 0", "not a recovered meter calibration source",
         "shared local splits", "eight-entry stock selector table",
         "without binary stock evidence", "uA is unresolved and unexposed",
+        "H2 table binary guard", "tail bytes", "0x1C340", "no ACK/apply proof",
     ]
 
     haystack = ""
