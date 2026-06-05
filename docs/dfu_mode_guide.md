@@ -249,10 +249,15 @@ make flash-all
 
 **Linux gotchas:**
 - **Permission denied on `dfu-util`, `make flash`, or the USB debug shell:**
-  add a udev rule or run with `sudo` once to confirm it is only a permission
-  problem. Recommended rule (save as
-  `/etc/udev/rules.d/60-openscope-2c53t.rules`, then run
-  `sudo udevadm control --reload-rules` and reconnect or retrigger the device):
+  install the repo's udev rule or run with `sudo` once to confirm it is only a
+  permission problem:
+  ```bash
+  sudo cp udev/60-openscope-2c53t.rules /etc/udev/rules.d/
+  sudo udevadm control --reload-rules
+  sudo udevadm trigger
+  ```
+  Then reconnect the device or enter the bootloader again. The rule covers all
+  three OpenScope USB interfaces:
   ```
   # OpenScope/FNIRSI 2C53T Artery AT32 bootloader and debug interfaces
   SUBSYSTEM=="hidraw", ATTRS{idVendor}=="2e3c", ATTRS{idProduct}=="af01", MODE="0660", GROUP="plugdev", TAG+="uaccess"
