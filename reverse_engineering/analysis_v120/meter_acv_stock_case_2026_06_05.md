@@ -83,11 +83,12 @@ state layer. It tracks stock mode, variant, format, DC substate, display
 command, unit index, and composite format index, then translates those into the
 local `decimal_pos` and `unit_suffix` fields used by the UI.
 
-The local UI still has ten manual submodes while the stock display formatter has
+The local UI has eleven manual submodes while the stock display formatter has
 eight state-machine slots. The port therefore has an explicit UI-submode to
 stock-mode mapping for voltage, current, resistance, continuity, diode, and the
-extended/frequency-like slot. Translation overrides keep user-facing units sane
-for local split modes such as large current, continuity, diode, and capacitance.
+extended/frequency-like slot used by capacitance and temperature. Translation
+overrides keep user-facing units sane for local split modes such as large
+current, continuity, diode, capacitance, and temperature.
 
 Live ACV smoke after the port:
 

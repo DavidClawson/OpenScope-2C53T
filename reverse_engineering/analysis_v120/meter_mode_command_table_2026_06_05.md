@@ -30,23 +30,3 @@ Local port:
 | 5 | `0x12` | `0x0512` |
 | 6 | `0x11` | `0x0511` |
 | 7 | `0x10` | `0x0510` |
-*** Update File: /home/kom/proj/OpenScope-2C53T/firmware/Makefile
-@@
- C_SOURCES += src/drivers/fpga.c
-+C_SOURCES += src/drivers/fpga_meter_plan.c
- C_SOURCES += src/drivers/fpga_scanner.c
-@@
- test-meter-voltage-wave: $(BUILD_DIR)/test_meter_voltage_wave
- 	$<
- 
--test-meter: test-meter-data test-meter-voltage-wave
-+$(BUILD_DIR)/test_fpga_meter_plan: tests/test_fpga_meter_plan.c src/drivers/fpga_meter_plan.c src/drivers/fpga_meter_plan.h | $(BUILD_DIR)
-+	$(HOST_CC) -std=gnu11 -Wall -Wextra -Isrc/drivers $< src/drivers/fpga_meter_plan.c -o $@
-+
-+test-fpga-meter-plan: $(BUILD_DIR)/test_fpga_meter_plan
-+	$<
-+
-+test-meter: test-meter-data test-meter-voltage-wave test-fpga-meter-plan
- 
--.PHONY: all clean disasm size renode soak-test soak-quick flash flash-dfu bootloader flash-bootloader flash-all test-meter-data test-meter-voltage-wave test-meter
-+.PHONY: all clean disasm size renode soak-test soak-quick flash flash-dfu bootloader flash-bootloader flash-all test-meter-data test-meter-voltage-wave test-fpga-meter-plan test-meter

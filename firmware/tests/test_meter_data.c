@@ -346,6 +346,41 @@ static int test_invalidate_clears_stale_reading_before_mode_transition(void)
     return 1;
 }
 
+static int test_invalidate_clears_stale_reading_for_every_submode(void)
+{
+    static const uint8_t dcv_frame[12] = {
+        0x5A, 0xA5, 0xC6, 0xF7, 0xEB, 0xEB,
+        0x0F, 0x00, 0x02, 0x00, 0x01, 0x4E,
+    };
+    static const uint8_t expected_stock_mode[] = {
+        0, 1, 2, 2, 3, 3, 4, 6, 7, 5, 5
+    };
+
+    for (uint8_t mode = 0; mode < sizeof(expected_stock_mode); mode++) {
+        uint32_t updates_after_frame;
+        uint32_t display_updates_after_frame;
+
+        meter_data_init();
+        process_frame(dcv_frame, 0);
+        ASSERT(expect_normal_reading("5.008", "V", 5.008f, 0.001f));
+        updates_after_frame = meter_reading.update_count;
+        display_updates_after_frame = meter_reading.display_update_count;
+
+        meter_data_invalidate(mode);
+        ASSERT(!meter_reading.valid);
+        ASSERT(meter_reading.submode == mode);
+        ASSERT(meter_reading.result_class == METER_RESULT_NONE);
+        ASSERT(expect_payload_cleared("---"));
+        ASSERT(meter_reading.stock_mode == expected_stock_mode[mode]);
+        ASSERT(meter_reading.update_count == updates_after_frame + 1);
+        ASSERT(meter_reading.display_update_count == display_updates_after_frame + 1);
+        for (unsigned i = 0; i < sizeof(meter_reading.dbg_frame); i++) {
+            ASSERT(meter_reading.dbg_frame[i] == 0);
+        }
+    }
+    return 1;
+}
+
 static int test_voltage_mode_mains_frequency_frame_overrides_dcv_0f_rule(void)
 {
     static const uint8_t frame[12] = {
@@ -836,6 +871,7 @@ int main(void)
     TEST(stock_formatter_families_have_regression_fixtures);
     TEST(resistance_band_overrides_have_regression_fixtures);
     TEST(invalidate_clears_stale_reading_before_mode_transition);
+    TEST(invalidate_clears_stale_reading_for_every_submode);
     TEST(voltage_mode_mains_frequency_frame_overrides_dcv_0f_rule);
     TEST(dcv_high_range_frame_stays_voltage_across_current_transition);
     TEST(voltage_mode_mains_rotating_frames_stay_high_voltage);
