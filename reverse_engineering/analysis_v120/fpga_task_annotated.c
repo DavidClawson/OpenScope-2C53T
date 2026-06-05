@@ -1382,9 +1382,11 @@ power_off:
  * FUNCTION 10: usart_tx_config_writer
  * Address: 0x08039734 - 0x08039870  (316 bytes)
  *
- * Writes FPGA configuration parameters into the USART TX frame based on
- * command type. Called by scope/meter/siggen mode handlers to set up
- * the FPGA for the desired operating mode.
+ * Writes config bitfields based on command type. Earlier notes called this a
+ * USART TX config writer for scope/meter/siggen mode handlers, but the
+ * currently visible direct callers in FUN_08023A50 pass TIM5/TIM2 base
+ * addresses during master init. Treat the type names below as bitfield-shape
+ * labels until a stock runtime caller ties them to FPGA/DMM command payloads.
  *
  * 7 command types (TBB switch at 0x0803973E):
  *
@@ -1410,8 +1412,13 @@ power_off:
  *   Type 3: TIMEBASE CONFIGURATION
  *     - Direct register writes for sample rate / timebase
  *
- *   Type 4: METER RANGE CONFIGURATION
- *     - Meter measurement range selection
+ *   Type 4: METER-CASE-SHAPED BITFIELD CONFIGURATION
+ *     - params[1].0 -> config[0x20] bit 9
+ *     - params[1].1 -> config[0x20] bit 11
+ *     - params[2].0..1 -> config[0x1C] bits 0..1
+ *     - params[3].0..3 -> config[0x1C] bits 4..7
+ *     - update mask = 0x0100
+ *     - Not proof of normal runtime DMM range switching by itself.
  *
  *   Type 5: SIGNAL GENERATOR FREQUENCY
  *     - Frequency register configuration for DAC output
