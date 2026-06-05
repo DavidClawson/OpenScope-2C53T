@@ -20,7 +20,9 @@ uint8_t fpga_meter_stock_mode_for_submode(uint8_t submode)
     case 6: return 4; /* Resistance */
     case 7: return 6; /* Continuity */
     case 8: return 7; /* Diode */
-    case 9: return 5; /* Extended DMM slot; stock notes leave capacitance semantics open. */
+    case 9:  /* Capacitance */
+    case 10: /* Temperature, same recovered extended stock formatter family. */
+        return 5;
     default:
         return 0;
     }

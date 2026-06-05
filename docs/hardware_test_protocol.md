@@ -76,7 +76,7 @@ Simplest real-world measurement — use the built-in DMM to measure a battery.
 - [ ] Plug multimeter leads into COM and V/Ω/C jacks
 - [ ] Measure a fresh AA battery (expect ~1.5V)
 - [ ] Reading displayed on screen (verify it's in the right ballpark)
-- [ ] LEFT/RIGHT cycles through sub-modes (all 10 render without crash)
+- [ ] LEFT/RIGHT cycles through sub-modes (all 11 render without crash)
 
 ### 2.1a DMM voltage waveform overlay
 - [ ] Keep the multimeter leads in COM and V/Ω/C. Do not connect the
@@ -107,8 +107,8 @@ Simplest real-world measurement — use the built-in DMM to measure a battery.
       sine to stepped/modified-square, clipped, or chopped output.
 - [ ] Numeric DMM voltage remains the authoritative reading; the waveform is a
       shape/ripple aid, not a calibrated oscilloscope measurement.
-- [ ] Resistance, continuity, diode, capacitance, and current modes do not show
-      the waveform overlay.
+- [ ] Resistance, continuity, diode, capacitance, temperature, and current
+      modes do not show the waveform overlay.
 - [ ] Only after the low-voltage DMM-jack test passes, repeat with mains-rated
       leads and normal mains safety practice if mains waveform inspection is
       needed.

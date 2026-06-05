@@ -93,14 +93,15 @@ Note: Entering an FFT view claims the shared memory pool (88KB). Returning to ti
 | **TRIGGER** | Toggle auto-hold (HOLD) — freezes display when reading stabilizes |
 | **SELECT** | Reset min/max/avg tracking (also resets chart and histogram) |
 
-### 10 Sub-modes
+### 11 Sub-modes
 
 ```
-0: DC Voltage       5: AC Current (A)
-1: AC Voltage       6: Resistance
-2: DC Current (mA)  7: Continuity
-3: DC Current (A)   8: Diode Test
-4: AC Current (mA)  9: Capacitance
+0: DC Voltage       6: Resistance
+1: AC Voltage       7: Continuity
+2: DC Current (mA)  8: Diode Test
+3: DC Current (A)   9: Capacitance
+4: AC Current (mA) 10: Temperature
+5: AC Current (A)
 ```
 
 ### 3 Display Layouts

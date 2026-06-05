@@ -1,11 +1,11 @@
 /*
  * OpenScope 2C53T - Multimeter UI
  *
- * 10 sub-modes matching original firmware (device_mode 5-14):
+ * 11 sub-modes matching the recovered stock DMM families:
  *   0: DC Voltage      1: AC Voltage      2: DC mA
  *   3: DC A            4: AC mA           5: AC A
  *   6: Resistance      7: Continuity      8: Diode
- *   9: Capacitance
+ *   9: Capacitance     10: Temperature
  *
  * 3 switchable layouts (OK to cycle):
  *   Full  — Large digits with bar graph and min/max/avg (classic DMM)
@@ -79,6 +79,8 @@ static const meter_mode_info_t meter_modes[METER_SUBMODE_COUNT] = {
     { "Diode",       "V",    "",   "Diode",       "0.623",  0.31f,  2.0f,    "2V",    ""  },
     /* 9: Capacitance */
     { "Capacitance", "nF",   "",   "Auto 200nF",  "103.4",  0.52f,  200.0f,  "200nF", ""  },
+    /* 10: Temperature */
+    { "Temperature", "C",    "",   "Thermo",      "24.8",   0.25f,  100.0f,  "100C",   ""  },
 };
 
 /* ═══════════════════════════════════════════════════════════════════

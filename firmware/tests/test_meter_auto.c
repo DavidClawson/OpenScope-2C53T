@@ -40,7 +40,7 @@ static int test_candidate_order_keeps_voltage_before_passive_and_current(void)
 {
     size_t count = 0;
     const uint8_t *candidates = meter_auto_candidates(&count);
-    static const uint8_t expected[] = { 0, 1, 6, 7, 8, 9, 2, 4, 3, 5 };
+    static const uint8_t expected[] = { 0, 1, 6, 7, 8, 9, 10, 2, 4, 3, 5 };
 
     ASSERT(count == sizeof(expected) / sizeof(expected[0]));
     for (size_t i = 0; i < count; i++) {
@@ -89,6 +89,14 @@ static int test_current_scores_below_voltage(void)
     return 1;
 }
 
+static int test_temperature_scores_as_passive_candidate(void)
+{
+    meter_reading_t r = normal_reading(10, 248);
+
+    ASSERT(meter_auto_score(10, &r) == 60);
+    return 1;
+}
+
 static int test_continuity_marker_beats_resistance_normal(void)
 {
     meter_reading_t continuity;
@@ -113,6 +121,7 @@ int main(void)
     TEST(dc_voltage_scores_without_frequency);
     TEST(ac_voltage_requires_frequency_evidence);
     TEST(current_scores_below_voltage);
+    TEST(temperature_scores_as_passive_candidate);
     TEST(continuity_marker_beats_resistance_normal);
 
     printf("\n%d/%d tests passed\n", tests_passed, tests_run);

@@ -230,6 +230,7 @@ static uint8_t bcd_nibble_lookup(uint8_t combined)
  *   Sub-mode 7 (Cont):   XXX.X  → decimal at position 3
  *   Sub-mode 8 (Diode):  X.XXX  → decimal at position 1
  *   Sub-mode 9 (Cap):    XX.XX  → decimal at position 2
+ *   Sub-mode 10 (Temp):  XXX.X   → decimal at position 3
  *
  * The actual decimal position depends on the auto-range state,
  * but these are the defaults for the most common range.
@@ -243,8 +244,9 @@ static uint8_t bcd_nibble_lookup(uint8_t combined)
  *   Continuity (7): 200Ω range, raw 16 → 1.6 Ω, decimal after digit 3
  *   Diode (8): 2V range, raw 623 → 0.623 V, decimal after digit 1
  *   Capacitance (9): 200nF range, raw 1034 → 103.4 nF, decimal after digit 3
+ *   Temperature (10): stock extended family, raw 248 → 24.8 C, decimal after digit 3
  */
-static const uint8_t default_decimal_pos[10] = {
+static const uint8_t default_decimal_pos[11] = {
     1,  /* 0: DCV       — 9.899 V */
     2,  /* 1: ACV       — 98.99 V */
     2,  /* 2: DCA (mA)  — 98.99 mA */
@@ -255,10 +257,11 @@ static const uint8_t default_decimal_pos[10] = {
     3,  /* 7: Continuity— 198.9 Ω */
     1,  /* 8: Diode     — 0.623 V */
     3,  /* 9: Capacitance— 198.9 nF */
+    3,  /* 10: Temp     — 24.8 C */
 };
 
 /* Full-scale values per sub-mode (for bar graph calculation) */
-static const float bar_full_scale[10] = {
+static const float bar_full_scale[11] = {
     20.0f,    /* DC V: 20V */
     200.0f,   /* AC V: 200V */
     200.0f,   /* DC mA: 200mA */
@@ -269,6 +272,7 @@ static const float bar_full_scale[10] = {
     200.0f,   /* Cont: 200 Ohm */
     2.0f,     /* Diode: 2V */
     200.0f,   /* Cap: 200nF */
+    100.0f,   /* Temp: 100 C */
 };
 
 /* ═══════════════════════════════════════════════════════════════════
@@ -386,7 +390,7 @@ static void format_4digit_unsigned(float v, char *s)
  * mu/ohm glyphs.
  * ═══════════════════════════════════════════════════════════════════ */
 
-static const char * const unit_suffix_table[10][3] = {
+static const char * const unit_suffix_table[11][3] = {
     /*                v0       v1       v2    */
     /* 0 DCV      */ { "V",    "mV",    "mV"   },
     /* 1 ACV      */ { "V",    "mV",    "mV"   },
@@ -398,6 +402,7 @@ static const char * const unit_suffix_table[10][3] = {
     /* 7 Cont     */ { "Ohm",  "Ohm",   "Ohm"  },
     /* 8 Diode    */ { "V",    "V",     "V"    },
     /* 9 Cap      */ { "nF",   "uF",    "uF"   },
+    /* 10 Temp    */ { "C",    "C",     "F"    },
 };
 
 static uint8_t stock_mode_from_ui_submode(uint8_t submode)
@@ -412,7 +417,8 @@ static uint8_t stock_mode_from_ui_submode(uint8_t submode)
     case 6: return 4;  /* resistance */
     case 7: return 6;  /* continuity */
     case 8: return 7;  /* diode */
-    case 9: return 5;  /* extended/frequency-like formatter slot */
+    case 9:  return 5; /* capacitance */
+    case 10: return 5; /* temperature, same recovered extended formatter slot */
     default: return 0;
     }
 }
@@ -599,6 +605,7 @@ static const char *unit_suffix_from_stock(uint8_t ui_submode, uint8_t unit_index
     if (ui_submode == 7) return "Ohm";
     if (ui_submode == 8) return "V";
     if (ui_submode == 9) return "nF";
+    if (ui_submode == 10) return "C";
 
     switch (unit_index) {
     case 0:  return "V";
@@ -615,7 +622,7 @@ static const char *unit_suffix_from_stock(uint8_t ui_submode, uint8_t unit_index
     case 11: return "MHz";
     default: break;
     }
-    return (ui_submode < 10) ? unit_suffix_table[ui_submode][0] : "";
+    return (ui_submode < 11) ? unit_suffix_table[ui_submode][0] : "";
 }
 
 static uint8_t decimal_pos_from_stock(uint8_t ui_submode,
@@ -642,7 +649,8 @@ static uint8_t decimal_pos_from_stock(uint8_t ui_submode,
         if (fmt == 2) return 2;
         return 3;
     case 5:
-        return (ui_submode == 9) ? 3U : (uint8_t)(fmt > 3 ? 3 : fmt);
+        return (ui_submode == 9 || ui_submode == 10) ? 3U :
+               (uint8_t)(fmt > 3 ? 3 : fmt);
     case 6:
     case 7:
         return (fmt == 0) ? 0U : ((fmt == 1) ? 1U : 3U);
@@ -738,7 +746,7 @@ static void format_reading(meter_reading_t *r, uint8_t submode)
 
     /* Bar graph fraction */
     float abs_val = r->value < 0 ? -r->value : r->value;
-    float full_scale = (submode < 10) ? bar_full_scale[submode] : 1000.0f;
+    float full_scale = (submode < 11) ? bar_full_scale[submode] : 1000.0f;
     r->bar_fraction = abs_val / full_scale;
     if (r->bar_fraction > 1.0f) r->bar_fraction = 1.0f;
 }
@@ -1096,7 +1104,7 @@ void meter_data_process_frame(const volatile uint8_t *frame, uint8_t submode)
 
             /* Recompute bar graph fraction from the corrected value. */
             float abs_v = v < 0.0f ? -v : v;
-            float full_scale = (submode < 10) ? bar_full_scale[submode] : 1000.0f;
+            float full_scale = (submode < 11) ? bar_full_scale[submode] : 1000.0f;
             r->bar_fraction = abs_v / full_scale;
             if (r->bar_fraction > 1.0f) r->bar_fraction = 1.0f;
         }

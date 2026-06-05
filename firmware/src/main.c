@@ -58,7 +58,7 @@ volatile int8_t        settings_selected = 0;
 volatile int8_t        settings_depth = 0;
 volatile int8_t        settings_sub_selected = 0;
 volatile uint8_t       active_channel = 0;  /* 0=CH1, 1=CH2 */
-volatile uint8_t       meter_submode = 0;   /* 0-9: current meter sub-mode */
+volatile uint8_t       meter_submode = 0;   /* 0-10: current meter sub-mode */
 volatile uint8_t       meter_layout = 0;   /* 0=full, 1=chart, 2=stats, 3=fuse */
 volatile bool          meter_rel_enabled = false;  /* Relative/delta mode */
 volatile float         meter_rel_reference = 0.0f;

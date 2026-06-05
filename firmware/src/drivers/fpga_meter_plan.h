@@ -4,7 +4,7 @@
 #include <stdbool.h>
 #include <stdint.h>
 
-#define FPGA_METER_LOCAL_SUBMODE_COUNT 10u
+#define FPGA_METER_LOCAL_SUBMODE_COUNT 11u
 #define FPGA_METER_STOCK_MODE_COUNT    8u
 
 uint8_t fpga_meter_stock_mode_for_submode(uint8_t submode);

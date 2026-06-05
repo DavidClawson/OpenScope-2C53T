@@ -283,6 +283,10 @@ static int test_stock_formatter_families_have_regression_fixtures(void)
     process_frame(frame, 9);
     ASSERT(meter_reading.decimal_pos == 3);
     ASSERT(expect_normal_reading("123.4", "nF", 123.4f, 0.001f));
+
+    process_frame(frame, 10);
+    ASSERT(meter_reading.decimal_pos == 3);
+    ASSERT(expect_normal_reading("123.4", "C", 123.4f, 0.001f));
     return 1;
 }
 
@@ -577,7 +581,7 @@ static int test_non_voltage_modes_reject_voltage_payloads(void)
         0x5A, 0xA5, 0xA5, 0xAD, 0xED, 0x9F,
         0x0F, 0x00, 0x02, 0x00, 0x00, 0x31,
     };
-    static const uint8_t wrong_family_modes[] = { 2, 3, 4, 5, 6, 7, 8, 9 };
+    static const uint8_t wrong_family_modes[] = { 2, 3, 4, 5, 6, 7, 8, 9, 10 };
     const uint8_t *voltage_frames[] = { mains_frame, dcv_frame, dcv_high_frame };
 
     for (unsigned f = 0; f < sizeof(voltage_frames) / sizeof(voltage_frames[0]); f++) {
@@ -610,7 +614,7 @@ static int test_voltage_payload_clears_stale_reading_in_all_non_voltage_modes(vo
         0x5A, 0xA5, 0xA5, 0xAD, 0xED, 0x9F,
         0x0F, 0x00, 0x02, 0x00, 0x00, 0x31,
     };
-    static const uint8_t modes[] = { 3, 4, 5, 6, 7, 8, 9 };
+    static const uint8_t modes[] = { 2, 3, 4, 5, 6, 7, 8, 9, 10 };
     const uint8_t *voltage_frames[] = { mains_frame, dcv_frame, dcv_high_frame };
     uint8_t normal[12];
 
@@ -630,7 +634,8 @@ static int test_voltage_payload_clears_stale_reading_in_all_non_voltage_modes(vo
             ASSERT(meter_reading.bcd_value != 0);
             ASSERT_STR_EQ(meter_reading.display_str,
                           (modes[m] == 6 || modes[m] == 7) ? "3.300" :
-                          (modes[m] == 8 || modes[m] == 9) ? "123.4" : "12.34");
+                          (modes[m] == 8 || modes[m] == 9 || modes[m] == 10) ?
+                          "123.4" : "12.34");
 
             process_frame(voltage_frames[f], modes[m]);
             ASSERT(!meter_reading.valid);

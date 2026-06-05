@@ -168,7 +168,7 @@ void meter_data_invalidate(uint8_t submode);
  * Call this from the USART RX task when a valid data frame arrives.
  *
  * frame: pointer to 12-byte RX frame (0x5A 0xA5 + 10 data bytes)
- * submode: current meter sub-mode (0-9) for decimal point placement
+ * submode: current meter sub-mode for decimal point placement
  */
 void meter_data_process_frame(const volatile uint8_t *frame, uint8_t submode);
 

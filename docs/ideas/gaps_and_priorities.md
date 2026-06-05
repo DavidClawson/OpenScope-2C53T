@@ -46,19 +46,23 @@ The oscilloscope analog signals never touch the MCU directly — all high-speed 
 
 ## Multimeter Gaps
 
-The original has **10 multimeter sub-modes** (device_mode 5-14). We have 1 static demo screen. Biggest gap but mostly hardware-dependent on FPGA/ADC routing.
+The custom firmware now exposes **11 local multimeter sub-modes** covering the
+recovered stock DMM families, including separate small/large current entries
+and an explicit temperature slot. Voltage and several passive-mode frames are
+decoded; the remaining risk is hardware/front-end validation for current,
+capacitance, temperature, and the less-characterized stock formatter variants.
 
 | Feature | Original | Ours | Status |
 |---------|----------|------|--------|
-| DC Voltage | Yes | Demo screen only | **Gap** |
-| AC Voltage | Yes | No | **Gap** |
-| DC Current (small/large) | Yes (2 ranges) | No | **Gap** |
-| AC Current (small/large) | Yes (2 ranges) | No | **Gap** |
-| Resistance | Yes | No | **Gap** |
-| Continuity (with buzzer) | Yes | No | **Gap** |
-| Diode | Yes | No | **Gap** |
-| Capacitance | Yes | No | **Gap** |
-| Temperature | Yes | No | **Gap** |
+| DC Voltage | Yes | Decoder + UI, bench 5V sane | Needs broader range/cal proof |
+| AC Voltage | Yes | Decoder + UI, frequency evidence path | Needs broader mains/low-voltage AC proof |
+| DC Current (small/large) | Yes (2 ranges) | UI/decoder scaffold | Needs jack/series-load validation |
+| AC Current (small/large) | Yes (2 ranges) | UI/decoder scaffold | Needs jack/series-load validation |
+| Resistance | Yes | Decoder + calibrated low/kOhm bands | Higher bands need characterization |
+| Continuity (with buzzer) | Yes | Decoder + UI indicator | Buzzer hardware path needs validation |
+| Diode | Yes | UI/decoder scaffold | Needs real diode frame validation |
+| Capacitance | Yes | UI/decoder scaffold | Needs real capacitor frame validation |
+| Temperature | Yes | UI/decoder scaffold | Needs real temperature probe/frame validation |
 | Min/Max/Avg with reset | No (community complaint) | UI drawn, no reset | **Opportunity** |
 | Auto-ranging | Yes | Label only | **Gap** |
 

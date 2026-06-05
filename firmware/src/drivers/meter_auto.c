@@ -5,7 +5,7 @@
 #include "meter_auto.h"
 
 static const uint8_t meter_auto_candidate_order[] = {
-    0, 1, 6, 7, 8, 9, 2, 4, 3, 5
+    0, 1, 6, 7, 8, 9, 10, 2, 4, 3, 5
 };
 
 const uint8_t *meter_auto_candidates(size_t *count)
@@ -32,6 +32,7 @@ uint8_t meter_auto_score(uint8_t submode, const meter_reading_t *r)
             return (r->bcd_value > 0) ? 70U : 0U;
         case 8:
         case 9:
+        case 10:
             return (r->bcd_value > 0) ? 60U : 0U;
         case 2:
         case 3:

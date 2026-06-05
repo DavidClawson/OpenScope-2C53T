@@ -7,7 +7,7 @@
  *
  * Integrated features from 4 agent worktrees:
  *   - Cursor measurement mode (TRIGGER toggles, arrows move cursors)
- *   - Meter 10 sub-modes (LEFT/RIGHT cycle, SELECT resets min/max/avg)
+ *   - Meter sub-modes (LEFT/RIGHT cycle, SELECT resets min/max/avg)
  *   - Signal gen: amplitude stepping, duty cycle, frequency presets
  *   - Math channel, persistence, component tester (settings sub-menus)
  */

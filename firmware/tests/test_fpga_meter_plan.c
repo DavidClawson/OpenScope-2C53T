@@ -43,7 +43,7 @@ static void test_stock_table_bytes(void)
 static void test_local_submode_mapping(void)
 {
     static const uint8_t expected_stock_mode[FPGA_METER_LOCAL_SUBMODE_COUNT] = {
-        0, 1, 2, 2, 3, 3, 4, 6, 7, 5
+        0, 1, 2, 2, 3, 3, 4, 6, 7, 5, 5
     };
 
     for (uint8_t i = 0; i < FPGA_METER_LOCAL_SUBMODE_COUNT; i++) {
@@ -58,7 +58,8 @@ static void test_wire_words_are_raw_05_family(void)
 {
     static const uint16_t expected_words[FPGA_METER_LOCAL_SUBMODE_COUNT] = {
         0x0514, 0x050C, 0x0517, 0x0517, 0x050B,
-        0x050B, 0x050A, 0x0511, 0x0510, 0x0512
+        0x050B, 0x050A, 0x0511, 0x0510, 0x0512,
+        0x0512
     };
 
     for (uint8_t i = 0; i < FPGA_METER_LOCAL_SUBMODE_COUNT; i++) {
@@ -74,7 +75,8 @@ static void test_stock_apply_words_for_runtime_family_switch(void)
 {
     static const uint16_t expected_apply[FPGA_METER_LOCAL_SUBMODE_COUNT] = {
         0x0000, 0x050D, 0x050E, 0x050E, 0x0000,
-        0x0000, 0x0000, 0x0516, 0x0515, 0x0000
+        0x0000, 0x0000, 0x0516, 0x0515, 0x0000,
+        0x0000
     };
 
     for (uint8_t i = 0; i < FPGA_METER_LOCAL_SUBMODE_COUNT; i++) {

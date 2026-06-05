@@ -86,7 +86,7 @@ extern volatile int8_t        settings_selected;  /* Selected menu item index */
 extern volatile int8_t        settings_depth;      /* 0=top, 1=sub-menu, 2=about, 3=osc-math, 4=component */
 extern volatile int8_t        settings_sub_selected; /* Sub-menu selection */
 extern volatile uint8_t       active_channel;      /* 0=CH1, 1=CH2 (for scope adjustments) */
-extern volatile uint8_t       meter_submode;       /* 0-9: current meter sub-mode */
+extern volatile uint8_t       meter_submode;       /* 0-10: current meter sub-mode */
 extern volatile uint8_t       meter_layout;        /* 0=full, 1=chart, 2=stats, 3=fuse */
 extern volatile uint32_t      meter_screen_draw_count; /* Incremented by draw_meter_screen() */
 extern volatile uint32_t      meter_screen_full_clear_count;
@@ -116,7 +116,7 @@ extern volatile bool          persist_enabled;
 #define SETTINGS_ITEM_COUNT     12
 #define SETTINGS_OSC_ITEM_COUNT 8
 #define SETTINGS_ABOUT_LINES    5
-#define METER_SUBMODE_COUNT     10
+#define METER_SUBMODE_COUNT     11
 #define METER_LAYOUT_COUNT      4
 #define METER_LAYOUT_FULL       0
 #define METER_LAYOUT_CHART      1
