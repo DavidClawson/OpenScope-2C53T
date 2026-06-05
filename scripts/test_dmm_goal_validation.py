@@ -182,6 +182,34 @@ class DmmGoalValidationTests(unittest.TestCase):
             "9a f8 02 00 da f7 2f fb 9a f8 03 00 da f7 05 fc",
         )
 
+    def test_stock_meter_mux_direct_callsites_are_binary_grounded(self) -> None:
+        result = stock_meter_literals.verify_meter_mux_callsite_sequences()
+
+        self.assertEqual(result["gpio_mux_portc_porte"]["target"], "0x080018a4")
+        self.assertEqual(result["gpio_mux_porta_portb"]["target"], "0x08001a58")
+        self.assertEqual(
+            result["gpio_mux_portc_porte"]["calls"],
+            [
+                "0x080020b2", "0x080031e8", "0x080039a2", "0x0801a53e",
+                "0x0801c7cc", "0x0801d094", "0x08025546", "0x08027242",
+            ],
+        )
+        self.assertEqual(
+            result["gpio_mux_porta_portb"]["calls"],
+            [
+                "0x08001f06", "0x08003644", "0x08003e3a", "0x0801a534",
+                "0x0801c7d8", "0x0801d0a0", "0x0802554c", "0x0802724a",
+            ],
+        )
+        self.assertEqual(
+            result["gpio_mux_portc_porte"]["sequences"]["0x08025546"],
+            "dc f7 ad f9",
+        )
+        self.assertEqual(
+            result["gpio_mux_porta_portb"]["sequences"]["0x0802724a"],
+            "da f7 05 fc",
+        )
+
 
 if __name__ == "__main__":
     unittest.main()

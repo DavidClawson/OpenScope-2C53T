@@ -33,6 +33,34 @@ EXPECTED_MUX_RESTORE_SEQUENCES = {
         "9a f8 02 00 da f7 2f fb 9a f8 03 00 da f7 05 fc"
     ),
 }
+EXPECTED_MUX_CALLS_BY_TARGET = {
+    "gpio_mux_portc_porte": {
+        "target": 0x080018A4,
+        "calls": {
+            0x080020B2: bytes.fromhex("ff f7 f7 fb"),
+            0x080031E8: bytes.fromhex("fe f7 5c fb"),
+            0x080039A2: bytes.fromhex("fd f7 7f ff"),
+            0x0801A53E: bytes.fromhex("e7 f7 b1 f9"),
+            0x0801C7CC: bytes.fromhex("e5 f7 6a f8"),
+            0x0801D094: bytes.fromhex("e4 f7 06 fc"),
+            0x08025546: bytes.fromhex("dc f7 ad f9"),
+            0x08027242: bytes.fromhex("da f7 2f fb"),
+        },
+    },
+    "gpio_mux_porta_portb": {
+        "target": 0x08001A58,
+        "calls": {
+            0x08001F06: bytes.fromhex("ff f7 a7 fd"),
+            0x08003644: bytes.fromhex("fe f7 08 fa"),
+            0x08003E3A: bytes.fromhex("fd f7 0d fe"),
+            0x0801A534: bytes.fromhex("e7 f7 90 fa"),
+            0x0801C7D8: bytes.fromhex("e5 f7 3e f9"),
+            0x0801D0A0: bytes.fromhex("e4 f7 da fc"),
+            0x0802554C: bytes.fromhex("dc f7 84 fa"),
+            0x0802724A: bytes.fromhex("da f7 05 fc"),
+        },
+    },
+}
 
 
 def read(addr: int, size: int) -> bytes:
@@ -130,6 +158,35 @@ def verify_meter_mux_restore_sequences() -> dict[str, object]:
     return {"sequences": checked}
 
 
+def verify_meter_mux_callsite_sequences() -> dict[str, object]:
+    """Check every stock direct BL callsite to the two mux writers.
+
+    This is a binary callsite guard, not a DMM mode/range proof.  The stock
+    decompile exposes scope/siggen runtime callers plus DMM-relevant boot and
+    saved-state apply sites.  Keeping the complete direct BL list guarded makes
+    it harder to mistake partial xrefs for recovered DMM runtime mux writers.
+    """
+    checked: dict[str, object] = {}
+    for name, info in EXPECTED_MUX_CALLS_BY_TARGET.items():
+        calls: dict[int, bytes] = info["calls"]  # type: ignore[assignment]
+        target = int(info["target"])
+        call_bytes: dict[str, str] = {}
+        for addr, expected in calls.items():
+            actual = read(addr, len(expected))
+            if actual != expected:
+                raise AssertionError(
+                    f"{name} call {addr:#010x}: "
+                    f"expected {expected.hex(' ')}, got {actual.hex(' ')}"
+                )
+            call_bytes[f"{addr:#010x}"] = actual.hex(" ")
+        checked[name] = {
+            "target": f"{target:#010x}",
+            "calls": sorted(call_bytes),
+            "sequences": call_bytes,
+        }
+    return checked
+
+
 def main() -> None:
     if not BIN.exists():
         print(f"stock meter literal pools: skipped; missing {BIN}", file=sys.stderr)
@@ -168,11 +225,14 @@ def main() -> None:
     selector = verify_meter_selector_table()
     selector_xrefs = verify_meter_selector_xref_sequences()
     mux_restore = verify_meter_mux_restore_sequences()
+    mux_calls = verify_meter_mux_callsite_sequences()
     print(f"stock meter selector table: {selector['bytes']}")
     print("stock meter selector xref sites: " +
           ", ".join(selector_xrefs["sequences"].keys()))
     print("stock meter mux restore sites: " +
           ", ".join(mux_restore["sequences"].keys()))
+    for name, info in mux_calls.items():
+        print(f"stock {name} direct BL sites: " + ", ".join(info["calls"]))
     print("stock meter literal pools: ok")
 
 
