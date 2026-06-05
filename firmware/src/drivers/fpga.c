@@ -1123,15 +1123,34 @@ static void fpga_apply_stock_meter_range_mux(uint8_t range_idx)
     }
 }
 
+fpga_meter_selector_t fpga_meter_expected_selectors(uint8_t submode)
+{
+    fpga_meter_selector_t selectors;
+
+    if (submode == 0 || submode == 1) {
+        selectors.function_selector = submode;
+        selectors.range_selector = 0;
+        selectors.voltage_function_axis = true;
+        return selectors;
+    }
+
+    selectors.function_selector = submode;
+    selectors.range_selector = 0xFF;
+    selectors.voltage_function_axis = false;
+    return selectors;
+}
+
 static void fpga_set_voltage_meter_frontend(uint8_t submode)
 {
+    fpga_meter_selector_t selectors = fpga_meter_expected_selectors(submode);
+
     /* Stock uses two selectors here: meter function on C/E and meter range on
      * A/B. Keep voltage on the known default range 0; ACV is function 1, not
      * range 1. */
     GPIOE->scr = (1U << 4);
     GPIOE->clr = (1U << 5);
-    fpga_apply_stock_meter_function_mux(submode == 1 ? 1U : 0U);
-    fpga_apply_stock_meter_range_mux(0);
+    fpga_apply_stock_meter_function_mux(selectors.function_selector);
+    fpga_apply_stock_meter_range_mux(selectors.range_selector);
 }
 
 static void fpga_set_meter_frontend_for_submode(uint8_t submode)

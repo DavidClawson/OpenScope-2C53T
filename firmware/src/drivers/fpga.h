@@ -108,6 +108,12 @@ typedef enum {
     FPGA_ACQ_SELF_TEST   = 8,  /* Self test */
 } fpga_acq_mode_t;
 
+typedef struct {
+    uint8_t function_selector;  /* Stock meter function mux: voltage DCV=0, ACV=1. */
+    uint8_t range_selector;     /* Stock meter range mux, 0xFF when not modelled. */
+    bool    voltage_function_axis;
+} fpga_meter_selector_t;
+
 /* ═══════════════════════════════════════════════════════════════════
  * Stock-State Bench Shadow
  * ═══════════════════════════════════════════════════════════════════ */
@@ -569,6 +575,13 @@ void fpga_enter_siggen_mode(void);
  * Call when the meter submode changes (LEFT/RIGHT buttons).
  */
 void fpga_set_meter_mode(uint8_t submode);
+
+/*
+ * Return the stock mux selectors that fpga_set_meter_mode() intends to apply.
+ * This is read-only debug metadata for USB harnesses and tests; it does not
+ * touch GPIO or send FPGA commands.
+ */
+fpga_meter_selector_t fpga_meter_expected_selectors(uint8_t submode);
 
 /*
  * Re-apply the known-good meter frontend baseline and meter command
