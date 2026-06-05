@@ -2078,7 +2078,8 @@ static uint8_t meter_autoscan_score(uint8_t submode, const meter_reading_t *r)
 static void cmd_meter_autoscan(const char *args)
 {
     static const uint8_t candidates[] = { 0, 1, 6, 7, 8, 9, 2, 4, 3, 5 };
-    uint32_t settle_ms = 900;
+    uint32_t settle_ms = 1800;
+    uint32_t wait_budget_ms;
     uint8_t best_mode = meter_submode;
     uint8_t best_score = 0;
 
@@ -2088,11 +2089,13 @@ static void cmd_meter_autoscan(const char *args)
             return;
         }
     }
+    wait_budget_ms = (settle_ms < 1200U) ? 1200U : settle_ms;
 
     current_mode = MODE_MULTIMETER;
     meter_layout = METER_LAYOUT_FULL;
-    usb_debug_printf("autoscan settle_ms=%lu candidates=%u\r\n",
+    usb_debug_printf("autoscan settle_ms=%lu wait_budget_ms=%lu candidates=%u\r\n",
                      settle_ms,
+                     wait_budget_ms,
                      (unsigned)(sizeof(candidates) / sizeof(candidates[0])));
 
     for (uint8_t i = 0; i < sizeof(candidates) / sizeof(candidates[0]); i++) {
@@ -2103,9 +2106,13 @@ static void cmd_meter_autoscan(const char *args)
         meter_reset_minmaxavg();
         meter_voltage_wave_reset();
         fpga_meter_reinit(submode);
-        if (settle_ms > 0) vTaskDelay(pdMS_TO_TICKS(settle_ms));
 
-        score = meter_autoscan_score(submode, (const meter_reading_t *)&meter_reading);
+        score = 0;
+        for (uint32_t waited = 0; waited < wait_budget_ms; waited += 100U) {
+            vTaskDelay(pdMS_TO_TICKS(100));
+            score = meter_autoscan_score(submode, (const meter_reading_t *)&meter_reading);
+            if (score > 0) break;
+        }
         usb_debug_printf("auto candidate sub=%u (%s) score=%u valid=%u cls=%u "
                          "disp=%s unit=%s raw=%d dp=%u f8=%02X seq=%u word=%04X apply=%04X\r\n",
                          (unsigned)submode,
