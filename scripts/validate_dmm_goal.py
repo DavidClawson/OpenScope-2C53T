@@ -125,6 +125,7 @@ def verify_state_machine_property_contract() -> dict[str, Any]:
     text = (REPO / rel).read_text(encoding="utf-8", errors="replace")
     required_tests = [
         "dcv_stock_range_class_priority_all_bit_combinations",
+        "dcv_live_0200_frame_preserves_stock_math_as_unresolved_frontend",
         "acv_rejects_dc_voltage_without_ac_evidence",
         "ac_current_rejects_current_frame_without_ac_evidence",
         "invalid_submode_rejects_without_becoming_dcv",
@@ -155,6 +156,9 @@ def verify_state_machine_property_contract() -> dict[str, Any]:
         "METER_REJECT_MISSING_AC_EVIDENCE",
         "METER_REJECT_WRONG_FRAME_FAMILY",
         "low-dcv-voltage",
+        "0.4366",
+        "0.2000f",
+        "one-point display coefficient",
         "FPGA_METER_FRAME_FAMILY_CONTINUITY",
         "uA",
     ]
