@@ -78,6 +78,14 @@ dfu-util -a 1 -d 2e3c:df11 -s 0x1FFFF800 -D build/option_bytes48.bin
 make flash-all
 ```
 
+The Makefile flash targets run `scripts/flash_preflight.py` before any write.
+The preflight prints the detected USB mode, image kind, vector table, target
+address, size, and SHA-256. It refuses HID IAP flashing unless the device is in
+`2e3c:af01` HID bootloader mode and the image is an OpenScope app-slot image
+for `0x08004000`. It refuses ROM DFU app writes unless the device is in
+`2e3c:df11` ROM DFU mode and the app write target is `0x08004000`. A running
+CDC debug device (`2e3c:5740`) is not a flash target.
+
 Harmless warnings you can ignore during step 1:
 - `Invalid DFU suffix signature` — our blob doesn't carry a CRC trailer; dfu-util just notes it.
 - `Error sending dfu abort request` — AT32 ROM resets before acknowledging the session teardown.

@@ -1,7 +1,7 @@
 /*
  * Shared Memory Pool — Lifecycle-Managed
  *
- * 150KB buffer shared between features that never run simultaneously.
+ * 96KB buffer shared between features that never run simultaneously.
  * Features must explicitly claim the pool before use and release it
  * when done. The lifecycle manager tracks what's loaded and provides
  * diagnostic info (for the About screen and health monitoring).
@@ -37,13 +37,15 @@ typedef enum {
     SHMEM_OWNER_COUNT
 } shmem_owner_t;
 
-/* Size of the shared pool (largest consumer = screenshot at 150KB) */
-#define SHMEM_POOL_SIZE  153600
+/* Size of the shared pool. Keep this above the largest enabled consumer.
+ * The old RGB565 screenshot utility needs 150KB and must fail closed unless
+ * this pool is deliberately restored to that size. */
+#define SHMEM_POOL_SIZE  98304
 
 /* RAM sizes each feature actually needs (for diagnostics/budgeting) */
 #define SHMEM_NEED_FFT          90112   /* 88 KB (radix-2) */
 #define SHMEM_NEED_PERSISTENCE  65920   /* 320 * 206 = 64.4 KB */
-#define SHMEM_NEED_SCREENSHOT   153600  /* 320 * 240 * 2 = 150 KB */
+#define SHMEM_NEED_SCREENSHOT   153600  /* legacy RGB565 screenshot */
 #define SHMEM_NEED_DECODE       32768   /* 32 KB */
 #define SHMEM_NEED_COMPONENT    8192    /* 8 KB */
 #define SHMEM_NEED_BODE         4096    /* 4 KB */

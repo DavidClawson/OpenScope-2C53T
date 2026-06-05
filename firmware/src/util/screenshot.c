@@ -41,6 +41,11 @@ static void write_le32(uint8_t *buf, uint32_t val)
 
 void screenshot_init(void)
 {
+    if (shared_mem_size() < SCREENSHOT_SIZE) {
+        shadow_fb = 0;
+        initialized = false;
+        return;
+    }
     shadow_fb = shared_mem_acquire(SHMEM_OWNER_SCREENSHOT);
     memset(shadow_fb, 0, SCREENSHOT_SIZE);
     initialized = true;
@@ -77,6 +82,7 @@ void screenshot_clear(uint16_t color)
     if (!initialized) {
         screenshot_init();
     }
+    if (!initialized) return;
 
     uint8_t lo = (uint8_t)(color & 0xFF);
     uint8_t hi = (uint8_t)((color >> 8) & 0xFF);

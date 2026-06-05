@@ -228,11 +228,8 @@ void lcd_shadow_clear(void)
 
 void lcd_shadow_set_page(uint16_t y)
 {
-    if (y >= LCD_HEIGHT) y = 0;
-    if (y + LCD_SHADOW_HEIGHT > LCD_HEIGHT) {
-        y = LCD_HEIGHT - LCD_SHADOW_HEIGHT;
-    }
-    lcd_shadow_page = y;
+    (void)y;
+    lcd_shadow_page = 0;
     lcd_shadow_clear();
 }
 

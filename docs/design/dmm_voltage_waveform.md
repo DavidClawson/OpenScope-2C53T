@@ -59,6 +59,13 @@ subcommands for `meter-dump`, `meter-frontend`, `meter-stream`,
 `command` or `poll` subcommands for firmware shell commands such as
 `meter wave` and `mode meter 1 0`.
 
+`screen-capture` defaults to the read-only firmware command `screen dumpbin`,
+which returns a `SCREENBIN` header, exact-length packed indexed4 payload, and
+CRC32. The host reads the payload by `len`, verifies the CRC, and writes a BMP
+through the same palette path used by text dumps. The older `--rle-shadow` path
+is only a deprecated diagnostic fallback because it clears/paginates shadow
+state and switches the UI to ACV while stitching pages.
+
 The module has a narrow scaling abstraction for v1 calibration:
 `meter_voltage_wave_scale_from_dmm_rms()` derives raw-count-to-volt scaling from
 the decoded DMM RMS voltage, keeping the numeric DMM reading authoritative.
@@ -115,6 +122,7 @@ and exposes the result through USB debug:
 
 - `meter dump [delay_ms]`
 - `ui dump`
+- `screen dumpbin [x y w h]` for fast read-only screenshot timing
 
 Relevant fields are `draw_us`, `max_draw_us`, `over_budget`, `last_full`,
 `full_clears`, and `partial_clears`. During a stable AC/DC voltage measurement,

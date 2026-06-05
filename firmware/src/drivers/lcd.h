@@ -196,7 +196,7 @@ void lcd_set_orientation(uint8_t madctl);
 /* 4-bit indexed software shadow of pixels written through lcd_write_data().
  * Used only for USB/debug screenshots when LCD GRAM readback is unreliable. */
 #define LCD_SHADOW_STRIDE  ((LCD_WIDTH + 1) / 2)
-#define LCD_SHADOW_HEIGHT  16
+#define LCD_SHADOW_HEIGHT  LCD_HEIGHT
 const uint8_t *lcd_shadow_bits(void);
 void lcd_shadow_clear(void);
 void lcd_shadow_set_page(uint16_t y);

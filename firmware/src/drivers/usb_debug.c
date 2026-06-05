@@ -462,8 +462,9 @@ static void cmd_help(void)
         "flash wtest <addr> CONFIRM      Non-destructive write-primitive self-test (blank 4KB sector)\r\n"
         "trig raw <0-4095>               Write DAC1 (PA4) directly + sw trigger\r\n"
         "trig <range> <level>            Scope trigger DAC: range 0-9, level -100..100\r\n"
-        "screen dump [shadow] [x y w h]  Dump 4-bit software LCD shadow\r\n"
-        "screen shadow page [y]          Set/clear 16-row shadow capture page\r\n"
+        "screen dump [shadow] [x y w h]  Dump text indexed4 LCD shadow\r\n"
+        "screen dumpbin [x y w h]        Binary indexed4 LCD shadow dump\r\n"
+        "screen shadow page [y]          Clear full-screen shadow capture\r\n"
         "fpga cmd <hi> <lo>              Send FPGA command bytes\r\n"
         "  e.g.: fpga cmd 0 9   (sends 0x00 0x09)\r\n"
         "        fpga cmd 0x0509 (sends 0x05 0x09)\r\n"
@@ -1254,6 +1255,112 @@ parsed_screen_args:
         }
         usb_send_str("\r\n");
     }
+}
+
+static uint32_t crc32_update(uint32_t crc, const uint8_t *data, uint32_t len)
+{
+    crc = ~crc;
+    for (uint32_t i = 0; i < len; i++) {
+        crc ^= data[i];
+        for (uint8_t bit = 0; bit < 8; bit++) {
+            uint32_t mask = 0U - (crc & 1U);
+            crc = (crc >> 1) ^ (0xEDB88320U & mask);
+        }
+    }
+    return ~crc;
+}
+
+static bool parse_screen_region_args(const char *args,
+                                     uint32_t *x,
+                                     uint32_t *y,
+                                     uint32_t *w,
+                                     uint32_t *h)
+{
+    char buf[64];
+    char *saveptr = NULL;
+    char *tok;
+
+    *x = 0;
+    *y = 0;
+    *w = LCD_WIDTH;
+    *h = LCD_HEIGHT;
+
+    if (args && *args) {
+        if (strlen(args) >= sizeof(buf)) return false;
+        strcpy(buf, args);
+
+        tok = strtok_r(buf, " \t", &saveptr);
+        if (tok == NULL || parse_int(tok, x) != 0) return false;
+        tok = strtok_r(NULL, " \t", &saveptr);
+        if (tok == NULL || parse_int(tok, y) != 0) return false;
+        tok = strtok_r(NULL, " \t", &saveptr);
+        if (tok == NULL || parse_int(tok, w) != 0) return false;
+        tok = strtok_r(NULL, " \t", &saveptr);
+        if (tok == NULL || parse_int(tok, h) != 0) return false;
+        if (strtok_r(NULL, " \t", &saveptr) != NULL) return false;
+    }
+
+    return *x < LCD_WIDTH && *y < LCD_HEIGHT &&
+           *w > 0 && *h > 0 &&
+           *x + *w <= LCD_WIDTH && *y + *h <= LCD_HEIGHT;
+}
+
+static void cmd_screen_dumpbin(const char *args)
+{
+    uint32_t x, y, w, h;
+    uint8_t out_row[LCD_SHADOW_STRIDE];
+
+    if (!parse_screen_region_args(args, &x, &y, &w, &h)) {
+        usb_send_str("Usage: screen dumpbin [x y w h]\r\n");
+        usb_debug_printf("  bounds: x<%u y<%u x+w<=%u y+h<=%u\r\n",
+                         (unsigned)LCD_WIDTH,
+                         (unsigned)LCD_HEIGHT,
+                         (unsigned)LCD_WIDTH,
+                         (unsigned)LCD_HEIGHT);
+        return;
+    }
+
+    uint32_t row_len = (w + 1U) / 2U;
+    uint32_t len = row_len * h;
+    uint32_t crc = 0;
+    const uint8_t *bits = lcd_shadow_bits();
+
+    for (uint32_t row = 0; row < h; row++) {
+        uint32_t sy = y + row;
+        memset(out_row, 0, row_len);
+        for (uint32_t col = 0; col < w; col++) {
+            uint32_t sx = x + col;
+            uint8_t src = bits[sy * LCD_SHADOW_STRIDE + (sx >> 1)];
+            uint8_t idx = (sx & 1U) ? (src & 0x0FU) : (src >> 4);
+            if ((col & 1U) == 0) {
+                out_row[col >> 1] = (uint8_t)(idx << 4);
+            } else {
+                out_row[col >> 1] |= idx;
+            }
+        }
+        crc = crc32_update(crc, out_row, row_len);
+    }
+
+    usb_debug_printf("SCREENBIN x=%lu y=%lu w=%lu h=%lu format=indexed4 len=%lu crc32=%08lX\r\n",
+                     x, y, w, h, len, crc);
+
+    for (uint32_t row = 0; row < h; row++) {
+        uint32_t sy = y + row;
+        memset(out_row, 0, row_len);
+        for (uint32_t col = 0; col < w; col++) {
+            uint32_t sx = x + col;
+            uint8_t src = bits[sy * LCD_SHADOW_STRIDE + (sx >> 1)];
+            uint8_t idx = (sx & 1U) ? (src & 0x0FU) : (src >> 4);
+            if ((col & 1U) == 0) {
+                out_row[col >> 1] = (uint8_t)(idx << 4);
+            } else {
+                out_row[col >> 1] |= idx;
+            }
+        }
+        usb_send_bytes(out_row, (uint16_t)row_len);
+    }
+
+    usb_send_str("\r\nSCREENBIN END\r\n");
 }
 
 static void cmd_screen_shadow(const char *args)
@@ -3507,6 +3614,10 @@ static void dispatch_command(char *line)
         cmd_screen_dump("");
     } else if (strncmp(line, "screen dump ", 12) == 0) {
         cmd_screen_dump(line + 12);
+    } else if (strcmp(line, "screen dumpbin") == 0) {
+        cmd_screen_dumpbin("");
+    } else if (strncmp(line, "screen dumpbin ", 15) == 0) {
+        cmd_screen_dumpbin(line + 15);
     } else if (strcmp(line, "screen shadow") == 0) {
         cmd_screen_shadow("");
     } else if (strncmp(line, "screen shadow ", 14) == 0) {

@@ -30,6 +30,7 @@ import sys
 import termios
 import time
 from typing import Iterable, TextIO
+import zlib
 
 
 DEFAULT_BAUD = 115200
@@ -82,6 +83,7 @@ class PosixSerial:
     def __init__(self, port: str, baud: int, read_timeout: float) -> None:
         self.port = port
         self.read_timeout = read_timeout
+        self._rx_buffer = bytearray()
         try:
             self.fd = os.open(port, os.O_RDWR | os.O_NOCTTY | os.O_NONBLOCK)
         except OSError as exc:
@@ -122,24 +124,53 @@ class PosixSerial:
                 continue
             offset += os.write(self.fd, data[offset:])
 
+    def _read_to_buffer(self, deadline: float) -> None:
+        remaining = max(0.0, deadline - time.monotonic())
+        readable, _, _ = select.select([self.fd], [], [], min(0.05, remaining))
+        if not readable:
+            return
+        try:
+            chunk = os.read(self.fd, 4096)
+        except BlockingIOError:
+            return
+        if chunk:
+            self._rx_buffer.extend(chunk)
+
     def read_until_prompt(self, timeout: float) -> bytes:
-        response = bytearray()
+        response = bytearray(self._rx_buffer)
+        self._rx_buffer.clear()
         deadline = time.monotonic() + timeout
         while time.monotonic() < deadline:
-            remaining = max(0.0, deadline - time.monotonic())
-            readable, _, _ = select.select([self.fd], [], [], min(0.05, remaining))
-            if not readable:
-                continue
-            try:
-                chunk = os.read(self.fd, 4096)
-            except BlockingIOError:
-                continue
-            if not chunk:
-                continue
-            response.extend(chunk)
             if any(response.endswith(suffix) for suffix in PROMPT_SUFFIXES):
                 return bytes(response)
+            self._read_to_buffer(deadline)
+            if self._rx_buffer:
+                response.extend(self._rx_buffer)
+                self._rx_buffer.clear()
         raise TimeoutError(f"no prompt from {self.port} within {timeout:.1f}s")
+
+    def read_line(self, timeout: float) -> bytes:
+        deadline = time.monotonic() + timeout
+        while time.monotonic() < deadline:
+            newline = self._rx_buffer.find(b"\n")
+            if newline >= 0:
+                line = bytes(self._rx_buffer[: newline + 1])
+                del self._rx_buffer[: newline + 1]
+                return line
+            self._read_to_buffer(deadline)
+        raise TimeoutError(f"no line from {self.port} within {timeout:.1f}s")
+
+    def read_exact(self, length: int, timeout: float) -> bytes:
+        deadline = time.monotonic() + timeout
+        while len(self._rx_buffer) < length and time.monotonic() < deadline:
+            self._read_to_buffer(deadline)
+        if len(self._rx_buffer) < length:
+            raise TimeoutError(
+                f"only read {len(self._rx_buffer)} of {length} payload bytes from {self.port}"
+            )
+        data = bytes(self._rx_buffer[:length])
+        del self._rx_buffer[:length]
+        return data
 
     def drain(self, quiet_window: float = 0.15, max_wait: float = 1.0) -> bytes:
         response = bytearray()
@@ -330,6 +361,87 @@ def parse_screen_dump(text: str) -> tuple[int, int, int, int, str, list[list[int
     return x, y, w, h, dump_format, rows
 
 
+def parse_screenbin_header(line: bytes) -> tuple[int, int, int, int, str, int, int]:
+    text = line.decode("ascii", errors="replace").strip()
+    if not text.startswith("SCREENBIN "):
+        raise ValueError(f"screen dumpbin response has no SCREENBIN header: {text[:80]!r}")
+
+    fields: dict[str, str] = {}
+    for item in text.split()[1:]:
+        if "=" in item:
+            key, value = item.split("=", 1)
+            fields[key] = value
+
+    try:
+        x = int(fields["x"], 10)
+        y = int(fields["y"], 10)
+        w = int(fields["w"], 10)
+        h = int(fields["h"], 10)
+        dump_format = fields["format"]
+        payload_len = int(fields["len"], 10)
+        crc32 = int(fields["crc32"], 16)
+    except KeyError as exc:
+        raise ValueError(f"screen dumpbin header missing {exc.args[0]!r}") from exc
+
+    if dump_format != "indexed4":
+        raise ValueError(f"unsupported screen dumpbin format: {dump_format}")
+    expected_len = ((w + 1) // 2) * h
+    if payload_len != expected_len:
+        raise ValueError(f"screen dumpbin len {payload_len} does not match expected {expected_len}")
+    return x, y, w, h, dump_format, payload_len, crc32
+
+
+def unpack_indexed4_payload(width: int, height: int, payload: bytes) -> list[list[int]]:
+    row_len = (width + 1) // 2
+    if len(payload) != row_len * height:
+        raise ValueError(f"indexed4 payload size {len(payload)} does not match {width}x{height}")
+
+    rows: list[list[int]] = []
+    for row_index in range(height):
+        row_bytes = payload[row_index * row_len : (row_index + 1) * row_len]
+        row: list[int] = []
+        for byte in row_bytes:
+            row.append(SHADOW_PALETTE_RGB565[byte >> 4])
+            if len(row) < width:
+                row.append(SHADOW_PALETTE_RGB565[byte & 0x0F])
+        rows.append(row)
+    return rows
+
+
+def run_screen_dumpbin(
+    port: str,
+    baud: int,
+    command: str,
+    timeout: float,
+) -> tuple[int, int, int, int, str, list[list[int]]]:
+    with PosixSerial(port, baud, timeout) as serial:
+        serial.drain()
+        serial.write_line(command)
+        header = None
+        while header is None:
+            line = serial.read_line(timeout)
+            if line.strip().startswith(b"SCREENBIN "):
+                header = line
+                break
+            if line.strip().startswith((b"Usage:", b"ERR", b"Unknown command:")):
+                raise ValueError(line.decode("utf-8", errors="replace").strip())
+
+        x, y, w, h, dump_format, payload_len, expected_crc = parse_screenbin_header(header)
+        payload = serial.read_exact(payload_len, timeout)
+        actual_crc = zlib.crc32(payload) & 0xFFFFFFFF
+        if actual_crc != expected_crc:
+            raise ValueError(
+                f"screen dumpbin CRC mismatch: got {actual_crc:08X}, expected {expected_crc:08X}"
+            )
+
+        trailer = serial.read_until_prompt(timeout)
+        if b"SCREENBIN END" not in trailer:
+            raise ValueError("screen dumpbin trailer missing SCREENBIN END")
+
+    rows = unpack_indexed4_payload(w, h, payload)
+    return x, y, w, h, dump_format, rows
+
+
 def write_bmp_rgb565(path: Path, width: int, height: int, rows: list[list[int]]) -> None:
     row_stride = ((width * 3 + 3) // 4) * 4
     pixel_bytes = row_stride * height
@@ -405,13 +517,33 @@ def capture_screen(
             f"x={rx} y={ry} w={rw} h={rh} format=indexed4"
         )
 
-    prefix = "screen dump"
+    prefix = "screen dumpbin"
     if region is None:
         command = prefix
     else:
         command = "%s %u %u %u %u" % ((prefix,) + region)
-    response = run_command(port, baud, command, timeout)
-    x, y, w, h, dump_format, rows = parse_screen_dump(response)
+    try:
+        x, y, w, h, dump_format, rows = run_screen_dumpbin(port, baud, command, timeout)
+    except TimeoutError as exc:
+        text_prefix = "screen dump"
+        if region is None:
+            text_command = text_prefix
+        else:
+            text_command = "%s %u %u %u %u" % ((text_prefix,) + region)
+        response = run_command(port, baud, text_command, timeout)
+        x, y, w, h, dump_format, rows = parse_screen_dump(response)
+        dump_format = f"{dump_format} text-fallback after dumpbin failure: {exc}"
+    except ValueError as exc:
+        if not any(marker in str(exc) for marker in ("Unknown command", "Usage: screen dumpbin")):
+            raise
+        text_prefix = "screen dump"
+        if region is None:
+            text_command = text_prefix
+        else:
+            text_command = "%s %u %u %u %u" % ((text_prefix,) + region)
+        response = run_command(port, baud, text_command, timeout)
+        x, y, w, h, dump_format, rows = parse_screen_dump(response)
+        dump_format = f"{dump_format} text-fallback after dumpbin unsupported: {exc}"
     write_bmp_rgb565(output, w, h, rows)
     return f"saved {output} from screen region x={x} y={y} w={w} h={h} format={dump_format}"
 
@@ -523,16 +655,16 @@ def build_parser() -> argparse.ArgumentParser:
     add_common_serial_args(adc_parser)
     adc_parser.add_argument("--log", type=Path, help="optional log file for the single ADC snapshot response")
 
-    screen_parser = subparsers.add_parser("screen-capture", help="save current LCD GRAM dump as a BMP file")
+    screen_parser = subparsers.add_parser("screen-capture", help="save current read-only LCD shadow as a BMP file")
     add_common_serial_args(screen_parser)
     screen_parser.add_argument("--output", type=Path, default=Path("tmp/screen.bmp"), help="output BMP path, default tmp/screen.bmp")
     screen_parser.add_argument("--region", nargs=4, type=int, metavar=("X", "Y", "W", "H"), help="optional capture rectangle")
-    screen_parser.add_argument("--no-rle", action="store_false", dest="use_rle", help="deprecated no-op: plain RGB565 is the default")
+    screen_parser.add_argument("--no-rle", action="store_false", dest="use_rle", help="deprecated no-op: binary indexed4 is the default")
     screen_parser.add_argument(
         "--rle-shadow",
         action="store_true",
         dest="use_rle",
-        help="use indexed shadow capture; mutates screen shadow state and switches to ACV meter screen",
+        help="deprecated debug path: page-stitches indexed shadow and switches to ACV meter screen",
     )
     screen_parser.set_defaults(use_rle=False)
 
@@ -656,7 +788,7 @@ def main(argv: list[str] | None = None) -> int:
 
             if args.mode == "screen-capture":
                 region = tuple(args.region) if args.region is not None else None
-                timeout = max(args.timeout, 45.0)
+                timeout = max(args.timeout, 4.0)
                 print(capture_screen(port, args.baud, timeout, args.output, region, args.use_rle))
                 return 0
 
