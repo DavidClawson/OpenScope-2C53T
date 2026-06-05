@@ -1081,7 +1081,7 @@ typedef struct {
 
 static const meter_frontend_state_t meter_frontend_states[METER_SUBMODE_COUNT] = {
     /* 0: DCV */      { true,  true,  false, true,  true,  true,  false },
-    /* 1: ACV */      { true,  true,  true,  true,  true,  true,  true  },
+    /* 1: ACV */      { true,  true,  false, true,  true,  true,  true  },
     /* 2: DC mA */    { true,  true,  true,  false, true,  false, true  },
     /* 3: DC A */     { true,  true,  true,  false, true,  false, false },
     /* 4: AC mA */    { true,  true,  true,  false, true,  false, true  },
