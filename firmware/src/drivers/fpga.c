@@ -1667,9 +1667,9 @@ static uint8_t fpga_meter_adc_select_byte(void)
     }
 
     /* Stock case 5 sends ms[0x16], annotated as active_channel in the
-     * recovered scope state. In meter voltage mode this is only the command
-     * selector byte for METER_ADC_READ; the analog source remains the DMM
-     * frontend routed to COM + V/Ohm/C. */
+     * recovered state. Whether this can expose a useful DMM-probe waveform is
+     * still experimental; live probes currently show 0xFF when not armed by the
+     * right FPGA state. */
     return active_channel & 0x01;
 }
 
@@ -1684,9 +1684,9 @@ static uint8_t fpga_preacq_command_byte(void)
  * Meter ADC Waveform Sampler
  *
  * The decoded DMM value arrives over USART2 at a few hertz. Stock RE also
- * shows SPI3 acquisition case 5: a single raw meter-path ADC byte. Poll that
- * path at the FreeRTOS tick rate only in voltage modes, giving the meter
- * screen a scope-like shape/ripple trace from the same DMM jacks.
+ * shows SPI3 acquisition case 5: a single raw meter-path ADC byte. Poll this
+ * experimental path only in voltage modes; the UI treats all-0xFF results as
+ * "not armed" rather than a valid DMM waveform.
  */
 static void fpga_meter_adc_sampler_task(void *pv)
 {

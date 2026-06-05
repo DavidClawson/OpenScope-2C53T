@@ -25,6 +25,8 @@ typedef struct {
     uint8_t  raw_max;
     uint8_t  raw_last;
     uint16_t peak_to_peak_raw;
+    bool     has_signal;
+    bool     stuck_high;
     float    mean_raw;
     float    rms_raw;
     float    freq_hz;

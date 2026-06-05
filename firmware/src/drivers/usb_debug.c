@@ -2292,7 +2292,7 @@ static void cmd_meter_wave(void)
 
     meter_voltage_wave_snapshot(&usb_meter_wave_snap, METER_VOLTAGE_WAVE_RENDER_POINTS, 0.0f);
 
-    usb_send_str("=== DMM Voltage Waveform ===\r\n");
+    usb_send_str("=== SPI3 Meter ADC Probe ===\r\n");
     usb_debug_printf("mode=%lu meter_submode=%u (%s)\r\n",
                      (uint32_t)current_mode,
                      (unsigned)meter_submode,
@@ -2330,7 +2330,7 @@ static void cmd_meter_wave(void)
                      (unsigned)meter_reading.result_class,
                      meter_reading.update_count,
                      meter_reading.valid ? 1U : 0U);
-    usb_send_str("Use in DMM DC/AC voltage mode with leads on COM + V/Ohm/C; this is not CH1/CH2 evidence.\r\n");
+    usb_send_str("Experimental SPI3 meter-ADC probe; all-FF means this path is not armed/valid, not a DMM waveform.\r\n");
 }
 
 static void cmd_meter_wave_args(const char *args)

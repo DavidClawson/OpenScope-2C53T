@@ -492,15 +492,18 @@ static void draw_voltage_wave_panel(uint16_t x, uint16_t y,
 
     lcd_fill_rect(x, y - 13, w, 13, th->background);
     lcd_fill_rect(x, y + h + 2, 120, 13, th->background);
-    font_draw_string(x, y - 13, "DMM voltage waveform",
+    font_draw_string(x, y - 13, "SPI3 meter ADC probe",
                      th->text_secondary, th->background, &font_small);
 
-    if (snap.count < 2) {
+    if (snap.count < 2 || !snap.has_signal) {
         if (panel != NULL) {
             lcd_blit_rect(x, y, w, h, panel);
         }
-        font_draw_string(x + 70, y + h / 2 - 6, "Waiting for samples",
-                         th->text_secondary, th->background, &font_small);
+        const char *msg = snap.stuck_high ? "No valid SPI3 samples" :
+                          "Waiting for signal";
+        font_draw_string(x + 56, y + h / 2 - 6, msg,
+                         snap.stuck_high ? th->warning : th->text_secondary,
+                         th->background, &font_small);
         meter_wave_panel_retained = true;
         meter_wave_last_mode = mode;
         meter_wave_last_w = w;

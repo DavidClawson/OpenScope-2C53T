@@ -209,6 +209,8 @@ void meter_voltage_wave_snapshot(meter_voltage_wave_snapshot_t *out,
     out->raw_min = raw_min;
     out->raw_max = raw_max;
     out->peak_to_peak_raw = peak_to_peak;
+    out->has_signal = has_signal;
+    out->stuck_high = (raw_min == 0xFF && raw_max == 0xFF);
     out->raw_last = snapshot_samples[(snapshot_write_pos + METER_VOLTAGE_WAVE_CAPACITY - 1)
                                      % METER_VOLTAGE_WAVE_CAPACITY];
     out->mean_raw = mean;
