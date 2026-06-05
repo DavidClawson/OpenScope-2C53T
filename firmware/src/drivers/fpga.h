@@ -177,6 +177,7 @@ typedef struct {
     volatile uint8_t  tx_cmd_lo_history[16]; /* Last sent USART command low bytes */
     volatile uint8_t  tx_cmd_history_head;   /* Next history slot */
     volatile uint8_t  tx_cmd_history_count;  /* Valid history entries */
+    volatile uint8_t  last_tx_frame[FPGA_TX_FRAME_SIZE]; /* Last full 10-byte USART frame sent */
 
     /* Acquisition mode (set by mode switch, read by acq task) */
     volatile uint8_t acq_mode;         /* fpga_acq_mode_t */

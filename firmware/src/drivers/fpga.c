@@ -634,6 +634,11 @@ static void fpga_record_tx_cmd(uint8_t cmd_hi, uint8_t cmd_lo)
     }
 }
 
+static void fpga_record_tx_frame(const uint8_t *frame)
+{
+    memcpy((void *)fpga.last_tx_frame, frame, FPGA_TX_FRAME_SIZE);
+}
+
 /*
  * Build and send a USART command frame (10 bytes).
  * Format: [0][1] [cmd_hi][cmd_lo] [0..0] [checksum]
@@ -652,6 +657,7 @@ static void usart2_send_cmd(uint8_t cmd_hi, uint8_t cmd_lo)
      * causing checksum validation failures on the FPGA side, explaining
      * zero echo frames. Now matches stock: bytes[4-8] = 0 for basic cmds. */
     frame[9] = (cmd_lo + cmd_hi) & 0xFF;
+    fpga_record_tx_frame(frame);
     usart2_send_frame(frame);
 }
 
@@ -1634,6 +1640,7 @@ static void fpga_usart_tx_task(void *pv)
         fpga.tx_frame[2] = cmd_hi;
         fpga.tx_frame[3] = cmd_lo;
         fpga.tx_frame[9] = (cmd_lo + cmd_hi) & 0xFF;
+        fpga_record_tx_frame((const uint8_t *)fpga.tx_frame);
 
         /* Enable TX interrupt — ISR pumps all 10 bytes */
         USART2->ctrl1 |= USART_CTRL1_TDBEIEN;
@@ -4187,5 +4194,6 @@ void fpga_scope_wake(void)
 
 void fpga_send_raw_frame(const uint8_t *frame)
 {
+    fpga_record_tx_frame(frame);
     usart2_send_frame(frame);
 }

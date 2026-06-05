@@ -345,6 +345,15 @@ static void fpga_diag_print_delta(const fpga_diag_snapshot_t *before)
     }
 }
 
+static void usb_print_last_tx_frame(void)
+{
+    usb_send_str("last_tx_frame:");
+    for (int i = 0; i < FPGA_TX_FRAME_SIZE; i++) {
+        usb_debug_printf(" %02X", (unsigned)fpga.last_tx_frame[i]);
+    }
+    usb_send_str("\r\n");
+}
+
 static void fpga_diag_clear(void)
 {
     taskENTER_CRITICAL();
@@ -535,6 +544,7 @@ static void cmd_status(void)
         fpga.spi3_timeout_count, fpga.spi3_total_timeouts,
         fpga.spi3_first_byte
     );
+    usb_print_last_tx_frame();
 
     /* Split FPGA diag into separate printf to avoid buffer overflow */
     usb_debug_printf(
@@ -2087,6 +2097,7 @@ static void cmd_meter_frontend(void)
                          (unsigned)fpga.tx_cmd_lo_history[idx]);
     }
     usb_send_str("\r\n");
+    usb_print_last_tx_frame();
     usb_debug_printf("control PC6_spi=%u PB11_active=%u PC11_meter_mux=%u PC7_probe=%u PC0_ready=%u\r\n",
                      gpio_level(GPIOC, 6),
                      gpio_level(GPIOB, 11),
