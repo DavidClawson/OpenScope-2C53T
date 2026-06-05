@@ -27,6 +27,55 @@ EXPECTED_METER_SELECTOR_XREF_SEQUENCES = {
         "00 f5 a0 60 c2 f2 00 01 08 80"
     ),
 }
+EXPECTED_METER_SELECTOR_STATE_SEQUENCES = {
+    "init_selector_reset": (
+        0x08026FDE,
+        bytes.fromhex(
+            "00 20 aa f8 35 1f ff 21 8a f8 5d 0f "
+            "8a f8 2d 0f 8a f8 2f 0f 8a f8 38 1f aa f8 3c 0f"
+        ),
+    ),
+    "rx_force_mode_8": (
+        0x08036D14,
+        bytes.fromhex(
+            "40 f2 f8 07 c2 f2 00 07 04 20 87 f8 35 0f "
+            "08 20 00 24 87 f8 2d 0f c7 f8 30 4f"
+        ),
+    ),
+    "rx_force_mode_1": (
+        0x08036D50,
+        bytes.fromhex("b1 20 86 f8 5d 0f 01 20 86 f8 2d 0f"),
+    ),
+    "rx_shadow_zero": (
+        0x08037220,
+        bytes.fromhex("00 20 87 f8 36 0f"),
+    ),
+    "rx_shadow_extended": (
+        0x080372E0,
+        bytes.fromhex(
+            "49 07 4f f0 00 00 4f f0 02 01 87 f8 36 0f "
+            "b2 79 58 bf c2 f3 80 11 87 f8 37 1f 03 21 87 f8 2f 1f"
+        ),
+    ),
+    "rx_shadow_one": (
+        0x08037328,
+        bytes.fromhex("01 22 87 f8 36 2f"),
+    ),
+    "rx_shadow_two": (
+        0x08037338,
+        bytes.fromhex(
+            "02 20 87 f8 36 0f 01 22 22 ea 01 00 "
+            "87 f8 37 0f 87 f8 2f 2f"
+        ),
+    ),
+    "rx_shadow_two_with_frame_bit": (
+        0x080373A8,
+        bytes.fromhex(
+            "49 07 4f f0 02 02 b0 79 4f f0 02 01 87 f8 36 2f "
+            "58 bf c0 f3 80 11 87 f8 37 1f 87 f8 2f 2f"
+        ),
+    ),
+}
 EXPECTED_MUX_RESTORE_SEQUENCES = {
     0x08025544: bytes.fromhex("a0 78 dc f7 ad f9 e0 78 dc f7 84 fa"),
     0x0802723E: bytes.fromhex(
@@ -138,6 +187,32 @@ def verify_meter_selector_xref_sequences() -> dict[str, object]:
     return {"sequences": checked}
 
 
+def verify_meter_selector_state_sequences() -> dict[str, object]:
+    """Check stock selector/shadow-state writers used by the DMM FSM.
+
+    These sequences prove RAM-state coupling around `DAT_20001025` and adjacent
+    formatter bytes: init clears the selector, RX classification can force mode
+    8 or mode 1, and later RX branches update `DAT_2000102E`/`DAT_2000102F`/
+    `DAT_20001027` before the display formatter consumes them.
+
+    This is still digital DMM FSM evidence only.  It does not recover the
+    analog mux bytes `ms[0x02]`/`ms[0x03]` or any factory calibration source.
+    """
+    checked: dict[str, dict[str, str]] = {}
+    for name, (addr, expected) in EXPECTED_METER_SELECTOR_STATE_SEQUENCES.items():
+        actual = read(addr, len(expected))
+        if actual != expected:
+            raise AssertionError(
+                f"{name} {addr:#010x}: expected {expected.hex(' ')}, "
+                f"got {actual.hex(' ')}"
+            )
+        checked[name] = {
+            "addr": f"{addr:#010x}",
+            "bytes": actual.hex(" "),
+        }
+    return {"sequences": checked}
+
+
 def verify_meter_mux_restore_sequences() -> dict[str, object]:
     """Check stock saved-state ms[0x02]/ms[0x03] mux apply call sites.
 
@@ -224,11 +299,14 @@ def main() -> None:
     expect_bytes(0x08036C8C, "00 bf 00 bf")
     selector = verify_meter_selector_table()
     selector_xrefs = verify_meter_selector_xref_sequences()
+    selector_state = verify_meter_selector_state_sequences()
     mux_restore = verify_meter_mux_restore_sequences()
     mux_calls = verify_meter_mux_callsite_sequences()
     print(f"stock meter selector table: {selector['bytes']}")
     print("stock meter selector xref sites: " +
           ", ".join(selector_xrefs["sequences"].keys()))
+    print("stock meter selector state sites: " +
+          ", ".join(item["addr"] for item in selector_state["sequences"].values()))
     print("stock meter mux restore sites: " +
           ", ".join(mux_restore["sequences"].keys()))
     for name, info in mux_calls.items():

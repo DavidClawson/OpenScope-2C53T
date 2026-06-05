@@ -171,6 +171,19 @@ class DmmGoalValidationTests(unittest.TestCase):
         self.assertIn("c0 f6 0b 02", result["sequences"]["0x080048ba"])
         self.assertIn("00 f5 a0 60", result["sequences"]["0x080048ba"])
 
+    def test_stock_meter_selector_state_writers_are_binary_grounded(self) -> None:
+        result = stock_meter_literals.verify_meter_selector_state_sequences()
+        sequences = result["sequences"]
+
+        self.assertEqual(sequences["init_selector_reset"]["addr"], "0x08026fde")
+        self.assertEqual(sequences["rx_force_mode_8"]["addr"], "0x08036d14")
+        self.assertEqual(sequences["rx_force_mode_1"]["addr"], "0x08036d50")
+        self.assertEqual(sequences["rx_shadow_two_with_frame_bit"]["addr"], "0x080373a8")
+        self.assertIn("8a f8 2d 0f", sequences["init_selector_reset"]["bytes"])
+        self.assertIn("87 f8 2d 0f", sequences["rx_force_mode_8"]["bytes"])
+        self.assertIn("86 f8 2d 0f", sequences["rx_force_mode_1"]["bytes"])
+        self.assertIn("87 f8 36 2f", sequences["rx_shadow_two_with_frame_bit"]["bytes"])
+
     def test_stock_meter_mux_restore_sites_are_binary_grounded(self) -> None:
         result = stock_meter_literals.verify_meter_mux_restore_sequences()
         self.assertEqual(

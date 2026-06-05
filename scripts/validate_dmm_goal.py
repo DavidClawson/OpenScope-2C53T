@@ -146,6 +146,8 @@ def verify_re_coverage() -> dict[str, Any]:
         "H2 table binary guard", "tail bytes", "0x1C340", "no ACK/apply proof",
         "transition phase matrix", "busy transition frame", "stable frame",
         "selector consumer xrefs", "0x080042E2", "0x080048BA", "0x20002D54",
+        "selector state writer guard", "0x08036D14", "0x08036D50",
+        "0x080373A8", "digital stock DMM FSM",
         "32-case range-class matrix", "all 16 combinations",
         "ordered mode-transition stale matrix", "every source submode",
         "mux callsite guard", "0x080020B2", "0x0801A53E", "0x0802724A",

@@ -30,6 +30,34 @@ before queueing through the `0x20002D74` raw-word path.  This is selector-table
 consumer evidence only; it still does not recover the analog mux bytes
 `ms[0x02]`/`ms[0x03]` or any physical correction coefficient.
 
+The same script now also carries a selector state writer guard for the stock
+digital DMM state machine. These sites prove stock RAM coupling around
+`DAT_20001025` (`0x20001025`, selector), `DAT_2000102E` (`0x2000102e`, mode/range
+shadow), `DAT_2000102F` (`0x2000102f`, display decimal shift), and
+`DAT_20001027` (`0x20001027`, formatter substate). They are not analog
+mux/range writers:
+
+```text
+0x08026FDE: init/reset clears selector/shadow state, including
+            `strb.w r0, [sl, #0xf2d]` and `strb.w r0, [sl, #0xf2f]`
+0x08036D14: RX classifier special branch writes `DAT_20001025 = 8`
+0x08036D50: RX classifier B0/B1 branch writes `DAT_20001025 = 1`
+0x08037220: RX branch writes `DAT_2000102E = 0`
+0x080372E0: RX branch writes `DAT_2000102E = 0`,
+            `DAT_2000102F = frame-derived bit`, `DAT_20001027 = 3`
+0x08037328: RX branch writes `DAT_2000102E = 1`
+0x08037338: RX branch writes `DAT_2000102E = 2`,
+            `DAT_2000102F = 1 & ~frame_flag`, `DAT_20001027 = 1`
+0x080373A8: RX branch writes `DAT_2000102E = 2`,
+            `DAT_2000102F = frame-derived bit`, `DAT_20001027 = 2`
+```
+
+`FUN_080028E0` then reads `DAT_20001025` at `0x08002A9A` and dispatches the
+formatter/unit cases listed below. This selector state writer guard proves the
+digital stock DMM FSM around selector and formatter shadow bytes; it still does
+not recover `ms[0x02]`/`ms[0x03]`, the analog frontend range writer, or a
+factory calibration coefficient.
+
 Local port:
 
 | Stock meter mode | Low byte | Raw word |
