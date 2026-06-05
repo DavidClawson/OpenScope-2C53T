@@ -225,6 +225,8 @@ def verify_re_coverage() -> dict[str, Any]:
         "complete direct mux callsite list", "scope/siggen mux callers are not DMM runtime range proof",
         "mux writer body guard", "gpio_pc12_pe_write_block",
         "gpio_pa15_pb11_pb10_write_block", "DAC1/scope calibration tail",
+        "runtime mux-state writer guard", "0x08001EE8", "0x0801A526",
+        "negative DMM evidence",
     ]
 
     haystack = ""

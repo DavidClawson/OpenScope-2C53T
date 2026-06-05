@@ -194,6 +194,25 @@ EXPECTED_MUX_WRITER_BODY_SEQUENCES = {
         },
     },
 }
+EXPECTED_RUNTIME_MUX_STATE_WRITER_SEQUENCES = {
+    "siggen_scope_autorange_increment": (
+        0x08001EE8,
+        bytes.fromhex(
+            "0b eb 0a 00 10 f8 02 1f 08 29 3f f6 f3 ae "
+            "01 31 ba f1 00 0f 01 70 00 f0 d6 80 "
+            "9b f8 03 00 ff f7 a7 fd d4 e0"
+        ),
+    ),
+    "scope_main_autorange_increment": (
+        0x0801A526,
+        bytes.fromhex(
+            "51 1c bb f1 00 0f 01 70 04 d0 9a f8 03 00 "
+            "e7 f7 90 fa 03 e0 9a f8 02 00 e7 f7 b1 f9 "
+            "42 f6 6c 50 c2 f2 00 00 00 68 04 21 8d f8 5d 10 "
+            "0d f1 5d 01 4f f0 ff 32 40 f2 2d 15 20 f0"
+        ),
+    ),
+}
 
 
 def read(addr: int, size: int) -> bytes:
@@ -378,6 +397,30 @@ def verify_meter_mux_writer_body_sequences() -> dict[str, object]:
     return checked
 
 
+def verify_runtime_mux_state_writer_sequences() -> dict[str, object]:
+    """Check recovered runtime writes to the DAT_200000fa/fb mux-state pair.
+
+    The text decompile exposes two runtime increment/write paths for
+    `(&DAT_200000fa)[idx]`: one in `FUN_08001c60` and one in `FUN_08019e98`.
+    Both are scope/siggen autorange paths that call the mux writers and queue a
+    scope frontend update.  Guard these as negative DMM evidence: the inspected
+    runtime writer set is not the DMM `ms[0x02]`/`ms[0x03]` range writer.
+    """
+    checked: dict[str, dict[str, str]] = {}
+    for name, (addr, expected) in EXPECTED_RUNTIME_MUX_STATE_WRITER_SEQUENCES.items():
+        actual = read(addr, len(expected))
+        if actual != expected:
+            raise AssertionError(
+                f"{name} {addr:#010x}: expected {expected.hex(' ')}, "
+                f"got {actual.hex(' ')}"
+            )
+        checked[name] = {
+            "addr": f"{addr:#010x}",
+            "bytes": actual.hex(" "),
+        }
+    return {"sequences": checked}
+
+
 def main() -> None:
     if not BIN.exists():
         print(f"stock meter literal pools: skipped; missing {BIN}", file=sys.stderr)
@@ -419,6 +462,7 @@ def main() -> None:
     mux_restore = verify_meter_mux_restore_sequences()
     mux_calls = verify_meter_mux_callsite_sequences()
     mux_bodies = verify_meter_mux_writer_body_sequences()
+    runtime_mux_writers = verify_runtime_mux_state_writer_sequences()
     print(f"stock meter selector table: {selector['bytes']}")
     print("stock meter selector xref sites: " +
           ", ".join(selector_xrefs["sequences"].keys()))
@@ -431,6 +475,8 @@ def main() -> None:
     for name, info in mux_bodies.items():
         print(f"stock {name} body slices: " +
               ", ".join(info["slices"].keys()))
+    print("stock runtime mux-state writer sites: " +
+          ", ".join(item["addr"] for item in runtime_mux_writers["sequences"].values()))
     print("stock meter literal pools: ok")
 
 

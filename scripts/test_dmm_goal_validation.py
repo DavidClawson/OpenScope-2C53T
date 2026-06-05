@@ -314,6 +314,31 @@ class DmmGoalValidationTests(unittest.TestCase):
         self.assertIn("dac1_scope_tail", portc["slices"])
         self.assertIn("dac1_scope_tail", porta["slices"])
 
+    def test_stock_runtime_mux_state_writers_are_binary_grounded(self) -> None:
+        result = stock_meter_literals.verify_runtime_mux_state_writer_sequences()
+        sequences = result["sequences"]
+
+        self.assertEqual(
+            sequences["siggen_scope_autorange_increment"]["addr"],
+            "0x08001ee8",
+        )
+        self.assertEqual(
+            sequences["scope_main_autorange_increment"]["addr"],
+            "0x0801a526",
+        )
+        self.assertIn(
+            "01 70 00 f0 d6 80 9b f8 03 00 ff f7 a7 fd",
+            sequences["siggen_scope_autorange_increment"]["bytes"],
+        )
+        self.assertIn(
+            "01 70 04 d0 9a f8 03 00 e7 f7 90 fa",
+            sequences["scope_main_autorange_increment"]["bytes"],
+        )
+        self.assertIn(
+            "9a f8 02 00 e7 f7 b1 f9",
+            sequences["scope_main_autorange_increment"]["bytes"],
+        )
+
 
 if __name__ == "__main__":
     unittest.main()

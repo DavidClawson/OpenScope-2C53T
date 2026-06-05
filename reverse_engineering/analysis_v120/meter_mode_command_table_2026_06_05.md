@@ -289,6 +289,27 @@ tails. It deliberately does not prove that any inspected DMM runtime branch
 writes those bytes during local range switching, and it does not turn the DAC1
 tail into a DMM calibration coefficient.
 
+### Runtime Mux-State Writer Guard, 2026-06-06
+
+The text decompile currently exposes only two runtime writes to the
+`DAT_200000fa`/`DAT_200000fb` mux-state pair, and
+`scripts/test_stock_meter_literals.py` now binary-guards both:
+
+```text
+0x08001EE8: `FUN_08001c60` increments `(&DAT_200000fa)[uVar20]`,
+            calls `FUN_080018a4(DAT_200000fa)` or
+            `FUN_08001a58(DAT_200000fb)`, then queues command `4`
+0x0801A526: `FUN_08019e98` writes `(&DAT_200000fa)[uVar70] = bVar37 + 1`,
+            calls `FUN_080018a4`/`FUN_08001a58`, then queues command `4`
+```
+
+This is negative DMM evidence. Both guarded writer branches are scope/siggen
+autorange/frontend paths in the current decompile context. They prove that the
+stock firmware mutates the mux-state pair at runtime, but they do not recover a
+DMM-mode runtime writer for `ms[0x02]`/`ms[0x03]`. A future DMM correction must
+find a DMM-owned writer or a stock runtime trace; it must not reuse these
+scope/siggen autorange branches as a meter range proof.
+
 This means the open firmware can legitimately project the recovered stock DMM
 slots into the two mux bytes for fail-closed local operation, but it must keep
 that projection marked as a local policy. The complete direct mux callsite list
