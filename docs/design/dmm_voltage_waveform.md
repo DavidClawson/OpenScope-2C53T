@@ -43,7 +43,8 @@ The USB debug shell commands used for validation are:
   range/decimal instability without mixing concurrent serial readers; each
   row includes expected/observed frame family and wrong-family reject state.
 - `meter mux-stream [count] [delay_ms]`: decoded-frame stream plus the tested
-  DMM transition plan (`stock_mode`, frame family, mux index, settle time),
+  DMM transition plan (`stock_mode`, frame family, Port C/E mux, Port A/B mux,
+  settle time),
   observed frame family/reject reason, recent mode-sequence words, and actual
   frontend GPIO state.
 - `meter frontend`: one-shot DMM selector, transition plan, GPIO, parsed
@@ -158,10 +159,11 @@ renderer fields. The parser stock-family state and the frontend transition
 sequence both derive their UI-submode mapping from `fpga_meter_plan`, so one
 tested table controls selector/apply words, mux metadata, and parser debug
 state. Autoscan only scores candidates when the parser reports a clean matching
-frame family for the active transition plan. AC voltage/current candidates also
-need AC evidence (`is_ac` from the frame status or companion frequency
-metadata), and the parser applies the same gate before rendering manual AC
-modes, so DC payloads are not promoted into AC display states. For ACV, this
+frame family for the active transition plan; it no longer uses nonzero numeric
+magnitude as evidence for any mode. AC voltage/current candidates also need AC
+evidence (`is_ac` from the frame status or companion frequency metadata), and
+the parser applies the same gate before rendering manual AC modes, so DC
+payloads are not promoted into AC display states. For ACV, this
 means the display formatter still uses the stock `frame[7]` format selector
 instead of using `extra` as a range hint once AC evidence is present:
 
@@ -190,3 +192,11 @@ usable DMM-path shape. A later diagnostic build expanded the sweep to
 `pre_rx=FF`, `last=FF`, `min=FF`, and `max=FF` while the USART2 DMM reading
 remained live at about `4.995..4.997 V` on a 5 V DC lab supply. That blocks
 claiming the voltage waveform overlay works on the real COM + V/Ohm/C jacks.
+
+The stock DMM command-table evidence is tracked in
+`reverse_engineering/analysis_v120/meter_mode_command_table_2026_06_05.md`.
+That note now separates the recovered eight stock selector slots from the local
+eleven-submode porting map and records the evidence boundary for `ms[0x02]`
+(`gpio_mux_portc_porte`) versus `ms[0x03]` (`gpio_mux_porta_portb`). In
+particular, uA/mA/A range splitting and capacitance/temperature validation still
+need direct stock or live bench evidence before they can be called fully proven.

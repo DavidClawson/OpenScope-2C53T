@@ -2372,9 +2372,11 @@ static void cmd_meter_frontend(void)
                      (unsigned)selectors.function_selector,
                      (unsigned)selectors.range_selector,
                      selectors.voltage_function_axis ? 1U : 0U);
-    usb_debug_printf("transition_plan family=%u mux=%u discard=%u settle_ms=%u selector=%04X apply=%04X has_apply=%u\r\n",
+    usb_debug_printf("transition_plan family=%u mux=%u portc_porte_mux=%u porta_portb_mux=%u discard=%u settle_ms=%u selector=%04X apply=%04X has_apply=%u\r\n",
                      (unsigned)plan.frame_family,
                      (unsigned)plan.mux_index,
+                     (unsigned)plan.portc_porte_mux,
+                     (unsigned)plan.porta_portb_mux,
                      (unsigned)plan.discard_frames,
                      (unsigned)plan.settle_ms,
                      (unsigned)plan.selector_word,
@@ -2444,7 +2446,7 @@ static void print_meter_mux_stream_line(uint32_t index)
         fpga_meter_transition_plan_for_submode(meter_submode);
 
     usb_debug_printf("t=%lu upd=%lu ui_sub=%u rd_sub=%u live=%u cls=%u "
-                     "stock_mode=%u raw_low=%02X family=%u mux=%u settle=%u "
+                     "stock_mode=%u raw_low=%02X family=%u mux=%u portc_porte=%u porta_portb=%u settle=%u "
                      "obs_family=%u reject=%u "
                      "seq=%u seq_sub=%u seq_word=%04X seq_apply=%04X "
                      "disp=%s unit=%s raw=%d dp=%u f6=%02X f7=%02X f8=%02X f9=%02X "
@@ -2460,6 +2462,8 @@ static void print_meter_mux_stream_line(uint32_t index)
                      (unsigned)selectors.range_selector,
                      (unsigned)plan.frame_family,
                      (unsigned)plan.mux_index,
+                     (unsigned)plan.portc_porte_mux,
+                     (unsigned)plan.porta_portb_mux,
                      (unsigned)plan.settle_ms,
                      (unsigned)meter_reading.observed_frame_family,
                      (unsigned)meter_reading.reject_reason,

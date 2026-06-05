@@ -138,6 +138,10 @@ static void test_transition_plan_covers_mux_family_and_settle_policy(void)
         EXPECT_EQ_U8(name, plan.stock_mode, expected_stock_mode[i]);
         snprintf(name, sizeof(name), "plan mux %u", (unsigned)i);
         EXPECT_EQ_U8(name, plan.mux_index, expected_stock_mode[i]);
+        snprintf(name, sizeof(name), "plan portc/porte mux %u", (unsigned)i);
+        EXPECT_EQ_U8(name, plan.portc_porte_mux, expected_stock_mode[i]);
+        snprintf(name, sizeof(name), "plan porta/portb mux %u", (unsigned)i);
+        EXPECT_EQ_U8(name, plan.porta_portb_mux, expected_stock_mode[i]);
         snprintf(name, sizeof(name), "plan family %u", (unsigned)i);
         EXPECT_EQ_U8(name, plan.frame_family, expected_family[i]);
         snprintf(name, sizeof(name), "plan discard %u", (unsigned)i);
@@ -181,6 +185,10 @@ static void test_fallbacks(void)
     EXPECT_EQ_U8("bad plan stock", plan.stock_mode,
                  FPGA_METER_INVALID_STOCK_MODE);
     EXPECT_EQ_U8("bad plan mux", plan.mux_index,
+                 FPGA_METER_INVALID_STOCK_MODE);
+    EXPECT_EQ_U8("bad plan portc/porte mux", plan.portc_porte_mux,
+                 FPGA_METER_INVALID_STOCK_MODE);
+    EXPECT_EQ_U8("bad plan porta/portb mux", plan.porta_portb_mux,
                  FPGA_METER_INVALID_STOCK_MODE);
     EXPECT_EQ_U8("bad plan family", plan.frame_family,
                  FPGA_METER_FRAME_FAMILY_INVALID);

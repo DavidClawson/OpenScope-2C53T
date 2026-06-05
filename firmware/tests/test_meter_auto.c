@@ -86,11 +86,13 @@ static int test_dirty_frame_family_state_never_scores(void)
     return 1;
 }
 
-static int test_dc_voltage_scores_without_frequency(void)
+static int test_dc_voltage_scores_without_frequency_or_nonzero_magnitude(void)
 {
     meter_reading_t r = normal_reading(0, 4997);
 
     r.aux_freq_hz = 0.0f;
+    ASSERT(meter_auto_score(0, &r) == 90);
+    r.bcd_value = 0;
     ASSERT(meter_auto_score(0, &r) == 90);
     return 1;
 }
@@ -104,6 +106,8 @@ static int test_ac_voltage_requires_frequency_evidence(void)
 
     r.aux_freq_hz = 49.9f;
     ASSERT(meter_auto_score(1, &r) == 90);
+    r.bcd_value = 0;
+    ASSERT(meter_auto_score(1, &r) == 90);
 
     r.aux_freq_hz = 0.0f;
     r.is_ac = true;
@@ -116,6 +120,9 @@ static int test_current_auto_scores_respect_ac_evidence(void)
     meter_reading_t r = normal_reading(2, 2261);
 
     ASSERT(meter_auto_score(2, &r) == 50);
+    r.bcd_value = 0;
+    ASSERT(meter_auto_score(2, &r) == 50);
+    r.bcd_value = 2261;
     r.submode = 3;
     ASSERT(meter_auto_score(3, &r) == 50);
     r.submode = 4;
@@ -135,6 +142,8 @@ static int test_current_auto_scores_respect_ac_evidence(void)
 
     r = normal_reading(4, 2261);
     r.aux_freq_hz = 49.0f;
+    ASSERT(meter_auto_score(4, &r) == 50);
+    r.bcd_value = 0;
     ASSERT(meter_auto_score(4, &r) == 50);
     r.submode = 5;
     ASSERT(meter_auto_score(5, &r) == 50);
@@ -174,7 +183,7 @@ int main(void)
     TEST(candidate_order_keeps_voltage_before_passive_and_current);
     TEST(wrong_submode_never_scores);
     TEST(dirty_frame_family_state_never_scores);
-    TEST(dc_voltage_scores_without_frequency);
+    TEST(dc_voltage_scores_without_frequency_or_nonzero_magnitude);
     TEST(ac_voltage_requires_frequency_evidence);
     TEST(current_auto_scores_respect_ac_evidence);
     TEST(temperature_scores_as_passive_candidate);

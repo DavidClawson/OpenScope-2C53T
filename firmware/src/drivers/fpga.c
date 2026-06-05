@@ -1298,8 +1298,8 @@ static void fpga_set_meter_frontend_for_submode(uint8_t submode)
     GPIOA->scr = (1U << 10);
     GPIOB->clr = (1U << 10);
 
-    fpga_apply_meter_portc_porte_mux(plan.mux_index);
-    fpga_apply_meter_porta_portb_mux(plan.mux_index);
+    fpga_apply_meter_portc_porte_mux(plan.portc_porte_mux);
+    fpga_apply_meter_porta_portb_mux(plan.porta_portb_mux);
 }
 
 static void fpga_send_meter_wake_preamble(void)

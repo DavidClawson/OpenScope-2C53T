@@ -745,7 +745,7 @@ static bool submode_requires_ac_evidence(uint8_t submode)
     return submode == 1 || submode == 4 || submode == 5;
 }
 
-static bool frame_extra_looks_like_line_frequency(uint16_t extra)
+static bool frame_extra_is_empirical_line_frequency_hint(uint16_t extra)
 {
     return extra >= 45U && extra <= 65U;
 }
@@ -756,7 +756,7 @@ static bool frame_has_ac_evidence(uint8_t submode,
 {
     if ((status & (1U << 2)) != 0) return true;
     return submode_requires_ac_evidence(submode) &&
-           frame_extra_looks_like_line_frequency(extra);
+           frame_extra_is_empirical_line_frequency_hint(extra);
 }
 
 /* ═══════════════════════════════════════════════════════════════════
@@ -1126,7 +1126,7 @@ void meter_data_process_frame(const volatile uint8_t *frame, uint8_t submode)
 
     if (((submode == 0 && frame[8] == 0x02 && frame[9] == 0x00) ||
          submode_requires_ac_evidence(submode)) &&
-        frame_extra_looks_like_line_frequency(extra)) {
+        frame_extra_is_empirical_line_frequency_hint(extra)) {
         r->aux_freq_hz = (float)extra;
     }
 
