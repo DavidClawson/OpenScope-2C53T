@@ -360,6 +360,35 @@ static int test_voltage_mode_mains_frequency_frame_overrides_dcv_0f_rule(void)
     return 1;
 }
 
+static int test_dcv_high_range_frame_stays_voltage_across_current_transition(void)
+{
+    static const uint8_t dcv_high_frame[12] = {
+        0x5A, 0xA5, 0xA5, 0xAD, 0xED, 0x9F,
+        0x0F, 0x00, 0x02, 0x00, 0x00, 0x31,
+    };
+    uint8_t current_frame[12];
+
+    build_segment_frame(current_frame, 2, 2, 6, 1, 0x00,
+                        0x00, 0x00, 0x00, 0);
+
+    meter_data_init();
+    process_frame(dcv_high_frame, 0);
+    ASSERT(meter_reading.valid);
+    ASSERT(meter_reading.result_class == METER_RESULT_NORMAL);
+    ASSERT(meter_reading.raw_bcd == 2283);
+    ASSERT(meter_reading.decimal_pos == 3);
+    ASSERT_STR_EQ(meter_reading.display_str, "228.3");
+    ASSERT_STR_EQ(meter_reading.unit_suffix, "V");
+    ASSERT(close_to(meter_reading.value, 228.3f, 0.05f));
+    ASSERT(close_to(meter_reading.aux_freq_hz, 49.0f, 0.1f));
+
+    process_frame(current_frame, 2);
+    ASSERT(expect_normal_reading("22.61", "mA", 22.61f, 0.001f));
+    ASSERT(meter_reading.decimal_pos == 2);
+    ASSERT(close_to(meter_reading.aux_freq_hz, 0.0f, 0.001f));
+    return 1;
+}
+
 static int test_voltage_mode_mains_rotating_frames_stay_high_voltage(void)
 {
     static const uint8_t frames[][12] = {
@@ -541,8 +570,12 @@ static int test_non_voltage_modes_reject_voltage_payloads(void)
         0x5A, 0xA5, 0xC6, 0xF7, 0xEB, 0xEB,
         0x0F, 0x00, 0x02, 0x00, 0x01, 0x4E,
     };
+    static const uint8_t dcv_high_frame[12] = {
+        0x5A, 0xA5, 0xA5, 0xAD, 0xED, 0x9F,
+        0x0F, 0x00, 0x02, 0x00, 0x00, 0x31,
+    };
     static const uint8_t wrong_family_modes[] = { 2, 3, 4, 5, 6, 7, 8, 9 };
-    const uint8_t *voltage_frames[] = { mains_frame, dcv_frame };
+    const uint8_t *voltage_frames[] = { mains_frame, dcv_frame, dcv_high_frame };
 
     for (unsigned f = 0; f < sizeof(voltage_frames) / sizeof(voltage_frames[0]); f++) {
         for (unsigned i = 0; i < sizeof(wrong_family_modes); i++) {
@@ -570,8 +603,12 @@ static int test_voltage_payload_clears_stale_reading_in_all_non_voltage_modes(vo
         0x5A, 0xA5, 0xC6, 0xF7, 0xEB, 0xEB,
         0x0F, 0x00, 0x02, 0x00, 0x01, 0x4E,
     };
+    static const uint8_t dcv_high_frame[12] = {
+        0x5A, 0xA5, 0xA5, 0xAD, 0xED, 0x9F,
+        0x0F, 0x00, 0x02, 0x00, 0x00, 0x31,
+    };
     static const uint8_t modes[] = { 3, 4, 5, 6, 7, 8, 9 };
-    const uint8_t *voltage_frames[] = { mains_frame, dcv_frame };
+    const uint8_t *voltage_frames[] = { mains_frame, dcv_frame, dcv_high_frame };
     uint8_t normal[12];
 
     for (unsigned m = 0; m < sizeof(modes); m++) {
@@ -667,6 +704,7 @@ int main(void)
     TEST(resistance_band_overrides_have_regression_fixtures);
     TEST(invalidate_clears_stale_reading_before_mode_transition);
     TEST(voltage_mode_mains_frequency_frame_overrides_dcv_0f_rule);
+    TEST(dcv_high_range_frame_stays_voltage_across_current_transition);
     TEST(voltage_mode_mains_rotating_frames_stay_high_voltage);
     TEST(acv_repeated_rotating_range_frames_do_not_drop_to_2v);
     TEST(continuity_frame_sets_beep_from_segment_pattern);
