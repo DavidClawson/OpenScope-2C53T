@@ -160,9 +160,10 @@ tested table controls selector/apply words, mux metadata, and parser debug
 state. Autoscan only scores candidates when the parser reports a clean matching
 frame family for the active transition plan. AC voltage/current candidates also
 need AC evidence (`is_ac` from the frame status or companion frequency
-metadata), so DC payloads are not promoted into AC modes. For ACV, this means
-the display formatter still uses the stock `frame[7]` format selector instead
-of using `extra` as a range hint:
+metadata), and the parser applies the same gate before rendering manual AC
+modes, so DC payloads are not promoted into AC display states. For ACV, this
+means the display formatter still uses the stock `frame[7]` format selector
+instead of using `extra` as a range hint once AC evidence is present:
 
 Out-of-range local submodes fail closed. The shared plan API marks them with an
 invalid stock mode/frame family, emits no selector/apply word, and the parser

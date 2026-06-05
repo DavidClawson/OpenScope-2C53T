@@ -34,6 +34,7 @@ typedef enum {
     METER_REJECT_NONE = 0,
     METER_REJECT_WRONG_FRAME_FAMILY = 1,
     METER_REJECT_INVALID_SUBMODE = 2,
+    METER_REJECT_MISSING_AC_EVIDENCE = 3,
 } meter_reject_reason_t;
 
 /* ═══════════════════════════════════════════════════════════════════

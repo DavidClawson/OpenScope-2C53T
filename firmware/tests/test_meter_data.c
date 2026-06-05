@@ -262,12 +262,62 @@ static int test_acv_mains_frame_uses_high_voltage_scale_and_frequency(void)
     return 1;
 }
 
+static int test_acv_rejects_dc_voltage_without_ac_evidence(void)
+{
+    static const uint8_t dcv_frame[12] = {
+        0x5A, 0xA5, 0xC6, 0xF7, 0xEB, 0xEB,
+        0x0F, 0x00, 0x02, 0x00, 0x01, 0x4E,
+    };
+
+    meter_data_init();
+    process_frame(dcv_frame, 1);
+
+    ASSERT(!meter_reading.valid);
+    ASSERT(meter_reading.submode == 1);
+    ASSERT(meter_reading.result_class == METER_RESULT_NONE);
+    ASSERT(expect_payload_cleared("---"));
+    ASSERT(expect_family_debug((uint8_t)FPGA_METER_FRAME_FAMILY_VOLTAGE,
+                               (uint8_t)FPGA_METER_FRAME_FAMILY_VOLTAGE,
+                               METER_REJECT_MISSING_AC_EVIDENCE));
+    return 1;
+}
+
+static int test_ac_current_rejects_current_frame_without_ac_evidence(void)
+{
+    uint8_t current_frame[12];
+
+    build_segment_frame(current_frame, 2, 2, 6, 1,
+                        0x00, 0x00, 0x00, 0x00, 0);
+
+    meter_data_init();
+    process_frame(current_frame, 4);
+    ASSERT(!meter_reading.valid);
+    ASSERT(meter_reading.submode == 4);
+    ASSERT(expect_payload_cleared("---"));
+    ASSERT(expect_family_debug((uint8_t)FPGA_METER_FRAME_FAMILY_CURRENT,
+                               (uint8_t)FPGA_METER_FRAME_FAMILY_CURRENT,
+                               METER_REJECT_MISSING_AC_EVIDENCE));
+
+    meter_data_init();
+    process_frame(current_frame, 5);
+    ASSERT(!meter_reading.valid);
+    ASSERT(meter_reading.submode == 5);
+    ASSERT(expect_payload_cleared("---"));
+    ASSERT(expect_family_debug((uint8_t)FPGA_METER_FRAME_FAMILY_CURRENT,
+                               (uint8_t)FPGA_METER_FRAME_FAMILY_CURRENT,
+                               METER_REJECT_MISSING_AC_EVIDENCE));
+    return 1;
+}
+
 static int test_stock_formatter_families_have_regression_fixtures(void)
 {
     uint8_t frame[12];
+    uint8_t ac_current_frame[12];
 
     meter_data_init();
     build_segment_frame(frame, 1, 2, 3, 4, 0x00, 0x00, 0x00, 0x00, 0);
+    build_segment_frame(ac_current_frame, 1, 2, 3, 4,
+                        0x00, 0x00, 0x00, 0x00, 0x0031);
     process_frame(frame, 2);
     ASSERT(meter_reading.decimal_pos == 2);
     ASSERT(expect_normal_reading("12.34", "mA", 12.34f, 0.001f));
@@ -276,13 +326,15 @@ static int test_stock_formatter_families_have_regression_fixtures(void)
     ASSERT(meter_reading.decimal_pos == 1);
     ASSERT(expect_normal_reading("1.234", "A", 1.234f, 0.001f));
 
-    process_frame(frame, 4);
+    process_frame(ac_current_frame, 4);
     ASSERT(meter_reading.decimal_pos == 2);
     ASSERT(expect_normal_reading("12.34", "mA", 12.34f, 0.001f));
+    ASSERT(close_to(meter_reading.aux_freq_hz, 49.0f, 0.1f));
 
-    process_frame(frame, 5);
+    process_frame(ac_current_frame, 5);
     ASSERT(meter_reading.decimal_pos == 1);
     ASSERT(expect_normal_reading("1.234", "A", 1.234f, 0.001f));
+    ASSERT(close_to(meter_reading.aux_freq_hz, 49.0f, 0.1f));
 
     build_segment_frame(frame, 6, 7, 8, 9, 0x00, 0x00, 0x00, 0x00, 0);
     process_frame(frame, 8);
@@ -399,8 +451,10 @@ static int test_invalidate_clears_stale_reading_for_every_submode(void)
 static int test_parser_stock_mode_tracks_transition_plan_for_every_submode(void)
 {
     uint8_t frame[12];
+    uint8_t ac_frame[12];
 
     build_segment_frame(frame, 1, 2, 3, 4, 0x00, 0x00, 0x00, 0x00, 0);
+    build_segment_frame(ac_frame, 1, 2, 3, 4, 0x00, 0x00, 0x00, 0x00, 0x0031);
 
     for (uint8_t mode = 0; mode < FPGA_METER_LOCAL_SUBMODE_COUNT; mode++) {
         fpga_meter_transition_plan_t plan =
@@ -412,7 +466,8 @@ static int test_parser_stock_mode_tracks_transition_plan_for_every_submode(void)
         ASSERT(meter_reading.submode == mode);
         ASSERT(!meter_reading.valid);
 
-        process_frame(frame, mode);
+        process_frame((mode == 1 || mode == 4 || mode == 5) ?
+                      ac_frame : frame, mode);
         ASSERT(meter_reading.valid);
         ASSERT(meter_reading.submode == mode);
         ASSERT(meter_reading.stock_mode == plan.stock_mode);
@@ -559,18 +614,22 @@ static int test_continuity_marker_rejected_outside_continuity_mode(void)
 {
     uint8_t continuity[12];
     uint8_t normal[12];
+    uint8_t ac_normal[12];
     static const uint8_t modes[] = { 0, 1, 2, 3, 4, 5, 6, 8, 9, 10 };
 
     build_segment_frame(continuity, 0, 0x12, 0x0A, 5,
                         0x00, 0x00, 0x00, 0x00, 0);
     build_segment_frame(normal, 1, 2, 3, 4,
                         0x00, 0x00, 0x00, 0x00, 0);
+    build_segment_frame(ac_normal, 1, 2, 3, 4,
+                        0x00, 0x00, 0x00, 0x00, 0x0031);
 
     for (unsigned i = 0; i < sizeof(modes); i++) {
         uint8_t mode = modes[i];
 
         meter_data_init();
-        process_frame(normal, mode);
+        process_frame((mode == 1 || mode == 4 || mode == 5) ?
+                      ac_normal : normal, mode);
         ASSERT(meter_reading.valid);
         ASSERT(meter_reading.result_class == METER_RESULT_NORMAL);
 
@@ -758,6 +817,8 @@ static int test_voltage_payload_clears_stale_reading_in_all_non_voltage_modes(vo
 
             if (modes[m] == 6 || modes[m] == 7) {
                 build_segment_frame(normal, 3, 3, 0, 0, 0x40, 0x00, 0x00, 0x00, 0);
+            } else if (modes[m] == 4 || modes[m] == 5) {
+                build_segment_frame(normal, 1, 2, 3, 4, 0x00, 0x00, 0x00, 0x00, 0x0031);
             } else {
                 build_segment_frame(normal, 1, 2, 3, 4, 0x00, 0x00, 0x00, 0x00, 0);
             }
@@ -822,17 +883,21 @@ static int test_voltage_payload_clears_stale_current_reading(void)
         0x0D, 0x00, 0x02, 0x00, 0x00, 0x31,
     };
     uint8_t current_frame[12];
+    uint8_t ac_current_frame[12];
     static const uint8_t current_modes[] = { 2, 3, 4, 5 };
 
     build_segment_frame(current_frame, 2, 2, 6, 1, 0x00, 0x00, 0x00, 0x00, 0);
+    build_segment_frame(ac_current_frame, 2, 2, 6, 1, 0x00, 0x00, 0x00, 0x00, 0x0031);
 
     for (unsigned i = 0; i < sizeof(current_modes); i++) {
         uint8_t mode = current_modes[i];
+        const uint8_t *active_current =
+            (mode == 4 || mode == 5) ? ac_current_frame : current_frame;
         uint32_t updates_after_current;
         uint32_t display_updates_after_current;
 
         meter_data_init();
-        process_frame(current_frame, mode);
+        process_frame(active_current, mode);
         ASSERT(expect_normal_reading((mode == 2 || mode == 4) ? "22.61" : "2.261",
                                      (mode == 2 || mode == 4) ? "mA" : "A",
                                      (mode == 2 || mode == 4) ? 22.61f : 2.261f,
@@ -840,7 +905,7 @@ static int test_voltage_payload_clears_stale_current_reading(void)
         updates_after_current = meter_reading.update_count;
         display_updates_after_current = meter_reading.display_update_count;
 
-        process_frame(current_frame, mode);
+        process_frame(active_current, mode);
         ASSERT(expect_normal_reading((mode == 2 || mode == 4) ? "22.61" : "2.261",
                                      (mode == 2 || mode == 4) ? "mA" : "A",
                                      (mode == 2 || mode == 4) ? 22.61f : 2.261f,
@@ -908,9 +973,12 @@ static int test_stock_fsm_debug_fields_follow_mode_and_frames(void)
 static int test_large_current_submodes_use_active_local_range_state(void)
 {
     uint8_t current_frame[12];
+    uint8_t ac_current_frame[12];
 
     build_segment_frame(current_frame, 2, 2, 6, 1, 0x00,
                         0x00, 0x00, 0x00, 0);
+    build_segment_frame(ac_current_frame, 2, 2, 6, 1, 0x00,
+                        0x00, 0x00, 0x00, 0x0031);
 
     meter_data_init();
     process_frame(current_frame, 2);
@@ -927,13 +995,13 @@ static int test_large_current_submodes_use_active_local_range_state(void)
     ASSERT(meter_reading.stock_unit_index == 3);
 
     meter_data_invalidate(4);
-    process_frame(current_frame, 4);
+    process_frame(ac_current_frame, 4);
     ASSERT(expect_normal_reading("22.61", "mA", 22.61f, 0.001f));
     ASSERT(meter_reading.decimal_pos == 2);
     ASSERT(meter_reading.stock_variant == 1);
     ASSERT(meter_reading.stock_unit_index == 5);
 
-    process_frame(current_frame, 5);
+    process_frame(ac_current_frame, 5);
     ASSERT(expect_normal_reading("2.261", "A", 2.261f, 0.001f));
     ASSERT(meter_reading.decimal_pos == 1);
     ASSERT(meter_reading.stock_mode == 3);
@@ -981,6 +1049,8 @@ int main(void)
     TEST(dcv_7v_f6_07_keeps_default_volt_scale);
     TEST(dcv_range_frames_are_not_latched_from_acv_mains);
     TEST(acv_mains_frame_uses_high_voltage_scale_and_frequency);
+    TEST(acv_rejects_dc_voltage_without_ac_evidence);
+    TEST(ac_current_rejects_current_frame_without_ac_evidence);
     TEST(stock_formatter_families_have_regression_fixtures);
     TEST(resistance_band_overrides_have_regression_fixtures);
     TEST(invalidate_clears_stale_reading_before_mode_transition);

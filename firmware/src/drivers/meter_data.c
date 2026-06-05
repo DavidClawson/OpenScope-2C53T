@@ -740,6 +740,25 @@ static bool meter_submode_invalid(uint8_t submode)
     return !fpga_meter_submode_is_valid(submode);
 }
 
+static bool submode_requires_ac_evidence(uint8_t submode)
+{
+    return submode == 1 || submode == 4 || submode == 5;
+}
+
+static bool frame_extra_looks_like_line_frequency(uint16_t extra)
+{
+    return extra >= 45U && extra <= 65U;
+}
+
+static bool frame_has_ac_evidence(uint8_t submode,
+                                  uint8_t status,
+                                  uint16_t extra)
+{
+    if ((status & (1U << 2)) != 0) return true;
+    return submode_requires_ac_evidence(submode) &&
+           frame_extra_looks_like_line_frequency(extra);
+}
+
 /* ═══════════════════════════════════════════════════════════════════
  * Format value into display string
  * ═══════════════════════════════════════════════════════════════════ */
@@ -1009,6 +1028,13 @@ void meter_data_process_frame(const volatile uint8_t *frame, uint8_t submode)
         return;
     }
 
+    if (submode_requires_ac_evidence(submode) &&
+        !frame_has_ac_evidence(submode, status, extra)) {
+        r->reject_reason = METER_REJECT_MISSING_AC_EVIDENCE;
+        METER_REJECT_FRAME();
+        return;
+    }
+
     /* Overload: "OL" */
     if (digit0 == 0x0A && digit1 == 0x0B) {
         meter_clear_payload(r);
@@ -1098,9 +1124,9 @@ void meter_data_process_frame(const volatile uint8_t *frame, uint8_t submode)
     r->unit_suffix = unit_suffix_from_stock(submode, meter_stock_fsm.unit_index);
     (void)apply_verified_frame_range(r, submode, f6, frame, extra);
 
-    if ((submode == 0 || submode == 1) &&
-        frame[8] == 0x02 && frame[9] == 0x00 &&
-        extra >= 45 && extra <= 65) {
+    if (((submode == 0 && frame[8] == 0x02 && frame[9] == 0x00) ||
+         submode_requires_ac_evidence(submode)) &&
+        frame_extra_looks_like_line_frequency(extra)) {
         r->aux_freq_hz = (float)extra;
     }
 

@@ -132,6 +132,12 @@ static int test_current_auto_scores_respect_ac_evidence(void)
     ASSERT(meter_auto_score(4, &r) == 50);
     r.submode = 5;
     ASSERT(meter_auto_score(5, &r) == 50);
+
+    r = normal_reading(4, 2261);
+    r.aux_freq_hz = 49.0f;
+    ASSERT(meter_auto_score(4, &r) == 50);
+    r.submode = 5;
+    ASSERT(meter_auto_score(5, &r) == 50);
     return 1;
 }
 
