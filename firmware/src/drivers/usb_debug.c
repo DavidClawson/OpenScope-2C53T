@@ -466,6 +466,7 @@ static void cmd_help(void)
         "mode scope                      Switch UI + FPGA to scope frontend\r\n"
         "mode startup [scope|meter]      Get/set Settings > Startup on Boot\r\n"
         "meter dump [delay_ms]           Show parsed DMM/UI/raw frame state\r\n"
+        "meter frontend                  Show DMM analog frontend GPIO state\r\n"
         "meter stream [count] [delay_ms] Print compact DMM frame stream\r\n"
         "ui dump                         Show current UI mode/redraw state\r\n"
         "meter wave                      Show DMM voltage waveform sample stats\r\n"
@@ -2000,6 +2001,58 @@ static void cmd_meter_dump(const char *args)
     }
 }
 
+static uint8_t gpio_level(gpio_type *port, uint16_t pin)
+{
+    return (port->idt & (1U << pin)) ? 1U : 0U;
+}
+
+static void cmd_meter_frontend(void)
+{
+    uint16_t extra = ((uint16_t)meter_reading.dbg_frame[10] << 8) |
+                     meter_reading.dbg_frame[11];
+
+    usb_send_str("=== DMM Frontend ===\r\n");
+    usb_debug_printf("mode=%lu startup=%s meter_submode=%u (%s) reading_submode=%u valid=%u class=%u updates=%lu\r\n",
+                     (uint32_t)current_mode,
+                     startup_mode_name(startup_mode),
+                     (unsigned)meter_submode,
+                     meter_submode_name(meter_submode),
+                     (unsigned)meter_reading.submode,
+                     meter_reading.valid ? 1U : 0U,
+                     (unsigned)meter_reading.result_class,
+                     meter_reading.update_count);
+    usb_debug_printf("display=%s unit=%s raw_bcd=%d dp=%u f6=%02X f7=%02X f8=%02X f9=%02X extra=%04X aux_freq_i10=%ld beep=%u discard=%u\r\n",
+                     meter_reading.valid ? meter_reading.display_str : "---",
+                     (meter_reading.valid && meter_reading.unit_suffix) ? meter_reading.unit_suffix : "",
+                     meter_reading.raw_bcd,
+                     (unsigned)meter_reading.decimal_pos,
+                     (unsigned)meter_reading.dbg_frame[6],
+                     (unsigned)meter_reading.dbg_frame[7],
+                     (unsigned)meter_reading.dbg_frame[8],
+                     (unsigned)meter_reading.dbg_frame[9],
+                     (unsigned)extra,
+                     (long)scaled_i100(meter_reading.aux_freq_hz) / 10L,
+                     meter_reading.continuity_beep ? 1U : 0U,
+                     (unsigned)meter_frame_discard_count);
+    usb_debug_printf("control PC6_spi=%u PB11_active=%u PC11_meter_mux=%u PC7_probe=%u PC0_ready=%u\r\n",
+                     gpio_level(GPIOC, 6),
+                     gpio_level(GPIOB, 11),
+                     gpio_level(GPIOC, 11),
+                     gpio_level(GPIOC, 7),
+                     gpio_level(GPIOC, 0));
+    usb_debug_printf("port_c_e PC12_route=%u PE4=%u PE5=%u PE6=%u\r\n",
+                     gpio_level(GPIOC, 12),
+                     gpio_level(GPIOE, 4),
+                     gpio_level(GPIOE, 5),
+                     gpio_level(GPIOE, 6));
+    usb_debug_printf("port_a_b PA15=%u PA10=%u PB10=%u PB9=%u PA6=%u\r\n",
+                     gpio_level(GPIOA, 15),
+                     gpio_level(GPIOA, 10),
+                     gpio_level(GPIOB, 10),
+                     gpio_level(GPIOB, 9),
+                     gpio_level(GPIOA, 6));
+}
+
 static void cmd_meter_stream(const char *args)
 {
     uint32_t count = 16;
@@ -3116,6 +3169,8 @@ static void dispatch_command(char *line)
         cmd_meter_dump("");
     } else if (strncmp(line, "meter dump ", 11) == 0) {
         cmd_meter_dump(line + 11);
+    } else if (strcmp(line, "meter frontend") == 0) {
+        cmd_meter_frontend();
     } else if (strcmp(line, "meter stream") == 0) {
         cmd_meter_stream("");
     } else if (strncmp(line, "meter stream ", 13) == 0) {
