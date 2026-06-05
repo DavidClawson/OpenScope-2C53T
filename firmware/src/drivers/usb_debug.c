@@ -1995,6 +1995,14 @@ static void cmd_meter_dump(const char *args)
                      (unsigned)meter_reading.range_indicator,
                      (unsigned)meter_reading.range_cmd,
                      meter_reading.continuity_beep ? 1U : 0U);
+    usb_debug_printf("stock_fsm mode=%u variant=%u format=%u dc_state=%u display_cmd=%u unit_index=%u composite=%u\r\n",
+                     (unsigned)meter_reading.stock_mode,
+                     (unsigned)meter_reading.stock_variant,
+                     (unsigned)meter_reading.stock_format,
+                     (unsigned)meter_reading.stock_dc_state,
+                     (unsigned)meter_reading.stock_display_cmd,
+                     (unsigned)meter_reading.stock_unit_index,
+                     (unsigned)meter_reading.stock_composite_index);
     usb_send_str("frame=");
     for (int i = 0; i < 12; i++) usb_debug_printf("%02X%s", meter_reading.dbg_frame[i], i == 11 ? "" : " ");
     usb_send_str("\r\nnibbles=");

@@ -404,6 +404,17 @@ static void meter_stock_fsm_reset(uint8_t stock_mode)
     meter_stock_fsm.dc_state = (stock_mode == 0) ? 1U : 0U;
 }
 
+static void meter_sync_stock_fsm_debug(meter_reading_t *r)
+{
+    r->stock_mode = meter_stock_fsm.stock_mode;
+    r->stock_variant = meter_stock_fsm.variant;
+    r->stock_format = meter_stock_fsm.format;
+    r->stock_dc_state = meter_stock_fsm.dc_state;
+    r->stock_display_cmd = meter_stock_fsm.display_cmd;
+    r->stock_unit_index = meter_stock_fsm.unit_index;
+    r->stock_composite_index = meter_stock_fsm.composite_index;
+}
+
 static void meter_stock_fsm_apply(uint8_t ui_submode,
                                   const volatile uint8_t *frame,
                                   const uint8_t raw_digits[4])
@@ -556,6 +567,8 @@ static void meter_stock_fsm_apply(uint8_t ui_submode,
         meter_stock_fsm.composite_index = meter_stock_fsm.format + 10U;
         break;
     }
+
+    meter_sync_stock_fsm_debug(&meter_reading);
 }
 
 static const char *unit_suffix_from_stock(uint8_t ui_submode, uint8_t unit_index)
@@ -761,6 +774,7 @@ void meter_data_invalidate(uint8_t submode)
     memset(r->dbg_raw_digits, 0, sizeof(r->dbg_raw_digits));
 
     meter_stock_fsm_reset(stock_mode_from_ui_submode(submode));
+    meter_sync_stock_fsm_debug(r);
     r->update_count++;
 }
 
@@ -792,6 +806,10 @@ void meter_data_process_frame(const volatile uint8_t *frame, uint8_t submode)
     r->submode = submode;
     r->continuity_beep = false;
     r->aux_freq_hz = 0.0f;
+    if (meter_stock_fsm.stock_mode != stock_mode_from_ui_submode(submode)) {
+        meter_stock_fsm_reset(stock_mode_from_ui_submode(submode));
+    }
+    meter_sync_stock_fsm_debug(r);
 
     /* Extract cross-byte nibble pairs */
     uint8_t b2 = frame[2], b3 = frame[3], b4 = frame[4];

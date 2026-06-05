@@ -710,6 +710,37 @@ static int test_voltage_payload_clears_stale_current_reading(void)
     return 1;
 }
 
+static int test_stock_fsm_debug_fields_follow_mode_and_frames(void)
+{
+    uint8_t current_frame[12];
+    uint8_t voltage_payload[12];
+
+    build_segment_frame(current_frame, 2, 2, 6, 1, 0x00, 0x00, 0x00, 0x00, 0);
+    build_segment_frame(voltage_payload, 5, 0, 0, 8, 0x00, 0x00, 0x02, 0x00, 0x014E);
+
+    meter_data_init();
+    meter_data_invalidate(2);
+    ASSERT(meter_reading.stock_mode == 2);
+    ASSERT(meter_reading.stock_variant == 2);
+    ASSERT(meter_reading.stock_dc_state == 0);
+
+    process_frame(current_frame, 2);
+    ASSERT(expect_normal_reading("22.61", "mA", 22.61f, 0.001f));
+    ASSERT(meter_reading.stock_mode == 2);
+    ASSERT(meter_reading.stock_variant == 2);
+    ASSERT(meter_reading.stock_format == 0);
+    ASSERT(meter_reading.stock_display_cmd == 2);
+    ASSERT(meter_reading.stock_unit_index == 3);
+    ASSERT(meter_reading.stock_composite_index == 2);
+
+    process_frame(voltage_payload, 2);
+    ASSERT(!meter_reading.valid);
+    ASSERT(meter_reading.stock_mode == 2);
+    ASSERT(meter_reading.stock_variant == 2);
+    ASSERT(meter_reading.stock_dc_state == 0);
+    return 1;
+}
+
 int main(void)
 {
     printf("Meter data frame tests\n");
@@ -735,6 +766,7 @@ int main(void)
     TEST(voltage_payload_clears_stale_reading_in_all_non_voltage_modes);
     TEST(special_voltage_family_frames_are_rejected_outside_voltage);
     TEST(voltage_payload_clears_stale_current_reading);
+    TEST(stock_fsm_debug_fields_follow_mode_and_frames);
 
     printf("\n%d/%d tests passed\n", tests_passed, tests_run);
     return (tests_passed == tests_run) ? 0 : 1;

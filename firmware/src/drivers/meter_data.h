@@ -78,6 +78,13 @@ typedef struct {
     uint8_t  probe_type;         /* 0, 1, or 2 — from frame[7] bit pattern */
     uint8_t  range_indicator;    /* from frame[6] bits 4-5: range band */
     uint8_t  range_cmd;          /* Parameter for auto-range FPGA commands */
+    uint8_t  stock_mode;         /* Stock DMM FSM mode family (0-7) */
+    uint8_t  stock_variant;      /* Stock FSM unit/range variant */
+    uint8_t  stock_format;       /* Stock FSM decimal/display format */
+    uint8_t  stock_dc_state;     /* Stock DCV multi-frame state */
+    uint8_t  stock_display_cmd;  /* Stock display selector */
+    uint8_t  stock_unit_index;   /* Stock unit selector */
+    uint8_t  stock_composite_index; /* Stock composite formatting selector */
 
     /* Continuity buzzer state */
     bool     continuity_beep;    /* Should buzzer sound */
