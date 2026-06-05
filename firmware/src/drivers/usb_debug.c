@@ -511,7 +511,8 @@ static void cmd_help(void)
         "meter wave                      Show DMM voltage waveform sample stats\r\n"
         "meter wave reset                Reset DMM waveform diagnostics\r\n"
         "meter wave path [direct|preacq] Get/set DMM waveform SPI path\r\n"
-        "meter wave selector [auto|0|1]  Override DMM waveform selector byte\r\n"
+        "meter wave selector [auto|N]    DMM wave selector byte\r\n"
+        "meter wave preacq [auto|N]      DMM wave pre-acq byte\r\n"
         "fpga acq [mode]                 Trigger SPI3 acquisition\r\n"
         "spi3 read [len]                 Raw SPI3 read + hex dump\r\n"
         "spi3 xfer <hex...>              Send arbitrary MOSI bytes, dump MISO\r\n"
@@ -2416,12 +2417,14 @@ static void cmd_meter_adc_snapshot(void)
                      meter_submode_name(meter_submode),
                      meter_voltage_wave_sample_count());
     usb_debug_printf("spi_path=%s selector_override=%d last_preacq=%02X last_selector=%02X "
-                     "last_sample=%02X min_sample=%02X max_sample=%02X samples=%lu ff_samples=%lu "
+                     "preacq_override=%d last_preacq_rx=%02X last_sample=%02X min_sample=%02X max_sample=%02X samples=%lu ff_samples=%lu "
                      "zero_samples=%lu enq_attempts=%lu enq_success=%lu enq_drops=%lu\r\n",
                      fpga_meter_adc_use_preacq ? "preacq" : "direct",
                      (int)fpga_meter_adc_selector_override,
                      (unsigned)fpga_meter_adc_last_preacq,
                      (unsigned)fpga_meter_adc_last_selector,
+                     (int)fpga_meter_adc_preacq_override,
+                     (unsigned)fpga_meter_adc_last_preacq_rx,
                      (unsigned)fpga_meter_adc_last_sample,
                      (unsigned)fpga_meter_adc_min_sample,
                      (unsigned)fpga_meter_adc_max_sample,
@@ -2431,6 +2434,18 @@ static void cmd_meter_adc_snapshot(void)
                      fpga_meter_adc_enqueue_attempts,
                      fpga_meter_adc_enqueue_success,
                      fpga_meter_adc_enqueue_drops);
+    usb_debug_printf("adc_diag trans=%lu not_v=%lu gen=%lu last_gen=%lu first=%02X busy=%u discard=%u probing=%u to=%lu total_to=%lu ch=%u\r\n",
+                     fpga_meter_adc_transition_skips,
+                     fpga_meter_adc_not_voltage_skips,
+                     fpga_meter_adc_reset_generation,
+                     fpga_meter_adc_last_reset_generation,
+                     (unsigned)fpga_meter_adc_first_sample_after_reset,
+                     fpga_meter_transition_busy() ? 1U : 0U,
+                     (unsigned)meter_frame_discard_count,
+                     fpga.spi3_probing ? 1U : 0U,
+                     (unsigned long)fpga.spi3_timeout_count,
+                     (unsigned long)fpga.spi3_total_timeouts,
+                     (unsigned)active_channel);
     usb_debug_printf("snapshot_count=%u raw_last=%u raw_min=%u raw_max=%u p2p=%u synced=%u\r\n",
                      (unsigned)usb_meter_wave_snap.count,
                      (unsigned)usb_meter_wave_snap.raw_last,
@@ -2513,7 +2528,7 @@ static void cmd_meter_wave(void)
     usb_debug_printf("samples_total=%lu delta_250ms=%lu approx_rate=%lu Hz\r\n",
                      after, after - before, (after - before) * 4U);
     usb_debug_printf("spi_path=%s enq=%lu ok=%lu drop=%lu samples=%lu ff=%lu zero=%lu "
-                     "selector_mode=%d last_pre=%02X selector=%02X last=%02X min=%02X max=%02X\r\n",
+                     "selector_mode=%d preacq_mode=%d last_pre=%02X pre_rx=%02X selector=%02X last=%02X min=%02X max=%02X\r\n",
                      fpga_meter_adc_use_preacq ? "preacq" : "direct",
                      fpga_meter_adc_enqueue_attempts,
                      fpga_meter_adc_enqueue_success,
@@ -2522,11 +2537,25 @@ static void cmd_meter_wave(void)
                      fpga_meter_adc_ff_samples,
                      fpga_meter_adc_zero_samples,
                      (int)fpga_meter_adc_selector_override,
+                     (int)fpga_meter_adc_preacq_override,
                      (unsigned)fpga_meter_adc_last_preacq,
+                     (unsigned)fpga_meter_adc_last_preacq_rx,
                      (unsigned)fpga_meter_adc_last_selector,
                      (unsigned)fpga_meter_adc_last_sample,
                      (unsigned)fpga_meter_adc_min_sample,
                      (unsigned)fpga_meter_adc_max_sample);
+    usb_debug_printf("adc_diag trans=%lu not_v=%lu gen=%lu last_gen=%lu first=%02X busy=%u discard=%u probing=%u to=%lu total_to=%lu ch=%u\r\n",
+                     fpga_meter_adc_transition_skips,
+                     fpga_meter_adc_not_voltage_skips,
+                     fpga_meter_adc_reset_generation,
+                     fpga_meter_adc_last_reset_generation,
+                     (unsigned)fpga_meter_adc_first_sample_after_reset,
+                     fpga_meter_transition_busy() ? 1U : 0U,
+                     (unsigned)meter_frame_discard_count,
+                     fpga.spi3_probing ? 1U : 0U,
+                     (unsigned long)fpga.spi3_timeout_count,
+                     (unsigned long)fpga.spi3_total_timeouts,
+                     (unsigned)active_channel);
     usb_debug_printf("snapshot_count=%u raw_last=%u raw_min=%u raw_max=%u p2p=%u synced=%u\r\n",
                      (unsigned)usb_meter_wave_snap.count,
                      (unsigned)usb_meter_wave_snap.raw_last,
@@ -2587,6 +2616,7 @@ static void cmd_meter_wave_args(const char *args)
     if (strncmp(args, "selector", 8) == 0 &&
         (args[8] == '\0' || args[8] == ' ' || args[8] == '\t')) {
         const char *value = args + 8;
+        uint32_t selector;
         while (*value == ' ' || *value == '\t') value++;
 
         if (*value == '\0') {
@@ -2597,19 +2627,45 @@ static void cmd_meter_wave_args(const char *args)
             meter_voltage_wave_reset();
             fpga_meter_adc_diag_reset();
             usb_send_str("meter wave selector=auto\r\n");
-        } else if (strcmp(value, "0") == 0 || strcmp(value, "1") == 0) {
-            fpga_meter_adc_selector_override = (int8_t)(value[0] - '0');
+        } else if (parse_int(value, &selector) == 0 && selector <= 255U) {
+            fpga_meter_adc_selector_override = (int16_t)selector;
             meter_voltage_wave_reset();
             fpga_meter_adc_diag_reset();
             usb_debug_printf("meter wave selector=%d\r\n",
                              (int)fpga_meter_adc_selector_override);
         } else {
-            usb_send_str("Usage: meter wave selector [auto|0|1]\r\n");
+            usb_send_str("Usage: meter wave selector [auto|0..255]\r\n");
         }
         return;
     }
 
-    usb_send_str("Usage: meter wave [reset|path [direct|preacq]|selector [auto|0|1]]\r\n");
+    if (strncmp(args, "preacq", 6) == 0 &&
+        (args[6] == '\0' || args[6] == ' ' || args[6] == '\t')) {
+        const char *value = args + 6;
+        uint32_t preacq;
+        while (*value == ' ' || *value == '\t') value++;
+
+        if (*value == '\0') {
+            usb_debug_printf("meter wave preacq=%d\r\n",
+                             (int)fpga_meter_adc_preacq_override);
+        } else if (strcmp(value, "auto") == 0) {
+            fpga_meter_adc_preacq_override = -1;
+            meter_voltage_wave_reset();
+            fpga_meter_adc_diag_reset();
+            usb_send_str("meter wave preacq=auto\r\n");
+        } else if (parse_int(value, &preacq) == 0 && preacq <= 255U) {
+            fpga_meter_adc_preacq_override = (int16_t)preacq;
+            meter_voltage_wave_reset();
+            fpga_meter_adc_diag_reset();
+            usb_debug_printf("meter wave preacq=%d\r\n",
+                             (int)fpga_meter_adc_preacq_override);
+        } else {
+            usb_send_str("Usage: meter wave preacq [auto|0..255]\r\n");
+        }
+        return;
+    }
+
+    usb_send_str("Usage: meter wave [reset|path|selector|preacq]\r\n");
 }
 
 static void cmd_uptime(void)

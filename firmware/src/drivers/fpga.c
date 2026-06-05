@@ -67,16 +67,23 @@
 fpga_state_t fpga;
 
 volatile bool     fpga_meter_adc_use_preacq;
-volatile int8_t   fpga_meter_adc_selector_override = -1;
+volatile int16_t  fpga_meter_adc_selector_override = -1;
+volatile int16_t  fpga_meter_adc_preacq_override = -1;
 volatile uint32_t fpga_meter_adc_enqueue_attempts;
 volatile uint32_t fpga_meter_adc_enqueue_success;
 volatile uint32_t fpga_meter_adc_enqueue_drops;
 volatile uint32_t fpga_meter_adc_samples;
 volatile uint32_t fpga_meter_adc_ff_samples;
 volatile uint32_t fpga_meter_adc_zero_samples;
+volatile uint32_t fpga_meter_adc_transition_skips;
+volatile uint32_t fpga_meter_adc_not_voltage_skips;
+volatile uint32_t fpga_meter_adc_reset_generation;
+volatile uint32_t fpga_meter_adc_last_reset_generation;
 volatile uint8_t  fpga_meter_adc_last_preacq;
+volatile uint8_t  fpga_meter_adc_last_preacq_rx;
 volatile uint8_t  fpga_meter_adc_last_selector;
 volatile uint8_t  fpga_meter_adc_last_sample;
+volatile uint8_t  fpga_meter_adc_first_sample_after_reset;
 volatile uint8_t  fpga_meter_adc_min_sample = 255;
 volatile uint8_t  fpga_meter_adc_max_sample;
 
@@ -107,11 +114,22 @@ void fpga_meter_adc_diag_reset(void)
     fpga_meter_adc_samples = 0;
     fpga_meter_adc_ff_samples = 0;
     fpga_meter_adc_zero_samples = 0;
+    fpga_meter_adc_transition_skips = 0;
+    fpga_meter_adc_not_voltage_skips = 0;
+    fpga_meter_adc_reset_generation++;
+    fpga_meter_adc_last_reset_generation = 0;
     fpga_meter_adc_last_preacq = 0;
+    fpga_meter_adc_last_preacq_rx = 0;
     fpga_meter_adc_last_selector = 0;
     fpga_meter_adc_last_sample = 0;
+    fpga_meter_adc_first_sample_after_reset = 0;
     fpga_meter_adc_min_sample = 255;
     fpga_meter_adc_max_sample = 0;
+}
+
+bool fpga_meter_transition_busy(void)
+{
+    return meter_transition_busy;
 }
 
 static void fpga_meter_discard_next_frames(uint8_t count)
@@ -134,6 +152,7 @@ static void fpga_meter_reset_transport(void)
     if (usart_tx_queue != NULL) xQueueReset(usart_tx_queue);
     if (meter_sem != NULL) xQueueReset(meter_sem);
     if (spi3_acq_queue != NULL) xQueueReset(spi3_acq_queue);
+    fpga_meter_adc_reset_generation++;
 
     fpga.tx_index = 0;
     fpga.rx_index = 0;
@@ -1742,8 +1761,8 @@ static void fpga_meter_poll_task(void *pv)
 
 static uint8_t fpga_meter_adc_select_byte(void)
 {
-    if (fpga_meter_adc_selector_override == 0 ||
-        fpga_meter_adc_selector_override == 1) {
+    if (fpga_meter_adc_selector_override >= 0 &&
+        fpga_meter_adc_selector_override <= 255) {
         return (uint8_t)fpga_meter_adc_selector_override;
     }
 
@@ -1756,6 +1775,11 @@ static uint8_t fpga_meter_adc_select_byte(void)
 
 static uint8_t fpga_preacq_command_byte(void)
 {
+    if (fpga_meter_adc_preacq_override >= 0 &&
+        fpga_meter_adc_preacq_override <= 255) {
+        return (uint8_t)fpga_meter_adc_preacq_override;
+    }
+
     const scope_state_t *ss = scope_state_get();
     uint8_t voltage_range = fpga_scope_primary_range(ss) & 0x7F;
     return (uint8_t)(0x80 | voltage_range);
@@ -1782,7 +1806,11 @@ static void fpga_meter_adc_sampler_task(void *pv)
         bool voltage_mode;
 
         vTaskDelay(pdMS_TO_TICKS(1));  /* ~1 ksample/s with a 1 kHz tick. */
-        if (!fpga.initialized || meter_transition_busy) continue;
+        if (!fpga.initialized) continue;
+        if (meter_transition_busy) {
+            fpga_meter_adc_transition_skips++;
+            continue;
+        }
 
         voltage_mode = (current_mode == MODE_MULTIMETER) &&
                        (meter_submode == 0 || meter_submode == 1);
@@ -1793,6 +1821,7 @@ static void fpga_meter_adc_sampler_task(void *pv)
                 was_voltage_mode = false;
                 last_submode = 0xFF;
             }
+            fpga_meter_adc_not_voltage_skips++;
             continue;
         }
 
@@ -1852,8 +1881,10 @@ static void fpga_acquisition_task(void *pv)
 
         if (trigger_byte == (FPGA_ACQ_METER_ADC + 1)) {
             uint8_t sample;
+            uint8_t preacq_rx = 0;
             uint8_t selector = fpga_meter_adc_select_byte();
             uint8_t preacq = fpga_preacq_command_byte();
+            uint32_t reset_generation = fpga_meter_adc_reset_generation;
 
             fpga.spi3_probing = true;
             fpga_meter_adc_last_preacq = preacq;
@@ -1861,11 +1892,12 @@ static void fpga_acquisition_task(void *pv)
 
             if (fpga_meter_adc_use_preacq) {
                 SPI3_CS_ASSERT();
-                spi3_xfer(preacq);
+                preacq_rx = spi3_xfer(preacq);
                 SPI3_CS_DEASSERT();
 
                 for (volatile int d = 0; d < 100; d++) {}
             }
+            fpga_meter_adc_last_preacq_rx = preacq_rx;
 
             SPI3_CS_ASSERT();
             /* Stock case 5 is a single-byte DMM ADC read. */
@@ -1874,6 +1906,10 @@ static void fpga_acquisition_task(void *pv)
 
             meter_voltage_wave_add_sample(sample);
             fpga_meter_adc_last_sample = sample;
+            if (fpga_meter_adc_last_reset_generation != reset_generation) {
+                fpga_meter_adc_last_reset_generation = reset_generation;
+                fpga_meter_adc_first_sample_after_reset = sample;
+            }
             fpga_meter_adc_samples++;
             if (sample == 0xFF) fpga_meter_adc_ff_samples++;
             if (sample == 0x00) fpga_meter_adc_zero_samples++;

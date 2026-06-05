@@ -506,21 +506,29 @@ const volatile uint8_t *fpga_get_ch1_buf(void);
 const volatile uint8_t *fpga_get_ch2_buf(void);
 
 extern volatile bool     fpga_meter_adc_use_preacq;
-extern volatile int8_t   fpga_meter_adc_selector_override;
+extern volatile int16_t  fpga_meter_adc_selector_override;
+extern volatile int16_t  fpga_meter_adc_preacq_override;
 extern volatile uint32_t fpga_meter_adc_enqueue_attempts;
 extern volatile uint32_t fpga_meter_adc_enqueue_success;
 extern volatile uint32_t fpga_meter_adc_enqueue_drops;
 extern volatile uint32_t fpga_meter_adc_samples;
 extern volatile uint32_t fpga_meter_adc_ff_samples;
 extern volatile uint32_t fpga_meter_adc_zero_samples;
+extern volatile uint32_t fpga_meter_adc_transition_skips;
+extern volatile uint32_t fpga_meter_adc_not_voltage_skips;
+extern volatile uint32_t fpga_meter_adc_reset_generation;
+extern volatile uint32_t fpga_meter_adc_last_reset_generation;
 extern volatile uint8_t  fpga_meter_adc_last_preacq;
+extern volatile uint8_t  fpga_meter_adc_last_preacq_rx;
 extern volatile uint8_t  fpga_meter_adc_last_selector;
 extern volatile uint8_t  fpga_meter_adc_last_sample;
+extern volatile uint8_t  fpga_meter_adc_first_sample_after_reset;
 extern volatile uint8_t  fpga_meter_adc_min_sample;
 extern volatile uint8_t  fpga_meter_adc_max_sample;
 extern volatile uint8_t  meter_frame_discard_count;
 
 void fpga_meter_adc_diag_reset(void);
+bool fpga_meter_transition_busy(void);
 
 /*
  * Set FPGA active mode (PB11).
