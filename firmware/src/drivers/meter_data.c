@@ -80,10 +80,24 @@ static void meter_record_history(void)
     }
 }
 
+static uint16_t meter_aux_freq_i10(const meter_reading_t *r)
+{
+    if (r->aux_freq_hz <= 0.0f) return 0;
+    return (uint16_t)(r->aux_freq_hz * 10.0f + 0.5f);
+}
+
 #define METER_FINISH_FRAME() do { \
     r->valid = true; \
     r->update_count++; \
-    r->display_update_count++; \
+    if (old_valid != r->valid || old_submode != r->submode || \
+        old_result_class != r->result_class || old_raw_bcd != r->raw_bcd || \
+        old_decimal_pos != r->decimal_pos || old_negative != r->negative || \
+        old_unit_variant != r->unit_variant || old_aux_freq_i10 != meter_aux_freq_i10(r) || \
+        old_continuity_beep != r->continuity_beep || \
+        strcmp(old_display_str, r->display_str) != 0 || \
+        strcmp(old_unit_suffix, r->unit_suffix ? r->unit_suffix : "") != 0) { \
+        r->display_update_count++; \
+    } \
     meter_record_history(); \
 } while (0)
 
@@ -102,6 +116,15 @@ static void meter_record_history(void)
     r->continuity_beep = false; \
     r->valid = false; \
     r->update_count++; \
+    if (old_valid != r->valid || old_submode != r->submode || \
+        old_result_class != r->result_class || old_raw_bcd != r->raw_bcd || \
+        old_decimal_pos != r->decimal_pos || old_negative != r->negative || \
+        old_unit_variant != r->unit_variant || old_aux_freq_i10 != meter_aux_freq_i10(r) || \
+        old_continuity_beep != r->continuity_beep || \
+        strcmp(old_display_str, r->display_str) != 0 || \
+        strcmp(old_unit_suffix, r->unit_suffix ? r->unit_suffix : "") != 0) { \
+        r->display_update_count++; \
+    } \
 } while (0)
 
 static void meter_clear_payload(meter_reading_t *r)
@@ -747,6 +770,22 @@ void meter_data_process_frame(const volatile uint8_t *frame, uint8_t submode)
 
     /* Validate header */
     if (frame[0] != 0x5A || frame[1] != 0xA5) return;
+
+    bool old_valid = r->valid;
+    uint8_t old_submode = r->submode;
+    meter_result_class_t old_result_class = r->result_class;
+    int old_raw_bcd = r->raw_bcd;
+    uint8_t old_decimal_pos = r->decimal_pos;
+    bool old_negative = r->negative;
+    uint8_t old_unit_variant = r->unit_variant;
+    uint16_t old_aux_freq_i10 = meter_aux_freq_i10(r);
+    bool old_continuity_beep = r->continuity_beep;
+    char old_display_str[sizeof(r->display_str)];
+    char old_unit_suffix[12];
+    strcpy(old_display_str, r->display_str);
+    strncpy(old_unit_suffix, r->unit_suffix ? r->unit_suffix : "",
+            sizeof(old_unit_suffix) - 1);
+    old_unit_suffix[sizeof(old_unit_suffix) - 1] = '\0';
 
     /* Save raw frame for debug display */
     for (int i = 0; i < 12; i++) r->dbg_frame[i] = frame[i];
