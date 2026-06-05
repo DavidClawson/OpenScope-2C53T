@@ -72,6 +72,7 @@ static uint8_t segment_nibble_for_code(uint8_t code)
     case 8: return 0xEF;
     case 9: return 0xCF;
     case 0x0A: return 0xEE;  /* OL high / continuity marker */
+    case 0x0B: return 0x23;  /* OL low */
     case 0x10: return 0x00;  /* blank */
     case 0x11: return 0xE1;  /* partial blank */
     case 0x12: return 0xEC;  /* continuity */
@@ -471,6 +472,85 @@ static int test_special_frames_clear_stale_aux_frequency(void)
     return 1;
 }
 
+static int test_non_voltage_modes_reject_voltage_payloads(void)
+{
+    static const uint8_t mains_frame[12] = {
+        0x5A, 0xA5, 0xA5, 0xAD, 0xED, 0xBF,
+        0x0D, 0x00, 0x02, 0x00, 0x00, 0x31,
+    };
+    static const uint8_t dcv_frame[12] = {
+        0x5A, 0xA5, 0xC6, 0xF7, 0xEB, 0xEB,
+        0x0F, 0x00, 0x02, 0x00, 0x01, 0x4E,
+    };
+    static const uint8_t wrong_family_modes[] = { 2, 3, 4, 5, 6, 7, 8, 9 };
+    const uint8_t *voltage_frames[] = { mains_frame, dcv_frame };
+
+    for (unsigned f = 0; f < sizeof(voltage_frames) / sizeof(voltage_frames[0]); f++) {
+        for (unsigned i = 0; i < sizeof(wrong_family_modes); i++) {
+            meter_data_init();
+            process_frame(voltage_frames[f], wrong_family_modes[i]);
+            ASSERT(!meter_reading.valid);
+            ASSERT(meter_reading.submode == wrong_family_modes[i]);
+            ASSERT(meter_reading.result_class == METER_RESULT_NONE);
+            ASSERT_STR_EQ(meter_reading.display_str, "---");
+            ASSERT_STR_EQ(meter_reading.unit_suffix, "");
+            ASSERT(close_to(meter_reading.value, 0.0f, 0.001f));
+            ASSERT(close_to(meter_reading.aux_freq_hz, 0.0f, 0.001f));
+        }
+    }
+    return 1;
+}
+
+static int test_special_voltage_family_frames_are_rejected_outside_voltage(void)
+{
+    uint8_t ol_voltage_frame[12];
+
+    build_segment_frame(ol_voltage_frame, 0x0A, 0x0B, 0, 0, 0x00,
+                        0x00, 0x02, 0x00, 0x0031);
+
+    meter_data_init();
+    process_frame(ol_voltage_frame, 2);
+    ASSERT(!meter_reading.valid);
+    ASSERT(meter_reading.result_class == METER_RESULT_NONE);
+    ASSERT_STR_EQ(meter_reading.display_str, "---");
+    ASSERT_STR_EQ(meter_reading.unit_suffix, "");
+
+    meter_data_init();
+    process_frame(ol_voltage_frame, 6);
+    ASSERT(!meter_reading.valid);
+    ASSERT(meter_reading.result_class == METER_RESULT_NONE);
+    ASSERT_STR_EQ(meter_reading.display_str, "---");
+    ASSERT_STR_EQ(meter_reading.unit_suffix, "");
+    return 1;
+}
+
+static int test_voltage_payload_clears_stale_current_reading(void)
+{
+    static const uint8_t mains_frame[12] = {
+        0x5A, 0xA5, 0xA5, 0xAD, 0xED, 0xBF,
+        0x0D, 0x00, 0x02, 0x00, 0x00, 0x31,
+    };
+    uint8_t current_frame[12];
+    uint32_t updates_after_current;
+
+    build_segment_frame(current_frame, 2, 2, 6, 1, 0x00, 0x00, 0x00, 0x00, 0);
+
+    meter_data_init();
+    process_frame(current_frame, 2);
+    ASSERT(expect_normal_reading("22.61", "mA", 22.61f, 0.001f));
+    updates_after_current = meter_reading.update_count;
+
+    process_frame(mains_frame, 2);
+    ASSERT(!meter_reading.valid);
+    ASSERT(meter_reading.update_count == updates_after_current + 1);
+    ASSERT(meter_reading.submode == 2);
+    ASSERT(meter_reading.result_class == METER_RESULT_NONE);
+    ASSERT_STR_EQ(meter_reading.display_str, "---");
+    ASSERT_STR_EQ(meter_reading.unit_suffix, "");
+    ASSERT(close_to(meter_reading.value, 0.0f, 0.001f));
+    return 1;
+}
+
 int main(void)
 {
     printf("Meter data frame tests\n");
@@ -490,6 +570,9 @@ int main(void)
     TEST(continuity_frame_sets_beep_from_segment_pattern);
     TEST(non_continuity_terminal_frames_clear_stale_beep);
     TEST(special_frames_clear_stale_aux_frequency);
+    TEST(non_voltage_modes_reject_voltage_payloads);
+    TEST(special_voltage_family_frames_are_rejected_outside_voltage);
+    TEST(voltage_payload_clears_stale_current_reading);
 
     printf("\n%d/%d tests passed\n", tests_passed, tests_run);
     return (tests_passed == tests_run) ? 0 : 1;

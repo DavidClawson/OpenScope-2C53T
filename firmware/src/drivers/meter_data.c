@@ -86,6 +86,23 @@ static void meter_record_history(void)
     meter_record_history(); \
 } while (0)
 
+#define METER_REJECT_FRAME() do { \
+    r->value = 0.0f; \
+    r->raw_bcd = 0; \
+    memset(r->digits, 0, sizeof(r->digits)); \
+    r->decimal_pos = 0; \
+    r->negative = false; \
+    strcpy(r->display_str, "---"); \
+    r->unit_suffix = ""; \
+    r->unit_variant = 0; \
+    r->bar_fraction = 0.0f; \
+    r->aux_freq_hz = 0.0f; \
+    r->result_class = METER_RESULT_NONE; \
+    r->continuity_beep = false; \
+    r->valid = false; \
+    r->update_count++; \
+} while (0)
+
 /* ═══════════════════════════════════════════════════════════════════
  * BCD Nibble Lookup
  *
@@ -598,6 +615,13 @@ static bool apply_verified_frame_range(meter_reading_t *r,
     return false;
 }
 
+static bool frame_is_voltage_payload(uint8_t submode,
+                                     const volatile uint8_t *frame)
+{
+    if (submode == 0 || submode == 1) return false;
+    return frame[8] == 0x02 && frame[9] == 0x00;
+}
+
 /* ═══════════════════════════════════════════════════════════════════
  * Format value into display string
  * ═══════════════════════════════════════════════════════════════════ */
@@ -751,6 +775,7 @@ void meter_data_process_frame(const volatile uint8_t *frame, uint8_t submode)
     /* Parse flags from byte [6] */
     uint8_t flags = frame[6];
     r->is_hold = (flags & (1 << 6)) != 0;
+    uint16_t extra = ((uint16_t)frame[10] << 8) | frame[11];
 
     /* Record distinct frame[6] values for Phase 1 diagnostic.
      * Push-front with dedup: if the current value is already in the
@@ -792,6 +817,11 @@ void meter_data_process_frame(const volatile uint8_t *frame, uint8_t submode)
     r->range_cmd = r->probe_type;
 
     /* --- Special value detection --- */
+
+    if (frame_is_voltage_payload(submode, frame)) {
+        METER_REJECT_FRAME();
+        return;
+    }
 
     /* Overload: "OL" */
     if (digit0 == 0x0A && digit1 == 0x0B) {
@@ -878,7 +908,6 @@ void meter_data_process_frame(const volatile uint8_t *frame, uint8_t submode)
 
     uint8_t raw_digit_codes[4] = { digit0, digit1, digit2, digit3 };
     uint8_t f6 = flags;
-    uint16_t extra = ((uint16_t)frame[10] << 8) | frame[11];
 
     meter_stock_fsm_apply(submode, frame, raw_digit_codes);
     r->decimal_pos = decimal_pos_from_stock(submode, &meter_stock_fsm);
