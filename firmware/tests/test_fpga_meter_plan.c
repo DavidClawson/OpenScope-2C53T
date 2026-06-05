@@ -194,6 +194,43 @@ static void test_state_machine_contract_is_exhaustive(void)
                   (uint16_t)((1U << FPGA_METER_STOCK_MODE_COUNT) - 1U));
 }
 
+static void test_local_splits_do_not_invent_extra_stock_selectors(void)
+{
+    static const struct {
+        uint8_t a;
+        uint8_t b;
+        const char *label;
+    } shared_slots[] = {
+        { 2, 3, "DC current small/A" },
+        { 4, 5, "AC current small/A" },
+        { 9, 10, "capacitance/temperature" },
+    };
+
+    for (unsigned i = 0; i < sizeof(shared_slots) / sizeof(shared_slots[0]); i++) {
+        char name[80];
+        fpga_meter_transition_plan_t a =
+            fpga_meter_transition_plan_for_submode(shared_slots[i].a);
+        fpga_meter_transition_plan_t b =
+            fpga_meter_transition_plan_for_submode(shared_slots[i].b);
+
+        snprintf(name, sizeof(name), "%s stock slot", shared_slots[i].label);
+        EXPECT_EQ_U8(name, a.stock_mode, b.stock_mode);
+        snprintf(name, sizeof(name), "%s selector", shared_slots[i].label);
+        EXPECT_EQ_U16(name, a.selector_word, b.selector_word);
+        snprintf(name, sizeof(name), "%s Port C/E mux", shared_slots[i].label);
+        EXPECT_EQ_U8(name, a.portc_porte_mux, b.portc_porte_mux);
+        snprintf(name, sizeof(name), "%s Port A/B mux", shared_slots[i].label);
+        EXPECT_EQ_U8(name, a.porta_portb_mux, b.porta_portb_mux);
+        snprintf(name, sizeof(name), "%s frame family", shared_slots[i].label);
+        EXPECT_EQ_U8(name, a.frame_family, b.frame_family);
+        snprintf(name, sizeof(name), "%s apply presence", shared_slots[i].label);
+        EXPECT_EQ_U8(name, a.has_apply_word ? 1U : 0U,
+                     b.has_apply_word ? 1U : 0U);
+        snprintf(name, sizeof(name), "%s apply word", shared_slots[i].label);
+        EXPECT_EQ_U16(name, a.apply_word, b.apply_word);
+    }
+}
+
 static void test_fallbacks(void)
 {
     fpga_meter_transition_plan_t plan =
@@ -273,6 +310,7 @@ int main(void)
     test_stock_apply_words_for_runtime_family_switch();
     test_transition_plan_covers_mux_family_and_settle_policy();
     test_state_machine_contract_is_exhaustive();
+    test_local_splits_do_not_invent_extra_stock_selectors();
     test_fallbacks();
     test_rx_frame_gate_preserves_discard_budget_while_busy();
 

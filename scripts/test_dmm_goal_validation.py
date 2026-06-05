@@ -110,6 +110,12 @@ class DmmGoalValidationTests(unittest.TestCase):
         self.assertIn("size 0", coverage["terms"])
         self.assertIn("not a recovered meter calibration source", coverage["terms"])
 
+    def test_re_coverage_requires_shared_local_split_boundary(self) -> None:
+        coverage = validate_dmm_goal.verify_re_coverage()
+        self.assertIn("shared local splits", coverage["terms"])
+        self.assertIn("eight-entry stock selector table", coverage["terms"])
+        self.assertIn("without binary stock evidence", coverage["terms"])
+
     def test_unrecovered_meter_coefficients_are_absent(self) -> None:
         result = validate_dmm_goal.verify_no_unrecovered_meter_coefficients()
         self.assertIn("firmware/src/drivers/meter_data.c", result["checked"])

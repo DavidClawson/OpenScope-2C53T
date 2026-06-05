@@ -52,6 +52,15 @@ The test fails if a local submode has no valid stock slot, no valid frame
 family, or no valid selector word, and it also fails if any recovered stock
 slot stops being represented by the local model.
 
+The same software contract now explicitly guards the shared local splits. DC
+small-current and DC A must keep the same stock slot/selector/mux projection;
+AC small-current and local AC A must keep the same stock slot/selector/mux
+projection; capacitance and temperature must keep the same stock slot/selector/
+mux projection. These are deliberate evidence boundaries over the
+eight-entry stock selector table. A future hard input must not cause the port to invent a
+new 0x05xx selector for one side of a local split unless a recovered stock
+writer or repeatable stock-runtime trace proves it.
+
 ## Current Evidence Boundary
 
 The software contract proves parser/state safety only:

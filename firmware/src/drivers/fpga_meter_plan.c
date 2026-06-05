@@ -10,7 +10,9 @@
  * hardware selector slots; it does not claim that stock has eleven independent
  * analog frontend modes. In particular, DC mA/DC A share stock slot 2,
  * AC mA/local AC A share stock slot 3, and capacitance/temperature share stock
- * slot 5 until a stock writer or bench trace proves a narrower selector.
+ * slot 5 until a stock writer or bench trace proves a narrower selector. If a
+ * future live case is surprising, keep that boundary here: do not invent a new
+ * 0x05xx selector for the local split without binary stock evidence.
  */
 static const uint8_t stock_meter_cmd_low[FPGA_METER_STOCK_MODE_COUNT] = {
     0x14, 0x0C, 0x17, 0x0B, 0x0A, 0x12, 0x11, 0x10

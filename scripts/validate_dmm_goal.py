@@ -139,6 +139,8 @@ def verify_re_coverage() -> dict[str, Any]:
         "not DMM calibration", "METER_REJECT_UNRESOLVED_CALIBRATION",
         "low-Ohm normal frames therefore", "9999.BIN", "cluster 0",
         "size 0", "not a recovered meter calibration source",
+        "shared local splits", "eight-entry stock selector table",
+        "without binary stock evidence",
     ]
 
     haystack = ""
