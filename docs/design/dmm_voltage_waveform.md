@@ -157,11 +157,12 @@ Current custom firmware now ports the stock DMM display-state machine into
 renderer fields. The parser stock-family state and the frontend transition
 sequence both derive their UI-submode mapping from `fpga_meter_plan`, so one
 tested table controls selector/apply words, mux metadata, and parser debug
-state. Autoscan only scores AC voltage/current candidates when the parsed frame
-has AC evidence (`is_ac` from the frame status or companion frequency metadata),
-so DC payloads are not promoted into AC modes. For ACV, this means the display
-formatter still uses the stock `frame[7]` format selector instead of using
-`extra` as a range hint:
+state. Autoscan only scores candidates when the parser reports a clean matching
+frame family for the active transition plan. AC voltage/current candidates also
+need AC evidence (`is_ac` from the frame status or companion frequency
+metadata), so DC payloads are not promoted into AC modes. For ACV, this means
+the display formatter still uses the stock `frame[7]` format selector instead
+of using `extra` as a range hint:
 
 - `frame[7] bit0 set` maps to stock ACV format index `0`, rendered locally as
   `X.XXX V`.

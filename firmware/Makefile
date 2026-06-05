@@ -410,8 +410,8 @@ $(BUILD_DIR)/test_meter_data: tests/test_meter_data.c src/drivers/meter_data.c s
 test-meter-data: $(BUILD_DIR)/test_meter_data
 	$<
 
-$(BUILD_DIR)/test_meter_auto: tests/test_meter_auto.c src/drivers/meter_auto.c src/drivers/meter_auto.h src/drivers/meter_data.h | $(BUILD_DIR)
-	$(HOST_CC) -std=gnu11 -Wall -Wextra -Isrc/drivers $< src/drivers/meter_auto.c -lm -o $@
+$(BUILD_DIR)/test_meter_auto: tests/test_meter_auto.c src/drivers/meter_auto.c src/drivers/meter_auto.h src/drivers/meter_data.h src/drivers/fpga_meter_plan.c src/drivers/fpga_meter_plan.h | $(BUILD_DIR)
+	$(HOST_CC) -std=gnu11 -Wall -Wextra -Isrc/drivers $< src/drivers/meter_auto.c src/drivers/fpga_meter_plan.c -lm -o $@
 
 test-meter-auto: $(BUILD_DIR)/test_meter_auto
 	$<

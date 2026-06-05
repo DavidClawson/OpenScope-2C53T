@@ -8,6 +8,7 @@
 #include <stdio.h>
 #include <string.h>
 
+#include "fpga_meter_plan.h"
 #include "meter_auto.h"
 
 static int tests_run = 0;
@@ -33,6 +34,9 @@ static meter_reading_t normal_reading(uint8_t submode, int bcd_value)
     r.submode = submode;
     r.bcd_value = bcd_value;
     r.result_class = METER_RESULT_NORMAL;
+    r.expected_frame_family = (uint8_t)fpga_meter_frame_family_for_submode(submode);
+    r.observed_frame_family = r.expected_frame_family;
+    r.reject_reason = METER_REJECT_NONE;
     return r;
 }
 
@@ -54,6 +58,25 @@ static int test_wrong_submode_never_scores(void)
     meter_reading_t r = normal_reading(0, 4997);
 
     ASSERT(meter_auto_score(1, &r) == 0);
+    ASSERT(meter_auto_score(2, &r) == 0);
+    return 1;
+}
+
+static int test_dirty_frame_family_state_never_scores(void)
+{
+    meter_reading_t r = normal_reading(2, 2261);
+
+    ASSERT(meter_auto_score(2, &r) == 50);
+
+    r.reject_reason = METER_REJECT_WRONG_FRAME_FAMILY;
+    ASSERT(meter_auto_score(2, &r) == 0);
+
+    r = normal_reading(2, 2261);
+    r.observed_frame_family = (uint8_t)FPGA_METER_FRAME_FAMILY_VOLTAGE;
+    ASSERT(meter_auto_score(2, &r) == 0);
+
+    r = normal_reading(2, 2261);
+    r.expected_frame_family = (uint8_t)FPGA_METER_FRAME_FAMILY_VOLTAGE;
     ASSERT(meter_auto_score(2, &r) == 0);
     return 1;
 }
@@ -124,6 +147,9 @@ static int test_continuity_marker_beats_resistance_normal(void)
     continuity.valid = true;
     continuity.submode = 7;
     continuity.result_class = METER_RESULT_CONTINUITY;
+    continuity.expected_frame_family =
+        (uint8_t)fpga_meter_frame_family_for_submode(7);
+    continuity.observed_frame_family = continuity.expected_frame_family;
 
     ASSERT(meter_auto_score(6, &resistance) == 70);
     ASSERT(meter_auto_score(7, &continuity) == 80);
@@ -136,6 +162,7 @@ int main(void)
 
     TEST(candidate_order_keeps_voltage_before_passive_and_current);
     TEST(wrong_submode_never_scores);
+    TEST(dirty_frame_family_state_never_scores);
     TEST(dc_voltage_scores_without_frequency);
     TEST(ac_voltage_requires_frequency_evidence);
     TEST(current_auto_scores_respect_ac_evidence);

@@ -3,6 +3,7 @@
  */
 
 #include "meter_auto.h"
+#include "fpga_meter_plan.h"
 
 static const uint8_t meter_auto_candidate_order[] = {
     0, 1, 6, 7, 8, 9, 10, 2, 4, 3, 5
@@ -22,9 +23,20 @@ static bool reading_has_ac_evidence(const meter_reading_t *r)
     return r->is_ac || r->aux_freq_hz >= 1.0f;
 }
 
+static bool reading_has_clean_frame_family(uint8_t submode,
+                                           const meter_reading_t *r)
+{
+    uint8_t expected = (uint8_t)fpga_meter_frame_family_for_submode(submode);
+
+    return r->reject_reason == METER_REJECT_NONE &&
+           r->expected_frame_family == expected &&
+           r->observed_frame_family == expected;
+}
+
 uint8_t meter_auto_score(uint8_t submode, const meter_reading_t *r)
 {
     if (!r || !r->valid || r->submode != submode) return 0;
+    if (!reading_has_clean_frame_family(submode, r)) return 0;
 
     if (r->result_class == METER_RESULT_NORMAL) {
         switch (submode) {
