@@ -56,7 +56,7 @@ typedef struct {
      * Points to a static string (never NULL). Example values:
      *   DCV:         "V", "mV"
      *   ACV:         "V", "mV"
-     *   DCA/ACA:     "A", "mA", "uA"
+     *   DCA/ACA:     "A", "mA" (uA is a local placeholder, not stock-proven)
      *   Resistance:  "Ohm", "kOhm", "MOhm"
      *   Frequency:   "Hz", "kHz", "MHz"
      *   Capacitance: "nF", "uF"
@@ -64,8 +64,9 @@ typedef struct {
      */
     const char *unit_suffix;
 
-    /* Unit variant (0..2) within the current submode. Used to select
-     * between e.g. mA / A / uA in the same DCA mode. */
+    /* Local unit/range variant (0..2) within the current submode. DC current
+     * has stock formatter evidence for mA/A; AC A and uA remain local policy
+     * until stock range state or live current traces prove them. */
     uint8_t  unit_variant;
 
     /* Bar graph fraction (0.0 - 1.0) */
@@ -84,7 +85,7 @@ typedef struct {
     uint8_t  submode;            /* UI submode that produced this reading */
     uint8_t  probe_type;         /* 0, 1, or 2 — from frame[7] bit pattern */
     uint8_t  range_indicator;    /* from frame[6] bits 4-5: range band */
-    uint8_t  range_cmd;          /* Parameter for auto-range FPGA commands */
+    uint8_t  range_cmd;          /* Legacy diagnostic mirror, not a range command. */
     uint8_t  stock_mode;         /* Stock DMM FSM mode family (0-7) */
     uint8_t  stock_variant;      /* Stock FSM unit/range variant */
     uint8_t  stock_format;       /* Stock FSM decimal/display format */

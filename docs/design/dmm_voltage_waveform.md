@@ -207,8 +207,9 @@ eleven-submode porting map and records the evidence boundary for `ms[0x02]`
 (`gpio_mux_portc_porte`) versus `ms[0x03]` (`gpio_mux_porta_portb`). In
 particular:
 
-- stock current evidence proves two selector slots, with display-side unit
-  indices inferred as mA/A, but no separate recovered uA selector;
+- stock current evidence proves two selector slots: DC current has display-side
+  mA/A formatter evidence, AC current currently has ACA mA formatter evidence,
+  and no separate recovered AC A or uA selector has been found;
 - capacitance and temperature share the recovered extended selector slot
   `0x0512` in the local port; stock notes support capacitance-like formatting
   and a mode-5 Fahrenheit conversion path, not separate stock selector modes;

@@ -60,13 +60,14 @@ eight-byte command table:
 | Stock slot | Selector | Stock formatter evidence | Local use |
 |---:|---:|---|---|
 | 2 | `0x0517` | `full_decompile.c` case 2 writes display unit state `4` for one DCA range and `3` for another, keyed by `DAT_2000102e`. `meter_fsm_deep_dive.md` maps those unit indices to inferred mA and A unit strings. | local DC current small range and DC A range |
-| 3 | `0x050B` | `full_decompile.c` case 3 writes display unit state `5`; `meter_fsm_deep_dive.md` maps that unit index to an inferred ACA mA unit string. | local AC current small range and AC A range |
+| 3 | `0x050B` | `full_decompile.c` case 3 writes display unit state `5`; `meter_fsm_deep_dive.md` maps that unit index to an inferred ACA mA unit string. | local AC current small range; AC A is only local policy until proven |
 
-No inspected stock path proves a separate uA selector. The stock evidence so
-far distinguishes current ranges through frame/display unit state, not through
-additional command-table slots. Until the runtime writer for the stock range
-state is recovered or bench-proven, local uA/mA/A labels are parser/UI policy
-on top of the two recovered current slots.
+No inspected stock path proves a separate uA selector, and no inspected AC path
+proves an A-range ACA formatter. The stock evidence so far distinguishes DC
+current ranges through frame/display unit state, not through additional
+command-table slots. Until the runtime writer for the stock range state is
+recovered or bench-proven, local uA and AC A labels are parser/UI policy on top
+of the two recovered current slots.
 
 ## Extended Slot 5 Evidence Boundary
 

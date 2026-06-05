@@ -30,9 +30,9 @@ typedef struct {
 typedef struct {
     uint8_t submode;
     uint8_t stock_mode;
-    uint8_t mux_index;          /* Debug alias for the Port C/E function mux. */
-    uint8_t portc_porte_mux;    /* Stock ms[0x02] -> gpio_mux_portc_porte(). */
-    uint8_t porta_portb_mux;    /* Stock ms[0x03] -> gpio_mux_porta_portb(). */
+    uint8_t mux_index;          /* Debug alias for the Port C/E mux projection. */
+    uint8_t portc_porte_mux;    /* Local projection of stock ms[0x02]. */
+    uint8_t porta_portb_mux;    /* Local projection of stock ms[0x03]. */
     uint8_t frame_family;
     uint8_t discard_frames;
     uint16_t settle_ms;

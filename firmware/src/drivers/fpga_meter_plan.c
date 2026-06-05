@@ -2,6 +2,16 @@
 
 #define FPGA_METER_STOCK_WORD_BASE 0x0500u
 
+/*
+ * Stock source of truth:
+ * reverse_engineering/analysis_v120/meter_mode_command_table_2026_06_05.md
+ * records the eight recovered selector low bytes below. The open firmware has
+ * eleven UI submodes, so this module maps local UI policy onto those eight
+ * hardware selector slots; it does not claim that stock has eleven independent
+ * analog frontend modes. In particular, DC mA/DC A share stock slot 2,
+ * AC mA/local AC A share stock slot 3, and capacitance/temperature share stock
+ * slot 5 until a stock writer or bench trace proves a narrower selector.
+ */
 static const uint8_t stock_meter_cmd_low[FPGA_METER_STOCK_MODE_COUNT] = {
     0x14, 0x0C, 0x17, 0x0B, 0x0A, 0x12, 0x11, 0x10
 };
@@ -20,13 +30,13 @@ uint8_t fpga_meter_stock_mode_for_submode(uint8_t submode)
     case 3: /* DC A */
         return 2;
     case 4: /* AC mA */
-    case 5: /* AC A */
+    case 5: /* Local AC A policy over the recovered ACA slot. */
         return 3;
     case 6: return 4; /* Resistance */
     case 7: return 6; /* Continuity */
     case 8: return 7; /* Diode */
     case 9:  /* Capacitance */
-    case 10: /* Temperature, local split on recovered extended stock slot. */
+    case 10: /* Local temp split on the recovered extended stock slot. */
         return 5;
     default:
         return FPGA_METER_INVALID_STOCK_MODE;
@@ -128,6 +138,13 @@ fpga_meter_transition_plan_t fpga_meter_transition_plan_for_submode(uint8_t subm
         plan.voltage_function_axis = false;
         return plan;
     }
+    /*
+     * The stock decompile names two analog-frontend mux bytes, ms[0x02] and
+     * ms[0x03], which feed the Port C/E and Port A/B GPIO writers. The current
+     * port uses the recovered stock slot as both mux indices because no scoped
+     * disassembly path has yet shown an extra writer that splits small current,
+     * A-range current, capacitance, or temperature inside a shared slot.
+     */
     plan.portc_porte_mux = plan.stock_mode;
     plan.porta_portb_mux = plan.stock_mode;
     plan.mux_index = plan.portc_porte_mux;

@@ -230,21 +230,28 @@ static uint8_t bcd_nibble_lookup(uint8_t combined)
  *   Sub-mode 2 (DC mA):  XX.XX  → decimal at position 2
  *   Sub-mode 3 (DC A):   X.XXX  → decimal at position 1
  *   Sub-mode 4 (AC mA):  XX.XX  → decimal at position 2
- *   Sub-mode 5 (AC A):   X.XXX  → decimal at position 1
+ *   Sub-mode 5 (local AC A policy): X.XXX → decimal at position 1
  *   Sub-mode 6 (Ohm):    X.XXX  → decimal at position 1
  *   Sub-mode 7 (Cont):   XXX.X  → decimal at position 3
  *   Sub-mode 8 (Diode):  X.XXX  → decimal at position 1
  *   Sub-mode 9 (Cap):    XX.XX  → decimal at position 2
  *   Sub-mode 10 (Temp):  XXX.X   → decimal at position 3
  *
- * The actual decimal position depends on the auto-range state,
- * but these are the defaults for the most common range.
+ * The actual decimal position is driven later by the stock-like formatter
+ * state. These entries are local fallbacks for invalid/uncharacterized paths;
+ * do not promote them to range truth without stock disassembly or bench traces.
  * ═══════════════════════════════════════════════════════════════════ */
 
 /* Default decimal position per submode (index 0 = no decimal, 1-3 = after nth digit).
- * Empirically tuned from hardware readings:
+ * These are fallback display positions. The normal parser path below uses
+ * stock display-state fields before formatting, and DCV then applies the
+ * recovered per-frame voltage range hint. Current range splits, local AC A,
+ * and the cap/temp split remain local UI policy unless the stock FSM or live
+ * evidence proves a narrower hardware state.
+ *
+ * Bench references:
  *   DCV (0): 1-10V range, raw 9899 → 9.899 V, decimal after digit 1
- *   ACV (1): similar
+ *   ACV (1): stock frame[7] display format, broader AC sweep still needed
  *   Resistance (6): 20k range, raw 9899 → 98.99 kΩ, decimal after digit 2
  *   Continuity (7): 200Ω range, raw 16 → 1.6 Ω, decimal after digit 3
  *   Diode (8): 2V range, raw 623 → 0.623 V, decimal after digit 1
@@ -257,7 +264,7 @@ static const uint8_t default_decimal_pos[11] = {
     2,  /* 2: DCA (mA)  — 98.99 mA */
     1,  /* 3: DCA (A)   — 9.899 A */
     2,  /* 4: ACA (mA)  — 98.99 mA */
-    1,  /* 5: ACA (A) or Frequency */
+    1,  /* 5: local AC A policy over stock ACA slot */
     2,  /* 6: Resistance— 98.99 kΩ */
     3,  /* 7: Continuity— 198.9 Ω */
     1,  /* 8: Diode     — 0.623 V */
@@ -379,17 +386,13 @@ static void format_4digit_unsigned(float v, char *s)
 /* ═══════════════════════════════════════════════════════════════════
  * Unit suffix table
  *
- * Indexed by [submode][unit_variant]. Variant 0 is the only variant
- * the stock firmware actually uses for submodes 1-7 — see
- * reverse_engineering/analysis_v120/meter_fsm_deep_dive.md Q2: the
- * variant state is only written inside the DCV stock state machine, and it
- * persists from there into whatever submode runs next. Other modes
- * read it as a side-effect but never drive it.
- *
- * Variants 1/2 for submodes 1-7 are placeholder strings that will
- * never be selected at runtime today. They're left here as
- * documentation targets for when we wire up per-submode range
- * feedback in a future phase.
+ * Indexed by [local submode][local unit_variant]. Stock display evidence is
+ * narrower than this UI table: `meter_fsm_deep_dive.md` and full_decompile.c
+ * prove DCA formatter indices 4 (mA) and 3 (A), while ACA case 3 proves index
+ * 5 (mA-like). No inspected stock path proves a uA selector or a separate AC A
+ * formatter. The local variants therefore document UI intent and keep stale
+ * voltage/current data visibly separated; they must not be used as proof of an
+ * unresolved hardware range state.
  *
  * Strings are ASCII-only so the font renderer doesn't need Greek
  * mu/ohm glyphs.
@@ -402,7 +405,7 @@ static const char * const unit_suffix_table[11][3] = {
     /* 2 DCA(mA)  */ { "mA",   "uA",    "mA"   },
     /* 3 DCA(A)   */ { "A",    "A",     "A"    },
     /* 4 ACA(mA)  */ { "mA",   "uA",    "mA"   },
-    /* 5 Freq/ACA */ { "Hz",   "kHz",   "MHz"  },
+    /* 5 local AC A */ { "A",  "A",     "A"    },
     /* 6 Ohm      */ { "Ohm",  "kOhm",  "MOhm" },
     /* 7 Cont     */ { "Ohm",  "Ohm",   "Ohm"  },
     /* 8 Diode    */ { "V",    "V",     "V"    },
@@ -450,6 +453,8 @@ static bool ui_submode_is_small_current(uint8_t ui_submode)
 
 static bool ui_submode_is_large_current(uint8_t ui_submode)
 {
+    /* Local UI range split only. Stock slot 2 has DCA mA/A formatter evidence;
+     * stock slot 3 currently has only ACA mA formatter evidence. */
     return ui_submode == 3 || ui_submode == 5;
 }
 
@@ -483,6 +488,18 @@ static void meter_stock_fsm_apply(uint8_t ui_submode,
         meter_stock_fsm.variant = 2U;
     }
 
+    /*
+     * Stock formatter port.
+     * full_decompile.c:2931..3009 computes DAT_20001026 (unit/display index)
+     * and DAT_20001030 (composite decimal/template index) from stock mode,
+     * frame[6], frame[7], and DAT_2000102e; meter_fsm_deep_dive.md records
+     * that only DCV writes the stock DAT_2000102e variant state itself. Local
+     * current submodes therefore seed `variant` from UI range policy before
+     * entering the stock-shaped cases: DC slot 2 has mA/A formatter evidence,
+     * while AC slot 3 currently has ACA mA evidence and a local AC A override.
+     * This function must not decide exponent or mode from the raw BCD value;
+     * all decisions come from active UI/stock mode plus frame flags.
+     */
     switch (stock_mode) {
     case 0:
         if (meter_stock_fsm.dc_state != 0) {
@@ -628,6 +645,10 @@ static void meter_stock_fsm_apply(uint8_t ui_submode,
 
 static const char *unit_suffix_from_stock(uint8_t ui_submode, uint8_t unit_index)
 {
+    /* Local overrides keep the selected UI range visible after the stock-like
+     * formatter has established a matching current frame family. They are not
+     * standalone evidence that the analog frontend entered a distinct AC A/uA
+     * range; frontend validation must prove that separately. */
     if (ui_submode == 3 || ui_submode == 5) return "A";
     if (ui_submode == 1) return "V";
     if (ui_submode == 7) return "Ohm";

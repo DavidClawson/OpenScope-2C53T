@@ -1160,6 +1160,16 @@ fpga_meter_selector_t fpga_meter_expected_selectors(uint8_t submode)
 
 static void fpga_apply_meter_portc_porte_mux(uint8_t mux)
 {
+    /*
+     * Analog frontend mux projection, Port C/E half.
+     * The source-of-truth stock path is the recovered gpio_mux_portc_porte()
+     * writer fed by meter state byte ms[0x02]. These writes touch AT32 GPIO
+     * BOP/BCR aliases (`scr`/`clr`) directly: PC12 and PE4/PE5/PE6 select
+     * which probe/AFE path is exposed to the meter IC. The mux value is a stock
+     * selector-family index projected by fpga_meter_plan; current range and the
+     * cap/temp split are not treated as separate hardware truth until a stock
+     * writer or live trace proves extra state.
+     */
     switch (mux) {
     case 0:
         GPIOC->scr = (1U << 12);
@@ -1216,6 +1226,14 @@ static void fpga_apply_meter_portc_porte_mux(uint8_t mux)
 
 static void fpga_apply_meter_porta_portb_mux(uint8_t mux)
 {
+    /*
+     * Analog frontend mux projection, Port A/B half.
+     * The stock counterpart writes PA15, PA10, PB10, and PB11 from meter state
+     * byte ms[0x03]. PB11 is also the FPGA active-measurement gate, so this is
+     * deliberately sequenced before the 0x05xx USART selector words below.
+     * Because no recovered stock path distinguishes AC A/uA or cap/temp with an
+     * additional ms[0x03] value, shared stock slots keep shared mux state here.
+     */
     switch (mux) {
     case 0:
         GPIOA->scr = (1U << 15);
@@ -1685,10 +1703,12 @@ static void fpga_usart_tx_task(void *pv)
  * Wakes on meter_sem when a complete data frame arrives.
  * Parses BCD meter readings and updates the global meter_reading.
  *
- * After parsing, sends auto-range feedback commands (0x1B, 0x1C, 0x1E)
- * to keep the FPGA meter IC properly configured. Without these, the
- * meter IC operates with wrong gain/reference settings.
- * See: fpga_state_update (0x080028E0) in stock firmware.
+ * Stock note: the decompiled FUN_080028e0 path queues display task indices
+ * 0x1B/0x1C/0x1E after formatter state changes; the current RE notes classify
+ * that as display-side dispatch, not an FPGA range-control feedback loop.
+ * Consequently this RX task only gates transition/stale frames and parses the
+ * active 12-byte USART2 data frame. It must not infer or send range commands
+ * from the decoded number itself.
  */
 static void fpga_usart_rx_task(void *pv)
 {
@@ -4191,6 +4211,15 @@ static void fpga_send_meter_mode_sequence(uint8_t submode)
     fpga.meter_mode_apply_word = 0;
     fpga.meter_mode_probe_word = probe_word;
     fpga.meter_mode_start_word = (uint16_t)(0x0500U | FPGA_CMD_METER_START);
+    /*
+     * USART2 selector sequence.
+     * Stock evidence proves raw meter command words in the 0x05xx family and
+     * 10-tick command pacing; it does not prove that every local submode owns a
+     * unique selector. The optional apply word mirrors recovered family-switch
+     * words (ACV, DCA, continuity, diode). The fixed settle/discard constants
+     * are conservative local policy and are reported in debug output instead of
+     * being hidden as stock fact.
+     */
     fpga_wire_send_word(plan.selector_word, plan.settle_ms);
     if (plan.has_apply_word) {
         fpga.meter_mode_apply_word = plan.apply_word;

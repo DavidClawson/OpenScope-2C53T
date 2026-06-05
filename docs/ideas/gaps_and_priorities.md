@@ -46,21 +46,20 @@ The oscilloscope analog signals never touch the MCU directly — all high-speed 
 
 ## Multimeter Gaps
 
-The custom firmware now exposes **11 local multimeter sub-modes** covering the
-recovered stock DMM families, including separate small/large current entries
-and an explicit temperature slot. Voltage and several passive-mode frames are
-decoded; the remaining risk is hardware/front-end validation for current,
-capacitance, temperature, and the less-characterized stock formatter variants.
-Small-current and large-current UI entries deliberately share the recovered
-stock current command family but keep separate local range state: mA/uA paths
-must not be relabeled as A, and A paths must not inherit mA decimal placement.
+The custom firmware exposes **11 local multimeter sub-modes** mapped onto the
+eight recovered stock DMM selector slots. Voltage and several passive-mode
+frames are decoded; current range entries, the capacitance/temperature split,
+and higher resistance bands remain hardware/front-end validation gaps. DC
+mA/DC A share stock current slot 2 with display-side formatter evidence; AC mA
+maps to stock current slot 3; AC A and uA remain local/experimental policy
+until a stock writer or bench trace proves the corresponding hardware state.
 
 | Feature | Original | Ours | Status |
 |---------|----------|------|--------|
 | DC Voltage | Yes | Decoder + UI, bench 5V sane | Needs broader range/cal proof |
 | AC Voltage | Yes | Decoder + UI, frequency evidence path | Needs broader mains/low-voltage AC proof |
 | DC Current (small/large) | Yes (2 ranges) | UI/decoder scaffold | Needs jack/series-load validation |
-| AC Current (small/large) | Yes (2 ranges) | UI/decoder scaffold | Needs jack/series-load validation |
+| AC Current (small/large) | Yes | AC mA scaffold; AC A local policy | Needs stock A-range evidence plus jack/series-load validation |
 | Resistance | Yes | Decoder + calibrated low/kOhm bands | Higher bands need characterization |
 | Continuity (with buzzer) | Yes | Decoder + UI indicator | Buzzer hardware path needs validation |
 | Diode | Yes | UI/decoder scaffold | Needs real diode frame validation |
