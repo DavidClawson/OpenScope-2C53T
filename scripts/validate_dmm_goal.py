@@ -187,6 +187,61 @@ def verify_state_machine_property_contract() -> dict[str, Any]:
     }
 
 
+def verify_transition_plan_property_contract() -> dict[str, Any]:
+    """Anchor the transition-plan tests that exercise stock-like mode changes."""
+    rel = "firmware/tests/test_fpga_meter_plan.c"
+    text = (REPO / rel).read_text(encoding="utf-8", errors="replace")
+    required_tests = [
+        "transition_plan_covers_mux_family_and_settle_policy",
+        "state_machine_contract_is_exhaustive",
+        "local_splits_do_not_invent_extra_stock_selectors",
+        "fallbacks",
+        "rx_frame_gate_preserves_discard_budget_while_busy",
+        "every_submode_transition_drains_before_accepting_frames",
+    ]
+    required_regexes = {
+        "transition plan iterates every local submode":
+            r"for \(uint8_t i = 0; i < FPGA_METER_LOCAL_SUBMODE_COUNT; i\+\+\)",
+        "phase matrix iterates every local submode":
+            r"for \(uint8_t mode = 0; mode < FPGA_METER_LOCAL_SUBMODE_COUNT; mode\+\+\)",
+        "planned discards drain in order":
+            r"for \(uint8_t i = 0; i < plan\.discard_frames; i\+\+\)",
+    }
+    required_snippets = [
+        "FPGA_METER_TRANSITION_DISCARD_FRAMES",
+        "FPGA_METER_TRANSITION_SETTLE_MS",
+        "FPGA_METER_FRAME_FAMILY_VOLTAGE",
+        "FPGA_METER_FRAME_FAMILY_CURRENT",
+        "FPGA_METER_FRAME_FAMILY_CONTINUITY",
+        "busy frame rejected",
+        "stable frame accepted",
+        "all recovered stock slots covered",
+    ]
+
+    missing_tests = [
+        name for name in required_tests
+        if f"static void test_{name}" not in text or f"test_{name}();" not in text
+    ]
+    missing_regexes = [
+        name for name, pattern in required_regexes.items()
+        if re.search(pattern, text, re.MULTILINE) is None
+    ]
+    missing_snippets = [snippet for snippet in required_snippets if snippet not in text]
+    if missing_tests or missing_regexes or missing_snippets:
+        raise GateError(
+            "transition-plan property contract check failed: "
+            f"missing_tests={missing_tests} "
+            f"missing_regexes={missing_regexes} "
+            f"missing_snippets={missing_snippets}"
+        )
+    return {
+        "file": rel,
+        "tests": required_tests,
+        "regex_anchors": list(required_regexes),
+        "snippet_anchors": required_snippets,
+    }
+
+
 def verify_re_coverage() -> dict[str, Any]:
     required_docs = [
         "reverse_engineering/analysis_v120/meter_stock_multiplier_tables_2026_06_05.md",
@@ -476,6 +531,7 @@ def main(argv: list[str] | None = None) -> int:
             report["firmware_changed_since_upstream"] = firmware_changed_since_upstream()
             report["flash_preflight"] = preflight_current_firmware_image()
         report["state_machine_property_contract"] = verify_state_machine_property_contract()
+        report["transition_plan_property_contract"] = verify_transition_plan_property_contract()
         report["re_comment_coverage"] = verify_re_coverage()
         report["no_unrecovered_meter_coefficients"] = verify_no_unrecovered_meter_coefficients()
 

@@ -172,6 +172,23 @@ class DmmGoalValidationTests(unittest.TestCase):
         self.assertIn("METER_REJECT_MISSING_AC_EVIDENCE",
                       result["snippet_anchors"])
 
+    def test_transition_plan_property_contract_is_anchored(self) -> None:
+        result = validate_dmm_goal.verify_transition_plan_property_contract()
+        self.assertEqual(result["file"], "firmware/tests/test_fpga_meter_plan.c")
+        self.assertIn(
+            "every_submode_transition_drains_before_accepting_frames",
+            result["tests"],
+        )
+        self.assertIn(
+            "rx_frame_gate_preserves_discard_budget_while_busy",
+            result["tests"],
+        )
+        self.assertIn("phase matrix iterates every local submode",
+                      result["regex_anchors"])
+        self.assertIn("planned discards drain in order",
+                      result["regex_anchors"])
+        self.assertIn("stable frame accepted", result["snippet_anchors"])
+
     def test_live_validation_only_switches_dcv_acv_without_current_probe(self) -> None:
         calls: list[list[str]] = []
         meter_dumps = [GOOD_DCV, GOOD_ACV_REJECT]
