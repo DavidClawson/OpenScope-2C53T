@@ -2220,12 +2220,16 @@ static void cmd_meter_autoscan(const char *args)
             if (score > 0) break;
         }
         usb_debug_printf("auto candidate sub=%u (%s) score=%u valid=%u cls=%u "
+                         "family=%u/%u reject=%u "
                          "disp=%s unit=%s raw=%d dp=%u f8=%02X seq=%u word=%04X apply=%04X\r\n",
                          (unsigned)submode,
                          meter_submode_name(submode),
                          (unsigned)score,
                          meter_reading.valid ? 1U : 0U,
                          (unsigned)meter_reading.result_class,
+                         (unsigned)meter_reading.expected_frame_family,
+                         (unsigned)meter_reading.observed_frame_family,
+                         (unsigned)meter_reading.reject_reason,
                          (meter_reading.valid && meter_reading.submode == submode)
                             ? meter_reading.display_str : "---",
                          (meter_reading.valid && meter_reading.submode == submode &&
@@ -2519,12 +2523,16 @@ static void cmd_meter_stream(const char *args)
             last_update = meter_reading.update_count;
             uint16_t extra = ((uint16_t)meter_reading.dbg_frame[10] << 8) |
                              meter_reading.dbg_frame[11];
-            usb_debug_printf("%lu upd=%lu sub=%u cls=%u raw=%d dp=%u unit=%s disp=%s "
+            usb_debug_printf("%lu upd=%lu sub=%u cls=%u family=%u/%u reject=%u "
+                             "raw=%d dp=%u unit=%s disp=%s "
                              "f6=%02X f7=%02X f8=%02X f9=%02X extra=%04X aux_freq_i10=%ld wave=%lu beep=%u\r\n",
                              i,
                              meter_reading.update_count,
                              (unsigned)meter_reading.submode,
                              (unsigned)meter_reading.result_class,
+                             (unsigned)meter_reading.expected_frame_family,
+                             (unsigned)meter_reading.observed_frame_family,
+                             (unsigned)meter_reading.reject_reason,
                              meter_reading.bcd_value,
                              (unsigned)meter_reading.decimal_pos,
                              meter_reading.unit_suffix ? meter_reading.unit_suffix : "",

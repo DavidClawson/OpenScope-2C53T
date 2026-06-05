@@ -40,7 +40,8 @@ The USB debug shell commands used for validation are:
   wrong-family reject reason so current/frontend failures are visible as mode
   activation evidence instead of only `---`.
 - `meter stream [count] [delay_ms]`: compact decoded-frame stream for watching
-  range/decimal instability without mixing concurrent serial readers.
+  range/decimal instability without mixing concurrent serial readers; each
+  row includes expected/observed frame family and wrong-family reject state.
 - `meter mux-stream [count] [delay_ms]`: decoded-frame stream plus the tested
   DMM transition plan (`stock_mode`, frame family, mux index, settle time),
   observed frame family/reject reason, recent mode-sequence words, and actual
