@@ -94,6 +94,7 @@ extern volatile uint32_t      meter_screen_partial_clear_count;
 extern volatile uint32_t      meter_screen_last_draw_us;
 extern volatile uint32_t      meter_screen_max_draw_us;
 extern volatile uint32_t      meter_screen_over_budget_count;
+extern volatile uint32_t      meter_screen_last_reading_display_update;
 extern volatile uint8_t       meter_screen_last_full_clear;
 extern volatile uint8_t       meter_screen_last_live;  /* Last draw used same-submode data */
 extern volatile uint8_t       meter_screen_last_continuity_flash;

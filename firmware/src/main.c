@@ -395,7 +395,7 @@ static void vDisplayTask(void *pvParameters)
             if (submode_changed || ((uc != last_meter_update) && enough_time) ||
                 periodic_due) {
                 draw_meter_screen();
-                last_meter_update = uc;
+                last_meter_update = meter_screen_last_reading_display_update;
                 last_meter_frame  = frame;
                 last_meter_submode = meter_submode;
             }

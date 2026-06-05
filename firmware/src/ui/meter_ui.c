@@ -105,6 +105,7 @@ volatile uint32_t meter_screen_partial_clear_count;
 volatile uint32_t meter_screen_last_draw_us;
 volatile uint32_t meter_screen_max_draw_us;
 volatile uint32_t meter_screen_over_budget_count;
+volatile uint32_t meter_screen_last_reading_display_update;
 volatile uint8_t  meter_screen_last_full_clear;
 volatile uint8_t  meter_screen_last_live;
 volatile uint8_t  meter_screen_last_continuity_flash;
@@ -1216,6 +1217,7 @@ void draw_meter_screen(void)
         reading.display_str[3] = '\0';
         reading.unit_suffix = "";
     }
+    meter_screen_last_reading_display_update = reading.display_update_count;
 
     bool has_live_reading = live_reading_for_mode(&reading, mode);
     meter_screen_last_live = has_live_reading ? 1U : 0U;

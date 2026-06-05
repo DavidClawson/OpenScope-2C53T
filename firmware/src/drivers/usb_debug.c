@@ -1960,13 +1960,14 @@ static void cmd_meter_dump(const char *args)
                      meter_submode_name(meter_submode),
                      (unsigned)meter_layout,
                      meter_layout_name(meter_layout));
-    usb_debug_printf("ui_draws=%lu full_clears=%lu partial_clears=%lu draw_us=%lu max_draw_us=%lu over_budget=%lu last_full=%u ui_live=%u continuity_flash=%u live_same_submode=%u\r\n",
+    usb_debug_printf("ui_draws=%lu full_clears=%lu partial_clears=%lu draw_us=%lu max_draw_us=%lu over_budget=%lu rendered_update=%lu last_full=%u ui_live=%u continuity_flash=%u live_same_submode=%u\r\n",
                      meter_screen_draw_count,
                      meter_screen_full_clear_count,
                      meter_screen_partial_clear_count,
                      meter_screen_last_draw_us,
                      meter_screen_max_draw_us,
                      meter_screen_over_budget_count,
+                     meter_screen_last_reading_display_update,
                      (unsigned)meter_screen_last_full_clear,
                      (unsigned)meter_screen_last_live,
                      (unsigned)meter_screen_last_continuity_flash,
@@ -2310,7 +2311,7 @@ static void cmd_ui_dump(void)
                      (int)settings_depth,
                      (int)settings_selected,
                      (int)settings_sub_selected);
-    usb_debug_printf("meter_ui draws=%lu full_clears=%lu partial_clears=%lu draw_us=%lu max_draw_us=%lu over_budget=%lu last_full=%u live=%u continuity_flash=%u reading_valid=%u "
+    usb_debug_printf("meter_ui draws=%lu full_clears=%lu partial_clears=%lu draw_us=%lu max_draw_us=%lu over_budget=%lu rendered_update=%lu last_full=%u live=%u continuity_flash=%u reading_valid=%u "
                      "reading_submode=%u updates=%lu display_updates=%lu\r\n",
                      meter_screen_draw_count,
                      meter_screen_full_clear_count,
@@ -2318,6 +2319,7 @@ static void cmd_ui_dump(void)
                      meter_screen_last_draw_us,
                      meter_screen_max_draw_us,
                      meter_screen_over_budget_count,
+                     meter_screen_last_reading_display_update,
                      (unsigned)meter_screen_last_full_clear,
                      (unsigned)meter_screen_last_live,
                      (unsigned)meter_screen_last_continuity_flash,
