@@ -117,6 +117,17 @@ class DmmGoalValidationTests(unittest.TestCase):
             ],
         )
 
+    def test_stock_meter_mux_restore_sites_are_binary_grounded(self) -> None:
+        result = stock_meter_literals.verify_meter_mux_restore_sequences()
+        self.assertEqual(
+            result["sequences"]["0x08025544"],
+            "a0 78 dc f7 ad f9 e0 78 dc f7 84 fa",
+        )
+        self.assertEqual(
+            result["sequences"]["0x0802723e"],
+            "9a f8 02 00 da f7 2f fb 9a f8 03 00 da f7 05 fc",
+        )
+
 
 if __name__ == "__main__":
     unittest.main()

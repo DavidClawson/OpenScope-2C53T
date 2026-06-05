@@ -163,6 +163,18 @@ open-firmware transition plan now represents these as separate
 `portc_porte_mux` and `porta_portb_mux` fields instead of treating the stock
 function/range selectors as one generic mux.
 
+`scripts/test_stock_meter_literals.py` binary-guards both saved-state apply
+sites so this evidence cannot drift silently:
+
+```text
+0x08025544: a0 78 dc f7 ad f9 e0 78 dc f7 84 fa
+0x0802723e: 9a f8 02 00 da f7 2f fb 9a f8 03 00 da f7 05 fc
+```
+
+These bytes prove the two boot/saved-state apply sequences only. They still do
+not prove a runtime DMM writer that changes `ms[0x02]`/`ms[0x03]` while the user
+switches local DMM ranges.
+
 The unresolved part is the live/runtime writer for `ms[0x03]` during local
 small-current versus A-range operation. Until that is recovered or bench-proven,
 local submodes 2/3 and 4/5 share the same recovered stock current slot and are
