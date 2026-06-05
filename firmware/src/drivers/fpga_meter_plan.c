@@ -13,11 +13,11 @@ uint8_t fpga_meter_stock_mode_for_submode(uint8_t submode)
     case 1: return 1; /* ACV */
     case 2: /* DC mA */
     case 3: /* DC A */
-        return 4;
+        return 2;
     case 4: /* AC mA */
     case 5: /* AC A */
         return 3;
-    case 6: return 2; /* Resistance */
+    case 6: return 4; /* Resistance */
     case 7: return 6; /* Continuity */
     case 8: return 7; /* Diode */
     case 9: return 5; /* Extended DMM slot; stock notes leave capacitance semantics open. */
