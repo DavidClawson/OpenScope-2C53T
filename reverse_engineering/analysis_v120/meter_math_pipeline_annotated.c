@@ -438,39 +438,15 @@ void dvom_rx_task(void)
         ms[0xF34] = result_class;
 
         /*
-         * Decimal scaling application:
-         *   scale = pow(10.0, scale_exp)   — computed via FUN_0803C8E0 with d0=10.0 (d9)
-         *   result = raw_f_double + scale   — via FUN_0803E124 (dadd)
+         * Decimal scaling application, corrected 2026-06-05:
          *
-         * IMPORTANT: FUN_0803E124 is __aeabi_dadd (double ADD), NOT division.
-         * In this path the scale (1.0, 10.0, 100.0, or 1000.0) is ADDED to raw_bcd.
-         * This shifts the value UP by one range-step's worth of counts.
+         *   scale = pow(10.0, scale_exp)   -- computed via FUN_0803C8E0 with d0=10.0
+         *   displayed value = extended_raw / scale
          *
-         * For the common DCV low-range case (scale_exp=0.0, scale=1.0):
-         *   result = raw_bcd + 1.0   (negligible change for display purposes)
-         *
-         * For the kΩ range (scale_exp=3.0, scale=1000.0):
-         *   result = raw_bcd + 1000.0  (shifts display by one kΩ step)
-         *
-         * The purpose is analogous to the decimal-shift-add loop in fpga_state_update:
-         * it adjusts the visible digit window to the correct decade.
-         *
-         * After the dadd, d2f converts back to float and stores to meter_raw_value.
-         * A polarity check (frame[2] bit 4) then optionally negates the float.
-         */
-        double scale = pow(10.0, scale_exp);   /* pow(d9=10.0, scale_exp) */
-        double raw_d = (double)raw_f;          /* __aeabi_f2d */
-        double adjusted = raw_d + scale;       /* __aeabi_dadd = FUN_0803E124 */
-        float final_val = (float)adjusted;     /* __aeabi_d2iz then d2f = FUN_0803DF48 */
-
-        /* Store adjusted value back to meter_raw_value */
-        *(float *)&ms[0xF30] = final_val;
-
-        /*
-         * 2026-06-05 stock-only correction from live low-DCV capture:
-         *
-         * The class bits above are decimal exponent inputs to the stock display
-         * pipeline. A 1.5 V bench cell produced:
+         * Earlier notes misread the nearby __aeabi_dadd helper as proof that the
+         * stock value should be adjusted upward by adding pow(10, class). The
+         * V1.2.0 disassembly/literal-pool path and live low-DCV frames instead
+         * show a decimal-exponent class. A 1.5 V bench cell produced:
          *
          *   5A A5 4E CE 8F 8A 0A 00 82 00 01 7F
          *   digits=4977, frame[2].3=1, frame[8].7=1
@@ -481,6 +457,13 @@ void dvom_rx_task(void)
          * per-device factory calibration remains unresolved until recovered from
          * stock xrefs, W25Q/system-file data, or SPI bulk initialization tables.
          */
+        double scale = pow(10.0, scale_exp);   /* pow(d9=10.0, scale_exp) */
+        double raw_d = (double)raw_f;          /* __aeabi_f2d */
+        double adjusted = raw_d / scale;       /* stock-visible decimal class */
+        float final_val = (float)adjusted;     /* stored for the display path */
+
+        /* Store scaled value back to meter_raw_value */
+        *(float *)&ms[0xF30] = final_val;
 
         /* Negate if frame[2] bit 4 is set (polarity flag) */
         if (b2 & 0x10) {   /* frame[2] bit 4, tested via lsls r1, r8, #0x1B at 0x08037166 */
