@@ -893,37 +893,52 @@ void fpga_state_update(void)
  *   Result: dp=1, unit="V", value=5.008V ✓
  *
  * ============================================================================
- * SECTION 5: 3.7x ERROR DIAGNOSIS
+ * SECTION 5: VOLTAGE/RESISTANCE CALIBRATION ERROR DIAGNOSIS
  * ============================================================================
  *
  * HISTORICAL CONTEXT (from CLAUDE.md, 2026-04-03):
  *   "LIVE VOLTAGE READINGS FROM METER IC — first achieved 2026-04-03.
  *    Reads ~3.7x high (5.6V for 1.5V) — calibration/gain tuning needed."
  *
- * CURRENT STATUS (2026-04-04 hardware captures):
- *   5V DC → 5.008 V  ✓ CORRECT (0.16% error, within resistor/meter tolerance)
- *   DCV range: WORKING CORRECTLY
+ * CURRENT STATUS:
+ *   2026-04-04:
+ *     5V DC → 5.008 V  ✓ via the decimal-position/frame[6] fix.
+ *     Low Ω (147 Ω resistor) → 48.36 Ω  ✗ before the resistance band override.
+ *     kΩ range (3.3 kΩ → 3.230 kΩ, 10 kΩ → 9.840 kΩ) ✓ within bench tolerance.
  *
- *   Low Ω (147 Ω resistor) → 48.36 Ω  ✗ WRONG (~3.04x low)
- *   kΩ range (3.3 kΩ → 3.230 kΩ, 10 kΩ → 9.840 kΩ) ✓ CORRECT (within 2%)
+ *   2026-06-05:
+ *     5V DC → about 4.994 V ✓ via stock-analysis range hint frame[3].4.
+ *     32V DC → about 31.96..31.98 V ✓ via range hint frame[4].4.
+ *     1.5V DC → about 1.497..1.500 V ✓ via low-DCV range hint frame[8].7
+ *               and a temporary per-unit coefficient.
  *
- * THE 3.7x ERROR IS NOW RESOLVED FOR DCV:
- *   The initial 3.7x error on 2026-04-03 was caused by incorrect decimal_pos handling
- *   before the frame[6] decoder was implemented. With frame[6]=0x0F → dp=1, the
- *   DCV path correctly divides raw_bcd by 1000 (= 10^(4-1)) to get voltage in V.
+ * VOLTAGE ROOT CAUSE UPDATE:
+ *   The original 5V error was largely decimal-position handling. That was not
+ *   the whole voltage story. A later low-DCV capture showed a 1.5 V input with
+ *   about 4977 BCD counts and frame[8].7 set. Mapping class 4 to decimal
+ *   position 0 produced about 4977 V, proving that this class is a calibrated
+ *   low-DCV band, not a complete display exponent. The local firmware now
+ *   selects a DCV volts-per-count entry from the stock range bits:
  *
- * REMAINING ERROR: Low-Ω calibration (~3x low)
+ *     frame[8].7 → low-DCV calibrated band, temporary 0.0003013864 V/count
+ *     frame[3].4 → 0.001 V/count
+ *     frame[4].4 → 0.01 V/count
+ *     frame[5].4 → 0.1 V/count
+ *     none       → 0.001 V/count pending wider sweep
+ *
+ *   The low-DCV coefficient remains empirical for this bench unit until the
+ *   stock factory calibration block is loaded/replayed.
+ *
+ * REMAINING/EMPIRICAL ERROR: Low-Ω calibration and low-DCV factory coefficient
  *
  *   SYMPTOM: 147 Ω reads as 48.36 Ω (ratio ≈ 0.329, or ~3.04x low)
  *   AFFECTED RANGE: low-Ω band (frame[6]=0x07, "Ohm" unit, dp=2)
  *   NOT AFFECTED: kΩ range (frame[6]=0x4B/0x4D, "kOhm" unit)
  *
- *   ROOT CAUSE: Missing factory calibration coefficients from SPI flash.
- *   The stock firmware loads per-range gain coefficients at boot from SPI flash
- *   ("3:System file/" filesystem). These are stored in meter_state[0x29C..0x34E]
- *   (120 bytes for scope, plus additional meter-specific cal).
- *   Our firmware has a stub: flash_fs_load_factory_cal() in src/drivers/flash_fs.c
- *   at line 199 that allocates but doesn't populate the 301-byte cal region.
+ *   ROOT CAUSE: Missing factory calibration coefficients from SPI flash or the
+ *   FPGA-side initialization/calibration exchange. The exact stock source for
+ *   all meter coefficients is still unresolved; current local coefficients are
+ *   bench-unit stand-ins with explicit evidence boundaries.
  *
  *   WHY kΩ RANGE IS FINE:
  *   The kΩ sub-ranges (0x4B, 0x4D) use frame[3] or frame[4] range bits to shift
@@ -940,15 +955,14 @@ void fpga_state_update(void)
  *   This coefficient varies per device (factory calibrated) so a hardcoded 3.04 is wrong.
  *
  *   WHAT TO CHANGE IN CUSTOM FIRMWARE (do NOT modify code, just note):
- *   File: firmware/src/drivers/flash_fs.c  function: flash_fs_load_factory_cal()
- *   Currently: allocates buffer but returns without reading SPI flash
- *   Fix needed: read from SPI flash at the "3:System file/" path, parse the binary
- *               cal table, store per-range gain coefficients into the meter state.
+ *   File: firmware/src/drivers/flash_fs.c
+ *   Fix needed: recover and load the stock factory calibration source, then
+ *               replace the low-Ω and low-DCV bench-unit coefficients.
  *
- *   File: firmware/src/drivers/meter_data.c  function: format_reading()
- *   Currently: uses raw_bcd / 10^(4-decimal_pos) as the value
- *   Fix needed: multiply the result by the appropriate per-range cal coefficient
- *               BEFORE dividing by the decimal divisor.
+ *   File: firmware/src/drivers/meter_data.c
+ *   Current local port: uses stock frame/mode metadata to select range
+ *                       coefficients, with live fixtures for low-DCV, 5V,
+ *                       32V, mains-class frames, low-Ω, and kΩ.
  *
  *   LIKELIHOOD RANKING:
  *   1. (95%) Missing SPI flash cal load → explains ~3x error on low-Ω

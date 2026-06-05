@@ -294,7 +294,7 @@
  *   Display task reads formatted result
  *
  *
- * CUSTOM FIRMWARE PIPELINE (MISSING COMPONENTS):
+ * CUSTOM FIRMWARE PIPELINE (HISTORICAL 2026-04-04 SNAPSHOT):
  *
  *   USART2 ISR → fpga.rx_frame
  *       |
@@ -305,6 +305,23 @@
  *       | raw_bcd / pow(10, 4-decimal_pos)    ← MISSING calibration division
  *       v
  *   Display (no auto-range feedback)          ← MISSING 0x1B/0x1C/0x1E commands
+ */
+
+/*
+ * 2026-06-05 LOCAL PORT STATUS UPDATE:
+ *
+ * The current custom firmware no longer uses only a static decimal lookup for
+ * voltage/current/passive display. It has a stock-style parser state layer and
+ * a DCV range table keyed by the stock-analysis frame bits:
+ *   frame[8].7, frame[3].4, frame[4].4, frame[5].4, then default.
+ *
+ * This distinction matters because low-DCV frames for a 1.5 V input report
+ * about 4977 BCD counts with frame[8].7 set. Treating that class as decimal
+ * position 0 renders thousands of volts; selecting a calibrated low-DCV
+ * volts-per-count coefficient renders about 1.5 V. The local coefficient is
+ * still a bench-unit stand-in until the stock factory calibration source is
+ * recovered, but it is selected from frame metadata rather than from the
+ * numeric value.
  */
 
 /*

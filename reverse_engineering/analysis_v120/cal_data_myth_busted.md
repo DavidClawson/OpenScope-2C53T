@@ -22,6 +22,14 @@
 > now most likely the 411-byte FPGA internal cal exchange (cmds
 > 0x3B/0x3A). See `fpga_411_byte_cal.md` for the current leading
 > hypothesis.
+>
+> **Update 2026-06-05:** The "411-byte" H2 size above was later
+> disproven. The stock SPI3 boot exchange is a byte-verified
+> **115,638-byte** transfer at `0x08051D19` (`38,546 × 3-byte`
+> records), documented in `spi3_bulk_cal_resolved.md` and
+> `h2_extracted/FINDINGS.md`. Treat the body below as historical
+> hypothesis archaeology except where it identifies what is *not*
+> meter calibration.
 
 **Status:** The claim in `CLAUDE.md` that stock firmware loads
 "301-byte cal data from SPI flash per channel" for meter calibration
@@ -163,6 +171,11 @@ port the DAC cal formula from FUN_080018a4. This is the concrete
 fix path.
 
 ### H2: The FPGA needs a boot-time cal exchange we aren't sending
+
+> Superseded detail: this section predates the later extraction that proved
+> the exchange is 115,638 bytes, not 411 bytes. The high-level idea that a
+> missing FPGA-side boot exchange may carry calibration state remains plausible;
+> the size/framing/test plan below is historical.
 
 `CLAUDE.md` mentions a 411-byte cal exchange (137 entries × 3 bytes)
 sent via commands `0x3B`/`0x3A` during boot from a table at
