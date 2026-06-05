@@ -1,9 +1,11 @@
 #!/usr/bin/env python3
 """
-Helpers for reversible stock-app-slot experiments on the OpenScope 2C53T.
+Helpers for OpenScope 2C53T app-slot restore experiments.
 
-This keeps the permanent bootloader intact and only swaps the application
-image at 0x08004000 using the existing HID flash path.
+Safety note: a valid vector table does not prove that a vendor/stock image is
+compatible with this bootloader, app offset, option-byte state, external flash
+state, or USB recovery path. Stock APP_2C53T images must not be treated as
+reversible A/B tests unless an independent recovery route is already proven.
 """
 
 from __future__ import annotations
@@ -100,6 +102,16 @@ def cmd_save_restore(args: argparse.Namespace) -> int:
 
 
 def cmd_flash_stock(args: argparse.Namespace) -> int:
+    if not args.allow_unproven_stock_app:
+        print(
+            "Refusing to flash stock app through the custom HID app-slot path.\n"
+            "This is not proven reversible: stock firmware may require a different "
+            "boot chain, option-byte/external-flash state, or recovery path.\n"
+            "Use ROM BOOT0/SWD or pass --allow-unproven-stock-app only after "
+            "documenting and accepting that recovery plan.",
+            file=sys.stderr,
+        )
+        return 2
     print_image_summary("Stock app", args.stock)
     if args.save_restore:
         save_restore_image(args.current, args.restore)
@@ -135,6 +147,14 @@ def build_parser() -> argparse.ArgumentParser:
     flash_p.add_argument("--restore", type=Path, default=DEFAULT_RESTORE)
     flash_p.add_argument("--save-restore", action="store_true", default=True)
     flash_p.add_argument("--no-jump", action="store_true")
+    flash_p.add_argument(
+        "--allow-unproven-stock-app",
+        action="store_true",
+        help=(
+            "dangerous: permit flashing a stock/vendor app through this custom "
+            "app-slot path after independently proving a recovery route"
+        ),
+    )
     flash_p.set_defaults(func=cmd_flash_stock)
 
     restore_p = sub.add_parser("restore", help="Restore saved custom app")
