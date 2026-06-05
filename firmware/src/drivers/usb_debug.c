@@ -2054,8 +2054,9 @@ static uint8_t meter_autoscan_score(uint8_t submode, const meter_reading_t *r)
     if (r->result_class == METER_RESULT_NORMAL) {
         switch (submode) {
         case 0:
-        case 1:
             return (r->raw_bcd > 0) ? 90U : 0U;
+        case 1:
+            return (r->raw_bcd > 0 && r->aux_freq_hz >= 1.0f) ? 90U : 0U;
         case 6:
         case 7:
             return (r->raw_bcd > 0) ? 70U : 0U;
@@ -2078,7 +2079,7 @@ static uint8_t meter_autoscan_score(uint8_t submode, const meter_reading_t *r)
 static void cmd_meter_autoscan(const char *args)
 {
     static const uint8_t candidates[] = { 0, 1, 6, 7, 8, 9, 2, 4, 3, 5 };
-    uint32_t settle_ms = 1800;
+    uint32_t settle_ms = 2500;
     uint32_t wait_budget_ms;
     uint8_t best_mode = meter_submode;
     uint8_t best_score = 0;
@@ -2089,7 +2090,7 @@ static void cmd_meter_autoscan(const char *args)
             return;
         }
     }
-    wait_budget_ms = (settle_ms < 1200U) ? 1200U : settle_ms;
+    wait_budget_ms = (settle_ms < 2500U) ? 2500U : settle_ms;
 
     current_mode = MODE_MULTIMETER;
     meter_layout = METER_LAYOUT_FULL;
