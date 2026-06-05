@@ -499,6 +499,7 @@ static void cmd_help(void)
         "mode scope                      Switch UI + FPGA to scope frontend\r\n"
         "mode startup [scope|meter]      Get/set Settings > Startup on Boot\r\n"
         "meter dump [delay_ms]           Show parsed DMM/UI/raw frame state\r\n"
+        "meter autoscan [settle_ms]      Probe DMM submodes and select best live mode\r\n"
         "meter frontend                  Show DMM analog frontend GPIO state\r\n"
         "meter mux-stream [count] [ms]   Stream DMM frames plus frontend GPIOs\r\n"
         "meter stream [count] [delay_ms] Print compact DMM frame stream\r\n"
@@ -2047,6 +2048,97 @@ static void cmd_meter_dump(const char *args)
     }
 }
 
+static uint8_t meter_autoscan_score(uint8_t submode, const meter_reading_t *r)
+{
+    if (!r->valid || r->submode != submode) return 0;
+    if (r->result_class == METER_RESULT_NORMAL) {
+        switch (submode) {
+        case 0:
+        case 1:
+            return (r->raw_bcd > 0) ? 90U : 0U;
+        case 6:
+        case 7:
+            return (r->raw_bcd > 0) ? 70U : 0U;
+        case 8:
+        case 9:
+            return (r->raw_bcd > 0) ? 60U : 0U;
+        case 2:
+        case 3:
+        case 4:
+        case 5:
+            return (r->raw_bcd > 0) ? 50U : 0U;
+        default:
+            return 10U;
+        }
+    }
+    if (r->result_class == METER_RESULT_CONTINUITY) return 80U;
+    return 0;
+}
+
+static void cmd_meter_autoscan(const char *args)
+{
+    static const uint8_t candidates[] = { 0, 1, 6, 7, 8, 9, 2, 4, 3, 5 };
+    uint32_t settle_ms = 900;
+    uint8_t best_mode = meter_submode;
+    uint8_t best_score = 0;
+
+    if (args && *args) {
+        if (parse_int(args, &settle_ms) != 0 || settle_ms > 3000) {
+            usb_send_str("Usage: meter autoscan [settle_ms<=3000]\r\n");
+            return;
+        }
+    }
+
+    current_mode = MODE_MULTIMETER;
+    meter_layout = METER_LAYOUT_FULL;
+    usb_debug_printf("autoscan settle_ms=%lu candidates=%u\r\n",
+                     settle_ms,
+                     (unsigned)(sizeof(candidates) / sizeof(candidates[0])));
+
+    for (uint8_t i = 0; i < sizeof(candidates) / sizeof(candidates[0]); i++) {
+        uint8_t submode = candidates[i];
+        uint8_t score;
+
+        meter_submode = submode;
+        meter_reset_minmaxavg();
+        meter_voltage_wave_reset();
+        fpga_meter_reinit(submode);
+        if (settle_ms > 0) vTaskDelay(pdMS_TO_TICKS(settle_ms));
+
+        score = meter_autoscan_score(submode, (const meter_reading_t *)&meter_reading);
+        usb_debug_printf("auto candidate sub=%u (%s) score=%u valid=%u cls=%u "
+                         "disp=%s unit=%s raw=%d dp=%u f8=%02X seq=%u word=%04X apply=%04X\r\n",
+                         (unsigned)submode,
+                         meter_submode_name(submode),
+                         (unsigned)score,
+                         meter_reading.valid ? 1U : 0U,
+                         (unsigned)meter_reading.result_class,
+                         (meter_reading.valid && meter_reading.submode == submode)
+                            ? meter_reading.display_str : "---",
+                         (meter_reading.valid && meter_reading.submode == submode &&
+                          meter_reading.unit_suffix) ? meter_reading.unit_suffix : "",
+                         meter_reading.raw_bcd,
+                         (unsigned)meter_reading.decimal_pos,
+                         (unsigned)meter_reading.dbg_frame[8],
+                         (unsigned)fpga.meter_mode_sequence_count,
+                         (unsigned)fpga.meter_mode_selector_word,
+                         (unsigned)fpga.meter_mode_apply_word);
+        if (score > best_score) {
+            best_score = score;
+            best_mode = submode;
+        }
+    }
+
+    meter_submode = best_mode;
+    meter_reset_minmaxavg();
+    meter_voltage_wave_reset();
+    fpga_meter_reinit(best_mode);
+    usb_debug_printf("autoscan selected submode=%u (%s) score=%u\r\n",
+                     (unsigned)best_mode,
+                     meter_submode_name(best_mode),
+                     (unsigned)best_score);
+}
+
 static uint8_t gpio_level(gpio_type *port, uint16_t pin)
 {
     return (port->idt & (1U << pin)) ? 1U : 0U;
@@ -3372,6 +3464,10 @@ static void dispatch_command(char *line)
         cmd_meter_dump("");
     } else if (strncmp(line, "meter dump ", 11) == 0) {
         cmd_meter_dump(line + 11);
+    } else if (strcmp(line, "meter autoscan") == 0) {
+        cmd_meter_autoscan("");
+    } else if (strncmp(line, "meter autoscan ", 15) == 0) {
+        cmd_meter_autoscan(line + 15);
     } else if (strcmp(line, "meter frontend") == 0) {
         cmd_meter_frontend();
     } else if (strcmp(line, "meter mux-stream") == 0) {
