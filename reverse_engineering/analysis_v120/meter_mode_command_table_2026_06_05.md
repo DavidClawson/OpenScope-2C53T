@@ -182,6 +182,49 @@ It still does not recover a DMM-specific `ms[0x02]`/
 `ms[0x03]` analog range writer, exact settle/discard counts, or any factory
 calibration acceptance/apply proof.
 
+### Boot Mode-Init DMM Sequence Guard, 2026-06-06
+
+`FUN_0800B908` is the stock mode-init dispatcher. It reads `ms[0xF68]`, loads
+the USART command queue pointer at `0x20002D6C`, and queues one-byte command
+codes with blocking `xQueueGenericSend` calls. It is boot-time command queue
+and resume sequencing evidence, not a DMM calibration or range-writer proof.
+
+`scripts/test_stock_meter_literals.py` now carries a `boot mode-init DMM sequence guard`
+for the DMM-relevant arms:
+
+```text
+0x0800B908 mode_init_dispatcher_tbh:
+  reads `[0x200000f8 + 0xf68]`, bounds it to 0..9, loads queue `0x20002D6C`,
+  and dispatches through the 10-case TBH table.
+
+0x0800B9D6 meter_basic_boot_probe_prefix:
+  queues `0x00`, `0x09`, then reads GPIOC IDR bit 7 and queues `0x07`
+  if probe-detect is high or `0x0A` otherwise.
+
+0x0800BA20 meter_basic_boot_range_tail:
+  queues `0x1A`, `0x1B`, `0x1C`, `0x1D`, then final command `0x1E`.
+
+0x0800BACE meter_extended_boot_probe_prefix:
+  queues `0x00`, `0x08`, `0x09`, then the same `0x07`/`0x0A`
+  probe-detect command.
+
+0x0800BB2A meter_extended_boot_range_tail:
+  queues `0x16`, `0x17`, `0x18`, then final command `0x19`.
+
+0x0800BC32 meter_variant_boot_tail:
+  queues `0x00`, `0x12`, `0x13`, `0x14`, `0x09`, then the same
+  `0x07`/`0x0A` probe-detect command.
+```
+
+This guard is useful because local meter bring-up and mode-resume comments use
+these command families, and future DMM changes must not replace them with
+observed-value guesses. The boundary is just as important: `FUN_0800B908`
+queues command bytes to `0x20002D6C`; parameter materialization and raw
+`0x05xx` word emission happen downstream. It does not identify the missing
+runtime writer for `ms[0x02]`/`ms[0x03]`, does not prove exact settle/discard
+counts, and does not explain the `0.200 V` visual versus `0.4366 V` CDC low-DCV
+blocker.
+
 The same script now also carries a selector state writer guard for the stock
 digital DMM state machine. These sites prove stock RAM coupling around
 `DAT_20001025` (`0x20001025`, selector), `DAT_2000102E` (`0x2000102e`, mode/range

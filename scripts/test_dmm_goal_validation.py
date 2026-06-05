@@ -472,6 +472,67 @@ class DmmGoalValidationTests(unittest.TestCase):
         self.assertIn("12 f0 2e fa", callers["tim5_init_config_writer_call"]["bytes"])
         self.assertIn("12 f0 f6 f9", callers["tim2_init_config_writer_call"]["bytes"])
 
+    def test_stock_boot_mode_init_dmm_sequences_are_binary_grounded(self) -> None:
+        result = stock_meter_literals.verify_boot_mode_init_dmm_sequences()
+        sequences = result["sequences"]
+
+        self.assertEqual(
+            sequences["mode_init_dispatcher_tbh"]["addr"],
+            "0x0800b908",
+        )
+        self.assertEqual(
+            sequences["meter_basic_boot_probe_prefix"]["addr"],
+            "0x0800b9d6",
+        )
+        self.assertEqual(
+            sequences["meter_extended_boot_probe_prefix"]["addr"],
+            "0x0800bace",
+        )
+        self.assertEqual(
+            sequences["meter_variant_boot_tail"]["addr"],
+            "0x0800bc32",
+        )
+        self.assertIn(
+            "90 f8 68 0f 09 28",
+            sequences["mode_init_dispatcher_tbh"]["bytes"],
+        )
+        self.assertIn(
+            "09 21 28 68",
+            sequences["meter_basic_boot_probe_prefix"]["bytes"],
+        )
+        self.assertIn(
+            "07 21 00 06 58 bf 0a 21",
+            sequences["meter_basic_boot_probe_prefix"]["bytes"],
+        )
+        self.assertIn(
+            "1a 21 28 68",
+            sequences["meter_basic_boot_range_tail"]["bytes"],
+        )
+        self.assertIn(
+            "1e 20 27 e1",
+            sequences["meter_basic_boot_range_tail"]["bytes"],
+        )
+        self.assertIn(
+            "08 21 28 68",
+            sequences["meter_extended_boot_probe_prefix"]["bytes"],
+        )
+        self.assertIn(
+            "16 21 28 68",
+            sequences["meter_extended_boot_range_tail"]["bytes"],
+        )
+        self.assertIn(
+            "19 20 ab e0",
+            sequences["meter_extended_boot_range_tail"]["bytes"],
+        )
+        self.assertIn(
+            "12 21 28 68",
+            sequences["meter_variant_boot_tail"]["bytes"],
+        )
+        self.assertIn(
+            "14 21 28 68",
+            sequences["meter_variant_boot_tail"]["bytes"],
+        )
+
     def test_stock_meter_mux_direct_callsites_are_binary_grounded(self) -> None:
         result = stock_meter_literals.verify_meter_mux_callsite_sequences()
 

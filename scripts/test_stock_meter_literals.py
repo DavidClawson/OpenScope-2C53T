@@ -265,6 +265,70 @@ EXPECTED_USART_TX_CONFIG_WRITER_CALLER_SEQUENCES = {
         bytes.fromhex("02 20 c0 f2 01 00 10 90 4f f0 80 40 12 f0 f6 f9"),
     ),
 }
+EXPECTED_BOOT_MODE_INIT_DMM_SEQUENCES = {
+    "mode_init_dispatcher_tbh": (
+        0x0800B908,
+        bytes.fromhex(
+            "b0 b5 82 b0 40 f2 f8 00 c2 f2 00 00 90 f8 68 0f "
+            "09 28 00 f2 d8 81 42 f6 6c 55 c2 f2 00 05 df e8 "
+            "10 f0 0a 00 56 00 a1 00 d2 00 1d 01 4a 01 80 01 "
+            "82 01 be 01"
+        ),
+    ),
+    "meter_basic_boot_probe_prefix": (
+        0x0800B9D6,
+        bytes.fromhex(
+            "00 21 28 68 0d f1 07 04 8d f8 07 10 21 46 4f f0 "
+            "ff 32 2f f0 82 f9 09 21 28 68 8d f8 07 10 21 46 "
+            "4f f0 ff 32 2f f0 79 f9 41 f2 08 00 c4 f2 01 00 "
+            "00 68 07 21 00 06 58 bf 0a 21 28 68 8d f8 07 10 "
+            "21 46 4f f0 ff 32 2f f0 68 f9"
+        ),
+    ),
+    "meter_basic_boot_range_tail": (
+        0x0800BA20,
+        bytes.fromhex(
+            "1a 21 28 68 8d f8 07 10 21 46 4f f0 ff 32 2f f0 "
+            "5f f9 1b 21 28 68 8d f8 07 10 21 46 4f f0 ff 32 "
+            "2f f0 56 f9 1c 21 28 68 8d f8 07 10 21 46 4f f0 "
+            "ff 32 2f f0 4d f9 1d 21 28 68 8d f8 07 10 21 46 "
+            "4f f0 ff 32 2f f0 44 f9 1e 20 27 e1"
+        ),
+    ),
+    "meter_extended_boot_probe_prefix": (
+        0x0800BACE,
+        bytes.fromhex(
+            "00 21 28 68 0d f1 07 04 8d f8 07 10 21 46 4f f0 "
+            "ff 32 2f f0 06 f9 08 21 28 68 8d f8 07 10 21 46 "
+            "4f f0 ff 32 2f f0 fd f8 09 21 28 68 8d f8 07 10 "
+            "21 46 4f f0 ff 32 2f f0 f4 f8 41 f2 08 00 c4 f2 "
+            "01 00 00 68 07 21 00 06 58 bf 0a 21 28 68 8d f8 "
+            "07 10 21 46"
+        ),
+    ),
+    "meter_extended_boot_range_tail": (
+        0x0800BB2A,
+        bytes.fromhex(
+            "16 21 28 68 8d f8 07 10 21 46 4f f0 ff 32 2f f0 "
+            "da f8 17 21 28 68 8d f8 07 10 21 46 4f f0 ff 32 "
+            "2f f0 d1 f8 18 21 28 68 8d f8 07 10 21 46 4f f0 "
+            "ff 32 2f f0 c8 f8 19 20 ab e0"
+        ),
+    ),
+    "meter_variant_boot_tail": (
+        0x0800BC32,
+        bytes.fromhex(
+            "00 21 28 68 0d f1 07 04 8d f8 07 10 21 46 4f f0 "
+            "ff 32 2f f0 54 f8 12 21 28 68 8d f8 07 10 21 46 "
+            "4f f0 ff 32 2f f0 4b f8 13 21 28 68 8d f8 07 10 "
+            "21 46 4f f0 ff 32 2f f0 42 f8 14 21 28 68 8d f8 "
+            "07 10 21 46 4f f0 ff 32 2f f0 39 f8 09 21 28 68 "
+            "8d f8 07 10 21 46 4f f0 ff 32 2f f0 30 f8 41 f2 "
+            "08 00 c4 f2 01 00 00 68 00 06 4f f0 07 00 58 bf "
+            "0a 20"
+        ),
+    ),
+}
 EXPECTED_MUX_CALLS_BY_TARGET = {
     "gpio_mux_portc_porte": {
         "target": 0x080018A4,
@@ -855,6 +919,31 @@ def verify_usart_tx_config_writer_meter_case_sequences() -> dict[str, object]:
     return {"sequences": checked, "callers": callers}
 
 
+def verify_boot_mode_init_dmm_sequences() -> dict[str, object]:
+    """Check stock `FUN_0800B908` boot-time DMM command queue sequences.
+
+    This dispatcher reads `ms[0xF68]`, sends one-byte command codes to queue
+    `0x20002D6C`, and is called by boot/runtime resume tails.  The guarded meter
+    arms prove stock command ordering for basic, extended, and variant meter
+    boot/resume setup.  They are not evidence for analog range writers,
+    calibration coefficients, or the exact runtime source of `ms[0x02]` and
+    `ms[0x03]`.
+    """
+    checked: dict[str, dict[str, str]] = {}
+    for name, (addr, expected) in EXPECTED_BOOT_MODE_INIT_DMM_SEQUENCES.items():
+        actual = read(addr, len(expected))
+        if actual != expected:
+            raise AssertionError(
+                f"{name} {addr:#010x}: expected {expected.hex(' ')}, "
+                f"got {actual.hex(' ')}"
+            )
+        checked[name] = {
+            "addr": f"{addr:#010x}",
+            "bytes": actual.hex(" "),
+        }
+    return {"sequences": checked}
+
+
 def verify_meter_mux_callsite_sequences() -> dict[str, object]:
     """Check every stock direct BL callsite to the two mux writers.
 
@@ -1084,6 +1173,7 @@ def main() -> None:
     saved_config_pack = verify_meter_saved_config_pack_sequences()
     saved_config_pack_callers = verify_meter_saved_config_pack_caller_sequences()
     usart_tx_config_writer = verify_usart_tx_config_writer_meter_case_sequences()
+    boot_mode_init = verify_boot_mode_init_dmm_sequences()
     mux_calls = verify_meter_mux_callsite_sequences()
     mux_bodies = verify_meter_mux_writer_body_sequences()
     runtime_mux_writers = verify_runtime_mux_state_writer_sequences()
@@ -1116,6 +1206,8 @@ def main() -> None:
           ", ".join(item["addr"] for item in usart_tx_config_writer["sequences"].values()))
     print("stock USART TX config writer visible callers: " +
           ", ".join(item["addr"] for item in usart_tx_config_writer["callers"].values()))
+    print("stock boot mode-init DMM sequence sites: " +
+          ", ".join(item["addr"] for item in boot_mode_init["sequences"].values()))
     for name, info in mux_calls.items():
         print(f"stock {name} direct BL sites: " + ", ".join(info["calls"]))
     for name, info in mux_bodies.items():
