@@ -488,11 +488,11 @@ def build_parser() -> argparse.ArgumentParser:
 
     command_parser = subparsers.add_parser("command", help="send one debug-shell command and print the response")
     add_common_serial_args(command_parser)
-    command_parser.add_argument("command", help='debug-shell command, for example "status" or "meter wave"')
+    command_parser.add_argument("command", help='debug-shell command, for example "status", "meter wave", or "mode meter 1 0"')
 
     poll_parser = subparsers.add_parser("poll", help="send one command repeatedly")
     add_common_serial_args(poll_parser)
-    poll_parser.add_argument("command", help='debug-shell command to poll, for example "meter wave"')
+    poll_parser.add_argument("command", help='debug-shell command to poll, for example "meter wave" or "meter frontend"')
     add_poll_args(poll_parser)
 
     meter_parser = subparsers.add_parser("meter-dump", help='poll the live DMM dump command, default "meter dump"')

@@ -39,6 +39,11 @@ The USB debug shell commands used for validation are:
   waveform sample count.
 - `meter stream [count] [delay_ms]`: compact decoded-frame stream for watching
   range/decimal instability without mixing concurrent serial readers.
+- `meter mux-stream [count] [delay_ms]`: decoded-frame stream plus expected
+  DMM function/range selectors and actual frontend GPIO state.
+- `meter frontend`: one-shot DMM selector, GPIO, parsed reading, buzzer, and
+  discard-window state.
+- `meter adc-snapshot`: read-only DMM waveform sampler counters and summary.
 - `meter wave`: waveform buffer stats, SPI3 meter-ADC diagnostics, and the
   decoded DMM reading.
 - `meter wave path [direct|preacq]` and `meter wave selector [auto|0|1]`:
@@ -47,7 +52,11 @@ The USB debug shell commands used for validation are:
   submode from USB before capturing evidence.
 
 The host helper `scripts/openscope_live_debug.py` can run those commands once
-or poll them into a log without needing a terminal emulator.
+or poll them into a log without needing a terminal emulator. It has dedicated
+subcommands for `meter-dump`, `meter-frontend`, `meter-stream`,
+`meter-mux-stream`, `meter-adc-snapshot`, and `screen-capture`; use the generic
+`command` or `poll` subcommands for firmware shell commands such as
+`meter wave` and `mode meter 1 0`.
 
 The module has a narrow scaling abstraction for v1 calibration:
 `meter_voltage_wave_scale_from_dmm_rms()` derives raw-count-to-volt scaling from

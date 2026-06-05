@@ -87,17 +87,22 @@ Simplest real-world measurement — use the built-in DMM to measure a battery.
       (isolated function generator or low-voltage transformer output, not
       mains). AC Voltage shows the normal numeric DMM voltage plus a compact
       waveform panel.
-- [ ] In the USB debug shell, run `meter dump` and `meter wave` while the safe
-      source is connected. Capture the raw 12-byte DMM frame, decoded BCD,
-      decimal position, unit, `aux_freq_i10`, `samples_total`, `delta_250ms`,
-      SPI path, selector, raw min/max/RMS, estimated frequency, and the decoded
-      DMM reading. `delta_250ms` should show the case-5 sample path advancing
-      much faster than the few-hertz decoded DMM frames.
+- [ ] In the USB debug shell, run `meter dump`, `meter mux-stream`, and
+      `meter wave` while the safe source is connected. With the host helper,
+      use `meter-dump`, `meter-mux-stream`, and `command "meter wave"`.
+      Capture the raw 12-byte DMM frame, decoded BCD, decimal position, unit,
+      `aux_freq_i10`, expected function/range selectors, GPIO frontend state,
+      `samples_total`, `delta_250ms`, SPI path, selector, raw min/max/RMS,
+      estimated frequency, and the decoded DMM reading. `delta_250ms` should
+      show the case-5 sample path advancing much faster than the few-hertz
+      decoded DMM frames.
 - [ ] If `meter wave` shows flat samples, sweep the candidate path explicitly:
       `meter wave reset`, `meter wave path direct`, `meter wave selector 0`,
       `meter wave selector 1`, then repeat for `meter wave path preacq`.
       Capture `last_pre`, `selector`, `last`, `min`, `max`, `ff`, `zero`, and
-      `p2p` for each combination.
+      `p2p` for each combination. Through the host helper, run these with
+      `command "meter wave ..."` so each mutating diagnostic is visible in the
+      command log.
 - [ ] The waveform shape changes when the same safe source is changed from
       sine to stepped/modified-square, clipped, or chopped output.
 - [ ] Numeric DMM voltage remains the authoritative reading; the waveform is a
