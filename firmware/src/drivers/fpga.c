@@ -1077,66 +1077,6 @@ static uint8_t fpga_probe_cmd_byte(void)
     return (GPIOC->idt & (1U << 7)) ? 0x07 : FPGA_CMD_METER_NOPROBE;
 }
 
-static void gpio_write_pin(gpio_type *port, uint16_t pin, bool high)
-{
-    if (high) port->scr = (1U << pin);
-    else      port->clr = (1U << pin);
-}
-
-typedef struct {
-    bool pc12;
-    bool pe4;
-    bool pe5;
-    bool pe6;
-    bool pa15;
-    bool pa10;
-    bool pb10;
-} meter_frontend_state_t;
-
-static const meter_frontend_state_t legacy_meter_frontend_states[METER_SUBMODE_COUNT] = {
-    /* 0: DCV */      { true,  true,  false, true,  true,  true,  false },
-    /* 1: ACV */      { true,  true,  false, true,  true,  true,  false },
-    /* 2: DC mA */    { true,  true,  true,  false, true,  false, true  },
-    /* 3: DC A */     { true,  true,  true,  false, true,  false, false },
-    /* 4: AC mA */    { true,  true,  true,  false, true,  false, true  },
-    /* 5: AC A */     { false, true,  false, true,  false, true,  false },
-    /* 6: Ohm */      { false, true,  true,  true,  false, true,  true  },
-    /* 7: Continuity */ { false, false, true,  true,  false, true,  true  },
-    /* 8: Diode */    { false, true,  true,  false, false, false, false },
-    /* 9: Cap */      { false, true,  true,  false, false, false, true  },
-};
-
-static void fpga_apply_stock_meter_function_mux(uint8_t function_idx)
-{
-    switch (function_idx) {
-    case 0: /* DCV function: stock writes PC12 high, PE5 low, PE6 high. */
-        GPIOC->scr = (1U << 12);
-        GPIOE->clr = (1U << 5);
-        GPIOE->scr = (1U << 6);
-        break;
-    case 1: /* ACV function: stock writes PC12 high and PE6 high. */
-        GPIOC->scr = (1U << 12);
-        GPIOE->scr = (1U << 6);
-        break;
-    default:
-        break;
-    }
-}
-
-static void fpga_apply_stock_meter_range_mux(uint8_t range_idx)
-{
-    switch (range_idx) {
-    case 0:
-        GPIOA->scr = (1U << 15);
-        GPIOA->scr = (1U << 10);
-        GPIOB->clr = (1U << 10);
-        GPIOB->scr = (1U << 11);
-        break;
-    default:
-        break;
-    }
-}
-
 fpga_meter_selector_t fpga_meter_expected_selectors(uint8_t submode)
 {
     fpga_meter_selector_t selectors;
@@ -1154,51 +1094,22 @@ fpga_meter_selector_t fpga_meter_expected_selectors(uint8_t submode)
     return selectors;
 }
 
-static void fpga_set_voltage_meter_frontend(uint8_t submode)
+static void fpga_set_meter_frontend_baseline(void)
 {
-    fpga_meter_selector_t selectors = fpga_meter_expected_selectors(submode);
+    GPIOB->scr = PB11_MASK;
+    GPIOC->scr = PC6_MASK;
+    GPIOC->scr = (1U << 11);
+    GPIOC->scr = (1U << 12);
 
-    /* Stock uses two selectors here: meter function on C/E and meter range on
-     * A/B. Keep voltage on the known default range 0; ACV is function 1, not
-     * range 1. */
     GPIOE->scr = (1U << 4);
     GPIOE->clr = (1U << 5);
-    fpga_apply_stock_meter_function_mux(selectors.function_selector);
-    fpga_apply_stock_meter_range_mux(selectors.range_selector);
-}
-
-static void fpga_set_meter_frontend_for_submode(uint8_t submode)
-{
-    if (submode >= METER_SUBMODE_COUNT) submode = 0;
-
-    GPIOB->scr = PB11_MASK;   /* FPGA active */
-    GPIOC->scr = PC6_MASK;    /* SPI path enabled */
-    GPIOC->scr = (1U << 11);  /* Meter MUX on */
-
-    if (submode == 0 || submode == 1) {
-        fpga_set_voltage_meter_frontend(submode);
-        GPIOB->scr = (1U << 9);
-        GPIOA->scr = (1U << 6);
-        return;
-    }
-
-    const meter_frontend_state_t *s = &legacy_meter_frontend_states[submode];
-
-    gpio_write_pin(GPIOC, 12, s->pc12);
-    gpio_write_pin(GPIOE, 4, s->pe4);
-    gpio_write_pin(GPIOE, 5, s->pe5);
-    gpio_write_pin(GPIOE, 6, s->pe6);
-    gpio_write_pin(GPIOA, 15, s->pa15);
-    gpio_write_pin(GPIOA, 10, s->pa10);
-    gpio_write_pin(GPIOB, 10, s->pb10);
+    GPIOE->scr = (1U << 6);
 
     GPIOB->scr = (1U << 9);
     GPIOA->scr = (1U << 6);
-}
-
-static void fpga_set_meter_frontend_baseline(void)
-{
-    fpga_set_meter_frontend_for_submode(0);
+    GPIOA->scr = (1U << 15);
+    GPIOA->scr = (1U << 10);
+    GPIOB->clr = (1U << 10);
 }
 
 static void fpga_send_meter_wake_preamble(void)
@@ -4139,7 +4050,7 @@ void fpga_set_meter_mode(uint8_t submode)
 
     meter_data_invalidate(submode);
     fpga_meter_discard_next_frames(METER_MODE_SWITCH_DISCARD_FRAMES);
-    fpga_set_meter_frontend_for_submode(submode);
+    fpga_set_meter_frontend_baseline();
     fpga_scope_delay_ms(10);
     fpga_send_meter_mode_sequence(submode);
 }
@@ -4155,7 +4066,7 @@ void fpga_meter_reinit(uint8_t submode)
     meter_data_invalidate(submode);
     fpga_meter_discard_next_frames(METER_MODE_SWITCH_DISCARD_FRAMES);
     fpga_send_meter_wake_preamble();
-    fpga_set_meter_frontend_for_submode(submode);
+    fpga_set_meter_frontend_baseline();
     fpga_scope_delay_ms(10);
     fpga_send_meter_mode_sequence(submode);
     fpga_timed_send_cmd(0x00, FPGA_CMD_METER_START, 20);
