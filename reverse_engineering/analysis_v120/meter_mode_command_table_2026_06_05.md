@@ -30,6 +30,43 @@ before queueing through the `0x20002D74` raw-word path.  This is selector-table
 consumer evidence only; it still does not recover the analog mux bytes
 `ms[0x02]`/`ms[0x03]` or any physical correction coefficient.
 
+The stock raw-word queue consumer is now binary-guarded as well. This
+`dvom_TX raw-word consumer guard` proves that the `dvom_TX` task at
+`0x080373F4` uses queue handle `0x20002D74`, blocks in `xQueueReceive`, then
+formats the received halfword into the USART2 TX buffer:
+
+```text
+0x080373F4: task prologue, sets r6 = 0x20002D74
+0x08037420: ldr r0, [r6, #0]
+0x08037428: bl 0x0803B1D8              ; xQueueReceive(queue, &halfword, -1)
+0x08037430: ldrh.w r0, [sp, #6]
+0x08037434: strb.w r9, [r8]            ; clear tx index at 0x2000000F
+0x08037438: lsrs r1, r0, #8
+0x0803743A: strb r0, [r7, #3]          ; low byte into tx buffer
+0x08037440: strb r1, [r7, #2]          ; high byte into tx buffer
+0x08037442: strb r0, [r7, #9]          ; byte-sum/check byte
+0x08037444: ldr r0, [r5, #0]
+0x08037446: orr.w r0, r0, #0x80        ; USART2 CTRL1 TDBEIEN
+0x0803744A: str r0, [r5, #0]
+```
+
+The guarded bytes are:
+
+```text
+0x080373F4:
+  82 b0 44 f2 0c 45 42 f6 74 56 40 f2 05 07 40 f2
+  0f 08 c4 f2 00 05 c2 f2 00 06 0d f1 06 04 c2 f2
+  00 07 c2 f2 00 08 4f f0 00 09 00 bf 30 68 21 46
+  4f f0 ff 32 03 f0 d6 fe 01 28 f7 d1 bd f8 06 00
+  88 f8 00 90 01 0a f8 70 00 eb 10 20 b9 70 78 72
+  28 68 40 f0 80 00 28 60 0a 20 02 f0 9f ff e5 e7
+```
+
+This proves that the guarded selector-table producers feed a real stock
+USART2 command path, not the display queue. It is still digital command-path
+evidence only: it does not recover the DMM-specific `ms[0x02]`/`ms[0x03]`
+analog mux writers, relay/range timing, or calibration.
+
 The same script now also carries a selector state writer guard for the stock
 digital DMM state machine. These sites prove stock RAM coupling around
 `DAT_20001025` (`0x20001025`, selector), `DAT_2000102E` (`0x2000102e`, mode/range

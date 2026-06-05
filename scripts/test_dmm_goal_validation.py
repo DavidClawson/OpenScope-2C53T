@@ -240,6 +240,31 @@ class DmmGoalValidationTests(unittest.TestCase):
         self.assertIn("c0 f6 0b 02", result["sequences"]["0x080048ba"])
         self.assertIn("00 f5 a0 60", result["sequences"]["0x080048ba"])
 
+    def test_stock_dvom_tx_queue_consumer_is_binary_grounded(self) -> None:
+        result = stock_meter_literals.verify_dvom_tx_queue_consumer_sequences()
+        sequences = result["sequences"]
+
+        self.assertEqual(
+            sequences["dvom_tx_raw_word_consumer"]["addr"],
+            "0x080373f4",
+        )
+        self.assertIn(
+            "42 f6 74 56",
+            sequences["dvom_tx_raw_word_consumer"]["bytes"],
+        )
+        self.assertIn(
+            "03 f0 d6 fe",
+            sequences["dvom_tx_raw_word_consumer"]["bytes"],
+        )
+        self.assertIn(
+            "88 f8 00 90 01 0a f8 70 00 eb 10 20 b9 70 78 72",
+            sequences["dvom_tx_raw_word_consumer"]["bytes"],
+        )
+        self.assertIn(
+            "28 68 40 f0 80 00 28 60",
+            sequences["dvom_tx_raw_word_consumer"]["bytes"],
+        )
+
     def test_stock_meter_selector_state_writers_are_binary_grounded(self) -> None:
         result = stock_meter_literals.verify_meter_selector_state_sequences()
         sequences = result["sequences"]

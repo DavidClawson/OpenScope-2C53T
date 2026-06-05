@@ -27,6 +27,19 @@ EXPECTED_METER_SELECTOR_XREF_SEQUENCES = {
         "00 f5 a0 60 c2 f2 00 01 08 80"
     ),
 }
+EXPECTED_DVOM_TX_QUEUE_CONSUMER_SEQUENCES = {
+    "dvom_tx_raw_word_consumer": (
+        0x080373F4,
+        bytes.fromhex(
+            "82 b0 44 f2 0c 45 42 f6 74 56 40 f2 05 07 40 f2 "
+            "0f 08 c4 f2 00 05 c2 f2 00 06 0d f1 06 04 c2 f2 "
+            "00 07 c2 f2 00 08 4f f0 00 09 00 bf 30 68 21 46 "
+            "4f f0 ff 32 03 f0 d6 fe 01 28 f7 d1 bd f8 06 00 "
+            "88 f8 00 90 01 0a f8 70 00 eb 10 20 b9 70 78 72 "
+            "28 68 40 f0 80 00 28 60 0a 20 02 f0 9f ff e5 e7"
+        ),
+    ),
+}
 EXPECTED_METER_SELECTOR_STATE_SEQUENCES = {
     "init_selector_reset": (
         0x08026FDE,
@@ -365,6 +378,32 @@ def verify_meter_selector_xref_sequences() -> dict[str, object]:
     return {"sequences": checked}
 
 
+def verify_dvom_tx_queue_consumer_sequences() -> dict[str, object]:
+    """Check the stock dvom_TX task that consumes raw DMM/FPGA TX words.
+
+    `FUN_080373F4` blocks on queue handle `0x20002D74`, receives one
+    halfword, clears the USART2 TX index at `0x2000000F`, splits the word into
+    the TX frame buffer at `0x20000005 + 2/3`, writes the byte-sum at `+9`,
+    and sets USART2 CTRL1 bit 7 (`0x80`) to start the TX interrupt pump.
+    This proves that selector-table producers feeding `0x20002D74` reach the
+    stock USART2 command channel; it still does not prove analog mux bytes or
+    meter calibration.
+    """
+    checked: dict[str, dict[str, str]] = {}
+    for name, (addr, expected) in EXPECTED_DVOM_TX_QUEUE_CONSUMER_SEQUENCES.items():
+        actual = read(addr, len(expected))
+        if actual != expected:
+            raise AssertionError(
+                f"{name} {addr:#010x}: expected {expected.hex(' ')}, "
+                f"got {actual.hex(' ')}"
+            )
+        checked[name] = {
+            "addr": f"{addr:#010x}",
+            "bytes": actual.hex(" "),
+        }
+    return {"sequences": checked}
+
+
 def verify_meter_selector_state_sequences() -> dict[str, object]:
     """Check stock selector/shadow-state writers used by the DMM FSM.
 
@@ -605,6 +644,7 @@ def main() -> None:
     expect_bytes(0x08036C8C, "00 bf 00 bf")
     selector = verify_meter_selector_table()
     selector_xrefs = verify_meter_selector_xref_sequences()
+    dvom_tx_consumers = verify_dvom_tx_queue_consumer_sequences()
     selector_state = verify_meter_selector_state_sequences()
     mux_restore = verify_meter_mux_restore_sequences()
     mux_calls = verify_meter_mux_callsite_sequences()
@@ -616,6 +656,8 @@ def main() -> None:
     print(f"stock meter selector table: {selector['bytes']}")
     print("stock meter selector xref sites: " +
           ", ".join(selector_xrefs["sequences"].keys()))
+    print("stock dvom_TX raw-word consumer sites: " +
+          ", ".join(item["addr"] for item in dvom_tx_consumers["sequences"].values()))
     print("stock meter selector state sites: " +
           ", ".join(item["addr"] for item in selector_state["sequences"].values()))
     print("stock meter mux restore sites: " +
