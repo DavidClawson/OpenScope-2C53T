@@ -21,9 +21,14 @@ except ImportError:
 
 def find_device():
     """Find the OpenScope USB CDC device."""
-    ports = sorted(glob.glob("/dev/cu.usbmodem*") + glob.glob("/dev/tty.usbmodem*"))
+    ports = sorted(
+        glob.glob("/dev/cu.usbmodem*")
+        + glob.glob("/dev/tty.usbmodem*")
+        + glob.glob("/dev/ttyACM*")
+        + glob.glob("/dev/ttyUSB*")
+    )
     if not ports:
-        print("ERROR: No USB modem device found. Is the scope connected?")
+        print("ERROR: No USB CDC device found. Is the scope connected?")
         sys.exit(1)
     if len(ports) > 1:
         print(f"Multiple devices found: {ports}")
