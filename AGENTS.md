@@ -139,6 +139,11 @@ make renode-test                 # 5-second smoke test
 - Target is Artery AT32F403A (STM32F1-compatible registers for GPIO/EXMC, but uses AT32 HAL for clock/peripheral init)
 - IOMUX (AFIO) clock MUST be enabled for EXMC alternate function pins to work
 - Power hold (PC9 HIGH) must be the very first operation in main()
+- Hardware interaction code must carry academic-style explanatory comments near
+  the code that touches the device: state the hardware source of truth,
+  protocol/register/frame semantics, why the sequence or exponent/range rule is
+  correct, and what evidence is still empirical. Do not replace unresolved
+  hardware behavior with observed-case stubs.
 - All display rendering is RGB565 (16-bit color)
 - Firmware binaries are raw ARM code, not encrypted or compressed
 - The decompiled source uses Ghidra naming conventions (FUN_, DAT_, etc.) — rename as functions are understood

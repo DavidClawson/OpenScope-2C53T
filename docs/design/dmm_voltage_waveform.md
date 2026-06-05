@@ -19,6 +19,13 @@ frames arrive only a few times per second, so they cannot be used to reconstruct
 a 50/60 Hz sine, inverter step waveform, or dimmer chop shape. They remain the
 authoritative calibrated value shown in large digits.
 
+DC voltage decimal/exponent selection follows the stock-analysis range hint bits
+in the meter frame (`frame[8].7`, `frame[3].4`, `frame[4].4`, `frame[5].4`),
+translated through the local stock-FSM display layer. AC voltage decimal format
+follows the cleaner stock `frame[7]` formatter path and still requires separate
+AC evidence. Bytes `[10..11]` may be exposed as a narrow empirical auxiliary
+frequency hint, but they are not used to choose the voltage exponent.
+
 The waveform shape is based on the stock-documented SPI3 acquisition case 5
 (`METER_ADC_READ`), which is documented as a single-byte meter ADC read. The
 firmware polls this candidate raw-sample path at the FreeRTOS tick rate while

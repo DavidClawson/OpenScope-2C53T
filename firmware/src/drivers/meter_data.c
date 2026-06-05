@@ -689,37 +689,71 @@ static uint8_t decimal_pos_from_stock(uint8_t ui_submode,
     }
 }
 
-static bool apply_verified_frame_range(meter_reading_t *r,
-                                       uint8_t submode,
-                                       uint8_t f6,
-                                       const volatile uint8_t *frame,
-                                       uint16_t extra)
+static uint8_t voltage_range_hint_from_stock_frame(const volatile uint8_t *frame)
 {
-    if (submode == 0 &&
-        frame[8] == 0x02 && frame[9] == 0x00 &&
-        extra >= 45 && extra <= 65) {
-        r->decimal_pos = 3;
-        r->unit_variant = 0;
-        r->unit_suffix = "V";
-        return true;
+    /*
+     * Stock evidence: the V1.2.0 DMM RX analysis exposes an ordered set of
+     * autonomous meter-frame voltage range bits. Raw full_decompile.c proves
+     * the later DAT_2000102f/DAT_20001030 formatter, while the annotated RX
+     * pass is the current source for this per-frame voltage exponent hint.
+     * The bit priority is documented in reverse_engineering/analysis_v120/
+     * meter_math_pipeline_annotated.c:
+     * frame[8].7 -> class 4, frame[3].4 -> class 3, frame[4].4 -> class 2,
+     * frame[5].4 -> class 1, otherwise class 0. Bytes 10..11 are not part of
+     * this stock exponent decision; in live voltage frames they are only an
+     * empirical auxiliary/frequency hint.
+     */
+    if (frame[8] & 0x80U) return 4;
+    if (frame[3] & 0x10U) return 3;
+    if (frame[4] & 0x10U) return 2;
+    if (frame[5] & 0x10U) return 1;
+    return 0;
+}
+
+static bool apply_stock_dcv_voltage_range_hint(meter_reading_t *r,
+                                               uint8_t submode,
+                                               const volatile uint8_t *frame)
+{
+    uint8_t range_hint;
+
+    if (submode != 0) {
+        return false;
     }
 
-    if (submode == 0) {
+    range_hint = voltage_range_hint_from_stock_frame(frame);
+
+    /*
+     * Local display mapping for the stock range hint. This is a general
+     * exponent mapping, not a classifier based on the decoded number: hints 0/3/2/1 are
+     * the stock meter-frame bands seen in default DCV, low-voltage, tens-
+     * voltage, and mains-voltage captures respectively. Class 4 is the stock
+     * highest bit and is retained as the natural continuation, but still needs
+     * a live sweep fixture before we can call its physical range fully
+     * characterized.
+     */
+    switch (range_hint) {
+    case 4:
+        r->decimal_pos = 0;
+        break;
+    case 3:
         r->decimal_pos = 1;
-        r->unit_variant = 0;
-        r->unit_suffix = "V";
-        return true;
-    }
-
-    if (submode == 1 &&
-        (f6 == 0x0A || f6 == 0x0B || f6 == 0x0D || f6 == 0x0F)) {
+        break;
+    case 2:
+        r->decimal_pos = 2;
+        break;
+    case 1:
         r->decimal_pos = 3;
-        r->unit_variant = 0;
-        r->unit_suffix = "V";
-        return true;
+        break;
+    case 0:
+        r->decimal_pos = 1;
+        break;
+    default:
+        return false;
     }
 
-    return false;
+    r->unit_variant = 0;
+    r->unit_suffix = "V";
+    return true;
 }
 
 static bool frame_is_voltage_payload(uint8_t submode,
@@ -1116,13 +1150,12 @@ void meter_data_process_frame(const volatile uint8_t *frame, uint8_t submode)
     r->bcd_value = d0 * 1000 + d1 * 100 + d2 * 10 + d3;
 
     uint8_t raw_digit_codes[4] = { digit0, digit1, digit2, digit3 };
-    uint8_t f6 = flags;
 
     meter_stock_fsm_apply(submode, frame, raw_digit_codes);
     r->decimal_pos = decimal_pos_from_stock(submode, &meter_stock_fsm);
     r->unit_variant = meter_stock_fsm.variant;
     r->unit_suffix = unit_suffix_from_stock(submode, meter_stock_fsm.unit_index);
-    (void)apply_verified_frame_range(r, submode, f6, frame, extra);
+    (void)apply_stock_dcv_voltage_range_hint(r, submode, frame);
 
     if (((submode == 0 && frame[8] == 0x02 && frame[9] == 0x00) ||
          submode_requires_ac_evidence(submode)) &&
@@ -1173,7 +1206,7 @@ void meter_data_process_frame(const volatile uint8_t *frame, uint8_t submode)
         float       scale = 0.0f;
         const char *unit  = NULL;
 
-        switch (f6 & 0xF0) {
+        switch (flags & 0xF0) {
         case 0x00:  scale = METER_CAL_LOW_OHM_FACTOR; unit = "Ohm";  break;
         case 0x40:  scale = METER_CAL_KOHM_FACTOR;    unit = "kOhm"; break;
         default:    break;  /* Unknown band — leave format_reading's output */

@@ -196,20 +196,22 @@ For the decoder to cover all meter ranges, we still need:
 | DC/AC current | Different mode | Low |
 | Frequency, capacitance | Different submode | Low |
 
-Each new `frame[6]` value found in the wild adds one row to the
-decoder table. No decompiler archaeology required.
+For DC voltage, range/exponent is no longer keyed from `frame[6]`:
+stock-analysis range hints use `frame[8].7`, `frame[3].4`, `frame[4].4`, and `frame[5].4`
+before the display-format translation. New voltage captures should therefore log
+the full 12-byte frame, decoded digits, the four range-hint bits, and `[10..11]`
+separately. For resistance/current/passive modes, new `frame[6]` values may still
+identify additional format variants.
 
 ## Decoder Confidence
 
 - **High confidence** (2+ data points matching): `0x07`→low Ω,
   `0x4B`→kΩ dp=1, `0x4D`→kΩ dp=2.
-- **Single point** (no second confirmation): `0x0F`→DCV. Matches
-  what we already display correctly via `default_decimal_pos[0]`.
+- **DCV range hints**: DCV exponent selection uses stock-analysis range-hint
+  bits, not `frame[6]` or `[10..11]`. Verified local fixtures now cover hint 3
+  (`4.994 V`), hint 2 (`31.96 V`), and hint 1 (`228.x V`). Hint 4 and low
+  sub-volt boundaries still need a sweep.
 - **Unmapped**: everything else.
-
-The single-point `0x0F` is low risk to ship because the default
-DCV path already produces the correct output — the decoder just
-formalizes what's already working.
 
 ## Cross-reference to prior research
 

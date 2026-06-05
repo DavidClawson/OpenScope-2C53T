@@ -76,6 +76,35 @@ in the DMM FSM, but they do not by themselves prove an ACV companion-Hz field.
 The custom firmware may expose `[10..11]` as a narrow auxiliary frequency hint,
 but it must not use it to decide the ACV voltage decimal/range.
 
+## Voltage Range-Hint Evidence
+
+The annotated stock RX analysis also exposes ordered range/exponent hint bits in
+the 12-byte meter frame. Raw `full_decompile.c` proves the later
+`DAT_2000102f` / `DAT_20001030` formatter, but current raw decompile evidence
+does not prove these bits are literally written into `DAT_2000102c`; treat them
+as a voltage range hint, not as a renamed RAM variable. The annotated decompile
+records this priority:
+
+| Frame bit | Range hint | Local DCV decimal position | Evidence |
+|---|---:|---:|---|
+| none set | 0 | 1 | default DCV synthetic fixtures, pending wider sweep |
+| `frame[5] & 0x10` | 1 | 3 | live/custom mains captures display about `228.x V` |
+| `frame[4] & 0x10` | 2 | 2 | live/custom 32 V capture displays `31.96 V` |
+| `frame[3] & 0x10` | 3 | 1 | live/custom 5 V capture displays `4.994 V` |
+| `frame[8] & 0x80` | 4 | 0 | stock highest-priority bit, physical range still unswept |
+
+The 2026-06-05 32 V failure frame was:
+
+```text
+5A A5 86 0F DA EF 07 00 02 00 03 FF
+digits=3196, frame[4].4=1, extra=03FF
+```
+
+The prior local decoder forced ordinary DCV to decimal position `1`, rendering
+`3.196 V`. The corrected local port uses the stock-analysis range hint (`2`) and renders
+`31.96 V`. The `[10..11]` value is intentionally ignored for voltage exponent
+selection; `03FF` is not stock evidence for a voltage range.
+
 ## Local Port
 
 `firmware/src/drivers/meter_data.c` now has a single stock-style DMM display

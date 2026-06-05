@@ -180,6 +180,44 @@ static int test_dcv_5v_frame_keeps_verified_decimal_and_unit(void)
     return 1;
 }
 
+static int test_dcv_live_5v_frame_uses_stock_range_hint(void)
+{
+    static const uint8_t frame[12] = {
+        0x5A, 0xA5, 0x46, 0xDE, 0xCF, 0x4F,
+        0x0E, 0x00, 0x02, 0x00, 0x01, 0x82,
+    };
+
+    meter_data_init();
+    process_frame(frame, 0);
+
+    ASSERT(meter_reading.valid);
+    ASSERT(meter_reading.bcd_value == 4994);
+    ASSERT(meter_reading.decimal_pos == 1);
+    ASSERT_STR_EQ(meter_reading.display_str, "4.994");
+    ASSERT_STR_EQ(meter_reading.unit_suffix, "V");
+    ASSERT(close_to(meter_reading.value, 4.994f, 0.001f));
+    return 1;
+}
+
+static int test_dcv_live_32v_frame_uses_stock_range_hint(void)
+{
+    static const uint8_t frame[12] = {
+        0x5A, 0xA5, 0x86, 0x0F, 0xDA, 0xEF,
+        0x07, 0x00, 0x02, 0x00, 0x03, 0xFF,
+    };
+
+    meter_data_init();
+    process_frame(frame, 0);
+
+    ASSERT(meter_reading.valid);
+    ASSERT(meter_reading.bcd_value == 3196);
+    ASSERT(meter_reading.decimal_pos == 2);
+    ASSERT_STR_EQ(meter_reading.display_str, "31.96");
+    ASSERT_STR_EQ(meter_reading.unit_suffix, "V");
+    ASSERT(close_to(meter_reading.value, 31.96f, 0.01f));
+    return 1;
+}
+
 static int test_dcv_5v_synthetic_f6_0f_does_not_become_mains_range(void)
 {
     uint8_t frame[12];
@@ -196,6 +234,24 @@ static int test_dcv_5v_synthetic_f6_0f_does_not_become_mains_range(void)
     ASSERT_STR_EQ(meter_reading.unit_suffix, "V");
     ASSERT(close_to(meter_reading.value, 5.008f, 0.001f));
     ASSERT(close_to(meter_reading.aux_freq_hz, 0.0f, 0.001f));
+    return 1;
+}
+
+static int test_dcv_extra_frequency_hint_does_not_set_voltage_range(void)
+{
+    uint8_t frame[12];
+
+    build_segment_frame(frame, 5, 0, 0, 8, 0x00, 0x00, 0x02, 0x00, 0x0031);
+    meter_data_init();
+    process_frame(frame, 0);
+
+    ASSERT(meter_reading.valid);
+    ASSERT(meter_reading.bcd_value == 5008);
+    ASSERT(meter_reading.decimal_pos == 1);
+    ASSERT_STR_EQ(meter_reading.display_str, "5.008");
+    ASSERT_STR_EQ(meter_reading.unit_suffix, "V");
+    ASSERT(close_to(meter_reading.value, 5.008f, 0.001f));
+    ASSERT(close_to(meter_reading.aux_freq_hz, 49.0f, 0.1f));
     return 1;
 }
 
@@ -496,7 +552,7 @@ static int test_invalid_submode_rejects_without_becoming_dcv(void)
     return 1;
 }
 
-static int test_voltage_mode_mains_frequency_frame_overrides_dcv_0f_rule(void)
+static int test_voltage_mode_mains_frame_uses_stock_range_hint(void)
 {
     static const uint8_t frame[12] = {
         0x5A, 0xA5, 0xA5, 0xAD, 0xED, 0x9F,
@@ -1045,7 +1101,10 @@ int main(void)
 
     TEST(segment_frame_builder_exercises_cross_byte_lookup);
     TEST(dcv_5v_frame_keeps_verified_decimal_and_unit);
+    TEST(dcv_live_5v_frame_uses_stock_range_hint);
+    TEST(dcv_live_32v_frame_uses_stock_range_hint);
     TEST(dcv_5v_synthetic_f6_0f_does_not_become_mains_range);
+    TEST(dcv_extra_frequency_hint_does_not_set_voltage_range);
     TEST(dcv_7v_f6_07_keeps_default_volt_scale);
     TEST(dcv_range_frames_are_not_latched_from_acv_mains);
     TEST(acv_mains_frame_uses_high_voltage_scale_and_frequency);
@@ -1057,7 +1116,7 @@ int main(void)
     TEST(invalidate_clears_stale_reading_for_every_submode);
     TEST(parser_stock_mode_tracks_transition_plan_for_every_submode);
     TEST(invalid_submode_rejects_without_becoming_dcv);
-    TEST(voltage_mode_mains_frequency_frame_overrides_dcv_0f_rule);
+    TEST(voltage_mode_mains_frame_uses_stock_range_hint);
     TEST(dcv_high_range_frame_stays_voltage_across_current_transition);
     TEST(voltage_mode_mains_rotating_frames_stay_high_voltage);
     TEST(acv_repeated_rotating_range_frames_do_not_drop_to_2v);
