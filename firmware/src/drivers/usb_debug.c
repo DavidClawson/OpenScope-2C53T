@@ -2062,7 +2062,7 @@ static void cmd_meter_frontend(void)
                      meter_reading.valid ? 1U : 0U,
                      (unsigned)meter_reading.result_class,
                      meter_reading.update_count);
-    usb_debug_printf("expected_selector function=%u range=%u voltage_function_axis=%u\r\n",
+    usb_debug_printf("expected_selector stock_mode=%u raw_low=%02X voltage_function_axis=%u\r\n",
                      (unsigned)selectors.function_selector,
                      (unsigned)selectors.range_selector,
                      selectors.voltage_function_axis ? 1U : 0U);
@@ -2114,7 +2114,7 @@ static void print_meter_mux_stream_line(uint32_t index)
     fpga_meter_selector_t selectors = fpga_meter_expected_selectors(meter_submode);
 
     usb_debug_printf("t=%lu upd=%lu ui_sub=%u rd_sub=%u live=%u cls=%u "
-                     "func=%u range=%u "
+                     "stock_mode=%u raw_low=%02X "
                      "disp=%s unit=%s raw=%d dp=%u f6=%02X f7=%02X f8=%02X f9=%02X "
                      "extra=%04X discard=%u PC6=%u PB11=%u PC11=%u PC12=%u "
                      "PE4=%u PE5=%u PE6=%u PA15=%u PA10=%u PB10=%u PB9=%u PA6=%u\r\n",
