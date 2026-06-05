@@ -109,8 +109,8 @@ typedef enum {
 } fpga_acq_mode_t;
 
 typedef struct {
-    uint8_t function_selector;  /* Stock meter function mux: voltage DCV=0, ACV=1. */
-    uint8_t range_selector;     /* Stock meter range mux, 0xFF when not modelled. */
+    uint8_t function_selector;  /* Stock DMM mode index used by the raw 0x05xx table. */
+    uint8_t range_selector;     /* Low byte from the recovered stock DMM command table. */
     bool    voltage_function_axis;
 } fpga_meter_selector_t;
 
@@ -568,20 +568,15 @@ void fpga_enter_siggen_mode(void);
 
 /*
  * Configure FPGA for a specific meter submode.
- * Applies the matching DMM analog frontend GPIO selector, then sends the
- * appropriate FPGA init command sequence:
- *   - DCV/ACV/current (0..5): system_mode 1 → 0x00, 0x09, probe, 0x1A-0x1E
- *   - Resistance (6): system_mode 9 → 0x00, 0x12-0x14, 0x09, probe
- *   - Continuity (7): system_mode 8 → 0x00, 0x2C
- *   - Diode (8): system_mode 8 → 0x00, 0x2C
- *   - Capacitance (9): system_mode 3 → 0x00, 0x08, 0x09, probe, 0x16-0x19
+ * Sends the stock DMM raw UART word selected from the recovered
+ * 0x080BB3FC meter-mode table, then re-arms measurement polling.
  *
  * Call when the meter submode changes (LEFT/RIGHT buttons).
  */
 void fpga_set_meter_mode(uint8_t submode);
 
 /*
- * Return the stock mux selectors that fpga_set_meter_mode() intends to apply.
+ * Return the stock DMM raw-command selector that fpga_set_meter_mode() applies.
  * This is read-only debug metadata for USB harnesses and tests; it does not
  * touch GPIO or send FPGA commands.
  */

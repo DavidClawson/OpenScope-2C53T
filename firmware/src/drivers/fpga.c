@@ -22,6 +22,7 @@
 
 #include "fpga.h"
 #include "fpga_cal_table.h"
+#include "fpga_meter_plan.h"
 #include "meter_data.h"
 #include "scope_trigger.h"
 #include "../ui/ui.h"
@@ -1115,16 +1116,10 @@ fpga_meter_selector_t fpga_meter_expected_selectors(uint8_t submode)
 {
     fpga_meter_selector_t selectors;
 
-    if (submode == 0 || submode == 1) {
-        selectors.function_selector = submode;
-        selectors.range_selector = 0;
-        selectors.voltage_function_axis = true;
-        return selectors;
-    }
-
-    selectors.function_selector = submode;
-    selectors.range_selector = 0xFF;
-    selectors.voltage_function_axis = false;
+    selectors.function_selector = fpga_meter_stock_mode_for_submode(submode);
+    selectors.range_selector =
+        fpga_meter_stock_cmd_low_for_mode(selectors.function_selector);
+    selectors.voltage_function_axis = (submode == 0 || submode == 1);
     return selectors;
 }
 
@@ -1600,7 +1595,7 @@ static void fpga_meter_poll_task(void *pv)
         vTaskDelay(pdMS_TO_TICKS(250));  /* ~4 Hz */
         if (fpga.initialized && current_mode == MODE_MULTIMETER &&
             !meter_transition_busy) {
-            fpga_send_cmd(0x00, 0x09);  /* Meter: start measurement */
+            fpga_send_cmd(0x05, 0x09);  /* Meter: start measurement */
         }
     }
 }
@@ -3991,75 +3986,16 @@ void fpga_enter_siggen_mode(void)
 /* Helper: send probe detect command (shared by meter modes) */
 static void fpga_timed_send_probe_detect(uint32_t delay_ms)
 {
-    fpga_timed_send_cmd(0x00, fpga_probe_cmd_byte(), delay_ms);
+    fpga_timed_send_cmd(0x05, fpga_probe_cmd_byte(), delay_ms);
 }
 
 static void fpga_send_meter_mode_sequence(uint8_t submode)
 {
-    if (submode >= METER_SUBMODE_COUNT) submode = 0;
+    uint16_t word = fpga_meter_stock_cmd_word_for_submode(submode);
 
-    /* Send mode-specific FPGA command sequence.
-     * Mapping from RE analysis of mode init dispatcher (FUN_0800b908):
-     *
-     * Submodes 0-5 (DCV, ACV, DC/AC current)     → system_mode 1 (basic meter)
-     * Submode 6 (Resistance)                     → system_mode 9 (meter variant)
-     * Submode 7 (Continuity)                     → system_mode 8 (cont/diode)
-     * Submode 8 (Diode)                          → system_mode 8 (cont/diode)
-     * Submode 9 (Capacitance)                    → system_mode 3 (extended meter)
-     */
-    switch (submode) {
-
-    case 0: /* DCV */
-    case 1: /* ACV */
-    case 2: /* DC mA */
-    case 3: /* DC A */
-    case 4: /* AC mA */
-    case 5: /* AC A */
-    default:
-        /* System mode 1: basic meter.
-         * Commands: 0x00, 0x09, probe, 0x1A-0x1E */
-        fpga_timed_send_cmd(0x00, FPGA_CMD_RESET, 10);
-        fpga_timed_send_cmd(0x00, FPGA_CMD_METER_START, 10);
-        fpga_timed_send_probe_detect(10);
-        fpga_timed_send_cmd(0x00, FPGA_CMD_CH1_GAIN, 10);
-        fpga_timed_send_cmd(0x00, FPGA_CMD_CH1_OFFSET, 10);
-        fpga_timed_send_cmd(0x00, FPGA_CMD_CH2_GAIN, 10);
-        fpga_timed_send_cmd(0x00, FPGA_CMD_CH2_OFFSET, 10);
-        fpga_timed_send_cmd(0x00, FPGA_CMD_COUPLING, 20);
-        break;
-
-    case 6: /* Resistance */
-        /* System mode 9: meter variant.
-         * Commands: 0x00, 0x12, 0x13, 0x14, 0x09, probe */
-        fpga_timed_send_cmd(0x00, FPGA_CMD_RESET, 10);
-        fpga_timed_send_cmd(0x00, FPGA_CMD_METER_VAR_12, 10);
-        fpga_timed_send_cmd(0x00, FPGA_CMD_METER_VAR_13, 10);
-        fpga_timed_send_cmd(0x00, FPGA_CMD_METER_VAR_14, 10);
-        fpga_timed_send_cmd(0x00, FPGA_CMD_METER_START, 10);
-        fpga_timed_send_probe_detect(20);
-        break;
-
-    case 7: /* Continuity */
-    case 8: /* Diode */
-        /* System mode 8: continuity/diode.
-         * Commands: 0x00, 0x2C */
-        fpga_timed_send_cmd(0x00, FPGA_CMD_RESET, 10);
-        fpga_timed_send_cmd(0x00, FPGA_CMD_CONT_DIODE, 20);
-        break;
-
-    case 9: /* Capacitance */
-        /* System mode 3: extended meter.
-         * Commands: 0x00, 0x08, 0x09, probe, 0x16-0x19 */
-        fpga_timed_send_cmd(0x00, FPGA_CMD_RESET, 10);
-        fpga_timed_send_cmd(0x00, 0x08, 10);
-        fpga_timed_send_cmd(0x00, FPGA_CMD_METER_START, 10);
-        fpga_timed_send_probe_detect(10);
-        fpga_timed_send_cmd(0x00, 0x16, 10);
-        fpga_timed_send_cmd(0x00, 0x17, 10);
-        fpga_timed_send_cmd(0x00, 0x18, 10);
-        fpga_timed_send_cmd(0x00, 0x19, 20);
-        break;
-    }
+    fpga_wire_send_word(word, 20);
+    fpga_timed_send_probe_detect(10);
+    fpga_timed_send_cmd(0x05, FPGA_CMD_METER_START, 20);
 }
 
 void fpga_set_meter_mode(uint8_t submode)
@@ -4086,7 +4022,6 @@ void fpga_set_meter_mode(uint8_t submode)
     fpga_set_meter_frontend_baseline();
     fpga_scope_delay_ms(20);
     fpga_send_meter_mode_sequence(submode);
-    fpga_timed_send_cmd(0x00, FPGA_CMD_METER_START, 20);
     meter_transition_busy = false;
 }
 
@@ -4106,7 +4041,6 @@ void fpga_meter_reinit(uint8_t submode)
     fpga_set_meter_frontend_baseline();
     fpga_scope_delay_ms(20);
     fpga_send_meter_mode_sequence(submode);
-    fpga_timed_send_cmd(0x00, FPGA_CMD_METER_START, 20);
     meter_transition_busy = false;
 }
 

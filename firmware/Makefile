@@ -12,7 +12,6 @@ SZ      = $(PREFIX)size
 OBJDUMP = $(PREFIX)objdump
 NANO_SPECS := $(shell f="$(shell $(CC) -print-file-name=nano.specs 2>/dev/null)"; test "$$f" != "nano.specs" -a -f "$$f" && printf '%s' '-specs=nano.specs')
 HOST_CC ?= gcc
-NANO_SPECS := $(shell f="$(shell $(CC) -print-file-name=nano.specs 2>/dev/null)"; test "$$f" != "nano.specs" -a -f "$$f" && printf '%s' '-specs=nano.specs')
 
 ######################################################################
 # Project paths
@@ -52,6 +51,7 @@ C_SOURCES += src/drivers/button_scan.c
 C_SOURCES += src/drivers/dfu_boot.c
 C_SOURCES += src/drivers/battery.c
 C_SOURCES += src/drivers/fpga.c
+C_SOURCES += src/drivers/fpga_meter_plan.c
 C_SOURCES += src/drivers/fpga_scanner.c
 C_SOURCES += src/drivers/dac_output.c
 C_SOURCES += src/drivers/scope_trigger.c
@@ -414,9 +414,15 @@ $(BUILD_DIR)/test_meter_voltage_wave: tests/test_meter_voltage_wave.c src/ui/met
 test-meter-voltage-wave: $(BUILD_DIR)/test_meter_voltage_wave
 	$<
 
-test-meter: test-meter-data test-meter-voltage-wave
+$(BUILD_DIR)/test_fpga_meter_plan: tests/test_fpga_meter_plan.c src/drivers/fpga_meter_plan.c src/drivers/fpga_meter_plan.h | $(BUILD_DIR)
+	$(HOST_CC) -std=gnu11 -Wall -Wextra -Isrc/drivers $< src/drivers/fpga_meter_plan.c -o $@
 
-.PHONY: all clean disasm size renode soak-test soak-quick flash flash-dfu bootloader flash-bootloader flash-all guest guest-warmtest guest-usart-silent emu test-meter-data test-meter-voltage-wave test-meter
+test-fpga-meter-plan: $(BUILD_DIR)/test_fpga_meter_plan
+	$<
+
+test-meter: test-meter-data test-meter-voltage-wave test-fpga-meter-plan
+
+.PHONY: all clean disasm size renode soak-test soak-quick flash flash-dfu bootloader flash-bootloader flash-all guest guest-warmtest guest-usart-silent emu test-meter-data test-meter-voltage-wave test-fpga-meter-plan test-meter
 
 # Experiment E (2026-07-27): park in fpga_init at the exact config-enable instant
 # (prelude 05/12 sent, CS LOW, 0x15 not yet clocked) so SWD can dump peripheral
