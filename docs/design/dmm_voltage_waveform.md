@@ -198,5 +198,14 @@ The stock DMM command-table evidence is tracked in
 That note now separates the recovered eight stock selector slots from the local
 eleven-submode porting map and records the evidence boundary for `ms[0x02]`
 (`gpio_mux_portc_porte`) versus `ms[0x03]` (`gpio_mux_porta_portb`). In
-particular, uA/mA/A range splitting and capacitance/temperature validation still
-need direct stock or live bench evidence before they can be called fully proven.
+particular:
+
+- stock current evidence proves two selector slots, with display-side unit
+  indices inferred as mA/A, but no separate recovered uA selector;
+- capacitance and temperature share the recovered extended selector slot
+  `0x0512` in the local port; stock notes support capacitance-like formatting
+  and a mode-5 Fahrenheit conversion path, not separate stock selector modes;
+- the current two-frame discard and 20 ms settle window is a conservative local
+  transition policy, while stock evidence so far proves command pacing,
+  USART2 frame filtering, and transition-frame recognition rather than exact
+  fixed settle/discard constants.

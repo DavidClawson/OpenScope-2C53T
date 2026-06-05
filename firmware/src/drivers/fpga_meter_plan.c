@@ -26,7 +26,7 @@ uint8_t fpga_meter_stock_mode_for_submode(uint8_t submode)
     case 7: return 6; /* Continuity */
     case 8: return 7; /* Diode */
     case 9:  /* Capacitance */
-    case 10: /* Temperature, same recovered extended stock formatter family. */
+    case 10: /* Temperature, local split on recovered extended stock slot. */
         return 5;
     default:
         return FPGA_METER_INVALID_STOCK_MODE;

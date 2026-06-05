@@ -52,6 +52,57 @@ separate modes.
 | 9 | capacitance | 5 | `0x0512` | none | extended |
 | 10 | temperature | 5 | `0x0512` | none | extended |
 
+## Current Range Evidence Boundary
+
+Stock selector slots 2 and 3 are the only current slots recovered from the
+eight-byte command table:
+
+| Stock slot | Selector | Stock formatter evidence | Local use |
+|---:|---:|---|---|
+| 2 | `0x0517` | `full_decompile.c` case 2 writes display unit state `4` for one DCA range and `3` for another, keyed by `DAT_2000102e`. `meter_fsm_deep_dive.md` maps those unit indices to inferred mA and A unit strings. | local DC current small range and DC A range |
+| 3 | `0x050B` | `full_decompile.c` case 3 writes display unit state `5`; `meter_fsm_deep_dive.md` maps that unit index to an inferred ACA mA unit string. | local AC current small range and AC A range |
+
+No inspected stock path proves a separate uA selector. The stock evidence so
+far distinguishes current ranges through frame/display unit state, not through
+additional command-table slots. Until the runtime writer for the stock range
+state is recovered or bench-proven, local uA/mA/A labels are parser/UI policy
+on top of the two recovered current slots.
+
+## Extended Slot 5 Evidence Boundary
+
+Stock slot 5 is solidly recovered as selector `0x0512`. The meaning of the
+local capacitance and temperature split is narrower:
+
+- `fpga_task_annotated.c` records the stock result-formatting switch case 5 as
+  `digit_count + 2` for capacitance-like formatting.
+- `meter_math_pipeline_annotated.c` contains a mode-5 conversion path using
+  `value = value * 9 / 5 + 32` when the flag at `+0xF39` is set, with a
+  Fahrenheit `32.0f` literal nearby.
+- The local port maps both capacitance and temperature to stock slot 5 and
+  parses both as the extended frame family.
+
+That is evidence for a shared extended slot, not proof that stock exposes
+separate capacitance and temperature selector modes matching the open
+firmware's eleven UI submodes.
+
+## Transition Timing Evidence Boundary
+
+Stock evidence supports command pacing and frame filtering:
+
+- `fpga_task_annotated.c` shows the TX interrupt enabled, followed by a 10-tick
+  delay before accepting the next command.
+- `full_decompile.c` and `usart2_isr_state_machine.md` show USART2 framing that
+  accepts `0x5A/0xA5` data frames, validates `0xAA/0x55` echo frames, and drops
+  invalid echo/data sequences.
+- `meter_math_pipeline_annotated.c` marks `{any, 0x13, 0x14, 1..3}` as pending
+  auto-range/mode-transition data.
+
+No inspected stock path proves a fixed "discard exactly N frames" or "settle
+exactly 20 ms" window after every mode switch. The open firmware's current
+two-frame discard plus 20 ms settle is a conservative local transition policy
+that should be replaced only when a stock path or repeatable bench capture
+proves the exact rule.
+
 ## GPIO Mux Evidence Boundary
 
 Stock master init calls the two GPIO mux functions from saved meter state:
