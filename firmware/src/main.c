@@ -51,7 +51,7 @@ volatile device_mode_t current_mode = MODE_OSCILLOSCOPE;
 #else
 volatile device_mode_t current_mode = MODE_MULTIMETER;
 #endif
-volatile startup_mode_t startup_mode = STARTUP_SCOPE;
+volatile startup_mode_t startup_mode = STARTUP_METER;
 volatile uint32_t      uptime_seconds = 0;
 volatile int8_t        settings_selected = 0;
 volatile int8_t        settings_depth = 0;

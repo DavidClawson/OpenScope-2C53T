@@ -178,9 +178,9 @@ Dark Blue -> Classic Green -> High Contrast -> Night Red -> Dark Blue
 Scope <-> Meter
 ```
 
-`Meter` starts the application in Multimeter mode and configures the DMM
-frontend immediately after FPGA initialization. `Scope` starts in the normal
-oscilloscope mode.
+Fresh or erased settings default to `Meter`: the application starts in
+Multimeter mode and configures the DMM frontend immediately after FPGA
+initialization. Selecting `Scope` keeps the normal oscilloscope startup path.
 
 ### Oscilloscope Settings Sub-menu (depth 1)
 

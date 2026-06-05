@@ -2046,6 +2046,19 @@ static uint16_t meter_dbg_extra(void)
            meter_reading.dbg_frame[11];
 }
 
+static uint8_t meter_dbg_function_selector(uint8_t submode)
+{
+    if (submode == 1) return 1;   /* ACV */
+    if (submode == 0) return 0;   /* DCV */
+    return submode;
+}
+
+static uint8_t meter_dbg_range_selector(uint8_t submode)
+{
+    if (submode == 0 || submode == 1) return 0;
+    return 0xFF;                  /* Legacy non-voltage rows are not split yet. */
+}
+
 static void cmd_meter_frontend(void)
 {
     uint16_t extra = meter_dbg_extra();
@@ -2060,6 +2073,10 @@ static void cmd_meter_frontend(void)
                      meter_reading.valid ? 1U : 0U,
                      (unsigned)meter_reading.result_class,
                      meter_reading.update_count);
+    usb_debug_printf("expected_selector function=%u range=%u voltage_function_axis=%u\r\n",
+                     (unsigned)meter_dbg_function_selector(meter_submode),
+                     (unsigned)meter_dbg_range_selector(meter_submode),
+                     (meter_submode == 0 || meter_submode == 1) ? 1U : 0U);
     usb_debug_printf("display=%s unit=%s raw_bcd=%d dp=%u f6=%02X f7=%02X f8=%02X f9=%02X extra=%04X aux_freq_i10=%ld beep=%u discard=%u\r\n",
                      meter_reading.valid ? meter_reading.display_str : "---",
                      (meter_reading.valid && meter_reading.unit_suffix) ? meter_reading.unit_suffix : "",
@@ -2099,6 +2116,7 @@ static void print_meter_mux_stream_line(uint32_t index)
                 meter_reading.submode == meter_submode;
 
     usb_debug_printf("t=%lu upd=%lu ui_sub=%u rd_sub=%u live=%u cls=%u "
+                     "func=%u range=%u "
                      "disp=%s unit=%s raw=%d dp=%u f6=%02X f7=%02X f8=%02X f9=%02X "
                      "extra=%04X discard=%u PC6=%u PB11=%u PC11=%u PC12=%u "
                      "PE4=%u PE5=%u PE6=%u PA15=%u PA10=%u PB10=%u PB9=%u PA6=%u\r\n",
@@ -2108,6 +2126,8 @@ static void print_meter_mux_stream_line(uint32_t index)
                      (unsigned)meter_reading.submode,
                      live ? 1U : 0U,
                      (unsigned)meter_reading.result_class,
+                     (unsigned)meter_dbg_function_selector(meter_submode),
+                     (unsigned)meter_dbg_range_selector(meter_submode),
                      meter_reading.valid ? meter_reading.display_str : "---",
                      (meter_reading.valid && meter_reading.unit_suffix) ? meter_reading.unit_suffix : "",
                      meter_reading.raw_bcd,
