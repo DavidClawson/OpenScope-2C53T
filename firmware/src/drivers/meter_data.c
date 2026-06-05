@@ -421,7 +421,7 @@ static void meter_stock_fsm_reset(uint8_t stock_mode)
 {
     memset(&meter_stock_fsm, 0, sizeof(meter_stock_fsm));
     meter_stock_fsm.stock_mode = stock_mode;
-    meter_stock_fsm.variant = (stock_mode == 2) ? 2U : 1U;
+    meter_stock_fsm.variant = 1U;
     meter_stock_fsm.dc_state = (stock_mode == 0) ? 1U : 0U;
 }
 
@@ -595,8 +595,6 @@ static void meter_stock_fsm_apply(uint8_t ui_submode,
 static const char *unit_suffix_from_stock(uint8_t ui_submode, uint8_t unit_index)
 {
     if (ui_submode == 1) return "V";
-    if (ui_submode == 2 || ui_submode == 4) return "mA";
-    if (ui_submode == 3 || ui_submode == 5) return "A";
     if (ui_submode == 7) return "Ohm";
     if (ui_submode == 8) return "V";
     if (ui_submode == 9) return "nF";
@@ -633,8 +631,6 @@ static uint8_t decimal_pos_from_stock(uint8_t ui_submode,
         return default_decimal_pos[ui_submode];
     case 2:
     case 3:
-        if (ui_submode == 2 || ui_submode == 4) return 2;
-        if (ui_submode == 3 || ui_submode == 5) return 1;
         if (fsm->unit_index == 3) return 1;
         if (fmt >= 2) return 1;
         return 2;

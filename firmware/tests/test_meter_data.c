@@ -263,16 +263,16 @@ static int test_stock_formatter_families_have_regression_fixtures(void)
     ASSERT(expect_normal_reading("12.34", "mA", 12.34f, 0.001f));
 
     process_frame(frame, 3);
-    ASSERT(meter_reading.decimal_pos == 1);
-    ASSERT(expect_normal_reading("1.234", "A", 1.234f, 0.001f));
+    ASSERT(meter_reading.decimal_pos == 2);
+    ASSERT(expect_normal_reading("12.34", "mA", 12.34f, 0.001f));
 
     process_frame(frame, 4);
     ASSERT(meter_reading.decimal_pos == 2);
     ASSERT(expect_normal_reading("12.34", "mA", 12.34f, 0.001f));
 
     process_frame(frame, 5);
-    ASSERT(meter_reading.decimal_pos == 1);
-    ASSERT(expect_normal_reading("1.234", "A", 1.234f, 0.001f));
+    ASSERT(meter_reading.decimal_pos == 2);
+    ASSERT(expect_normal_reading("12.34", "mA", 12.34f, 0.001f));
 
     build_segment_frame(frame, 6, 7, 8, 9, 0x00, 0x00, 0x00, 0x00, 0);
     process_frame(frame, 8);
@@ -630,7 +630,6 @@ static int test_voltage_payload_clears_stale_reading_in_all_non_voltage_modes(vo
             ASSERT(meter_reading.raw_bcd != 0);
             ASSERT_STR_EQ(meter_reading.display_str,
                           (modes[m] == 6 || modes[m] == 7) ? "3.300" :
-                          (modes[m] == 3 || modes[m] == 5) ? "1.234" :
                           (modes[m] == 8 || modes[m] == 9) ? "123.4" : "12.34");
 
             process_frame(voltage_frames[f], modes[m]);
@@ -721,22 +720,22 @@ static int test_stock_fsm_debug_fields_follow_mode_and_frames(void)
     meter_data_init();
     meter_data_invalidate(2);
     ASSERT(meter_reading.stock_mode == 2);
-    ASSERT(meter_reading.stock_variant == 2);
+    ASSERT(meter_reading.stock_variant == 1);
     ASSERT(meter_reading.stock_dc_state == 0);
 
     process_frame(current_frame, 2);
     ASSERT(expect_normal_reading("22.61", "mA", 22.61f, 0.001f));
     ASSERT(meter_reading.stock_mode == 2);
-    ASSERT(meter_reading.stock_variant == 2);
-    ASSERT(meter_reading.stock_format == 0);
+    ASSERT(meter_reading.stock_variant == 1);
+    ASSERT(meter_reading.stock_format == 1);
     ASSERT(meter_reading.stock_display_cmd == 2);
-    ASSERT(meter_reading.stock_unit_index == 3);
-    ASSERT(meter_reading.stock_composite_index == 2);
+    ASSERT(meter_reading.stock_unit_index == 4);
+    ASSERT(meter_reading.stock_composite_index == 1);
 
     process_frame(voltage_payload, 2);
     ASSERT(!meter_reading.valid);
     ASSERT(meter_reading.stock_mode == 2);
-    ASSERT(meter_reading.stock_variant == 2);
+    ASSERT(meter_reading.stock_variant == 1);
     ASSERT(meter_reading.stock_dc_state == 0);
     return 1;
 }
