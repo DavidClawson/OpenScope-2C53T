@@ -83,6 +83,7 @@ static void meter_record_history(void)
 #define METER_FINISH_FRAME() do { \
     r->valid = true; \
     r->update_count++; \
+    r->display_update_count++; \
     meter_record_history(); \
 } while (0)
 
@@ -731,6 +732,7 @@ void meter_data_invalidate(uint8_t submode)
     r->range_cmd = 0;
     r->continuity_beep = false;
     r->valid = false;
+    r->display_update_count++;
     memset(r->dbg_frame, 0, sizeof(r->dbg_frame));
     memset(r->dbg_nibbles, 0, sizeof(r->dbg_nibbles));
     memset(r->dbg_raw_digits, 0, sizeof(r->dbg_raw_digits));

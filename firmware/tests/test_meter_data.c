@@ -313,6 +313,7 @@ static int test_invalidate_clears_stale_reading_before_mode_transition(void)
     };
     uint8_t ohms_frame[12];
     uint32_t updates_after_frame;
+    uint32_t display_updates_after_frame;
 
     build_segment_frame(ohms_frame, 3, 3, 0, 0, 0x40, 0x00, 0x00, 0x00, 0);
 
@@ -321,6 +322,7 @@ static int test_invalidate_clears_stale_reading_before_mode_transition(void)
     ASSERT(expect_normal_reading("228.2", "V", 228.2f, 0.05f));
     ASSERT(close_to(meter_reading.aux_freq_hz, 49.0f, 0.1f));
     updates_after_frame = meter_reading.update_count;
+    display_updates_after_frame = meter_reading.display_update_count;
 
     meter_data_invalidate(6);
     ASSERT(!meter_reading.valid);
@@ -332,6 +334,7 @@ static int test_invalidate_clears_stale_reading_before_mode_transition(void)
     ASSERT(close_to(meter_reading.aux_freq_hz, 0.0f, 0.001f));
     ASSERT(!meter_reading.continuity_beep);
     ASSERT(meter_reading.update_count == updates_after_frame + 1);
+    ASSERT(meter_reading.display_update_count == display_updates_after_frame + 1);
 
     process_frame(ohms_frame, 6);
     ASSERT(expect_normal_reading("3.300", "kOhm", 3.300f, 0.001f));
@@ -671,6 +674,7 @@ static int test_voltage_payload_clears_stale_current_reading(void)
     };
     uint8_t current_frame[12];
     uint32_t updates_after_current;
+    uint32_t display_updates_after_current;
 
     build_segment_frame(current_frame, 2, 2, 6, 1, 0x00, 0x00, 0x00, 0x00, 0);
 
@@ -678,10 +682,12 @@ static int test_voltage_payload_clears_stale_current_reading(void)
     process_frame(current_frame, 2);
     ASSERT(expect_normal_reading("22.61", "mA", 22.61f, 0.001f));
     updates_after_current = meter_reading.update_count;
+    display_updates_after_current = meter_reading.display_update_count;
 
     process_frame(mains_frame, 2);
     ASSERT(!meter_reading.valid);
     ASSERT(meter_reading.update_count == updates_after_current + 1);
+    ASSERT(meter_reading.display_update_count == display_updates_after_current);
     ASSERT(meter_reading.submode == 2);
     ASSERT(meter_reading.result_class == METER_RESULT_NONE);
     ASSERT_STR_EQ(meter_reading.display_str, "---");

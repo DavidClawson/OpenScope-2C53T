@@ -2303,7 +2303,7 @@ static void cmd_ui_dump(void)
                      (int)settings_selected,
                      (int)settings_sub_selected);
     usb_debug_printf("meter_ui draws=%lu full_clears=%lu partial_clears=%lu draw_us=%lu max_draw_us=%lu over_budget=%lu last_full=%u live=%u continuity_flash=%u reading_valid=%u "
-                     "reading_submode=%u updates=%lu\r\n",
+                     "reading_submode=%u updates=%lu display_updates=%lu\r\n",
                      meter_screen_draw_count,
                      meter_screen_full_clear_count,
                      meter_screen_partial_clear_count,
@@ -2315,7 +2315,8 @@ static void cmd_ui_dump(void)
                      (unsigned)meter_screen_last_continuity_flash,
                      meter_reading.valid ? 1U : 0U,
                      (unsigned)meter_reading.submode,
-                     meter_reading.update_count);
+                     meter_reading.update_count,
+                     meter_reading.display_update_count);
 }
 
 static void cmd_meter_wave(void)

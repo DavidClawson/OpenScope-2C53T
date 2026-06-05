@@ -392,7 +392,7 @@ static void vDisplayTask(void *pvParameters)
             static uint32_t last_meter_update = 0xFFFFFFFFu;
             static uint32_t last_meter_frame  = 0;
             static uint8_t  last_meter_submode = 0xFFu;
-            uint32_t uc = meter_reading.update_count;
+            uint32_t uc = meter_reading.display_update_count;
             bool submode_changed = (meter_submode != last_meter_submode);
             bool enough_time = (frame - last_meter_frame) >= 5;  /* 20Hz loop -> max 4Hz redraw */
             if (submode_changed || ((uc != last_meter_update) && enough_time) ||

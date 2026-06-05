@@ -85,6 +85,7 @@ typedef struct {
     /* Validity */
     bool     valid;              /* At least one successful parse */
     uint32_t update_count;       /* Incremented on each new reading */
+    uint32_t display_update_count; /* Incremented only when the UI-visible value changes */
 
     /* Debug: raw frame bytes and pre-lookup nibble pairs */
     uint8_t  dbg_frame[12];     /* Last raw USART RX frame */
