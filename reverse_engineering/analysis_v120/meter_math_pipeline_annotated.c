@@ -467,21 +467,19 @@ void dvom_rx_task(void)
         *(float *)&ms[0xF30] = final_val;
 
         /*
-         * 2026-06-05 correction from live low-DCV capture:
+         * 2026-06-05 stock-only correction from live low-DCV capture:
          *
-         * The class bits above are range-status inputs to the later stock
-         * display/calibration pipeline, not a complete local display formula by
-         * themselves. A 1.5 V bench cell produced:
+         * The class bits above are decimal exponent inputs to the stock display
+         * pipeline. A 1.5 V bench cell produced:
          *
          *   5A A5 4E CE 8F 8A 0A 00 82 00 01 7F
-         *   digits=4977, frame[8].7=1
+         *   digits=4977, frame[2].3=1, frame[8].7=1
          *
-         * A local port that maps class 4 to decimal position 0 renders this as
-         * about 4977 V. The correct port must select the low-DCV calibrated
-         * range from frame[8].7 and then apply the factory/per-unit coefficient
-         * described in SECTION 5. The current firmware uses an explicit
-         * per-unit stand-in coefficient for this band until the stock SPI
-         * calibration block is loaded and replayed.
+         * Stock first extends the raw value to 14977 via frame[2].3, then class
+         * 4 divides by 10^4 and renders about 1.4977 V. There is no stock-only
+         * evidence here for a one-point low-voltage coefficient; any real
+         * per-device factory calibration remains unresolved until recovered from
+         * stock xrefs, W25Q/system-file data, or SPI bulk initialization tables.
          */
 
         /* Negate if frame[2] bit 4 is set (polarity flag) */
@@ -919,27 +917,27 @@ void fpga_state_update(void)
  *   2026-06-05:
  *     5V DC → about 4.994 V ✓ via stock-analysis range hint frame[3].4.
  *     32V DC → about 31.96..31.98 V ✓ via range hint frame[4].4.
- *     1.5V DC → about 1.497..1.500 V ✓ via low-DCV range hint frame[8].7
- *               and a temporary per-unit coefficient.
+	 *     1.5V DC → about 1.497..1.500 V ✓ via frame[2].3 raw extension and
+	 *               stock class-4 decimal exponent frame[8].7.
  *
  * VOLTAGE ROOT CAUSE UPDATE:
  *   The original 5V error was largely decimal-position handling. That was not
- *   the whole voltage story. A later low-DCV capture showed a 1.5 V input with
- *   about 4977 BCD counts and frame[8].7 set. Mapping class 4 to decimal
- *   position 0 produced about 4977 V, proving that this class is a calibrated
- *   low-DCV band, not a complete display exponent. The local firmware now
- *   selects a DCV volts-per-count entry from the stock range bits:
+	 *   the whole voltage story. A later low-DCV capture showed a 1.5 V input with
+	 *   about 4977 BCD counts, frame[2].3 set, and frame[8].7 set. Mapping class 4
+	 *   to decimal position 0 produced about 4977 V. Stock instead extends the raw
+	 *   count to 14977 and divides by 10^class selected from the range bits:
+	 *
+	 *     frame[8].7 → class 4, multiplier 0.0001
+	 *     frame[3].4 → class 3, multiplier 0.001
+	 *     frame[4].4 → class 2, multiplier 0.01
+	 *     frame[5].4 → class 1, multiplier 0.1
+	 *     none       → class 0, multiplier 1.0
+	 *
+	 *   Factory calibration remains empirical/unresolved until a stock data source
+	 *   for it is recovered; the local decoder must not invent physical
+	 *   coefficients from one observed voltage.
  *
- *     frame[8].7 → low-DCV calibrated band, temporary 0.0003013864 V/count
- *     frame[3].4 → 0.001 V/count
- *     frame[4].4 → 0.01 V/count
- *     frame[5].4 → 0.1 V/count
- *     none       → 0.001 V/count pending wider sweep
- *
- *   The low-DCV coefficient remains empirical for this bench unit until the
- *   stock factory calibration block is loaded/replayed.
- *
- * REMAINING/EMPIRICAL ERROR: Low-Ω calibration and low-DCV factory coefficient
+	 * REMAINING/EMPIRICAL ERROR: Low-Ω calibration and unresolved factory data
  *
  *   SYMPTOM: 147 Ω reads as 48.36 Ω (ratio ≈ 0.329, or ~3.04x low)
  *   AFFECTED RANGE: low-Ω band (frame[6]=0x07, "Ohm" unit, dp=2)

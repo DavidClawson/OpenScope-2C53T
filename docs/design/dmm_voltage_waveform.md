@@ -19,13 +19,14 @@ frames arrive only a few times per second, so they cannot be used to reconstruct
 a 50/60 Hz sine, inverter step waveform, or dimmer chop shape. They remain the
 authoritative calibrated value shown in large digits.
 
-DC voltage range selection follows the stock-analysis range hint bits in the
-meter frame (`frame[8].7`, `frame[3].4`, `frame[4].4`, `frame[5].4`). The local
-decoder now treats those bits as a range table with explicit volts-per-count
-multipliers, not only as decimal-point placement. The `frame[8].7` class is the
-low-DCV calibrated band on the bench unit: live 1.5 V frames report about 4977
-counts, so the port applies the temporary per-unit coefficient documented in
-`meter_data.c` until the stock factory-calibration block is loaded and replayed.
+DC voltage range selection follows the stock range class bits in the meter frame
+(`frame[8].7`, `frame[3].4`, `frame[4].4`, `frame[5].4`) plus the raw extension
+bit `frame[2].3`. The local decoder treats those bits as the stock decimal
+exponent table: raw BCD digits get an optional `+10000`, then the display value
+is `extended_raw / 10^class`. The `frame[8].7` class is therefore `class=4`
+(`0.0001` multiplier), not a bench-derived low-voltage coefficient. Any true
+per-device factory calibration remains unresolved until recovered from stock
+xrefs, W25Q/system-file data, or SPI bulk initialization tables.
 AC voltage decimal format follows the cleaner stock `frame[7]` formatter path
 and still requires separate AC evidence. Bytes `[10..11]` may be exposed as a
 narrow empirical auxiliary frequency hint, but they are not used to choose the

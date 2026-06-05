@@ -85,13 +85,13 @@ does not prove these bits are literally written into `DAT_2000102c`; treat them
 as a voltage range hint, not as a renamed RAM variable. The annotated decompile
 records this priority:
 
-| Frame bit | Range hint | Local DCV multiplier | Evidence |
+| Frame bit | Stock class | Decimal multiplier | Evidence |
 |---|---:|---:|---|
-| none set | 0 | `0.001 V/count` | default DCV synthetic fixtures, pending wider sweep |
-| `frame[5] & 0x10` | 1 | `0.1 V/count` | live/custom mains captures display about `228.x V` |
+| none set | 0 | `1.0` | stock priority fallback |
+| `frame[5] & 0x10` | 1 | `0.1` | stock priority branch |
 | `frame[4] & 0x10` | 2 | `0.01 V/count` | live/custom 32 V capture displays `31.96 V` |
 | `frame[3] & 0x10` | 3 | `0.001 V/count` | live/custom 5 V capture displays `4.994 V` |
-| `frame[8] & 0x80` | 4 | `~0.000301386 V/count` | live/custom 1.5 V capture reports about `4977` counts and stock notes show this low band needs a factory-calibration coefficient |
+| `frame[8] & 0x80` | 4 | `0.0001` | live/custom 1.5 V capture uses `frame[2].3` to extend `4977` into `14977`, then class 4 renders `1.4977 V` |
 
 The 2026-06-05 32 V failure frame was:
 
@@ -113,11 +113,10 @@ digits=4977, frame[8].7=1, extra=017F
 ```
 
 The previous local decoder treated hint `4` as decimal position `0`, rendering
-about `4977 V` for a 1.5 V cell. That contradicted the stock calibration notes
-in `fpga_comms_deep_dive.c`, where low-DCV counts are converted through a
-calibration coefficient rather than only by moving the decimal point. The local
-port now selects the low-DCV multiplier from `frame[8].7`; it does not infer
-the multiplier from the numeric digits.
+about `4977 V` for a 1.5 V cell. The stock-only correction is the `frame[2].3`
+raw extension: `4977` becomes `14977`, then `frame[8].7` selects class `4` and
+renders `1.4977 V`. The local port does not infer a multiplier from the numeric
+digits, and it does not use a one-point low-voltage coefficient.
 
 ## Local Port
 

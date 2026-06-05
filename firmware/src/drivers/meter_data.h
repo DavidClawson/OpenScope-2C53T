@@ -44,7 +44,7 @@ typedef enum {
 typedef struct {
     /* Parsed measurement value */
     float    value;              /* Scaled measurement value */
-    int      bcd_value;            /* Raw 4-digit BCD integer (0-9999) */
+    int      bcd_value;            /* Stock raw value: 4 BCD digits plus optional frame[2].3 +10000 */
     uint8_t  digits[4];          /* Individual BCD digits */
     uint8_t  decimal_pos;        /* Decimal point position (0=none, 1-3) */
     bool     negative;           /* Negative polarity */

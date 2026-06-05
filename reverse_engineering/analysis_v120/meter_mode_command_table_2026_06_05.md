@@ -73,7 +73,7 @@ of the two recovered current slots.
 
 The low-DCV live failure frame uses `frame[8]=0x82`: low seven bits still carry
 the stock DCV/voltage marker `0x02`, while bit 7 is the stock range/status input
-that routes the value into the local low-DCV calibrated band. Therefore `0x82`
+that selects stock decimal class `4`. Therefore `0x82`
 must be treated as a voltage-family payload for wrong-mode rejection even though
 it is not byte-equal to the common `0x02` DCV frame.
 

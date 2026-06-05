@@ -321,20 +321,19 @@ static const float bar_full_scale[11] = {
 
 #define METER_CAL_LOW_OHM_FACTOR  0.0304f   /* bcd_value × this = Ω, low band */
 #define METER_CAL_KOHM_FACTOR     0.001f    /* bcd_value × this = kΩ, mid band */
-#define METER_CAL_DCV_LOW_FACTOR  0.0003013864f
 
 typedef struct {
-    uint8_t hint;
-    uint8_t decimal_pos;
-    float volts_per_count;
-} dcv_voltage_range_t;
+    uint8_t class_id;
+    uint8_t display_decimal_pos;
+    float divisor;
+} dcv_stock_class_t;
 
-static const dcv_voltage_range_t dcv_voltage_ranges[] = {
-    { 4, 1, METER_CAL_DCV_LOW_FACTOR },
-    { 3, 1, 0.001f                  },
-    { 2, 2, 0.01f                   },
-    { 1, 3, 0.1f                    },
-    { 0, 1, 0.001f                  },
+static const dcv_stock_class_t dcv_stock_classes[] = {
+    { 4, 1, 10000.0f },
+    { 3, 1, 1000.0f  },
+    { 2, 2, 100.0f   },
+    { 1, 3, 10.0f    },
+    { 0, 0, 1.0f     },
 };
 
 /* ═══════════════════════════════════════════════════════════════════
@@ -443,11 +442,10 @@ static void meter_stock_fsm_reset(uint8_t stock_mode)
 
 static bool frame_has_voltage_payload_marker(const volatile uint8_t *frame)
 {
-    /* Stock USART2 DMM frames carry the active voltage family in frame[8]'s
-     * low bits (`0x02` for DCV-class payloads); frame[8].7 is an orthogonal
-     * range/status bit used by the stock decimal/range pipeline and by the
-     * local low-DCV calibrated band. Therefore a `0x82` low-DCV frame is still
-     * a voltage-family payload when it leaks into current/passive UI modes.
+    /* Stock USART2 DMM frames carry the active voltage family in frame[8]'s low
+     * bits (`0x02` for DCV-class payloads); frame[8].7 is the highest-priority
+     * stock decimal class bit. Therefore a `0x82` class-4 DCV frame is still a
+     * voltage-family payload when it leaks into current/passive UI modes.
      * This classification is metadata-based: it must not depend on whether the
      * BCD count happens to look like a plausible voltage/current/resistance. */
     return ((frame[8] & 0x7FU) == 0x02U) && frame[9] == 0x00;
@@ -753,14 +751,14 @@ static uint8_t voltage_range_hint_from_stock_frame(const volatile uint8_t *frame
     return 0;
 }
 
-static const dcv_voltage_range_t *
-dcv_voltage_range_from_stock_frame(const volatile uint8_t *frame)
+static const dcv_stock_class_t *
+dcv_stock_class_from_frame(const volatile uint8_t *frame)
 {
-    uint8_t hint = voltage_range_hint_from_stock_frame(frame);
+    uint8_t class_id = voltage_range_hint_from_stock_frame(frame);
 
-    for (unsigned i = 0; i < sizeof(dcv_voltage_ranges) / sizeof(dcv_voltage_ranges[0]); i++) {
-        if (dcv_voltage_ranges[i].hint == hint) {
-            return &dcv_voltage_ranges[i];
+    for (unsigned i = 0; i < sizeof(dcv_stock_classes) / sizeof(dcv_stock_classes[0]); i++) {
+        if (dcv_stock_classes[i].class_id == class_id) {
+            return &dcv_stock_classes[i];
         }
     }
 
@@ -771,14 +769,14 @@ static bool apply_stock_dcv_voltage_range_hint(meter_reading_t *r,
                                                uint8_t submode,
                                                const volatile uint8_t *frame)
 {
-    const dcv_voltage_range_t *range;
+    const dcv_stock_class_t *stock_class;
 
     if (submode != 0) {
         return false;
     }
 
-    range = dcv_voltage_range_from_stock_frame(frame);
-    if (range == NULL) {
+    stock_class = dcv_stock_class_from_frame(frame);
+    if (stock_class == NULL) {
         return false;
     }
 
@@ -786,61 +784,88 @@ static bool apply_stock_dcv_voltage_range_hint(meter_reading_t *r,
      * The range entry is selected only from stock frame status bits, before
      * looking at the decoded digits. This mirrors the instrument contract:
      * the meter IC/front-end declares its active range in the 12-byte USART2
-     * report, and the renderer converts the four display digits through that
-     * range's engineering coefficient. The coefficient table is therefore a
-     * range model, not a recognition table for convenient bench values.
+     * report, and the renderer converts the extended raw value by the matching
+     * stock decimal exponent. This table is not a recognition table for
+     * convenient bench values.
      */
-    r->decimal_pos = range->decimal_pos;
+    r->decimal_pos = stock_class->display_decimal_pos;
     r->unit_variant = 0;
     r->unit_suffix = "V";
     return true;
+}
+
+static void format_stock_decimal_value(int raw_value, uint8_t class_id,
+                                       bool negative, char *s)
+{
+    int pos = 0;
+    int divisor = 1;
+    uint8_t decimals = class_id;
+
+    if (negative) {
+        s[pos++] = '-';
+    }
+
+    for (uint8_t i = 0; i < decimals; i++) {
+        divisor *= 10;
+    }
+
+    int whole = raw_value / divisor;
+    int frac = raw_value % divisor;
+
+    if (whole >= 10000) s[pos++] = (char)('0' + (whole / 10000) % 10);
+    if (whole >= 1000)  s[pos++] = (char)('0' + (whole / 1000) % 10);
+    if (whole >= 100)   s[pos++] = (char)('0' + (whole / 100) % 10);
+    if (whole >= 10)    s[pos++] = (char)('0' + (whole / 10) % 10);
+    s[pos++] = (char)('0' + whole % 10);
+
+    if (decimals > 0) {
+        int place = divisor / 10;
+        s[pos++] = '.';
+        while (place > 0) {
+            s[pos++] = (char)('0' + (frac / place) % 10);
+            place /= 10;
+        }
+    }
+
+    s[pos] = '\0';
 }
 
 static bool apply_stock_dcv_voltage_multiplier(meter_reading_t *r,
                                                uint8_t submode,
                                                const volatile uint8_t *frame)
 {
-    const dcv_voltage_range_t *range;
+    const dcv_stock_class_t *stock_class;
 
     if (submode != 0) {
         return false;
     }
 
-    range = dcv_voltage_range_from_stock_frame(frame);
-    if (range == NULL) {
+    stock_class = dcv_stock_class_from_frame(frame);
+    if (stock_class == NULL) {
         return false;
     }
 
     /*
      * DCV value reconstruction.
      *
-     * Source of truth: V1.2.0 stock receive-path notes identify the ordered
-     * range bits tested by voltage_range_hint_from_stock_frame(); live frames
-     * then bind those bit classes to physical ranges. Hints 3, 2, and 1 are
-     * geometric decade ranges proven by the 5 V, 32 V, and high-voltage
-     * fixtures. Hint 4 is the low-DCV calibrated band: the stock SPI/factory
-     * calibration path applies a per-unit coefficient here, and the current
-     * bench unit reports about 4977 counts for a 1.5 V cell. Until the factory
-     * calibration block is replayed, METER_CAL_DCV_LOW_FACTOR is the explicit
-     * per-unit stand-in for that stock coefficient.
+     * Stock V1.2.0 does two separate things in FUN_08036AC0:
+     *   1. build raw = d0*1000 + d1*100 + d2*10 + d3, then add 10000.0f
+     *      when frame[2].3 is set;
+     *   2. choose a decimal exponent from frame[8].7, frame[3].4, frame[4].4,
+     *      frame[5].4, or default, and divide the extended raw value by
+     *      10^class.
      *
-     * Keeping this as a table avoids the previous error where class 4 was
-     * treated as just another decimal-point position and rendered 1.5 V as
-     * about 4977 V. It also keeps the debug fields unchanged: bcd_value,
-     * digits[], decimal_pos, and dbg_frame continue to show the meter report,
-     * while value/display_str carry the calibrated engineering reading.
+     * No stock-only evidence has a special one-point low-voltage coefficient.
+     * Factory calibration may still exist in W25Q/SPI bulk data, but it is not
+     * this display exponent table and must not be invented here.
      */
-    float v = (float)r->bcd_value * range->volts_per_count;
+    float v = (float)r->bcd_value / stock_class->divisor;
     if (r->negative) v = -v;
     r->value = v;
     r->unit_variant = 0;
     r->unit_suffix = "V";
-
-    char *s = r->display_str;
-    int pos = 0;
-    float av = v;
-    if (av < 0.0f) { s[pos++] = '-'; av = -av; }
-    format_4digit_unsigned(av, s + pos);
+    format_stock_decimal_value(r->bcd_value, stock_class->class_id,
+                               r->negative, r->display_str);
 
     float abs_v = v < 0.0f ? -v : v;
     float full_scale = (submode < 11) ? bar_full_scale[submode] : 1000.0f;
@@ -1242,6 +1267,9 @@ void meter_data_process_frame(const volatile uint8_t *frame, uint8_t submode)
     r->digits[2] = d2;
     r->digits[3] = d3;
     r->bcd_value = d0 * 1000 + d1 * 100 + d2 * 10 + d3;
+    if (frame[2] & 0x08U) {
+        r->bcd_value += 10000;
+    }
 
     uint8_t raw_digit_codes[4] = { digit0, digit1, digit2, digit3 };
 
