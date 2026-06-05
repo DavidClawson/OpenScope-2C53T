@@ -1,0 +1,367 @@
+#!/usr/bin/env python3
+"""Goal gate for stock-grounded OpenScope 2C53T DMM validation.
+
+This script intentionally does not OCR webcam frames.  The webcam image is
+captured as evidence; the observed source/load value is read from that evidence
+by the operator/agent using the image-view tool, then passed here as a recorded
+visual observation.  The script verifies firmware/host gates and compares the
+live CDC DMM reading against that visual observation.
+"""
+
+from __future__ import annotations
+
+import argparse
+import json
+from pathlib import Path
+import re
+import subprocess
+import sys
+import time
+from typing import Any
+
+
+REPO = Path(__file__).resolve().parents[1]
+FORBIDDEN_RE = r"raw_bcd|display_value|magnitude|looks like|1800|2600"
+DMM_MODE_COUNT = 11
+
+
+class GateError(RuntimeError):
+    pass
+
+
+def run(cmd: list[str], *, timeout: float | None = None) -> subprocess.CompletedProcess[str]:
+    proc = subprocess.run(
+        cmd,
+        cwd=REPO,
+        text=True,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.STDOUT,
+        timeout=timeout,
+    )
+    if proc.returncode != 0:
+        raise GateError(
+            "command failed (%s):\n%s" % (" ".join(cmd), proc.stdout.rstrip())
+        )
+    return proc
+
+
+def run_software_gate() -> list[dict[str, Any]]:
+    commands = [
+        ["python3", "-m", "py_compile",
+         "scripts/openscope_live_debug.py",
+         "scripts/flash_preflight.py",
+         "scripts/hid_flash.py",
+         "scripts/validate_dmm_goal.py"],
+        ["python3", "scripts/test_openscope_live_debug.py"],
+        ["python3", "scripts/test_flash_preflight.py"],
+        ["python3", "scripts/test_dmm_goal_validation.py"],
+        ["make", "-C", "firmware", "test-meter"],
+        ["make", "-C", "firmware", "clean"],
+        ["make", "-C", "firmware"],
+        ["git", "diff", "--check"],
+    ]
+    results: list[dict[str, Any]] = []
+    for cmd in commands:
+        started = time.monotonic()
+        proc = run(cmd)
+        results.append({
+            "cmd": cmd,
+            "seconds": round(time.monotonic() - started, 3),
+            "tail": "\n".join(proc.stdout.rstrip().splitlines()[-12:]),
+        })
+
+    proc = subprocess.run(
+        ["rg", "-n", FORBIDDEN_RE, "firmware/src/drivers", "firmware/src/ui"],
+        cwd=REPO,
+        text=True,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.STDOUT,
+    )
+    if proc.returncode == 0:
+        raise GateError("forbidden decoder/search terms found:\n" + proc.stdout.rstrip())
+    if proc.returncode not in (1,):
+        raise GateError("forbidden-search command failed:\n" + proc.stdout.rstrip())
+    results.append({
+        "cmd": ["!", "rg", "-n", FORBIDDEN_RE,
+                "firmware/src/drivers", "firmware/src/ui"],
+        "seconds": 0,
+        "tail": "no hits",
+    })
+    return results
+
+
+def verify_re_coverage() -> dict[str, Any]:
+    required_docs = [
+        "reverse_engineering/analysis_v120/meter_stock_multiplier_tables_2026_06_05.md",
+        "reverse_engineering/analysis_v120/meter_mode_command_table_2026_06_05.md",
+        "reverse_engineering/analysis_v120/meter_acv_stock_case_2026_06_05.md",
+        "reverse_engineering/analysis_v120/meter_math_pipeline_annotated.c",
+    ]
+    required_code = [
+        "firmware/src/drivers/meter_data.c",
+        "firmware/src/drivers/fpga_meter_plan.c",
+        "firmware/src/drivers/fpga.c",
+        "firmware/src/ui/meter_ui.c",
+    ]
+    required_terms = [
+        "DC voltage", "AC voltage", "DC current", "AC current",
+        "resistance", "continuity", "diode", "capacitance",
+        "temperature", "selector", "mux", "settle", "discard",
+        "empirical", "stock",
+    ]
+
+    haystack = ""
+    missing_files: list[str] = []
+    for rel in required_docs + required_code:
+        path = REPO / rel
+        if not path.exists():
+            missing_files.append(rel)
+            continue
+        haystack += "\n" + path.read_text(encoding="utf-8", errors="replace")
+
+    missing_terms = [term for term in required_terms
+                     if term.lower() not in haystack.lower()]
+    if missing_files or missing_terms:
+        raise GateError(
+            "RE/comment coverage check failed: "
+            f"missing_files={missing_files} missing_terms={missing_terms}"
+        )
+    return {
+        "docs": required_docs,
+        "code": required_code,
+        "terms": required_terms,
+    }
+
+
+def firmware_changed_since_upstream() -> bool:
+    proc = run(["git", "diff", "--name-only", "origin/feature/meter-voltage-waveform..HEAD"])
+    return any(line.startswith("firmware/") for line in proc.stdout.splitlines())
+
+
+def preflight_current_firmware_image() -> dict[str, Any]:
+    image = REPO / "firmware/build/firmware.bin"
+    if not image.exists():
+        return {"status": "skipped", "reason": "firmware image does not exist yet"}
+    proc = run([
+        "python3", "scripts/flash_preflight.py", "hid-app",
+        "--image", str(image.relative_to(REPO)),
+        "--address", "0x08004000",
+        "--image-only",
+    ])
+    return {"status": "ok", "tail": "\n".join(proc.stdout.rstrip().splitlines()[-8:])}
+
+
+def capture_webcam(device: str, output: Path, size: str) -> dict[str, Any]:
+    output.parent.mkdir(parents=True, exist_ok=True)
+    cmd = [
+        "ffmpeg", "-hide_banner", "-loglevel", "error",
+        "-f", "v4l2", "-input_format", "mjpeg", "-video_size", size,
+        "-i", device, "-frames:v", "1", str(output),
+    ]
+    run(cmd, timeout=10)
+    if not output.exists() or output.stat().st_size <= 0:
+        raise GateError(f"webcam capture did not create a non-empty frame: {output}")
+    return {"device": device, "path": str(output), "bytes": output.stat().st_size}
+
+
+def live_debug(args: list[str]) -> str:
+    cmd = ["python3", "scripts/openscope_live_debug.py", *args]
+    return run(cmd, timeout=30).stdout
+
+
+def parse_meter_dump_block(text: str) -> dict[str, Any]:
+    blocks = [block for block in text.split("=== DMM State ===") if "valid=" in block]
+    if blocks:
+        text = "=== DMM State ===" + blocks[-1]
+
+    data: dict[str, Any] = {}
+    patterns = {
+        "mode": r"mode=(\d+)",
+        "meter_submode": r"meter_submode=(\d+)",
+        "valid": r"valid=(\d+)",
+        "reading_submode": r"reading_submode=(\d+)",
+        "class": r"class=(\d+)",
+        "display": r"display=([^\s]+)",
+        "unit": r"unit=([^\s]*)",
+        "bcd_value": r"bcd_value=(-?\d+)",
+        "decimal_pos": r"decimal_pos=(\d+)",
+        "reject": r"reject=(\d+)",
+    }
+    for key, pattern in patterns.items():
+        match = re.search(pattern, text)
+        if not match:
+            raise GateError(f"meter dump missing {key}: {text[:400]!r}")
+        value = match.group(1)
+        data[key] = int(value) if value.lstrip("-").isdigit() else value
+    try:
+        data["display_value"] = float(str(data["display"]))
+    except ValueError:
+        data["display_value"] = None
+    frame_match = re.search(r"frame=([0-9A-Fa-f ]+)", text)
+    if frame_match:
+        data["frame"] = frame_match.group(1).strip()
+    return data
+
+
+def parse_meter_dumps(text: str) -> list[dict[str, Any]]:
+    blocks = [block for block in text.split("=== DMM State ===") if "valid=" in block]
+    if not blocks:
+        return [parse_meter_dump_block(text)]
+    return [parse_meter_dump_block("=== DMM State ===" + block) for block in blocks]
+
+
+def select_dcv_dump(text: str) -> dict[str, Any]:
+    dumps = parse_meter_dumps(text)
+    for dump in reversed(dumps):
+        if dump.get("meter_submode") == 0 and dump.get("reading_submode") == 0 and \
+           dump.get("valid") == 1 and dump.get("display_value") is not None:
+            return dump
+    return dumps[-1]
+
+
+def select_acv_reject_dump(text: str) -> dict[str, Any]:
+    dumps = parse_meter_dumps(text)
+    for dump in reversed(dumps):
+        if dump.get("meter_submode") == 1 and dump.get("reading_submode") == 1 and \
+           dump.get("valid") == 0 and dump.get("display") == "---" and \
+           dump.get("reject") == 3:
+            return dump
+    return dumps[-1]
+
+
+def assert_dcv_matches_observed(meter: dict[str, Any], observed: float, tolerance: float) -> None:
+    if meter["valid"] != 1:
+        raise GateError(f"DCV is invalid: {meter}")
+    if meter["meter_submode"] != 0 or meter["reading_submode"] != 0:
+        raise GateError(f"DCV mode/submode mismatch: {meter}")
+    if meter.get("unit") != "V" or meter.get("display_value") is None:
+        raise GateError(f"DCV did not produce a numeric volt reading: {meter}")
+    delta = abs(float(meter["display_value"]) - observed)
+    if delta > tolerance:
+        raise GateError(
+            f"DCV mismatch: CDC={meter['display_value']} V, "
+            f"visual_observed={observed} V, tolerance={tolerance} V"
+        )
+
+
+def assert_acv_rejects_dc(meter: dict[str, Any]) -> None:
+    if meter["meter_submode"] != 1 or meter["reading_submode"] != 1:
+        raise GateError(f"ACV mode/submode mismatch: {meter}")
+    if meter["valid"] != 0 or meter["display"] != "---" or meter["reject"] != 3:
+        raise GateError(f"ACV did not reject DC input as missing AC evidence: {meter}")
+
+
+def run_live_validation(args: argparse.Namespace, outdir: Path) -> dict[str, Any]:
+    result: dict[str, Any] = {
+        "visual_observed_source_voltage_v": args.observed_source_voltage,
+        "voltage_tolerance_v": args.voltage_tolerance,
+        "passive_live": "not probed on energized voltage input; parser tests cover stale/wrong-family rejection",
+        "current_live": "not probed without correct jack and load-limited series wiring; parser tests cover voltage rejection",
+    }
+    webcam = capture_webcam(args.webcam, outdir / "webcam_source_load.jpg", args.webcam_size)
+    result["webcam"] = webcam
+    screen_path = outdir / "openscope_screen.bmp"
+    screen_stdout = live_debug([
+        "screen-capture", "--output", str(screen_path),
+        "--timeout", str(args.timeout),
+        *([] if args.port is None else ["--port", args.port]),
+    ])
+    result["screen_capture"] = {"path": str(screen_path), "stdout": screen_stdout.strip()}
+
+    live_debug(["command", "mode meter 0 0", "--timeout", str(args.timeout),
+                *([] if args.port is None else ["--port", args.port])])
+    time.sleep(args.settle_seconds)
+    dcv_text = live_debug([
+        "meter-dump", "--count", "5", "--interval", "0.4",
+        "--timeout", str(args.timeout),
+        *([] if args.port is None else ["--port", args.port]),
+    ])
+    dcv = select_dcv_dump(dcv_text)
+    result["dcv"] = dcv
+    try:
+        assert_dcv_matches_observed(dcv, args.observed_source_voltage, args.voltage_tolerance)
+    except GateError as exc:
+        result["passed"] = False
+        result["error"] = str(exc)
+        return result
+
+    live_debug(["command", "mode meter 1 0", "--timeout", str(args.timeout),
+                *([] if args.port is None else ["--port", args.port])])
+    time.sleep(args.settle_seconds)
+    acv_text = live_debug([
+        "meter-dump", "--count", "5", "--interval", "0.4",
+        "--timeout", str(args.timeout),
+        *([] if args.port is None else ["--port", args.port]),
+    ])
+    acv = select_acv_reject_dump(acv_text)
+    result["acv_same_dc_input"] = acv
+    try:
+        assert_acv_rejects_dc(acv)
+    except GateError as exc:
+        result["passed"] = False
+        result["error"] = str(exc)
+        return result
+
+    result["passed"] = True
+    return result
+
+
+def build_parser() -> argparse.ArgumentParser:
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("--outdir", type=Path, default=Path("tmp/dmm_goal_validation"))
+    parser.add_argument("--skip-software", action="store_true")
+    parser.add_argument("--skip-live", action="store_true")
+    parser.add_argument("--port")
+    parser.add_argument("--timeout", type=float, default=4.0)
+    parser.add_argument("--webcam", default="/dev/video0")
+    parser.add_argument("--webcam-size", default="1920x1080")
+    parser.add_argument("--observed-source-voltage", type=float,
+                        help="volts read visually from the captured webcam evidence")
+    parser.add_argument("--voltage-tolerance", type=float, default=0.05)
+    parser.add_argument("--settle-seconds", type=float, default=1.0)
+    return parser
+
+
+def main(argv: list[str] | None = None) -> int:
+    args = build_parser().parse_args(argv)
+    outdir = args.outdir
+    outdir.mkdir(parents=True, exist_ok=True)
+
+    report: dict[str, Any] = {
+        "timestamp": time.strftime("%Y-%m-%d %H:%M:%S"),
+        "head": run(["git", "rev-parse", "HEAD"]).stdout.strip(),
+    }
+    try:
+        if not args.skip_software:
+            report["software_gate"] = run_software_gate()
+            report["re_comment_coverage"] = verify_re_coverage()
+            report["firmware_changed_since_upstream"] = firmware_changed_since_upstream()
+            report["flash_preflight"] = preflight_current_firmware_image()
+
+        if not args.skip_live:
+            if args.observed_source_voltage is None:
+                raise GateError(
+                    "--observed-source-voltage is required for live validation; "
+                    "read it from the captured webcam evidence with the image-view tool"
+                )
+            report["live_validation"] = run_live_validation(args, outdir)
+            if not report["live_validation"].get("passed", False):
+                raise GateError(report["live_validation"].get("error", "live validation failed"))
+
+        report_path = outdir / "report.json"
+        report_path.write_text(json.dumps(report, indent=2, sort_keys=True) + "\n",
+                               encoding="utf-8")
+        print(f"DMM goal validation ok: {report_path}")
+        return 0
+    except Exception as exc:
+        report["error"] = str(exc)
+        report_path = outdir / "report.json"
+        report_path.write_text(json.dumps(report, indent=2, sort_keys=True) + "\n",
+                               encoding="utf-8")
+        print(f"DMM goal validation failed: {exc}", file=sys.stderr)
+        print(f"partial report: {report_path}", file=sys.stderr)
+        return 1
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

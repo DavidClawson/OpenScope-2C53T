@@ -142,6 +142,21 @@ static void fpga_meter_reset_transport(void)
 
     if (xTaskGetSchedulerState() != taskSCHEDULER_RUNNING) return;
 
+    /*
+     * DMM transition drain/reset.
+     *
+     * Stock evidence in analysis_v120/usart2_isr_state_machine.md shows two
+     * USART2 frame families on one stream: 12-byte 0x5A/0xA5 meter data and
+     * 10-byte 0xAA/0x55 command echoes. The meter-mode command-table note also
+     * tracks the stock PC11 meter-MUX gate and the separate Port C/E and
+     * Port A/B frontend writers. During a local mode switch we therefore stop
+     * RX/TX IRQs, suspend both DVOM transport tasks, reset pending queues and
+     * byte indices, drop PC11, then resume before sending the new stock 0x05xx
+     * selector sequence. The exact 20 ms quiet window and later two-frame
+     * discard are conservative local policy, not recovered stock constants; the
+     * values are exported through `meter frontend`/`meter mux-stream` so future
+     * stock traces can replace them instead of hiding a guess here.
+     */
     ctrl1 = USART2->ctrl1;
     USART2->ctrl1 = ctrl1 & ~(USART_CTRL1_RDBFIEN | USART_CTRL1_TDBEIEN);
 
