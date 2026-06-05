@@ -91,9 +91,12 @@ static TaskHandle_t      rx_task_handle  = NULL;
 /* Track whether we've received at least one valid acquisition */
 static volatile bool data_ready = false;
 static volatile bool scope_reinit_pending = false;
+static volatile bool meter_transition_busy = false;
 volatile uint8_t meter_frame_discard_count;
 
 #define METER_MODE_SWITCH_DISCARD_FRAMES 2U
+
+static void fpga_scope_delay_ms(uint32_t ms);
 
 void fpga_meter_adc_diag_reset(void)
 {
@@ -113,6 +116,37 @@ void fpga_meter_adc_diag_reset(void)
 static void fpga_meter_discard_next_frames(uint8_t count)
 {
     meter_frame_discard_count = count;
+}
+
+static void fpga_meter_reset_transport(void)
+{
+    uint32_t ctrl1;
+
+    if (xTaskGetSchedulerState() != taskSCHEDULER_RUNNING) return;
+
+    ctrl1 = USART2->ctrl1;
+    USART2->ctrl1 = ctrl1 & ~(USART_CTRL1_RDBFIEN | USART_CTRL1_TDBEIEN);
+
+    if (tx_task_handle != NULL) vTaskSuspend(tx_task_handle);
+    if (rx_task_handle != NULL) vTaskSuspend(rx_task_handle);
+
+    if (usart_tx_queue != NULL) xQueueReset(usart_tx_queue);
+    if (meter_sem != NULL) xQueueReset(meter_sem);
+    if (spi3_acq_queue != NULL) xQueueReset(spi3_acq_queue);
+
+    fpga.tx_index = 0;
+    fpga.rx_index = 0;
+    fpga.rx_frame_valid = false;
+    (void)USART2->sts;
+    (void)USART2->dt;
+
+    GPIOC->clr = (1U << 11);
+    fpga_scope_delay_ms(20);
+
+    if (rx_task_handle != NULL) vTaskResume(rx_task_handle);
+    if (tx_task_handle != NULL) vTaskResume(tx_task_handle);
+
+    USART2->ctrl1 = (ctrl1 | USART_CTRL1_RDBFIEN) & ~USART_CTRL1_TDBEIEN;
 }
 
 /* ═══════════════════════════════════════════════════════════════════
@@ -1564,7 +1598,8 @@ static void fpga_meter_poll_task(void *pv)
 
     for (;;) {
         vTaskDelay(pdMS_TO_TICKS(250));  /* ~4 Hz */
-        if (fpga.initialized && current_mode == MODE_MULTIMETER) {
+        if (fpga.initialized && current_mode == MODE_MULTIMETER &&
+            !meter_transition_busy) {
             fpga_send_cmd(0x00, 0x09);  /* Meter: start measurement */
         }
     }
@@ -1612,7 +1647,7 @@ static void fpga_meter_adc_sampler_task(void *pv)
         bool voltage_mode;
 
         vTaskDelay(pdMS_TO_TICKS(1));  /* ~1 ksample/s with a 1 kHz tick. */
-        if (!fpga.initialized) continue;
+        if (!fpga.initialized || meter_transition_busy) continue;
 
         voltage_mode = (current_mode == MODE_MULTIMETER) &&
                        (meter_submode == 0 || meter_submode == 1);
@@ -3954,13 +3989,9 @@ void fpga_enter_siggen_mode(void)
 }
 
 /* Helper: send probe detect command (shared by meter modes) */
-static void fpga_send_probe_detect(void)
+static void fpga_timed_send_probe_detect(uint32_t delay_ms)
 {
-    if (fpga_probe_cmd_byte() == 0x07) {
-        fpga_send_cmd(0x00, 0x07);  /* PC7 HIGH: probe detected */
-    } else {
-        fpga_send_cmd(0x00, FPGA_CMD_METER_NOPROBE);
-    }
+    fpga_timed_send_cmd(0x00, fpga_probe_cmd_byte(), delay_ms);
 }
 
 static void fpga_send_meter_mode_sequence(uint8_t submode)
@@ -3987,46 +4018,46 @@ static void fpga_send_meter_mode_sequence(uint8_t submode)
     default:
         /* System mode 1: basic meter.
          * Commands: 0x00, 0x09, probe, 0x1A-0x1E */
-        fpga_send_cmd(0x00, FPGA_CMD_RESET);
-        fpga_send_cmd(0x00, FPGA_CMD_METER_START);
-        fpga_send_probe_detect();
-        fpga_send_cmd(0x00, FPGA_CMD_CH1_GAIN);
-        fpga_send_cmd(0x00, FPGA_CMD_CH1_OFFSET);
-        fpga_send_cmd(0x00, FPGA_CMD_CH2_GAIN);
-        fpga_send_cmd(0x00, FPGA_CMD_CH2_OFFSET);
-        fpga_send_cmd(0x00, FPGA_CMD_COUPLING);
+        fpga_timed_send_cmd(0x00, FPGA_CMD_RESET, 10);
+        fpga_timed_send_cmd(0x00, FPGA_CMD_METER_START, 10);
+        fpga_timed_send_probe_detect(10);
+        fpga_timed_send_cmd(0x00, FPGA_CMD_CH1_GAIN, 10);
+        fpga_timed_send_cmd(0x00, FPGA_CMD_CH1_OFFSET, 10);
+        fpga_timed_send_cmd(0x00, FPGA_CMD_CH2_GAIN, 10);
+        fpga_timed_send_cmd(0x00, FPGA_CMD_CH2_OFFSET, 10);
+        fpga_timed_send_cmd(0x00, FPGA_CMD_COUPLING, 20);
         break;
 
     case 6: /* Resistance */
         /* System mode 9: meter variant.
          * Commands: 0x00, 0x12, 0x13, 0x14, 0x09, probe */
-        fpga_send_cmd(0x00, FPGA_CMD_RESET);
-        fpga_send_cmd(0x00, FPGA_CMD_METER_VAR_12);
-        fpga_send_cmd(0x00, FPGA_CMD_METER_VAR_13);
-        fpga_send_cmd(0x00, FPGA_CMD_METER_VAR_14);
-        fpga_send_cmd(0x00, FPGA_CMD_METER_START);
-        fpga_send_probe_detect();
+        fpga_timed_send_cmd(0x00, FPGA_CMD_RESET, 10);
+        fpga_timed_send_cmd(0x00, FPGA_CMD_METER_VAR_12, 10);
+        fpga_timed_send_cmd(0x00, FPGA_CMD_METER_VAR_13, 10);
+        fpga_timed_send_cmd(0x00, FPGA_CMD_METER_VAR_14, 10);
+        fpga_timed_send_cmd(0x00, FPGA_CMD_METER_START, 10);
+        fpga_timed_send_probe_detect(20);
         break;
 
     case 7: /* Continuity */
     case 8: /* Diode */
         /* System mode 8: continuity/diode.
          * Commands: 0x00, 0x2C */
-        fpga_send_cmd(0x00, FPGA_CMD_RESET);
-        fpga_send_cmd(0x00, FPGA_CMD_CONT_DIODE);
+        fpga_timed_send_cmd(0x00, FPGA_CMD_RESET, 10);
+        fpga_timed_send_cmd(0x00, FPGA_CMD_CONT_DIODE, 20);
         break;
 
     case 9: /* Capacitance */
         /* System mode 3: extended meter.
          * Commands: 0x00, 0x08, 0x09, probe, 0x16-0x19 */
-        fpga_send_cmd(0x00, FPGA_CMD_RESET);
-        fpga_send_cmd(0x00, 0x08);
-        fpga_send_cmd(0x00, FPGA_CMD_METER_START);
-        fpga_send_probe_detect();
-        fpga_send_cmd(0x00, 0x16);
-        fpga_send_cmd(0x00, 0x17);
-        fpga_send_cmd(0x00, 0x18);
-        fpga_send_cmd(0x00, 0x19);
+        fpga_timed_send_cmd(0x00, FPGA_CMD_RESET, 10);
+        fpga_timed_send_cmd(0x00, 0x08, 10);
+        fpga_timed_send_cmd(0x00, FPGA_CMD_METER_START, 10);
+        fpga_timed_send_probe_detect(10);
+        fpga_timed_send_cmd(0x00, 0x16, 10);
+        fpga_timed_send_cmd(0x00, 0x17, 10);
+        fpga_timed_send_cmd(0x00, 0x18, 10);
+        fpga_timed_send_cmd(0x00, 0x19, 20);
         break;
     }
 }
@@ -4040,6 +4071,7 @@ void fpga_set_meter_mode(uint8_t submode)
     return;
 #endif
     if (!fpga.initialized) return;
+    meter_transition_busy = true;
 
     /* Stop DAC output if signal gen was running */
     {
@@ -4050,9 +4082,12 @@ void fpga_set_meter_mode(uint8_t submode)
 
     meter_data_invalidate(submode);
     fpga_meter_discard_next_frames(METER_MODE_SWITCH_DISCARD_FRAMES);
+    fpga_meter_reset_transport();
     fpga_set_meter_frontend_baseline();
-    fpga_scope_delay_ms(10);
+    fpga_scope_delay_ms(20);
     fpga_send_meter_mode_sequence(submode);
+    fpga_timed_send_cmd(0x00, FPGA_CMD_METER_START, 20);
+    meter_transition_busy = false;
 }
 
 void fpga_meter_reinit(uint8_t submode)
@@ -4062,14 +4097,17 @@ void fpga_meter_reinit(uint8_t submode)
     return;
 #endif
     if (!fpga.initialized) return;
+    meter_transition_busy = true;
 
     meter_data_invalidate(submode);
     fpga_meter_discard_next_frames(METER_MODE_SWITCH_DISCARD_FRAMES);
+    fpga_meter_reset_transport();
     fpga_send_meter_wake_preamble();
     fpga_set_meter_frontend_baseline();
-    fpga_scope_delay_ms(10);
+    fpga_scope_delay_ms(20);
     fpga_send_meter_mode_sequence(submode);
     fpga_timed_send_cmd(0x00, FPGA_CMD_METER_START, 20);
+    meter_transition_busy = false;
 }
 
 void fpga_scope_wake(void)
