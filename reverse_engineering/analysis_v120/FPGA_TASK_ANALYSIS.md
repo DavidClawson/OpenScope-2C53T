@@ -412,7 +412,10 @@ The hardcoded VFP constant `s16 = -28.0` reveals the FPGA ADC has a DC offset of
 ### 2. Dual-Interface FPGA Communication
 
 The FPGA uses TWO independent interfaces simultaneously:
-- **USART2** (9600 baud): Low-bandwidth command/control channel. 10-byte commands, 12-byte responses. Timer-driven (TMR3), not interrupt-driven.
+- **USART2** (9600 baud): Low-bandwidth command/status channel. The MCU
+  sends 10-byte command frames; RX includes both 10-byte echo frames and
+  12-byte data frames, including DMM/meter frames in meter modes. Current
+  firmware handles USART2 RX from the USART2 interrupt path.
 - **SPI3** (60 MHz): High-bandwidth data channel. Raw ADC samples at full speed. Software CS on PB6.
 
 ### 3. Button Input via GPIO Scanning (NOT FPGA)

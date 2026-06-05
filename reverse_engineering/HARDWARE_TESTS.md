@@ -104,7 +104,9 @@ The scanning uses specific GPIO output drive patterns and reads the resulting in
 #### `fpgacmd.c` -- USART command sender (TX only)
 - **Goal:** Send 10-byte command frames to FPGA via USART2 TX (PA2). Capture responses externally via logic analyzer on debug UART pads.
 - **Method:** Format frames per the decompiled protocol. LCD shows what was sent + button press reminder.
-- **Result:** Commands sent successfully. FPGA responded with ACK frames on PA3. Confirmed the 10-byte TX / 12-byte RX frame format.
+- **Result:** Commands sent successfully. FPGA responded with ACK frames on PA3.
+  Later USART2 ISR analysis resolved the RX side into 10-byte echo frames and
+  12-byte data/meter frames, rather than one generic 12-byte RX format.
 
 #### `fpgatalk.c` -- Bidirectional USART communication
 - **Goal:** Send commands AND receive/display responses. Highlight bytes that change to detect button data in FPGA responses.

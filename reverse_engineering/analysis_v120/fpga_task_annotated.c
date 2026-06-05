@@ -18,7 +18,8 @@
  *
  * Hardware interfaces:
  *   SPI3  (0x40003C00): PB3=SCK, PB4=MISO, PB5=MOSI, PB6=CS (GPIO)
- *   USART2 (0x40004400): PA2=TX, PA3=RX, 9600 baud, 10-byte TX / 12-byte RX
+ *   USART2 (0x40004400): PA2=TX, PA3=RX, 9600 baud, 10-byte TX commands,
+ *                        10-byte echo RX, and 12-byte data/meter RX frames
  *   GPIOB BOP/BCR: 0x40010C10/0x40010C14
  *   GPIOC IDR: 0x40011008
  *   TMR3 (0x40000400): drives USART2 exchange cycle
