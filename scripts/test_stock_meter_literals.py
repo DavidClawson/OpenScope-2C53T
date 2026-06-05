@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Verify stock V1.2.0 DMM literal pools used by the multiplier note."""
+"""Verify stock V1.2.0 DMM literal pools used by the multiplier notes."""
 
 from __future__ import annotations
 
@@ -14,6 +14,7 @@ REPO = Path(__file__).resolve().parents[1]
 BIN = REPO / "archive/2C53T Firmware V1.2.0/APP_2C53T_V1.2.0_251015.bin"
 BASE = 0x08000000
 EXPECTED_SHA256 = "a17c5c35c97bb898f15672a1747bc1041d8ed507c16999ddba0d1e4e2ec0c760"
+EXPECTED_METER_SELECTOR_TABLE = bytes.fromhex("14 0c 17 0b 0a 12 11 10")
 
 
 def read(addr: int, size: int) -> bytes:
@@ -41,6 +42,31 @@ def expect_bytes(addr: int, expected_hex: str) -> None:
         raise AssertionError(
             f"{addr:#010x}: expected {expected.hex(' ')}, got {actual.hex(' ')}"
         )
+
+
+def verify_meter_selector_table() -> dict[str, object]:
+    """Check the stock eight-entry DMM 0x05xx selector low-byte table.
+
+    The decompile notes refer to the app-slot runtime literal at 0x080BB3FC.
+    This archived app image is read with base 0x08000000, so the same bytes are
+    at 0x080B43FC / file offset 0x000B43FC after the documented app-slot
+    correction.  Keep this binary-grounded so local DMM submode policy cannot
+    drift into invented selector bytes.
+    """
+    runtime_addr = 0x080BB3FC
+    app_image_addr = 0x080B43FC
+    actual = read(app_image_addr, len(EXPECTED_METER_SELECTOR_TABLE))
+    if actual != EXPECTED_METER_SELECTOR_TABLE:
+        raise AssertionError(
+            f"{runtime_addr:#010x}/file {app_image_addr:#010x}: "
+            f"expected {EXPECTED_METER_SELECTOR_TABLE.hex(' ')}, got {actual.hex(' ')}"
+        )
+    return {
+        "runtime_addr": runtime_addr,
+        "app_image_addr": app_image_addr,
+        "bytes": actual.hex(" "),
+        "words": [f"0x05{b:02X}" for b in actual],
+    }
 
 
 def main() -> None:
@@ -78,6 +104,8 @@ def main() -> None:
         expect_f32(addr, value)
 
     expect_bytes(0x08036C8C, "00 bf 00 bf")
+    selector = verify_meter_selector_table()
+    print(f"stock meter selector table: {selector['bytes']}")
     print("stock meter literal pools: ok")
 
 

@@ -17,6 +17,10 @@ Extraction from `archive/2C53T Firmware V1.2.0/APP_2C53T_V1.2.0_251015.bin`:
 
 These bytes are the low byte of raw UART words of the form `0x0500 | table[i]`.
 They are not display/update selector bytes from queue `0x20002D6C`.
+`scripts/test_stock_meter_literals.py` verifies these exact bytes at the
+app-image address `0x080B43FC` (file offset `0x000B43FC`) while documenting the
+runtime/app-slot literal as `0x080BB3FC`, so local selector policy fails the
+software gate if the stock table evidence drifts.
 
 Local port:
 

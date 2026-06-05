@@ -12,6 +12,14 @@ assert SPEC is not None and SPEC.loader is not None
 validate_dmm_goal = importlib.util.module_from_spec(SPEC)
 SPEC.loader.exec_module(validate_dmm_goal)
 
+STOCK_LITERALS_PATH = Path(__file__).resolve().parent / "test_stock_meter_literals.py"
+STOCK_SPEC = importlib.util.spec_from_file_location(
+    "test_stock_meter_literals", STOCK_LITERALS_PATH
+)
+assert STOCK_SPEC is not None and STOCK_SPEC.loader is not None
+stock_meter_literals = importlib.util.module_from_spec(STOCK_SPEC)
+STOCK_SPEC.loader.exec_module(stock_meter_literals)
+
 
 GOOD_DCV = """=== DMM State ===
 mode=1 startup=Meter meter_submode=0 (DC Voltage) layout=0 (full)
@@ -95,6 +103,19 @@ class DmmGoalValidationTests(unittest.TestCase):
         result = validate_dmm_goal.verify_no_unrecovered_meter_coefficients()
         self.assertIn("firmware/src/drivers/meter_data.c", result["checked"])
         self.assertIn("METER_CAL_LOW_OHM_FACTOR", result["forbidden"])
+
+    def test_stock_meter_selector_table_is_binary_grounded(self) -> None:
+        result = stock_meter_literals.verify_meter_selector_table()
+        self.assertEqual(result["runtime_addr"], 0x080BB3FC)
+        self.assertEqual(result["app_image_addr"], 0x080B43FC)
+        self.assertEqual(result["bytes"], "14 0c 17 0b 0a 12 11 10")
+        self.assertEqual(
+            result["words"],
+            [
+                "0x0514", "0x050C", "0x0517", "0x050B",
+                "0x050A", "0x0512", "0x0511", "0x0510",
+            ],
+        )
 
 
 if __name__ == "__main__":
