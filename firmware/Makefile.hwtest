@@ -6,6 +6,8 @@ CC = $(PREFIX)gcc
 AS = $(PREFIX)gcc -x assembler-with-cpp
 CP = $(PREFIX)objcopy
 SZ = $(PREFIX)size
+NANO_SPECS := $(shell f="$(shell $(CC) -print-file-name=nano.specs 2>/dev/null)"; test "$$f" != "nano.specs" -a -f "$$f" && printf '%s' '-specs=nano.specs')
+NOSYS_SPECS := $(shell f="$(shell $(CC) -print-file-name=nosys.specs 2>/dev/null)"; test "$$f" != "nosys.specs" -a -f "$$f" && printf '%s' '-specs=nosys.specs')
 
 BUILD_DIR = build
 
@@ -25,7 +27,7 @@ C_DEFS =
 
 C_SOURCES = \
 	src/attic/$(TEST).c \
-	at32f403a_gcc/user/at32f403a_407_clock.c \
+	src/at32f403a_407_clock.c \
 	$(AT32_CMSIS)/device_support/system_at32f403a_407.c \
 	$(AT32_DRV)/src/at32f403a_407_crm.c \
 	$(AT32_DRV)/src/at32f403a_407_gpio.c \
@@ -46,8 +48,8 @@ endif
 # Include paths
 C_INCLUDES = \
 	-Iinclude \
+	-Isrc \
 	-Isrc/drivers \
-	-Iat32f403a_gcc/user \
 	-I$(AT32_DRV)/inc \
 	-I$(AT32_CMSIS)/device_support \
 	-I$(AT32_CMSIS)/core_support \
@@ -68,7 +70,7 @@ LDSCRIPT = $(AT32_STARTUP)/linker/AT32F403AxG_FLASH.ld
 FLASH_DFU_ADDR = 0x08000000
 endif
 
-LDFLAGS = $(MCU) -specs=nano.specs -specs=nosys.specs -T$(LDSCRIPT) -Wl,--gc-sections -Wl,-Map=$(BUILD_DIR)/hwtest.map,--cref
+LDFLAGS = $(MCU) $(NANO_SPECS) $(NOSYS_SPECS) -T$(LDSCRIPT) -Wl,--gc-sections -Wl,-Map=$(BUILD_DIR)/hwtest.map,--cref
 
 # Build targets
 TARGET_NAME = $(TEST)$(VARIANT_SUFFIX)

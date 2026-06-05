@@ -12,6 +12,7 @@ SZ      = $(PREFIX)size
 OBJDUMP = $(PREFIX)objdump
 NANO_SPECS := $(shell f="$(shell $(CC) -print-file-name=nano.specs 2>/dev/null)"; test "$$f" != "nano.specs" -a -f "$$f" && printf '%s' '-specs=nano.specs')
 HOST_CC ?= gcc
+NANO_SPECS := $(shell f="$(shell $(CC) -print-file-name=nano.specs 2>/dev/null)"; test "$$f" != "nano.specs" -a -f "$$f" && printf '%s' '-specs=nano.specs')
 
 ######################################################################
 # Project paths
