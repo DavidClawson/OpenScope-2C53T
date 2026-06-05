@@ -343,6 +343,8 @@ def verify_re_coverage() -> dict[str, Any]:
         "not DMM runtime range proof",
         "scope UI mux-LUT consumer guard", "0x080151B0", "0x080151C2",
         "FUN_08015f50", "scope render/scale consumer",
+        "ACV format selector guard", "0x080371C8", "0x08037228",
+        "frame[7] bit 0", "not AC evidence",
     ]
 
     haystack = ""

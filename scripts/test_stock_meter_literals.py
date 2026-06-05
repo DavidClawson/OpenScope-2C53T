@@ -153,6 +153,23 @@ EXPECTED_METER_SELECTOR_STATE_SEQUENCES = {
         ),
     ),
 }
+EXPECTED_ACV_FORMAT_SELECTOR_SEQUENCES = {
+    "meter_mode_tbb_table": (
+        0x080371C8,
+        bytes.fromhex("15 30 3b 4b 59 68 04 04"),
+    ),
+    "acv_frame7_bit0_format_selector": (
+        0x08037228,
+        bytes.fromhex(
+            "f0 79 42 f6 7c 5b c0 07 c2 f2 00 0b 42 d1 01 20 "
+            "87 f8 37 0f 8c e0 97 f8 36 1f f0 79 01 29 3d d1"
+        ),
+    ),
+    "acv_frame7_bit0_format_selector_branch_target": (
+        0x080372BC,
+        bytes.fromhex("87 f8 37 4f 01 20 49 e0"),
+    ),
+}
 EXPECTED_MUX_RESTORE_SEQUENCES = {
     0x08025544: bytes.fromhex("a0 78 dc f7 ad f9 e0 78 dc f7 84 fa"),
     0x0802723E: bytes.fromhex(
@@ -556,6 +573,31 @@ def verify_meter_selector_state_sequences() -> dict[str, object]:
     return {"sequences": checked}
 
 
+def verify_acv_format_selector_sequences() -> dict[str, object]:
+    """Check stock ACV submode dispatch and `frame[7].0` format selection.
+
+    The guarded TBB table maps stock DMM submode 1 to the ACV case at
+    `0x08037228`.  That case reads meter frame byte 7, tests bit 0, and writes
+    the formatter state byte at `[r7,#0xf37]` (`DAT_2000102F`-adjacent local
+    display state).  This is stock evidence for ACV decimal/format selection.
+    It is explicitly not AC-evidence; local AC confidence still has to come
+    from independent frequency/AC metadata and must reject DC input in ACV.
+    """
+    checked: dict[str, dict[str, str]] = {}
+    for name, (addr, expected) in EXPECTED_ACV_FORMAT_SELECTOR_SEQUENCES.items():
+        actual = read(addr, len(expected))
+        if actual != expected:
+            raise AssertionError(
+                f"{name} {addr:#010x}: expected {expected.hex(' ')}, "
+                f"got {actual.hex(' ')}"
+            )
+        checked[name] = {
+            "addr": f"{addr:#010x}",
+            "bytes": actual.hex(" "),
+        }
+    return {"sequences": checked}
+
+
 def verify_meter_mux_restore_sequences() -> dict[str, object]:
     """Check stock saved-state ms[0x02]/ms[0x03] mux apply call sites.
 
@@ -799,6 +841,7 @@ def main() -> None:
     transport_transitions = verify_meter_transport_transition_sequences()
     runtime_transport_transitions = verify_runtime_mode_switch_transport_sequences()
     selector_state = verify_meter_selector_state_sequences()
+    acv_format = verify_acv_format_selector_sequences()
     mux_restore = verify_meter_mux_restore_sequences()
     saved_config_unpack = verify_meter_saved_config_unpack_sequences()
     mux_calls = verify_meter_mux_callsite_sequences()
@@ -818,6 +861,8 @@ def main() -> None:
           ", ".join(item["addr"] for item in runtime_transport_transitions["sequences"].values()))
     print("stock meter selector state sites: " +
           ", ".join(item["addr"] for item in selector_state["sequences"].values()))
+    print("stock ACV format selector sites: " +
+          ", ".join(item["addr"] for item in acv_format["sequences"].values()))
     print("stock meter mux restore sites: " +
           ", ".join(mux_restore["sequences"].keys()))
     print("stock meter saved-config unpack sites: " +

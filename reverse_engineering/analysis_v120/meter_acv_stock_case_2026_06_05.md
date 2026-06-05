@@ -21,7 +21,9 @@ existing `full_decompile.c` / annotated analysis plus fresh
 ## ACV Decimal Evidence
 
 The stock DMM mode handler dispatches through a Thumb `TBB` table at
-`0x080371c4`. The table bytes at `0x080371c8` are:
+`0x080371c4`. The ACV format selector guard in
+`scripts/test_stock_meter_literals.py` now checks the literal table bytes at
+`0x080371c8`:
 
 ```text
 15 30 3b 4b 59 68 04 04
@@ -31,16 +33,27 @@ For `TBB`, the branch target is `pc + 2 * table[submode]`. Submode `1`
 (AC Voltage) therefore reaches `0x08037228`.
 
 The ACV case at `0x08037228` reads byte `frame[7]`, tests bit 0, and writes the
-decimal/range state at the nearby meter state offset:
+decimal/range state at the nearby meter state offset. The guarded literal bytes
+are:
+
+```text
+08037228: f0 79 42 f6 7c 5b c0 07 c2 f2 00 0b 42 d1 01 20
+08037238: 87 f8 37 0f 8c e0 97 f8 36 1f f0 79 01 29 3d d1
+080372bc: 87 f8 37 4f 01 20 49 e0
+```
+
+Corresponding stock disassembly:
 
 ```text
 08037228: ldrb r0, [r6, #7]
-0803722a: lsls r0, r0, #31
-0803722c: bmi.n 0x080372bc
-0803722e: movs r0, #1
-08037230: strb r0, [r7, #0xf37]
+0803722a: movw fp, #0x2d7c
+0803722e: lsls r0, r0, #31
+08037230: movt fp, #0x2000
+08037234: bne 0x080372bc
+08037236: movs r0, #1
+08037238: strb.w r0, [r7, #0xf37]
 ...
-080372bc: strb r4, [r7, #0xf37]
+080372bc: strb.w r4, [r7, #0xf37]
 080372be: movs r0, #1
 ```
 
@@ -58,6 +71,11 @@ The local renderer stores the decimal insertion position directly, while stock
 stores a format-template index. The mapping above preserves the observed low
 voltage `7.005 V` and mains `227.6 V` shapes without using frame `[10..11]` for
 range selection.
+
+This is not AC evidence. It proves only that stock ACV selects one of two
+format/decimal shapes from `frame[7] bit 0`. Local confidence for ACV must still
+come from independent AC/frequency metadata and must reject a DC input in ACV
+instead of treating this format bit as proof of an alternating signal.
 
 ## What This Does Not Prove
 
