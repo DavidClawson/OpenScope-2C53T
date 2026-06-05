@@ -79,6 +79,13 @@ for stock `ms[0x02]` and `ms[0x03]`, the exact effect and commit semantics of
 the H2 SPI3 bulk replay, and any real factory calibration source in
 W25Q/system files/SPI bulk tables.
 
+The W25Q/System-file boundary is now narrowed in
+`meter_w25q_calibration_boundary_2026_06_06.md`: the bench-unit
+`System file/9999.BIN` directory entry is archive attribute `0x20`, cluster 0,
+size 0, so it is not a recovered meter calibration source. This is negative
+evidence for the obvious `9999.BIN` lead only; it does not prove that all
+factory calibration is absent.
+
 The H2 boundary is deliberately strict: stock proves a 115,638-byte SPI3 table
 from `0x08051D19` bracketed by `0x3B`/`0x3A`, and the open firmware can report
 that those bytes were transmitted. That byte count is not acceptance proof. No

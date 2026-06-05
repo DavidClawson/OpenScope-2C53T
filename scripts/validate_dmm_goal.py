@@ -120,6 +120,7 @@ def verify_re_coverage() -> dict[str, Any]:
         "reverse_engineering/analysis_v120/meter_math_pipeline_annotated.c",
         "reverse_engineering/analysis_v120/dmm_state_machine_contract_2026_06_05.md",
         "reverse_engineering/analysis_v120/meter_dac1_scope_boundary_2026_06_06.md",
+        "reverse_engineering/analysis_v120/meter_w25q_calibration_boundary_2026_06_06.md",
         "reverse_engineering/analysis_v120/spi3_bulk_cal_resolved.md",
         "reverse_engineering/analysis_v120/h2_extracted/FINDINGS.md",
     ]
@@ -136,7 +137,8 @@ def verify_re_coverage() -> dict[str, Any]:
         "empirical", "stock", "H2", "SPI3", "115,638",
         "acceptance proof", "unproven", "DAC1", "scope trigger",
         "not DMM calibration", "METER_REJECT_UNRESOLVED_CALIBRATION",
-        "low-Ohm normal frames therefore",
+        "low-Ohm normal frames therefore", "9999.BIN", "cluster 0",
+        "size 0", "not a recovered meter calibration source",
     ]
 
     haystack = ""

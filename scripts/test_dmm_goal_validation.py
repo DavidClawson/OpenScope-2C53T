@@ -99,6 +99,17 @@ class DmmGoalValidationTests(unittest.TestCase):
         self.assertIn("scope trigger", coverage["terms"])
         self.assertIn("not DMM calibration", coverage["terms"])
 
+    def test_re_coverage_requires_w25q_system_file_boundary(self) -> None:
+        coverage = validate_dmm_goal.verify_re_coverage()
+        self.assertIn(
+            "reverse_engineering/analysis_v120/meter_w25q_calibration_boundary_2026_06_06.md",
+            coverage["docs"],
+        )
+        self.assertIn("9999.BIN", coverage["terms"])
+        self.assertIn("cluster 0", coverage["terms"])
+        self.assertIn("size 0", coverage["terms"])
+        self.assertIn("not a recovered meter calibration source", coverage["terms"])
+
     def test_unrecovered_meter_coefficients_are_absent(self) -> None:
         result = validate_dmm_goal.verify_no_unrecovered_meter_coefficients()
         self.assertIn("firmware/src/drivers/meter_data.c", result["checked"])
