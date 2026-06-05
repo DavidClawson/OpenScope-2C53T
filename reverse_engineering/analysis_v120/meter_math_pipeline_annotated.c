@@ -945,8 +945,10 @@ void fpga_state_update(void)
  *
  *   ROOT CAUSE: Missing factory calibration coefficients from SPI flash or the
  *   FPGA-side initialization/calibration exchange. The exact stock source for
- *   all meter coefficients is still unresolved; current local coefficients are
- *   bench-unit stand-ins with explicit evidence boundaries.
+ *   resistance/current factory coefficients is still unresolved; current
+ *   resistance coefficients are bench-unit stand-ins with explicit evidence
+ *   boundaries. The low-DCV path was later corrected to stock raw extension
+ *   plus decimal class, not a physical coefficient.
  *
  *   WHY kΩ RANGE IS FINE:
  *   The kΩ sub-ranges (0x4B, 0x4D) use frame[3] or frame[4] range bits to shift
@@ -965,12 +967,14 @@ void fpga_state_update(void)
  *   WHAT TO CHANGE IN CUSTOM FIRMWARE (do NOT modify code, just note):
  *   File: firmware/src/drivers/flash_fs.c
  *   Fix needed: recover and load the stock factory calibration source, then
- *               replace the low-Ω and low-DCV bench-unit coefficients.
+ *               replace the remaining resistance/current bench-unit
+ *               coefficients. Do not invent a low-DCV coefficient; stock
+ *               evidence uses frame[2].3 +10000 and class bits.
  *
  *   File: firmware/src/drivers/meter_data.c
- *   Current local port: uses stock frame/mode metadata to select range
- *                       coefficients, with live fixtures for low-DCV, 5V,
- *                       32V, mains-class frames, low-Ω, and kΩ.
+ *   Current local port: uses stock frame/mode metadata to select DCV decimal
+ *                       class, with live fixtures for low-DCV, 5V, 32V,
+ *                       mains-class frames, low-Ω, and kΩ.
  *
  *   LIKELIHOOD RANKING:
  *   1. (95%) Missing SPI flash cal load → explains ~3x error on low-Ω
