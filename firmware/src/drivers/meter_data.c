@@ -431,6 +431,16 @@ static void meter_stock_fsm_reset(uint8_t stock_mode)
     meter_stock_fsm.dc_state = (stock_mode == 0) ? 1U : 0U;
 }
 
+static bool ui_submode_is_small_current(uint8_t ui_submode)
+{
+    return ui_submode == 2 || ui_submode == 4;
+}
+
+static bool ui_submode_is_large_current(uint8_t ui_submode)
+{
+    return ui_submode == 3 || ui_submode == 5;
+}
+
 static void meter_sync_stock_fsm_debug(meter_reading_t *r)
 {
     r->stock_mode = meter_stock_fsm.stock_mode;
@@ -454,6 +464,11 @@ static void meter_stock_fsm_apply(uint8_t ui_submode,
 
     if (meter_stock_fsm.stock_mode != stock_mode) {
         meter_stock_fsm_reset(stock_mode);
+    }
+    if (ui_submode_is_small_current(ui_submode)) {
+        meter_stock_fsm.variant = 1U;
+    } else if (ui_submode_is_large_current(ui_submode)) {
+        meter_stock_fsm.variant = 2U;
     }
 
     switch (stock_mode) {
@@ -571,7 +586,8 @@ static void meter_stock_fsm_apply(uint8_t ui_submode,
 
     case 3:
         meter_stock_fsm.display_cmd = format_result;
-        meter_stock_fsm.unit_index = 5;
+        meter_stock_fsm.unit_index =
+            ui_submode_is_large_current(ui_submode) ? 3U : 5U;
         meter_stock_fsm.composite_index = meter_stock_fsm.format + 2U;
         break;
 
@@ -639,6 +655,7 @@ static uint8_t decimal_pos_from_stock(uint8_t ui_submode,
         return default_decimal_pos[ui_submode];
     case 2:
     case 3:
+        if (ui_submode_is_large_current(ui_submode)) return 1;
         if (fsm->unit_index == 3) return 1;
         if (fmt >= 2) return 1;
         return 2;

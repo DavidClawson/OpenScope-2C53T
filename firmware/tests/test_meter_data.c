@@ -263,16 +263,16 @@ static int test_stock_formatter_families_have_regression_fixtures(void)
     ASSERT(expect_normal_reading("12.34", "mA", 12.34f, 0.001f));
 
     process_frame(frame, 3);
-    ASSERT(meter_reading.decimal_pos == 2);
-    ASSERT(expect_normal_reading("12.34", "A", 12.34f, 0.001f));
+    ASSERT(meter_reading.decimal_pos == 1);
+    ASSERT(expect_normal_reading("1.234", "A", 1.234f, 0.001f));
 
     process_frame(frame, 4);
     ASSERT(meter_reading.decimal_pos == 2);
     ASSERT(expect_normal_reading("12.34", "mA", 12.34f, 0.001f));
 
     process_frame(frame, 5);
-    ASSERT(meter_reading.decimal_pos == 2);
-    ASSERT(expect_normal_reading("12.34", "A", 12.34f, 0.001f));
+    ASSERT(meter_reading.decimal_pos == 1);
+    ASSERT(expect_normal_reading("1.234", "A", 1.234f, 0.001f));
 
     build_segment_frame(frame, 6, 7, 8, 9, 0x00, 0x00, 0x00, 0x00, 0);
     process_frame(frame, 8);
@@ -635,7 +635,8 @@ static int test_voltage_payload_clears_stale_reading_in_all_non_voltage_modes(vo
             ASSERT_STR_EQ(meter_reading.display_str,
                           (modes[m] == 6 || modes[m] == 7) ? "3.300" :
                           (modes[m] == 8 || modes[m] == 9 || modes[m] == 10) ?
-                          "123.4" : "12.34");
+                          "123.4" :
+                          (modes[m] == 3 || modes[m] == 5) ? "1.234" : "12.34");
 
             process_frame(voltage_frames[f], modes[m]);
             ASSERT(!meter_reading.valid);
@@ -688,16 +689,18 @@ static int test_voltage_payload_clears_stale_current_reading(void)
 
         meter_data_init();
         process_frame(current_frame, mode);
-        ASSERT(expect_normal_reading("22.61",
+        ASSERT(expect_normal_reading((mode == 2 || mode == 4) ? "22.61" : "2.261",
                                      (mode == 2 || mode == 4) ? "mA" : "A",
-                                     22.61f, 0.001f));
+                                     (mode == 2 || mode == 4) ? 22.61f : 2.261f,
+                                     0.001f));
         updates_after_current = meter_reading.update_count;
         display_updates_after_current = meter_reading.display_update_count;
 
         process_frame(current_frame, mode);
-        ASSERT(expect_normal_reading("22.61",
+        ASSERT(expect_normal_reading((mode == 2 || mode == 4) ? "22.61" : "2.261",
                                      (mode == 2 || mode == 4) ? "mA" : "A",
-                                     22.61f, 0.001f));
+                                     (mode == 2 || mode == 4) ? 22.61f : 2.261f,
+                                     0.001f));
         ASSERT(meter_reading.update_count == updates_after_current + 1);
         ASSERT(meter_reading.display_update_count == display_updates_after_current);
         updates_after_current = meter_reading.update_count;
@@ -751,6 +754,43 @@ static int test_stock_fsm_debug_fields_follow_mode_and_frames(void)
     ASSERT(meter_reading.stock_mode == 2);
     ASSERT(meter_reading.stock_variant == 1);
     ASSERT(meter_reading.stock_dc_state == 0);
+    return 1;
+}
+
+static int test_large_current_submodes_use_active_local_range_state(void)
+{
+    uint8_t current_frame[12];
+
+    build_segment_frame(current_frame, 2, 2, 6, 1, 0x00,
+                        0x00, 0x00, 0x00, 0);
+
+    meter_data_init();
+    process_frame(current_frame, 2);
+    ASSERT(expect_normal_reading("22.61", "mA", 22.61f, 0.001f));
+    ASSERT(meter_reading.decimal_pos == 2);
+    ASSERT(meter_reading.stock_variant == 1);
+    ASSERT(meter_reading.stock_unit_index == 4);
+
+    process_frame(current_frame, 3);
+    ASSERT(expect_normal_reading("2.261", "A", 2.261f, 0.001f));
+    ASSERT(meter_reading.decimal_pos == 1);
+    ASSERT(meter_reading.stock_mode == 2);
+    ASSERT(meter_reading.stock_variant == 2);
+    ASSERT(meter_reading.stock_unit_index == 3);
+
+    meter_data_invalidate(4);
+    process_frame(current_frame, 4);
+    ASSERT(expect_normal_reading("22.61", "mA", 22.61f, 0.001f));
+    ASSERT(meter_reading.decimal_pos == 2);
+    ASSERT(meter_reading.stock_variant == 1);
+    ASSERT(meter_reading.stock_unit_index == 5);
+
+    process_frame(current_frame, 5);
+    ASSERT(expect_normal_reading("2.261", "A", 2.261f, 0.001f));
+    ASSERT(meter_reading.decimal_pos == 1);
+    ASSERT(meter_reading.stock_mode == 3);
+    ASSERT(meter_reading.stock_variant == 2);
+    ASSERT(meter_reading.stock_unit_index == 3);
     return 1;
 }
 
@@ -809,6 +849,7 @@ int main(void)
     TEST(special_voltage_family_frames_are_rejected_outside_voltage);
     TEST(voltage_payload_clears_stale_current_reading);
     TEST(stock_fsm_debug_fields_follow_mode_and_frames);
+    TEST(large_current_submodes_use_active_local_range_state);
     TEST(snapshot_returns_coherent_latest_completed_reading);
 
     printf("\n%d/%d tests passed\n", tests_passed, tests_run);

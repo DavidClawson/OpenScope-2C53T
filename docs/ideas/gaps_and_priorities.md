@@ -51,6 +51,9 @@ recovered stock DMM families, including separate small/large current entries
 and an explicit temperature slot. Voltage and several passive-mode frames are
 decoded; the remaining risk is hardware/front-end validation for current,
 capacitance, temperature, and the less-characterized stock formatter variants.
+Small-current and large-current UI entries deliberately share the recovered
+stock current command family but keep separate local range state: mA/uA paths
+must not be relabeled as A, and A paths must not inherit mA decimal placement.
 
 | Feature | Original | Ours | Status |
 |---------|----------|------|--------|
