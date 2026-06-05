@@ -159,6 +159,17 @@ EXPECTED_MUX_RESTORE_SEQUENCES = {
         "9a f8 02 00 da f7 2f fb 9a f8 03 00 da f7 05 fc"
     ),
 }
+EXPECTED_METER_SAVED_CONFIG_UNPACK_SEQUENCES = {
+    "saved_config_meter_state_unpack": (
+        0x08025D92,
+        bytes.fromhex(
+            "20 68 40 f2 f8 0a c1 b2 55 29 c2 f2 00 0a 05 d0 "
+            "aa 29 40 f0 f8 81 08 21 8a f8 68 1f 01 0a 02 0c "
+            "00 0e 8a f8 00 10 8a f8 01 20 8a f8 02 00 60 68 "
+            "ca f8 03 00"
+        ),
+    ),
+}
 EXPECTED_MUX_CALLS_BY_TARGET = {
     "gpio_mux_portc_porte": {
         "target": 0x080018A4,
@@ -565,6 +576,31 @@ def verify_meter_mux_restore_sequences() -> dict[str, object]:
     return {"sequences": checked}
 
 
+def verify_meter_saved_config_unpack_sequences() -> dict[str, object]:
+    """Check stock saved-config unpack into `ms[0x02]`/`ms[0x03]`.
+
+    Master init reads persistent config at `0x08006000`, accepts signatures
+    `0x55` and `0xAA`, optionally writes meter-mode state `8`, then unpacks
+    word 0 into `ms[0x00]`, `ms[0x01]`, `ms[0x02]` and stores word 1 at
+    `ms[0x03]`.  This is the recovered persistent-state writer feeding the
+    guarded mux apply calls.  It is not evidence of a runtime DMM range writer
+    during local mode switching.
+    """
+    checked: dict[str, dict[str, str]] = {}
+    for name, (addr, expected) in EXPECTED_METER_SAVED_CONFIG_UNPACK_SEQUENCES.items():
+        actual = read(addr, len(expected))
+        if actual != expected:
+            raise AssertionError(
+                f"{name} {addr:#010x}: expected {expected.hex(' ')}, "
+                f"got {actual.hex(' ')}"
+            )
+        checked[name] = {
+            "addr": f"{addr:#010x}",
+            "bytes": actual.hex(" "),
+        }
+    return {"sequences": checked}
+
+
 def verify_meter_mux_callsite_sequences() -> dict[str, object]:
     """Check every stock direct BL callsite to the two mux writers.
 
@@ -764,6 +800,7 @@ def main() -> None:
     runtime_transport_transitions = verify_runtime_mode_switch_transport_sequences()
     selector_state = verify_meter_selector_state_sequences()
     mux_restore = verify_meter_mux_restore_sequences()
+    saved_config_unpack = verify_meter_saved_config_unpack_sequences()
     mux_calls = verify_meter_mux_callsite_sequences()
     mux_bodies = verify_meter_mux_writer_body_sequences()
     runtime_mux_writers = verify_runtime_mux_state_writer_sequences()
@@ -783,6 +820,8 @@ def main() -> None:
           ", ".join(item["addr"] for item in selector_state["sequences"].values()))
     print("stock meter mux restore sites: " +
           ", ".join(mux_restore["sequences"].keys()))
+    print("stock meter saved-config unpack sites: " +
+          ", ".join(item["addr"] for item in saved_config_unpack["sequences"].values()))
     for name, info in mux_calls.items():
         print(f"stock {name} direct BL sites: " + ", ".join(info["calls"]))
     for name, info in mux_bodies.items():

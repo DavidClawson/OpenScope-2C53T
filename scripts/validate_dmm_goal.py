@@ -228,6 +228,8 @@ def verify_re_coverage() -> dict[str, Any]:
         "state-machine property anchors", "all local submodes 0..10",
         "live validation only switches DCV/ACV",
         "mux callsite guard", "0x080020B2", "0x0801A53E", "0x0802724A",
+        "saved-config meter-state unpack guard", "0x08025D92", "0x08006000",
+        "persistent saved-config writer",
         "complete direct mux callsite list", "scope/siggen mux callers are not DMM runtime range proof",
         "mux writer body guard", "gpio_pc12_pe_write_block",
         "gpio_pa15_pb11_pb10_write_block", "DAC1/scope calibration tail",

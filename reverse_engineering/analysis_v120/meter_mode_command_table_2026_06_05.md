@@ -359,9 +359,41 @@ sites so this evidence cannot drift silently:
 0x0802723e: 9a f8 02 00 da f7 2f fb 9a f8 03 00 da f7 05 fc
 ```
 
-These bytes prove the two boot/saved-state apply sequences only. They still do
-not prove a runtime DMM writer that changes `ms[0x02]`/`ms[0x03]` while the user
-switches local DMM ranges.
+The persistent saved-config unpack path is also now covered by the
+`saved-config meter-state unpack guard`.  This is the stock writer that feeds
+the saved-state apply sites above:
+
+```text
+0x08025D92: ldr r0, [r4]           ; r4 = 0x08006000 persistent config
+0x08025D98: uxtb r1, r0
+0x08025D9A: cmp r1, #0x55          ; normal valid signature
+0x08025DA2: cmp r1, #0xAA          ; valid signature saved from meter mode
+0x08025DA8: movs r1, #8
+0x08025DAA: strb.w r1, [sl,#0xf68] ; if 0xAA, set mode_state = 8
+0x08025DAE: lsrs r1, r0, #8
+0x08025DB0: lsrs r2, r0, #16
+0x08025DB2: lsrs r0, r0, #24
+0x08025DB4: strb.w r1, [sl]        ; saved byte[1] -> ms[0x00]
+0x08025DB8: strb.w r2, [sl,#1]     ; saved byte[2] -> ms[0x01]
+0x08025DBC: strb.w r0, [sl,#2]     ; saved byte[3] -> ms[0x02]
+0x08025DC0: ldr r0, [r4,#4]
+0x08025DC2: str.w r0, [sl,#3]      ; saved word[1] -> ms[0x03..0x06]
+```
+
+The guarded bytes are:
+
+```text
+0x08025D92:
+  20 68 40 f2 f8 0a c1 b2 55 29 c2 f2 00 0a 05 d0
+  aa 29 40 f0 f8 81 08 21 8a f8 68 1f 01 0a 02 0c
+  00 0e 8a f8 00 10 8a f8 01 20 8a f8 02 00 60 68
+  ca f8 03 00
+```
+
+These bytes prove the persistent saved-config writer plus the two
+boot/saved-state apply sequences only. They still do not prove a runtime DMM
+writer that changes `ms[0x02]`/`ms[0x03]` while the user switches local DMM
+ranges.
 
 The unresolved part is the live/runtime writer for `ms[0x03]` during local
 small-current versus A-range operation. Until that is recovered or bench-proven,
