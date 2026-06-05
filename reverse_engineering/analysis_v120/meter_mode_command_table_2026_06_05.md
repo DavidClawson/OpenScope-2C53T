@@ -116,6 +116,72 @@ It does not recover the exact local settle delay or frame-discard count, so the
 open firmware must keep those constants documented as conservative local
 policy until a stock runtime trace proves them.
 
+The runtime UI/mode-switch path carries the same transport shape and is now
+covered by the `runtime mode-switch transport guard`.  This is distinct from
+the boot/config branch above: `mode_switch_handler` dispatches on the live mode
+state and runs the DMM entry/exit transition while the stock app is operating.
+The guarded sites are:
+
+```text
+0x08007360: common enable/resume tail
+            writes mode_state = 1 at `0x20001060`
+            USART2 CTRL1 |= 0x2000
+            resumes task handles `0x20002DA0` and `0x20002DA4`
+            writes `0x800` to GPIOC_BOP at `0x40011010`, setting PC11
+            resets max/min/avg sentinels and selector/display shadow bytes
+            tail-calls `0x0800B908`
+
+0x0800741A: meter-entry pause/drain case
+            USART2 CTRL1 &= ~0x2000
+            suspends task handles `0x20002DA0` and `0x20002DA4`
+            writes `0x800` to GPIOC_BC/BRR at `0x40011014`, clearing PC11
+            resets meter semaphore/queue `0x20002D7C`
+            resets raw TX-word queue `0x20002D74`
+            clears DMM selector/display shadow state before epilogue
+
+0x080074BE: active/running epilogue
+            writes mode_state = 2 at `0x20001060`
+            clears transient display bytes
+            optionally writes `0x3C00` to `0x20002D50`
+            tail-calls `0x0800B908`
+```
+
+The guarded byte slices are:
+
+```text
+0x08007360:
+  01 20 84 f8 68 0f 44 f2 0c 40 c4 f2 00 00 01 68
+  41 f4 00 51 01 60 42 f6 a0 50 c2 f2 00 00 00 68
+  33 f0 46 f9 42 f6 a4 50 c2 f2 00 00 00 68 33 f0
+  3f f9 41 f2 10 00 c4 f2 01 00 4f f4 00 61 01 60
+  00 20 c7 f6 c0 70 40 f2 01 11 c4 f8 48 0f c4 f8
+  4c 0f c4 f8 50 0f 00 20 a4 f8 35 1f ff 21 84 f8
+  5d 0f 84 f8 2f 0f 84 f8 38 1f a4 f8 3c 0f a4 f8
+  2c 1f a4 f8 69 0f 84 f8 6b 0f bd e8 10 40 04 f0
+  93 ba
+
+0x0800741A:
+  44 f2 0c 40 c4 f2 00 00 01 68 21 f4 00 51 01 60
+  42 f6 a0 50 c2 f2 00 00 00 68 33 f0 aa f9 42 f6
+  a4 50 c2 f2 00 00 00 68 33 f0 a3 f9 41 f2 14 00
+  c4 f2 01 00 4f f4 00 61 01 60 42 f6 7c 50 c2 f2
+  00 00 00 68 00 21 00 25 33 f0 a1 ff 42 f6 74 50
+  c2 f2 00 00 00 68 00 21 33 f0 e1 fb 01 20 84 f8
+  36 0f 00 20 c7 f6 c0 70 c4 f8 48 0f c4 f8 4c 0f
+  c4 f8 50 0f a4 f8 3c 5f a4 f8 2d 5f c4 f8 30 5f
+  0b e0
+
+0x080074BE:
+  94 f8 54 13 02 20 84 f8 68 0f 00 20 09 07 a4 f8
+  69 0f 84 f8 6b 0f 06 d0 42 f6 50 50 c2 f2 00 00
+  4f f4 70 51 01 80 bd e8 b0 40 04 f0 0e ba
+```
+
+This strengthens the state-machine evidence for pause/drain/resume in normal runtime transitions.
+It still does not recover a DMM-specific `ms[0x02]`/
+`ms[0x03]` analog range writer, exact settle/discard counts, or any factory
+calibration acceptance/apply proof.
+
 The same script now also carries a selector state writer guard for the stock
 digital DMM state machine. These sites prove stock RAM coupling around
 `DAT_20001025` (`0x20001025`, selector), `DAT_2000102E` (`0x2000102e`, mode/range

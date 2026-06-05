@@ -66,6 +66,44 @@ EXPECTED_METER_TRANSPORT_TRANSITION_SEQUENCES = {
         ),
     ),
 }
+EXPECTED_RUNTIME_MODE_SWITCH_TRANSPORT_SEQUENCES = {
+    "runtime_mode_switch_enable_resume_tail": (
+        0x08007360,
+        bytes.fromhex(
+            "01 20 84 f8 68 0f 44 f2 0c 40 c4 f2 00 00 01 68 "
+            "41 f4 00 51 01 60 42 f6 a0 50 c2 f2 00 00 00 68 "
+            "33 f0 46 f9 42 f6 a4 50 c2 f2 00 00 00 68 33 f0 "
+            "3f f9 41 f2 10 00 c4 f2 01 00 4f f4 00 61 01 60 "
+            "00 20 c7 f6 c0 70 40 f2 01 11 c4 f8 48 0f c4 f8 "
+            "4c 0f c4 f8 50 0f 00 20 a4 f8 35 1f ff 21 84 f8 "
+            "5d 0f 84 f8 2f 0f 84 f8 38 1f a4 f8 3c 0f a4 f8 "
+            "2c 1f a4 f8 69 0f 84 f8 6b 0f bd e8 10 40 04 f0 "
+            "93 ba"
+        ),
+    ),
+    "runtime_mode_switch_disable_suspend_drain": (
+        0x0800741A,
+        bytes.fromhex(
+            "44 f2 0c 40 c4 f2 00 00 01 68 21 f4 00 51 01 60 "
+            "42 f6 a0 50 c2 f2 00 00 00 68 33 f0 aa f9 42 f6 "
+            "a4 50 c2 f2 00 00 00 68 33 f0 a3 f9 41 f2 14 00 "
+            "c4 f2 01 00 4f f4 00 61 01 60 42 f6 7c 50 c2 f2 "
+            "00 00 00 68 00 21 00 25 33 f0 a1 ff 42 f6 74 50 "
+            "c2 f2 00 00 00 68 00 21 33 f0 e1 fb 01 20 84 f8 "
+            "36 0f 00 20 c7 f6 c0 70 c4 f8 48 0f c4 f8 4c 0f "
+            "c4 f8 50 0f a4 f8 3c 5f a4 f8 2d 5f c4 f8 30 5f "
+            "0b e0"
+        ),
+    ),
+    "runtime_mode_switch_active_epilogue": (
+        0x080074BE,
+        bytes.fromhex(
+            "94 f8 54 13 02 20 84 f8 68 0f 00 20 09 07 a4 f8 "
+            "69 0f 84 f8 6b 0f 06 d0 42 f6 50 50 c2 f2 00 00 "
+            "4f f4 70 51 01 80 bd e8 b0 40 04 f0 0e ba"
+        ),
+    ),
+}
 EXPECTED_METER_SELECTOR_STATE_SEQUENCES = {
     "init_selector_reset": (
         0x08026FDE,
@@ -455,6 +493,32 @@ def verify_meter_transport_transition_sequences() -> dict[str, object]:
     return {"sequences": checked}
 
 
+def verify_runtime_mode_switch_transport_sequences() -> dict[str, object]:
+    """Check runtime mode-switch transport pause/drain/resume slices.
+
+    `mode_switch_handler` around 0x080073E4 contains the UI/runtime transition
+    side of the same stock DMM transport behavior: one tail enables USART2,
+    resumes both DVOM tasks, asserts PC11, and clears meter display/selector
+    state; the meter-entry case disables USART2, suspends both DVOM tasks,
+    clears PC11, resets `0x20002D7C` and `0x20002D74`, and clears stale meter
+    state before the active epilogue.  This guards runtime transition evidence,
+    not a recovered analog range writer or exact settle/discard count.
+    """
+    checked: dict[str, dict[str, str]] = {}
+    for name, (addr, expected) in EXPECTED_RUNTIME_MODE_SWITCH_TRANSPORT_SEQUENCES.items():
+        actual = read(addr, len(expected))
+        if actual != expected:
+            raise AssertionError(
+                f"{name} {addr:#010x}: expected {expected.hex(' ')}, "
+                f"got {actual.hex(' ')}"
+            )
+        checked[name] = {
+            "addr": f"{addr:#010x}",
+            "bytes": actual.hex(" "),
+        }
+    return {"sequences": checked}
+
+
 def verify_meter_selector_state_sequences() -> dict[str, object]:
     """Check stock selector/shadow-state writers used by the DMM FSM.
 
@@ -697,6 +761,7 @@ def main() -> None:
     selector_xrefs = verify_meter_selector_xref_sequences()
     dvom_tx_consumers = verify_dvom_tx_queue_consumer_sequences()
     transport_transitions = verify_meter_transport_transition_sequences()
+    runtime_transport_transitions = verify_runtime_mode_switch_transport_sequences()
     selector_state = verify_meter_selector_state_sequences()
     mux_restore = verify_meter_mux_restore_sequences()
     mux_calls = verify_meter_mux_callsite_sequences()
@@ -712,6 +777,8 @@ def main() -> None:
           ", ".join(item["addr"] for item in dvom_tx_consumers["sequences"].values()))
     print("stock meter transport transition sites: " +
           ", ".join(item["addr"] for item in transport_transitions["sequences"].values()))
+    print("stock runtime mode-switch transport sites: " +
+          ", ".join(item["addr"] for item in runtime_transport_transitions["sequences"].values()))
     print("stock meter selector state sites: " +
           ", ".join(item["addr"] for item in selector_state["sequences"].values()))
     print("stock meter mux restore sites: " +

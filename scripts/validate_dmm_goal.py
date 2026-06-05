@@ -219,6 +219,8 @@ def verify_re_coverage() -> dict[str, Any]:
         "USART2 command path",
         "meter transport transition guard", "0x08026F8E", "0x0802700A",
         "pause/drain", "task suspension and queue reset",
+        "runtime mode-switch transport guard", "0x08007360", "0x0800741A",
+        "0x080074BE", "active/running epilogue", "normal runtime transitions",
         "selector state writer guard", "0x08036D14", "0x08036D50",
         "0x080373A8", "digital stock DMM FSM",
         "32-case range-class matrix", "all 16 combinations",
