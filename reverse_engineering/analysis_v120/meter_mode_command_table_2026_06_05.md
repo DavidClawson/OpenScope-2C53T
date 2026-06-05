@@ -435,6 +435,27 @@ defaults `ms[0x02] = 5` and `ms[0x03] = 5` before later default fields are
 filled. This is a saved-config pack/default guard: it proves persistence layout
 and default mux-state bytes, but still not a runtime DMM range writer.
 
+The visible caller of this packer is now guarded too. `probe_change_handler`
+(`0x080396C8..0x08039734`) increments the auto-power-off/probe-change counter
+at `ms[0xF6C]`, checks threshold constants `0x0384`, `0x0708`, and `0x0E10`,
+then calls `FUN_080223BC(0x55)` at `0x0803972E` only on the controlled
+shutdown/config-save path:
+
+```text
+0x080396F4 saved-config pack caller guard:
+  a0 b1 b1 f8 6c 2f 03 28 02 f1 01 02 a1 f8 6c 2f
+  08 d0 02 28 0b d0 01 28 08 d1 90 b2 b0 f5 61 7f
+  04 d9 09 e0 90 b2 b0 f5 61 6f 05 d8 80 bd 90 b2
+  b0 f5 e1 6f 98 bf 80 bd 55 20 e8 f7 45 fe 00 00
+```
+
+This `saved-config pack caller guard` makes the boundary explicit: the packer
+is stock evidence for persistence and power-off save behavior, not normal
+runtime DMM range switching. The missing runtime DMM evidence remains a writer
+or trace that ties live DMM selector/range transitions to `ms[0x02]` and
+`ms[0x03]`, or proves that those bytes are not the runtime DMM range source.
+In short: `0x0803972E` is controlled shutdown/config-save evidence, not normal runtime DMM range switching.
+
 The unresolved part is the live/runtime writer for `ms[0x03]` during local
 small-current versus A-range operation. Until that is recovered or bench-proven,
 local submodes 2/3 and 4/5 share the same recovered stock current slot and are

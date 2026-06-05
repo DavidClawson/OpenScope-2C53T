@@ -214,6 +214,17 @@ EXPECTED_METER_SAVED_CONFIG_PACK_SEQUENCES = {
         ),
     ),
 }
+EXPECTED_METER_SAVED_CONFIG_PACK_CALLER_SEQUENCES = {
+    "probe_change_poweroff_saved_config_pack_caller": (
+        0x080396F4,
+        bytes.fromhex(
+            "a0 b1 b1 f8 6c 2f 03 28 02 f1 01 02 a1 f8 6c 2f "
+            "08 d0 02 28 0b d0 01 28 08 d1 90 b2 b0 f5 61 7f "
+            "04 d9 09 e0 90 b2 b0 f5 61 6f 05 d8 80 bd 90 b2 "
+            "b0 f5 e1 6f 98 bf 80 bd 55 20 e8 f7 45 fe 00 00"
+        ),
+    ),
+}
 EXPECTED_MUX_CALLS_BY_TARGET = {
     "gpio_mux_portc_porte": {
         "target": 0x080018A4,
@@ -740,6 +751,31 @@ def verify_meter_saved_config_pack_sequences() -> dict[str, object]:
     return {"sequences": checked}
 
 
+def verify_meter_saved_config_pack_caller_sequences() -> dict[str, object]:
+    """Check the visible stock caller of the saved-config packer.
+
+    `probe_change_handler` (`0x080396C8..0x08039734`) increments the
+    auto-power-off/probe-change counter at `ms[0xF6C]`, compares it against
+    15/30/60 minute thresholds, and calls `FUN_080223BC(0x55)` at
+    `0x0803972E` only after the threshold trips.  This proves the guarded
+    packer is reached by controlled shutdown/config-save flow, not by normal
+    runtime DMM range switching.
+    """
+    checked: dict[str, dict[str, str]] = {}
+    for name, (addr, expected) in EXPECTED_METER_SAVED_CONFIG_PACK_CALLER_SEQUENCES.items():
+        actual = read(addr, len(expected))
+        if actual != expected:
+            raise AssertionError(
+                f"{name} {addr:#010x}: expected {expected.hex(' ')}, "
+                f"got {actual.hex(' ')}"
+            )
+        checked[name] = {
+            "addr": f"{addr:#010x}",
+            "bytes": actual.hex(" "),
+        }
+    return {"sequences": checked}
+
+
 def verify_meter_mux_callsite_sequences() -> dict[str, object]:
     """Check every stock direct BL callsite to the two mux writers.
 
@@ -967,6 +1003,7 @@ def main() -> None:
     mux_restore = verify_meter_mux_restore_sequences()
     saved_config_unpack = verify_meter_saved_config_unpack_sequences()
     saved_config_pack = verify_meter_saved_config_pack_sequences()
+    saved_config_pack_callers = verify_meter_saved_config_pack_caller_sequences()
     mux_calls = verify_meter_mux_callsite_sequences()
     mux_bodies = verify_meter_mux_writer_body_sequences()
     runtime_mux_writers = verify_runtime_mux_state_writer_sequences()
@@ -993,6 +1030,8 @@ def main() -> None:
           ", ".join(item["addr"] for item in saved_config_unpack["sequences"].values()))
     print("stock meter saved-config pack sites: " +
           ", ".join(item["addr"] for item in saved_config_pack["sequences"].values()))
+    print("stock meter saved-config pack caller sites: " +
+          ", ".join(item["addr"] for item in saved_config_pack_callers["sequences"].values()))
     for name, info in mux_calls.items():
         print(f"stock {name} direct BL sites: " + ", ".join(info["calls"]))
     for name, info in mux_bodies.items():

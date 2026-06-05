@@ -335,6 +335,8 @@ def verify_re_coverage() -> dict[str, Any]:
         "persistent saved-config writer",
         "saved-config meter-state pack guard", "0x080223BC", "0x080224A0",
         "0x05050000", "default mux-state bytes",
+        "saved-config pack caller guard", "0x0803972E", "probe_change_handler",
+        "controlled shutdown/config-save", "not normal runtime DMM range switching",
         "complete direct mux callsite list", "scope/siggen mux callers are not DMM runtime range proof",
         "mux writer body guard", "gpio_pc12_pe_write_block",
         "gpio_pa15_pb11_pb10_write_block", "DAC1/scope calibration tail",

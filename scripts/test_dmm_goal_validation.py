@@ -407,6 +407,27 @@ class DmmGoalValidationTests(unittest.TestCase):
             sequences["saved_config_meter_state_pack_writes"]["bytes"],
         )
 
+    def test_stock_meter_saved_config_pack_caller_is_binary_grounded(self) -> None:
+        result = stock_meter_literals.verify_meter_saved_config_pack_caller_sequences()
+        sequences = result["sequences"]
+
+        self.assertEqual(
+            sequences["probe_change_poweroff_saved_config_pack_caller"]["addr"],
+            "0x080396f4",
+        )
+        self.assertIn(
+            "b0 f5 61 7f",
+            sequences["probe_change_poweroff_saved_config_pack_caller"]["bytes"],
+        )
+        self.assertIn(
+            "b0 f5 e1 6f",
+            sequences["probe_change_poweroff_saved_config_pack_caller"]["bytes"],
+        )
+        self.assertIn(
+            "55 20 e8 f7 45 fe",
+            sequences["probe_change_poweroff_saved_config_pack_caller"]["bytes"],
+        )
+
     def test_stock_meter_mux_direct_callsites_are_binary_grounded(self) -> None:
         result = stock_meter_literals.verify_meter_mux_callsite_sequences()
 
