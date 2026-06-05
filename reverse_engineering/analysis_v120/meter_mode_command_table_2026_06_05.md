@@ -263,6 +263,32 @@ The evidence splits like this:
 | DAC1 writes | `FUN_080018a4` at `0x080018A4..0x08001A52` and inline recomputes at `full_decompile.c:2603..2624`, `6960..7020`, `7771..7990` write `0x40007408` from scope calibration tables | scope trigger/comparator threshold; not DMM calibration |
 | waveform calibration/render use | `full_decompile.c:8611..8624`, `9840..9971` index `DAT_080465cc` and calibration deltas through current and saved `DAT_200000fa/DAT_200000fb` | scope display/calibration path, not DMM selector proof |
 
+### Mux Writer Body Guard, 2026-06-06
+
+`scripts/test_stock_meter_literals.py` now also binary-guards representative
+slices inside the two mux writer bodies, not only their callsites:
+
+```text
+gpio_mux_portc_porte / FUN_080018a4:
+  0x080018A4 switch prologue: 09 28 00 f2 88 80 df e8 ...
+  0x080018C4 gpio_pc12_pe_write_block: GPIOC/E BOP/BCR writes for PC12 and PE pins
+  0x080019BA scope_calibration_table_select: indexes scope calibration tables
+  0x08001A20 DAC1/scope calibration tail: updates 0x40007408/0x40007404
+
+gpio_mux_porta_portb / FUN_08001a58:
+  0x08001A58 switch prologue: 09 28 00 f2 bb 80 df e8 ...
+  0x08001A78 gpio_pa15_pb11_pb10_write_block: GPIOA/B writes for PA15/PB11/PB10
+  0x08001B82 gpio_high_modes_write_block: higher mux modes writing PA/B pins
+  0x08001BD4 scope_calibration_table_select: indexes scope calibration tables
+  0x08001C3A DAC1/scope calibration tail: updates scope DAC state
+```
+
+This mux writer body guard proves that the functions behind `ms[0x02]` and
+`ms[0x03]` really are 10-way GPIO hardware writers with scope-calibration/DAC1
+tails. It deliberately does not prove that any inspected DMM runtime branch
+writes those bytes during local range switching, and it does not turn the DAC1
+tail into a DMM calibration coefficient.
+
 This means the open firmware can legitimately project the recovered stock DMM
 slots into the two mux bytes for fail-closed local operation, but it must keep
 that projection marked as a local policy. The complete direct mux callsite list

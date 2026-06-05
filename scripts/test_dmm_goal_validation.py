@@ -292,6 +292,28 @@ class DmmGoalValidationTests(unittest.TestCase):
             "da f7 05 fc",
         )
 
+    def test_stock_meter_mux_writer_bodies_are_binary_grounded(self) -> None:
+        result = stock_meter_literals.verify_meter_mux_writer_body_sequences()
+        portc = result["gpio_mux_portc_porte"]
+        porta = result["gpio_mux_porta_portb"]
+
+        self.assertEqual(portc["target"], "0x080018a4")
+        self.assertEqual(porta["target"], "0x08001a58")
+        self.assertEqual(
+            portc["slices"]["switch_prologue"]["bytes"],
+            "09 28 00 f2 88 80 df e8 00 f0 05 08 0b 1f 22 25",
+        )
+        self.assertEqual(
+            porta["slices"]["switch_prologue"]["bytes"],
+            "09 28 00 f2 bb 80 df e8 00 f0 05 08 0b 1e 38 4c",
+        )
+        self.assertIn("gpio_pc12_pe_write_block", portc["slices"])
+        self.assertIn("gpio_pa15_pb11_pb10_write_block", porta["slices"])
+        self.assertIn("scope_calibration_table_select", portc["slices"])
+        self.assertIn("scope_calibration_table_select", porta["slices"])
+        self.assertIn("dac1_scope_tail", portc["slices"])
+        self.assertIn("dac1_scope_tail", porta["slices"])
+
 
 if __name__ == "__main__":
     unittest.main()

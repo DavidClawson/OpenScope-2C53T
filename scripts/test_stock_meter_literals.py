@@ -110,6 +110,90 @@ EXPECTED_MUX_CALLS_BY_TARGET = {
         },
     },
 }
+EXPECTED_MUX_WRITER_BODY_SEQUENCES = {
+    "gpio_mux_portc_porte": {
+        "target": 0x080018A4,
+        "slices": {
+            "switch_prologue": (
+                0x080018A4,
+                bytes.fromhex("09 28 00 f2 88 80 df e8 00 f0 05 08 0b 1f 22 25"),
+            ),
+            "gpio_pc12_pe_write_block": (
+                0x080018C4,
+                bytes.fromhex(
+                    "4f f6 00 01 41 f6 10 02 cf f6 ff 71 c4 f2 01 02 "
+                    "4f f4 80 53 53 50 41 f6 14 01 c4 f2 01 01 "
+                    "10 23 0b 60 20 23 13 60 64 e0"
+                ),
+            ),
+            "scope_calibration_table_select": (
+                0x080019BA,
+                bytes.fromhex(
+                    "40 f2 f8 01 c2 f2 00 01 91 f8 2d 20 05 2a 06 d3 "
+                    "01 eb 40 02 02 f5 27 70 02 f5 18 72 11 e0 "
+                    "04 2a 09 d0 0a 7d 03 2a 06 d0 01 eb 40 02 "
+                    "02 f5 31 70 02 f5 22 72 05 e0 01 eb 40 02 "
+                    "02 f5 2c 70 02 f5"
+                ),
+            ),
+            "dac1_scope_tail": (
+                0x08001A20,
+                bytes.fromhex(
+                    "47 f2 04 40 c4 f2 00 00 41 68 09 0b 20 ee 01 0a "
+                    "01 ee 10 2a b8 ee 41 1a 30 ee 01 0a bc ee c0 0a "
+                    "10 ee 10 2a 61 f3 1f 32 42 60 01 68 41 f0 01 01 "
+                    "01 60 70 47"
+                ),
+            ),
+        },
+    },
+    "gpio_mux_porta_portb": {
+        "target": 0x08001A58,
+        "slices": {
+            "switch_prologue": (
+                0x08001A58,
+                bytes.fromhex("09 28 00 f2 bb 80 df e8 00 f0 05 08 0b 1e 38 4c"),
+            ),
+            "gpio_pa15_pb11_pb10_write_block": (
+                0x08001A78,
+                bytes.fromhex(
+                    "4f f6 00 41 40 f6 10 42 cf f6 ff 71 c4 f2 01 02 "
+                    "4f f4 00 43 53 50 40 f6 14 41 c4 f2 01 01 "
+                    "4f f4 00 63 0b 60 27 e0 4f f6"
+                ),
+            ),
+            "gpio_high_modes_write_block": (
+                0x08001B82,
+                bytes.fromhex(
+                    "4f f6 04 41 40 f6 10 42 cf f6 ff 71 c4 f2 01 02 "
+                    "4f f4 00 43 53 50 4f f4 00 63 13 60 "
+                    "4f f4 80 63 13 60 15 e0 4f f6 04 41 "
+                    "40 f6 10 42 cf f6 ff 71 c4 f2 01 02 "
+                    "4f f4 00 43 53 50 4f f4 00 63 40 f6 14 4c "
+                    "13 60 c4 f2 01 0c 4f f4 80 63 cc f8 00 30 53 50"
+                ),
+            ),
+            "scope_calibration_table_select": (
+                0x08001BD4,
+                bytes.fromhex(
+                    "40 f2 f8 01 c2 f2 00 01 91 f8 2d 20 05 2a 06 d3 "
+                    "01 eb 40 02 02 f5 45 70 02 f5 36 72 11 e0 "
+                    "04 2a 09 d0 0a 7d 03 2a 06 d0 01 eb 40 02 "
+                    "02 f5 4f 70 02 f5 40 72 05 e0 01 eb 40 02 "
+                    "02 f5 4a 70 02 f5 3b 72 00 88 12 88"
+                ),
+            ),
+            "dac1_scope_tail": (
+                0x08001C3A,
+                bytes.fromhex(
+                    "41 f6 34 40 c4 f2 00 00 20 ee 01 0a 01 ee 10 2a "
+                    "b8 ee 41 1a 30 ee 01 0a bc ee c0 0a "
+                    "80 ed 00 0a 70 47"
+                ),
+            ),
+        },
+    },
+}
 
 
 def read(addr: int, size: int) -> bytes:
@@ -262,6 +346,38 @@ def verify_meter_mux_callsite_sequences() -> dict[str, object]:
     return checked
 
 
+def verify_meter_mux_writer_body_sequences() -> dict[str, object]:
+    """Check stock GPIO mux writer body slices and their scope-calibration tails.
+
+    These are the bodies that the recovered ms[0x02]/ms[0x03] saved-state
+    apply sites and the direct BL callsite list target.  The guarded slices
+    cover the 10-way switch prologues, representative GPIO BOP/BCR pin writes,
+    and the trailing DAC1/scope calibration-table recompute.  This proves the
+    hardware writer shape; it still does not prove a DMM runtime range writer
+    or a DMM calibration coefficient.
+    """
+    checked: dict[str, object] = {}
+    for name, info in EXPECTED_MUX_WRITER_BODY_SEQUENCES.items():
+        slices: dict[str, tuple[int, bytes]] = info["slices"]  # type: ignore[assignment]
+        checked_slices: dict[str, dict[str, str]] = {}
+        for slice_name, (addr, expected) in slices.items():
+            actual = read(addr, len(expected))
+            if actual != expected:
+                raise AssertionError(
+                    f"{name} {slice_name} {addr:#010x}: "
+                    f"expected {expected.hex(' ')}, got {actual.hex(' ')}"
+                )
+            checked_slices[slice_name] = {
+                "addr": f"{addr:#010x}",
+                "bytes": actual.hex(" "),
+            }
+        checked[name] = {
+            "target": f"{int(info['target']):#010x}",
+            "slices": checked_slices,
+        }
+    return checked
+
+
 def main() -> None:
     if not BIN.exists():
         print(f"stock meter literal pools: skipped; missing {BIN}", file=sys.stderr)
@@ -302,6 +418,7 @@ def main() -> None:
     selector_state = verify_meter_selector_state_sequences()
     mux_restore = verify_meter_mux_restore_sequences()
     mux_calls = verify_meter_mux_callsite_sequences()
+    mux_bodies = verify_meter_mux_writer_body_sequences()
     print(f"stock meter selector table: {selector['bytes']}")
     print("stock meter selector xref sites: " +
           ", ".join(selector_xrefs["sequences"].keys()))
@@ -311,6 +428,9 @@ def main() -> None:
           ", ".join(mux_restore["sequences"].keys()))
     for name, info in mux_calls.items():
         print(f"stock {name} direct BL sites: " + ", ".join(info["calls"]))
+    for name, info in mux_bodies.items():
+        print(f"stock {name} body slices: " +
+              ", ".join(info["slices"].keys()))
     print("stock meter literal pools: ok")
 
 
