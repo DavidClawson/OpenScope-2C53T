@@ -1297,7 +1297,7 @@ static void draw_fft_region(uint16_t y_top, uint16_t height)
     fft_process(sbuf, FFT_SIZE, &fft_result);
 
     const float *draw_data = (fft_result.avg_db != NULL)
-                             ? fft_result.avg_db : fft_result.magnitude_db;
+                             ? fft_result.avg_db : fft_result.level_db;
 
     float ref_db = cfg->ref_level_db;
     float range_db = cfg->db_range;
@@ -1370,7 +1370,7 @@ static void draw_fft_region(uint16_t y_top, uint16_t height)
 
         uint16_t peak_x = (uint16_t)((uint32_t)(peak_bin - zoom_start)
                           * LCD_WIDTH / zoom_span);
-        float norm = (ref_db - fft_result.peaks[p].magnitude_db) / range_db;
+        float norm = (ref_db - fft_result.peaks[p].level_db) / range_db;
         if (norm < 0.0f) norm = 0.0f;
         uint16_t peak_y = y_top + (uint16_t)(norm * (float)height);
 
@@ -1469,7 +1469,7 @@ void draw_waterfall_screen(void)
     fft_process(sbuf, FFT_SIZE, &fft_result);
 
     const float *draw_data = (fft_result.avg_db != NULL)
-                             ? fft_result.avg_db : fft_result.magnitude_db;
+                             ? fft_result.avg_db : fft_result.level_db;
 
     uint16_t zoom_start = cfg->zoom_start_bin;
     uint16_t zoom_end = cfg->zoom_end_bin;

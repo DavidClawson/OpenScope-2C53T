@@ -211,7 +211,7 @@ void fft_auto_configure(int16_t *samples, uint16_t num_samples, float32_t sample
 typedef struct {
     uint16_t  bin;
     float32_t freq_hz;
-    float32_t magnitude_db;
+    float32_t level_db;
     char      label[8];  // "Fund", "H2", "H3", etc.
 } fft_peak_t;
 
@@ -225,7 +225,7 @@ int fft_find_peaks(float32_t *mag, uint16_t num_bins, float32_t sample_rate,
         if (mag[i] > mag[i-1] && mag[i] > mag[i+1] && mag[i] > threshold_db) {
             peaks[count].bin = i;
             peaks[count].freq_hz = (float32_t)i * bin_width;
-            peaks[count].magnitude_db = mag[i];
+            peaks[count].level_db = mag[i];
 
             // Label harmonics relative to fundamental
             if (count == 0) {

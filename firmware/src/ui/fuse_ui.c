@@ -109,7 +109,7 @@ static uint32_t calc_current_ma(float voltage_mv, uint32_t resistance_uohm)
     return (uint32_t)(current + 0.5f);
 }
 
-/* Format current: show mA or A depending on magnitude */
+/* Format current: show mA or A depending on display range */
 static void fmt_current(char *buf, int size, uint32_t current_ma)
 {
     if (current_ma >= 10000) {

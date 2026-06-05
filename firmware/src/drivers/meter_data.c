@@ -83,7 +83,7 @@ static void meter_record_history(void)
     h->additional_status = r->dbg_frame[9];
     h->extra = ((uint16_t)r->dbg_frame[10] << 8) | r->dbg_frame[11];
     h->aux_freq_hz_i10 = (uint16_t)(r->aux_freq_hz * 10.0f + 0.5f);
-    h->raw_bcd = r->raw_bcd;
+    h->bcd_value = r->bcd_value;
     strncpy(h->display_str, r->display_str, sizeof(h->display_str) - 1);
     h->display_str[sizeof(h->display_str) - 1] = '\0';
     h->unit_suffix = r->unit_suffix ? r->unit_suffix : "";
@@ -109,7 +109,7 @@ static uint16_t meter_aux_freq_i10(const meter_reading_t *r)
     r->valid = true; \
     r->update_count++; \
     if (old_valid != r->valid || old_submode != r->submode || \
-        old_result_class != r->result_class || old_raw_bcd != r->raw_bcd || \
+        old_result_class != r->result_class || old_bcd_value != r->bcd_value || \
         old_decimal_pos != r->decimal_pos || old_negative != r->negative || \
         old_unit_variant != r->unit_variant || old_aux_freq_i10 != meter_aux_freq_i10(r) || \
         old_continuity_beep != r->continuity_beep || \
@@ -123,7 +123,7 @@ static uint16_t meter_aux_freq_i10(const meter_reading_t *r)
 
 #define METER_REJECT_FRAME() do { \
     r->value = 0.0f; \
-    r->raw_bcd = 0; \
+    r->bcd_value = 0; \
     memset(r->digits, 0, sizeof(r->digits)); \
     r->decimal_pos = 0; \
     r->negative = false; \
@@ -137,7 +137,7 @@ static uint16_t meter_aux_freq_i10(const meter_reading_t *r)
     r->valid = false; \
     r->update_count++; \
     if (old_valid != r->valid || old_submode != r->submode || \
-        old_result_class != r->result_class || old_raw_bcd != r->raw_bcd || \
+        old_result_class != r->result_class || old_bcd_value != r->bcd_value || \
         old_decimal_pos != r->decimal_pos || old_negative != r->negative || \
         old_unit_variant != r->unit_variant || old_aux_freq_i10 != meter_aux_freq_i10(r) || \
         old_continuity_beep != r->continuity_beep || \
@@ -151,7 +151,7 @@ static uint16_t meter_aux_freq_i10(const meter_reading_t *r)
 static void meter_clear_payload(meter_reading_t *r)
 {
     r->value = 0.0f;
-    r->raw_bcd = 0;
+    r->bcd_value = 0;
     memset(r->digits, 0, sizeof(r->digits));
     r->decimal_pos = 0;
     r->negative = false;
@@ -275,7 +275,7 @@ static const float bar_full_scale[10] = {
  * Low-Ω band factory calibration
  *
  * Bench truth on unit #1 (2026-04-04):
- *   147 Ω ref → raw_bcd ≈ 4830/4831 → true_ohms = raw_bcd × 0.0304
+ *   147 Ω ref → bcd_value ≈ 4830/4831 → true_ohms = bcd_value × 0.0304
  *
  * The FPGA meter IC's low-Ω range outputs raw BCD counts that need a
  * fixed linear correction. The correction factor is independent of
@@ -303,8 +303,8 @@ static const float bar_full_scale[10] = {
  *   5 V DC ref → 5.008 V  (unchanged, different submode)
  * ═══════════════════════════════════════════════════════════════════ */
 
-#define METER_CAL_LOW_OHM_FACTOR  0.0304f   /* raw_bcd × this = Ω, low band */
-#define METER_CAL_KOHM_FACTOR     0.001f    /* raw_bcd × this = kΩ, mid band */
+#define METER_CAL_LOW_OHM_FACTOR  0.0304f   /* bcd_value × this = Ω, low band */
+#define METER_CAL_KOHM_FACTOR     0.001f    /* bcd_value × this = kΩ, mid band */
 
 /* ═══════════════════════════════════════════════════════════════════
  * 4-digit float → string formatter (newlib-nano has no %f support)
@@ -691,11 +691,6 @@ static bool frame_is_voltage_payload(uint8_t submode,
     return frame[8] == 0x02 && frame[9] == 0x00;
 }
 
-static bool submode_is_current(uint8_t submode)
-{
-    return submode >= 2 && submode <= 5;
-}
-
 /* ═══════════════════════════════════════════════════════════════════
  * Format value into display string
  * ═══════════════════════════════════════════════════════════════════ */
@@ -738,7 +733,7 @@ static void format_reading(meter_reading_t *r, uint8_t submode)
     for (int i = 0; i < (4 - (int)dec); i++) {
         divisor *= 10.0f;
     }
-    r->value = (float)r->raw_bcd / divisor;
+    r->value = (float)r->bcd_value / divisor;
     if (r->negative) r->value = -r->value;
 
     /* Bar graph fraction */
@@ -793,7 +788,7 @@ void meter_data_invalidate(uint8_t submode)
 
     meter_reading_write_begin();
     r->value = 0.0f;
-    r->raw_bcd = 0;
+    r->bcd_value = 0;
     memset(r->digits, 0, sizeof(r->digits));
     r->decimal_pos = 0;
     r->negative = false;
@@ -833,7 +828,7 @@ void meter_data_process_frame(const volatile uint8_t *frame, uint8_t submode)
     bool old_valid = r->valid;
     uint8_t old_submode = r->submode;
     meter_result_class_t old_result_class = r->result_class;
-    int old_raw_bcd = r->raw_bcd;
+    int old_bcd_value = r->bcd_value;
     uint8_t old_decimal_pos = r->decimal_pos;
     bool old_negative = r->negative;
     uint8_t old_unit_variant = r->unit_variant;
@@ -938,7 +933,7 @@ void meter_data_process_frame(const volatile uint8_t *frame, uint8_t submode)
 
     /* --- Special value detection --- */
 
-    if (frame_is_voltage_payload(submode, frame) && !submode_is_current(submode)) {
+    if (frame_is_voltage_payload(submode, frame)) {
         METER_REJECT_FRAME();
         return;
     }
@@ -950,11 +945,6 @@ void meter_data_process_frame(const volatile uint8_t *frame, uint8_t submode)
         strcpy(r->display_str, "OL");
         r->bar_fraction = 1.0f;
         METER_FINISH_FRAME();
-        return;
-    }
-
-    if (frame_is_voltage_payload(submode, frame)) {
-        METER_REJECT_FRAME();
         return;
     }
 
@@ -988,7 +978,7 @@ void meter_data_process_frame(const volatile uint8_t *frame, uint8_t submode)
             r->digits[1] = 0;
             r->digits[2] = 0;
             r->digits[3] = 0;
-            r->raw_bcd = digit0;
+            r->bcd_value = digit0;
             r->decimal_pos = 0;
             format_reading(r, submode);
         } else {
@@ -1026,7 +1016,7 @@ void meter_data_process_frame(const volatile uint8_t *frame, uint8_t submode)
     r->digits[1] = d1;
     r->digits[2] = d2;
     r->digits[3] = d3;
-    r->raw_bcd = d0 * 1000 + d1 * 100 + d2 * 10 + d3;
+    r->bcd_value = d0 * 1000 + d1 * 100 + d2 * 10 + d3;
 
     uint8_t raw_digit_codes[4] = { digit0, digit1, digit2, digit3 };
     uint8_t f6 = flags;
@@ -1057,11 +1047,11 @@ void meter_data_process_frame(const volatile uint8_t *frame, uint8_t submode)
      * the display flickers between e.g. "9.821 kOhm" and "98.24 kOhm"
      * for the SAME 10 kΩ resistor.
      *
-     * The FIX is to compute resistance from raw_bcd at the band level,
+     * The FIX is to compute resistance from bcd_value at the band level,
      * ignoring the per-frame dp hint entirely:
      *
-     *   Low-Ω band  (frame[6] upper nibble 0): value = raw_bcd × 0.0304 Ω
-     *   kΩ    band  (frame[6] upper nibble 4): value = raw_bcd × 0.001  kΩ
+     *   Low-Ω band  (frame[6] upper nibble 0): value = bcd_value × 0.0304 Ω
+     *   kΩ    band  (frame[6] upper nibble 4): value = bcd_value × 0.001  kΩ
      *
      * Bench data (2026-04-04, unit #1):
      *   147 Ω ref  → raw ≈ 4824 → 4824 × 0.0304 = 146.6 Ω  ✓
@@ -1077,7 +1067,7 @@ void meter_data_process_frame(const volatile uint8_t *frame, uint8_t submode)
      * Higher bands (MΩ, autorange to 200 kΩ / 2 MΩ) are not yet
      * characterized — those will need additional upper-nibble cases.
      *
-     * We leave raw_bcd, decimal_pos, and digits[] untouched so the
+     * We leave bcd_value, decimal_pos, and digits[] untouched so the
      * debug overlay at meter_ui.c:948 still shows the FPGA's raw
      * pre-cal report. UI code reads `value` and `display_str` for
      * the final numbers.
@@ -1093,7 +1083,7 @@ void meter_data_process_frame(const volatile uint8_t *frame, uint8_t submode)
         }
 
         if (scale != 0.0f) {
-            float v = (float)r->raw_bcd * scale;
+            float v = (float)r->bcd_value * scale;
             if (r->negative) v = -v;
             r->value       = v;
             r->unit_suffix = unit;

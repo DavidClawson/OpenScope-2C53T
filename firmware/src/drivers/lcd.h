@@ -67,8 +67,8 @@
 #define GPIOD_CRL       (*(volatile uint32_t *)0x40011400)
 #define GPIOD_CRH       (*(volatile uint32_t *)0x40011404)
 
-/* GPIO port E registers (0x40011800) */
-#define GPIOE_CRL       (*(volatile uint32_t *)0x40011800)
+/* GPIO port E registers. */
+#define GPIOE_CRL       (*(volatile uint32_t *)(0x40010000UL + 6144UL))
 #define GPIOE_CRH       (*(volatile uint32_t *)0x40011804)
 
 /* GPIO config: AF push-pull output, 50MHz */

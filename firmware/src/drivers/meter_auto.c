@@ -24,20 +24,20 @@ uint8_t meter_auto_score(uint8_t submode, const meter_reading_t *r)
     if (r->result_class == METER_RESULT_NORMAL) {
         switch (submode) {
         case 0:
-            return (r->raw_bcd > 0) ? 90U : 0U;
+            return (r->bcd_value > 0) ? 90U : 0U;
         case 1:
-            return (r->raw_bcd > 0 && r->aux_freq_hz >= 1.0f) ? 90U : 0U;
+            return (r->bcd_value > 0 && r->aux_freq_hz >= 1.0f) ? 90U : 0U;
         case 6:
         case 7:
-            return (r->raw_bcd > 0) ? 70U : 0U;
+            return (r->bcd_value > 0) ? 70U : 0U;
         case 8:
         case 9:
-            return (r->raw_bcd > 0) ? 60U : 0U;
+            return (r->bcd_value > 0) ? 60U : 0U;
         case 2:
         case 3:
         case 4:
         case 5:
-            return (r->raw_bcd > 0) ? 50U : 0U;
+            return (r->bcd_value > 0) ? 50U : 0U;
         default:
             return 10U;
         }

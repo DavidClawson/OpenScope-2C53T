@@ -58,7 +58,7 @@ static int expect_payload_cleared(const char *display)
     ASSERT_STR_EQ(meter_reading.display_str, display);
     ASSERT_STR_EQ(meter_reading.unit_suffix, "");
     ASSERT(close_to(meter_reading.value, 0.0f, 0.001f));
-    ASSERT(meter_reading.raw_bcd == 0);
+    ASSERT(meter_reading.bcd_value == 0);
     ASSERT(meter_reading.decimal_pos == 0);
     ASSERT(meter_reading.unit_variant == 0);
     ASSERT(meter_reading.digits[0] == 0);
@@ -138,7 +138,7 @@ static int test_segment_frame_builder_exercises_cross_byte_lookup(void)
     process_frame(frame, 0);
 
     ASSERT(meter_reading.valid);
-    ASSERT(meter_reading.raw_bcd == 5008);
+    ASSERT(meter_reading.bcd_value == 5008);
     ASSERT(meter_reading.dbg_nibbles[0] == 0xC7);
     ASSERT(meter_reading.dbg_nibbles[1] == 0xEB);
     ASSERT(meter_reading.dbg_nibbles[2] == 0xEB);
@@ -162,7 +162,7 @@ static int test_dcv_5v_frame_keeps_verified_decimal_and_unit(void)
 
     ASSERT(meter_reading.valid);
     ASSERT(meter_reading.result_class == METER_RESULT_NORMAL);
-    ASSERT(meter_reading.raw_bcd == 5008);
+    ASSERT(meter_reading.bcd_value == 5008);
     ASSERT(meter_reading.decimal_pos == 1);
     ASSERT_STR_EQ(meter_reading.display_str, "5.008");
     ASSERT_STR_EQ(meter_reading.unit_suffix, "V");
@@ -179,7 +179,7 @@ static int test_dcv_5v_synthetic_f6_0f_does_not_become_mains_range(void)
     process_frame(frame, 0);
 
     ASSERT(meter_reading.valid);
-    ASSERT(meter_reading.raw_bcd == 5008);
+    ASSERT(meter_reading.bcd_value == 5008);
     ASSERT(meter_reading.dbg_frame[6] == 0x0F);
     ASSERT(meter_reading.decimal_pos == 1);
     ASSERT_STR_EQ(meter_reading.display_str, "5.008");
@@ -198,7 +198,7 @@ static int test_dcv_7v_f6_07_keeps_default_volt_scale(void)
     process_frame(frame, 0);
 
     ASSERT(meter_reading.valid);
-    ASSERT(meter_reading.raw_bcd == 7005);
+    ASSERT(meter_reading.bcd_value == 7005);
     ASSERT(meter_reading.dbg_frame[6] == 0x07);
     ASSERT(meter_reading.decimal_pos == 1);
     ASSERT_STR_EQ(meter_reading.display_str, "7.005");
@@ -224,7 +224,7 @@ static int test_dcv_range_frames_are_not_latched_from_acv_mains(void)
     ASSERT(close_to(meter_reading.aux_freq_hz, 49.0f, 0.1f));
 
     process_frame(dcv_frame, 0);
-    ASSERT(meter_reading.raw_bcd == 5008);
+    ASSERT(meter_reading.bcd_value == 5008);
     ASSERT(meter_reading.decimal_pos == 1);
     ASSERT(expect_normal_reading("5.008", "V", 5.008f, 0.001f));
     ASSERT(close_to(meter_reading.aux_freq_hz, 0.0f, 0.001f));
@@ -243,7 +243,7 @@ static int test_acv_mains_frame_uses_high_voltage_scale_and_frequency(void)
 
     ASSERT(meter_reading.valid);
     ASSERT(meter_reading.result_class == METER_RESULT_NORMAL);
-    ASSERT(meter_reading.raw_bcd == 2282);
+    ASSERT(meter_reading.bcd_value == 2282);
     ASSERT(meter_reading.decimal_pos == 3);
     ASSERT_STR_EQ(meter_reading.display_str, "228.2");
     ASSERT_STR_EQ(meter_reading.unit_suffix, "V");
@@ -354,7 +354,7 @@ static int test_voltage_mode_mains_frequency_frame_overrides_dcv_0f_rule(void)
 
     ASSERT(meter_reading.valid);
     ASSERT(meter_reading.result_class == METER_RESULT_NORMAL);
-    ASSERT(meter_reading.raw_bcd == 2283);
+    ASSERT(meter_reading.bcd_value == 2283);
     ASSERT(meter_reading.decimal_pos == 3);
     ASSERT_STR_EQ(meter_reading.display_str, "228.3");
     ASSERT_STR_EQ(meter_reading.unit_suffix, "V");
@@ -378,7 +378,7 @@ static int test_dcv_high_range_frame_stays_voltage_across_current_transition(voi
     process_frame(dcv_high_frame, 0);
     ASSERT(meter_reading.valid);
     ASSERT(meter_reading.result_class == METER_RESULT_NORMAL);
-    ASSERT(meter_reading.raw_bcd == 2283);
+    ASSERT(meter_reading.bcd_value == 2283);
     ASSERT(meter_reading.decimal_pos == 3);
     ASSERT_STR_EQ(meter_reading.display_str, "228.3");
     ASSERT_STR_EQ(meter_reading.unit_suffix, "V");
@@ -627,7 +627,7 @@ static int test_voltage_payload_clears_stale_reading_in_all_non_voltage_modes(vo
             process_frame(normal, modes[m]);
             ASSERT(meter_reading.valid);
             ASSERT(meter_reading.result_class == METER_RESULT_NORMAL);
-            ASSERT(meter_reading.raw_bcd != 0);
+            ASSERT(meter_reading.bcd_value != 0);
             ASSERT_STR_EQ(meter_reading.display_str,
                           (modes[m] == 6 || modes[m] == 7) ? "3.300" :
                           (modes[m] == 8 || modes[m] == 9) ? "123.4" : "12.34");
@@ -651,9 +651,9 @@ static int test_special_voltage_family_frames_are_rejected_outside_voltage(void)
 
     meter_data_init();
     process_frame(ol_voltage_frame, 2);
-    ASSERT(meter_reading.valid);
-    ASSERT(meter_reading.result_class == METER_RESULT_OVERLOAD);
-    ASSERT_STR_EQ(meter_reading.display_str, "OL");
+    ASSERT(!meter_reading.valid);
+    ASSERT(meter_reading.result_class == METER_RESULT_NONE);
+    ASSERT_STR_EQ(meter_reading.display_str, "---");
     ASSERT_STR_EQ(meter_reading.unit_suffix, "");
 
     meter_data_init();
@@ -672,40 +672,49 @@ static int test_voltage_payload_clears_stale_current_reading(void)
         0x0D, 0x00, 0x02, 0x00, 0x00, 0x31,
     };
     uint8_t current_frame[12];
-    uint32_t updates_after_current;
-    uint32_t display_updates_after_current;
+    static const uint8_t current_modes[] = { 2, 3, 4, 5 };
 
     build_segment_frame(current_frame, 2, 2, 6, 1, 0x00, 0x00, 0x00, 0x00, 0);
 
-    meter_data_init();
-    process_frame(current_frame, 2);
-    ASSERT(expect_normal_reading("22.61", "mA", 22.61f, 0.001f));
-    updates_after_current = meter_reading.update_count;
-    display_updates_after_current = meter_reading.display_update_count;
+    for (unsigned i = 0; i < sizeof(current_modes); i++) {
+        uint8_t mode = current_modes[i];
+        uint32_t updates_after_current;
+        uint32_t display_updates_after_current;
 
-    process_frame(current_frame, 2);
-    ASSERT(expect_normal_reading("22.61", "mA", 22.61f, 0.001f));
-    ASSERT(meter_reading.update_count == updates_after_current + 1);
-    ASSERT(meter_reading.display_update_count == display_updates_after_current);
-    updates_after_current = meter_reading.update_count;
-    display_updates_after_current = meter_reading.display_update_count;
+        meter_data_init();
+        process_frame(current_frame, mode);
+        ASSERT(expect_normal_reading("22.61",
+                                     (mode == 2 || mode == 4) ? "mA" : "A",
+                                     22.61f, 0.001f));
+        updates_after_current = meter_reading.update_count;
+        display_updates_after_current = meter_reading.display_update_count;
 
-    process_frame(mains_frame, 2);
-    ASSERT(!meter_reading.valid);
-    ASSERT(meter_reading.update_count == updates_after_current + 1);
-    ASSERT(meter_reading.display_update_count == display_updates_after_current + 1);
-    ASSERT(meter_reading.submode == 2);
-    ASSERT(meter_reading.result_class == METER_RESULT_NONE);
-    ASSERT_STR_EQ(meter_reading.display_str, "---");
-    ASSERT_STR_EQ(meter_reading.unit_suffix, "");
-    ASSERT(close_to(meter_reading.value, 0.0f, 0.001f));
+        process_frame(current_frame, mode);
+        ASSERT(expect_normal_reading("22.61",
+                                     (mode == 2 || mode == 4) ? "mA" : "A",
+                                     22.61f, 0.001f));
+        ASSERT(meter_reading.update_count == updates_after_current + 1);
+        ASSERT(meter_reading.display_update_count == display_updates_after_current);
+        updates_after_current = meter_reading.update_count;
+        display_updates_after_current = meter_reading.display_update_count;
 
-    updates_after_current = meter_reading.update_count;
-    display_updates_after_current = meter_reading.display_update_count;
-    process_frame(mains_frame, 2);
-    ASSERT(meter_reading.update_count == updates_after_current + 1);
-    ASSERT(meter_reading.display_update_count == display_updates_after_current);
-    ASSERT_STR_EQ(meter_reading.display_str, "---");
+        process_frame(mains_frame, mode);
+        ASSERT(!meter_reading.valid);
+        ASSERT(meter_reading.update_count == updates_after_current + 1);
+        ASSERT(meter_reading.display_update_count == display_updates_after_current + 1);
+        ASSERT(meter_reading.submode == mode);
+        ASSERT(meter_reading.result_class == METER_RESULT_NONE);
+        ASSERT_STR_EQ(meter_reading.display_str, "---");
+        ASSERT_STR_EQ(meter_reading.unit_suffix, "");
+        ASSERT(close_to(meter_reading.value, 0.0f, 0.001f));
+
+        updates_after_current = meter_reading.update_count;
+        display_updates_after_current = meter_reading.display_update_count;
+        process_frame(mains_frame, mode);
+        ASSERT(meter_reading.update_count == updates_after_current + 1);
+        ASSERT(meter_reading.display_update_count == display_updates_after_current);
+        ASSERT_STR_EQ(meter_reading.display_str, "---");
+    }
     return 1;
 }
 

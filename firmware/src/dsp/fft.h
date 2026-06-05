@@ -39,7 +39,7 @@ typedef enum {
 typedef struct {
     uint16_t bin;
     float    freq_hz;
-    float    magnitude_db;
+    float    level_db;
     char     label[6];      /* "Fund", "H2", "H3", etc. or "" */
 } fft_peak_t;
 
@@ -58,7 +58,7 @@ typedef struct {
 
 /* FFT computation result — pointers to internal static buffers (no copy) */
 typedef struct {
-    const float *magnitude_db;      /* Current frame magnitude [FFT_BINS] */
+    const float *level_db;      /* Current frame magnitude [FFT_BINS] */
     const float *avg_db;            /* Averaged magnitude (NULL if off) */
     const float *max_hold_db;       /* Max hold envelope (NULL if off) */
     float       bin_width_hz;

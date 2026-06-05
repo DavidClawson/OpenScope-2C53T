@@ -37,7 +37,7 @@ typedef enum {
 typedef struct {
     /* Parsed measurement value */
     float    value;              /* Scaled measurement value */
-    int      raw_bcd;            /* Raw 4-digit BCD integer (0-9999) */
+    int      bcd_value;            /* Raw 4-digit BCD integer (0-9999) */
     uint8_t  digits[4];          /* Individual BCD digits */
     uint8_t  decimal_pos;        /* Decimal point position (0=none, 1-3) */
     bool     negative;           /* Negative polarity */
@@ -113,7 +113,7 @@ typedef struct {
     uint8_t  additional_status;
     uint16_t extra;
     uint16_t aux_freq_hz_i10;
-    int      raw_bcd;
+    int      bcd_value;
     char     display_str[16];
     const char *unit_suffix;
     uint8_t  frame[12];

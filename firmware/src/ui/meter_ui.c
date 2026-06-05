@@ -660,7 +660,7 @@ static void draw_main_reading(const meter_mode_info_t *m, const theme_t *th,
      * plus unit letters V/A/k/m/M/H/z/W/F/O. Special state strings like
      * "OL", "CONT", "ERR", "---" contain letters (L, N, T, R, -) that
      * aren't in the xlarge font — they silently drop and the user sees
-     * a truncated display (e.g. "OL" → "O", which looks like a "0").
+     * a truncated display (for example "OL" becoming only "O").
      * Fall back to font_large for non-numeric state strings. */
     bool is_numeric = true;
     for (const char *p = value_str; *p; p++) {
@@ -1395,7 +1395,7 @@ void draw_meter_screen(void)
 
         font_draw_string(4, dy + 2, dbg, 0x07E0, dbg_bg, &font_small);
 
-        /* Second debug line: nibble pairs → digits, probe_type, raw_bcd */
+        /* Second debug line: nibble pairs → digits, probe_type, bcd_value */
         {
             const char *hex = "0123456789ABCDEF";
             int j = 0;
@@ -1429,7 +1429,7 @@ void draw_meter_screen(void)
 
             /* Raw BCD */
             db2[j++] = '=';
-            { int bcd = reading.raw_bcd; char tmp[6]; int t = 0;
+            { int bcd = reading.bcd_value; char tmp[6]; int t = 0;
               if (bcd == 0) tmp[t++] = '0';
               else { int v = bcd; while (v > 0 && t < 5) { tmp[t++] = '0' + (v % 10); v /= 10; } }
               for (int q = t - 1; q >= 0; q--) db2[j++] = tmp[q]; }

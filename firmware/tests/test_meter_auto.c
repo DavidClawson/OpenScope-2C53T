@@ -24,14 +24,14 @@ static int tests_passed = 0;
     if (!(cond)) { printf("[line %d: %s] ", __LINE__, #cond); return 0; } \
 } while (0)
 
-static meter_reading_t normal_reading(uint8_t submode, int raw_bcd)
+static meter_reading_t normal_reading(uint8_t submode, int bcd_value)
 {
     meter_reading_t r;
 
     memset(&r, 0, sizeof(r));
     r.valid = true;
     r.submode = submode;
-    r.raw_bcd = raw_bcd;
+    r.bcd_value = bcd_value;
     r.result_class = METER_RESULT_NORMAL;
     return r;
 }

@@ -251,24 +251,24 @@ static void find_peaks(const float *mag_db, uint16_t num_bins,
 
             if (*num_found < max_peaks) {
                 uint8_t pos = *num_found;
-                while (pos > 0 && mag_db[i] > peaks[pos - 1].magnitude_db) {
+                while (pos > 0 && mag_db[i] > peaks[pos - 1].level_db) {
                     peaks[pos] = peaks[pos - 1];
                     pos--;
                 }
                 peaks[pos].bin = i;
                 peaks[pos].freq_hz = (float)i * bin_width_hz;
-                peaks[pos].magnitude_db = mag_db[i];
+                peaks[pos].level_db = mag_db[i];
                 peaks[pos].label[0] = '\0';
                 (*num_found)++;
-            } else if (mag_db[i] > peaks[max_peaks - 1].magnitude_db) {
+            } else if (mag_db[i] > peaks[max_peaks - 1].level_db) {
                 uint8_t pos = max_peaks - 1;
-                while (pos > 0 && mag_db[i] > peaks[pos - 1].magnitude_db) {
+                while (pos > 0 && mag_db[i] > peaks[pos - 1].level_db) {
                     peaks[pos] = peaks[pos - 1];
                     pos--;
                 }
                 peaks[pos].bin = i;
                 peaks[pos].freq_hz = (float)i * bin_width_hz;
-                peaks[pos].magnitude_db = mag_db[i];
+                peaks[pos].level_db = mag_db[i];
                 peaks[pos].label[0] = '\0';
             }
         }
@@ -285,11 +285,11 @@ static void label_harmonics(fft_peak_t *peaks, uint8_t num_peaks)
 
     /* Find the strongest peak */
     uint8_t strongest_idx = 0;
-    float strongest_mag = peaks[0].magnitude_db;
+    float strongest_mag = peaks[0].level_db;
     uint8_t i;
     for (i = 1; i < num_peaks; i++) {
-        if (peaks[i].magnitude_db > strongest_mag) {
-            strongest_mag = peaks[i].magnitude_db;
+        if (peaks[i].level_db > strongest_mag) {
+            strongest_mag = peaks[i].level_db;
             strongest_idx = i;
         }
     }
@@ -300,7 +300,7 @@ static void label_harmonics(fft_peak_t *peaks, uint8_t num_peaks)
     float mag_threshold = strongest_mag - 20.0f;
 
     for (i = 0; i < num_peaks; i++) {
-        if (peaks[i].magnitude_db >= mag_threshold &&
+        if (peaks[i].level_db >= mag_threshold &&
             peaks[i].freq_hz < fund_freq) {
             fund_freq = peaks[i].freq_hz;
             fund_idx = i;
@@ -486,7 +486,7 @@ void fft_process(const int16_t *samples, uint16_t num_samples,
     }
 #endif /* USE_CMSIS_DSP */
 
-    result->magnitude_db = magnitude_buf;
+    result->level_db = magnitude_buf;
 
     /* Step 4: Exponential moving average */
     if (current_cfg.avg_count > 0) {
@@ -530,7 +530,7 @@ void fft_process(const int16_t *samples, uint16_t num_samples,
 
         if (result->num_peaks > 0) {
             result->peak_freq_hz = result->peaks[0].freq_hz;
-            result->peak_mag_db  = result->peaks[0].magnitude_db;
+            result->peak_mag_db  = result->peaks[0].level_db;
         }
 
         /* Label harmonics relative to fundamental */
