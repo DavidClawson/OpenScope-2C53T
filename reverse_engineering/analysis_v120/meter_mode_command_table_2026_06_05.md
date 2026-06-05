@@ -456,6 +456,58 @@ or trace that ties live DMM selector/range transitions to `ms[0x02]` and
 `ms[0x03]`, or proves that those bytes are not the runtime DMM range source.
 In short: `0x0803972E` is controlled shutdown/config-save evidence, not normal runtime DMM range switching.
 
+### USART TX Config Writer Meter-Case Guard, 2026-06-06
+
+`FUN_08039734` has a seven-arm `TBB` dispatch that older notes describe as
+`usart_tx_config_writer`. One arm is meter-case-shaped (`cmd_type == 4`) and
+writes parameter bits into config words, but the visible direct callers in
+`FUN_08023A50` pass timer base addresses (`TIM5_CTL0` and `TIM2_CTL0`) during
+master init. Treat this as a separate FPGA config bitfield path, not as a
+recovered normal DMM runtime range source.
+
+The binary guard covers the dispatch prologue, the `0x080397C8` meter-case arm,
+the common epilogue that ORs the `0x0100 update mask`, and the two visible init
+callers:
+
+```text
+0x08039734 writer_tbb_prologue:
+  10 b5 0a 78 06 2a 88 bf 10 bd df e8 02 f0
+  04 98 1c 98 43 98 6c 00
+
+0x080397C8 meter_case_bitfield_body:
+  02 46 91 f8 01 c0 52 f8 20 3f 0c f0 01 0c
+  23 f4 00 73 43 ea 4c 23 13 60 91 f8 01 c0
+  d2 f8 00 e0 cc f3 54 03 63 f3 cb 2e c2 f8
+  00 e0 91 f8 02 c0 50 f8 1c 3f 4f f4 80 74
+  6c f3 01 03 03 60 c9 78 03 68 09 01 5f fa
+  81 fc 23 f0 f0 0e 6f f0 0c 03 22 e0
+
+0x08039860 writer_common_update_mask_commit:
+  4e ea 0c 01 01 60 01 68 19 40 01 60
+  10 68 20 43 10 60 10 bd
+
+0x080272CC tim5_init_config_writer_call:
+  4f f4 80 30 10 90 38 46 12 f0 2e fa
+  b8 68 05 21 61 f3 06 10 b8 60
+
+0x08027338 tim2_init_config_writer_call:
+  02 20 c0 f2 01 00 10 90 4f f0 80 40 12 f0 f6 f9
+```
+
+Decoded from the stock disassembly, the `cmd_type == 4` arm writes
+`params[1].0` into `[r0+0x20]` bit 9, `params[1].1` into `[r0+0x20]` bit 11,
+`params[2]` low two bits into `[r0+0x1C]` bits 0..1, and `params[3]` shifted
+into `[r0+0x1C]` bits 4..7, then commits update mask `0x0100`. That is useful
+stock hardware/config shape evidence. It still does not explain why the
+low-DCV live frame `5A A5 44 8E EF E7 07 24 80 00 01 89` reports stock math
+`0.4366 V` while the visible source is `0.200 V`, and it is not a license to
+add a multiplier, current/voltage magnitude classifier, or guessed factory
+coefficient.
+
+Open gap: find the DMM-owned runtime caller or trace that feeds this bitfield
+path from the eight-entry selector table, or prove that DMM runtime mode/range
+selection uses another writer entirely. Until that exists, `USART TX config writer meter-case guard` is evidence for a separate FPGA config bitfield path; visible direct callers are TIM5/TIM2 init, not normal DMM runtime range switching.
+
 The unresolved part is the live/runtime writer for `ms[0x03]` during local
 small-current versus A-range operation. Until that is recovered or bench-proven,
 local submodes 2/3 and 4/5 share the same recovered stock current slot and are

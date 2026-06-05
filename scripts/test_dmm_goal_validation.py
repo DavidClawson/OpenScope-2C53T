@@ -428,6 +428,50 @@ class DmmGoalValidationTests(unittest.TestCase):
             sequences["probe_change_poweroff_saved_config_pack_caller"]["bytes"],
         )
 
+    def test_stock_usart_tx_config_writer_meter_case_is_binary_grounded(self) -> None:
+        result = stock_meter_literals.verify_usart_tx_config_writer_meter_case_sequences()
+        sequences = result["sequences"]
+        callers = result["callers"]
+
+        self.assertEqual(
+            sequences["writer_tbb_prologue"]["addr"],
+            "0x08039734",
+        )
+        self.assertEqual(
+            sequences["meter_case_bitfield_body"]["addr"],
+            "0x080397c8",
+        )
+        self.assertEqual(
+            sequences["writer_common_update_mask_commit"]["addr"],
+            "0x08039860",
+        )
+        self.assertIn(
+            "df e8 02 f0",
+            sequences["writer_tbb_prologue"]["bytes"],
+        )
+        self.assertIn(
+            "23 f4 00 73 43 ea 4c 23",
+            sequences["meter_case_bitfield_body"]["bytes"],
+        )
+        self.assertIn(
+            "4f f4 80 74",
+            sequences["meter_case_bitfield_body"]["bytes"],
+        )
+        self.assertIn(
+            "10 68 20 43 10 60 10 bd",
+            sequences["writer_common_update_mask_commit"]["bytes"],
+        )
+        self.assertEqual(
+            callers["tim5_init_config_writer_call"]["addr"],
+            "0x080272cc",
+        )
+        self.assertEqual(
+            callers["tim2_init_config_writer_call"]["addr"],
+            "0x08027338",
+        )
+        self.assertIn("12 f0 2e fa", callers["tim5_init_config_writer_call"]["bytes"])
+        self.assertIn("12 f0 f6 f9", callers["tim2_init_config_writer_call"]["bytes"])
+
     def test_stock_meter_mux_direct_callsites_are_binary_grounded(self) -> None:
         result = stock_meter_literals.verify_meter_mux_callsite_sequences()
 

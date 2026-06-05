@@ -225,6 +225,46 @@ EXPECTED_METER_SAVED_CONFIG_PACK_CALLER_SEQUENCES = {
         ),
     ),
 }
+EXPECTED_USART_TX_CONFIG_WRITER_SEQUENCES = {
+    "writer_tbb_prologue": (
+        0x08039734,
+        bytes.fromhex(
+            "10 b5 0a 78 06 2a 88 bf 10 bd df e8 02 f0 "
+            "04 98 1c 98 43 98 6c 00"
+        ),
+    ),
+    "meter_case_bitfield_body": (
+        0x080397C8,
+        bytes.fromhex(
+            "02 46 91 f8 01 c0 52 f8 20 3f 0c f0 01 0c "
+            "23 f4 00 73 43 ea 4c 23 13 60 91 f8 01 c0 "
+            "d2 f8 00 e0 cc f3 54 03 63 f3 cb 2e c2 f8 "
+            "00 e0 91 f8 02 c0 50 f8 1c 3f 4f f4 80 74 "
+            "6c f3 01 03 03 60 c9 78 03 68 09 01 5f fa "
+            "81 fc 23 f0 f0 0e 6f f0 0c 03 22 e0"
+        ),
+    ),
+    "writer_common_update_mask_commit": (
+        0x08039860,
+        bytes.fromhex(
+            "4e ea 0c 01 01 60 01 68 19 40 01 60 "
+            "10 68 20 43 10 60 10 bd"
+        ),
+    ),
+}
+EXPECTED_USART_TX_CONFIG_WRITER_CALLER_SEQUENCES = {
+    "tim5_init_config_writer_call": (
+        0x080272CC,
+        bytes.fromhex(
+            "4f f4 80 30 10 90 38 46 12 f0 2e fa "
+            "b8 68 05 21 61 f3 06 10 b8 60"
+        ),
+    ),
+    "tim2_init_config_writer_call": (
+        0x08027338,
+        bytes.fromhex("02 20 c0 f2 01 00 10 90 4f f0 80 40 12 f0 f6 f9"),
+    ),
+}
 EXPECTED_MUX_CALLS_BY_TARGET = {
     "gpio_mux_portc_porte": {
         "target": 0x080018A4,
@@ -776,6 +816,45 @@ def verify_meter_saved_config_pack_caller_sequences() -> dict[str, object]:
     return {"sequences": checked}
 
 
+def verify_usart_tx_config_writer_meter_case_sequences() -> dict[str, object]:
+    """Check the stock `FUN_08039734` TBB writer and its meter-case-shaped arm.
+
+    The guarded `cmd_type == 4` arm writes parameter bits into the config words
+    at `[r0+0x20]` and `[r0+0x1C]`, then ORs update mask `0x0100` through the
+    shared epilogue.  Visible direct callers in master init pass TIM5/TIM2 base
+    addresses, so this is evidence for a separate FPGA/timer-style config
+    bitfield writer shape, not proof of the normal runtime DMM selector/range
+    source.
+    """
+    checked: dict[str, dict[str, str]] = {}
+    for name, (addr, expected) in EXPECTED_USART_TX_CONFIG_WRITER_SEQUENCES.items():
+        actual = read(addr, len(expected))
+        if actual != expected:
+            raise AssertionError(
+                f"{name} {addr:#010x}: expected {expected.hex(' ')}, "
+                f"got {actual.hex(' ')}"
+            )
+        checked[name] = {
+            "addr": f"{addr:#010x}",
+            "bytes": actual.hex(" "),
+        }
+
+    callers: dict[str, dict[str, str]] = {}
+    for name, (addr, expected) in EXPECTED_USART_TX_CONFIG_WRITER_CALLER_SEQUENCES.items():
+        actual = read(addr, len(expected))
+        if actual != expected:
+            raise AssertionError(
+                f"{name} {addr:#010x}: expected {expected.hex(' ')}, "
+                f"got {actual.hex(' ')}"
+            )
+        callers[name] = {
+            "addr": f"{addr:#010x}",
+            "bytes": actual.hex(" "),
+        }
+
+    return {"sequences": checked, "callers": callers}
+
+
 def verify_meter_mux_callsite_sequences() -> dict[str, object]:
     """Check every stock direct BL callsite to the two mux writers.
 
@@ -1004,6 +1083,7 @@ def main() -> None:
     saved_config_unpack = verify_meter_saved_config_unpack_sequences()
     saved_config_pack = verify_meter_saved_config_pack_sequences()
     saved_config_pack_callers = verify_meter_saved_config_pack_caller_sequences()
+    usart_tx_config_writer = verify_usart_tx_config_writer_meter_case_sequences()
     mux_calls = verify_meter_mux_callsite_sequences()
     mux_bodies = verify_meter_mux_writer_body_sequences()
     runtime_mux_writers = verify_runtime_mux_state_writer_sequences()
@@ -1032,6 +1112,10 @@ def main() -> None:
           ", ".join(item["addr"] for item in saved_config_pack["sequences"].values()))
     print("stock meter saved-config pack caller sites: " +
           ", ".join(item["addr"] for item in saved_config_pack_callers["sequences"].values()))
+    print("stock USART TX config writer meter-case sites: " +
+          ", ".join(item["addr"] for item in usart_tx_config_writer["sequences"].values()))
+    print("stock USART TX config writer visible callers: " +
+          ", ".join(item["addr"] for item in usart_tx_config_writer["callers"].values()))
     for name, info in mux_calls.items():
         print(f"stock {name} direct BL sites: " + ", ".join(info["calls"]))
     for name, info in mux_bodies.items():
