@@ -191,6 +191,12 @@ RAM budget for Level 3: a module binary of 8-16 KB code + 8-32 KB working data =
 
 ## Flash Budget (16 MB SPI)
 
+The table below is a product-direction budget, not a verified stock partition
+map. The stock W25Q128 contents include UI assets, system files, screenshots,
+and likely calibration/runtime data. Do not format, erase, or allocate a
+littlefs region until a full W25Q dump and partition manifest prove which
+sectors are free.
+
 | Region | Size | Purpose |
 |--------|------|---------|
 | System graphics | ~2 MB | UI icons, backgrounds (original firmware assets) |
@@ -200,6 +206,17 @@ RAM budget for Level 3: a module binary of 8-16 KB code + 8-32 KB working data =
 | Waveform references | ~2 MB | Saved waveforms, mask templates |
 | Vehicle definitions | ~2 MB | K-Line/OBD databases for automotive modules |
 | **Free** | **~1 MB** | Growth |
+
+Current storage split recommendation:
+
+- Internal MCU flash: keep only boot-critical settings in the reserved 2 KB
+  app settings sector at `0x080FF800`; the HID flasher must continue refusing
+  app images that overlap it.
+- External W25Q128: first add read-only `storage info` / `storage map`
+  diagnostics, then add an OpenScope-owned littlefs partition only after the
+  stock FAT/system ranges and any free high-end range are verified.
+- Stock paths such as `2:/Screenshot file/` and `3:/System file/` stay
+  read-only until the map is proven.
 
 ## Implementation Priority
 

@@ -51,6 +51,7 @@ volatile device_mode_t current_mode = MODE_OSCILLOSCOPE;
 #else
 volatile device_mode_t current_mode = MODE_MULTIMETER;
 #endif
+volatile startup_mode_t startup_mode = STARTUP_SCOPE;
 volatile uint32_t      uptime_seconds = 0;
 volatile int8_t        settings_selected = 0;
 volatile int8_t        settings_depth = 0;
@@ -74,6 +75,94 @@ volatile float         fuse_scan_threshold_mv = 0.5f; /* Pass/fail threshold */
 volatile bool          math_enabled = false;
 volatile uint8_t       math_op = 0;        /* MATH_ADD */
 volatile bool          persist_enabled = false;
+
+#define STARTUP_SETTINGS_ADDR     0x080FF800u
+#define STARTUP_SETTINGS_MAGIC    0x3243534Fu  /* "OSC2", little-endian */
+#define STARTUP_SETTINGS_VERSION  1u
+
+typedef struct {
+    uint32_t magic;
+    uint32_t version;
+    uint32_t mode;
+    uint32_t checksum;
+} startup_settings_record_t;
+
+static uint32_t startup_settings_checksum(uint32_t mode)
+{
+    return STARTUP_SETTINGS_MAGIC ^ STARTUP_SETTINGS_VERSION ^ mode ^ 0x5A5AA5A5u;
+}
+
+static void startup_mode_load(void)
+{
+#ifndef EMULATOR_BUILD
+    const startup_settings_record_t *rec =
+        (const startup_settings_record_t *)STARTUP_SETTINGS_ADDR;
+
+    if (rec->magic == STARTUP_SETTINGS_MAGIC &&
+        rec->version == STARTUP_SETTINGS_VERSION &&
+        rec->mode < STARTUP_COUNT &&
+        rec->checksum == startup_settings_checksum(rec->mode)) {
+        startup_mode = (startup_mode_t)rec->mode;
+    }
+#endif
+}
+
+static void startup_mode_save(void)
+{
+#ifndef EMULATOR_BUILD
+    startup_settings_record_t rec;
+    rec.magic = STARTUP_SETTINGS_MAGIC;
+    rec.version = STARTUP_SETTINGS_VERSION;
+    rec.mode = (uint32_t)startup_mode;
+    rec.checksum = startup_settings_checksum(rec.mode);
+
+    flash_unlock();
+    if (flash_sector_erase(STARTUP_SETTINGS_ADDR) == FLASH_OPERATE_DONE) {
+        const uint32_t *words = (const uint32_t *)&rec;
+        uint32_t addr = STARTUP_SETTINGS_ADDR;
+        for (uint32_t i = 0; i < sizeof(rec) / sizeof(uint32_t); i++, addr += 4) {
+            if (flash_word_program(addr, words[i]) != FLASH_OPERATE_DONE) {
+                break;
+            }
+        }
+    }
+    flash_lock();
+#endif
+}
+
+const char *startup_mode_name(startup_mode_t mode)
+{
+    switch (mode) {
+    case STARTUP_SCOPE: return "Scope";
+    case STARTUP_METER: return "Meter";
+    default:            return "?";
+    }
+}
+
+void startup_mode_set(startup_mode_t mode)
+{
+    if (mode >= STARTUP_COUNT || startup_mode == mode) return;
+    startup_mode = mode;
+    startup_mode_save();
+}
+
+void startup_mode_adjust(int dir)
+{
+    int next = (int)startup_mode + dir;
+    while (next < 0) next += STARTUP_COUNT;
+    startup_mode_set((startup_mode_t)(next % STARTUP_COUNT));
+}
+
+static device_mode_t startup_target_mode(void)
+{
+    switch (startup_mode) {
+    case STARTUP_METER:
+        return MODE_MULTIMETER;
+    case STARTUP_SCOPE:
+    default:
+        return MODE_OSCILLOSCOPE;
+    }
+}
 
 #ifdef FEATURE_FFT
 volatile scope_view_t scope_view = SCOPE_VIEW_TIME;
@@ -130,7 +219,11 @@ static void vDisplayTask(void *pvParameters)
     lcd_clear(COLOR_BLACK);
     draw_status_bar();
     draw_info_bar();
-    draw_scope_screen(0);
+    if (current_mode == MODE_MULTIMETER) {
+        draw_meter_screen();
+    } else {
+        draw_scope_screen(0);
+    }
 
     for (;;) {
         /* Check for commands (non-blocking with short timeout for animation) */
@@ -544,6 +637,8 @@ int main(void)
     /* Initialize meter data parser */
     meter_data_init();
     meter_voltage_wave_init();
+    startup_mode_load();
+    current_mode = startup_target_mode();
 
     /* Factory calibration stub: initializes the flash_fs mutex and
      * attempts to load per-channel cal blobs from SPI flash into the
@@ -595,10 +690,11 @@ int main(void)
      * Priority 2 — above display (1) but below input (4) and FPGA tasks. */
     usb_debug_create_task();
 
-    /* Device boots into oscilloscope mode — send scope FPGA commands and
-     * queue initial SPI3 acquisition triggers. The triggers will be waiting
-     * in the queue when vTaskStartScheduler() kicks off the acq task. */
-    fpga_enter_scope_mode();
+    if (current_mode == MODE_MULTIMETER) {
+        fpga_set_meter_mode(meter_submode);
+    } else {
+        fpga_enter_scope_mode();
+    }
 #endif
 
     /* Create 1-second timer for uptime/status updates */

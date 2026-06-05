@@ -173,6 +173,25 @@ static int test_flat_dc_has_no_fake_frequency(void)
     return 1;
 }
 
+static int test_flat_ff_rejects_frequency_hint(void)
+{
+    meter_voltage_wave_reset();
+    for (uint16_t i = 0; i < 200; i++) {
+        meter_voltage_wave_add_sample(0xFF);
+    }
+
+    meter_voltage_wave_snapshot_t snap;
+    meter_voltage_wave_snapshot(&snap, 300, 50.0f);
+
+    ASSERT(snap.count > 2);
+    ASSERT(snap.raw_min == 0xFF && snap.raw_max == 0xFF);
+    ASSERT(snap.peak_to_peak_raw == 0);
+    ASSERT(snap.rms_raw == 0.0f);
+    ASSERT(snap.freq_hz == 0.0f);
+    ASSERT(!snap.synced);
+    return 1;
+}
+
 static int test_chopped_wave_preserves_envelope(void)
 {
     meter_voltage_wave_reset();
@@ -331,6 +350,7 @@ int main(void)
     TEST(dmm_rms_scale_estimates_sine_peak_to_peak);
     TEST(sync_hint_stabilizes_start);
     TEST(flat_dc_has_no_fake_frequency);
+    TEST(flat_ff_rejects_frequency_hint);
     TEST(chopped_wave_preserves_envelope);
     TEST(stepped_inverter_keeps_square_edges);
     TEST(noisy_sine_envelope_spreads);

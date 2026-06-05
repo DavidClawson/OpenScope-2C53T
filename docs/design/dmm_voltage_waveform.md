@@ -32,8 +32,22 @@ then this feature cannot truthfully draw multi-hertz waveform shape from the
 DMM path and must remain blocked rather than falling back to CH1/CH2 scope
 inputs.
 
-The USB debug shell command `meter wave` reports the current waveform buffer
-stats and the decoded DMM reading for this validation pass.
+The USB debug shell commands used for validation are:
+
+- `meter dump [delay_ms]`: parsed DMM/UI state, raw 12-byte frame, decoded BCD,
+  decimal position, unit, frame[6] history, companion `aux_freq_i10`, and
+  waveform sample count.
+- `meter stream [count] [delay_ms]`: compact decoded-frame stream for watching
+  range/decimal instability without mixing concurrent serial readers.
+- `meter wave`: waveform buffer stats, SPI3 meter-ADC diagnostics, and the
+  decoded DMM reading.
+- `meter wave path [direct|preacq]` and `meter wave selector [auto|0|1]`:
+  explicit diagnostics for the candidate DMM waveform SPI path.
+- `mode meter [submode] [layout]`: switch the UI and FPGA frontend to a DMM
+  submode from USB before capturing evidence.
+
+The host helper `scripts/openscope_live_debug.py` can run those commands once
+or poll them into a log without needing a terminal emulator.
 
 The module has a narrow scaling abstraction for v1 calibration:
 `meter_voltage_wave_scale_from_dmm_rms()` derives raw-count-to-volt scaling from
@@ -50,8 +64,9 @@ draws a compact waveform panel below them:
 - A faint envelope shows the recent raw range so clipped or noisy shapes do not
   disappear when the synced trace window is short.
 - Frequency is estimated from zero crossings when a stable AC shape is present.
-  The stock voltage-mode parser does not currently expose a separate decoded Hz
-  companion reading, so this is the active sync path for v1.
+  In the live AC mains frame shape captured on 2026-06-05, bytes `[10..11]`
+  also alternate around `0x0031/0x0032`, which is exposed as a narrow empirical
+  `aux_freq_hz` hint for sync. This is not yet stock-proven metadata.
 - AC voltage mode shows an approximate `P-P~` value by scaling the raw peak span
   against the decoded DMM RMS reading.
 - DC voltage mode labels the panel as ripple shape; the numeric DC reading
@@ -59,3 +74,40 @@ draws a compact waveform panel below them:
 
 This feature is a visual aid for ripple and waveform shape on the DMM voltage
 jacks. It is not a calibrated oscilloscope replacement.
+
+## 2026-06-05 Live Status
+
+Official V1.2.0 firmware was downloaded from FNIRSI's published Shopify CDN
+bundle as `APP_2C53T_V1.2.0_251015.bin`:
+
+- size: `751232` bytes
+- sha256: `a17c5c35c97bb898f15672a1747bc1041d8ed507c16999ddba0d1e4e2ec0c760`
+
+`analyzeHeadless` was not available on the bench host, so this pass used the
+existing Ghidra decompile plus fresh `arm-none-eabi-objdump` disassembly of the
+downloaded binary. The stock ACV case in `meter_mode_handler` branches from the
+TBB table to `0x08037228` and reads `frame[7]` bit 0 to select the ACV decimal
+state. The pass did not prove that ACV frames use `[10..11]` as a companion
+frequency field; stock frequency-unit paths exist elsewhere in the DMM FSM, but
+that is different evidence.
+
+Current custom firmware now ports the stock DMM display-state machine into
+`meter_data.c` and translates its display format/unit outputs into the local
+renderer fields. For ACV, this means it uses the stock `frame[7]` format
+selector instead of using `extra` as a range hint:
+
+- `frame[7] bit0 set` maps to stock ACV format index `0`, rendered locally as
+  `X.XXX V`.
+- `frame[7] bit0 clear` maps to stock ACV format index `1`, rendered locally
+  as `XXX.X V`.
+
+After flashing the full-FSM port, the live unit produced stable
+`227.5..227.8 V` readings with `aux_freq_i10=490`, matching Georgian mains at
+about 50 Hz. The `aux_freq_i10` value is still empirical live metadata from
+`[10..11]`; it is not used to select the voltage range.
+
+The waveform source is still not solved. A post-flash sweep across
+`direct/preacq` SPI paths and selector `0/1` showed the candidate sample stream
+advancing at about 1 kHz but every sample remained `0xFF`, with `p2p=0` and no
+usable DMM-path shape. That blocks claiming the voltage waveform overlay works
+on the real COM + V/Ohm/C jacks.

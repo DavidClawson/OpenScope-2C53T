@@ -24,6 +24,12 @@ typedef enum {
     MODE_COUNT
 } device_mode_t;
 
+typedef enum {
+    STARTUP_SCOPE = 0,
+    STARTUP_METER,
+    STARTUP_COUNT
+} startup_mode_t;
+
 /* Display commands sent via queue */
 typedef enum {
     DCMD_DRAW_SPLASH = 0,
@@ -74,6 +80,7 @@ typedef enum {
  * ═══════════════════════════════════════════════════════════════════ */
 
 extern volatile device_mode_t current_mode;
+extern volatile startup_mode_t startup_mode;
 extern volatile uint32_t      uptime_seconds;
 extern volatile int8_t        settings_selected;  /* Selected menu item index */
 extern volatile int8_t        settings_depth;      /* 0=top, 1=sub-menu, 2=about, 3=osc-math, 4=component */
@@ -81,6 +88,9 @@ extern volatile int8_t        settings_sub_selected; /* Sub-menu selection */
 extern volatile uint8_t       active_channel;      /* 0=CH1, 1=CH2 (for scope adjustments) */
 extern volatile uint8_t       meter_submode;       /* 0-9: current meter sub-mode */
 extern volatile uint8_t       meter_layout;        /* 0=full, 1=chart, 2=stats, 3=fuse */
+extern volatile uint32_t      meter_screen_draw_count; /* Incremented by draw_meter_screen() */
+extern volatile uint8_t       meter_screen_last_live;  /* Last draw used same-submode data */
+extern volatile uint8_t       meter_screen_last_continuity_flash;
 extern volatile bool          meter_rel_enabled;   /* Relative/delta mode */
 extern volatile float         meter_rel_reference; /* Zero reference value */
 extern volatile bool          meter_hold_enabled;  /* Auto-hold mode */
@@ -159,6 +169,9 @@ void fuse_prev_rating(void);
 void fuse_next_type(void);
 void fuse_prev_type(void);
 const char *meter_submode_name(uint8_t submode);
+const char *startup_mode_name(startup_mode_t mode);
+void startup_mode_set(startup_mode_t mode);
+void startup_mode_adjust(int dir);
 
 /* siggen_ui.c */
 void draw_siggen_screen(uint32_t frame);

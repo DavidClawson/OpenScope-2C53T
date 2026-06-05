@@ -140,8 +140,9 @@ static void draw_settings_top(void)
         if (i == 4) value = ">";        /* Math/Persist: sub-menu */
         if (i == 5) value = ">";        /* Component Tester */
         if (i == 6) value = ">";        /* Bode Plot */
+        if (i == 7) value = startup_mode_name(startup_mode);
         if (i == 8) value = ">";        /* About: has detail screen */
-        if (i == 9) value = "DFU";      /* Firmware Update: reboot to bootloader */
+        if (i == 10) value = "DFU";     /* Firmware Update: reboot to bootloader */
 
         draw_menu_item(i, scroll, settings_selected, settings_items[i], value, th);
     }

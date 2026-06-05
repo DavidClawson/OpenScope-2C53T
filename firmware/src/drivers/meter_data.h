@@ -5,10 +5,8 @@
  * The FPGA sends 12-byte data frames (0x5A 0xA5 header + 10 data bytes)
  * containing BCD-encoded measurement digits and status flags.
  *
- * Based on RE analysis:
- *   - reverse_engineering/analysis_v120/FPGA_TASK_ANALYSIS.md
- *   - Functions: meter_data_processor (0x08036AC0) and
- *                meter_mode_handler   (0x080371B0)
+ * Based on the stock DMM frame parser and display formatter documented under
+ * reverse_engineering/analysis_v120/.
  */
 
 #ifndef METER_DATA_H
@@ -59,13 +57,13 @@ typedef struct {
      */
     const char *unit_suffix;
 
-    /* Unit variant (0..2) within the current submode — mirrors the
-     * stock meter_mode_handler's DAT_2000102e. Used to select between
-     * e.g. mA / A / uA in the same DCA mode. */
+    /* Unit variant (0..2) within the current submode. Used to select
+     * between e.g. mA / A / uA in the same DCA mode. */
     uint8_t  unit_variant;
 
     /* Bar graph fraction (0.0 - 1.0) */
     float    bar_fraction;
+    float    aux_freq_hz;        /* Companion frequency from frame extra, if known */
 
     /* Classification */
     meter_result_class_t result_class;
@@ -95,6 +93,25 @@ typedef struct {
 
 } meter_reading_t;
 
+typedef struct {
+    uint32_t update_count;
+    uint8_t  submode;
+    uint8_t  result_class;
+    uint8_t  decimal_pos;
+    uint8_t  unit_variant;
+    uint8_t  status;
+    uint8_t  flags;
+    uint8_t  meas_flags;
+    uint8_t  additional_status;
+    uint16_t extra;
+    uint16_t aux_freq_hz_i10;
+    int      raw_bcd;
+    char     display_str[16];
+    const char *unit_suffix;
+    uint8_t  frame[12];
+    uint8_t  raw_digits[4];
+} meter_frame_history_t;
+
 /* Global meter reading (defined in meter_data.c) */
 extern meter_reading_t meter_reading;
 
@@ -105,6 +122,11 @@ extern meter_reading_t meter_reading;
 #define METER_F6_HISTORY_LEN 8
 extern uint8_t meter_f6_history[METER_F6_HISTORY_LEN];
 extern uint8_t meter_f6_history_count;
+
+#define METER_FRAME_HISTORY_LEN 8
+extern meter_frame_history_t meter_frame_history[METER_FRAME_HISTORY_LEN];
+extern uint8_t meter_frame_history_count;
+extern uint8_t meter_frame_history_head;
 
 /* ═══════════════════════════════════════════════════════════════════
  * API

@@ -140,7 +140,7 @@ Sine -> Square -> Triangle -> Sawtooth -> Full-Rect Sine -> Half-Rect Sine -> Pu
 
 ## Settings Mode
 
-### Top-Level Menu (9 items)
+### Top-Level Menu
 
 ```
 > Oscilloscope Settings    [sub-menu]
@@ -149,8 +149,11 @@ Sine -> Square -> Triangle -> Sawtooth -> Full-Rect Sine -> Half-Rect Sine -> Pu
   Display Mode             [cycles theme]
   Math / Persist           [sub-menu]
   Component Tester         [sub-menu]
+  Bode Plot                [sub-menu]
   Startup on Boot
   About                    [info screen]
+  FPGA SPI Scanner
+  Firmware Update          [USB HID bootloader]
   Factory Reset
 ```
 
@@ -168,6 +171,16 @@ Sine -> Square -> Triangle -> Sawtooth -> Full-Rect Sine -> Half-Rect Sine -> Pu
 ```
 Dark Blue -> Classic Green -> High Contrast -> Night Red -> Dark Blue
 ```
+
+### Startup on Boot (OK/LEFT/RIGHT to cycle)
+
+```
+Scope <-> Meter
+```
+
+`Meter` starts the application in Multimeter mode and configures the DMM
+frontend immediately after FPGA initialization. `Scope` starts in the normal
+oscilloscope mode.
 
 ### Oscilloscope Settings Sub-menu (depth 1)
 

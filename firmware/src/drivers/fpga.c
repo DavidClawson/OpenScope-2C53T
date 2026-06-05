@@ -65,6 +65,20 @@
 
 fpga_state_t fpga;
 
+volatile bool     fpga_meter_adc_use_preacq;
+volatile int8_t   fpga_meter_adc_selector_override = -1;
+volatile uint32_t fpga_meter_adc_enqueue_attempts;
+volatile uint32_t fpga_meter_adc_enqueue_success;
+volatile uint32_t fpga_meter_adc_enqueue_drops;
+volatile uint32_t fpga_meter_adc_samples;
+volatile uint32_t fpga_meter_adc_ff_samples;
+volatile uint32_t fpga_meter_adc_zero_samples;
+volatile uint8_t  fpga_meter_adc_last_preacq;
+volatile uint8_t  fpga_meter_adc_last_selector;
+volatile uint8_t  fpga_meter_adc_last_sample;
+volatile uint8_t  fpga_meter_adc_min_sample = 255;
+volatile uint8_t  fpga_meter_adc_max_sample;
+
 /* FreeRTOS handles */
 static QueueHandle_t     usart_tx_queue  = NULL;  /* 2-byte items: cmd_hi|cmd_lo */
 static QueueHandle_t     spi3_acq_queue  = NULL;  /* 1-byte trigger mode */
@@ -77,6 +91,21 @@ static TaskHandle_t      rx_task_handle  = NULL;
 /* Track whether we've received at least one valid acquisition */
 static volatile bool data_ready = false;
 static volatile bool scope_reinit_pending = false;
+
+void fpga_meter_adc_diag_reset(void)
+{
+    fpga_meter_adc_enqueue_attempts = 0;
+    fpga_meter_adc_enqueue_success = 0;
+    fpga_meter_adc_enqueue_drops = 0;
+    fpga_meter_adc_samples = 0;
+    fpga_meter_adc_ff_samples = 0;
+    fpga_meter_adc_zero_samples = 0;
+    fpga_meter_adc_last_preacq = 0;
+    fpga_meter_adc_last_selector = 0;
+    fpga_meter_adc_last_sample = 0;
+    fpga_meter_adc_min_sample = 255;
+    fpga_meter_adc_max_sample = 0;
+}
 
 /* ═══════════════════════════════════════════════════════════════════
  * Stock-State Bench Shadow
@@ -1501,6 +1530,11 @@ static void fpga_meter_poll_task(void *pv)
 
 static uint8_t fpga_meter_adc_select_byte(void)
 {
+    if (fpga_meter_adc_selector_override == 0 ||
+        fpga_meter_adc_selector_override == 1) {
+        return (uint8_t)fpga_meter_adc_selector_override;
+    }
+
     /* Stock case 5 sends ms[0x16], annotated as active_channel in the
      * recovered scope state. In meter voltage mode this is only the command
      * selector byte for METER_ADC_READ; the analog source remains the DMM
@@ -1556,7 +1590,12 @@ static void fpga_meter_adc_sampler_task(void *pv)
             was_voltage_mode = true;
         }
 
-        (void)xQueueSend(spi3_acq_queue, &trigger, 0);
+        fpga_meter_adc_enqueue_attempts++;
+        if (xQueueSend(spi3_acq_queue, &trigger, 0) == pdTRUE) {
+            fpga_meter_adc_enqueue_success++;
+        } else {
+            fpga_meter_adc_enqueue_drops++;
+        }
     }
 }
 
@@ -1601,21 +1640,33 @@ static void fpga_acquisition_task(void *pv)
 
         if (trigger_byte == (FPGA_ACQ_METER_ADC + 1)) {
             uint8_t sample;
+            uint8_t selector = fpga_meter_adc_select_byte();
+            uint8_t preacq = fpga_preacq_command_byte();
 
             fpga.spi3_probing = true;
+            fpga_meter_adc_last_preacq = preacq;
+            fpga_meter_adc_last_selector = selector;
+
+            if (fpga_meter_adc_use_preacq) {
+                SPI3_CS_ASSERT();
+                spi3_xfer(preacq);
+                SPI3_CS_DEASSERT();
+
+                for (volatile int d = 0; d < 100; d++) {}
+            }
 
             SPI3_CS_ASSERT();
-            spi3_xfer(fpga_preacq_command_byte());
-            SPI3_CS_DEASSERT();
-
-            for (volatile int d = 0; d < 100; d++) {}
-
-            SPI3_CS_ASSERT();
-            /* Stock case 5 is a single-byte DMM ADC read after pre-acq arm. */
-            sample = spi3_xfer(fpga_meter_adc_select_byte());
+            /* Stock case 5 is a single-byte DMM ADC read. */
+            sample = spi3_xfer(selector);
             SPI3_CS_DEASSERT();
 
             meter_voltage_wave_add_sample(sample);
+            fpga_meter_adc_last_sample = sample;
+            fpga_meter_adc_samples++;
+            if (sample == 0xFF) fpga_meter_adc_ff_samples++;
+            if (sample == 0x00) fpga_meter_adc_zero_samples++;
+            if (sample < fpga_meter_adc_min_sample) fpga_meter_adc_min_sample = sample;
+            if (sample > fpga_meter_adc_max_sample) fpga_meter_adc_max_sample = sample;
             fpga.spi3_probing = false;
             continue;
         }

@@ -11,6 +11,7 @@ CP      = $(PREFIX)objcopy
 SZ      = $(PREFIX)size
 OBJDUMP = $(PREFIX)objdump
 NANO_SPECS := $(shell f="$(shell $(CC) -print-file-name=nano.specs 2>/dev/null)"; test "$$f" != "nano.specs" -a -f "$$f" && printf '%s' '-specs=nano.specs')
+HOST_CC ?= gcc
 
 ######################################################################
 # Project paths
@@ -400,7 +401,21 @@ soak-test: emu
 soak-quick: emu
 	python3 ../scripts/soak_test.py --no-build --duration 30 --seed $(SOAK_SEED) --verbose
 
-.PHONY: all clean disasm size renode soak-test soak-quick flash flash-dfu bootloader flash-bootloader flash-all guest guest-warmtest guest-usart-silent emu
+$(BUILD_DIR)/test_meter_data: tests/test_meter_data.c src/drivers/meter_data.c src/drivers/meter_data.h | $(BUILD_DIR)
+	$(HOST_CC) -std=gnu11 -Wall -Wextra -Isrc/drivers $< src/drivers/meter_data.c -lm -o $@
+
+test-meter-data: $(BUILD_DIR)/test_meter_data
+	$<
+
+$(BUILD_DIR)/test_meter_voltage_wave: tests/test_meter_voltage_wave.c src/ui/meter_voltage_wave.c src/ui/meter_voltage_wave.h | $(BUILD_DIR)
+	$(HOST_CC) -std=gnu11 -Wall -Wextra -Isrc/ui $< src/ui/meter_voltage_wave.c -lm -o $@
+
+test-meter-voltage-wave: $(BUILD_DIR)/test_meter_voltage_wave
+	$<
+
+test-meter: test-meter-data test-meter-voltage-wave
+
+.PHONY: all clean disasm size renode soak-test soak-quick flash flash-dfu bootloader flash-bootloader flash-all guest guest-warmtest guest-usart-silent emu test-meter-data test-meter-voltage-wave test-meter
 
 # Experiment E (2026-07-27): park in fpga_init at the exact config-enable instant
 # (prelude 05/12 sent, CS LOW, 0x15 not yet clocked) so SWD can dump peripheral

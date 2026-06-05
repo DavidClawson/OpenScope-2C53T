@@ -100,6 +100,9 @@ void input_handle_settings_ok(void)
         case 6: /* Bode Plot -- enter bode screen */
             settings_depth = 6;
             break;
+        case 7: /* Startup on Boot -- cycle target mode */
+            startup_mode_adjust(1);
+            break;
         case 8: /* About -- display info screen */
             settings_depth = 2;
             break;
@@ -547,8 +550,12 @@ uint8_t input_handle_button(button_id_t button, QueueHandle_t dq)
     /* -- LEFT / RIGHT --------------------------------------------- */
 
     case BTN_LEFT:
-        if (current_mode == MODE_SETTINGS && settings_depth == 0 && settings_selected == 3) {
-            theme_cycle_reverse();
+        if (current_mode == MODE_SETTINGS && settings_depth == 0 &&
+            (settings_selected == 3 || settings_selected == 7)) {
+            if (settings_selected == 3)
+                theme_cycle_reverse();
+            else
+                startup_mode_adjust(-1);
             cmd = DCMD_DRAW_SETTINGS;
             send_cmd(dq, cmd);
         }
@@ -603,8 +610,12 @@ uint8_t input_handle_button(button_id_t button, QueueHandle_t dq)
         break;
 
     case BTN_RIGHT:
-        if (current_mode == MODE_SETTINGS && settings_depth == 0 && settings_selected == 3) {
-            theme_cycle();
+        if (current_mode == MODE_SETTINGS && settings_depth == 0 &&
+            (settings_selected == 3 || settings_selected == 7)) {
+            if (settings_selected == 3)
+                theme_cycle();
+            else
+                startup_mode_adjust(1);
             cmd = DCMD_DRAW_SETTINGS;
             send_cmd(dq, cmd);
         }

@@ -133,6 +133,114 @@ static inline void lcd_bus_delay(void) {
     while (i--) __asm volatile("nop");
 }
 
+static uint8_t lcd_shadow[LCD_SHADOW_HEIGHT][LCD_SHADOW_STRIDE];
+static uint16_t lcd_shadow_page;
+static uint16_t lcd_shadow_x;
+static uint16_t lcd_shadow_y;
+static uint16_t lcd_shadow_w;
+static uint16_t lcd_shadow_h;
+static uint32_t lcd_shadow_pos;
+
+static const uint16_t lcd_shadow_palette[16] = {
+    COLOR_BLACK,
+    COLOR_WHITE,
+    COLOR_RED,
+    COLOR_GREEN,
+    COLOR_BLUE,
+    COLOR_YELLOW,
+    COLOR_CYAN,
+    COLOR_MAGENTA,
+    COLOR_DARK_GRAY,
+    COLOR_GRAY,
+    COLOR_ORANGE,
+    COLOR_UI_TEXT,
+    COLOR_SELECTED_BG,
+    COLOR_GRID,
+    COLOR_GRID_CENTER,
+    COLOR_UI_BG,
+};
+
+static uint8_t lcd_shadow_palette_index(uint16_t color)
+{
+    uint8_t best = 0;
+    uint32_t best_dist = 0xFFFFFFFFu;
+    int32_t r = (int32_t)((color >> 11) & 0x1F);
+    int32_t g = (int32_t)((color >> 5) & 0x3F);
+    int32_t b = (int32_t)(color & 0x1F);
+
+    for (uint8_t i = 0; i < 16; i++) {
+        uint16_t p = lcd_shadow_palette[i];
+        int32_t pr = (int32_t)((p >> 11) & 0x1F);
+        int32_t pg = (int32_t)((p >> 5) & 0x3F);
+        int32_t pb = (int32_t)(p & 0x1F);
+        int32_t dr = r - pr;
+        int32_t dg = g - pg;
+        int32_t db = b - pb;
+        uint32_t dist = (uint32_t)(dr * dr * 4 + dg * dg + db * db * 4);
+
+        if (dist < best_dist) {
+            best_dist = dist;
+            best = i;
+            if (dist == 0) break;
+        }
+    }
+    return best;
+}
+
+static void lcd_shadow_write_pixel(uint16_t color)
+{
+    if (lcd_shadow_w == 0 || lcd_shadow_h == 0) return;
+    if (lcd_shadow_pos >= (uint32_t)lcd_shadow_w * lcd_shadow_h) return;
+
+    uint16_t x = lcd_shadow_x + (uint16_t)(lcd_shadow_pos % lcd_shadow_w);
+    uint16_t y = lcd_shadow_y + (uint16_t)(lcd_shadow_pos / lcd_shadow_w);
+    lcd_shadow_pos++;
+
+    if (x >= LCD_WIDTH || y < lcd_shadow_page ||
+        y >= (uint16_t)(lcd_shadow_page + LCD_SHADOW_HEIGHT)) {
+        return;
+    }
+
+    uint16_t shadow_y = (uint16_t)(y - lcd_shadow_page);
+    uint8_t idx = lcd_shadow_palette_index(color);
+    uint8_t *cell = &lcd_shadow[shadow_y][x >> 1];
+
+    if ((x & 1U) == 0) {
+        *cell = (uint8_t)((*cell & 0x0FU) | (idx << 4));
+    } else {
+        *cell = (uint8_t)((*cell & 0xF0U) | idx);
+    }
+}
+
+const uint8_t *lcd_shadow_bits(void)
+{
+    return &lcd_shadow[0][0];
+}
+
+void lcd_shadow_clear(void)
+{
+    for (uint32_t y = 0; y < LCD_SHADOW_HEIGHT; y++) {
+        for (uint32_t x = 0; x < LCD_SHADOW_STRIDE; x++) {
+            lcd_shadow[y][x] = 0;
+        }
+    }
+}
+
+void lcd_shadow_set_page(uint16_t y)
+{
+    if (y >= LCD_HEIGHT) y = 0;
+    if (y + LCD_SHADOW_HEIGHT > LCD_HEIGHT) {
+        y = LCD_HEIGHT - LCD_SHADOW_HEIGHT;
+    }
+    lcd_shadow_page = y;
+    lcd_shadow_clear();
+}
+
+uint16_t lcd_shadow_page_y(void)
+{
+    return lcd_shadow_page;
+}
+
 void lcd_write_cmd(uint8_t cmd)
 {
     *LCD_CMD_ADDR = (uint16_t)cmd;
@@ -142,6 +250,7 @@ void lcd_write_cmd(uint8_t cmd)
 void lcd_write_data(uint16_t data)
 {
     *LCD_DATA_ADDR = data;
+    lcd_shadow_write_pixel(data);
 }
 
 void lcd_write_data8(uint8_t data)
@@ -450,6 +559,12 @@ void lcd_set_window(uint16_t x, uint16_t y, uint16_t w, uint16_t h)
 
     /* Memory Write (0x2C): subsequent data writes go to framebuffer */
     lcd_write_cmd(ST7789_RAMWR);
+
+    lcd_shadow_x = x;
+    lcd_shadow_y = y;
+    lcd_shadow_w = w;
+    lcd_shadow_h = h;
+    lcd_shadow_pos = 0;
 }
 
 /* ========================================================================

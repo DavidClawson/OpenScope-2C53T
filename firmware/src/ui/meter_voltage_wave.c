@@ -174,7 +174,9 @@ void meter_voltage_wave_snapshot(meter_voltage_wave_snapshot_t *out,
         render_start = ring_index_from_oldest(oldest, available - render_count);
     }
 
-    uint16_t range = (uint16_t)raw_max - (uint16_t)raw_min;
+    uint16_t peak_to_peak = (uint16_t)raw_max - (uint16_t)raw_min;
+    bool has_signal = peak_to_peak >= 4;
+    uint16_t range = peak_to_peak;
     if (range < 4) range = 4;
 
     for (uint16_t i = 0; i < render_points; i++) {
@@ -206,15 +208,17 @@ void meter_voltage_wave_snapshot(meter_voltage_wave_snapshot_t *out,
     out->count = render_count;
     out->raw_min = raw_min;
     out->raw_max = raw_max;
-    out->peak_to_peak_raw = (uint16_t)raw_max - (uint16_t)raw_min;
+    out->peak_to_peak_raw = peak_to_peak;
     out->raw_last = snapshot_samples[(snapshot_write_pos + METER_VOLTAGE_WAVE_CAPACITY - 1)
                                      % METER_VOLTAGE_WAVE_CAPACITY];
     out->mean_raw = mean;
     out->rms_raw = sqrtf(sum_sq / (float)available);
-    out->freq_hz = (freq_hint_hz >= 10.0f) ? freq_hint_hz
-                                           : estimate_frequency(snapshot_samples, oldest,
-                                                                available, mean);
-    out->synced = (sync_offset != 0 || out->freq_hz >= 10.0f);
+    if (has_signal) {
+        out->freq_hz = (freq_hint_hz >= 10.0f) ? freq_hint_hz
+                                               : estimate_frequency(snapshot_samples, oldest,
+                                                                    available, mean);
+        out->synced = (sync_offset != 0 || out->freq_hz >= 10.0f);
+    }
 }
 
 meter_voltage_wave_scale_t

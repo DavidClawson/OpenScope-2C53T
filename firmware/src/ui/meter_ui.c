@@ -59,9 +59,9 @@ typedef struct {
 
 static const meter_mode_info_t meter_modes[METER_SUBMODE_COUNT] = {
     /* 0: DC Voltage */
-    { "DC Voltage",  "V",    "DC", "Auto 20V",    "13.82",  0.69f,  20.0f,   "20V",   ""  },
+    { "DC Voltage",  "V",    "DC", "Auto DCV",    "13.82",  0.69f,  200.0f,  "Auto",  ""  },
     /* 1: AC Voltage */
-    { "AC Voltage",  "V",    "AC", "Auto 20V",    "120.3",  0.60f,  200.0f,  "200V",  "~" },
+    { "AC Voltage",  "V",    "AC", "Auto ACV",    "120.3",  0.60f,  600.0f,  "Auto",  "~" },
     /* 2: DC Current (small) */
     { "DC mA",       "mA",   "DC", "Auto 200mA",  "47.83",  0.24f,  200.0f,  "200mA", ""  },
     /* 3: DC Current (large) */
@@ -97,6 +97,10 @@ static uint8_t meter_stats_valid;
  * the low-Ω band-interpretation reverse engineering session
  * (2026-04-04) — see meter_data.c for the band override story. */
 static bool meter_debug_overlay = false;
+
+volatile uint32_t meter_screen_draw_count;
+volatile uint8_t  meter_screen_last_live;
+volatile uint8_t  meter_screen_last_continuity_flash;
 
 void meter_toggle_debug_overlay(void)
 {
@@ -304,9 +308,7 @@ static void draw_voltage_wave_panel(uint16_t x, uint16_t y,
     static meter_voltage_wave_snapshot_t snap;
     char buf[16];
 
-    /* Voltage-mode USART frames do not expose a companion Hz estimate yet.
-     * Until that exists, the waveform module derives sync from raw samples. */
-    meter_voltage_wave_snapshot(&snap, w, 0.0f);
+    meter_voltage_wave_snapshot(&snap, w, meter_reading.aux_freq_hz);
 
     lcd_fill_rect(x - 1, y - 1, w + 2, 1, th->grid_center);
     lcd_fill_rect(x - 1, y + h, w + 2, 1, th->grid_center);
@@ -407,6 +409,28 @@ static const char *live_unit(const meter_mode_info_t *m, uint8_t mode)
     return m->unit;
 }
 
+static bool live_voltage_auto_ac(uint8_t mode)
+{
+    return mode == 0 &&
+           live_reading_for_mode(mode) &&
+           meter_reading.aux_freq_hz >= 1.0f;
+}
+
+static const char *live_ac_dc(const meter_mode_info_t *m, uint8_t mode)
+{
+    return live_voltage_auto_ac(mode) ? "AC" : m->ac_dc;
+}
+
+static const char *live_symbol(const meter_mode_info_t *m, uint8_t mode)
+{
+    return live_voltage_auto_ac(mode) ? "~" : m->symbol;
+}
+
+static const char *live_range_label(const meter_mode_info_t *m, uint8_t mode)
+{
+    return live_voltage_auto_ac(mode) ? "Auto ACV" : m->range_label;
+}
+
 /* Draw the main reading (shared by all layouts)
  * value_str: the string to display (real or demo) */
 static void draw_main_reading(const meter_mode_info_t *m, const theme_t *th,
@@ -454,11 +478,13 @@ static void draw_main_reading(const meter_mode_info_t *m, const theme_t *th,
                      compact ? &font_medium : &font_large);
 
     /* AC/DC indicator */
-    if (m->ac_dc[0] != '\0') {
+    const char *ac_dc = live_ac_dc(m, mode);
+    const char *symbol = live_symbol(m, mode);
+    if (ac_dc[0] != '\0') {
         uint16_t ac_y = compact ? y + 18 : y + 30;
-        font_draw_string(UNIT_X, ac_y, m->ac_dc,
+        font_draw_string(UNIT_X, ac_y, ac_dc,
                          th->text_secondary, th->background, &font_small);
-        if (m->symbol[0] == '~') {
+        if (symbol[0] == '~') {
             font_draw_string(UNIT_X + 20, ac_y, "~",
                              th->ch1, th->background, &font_small);
         }
@@ -529,7 +555,7 @@ static void draw_meter_full(const meter_mode_info_t *m, uint8_t mode,
     if (mode == 0 || mode == 1) {
         draw_voltage_wave_panel(10, 118, 300, 74, mode, current_val,
                                 unit_str, th);
-        font_draw_string(200, SECONDARY_Y, m->range_label,
+        font_draw_string(200, SECONDARY_Y, live_range_label(m, mode),
                          th->ch1, th->background, &font_small);
         return;
     }
@@ -577,7 +603,7 @@ static void draw_meter_full(const meter_mode_info_t *m, uint8_t mode,
     /* Range info */
     font_draw_string(200, SECONDARY_Y, "Range:",
                      th->text_secondary, th->background, &font_small);
-    font_draw_string(200, SECONDARY_Y + 16, m->range_label,
+    font_draw_string(200, SECONDARY_Y + 16, live_range_label(m, mode),
                      th->ch1, th->background, &font_medium);
 
     /* Sub-mode index indicator */
@@ -614,7 +640,7 @@ static void draw_meter_chart(const meter_mode_info_t *m, uint8_t mode,
     draw_main_reading(m, th, mode, METER_TOP + 2, true, value_str);
 
     /* Current value + unit below reading */
-    font_draw_string(16, METER_TOP + 40, m->range_label,
+    font_draw_string(16, METER_TOP + 40, live_range_label(m, mode),
                      th->text_secondary, th->background, &font_small);
 
     /* Min/Max labels on right side of reading area */
@@ -907,7 +933,10 @@ void draw_meter_screen(void)
     const char *value_str;
     float bar_pct;
 
+    meter_screen_draw_count++;
+
     bool has_live_reading = live_reading_for_mode(mode);
+    meter_screen_last_live = has_live_reading ? 1U : 0U;
     if (has_live_reading) {
         current_val = meter_reading.value;
         value_str = meter_reading.display_str;
@@ -946,6 +975,7 @@ void draw_meter_screen(void)
                            ((current_val > 0.01f && current_val < 50.0f) ||
                             meter_reading.continuity_beep);
     }
+    meter_screen_last_continuity_flash = continuity_flash ? 1U : 0U;
 
     /* Clear content area (green flash for continuity, normal otherwise) */
     uint16_t clear_bg = continuity_flash ? th->success : th->background;

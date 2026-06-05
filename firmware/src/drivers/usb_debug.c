@@ -36,6 +36,7 @@
 #endif
 #include "scope_trigger.h"
 #include "fpga.h"
+#include "lcd.h"
 #include "meter_data.h"
 #include "ui.h"
 #include "../ui/scope_state.h"
@@ -426,6 +427,8 @@ static void cmd_help(void)
         "flash wtest <addr> CONFIRM      Non-destructive write-primitive self-test (blank 4KB sector)\r\n"
         "trig raw <0-4095>               Write DAC1 (PA4) directly + sw trigger\r\n"
         "trig <range> <level>            Scope trigger DAC: range 0-9, level -100..100\r\n"
+        "screen dump [shadow] [x y w h]  Dump 4-bit software LCD shadow\r\n"
+        "screen shadow page [y]          Set/clear 16-row shadow capture page\r\n"
         "fpga cmd <hi> <lo>              Send FPGA command bytes\r\n"
         "  e.g.: fpga cmd 0 9   (sends 0x00 0x09)\r\n"
         "        fpga cmd 0x0509 (sends 0x05 0x09)\r\n"
@@ -459,7 +462,16 @@ static void cmd_help(void)
         "fpga scope entry <8 bytes>      Reset + send 0x01,0B..11 params\r\n"
         "fpga scope timing <5 bytes>     Send 0x20,0x21,0x26..0x28 params\r\n"
         "fpga scope trig <4 bytes>       Send 0x07/0x0A,0x16..0x19\r\n"
+        "mode meter [submode] [layout]   Switch UI + FPGA to DMM frontend\r\n"
+        "mode scope                      Switch UI + FPGA to scope frontend\r\n"
+        "mode startup [scope|meter]      Get/set Settings > Startup on Boot\r\n"
+        "meter dump [delay_ms]           Show parsed DMM/UI/raw frame state\r\n"
+        "meter stream [count] [delay_ms] Print compact DMM frame stream\r\n"
+        "ui dump                         Show current UI mode/redraw state\r\n"
         "meter wave                      Show DMM voltage waveform sample stats\r\n"
+        "meter wave reset                Reset DMM waveform diagnostics\r\n"
+        "meter wave path [direct|preacq] Get/set DMM waveform SPI path\r\n"
+        "meter wave selector [auto|0|1]  Override DMM waveform selector byte\r\n"
         "fpga acq [mode]                 Trigger SPI3 acquisition\r\n"
         "spi3 read [len]                 Raw SPI3 read + hex dump\r\n"
         "spi3 xfer <hex...>              Send arbitrary MOSI bytes, dump MISO\r\n"
@@ -1117,6 +1129,118 @@ static void cmd_scope_trig(const char *args)
                      code, code, (unsigned long)(mv / 1000), (unsigned long)(mv % 1000));
 }
 
+static void cmd_screen_dump(const char *args)
+{
+    char buf[64];
+    char *saveptr = NULL;
+    char *tok;
+    uint32_t x = 0;
+    uint32_t y = 0;
+    uint32_t w = LCD_WIDTH;
+    uint32_t h = LCD_HEIGHT;
+
+    if (args && *args) {
+        if (strlen(args) >= sizeof(buf)) {
+            usb_send_str("Usage: screen dump [shadow] [x y w h]\r\n");
+            return;
+        }
+
+        strcpy(buf, args);
+        tok = strtok_r(buf, " \t", &saveptr);
+        if (tok && strcmp(tok, "shadow") == 0) {
+            tok = strtok_r(NULL, " \t", &saveptr);
+            if (tok == NULL) goto parsed_screen_args;
+        }
+        if (tok == NULL || parse_int(tok, &x) != 0) {
+            usb_send_str("Usage: screen dump [shadow] [x y w h]\r\n");
+            return;
+        }
+        tok = strtok_r(NULL, " \t", &saveptr);
+        if (tok == NULL || parse_int(tok, &y) != 0) {
+            usb_send_str("Usage: screen dump [shadow] [x y w h]\r\n");
+            return;
+        }
+        tok = strtok_r(NULL, " \t", &saveptr);
+        if (tok == NULL || parse_int(tok, &w) != 0) {
+            usb_send_str("Usage: screen dump [shadow] [x y w h]\r\n");
+            return;
+        }
+        tok = strtok_r(NULL, " \t", &saveptr);
+        if (tok == NULL || parse_int(tok, &h) != 0) {
+            usb_send_str("Usage: screen dump [shadow] [x y w h]\r\n");
+            return;
+        }
+        if (strtok_r(NULL, " \t", &saveptr) != NULL) {
+            usb_send_str("Usage: screen dump [shadow] [x y w h]\r\n");
+            return;
+        }
+    }
+
+parsed_screen_args:
+    if (x >= LCD_WIDTH || y >= LCD_HEIGHT ||
+        w == 0 || h == 0 ||
+        x + w > LCD_WIDTH || y + h > LCD_HEIGHT) {
+        usb_send_str("Usage: screen dump [shadow] [x y w h]\r\n");
+        usb_debug_printf("  bounds: x<%u y<%u x+w<=%u y+h<=%u\r\n",
+                         (unsigned)LCD_WIDTH,
+                         (unsigned)LCD_HEIGHT,
+                         (unsigned)LCD_WIDTH,
+                         (unsigned)LCD_HEIGHT);
+        return;
+    }
+
+    usb_debug_printf("SCREENDUMP x=%lu y=%lu w=%lu h=%lu format=%s\r\n",
+                     x, y, w, h, "indexed4");
+
+    const uint8_t *bits = lcd_shadow_bits();
+    static const char hexdigits[] = "0123456789ABCDEF";
+    uint16_t page_y = lcd_shadow_page_y();
+    for (uint32_t row = 0; row < h; row++) {
+        usb_debug_printf("ROW %lu ", row);
+        for (uint32_t col = 0; col < w; col++) {
+            uint32_t sx = x + col;
+            uint32_t sy = y + row;
+            uint8_t idx = 0;
+            if (sy >= page_y && sy < (uint32_t)page_y + LCD_SHADOW_HEIGHT) {
+                uint32_t shadow_y = sy - page_y;
+                uint8_t byte = bits[shadow_y * LCD_SHADOW_STRIDE + (sx >> 1)];
+                idx = (sx & 1U) ? (byte & 0x0FU) : (byte >> 4);
+            }
+            char c = hexdigits[idx & 0x0F];
+            usb_send_bytes((const uint8_t *)&c, 1);
+        }
+        usb_send_str("\r\n");
+    }
+}
+
+static void cmd_screen_shadow(const char *args)
+{
+    if (args == NULL || *args == '\0') {
+        usb_debug_printf("shadow_page_y=%u height=%u\r\n",
+                         (unsigned)lcd_shadow_page_y(),
+                         (unsigned)LCD_SHADOW_HEIGHT);
+        return;
+    }
+
+    if (strncmp(args, "page", 4) == 0 &&
+        (args[4] == '\0' || args[4] == ' ' || args[4] == '\t')) {
+        const char *value = args + 4;
+        uint32_t y = 0;
+        while (*value == ' ' || *value == '\t') value++;
+        if (*value != '\0' && parse_int(value, &y) != 0) {
+            usb_send_str("Usage: screen shadow page [y]\r\n");
+            return;
+        }
+        lcd_shadow_set_page((uint16_t)y);
+        usb_debug_printf("shadow_page_y=%u height=%u\r\n",
+                         (unsigned)lcd_shadow_page_y(),
+                         (unsigned)LCD_SHADOW_HEIGHT);
+        return;
+    }
+
+    usb_send_str("Usage: screen shadow page [y]\r\n");
+}
+
 static void cmd_fpga_cmd(const char *args)
 {
     uint32_t cmd_hi = 0, cmd_lo = 0;
@@ -1678,6 +1802,275 @@ static void print_i100(const char *label, float value, const char *suffix)
                      suffix ? suffix : "");
 }
 
+static const char *meter_layout_name(uint8_t layout)
+{
+    switch (layout) {
+    case METER_LAYOUT_FULL:  return "full";
+    case METER_LAYOUT_CHART: return "chart";
+    case METER_LAYOUT_STATS: return "stats";
+    case METER_LAYOUT_FUSE:  return "fuse";
+    default:                 return "?";
+    }
+}
+
+static meter_voltage_wave_snapshot_t usb_meter_wave_snap;
+
+static void cmd_mode(const char *args)
+{
+    if (args == NULL || *args == '\0') {
+        usb_debug_printf("current=%lu startup=%s meter_submode=%u (%s) layout=%u (%s)\r\n",
+                         (uint32_t)current_mode,
+                         startup_mode_name(startup_mode),
+                         (unsigned)meter_submode,
+                         meter_submode_name(meter_submode),
+                         (unsigned)meter_layout,
+                         meter_layout_name(meter_layout));
+        return;
+    }
+
+    if (strcmp(args, "scope") == 0) {
+        current_mode = MODE_OSCILLOSCOPE;
+        fpga_enter_scope_mode();
+        usb_send_str("mode=scope\r\n");
+        return;
+    }
+
+    if (strncmp(args, "startup", 7) == 0 &&
+        (args[7] == '\0' || args[7] == ' ' || args[7] == '\t')) {
+        const char *value = args + 7;
+        while (*value == ' ' || *value == '\t') value++;
+
+        if (*value == '\0') {
+            usb_debug_printf("startup=%s\r\n", startup_mode_name(startup_mode));
+        } else if (strcmp(value, "scope") == 0) {
+            startup_mode_set(STARTUP_SCOPE);
+            usb_send_str("startup=Scope\r\n");
+        } else if (strcmp(value, "meter") == 0) {
+            startup_mode_set(STARTUP_METER);
+            usb_send_str("startup=Meter\r\n");
+        } else {
+            usb_send_str("Usage: mode startup [scope|meter]\r\n");
+        }
+        return;
+    }
+
+    if (strncmp(args, "meter", 5) == 0 &&
+        (args[5] == '\0' || args[5] == ' ' || args[5] == '\t')) {
+        char buf[48];
+        char *tok;
+        char *saveptr = NULL;
+        uint32_t submode = meter_submode;
+        uint32_t layout = meter_layout;
+
+        if (strlen(args) >= sizeof(buf)) {
+            usb_send_str("Usage: mode meter [submode] [layout]\r\n");
+            return;
+        }
+        strcpy(buf, args);
+        tok = strtok_r(buf, " \t", &saveptr);  /* meter */
+        tok = strtok_r(NULL, " \t", &saveptr);
+        if (tok && (parse_int(tok, &submode) != 0 || submode >= METER_SUBMODE_COUNT)) {
+            usb_debug_printf("Usage: mode meter [0-%u] [0-%u]\r\n",
+                             (unsigned)(METER_SUBMODE_COUNT - 1),
+                             (unsigned)(METER_LAYOUT_COUNT - 1));
+            return;
+        }
+        tok = strtok_r(NULL, " \t", &saveptr);
+        if (tok && (parse_int(tok, &layout) != 0 || layout >= METER_LAYOUT_COUNT)) {
+            usb_debug_printf("Usage: mode meter [0-%u] [0-%u]\r\n",
+                             (unsigned)(METER_SUBMODE_COUNT - 1),
+                             (unsigned)(METER_LAYOUT_COUNT - 1));
+            return;
+        }
+
+        current_mode = MODE_MULTIMETER;
+        meter_submode = (uint8_t)submode;
+        meter_layout = (uint8_t)layout;
+        meter_reset_minmaxavg();
+        meter_voltage_wave_reset();
+        fpga_meter_reinit((uint8_t)submode);
+        usb_debug_printf("mode=meter submode=%lu (%s) layout=%lu (%s)\r\n",
+                         submode,
+                         meter_submode_name((uint8_t)submode),
+                         layout,
+                         meter_layout_name((uint8_t)layout));
+        return;
+    }
+
+    usb_send_str("Usage: mode [scope|meter [submode] [layout]|startup [scope|meter]]\r\n");
+}
+
+static void cmd_meter_dump(const char *args)
+{
+    uint32_t delay = 0;
+
+    if (args && *args) {
+        if (parse_int(args, &delay) != 0 || delay > 5000) {
+            usb_send_str("Usage: meter dump [delay_ms<=5000]\r\n");
+            return;
+        }
+    }
+    if (delay > 0) vTaskDelay(pdMS_TO_TICKS(delay));
+
+    bool live = meter_reading.valid && meter_reading.submode == meter_submode;
+
+    usb_send_str("=== DMM State ===\r\n");
+    usb_debug_printf("mode=%lu startup=%s meter_submode=%u (%s) layout=%u (%s)\r\n",
+                     (uint32_t)current_mode,
+                     startup_mode_name(startup_mode),
+                     (unsigned)meter_submode,
+                     meter_submode_name(meter_submode),
+                     (unsigned)meter_layout,
+                     meter_layout_name(meter_layout));
+    usb_debug_printf("ui_draws=%lu ui_live=%u continuity_flash=%u live_same_submode=%u\r\n",
+                     meter_screen_draw_count,
+                     (unsigned)meter_screen_last_live,
+                     (unsigned)meter_screen_last_continuity_flash,
+                     live ? 1U : 0U);
+    usb_debug_printf("valid=%u reading_submode=%u class=%u updates=%lu display=%s unit=%s\r\n",
+                     meter_reading.valid ? 1U : 0U,
+                     (unsigned)meter_reading.submode,
+                     (unsigned)meter_reading.result_class,
+                     meter_reading.update_count,
+                     live ? meter_reading.display_str : "---",
+                     (live && meter_reading.unit_suffix) ? meter_reading.unit_suffix : "");
+    usb_debug_printf("raw_bcd=%d decimal_pos=%u negative=%u unit_variant=%u bar_i100=%ld aux_freq_i10=%ld\r\n",
+                     meter_reading.raw_bcd,
+                     (unsigned)meter_reading.decimal_pos,
+                     meter_reading.negative ? 1U : 0U,
+                     (unsigned)meter_reading.unit_variant,
+                     (long)scaled_i100(meter_reading.bar_fraction),
+                     (long)scaled_i100(meter_reading.aux_freq_hz) / 10L);
+    usb_debug_printf("flags ac=%u auto=%u hold=%u probe=%u range_ind=%u range_cmd=%u beep=%u\r\n",
+                     meter_reading.is_ac ? 1U : 0U,
+                     meter_reading.is_auto_range ? 1U : 0U,
+                     meter_reading.is_hold ? 1U : 0U,
+                     (unsigned)meter_reading.probe_type,
+                     (unsigned)meter_reading.range_indicator,
+                     (unsigned)meter_reading.range_cmd,
+                     meter_reading.continuity_beep ? 1U : 0U);
+    usb_send_str("frame=");
+    for (int i = 0; i < 12; i++) usb_debug_printf("%02X%s", meter_reading.dbg_frame[i], i == 11 ? "" : " ");
+    usb_send_str("\r\nnibbles=");
+    for (int i = 0; i < 4; i++) usb_debug_printf("%02X%s", meter_reading.dbg_nibbles[i], i == 3 ? "" : " ");
+    usb_send_str(" raw_digits=");
+    for (int i = 0; i < 4; i++) usb_debug_printf("%02X%s", meter_reading.dbg_raw_digits[i], i == 3 ? "" : " ");
+    usb_send_str("\r\nf6_history=");
+    uint8_t f6_count = meter_f6_history_count;
+    if (f6_count > METER_F6_HISTORY_LEN) f6_count = METER_F6_HISTORY_LEN;
+    for (int i = 0; i < f6_count; i++) usb_debug_printf("%02X%s", meter_f6_history[i], i + 1 == f6_count ? "" : " ");
+    usb_send_str("\r\n");
+    usb_debug_printf("wave_samples=%lu\r\n", meter_voltage_wave_sample_count());
+
+    usb_send_str("history newest_first:\r\n");
+    uint8_t count = meter_frame_history_count;
+    if (count > METER_FRAME_HISTORY_LEN) count = METER_FRAME_HISTORY_LEN;
+    for (uint8_t n = 0; n < count; n++) {
+        uint8_t idx = (uint8_t)((meter_frame_history_head + METER_FRAME_HISTORY_LEN - 1U - n)
+                                % METER_FRAME_HISTORY_LEN);
+        const meter_frame_history_t *h = &meter_frame_history[idx];
+        usb_debug_printf("#%u upd=%lu sub=%u cls=%u raw=%d dp=%u unit=%s disp=%s "
+                         "f6=%02X f7=%02X f8=%02X f9=%02X extra=%04X aux_freq_i10=%u digits=%02X,%02X,%02X,%02X\r\n",
+                         (unsigned)n,
+                         h->update_count,
+                         (unsigned)h->submode,
+                         (unsigned)h->result_class,
+                         h->raw_bcd,
+                         (unsigned)h->decimal_pos,
+                         h->unit_suffix ? h->unit_suffix : "",
+                         h->display_str,
+                         (unsigned)h->flags,
+                         (unsigned)h->status,
+                         (unsigned)h->meas_flags,
+                         (unsigned)h->additional_status,
+                         (unsigned)h->extra,
+                         (unsigned)h->aux_freq_hz_i10,
+                         (unsigned)h->raw_digits[0],
+                         (unsigned)h->raw_digits[1],
+                         (unsigned)h->raw_digits[2],
+                         (unsigned)h->raw_digits[3]);
+    }
+}
+
+static void cmd_meter_stream(const char *args)
+{
+    uint32_t count = 16;
+    uint32_t delay_ms = 250;
+    char buf[32];
+    char *tok;
+    char *saveptr = NULL;
+    uint32_t last_update = 0xFFFFFFFFu;
+
+    if (args && *args) {
+        if (strlen(args) >= sizeof(buf)) {
+            usb_send_str("Usage: meter stream [count<=200] [delay_ms<=5000]\r\n");
+            return;
+        }
+        strcpy(buf, args);
+        tok = strtok_r(buf, " \t", &saveptr);
+        if (tok && (parse_int(tok, &count) != 0 || count > 200)) {
+            usb_send_str("Usage: meter stream [count<=200] [delay_ms<=5000]\r\n");
+            return;
+        }
+        tok = strtok_r(NULL, " \t", &saveptr);
+        if (tok && (parse_int(tok, &delay_ms) != 0 || delay_ms > 5000)) {
+            usb_send_str("Usage: meter stream [count<=200] [delay_ms<=5000]\r\n");
+            return;
+        }
+    }
+
+    usb_debug_printf("stream count=%lu delay_ms=%lu\r\n", count, delay_ms);
+    for (uint32_t i = 0; i < count; i++) {
+        if (meter_reading.update_count != last_update) {
+            last_update = meter_reading.update_count;
+            uint16_t extra = ((uint16_t)meter_reading.dbg_frame[10] << 8) |
+                             meter_reading.dbg_frame[11];
+            usb_debug_printf("%lu upd=%lu sub=%u cls=%u raw=%d dp=%u unit=%s disp=%s "
+                             "f6=%02X f7=%02X f8=%02X f9=%02X extra=%04X aux_freq_i10=%ld wave=%lu beep=%u\r\n",
+                             i,
+                             meter_reading.update_count,
+                             (unsigned)meter_reading.submode,
+                             (unsigned)meter_reading.result_class,
+                             meter_reading.raw_bcd,
+                             (unsigned)meter_reading.decimal_pos,
+                             meter_reading.unit_suffix ? meter_reading.unit_suffix : "",
+                             meter_reading.display_str,
+                             (unsigned)meter_reading.dbg_frame[6],
+                             (unsigned)meter_reading.dbg_frame[7],
+                             (unsigned)meter_reading.dbg_frame[8],
+                             (unsigned)meter_reading.dbg_frame[9],
+                             (unsigned)extra,
+                             (long)scaled_i100(meter_reading.aux_freq_hz) / 10L,
+                             meter_voltage_wave_sample_count(),
+                             meter_reading.continuity_beep ? 1U : 0U);
+        }
+        if (delay_ms > 0) vTaskDelay(pdMS_TO_TICKS(delay_ms));
+    }
+}
+
+static void cmd_ui_dump(void)
+{
+    usb_debug_printf("mode=%lu startup=%s meter_submode=%u (%s) layout=%u (%s) "
+                     "settings_depth=%d selected=%d sub_selected=%d\r\n",
+                     (uint32_t)current_mode,
+                     startup_mode_name(startup_mode),
+                     (unsigned)meter_submode,
+                     meter_submode_name(meter_submode),
+                     (unsigned)meter_layout,
+                     meter_layout_name(meter_layout),
+                     (int)settings_depth,
+                     (int)settings_selected,
+                     (int)settings_sub_selected);
+    usb_debug_printf("meter_ui draws=%lu live=%u continuity_flash=%u reading_valid=%u "
+                     "reading_submode=%u updates=%lu\r\n",
+                     meter_screen_draw_count,
+                     (unsigned)meter_screen_last_live,
+                     (unsigned)meter_screen_last_continuity_flash,
+                     meter_reading.valid ? 1U : 0U,
+                     (unsigned)meter_reading.submode,
+                     meter_reading.update_count);
+}
+
 static void cmd_meter_wave(void)
 {
     extern volatile device_mode_t current_mode;
@@ -1687,8 +2080,7 @@ static void cmd_meter_wave(void)
     vTaskDelay(pdMS_TO_TICKS(250));
     uint32_t after = meter_voltage_wave_sample_count();
 
-    meter_voltage_wave_snapshot_t snap;
-    meter_voltage_wave_snapshot(&snap, METER_VOLTAGE_WAVE_RENDER_POINTS, 0.0f);
+    meter_voltage_wave_snapshot(&usb_meter_wave_snap, METER_VOLTAGE_WAVE_RENDER_POINTS, 0.0f);
 
     usb_send_str("=== DMM Voltage Waveform ===\r\n");
     usb_debug_printf("mode=%lu meter_submode=%u (%s)\r\n",
@@ -1697,16 +2089,31 @@ static void cmd_meter_wave(void)
                      meter_submode_name(meter_submode));
     usb_debug_printf("samples_total=%lu delta_250ms=%lu approx_rate=%lu Hz\r\n",
                      after, after - before, (after - before) * 4U);
+    usb_debug_printf("spi_path=%s enq=%lu ok=%lu drop=%lu samples=%lu ff=%lu zero=%lu "
+                     "selector_mode=%d last_pre=%02X selector=%02X last=%02X min=%02X max=%02X\r\n",
+                     fpga_meter_adc_use_preacq ? "preacq" : "direct",
+                     fpga_meter_adc_enqueue_attempts,
+                     fpga_meter_adc_enqueue_success,
+                     fpga_meter_adc_enqueue_drops,
+                     fpga_meter_adc_samples,
+                     fpga_meter_adc_ff_samples,
+                     fpga_meter_adc_zero_samples,
+                     (int)fpga_meter_adc_selector_override,
+                     (unsigned)fpga_meter_adc_last_preacq,
+                     (unsigned)fpga_meter_adc_last_selector,
+                     (unsigned)fpga_meter_adc_last_sample,
+                     (unsigned)fpga_meter_adc_min_sample,
+                     (unsigned)fpga_meter_adc_max_sample);
     usb_debug_printf("snapshot_count=%u raw_last=%u raw_min=%u raw_max=%u p2p=%u synced=%u\r\n",
-                     (unsigned)snap.count,
-                     (unsigned)snap.raw_last,
-                     (unsigned)snap.raw_min,
-                     (unsigned)snap.raw_max,
-                     (unsigned)snap.peak_to_peak_raw,
-                     snap.synced ? 1U : 0U);
-    print_i100("mean_raw=", snap.mean_raw, "");
-    print_i100("rms_raw=", snap.rms_raw, "");
-    print_i100("freq=", snap.freq_hz, " Hz");
+                     (unsigned)usb_meter_wave_snap.count,
+                     (unsigned)usb_meter_wave_snap.raw_last,
+                     (unsigned)usb_meter_wave_snap.raw_min,
+                     (unsigned)usb_meter_wave_snap.raw_max,
+                     (unsigned)usb_meter_wave_snap.peak_to_peak_raw,
+                     usb_meter_wave_snap.synced ? 1U : 0U);
+    print_i100("mean_raw=", usb_meter_wave_snap.mean_raw, "");
+    print_i100("rms_raw=", usb_meter_wave_snap.rms_raw, "");
+    print_i100("freq=", usb_meter_wave_snap.freq_hz, " Hz");
     usb_debug_printf("dmm=%s %s class=%u updates=%lu valid=%u\r\n",
                      meter_reading.display_str,
                      meter_reading.unit_suffix ? meter_reading.unit_suffix : "",
@@ -1714,6 +2121,72 @@ static void cmd_meter_wave(void)
                      meter_reading.update_count,
                      meter_reading.valid ? 1U : 0U);
     usb_send_str("Use in DMM DC/AC voltage mode with leads on COM + V/Ohm/C; this is not CH1/CH2 evidence.\r\n");
+}
+
+static void cmd_meter_wave_args(const char *args)
+{
+    if (args == NULL || *args == '\0') {
+        cmd_meter_wave();
+        return;
+    }
+
+    if (strcmp(args, "reset") == 0) {
+        meter_voltage_wave_reset();
+        fpga_meter_adc_diag_reset();
+        usb_send_str("meter wave diagnostics reset\r\n");
+        return;
+    }
+
+    if (strncmp(args, "path", 4) == 0 &&
+        (args[4] == '\0' || args[4] == ' ' || args[4] == '\t')) {
+        const char *value = args + 4;
+        while (*value == ' ' || *value == '\t') value++;
+
+        if (*value == '\0') {
+            usb_debug_printf("meter wave path=%s\r\n",
+                             fpga_meter_adc_use_preacq ? "preacq" : "direct");
+        } else if (strcmp(value, "direct") == 0) {
+            fpga_meter_adc_use_preacq = false;
+            meter_voltage_wave_reset();
+            fpga_meter_adc_diag_reset();
+            usb_send_str("meter wave path=direct\r\n");
+        } else if (strcmp(value, "preacq") == 0) {
+            fpga_meter_adc_use_preacq = true;
+            meter_voltage_wave_reset();
+            fpga_meter_adc_diag_reset();
+            usb_send_str("meter wave path=preacq\r\n");
+        } else {
+            usb_send_str("Usage: meter wave path [direct|preacq]\r\n");
+        }
+        return;
+    }
+
+    if (strncmp(args, "selector", 8) == 0 &&
+        (args[8] == '\0' || args[8] == ' ' || args[8] == '\t')) {
+        const char *value = args + 8;
+        while (*value == ' ' || *value == '\t') value++;
+
+        if (*value == '\0') {
+            usb_debug_printf("meter wave selector=%d\r\n",
+                             (int)fpga_meter_adc_selector_override);
+        } else if (strcmp(value, "auto") == 0) {
+            fpga_meter_adc_selector_override = -1;
+            meter_voltage_wave_reset();
+            fpga_meter_adc_diag_reset();
+            usb_send_str("meter wave selector=auto\r\n");
+        } else if (strcmp(value, "0") == 0 || strcmp(value, "1") == 0) {
+            fpga_meter_adc_selector_override = (int8_t)(value[0] - '0');
+            meter_voltage_wave_reset();
+            fpga_meter_adc_diag_reset();
+            usb_debug_printf("meter wave selector=%d\r\n",
+                             (int)fpga_meter_adc_selector_override);
+        } else {
+            usb_send_str("Usage: meter wave selector [auto|0|1]\r\n");
+        }
+        return;
+    }
+
+    usb_send_str("Usage: meter wave [reset|path [direct|preacq]|selector [auto|0|1]]\r\n");
 }
 
 static void cmd_uptime(void)
@@ -2551,6 +3024,14 @@ static void dispatch_command(char *line)
         cmd_flash_wtest(line + 12);
     } else if (strcmp(line, "flash diag") == 0) {
         cmd_flash_diag();
+    } else if (strcmp(line, "screen dump") == 0) {
+        cmd_screen_dump("");
+    } else if (strncmp(line, "screen dump ", 12) == 0) {
+        cmd_screen_dump(line + 12);
+    } else if (strcmp(line, "screen shadow") == 0) {
+        cmd_screen_shadow("");
+    } else if (strncmp(line, "screen shadow ", 14) == 0) {
+        cmd_screen_shadow(line + 14);
     } else if (strncmp(line, "fpga cmd ", 9) == 0) {
         cmd_fpga_cmd(line + 9);
     } else if (strncmp(line, "fpga frame ", 11) == 0) {
@@ -2613,8 +3094,24 @@ static void dispatch_command(char *line)
         cmd_fpga_scope_timing(line + 18);
     } else if (strncmp(line, "fpga scope trig ", 16) == 0) {
         cmd_fpga_scope_trig(line + 16);
+    } else if (strncmp(line, "mode", 4) == 0 && (line[4] == '\0' || line[4] == ' ' || line[4] == '\t')) {
+        const char *args = line + 4;
+        while (*args == ' ' || *args == '\t') args++;
+        cmd_mode(args);
+    } else if (strcmp(line, "meter dump") == 0) {
+        cmd_meter_dump("");
+    } else if (strncmp(line, "meter dump ", 11) == 0) {
+        cmd_meter_dump(line + 11);
+    } else if (strcmp(line, "meter stream") == 0) {
+        cmd_meter_stream("");
+    } else if (strncmp(line, "meter stream ", 13) == 0) {
+        cmd_meter_stream(line + 13);
+    } else if (strcmp(line, "ui dump") == 0) {
+        cmd_ui_dump();
     } else if (strcmp(line, "meter wave") == 0) {
-        cmd_meter_wave();
+        cmd_meter_wave_args("");
+    } else if (strncmp(line, "meter wave ", 11) == 0) {
+        cmd_meter_wave_args(line + 11);
     } else if (strncmp(line, "fpga acq", 8) == 0) {
         cmd_fpga_acq(line[8] == ' ' ? line + 9 : "");
     } else if (strncmp(line, "fpga reinit", 11) == 0) {
@@ -2850,6 +3347,6 @@ static void vUsbDebugTask(void *pvParameters)
 void usb_debug_create_task(void)
 {
 #ifndef EMULATOR_BUILD
-    xTaskCreate(vUsbDebugTask, "usb_dbg", 512, NULL, 2, NULL);
+    xTaskCreate(vUsbDebugTask, "usb_dbg", 768, NULL, 2, NULL);
 #endif
 }
