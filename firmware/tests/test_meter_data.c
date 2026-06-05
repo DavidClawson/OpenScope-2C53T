@@ -71,6 +71,15 @@ static int expect_payload_cleared(const char *display)
     return 1;
 }
 
+static int expect_family_debug(uint8_t expected, uint8_t observed,
+                               uint8_t reject_reason)
+{
+    ASSERT(meter_reading.expected_frame_family == expected);
+    ASSERT(meter_reading.observed_frame_family == observed);
+    ASSERT(meter_reading.reject_reason == reject_reason);
+    return 1;
+}
+
 static void process_frame(const uint8_t frame[12], uint8_t submode)
 {
     meter_data_process_frame((const volatile uint8_t *)frame, submode);
@@ -373,6 +382,11 @@ static int test_invalidate_clears_stale_reading_for_every_submode(void)
         ASSERT(meter_reading.result_class == METER_RESULT_NONE);
         ASSERT(expect_payload_cleared("---"));
         ASSERT(meter_reading.stock_mode == expected_stock_mode[mode]);
+        ASSERT(meter_reading.expected_frame_family ==
+               (uint8_t)fpga_meter_frame_family_for_submode(mode));
+        ASSERT(meter_reading.observed_frame_family ==
+               meter_reading.expected_frame_family);
+        ASSERT(meter_reading.reject_reason == METER_REJECT_NONE);
         ASSERT(meter_reading.update_count == updates_after_frame + 1);
         ASSERT(meter_reading.display_update_count == display_updates_after_frame + 1);
         for (unsigned i = 0; i < sizeof(meter_reading.dbg_frame); i++) {
@@ -655,6 +669,10 @@ static int test_non_voltage_modes_reject_voltage_payloads(void)
             ASSERT_STR_EQ(meter_reading.unit_suffix, "");
             ASSERT(close_to(meter_reading.value, 0.0f, 0.001f));
             ASSERT(close_to(meter_reading.aux_freq_hz, 0.0f, 0.001f));
+            ASSERT(expect_family_debug(
+                (uint8_t)fpga_meter_frame_family_for_submode(wrong_family_modes[i]),
+                (uint8_t)FPGA_METER_FRAME_FAMILY_VOLTAGE,
+                METER_REJECT_WRONG_FRAME_FAMILY));
         }
     }
     return 1;
@@ -703,6 +721,10 @@ static int test_voltage_payload_clears_stale_reading_in_all_non_voltage_modes(vo
             ASSERT(meter_reading.submode == modes[m]);
             ASSERT(meter_reading.result_class == METER_RESULT_NONE);
             ASSERT(expect_payload_cleared("---"));
+            ASSERT(expect_family_debug(
+                (uint8_t)fpga_meter_frame_family_for_submode(modes[m]),
+                (uint8_t)FPGA_METER_FRAME_FAMILY_VOLTAGE,
+                METER_REJECT_WRONG_FRAME_FAMILY));
         }
     }
     return 1;
@@ -721,6 +743,9 @@ static int test_special_voltage_family_frames_are_rejected_outside_voltage(void)
     ASSERT(meter_reading.result_class == METER_RESULT_NONE);
     ASSERT_STR_EQ(meter_reading.display_str, "---");
     ASSERT_STR_EQ(meter_reading.unit_suffix, "");
+    ASSERT(expect_family_debug((uint8_t)FPGA_METER_FRAME_FAMILY_CURRENT,
+                               (uint8_t)FPGA_METER_FRAME_FAMILY_VOLTAGE,
+                               METER_REJECT_WRONG_FRAME_FAMILY));
 
     meter_data_init();
     process_frame(ol_voltage_frame, 6);
@@ -728,6 +753,9 @@ static int test_special_voltage_family_frames_are_rejected_outside_voltage(void)
     ASSERT(meter_reading.result_class == METER_RESULT_NONE);
     ASSERT_STR_EQ(meter_reading.display_str, "---");
     ASSERT_STR_EQ(meter_reading.unit_suffix, "");
+    ASSERT(expect_family_debug((uint8_t)FPGA_METER_FRAME_FAMILY_RESISTANCE,
+                               (uint8_t)FPGA_METER_FRAME_FAMILY_VOLTAGE,
+                               METER_REJECT_WRONG_FRAME_FAMILY));
     return 1;
 }
 
@@ -775,6 +803,10 @@ static int test_voltage_payload_clears_stale_current_reading(void)
         ASSERT_STR_EQ(meter_reading.display_str, "---");
         ASSERT_STR_EQ(meter_reading.unit_suffix, "");
         ASSERT(close_to(meter_reading.value, 0.0f, 0.001f));
+        ASSERT(expect_family_debug(
+            (uint8_t)FPGA_METER_FRAME_FAMILY_CURRENT,
+            (uint8_t)FPGA_METER_FRAME_FAMILY_VOLTAGE,
+            METER_REJECT_WRONG_FRAME_FAMILY));
 
         updates_after_current = meter_reading.update_count;
         display_updates_after_current = meter_reading.display_update_count;

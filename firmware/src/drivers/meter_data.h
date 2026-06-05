@@ -30,6 +30,11 @@ typedef enum {
     METER_RESULT_CONTINUITY= 7,  /* Continuity detected */
 } meter_result_class_t;
 
+typedef enum {
+    METER_REJECT_NONE = 0,
+    METER_REJECT_WRONG_FRAME_FAMILY = 1,
+} meter_reject_reason_t;
+
 /* ═══════════════════════════════════════════════════════════════════
  * Parsed Meter Reading
  * ═══════════════════════════════════════════════════════════════════ */
@@ -85,6 +90,9 @@ typedef struct {
     uint8_t  stock_display_cmd;  /* Stock display selector */
     uint8_t  stock_unit_index;   /* Stock unit selector */
     uint8_t  stock_composite_index; /* Stock composite formatting selector */
+    uint8_t  expected_frame_family; /* fpga_meter_frame_family_t from the active plan */
+    uint8_t  observed_frame_family; /* Known marker family, or expected family if unclassified */
+    uint8_t  reject_reason;      /* meter_reject_reason_t */
 
     /* Continuity buzzer state */
     bool     continuity_beep;    /* Should buzzer sound */
@@ -113,6 +121,9 @@ typedef struct {
     uint8_t  additional_status;
     uint16_t extra;
     uint16_t aux_freq_hz_i10;
+    uint8_t  expected_frame_family;
+    uint8_t  observed_frame_family;
+    uint8_t  reject_reason;
     int      bcd_value;
     char     display_str[16];
     const char *unit_suffix;

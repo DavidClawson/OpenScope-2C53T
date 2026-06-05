@@ -84,6 +84,9 @@ static void meter_record_history(void)
     h->additional_status = r->dbg_frame[9];
     h->extra = ((uint16_t)r->dbg_frame[10] << 8) | r->dbg_frame[11];
     h->aux_freq_hz_i10 = (uint16_t)(r->aux_freq_hz * 10.0f + 0.5f);
+    h->expected_frame_family = r->expected_frame_family;
+    h->observed_frame_family = r->observed_frame_family;
+    h->reject_reason = r->reject_reason;
     h->bcd_value = r->bcd_value;
     strncpy(h->display_str, r->display_str, sizeof(h->display_str) - 1);
     h->display_str[sizeof(h->display_str) - 1] = '\0';
@@ -147,6 +150,7 @@ static uint16_t meter_aux_freq_i10(const meter_reading_t *r)
         r->display_update_count++; \
     } \
     meter_reading_write_end(); \
+    meter_record_history(); \
 } while (0)
 
 static void meter_clear_payload(meter_reading_t *r)
@@ -417,6 +421,20 @@ static void meter_stock_fsm_reset(uint8_t stock_mode)
     meter_stock_fsm.stock_mode = stock_mode;
     meter_stock_fsm.variant = 1U;
     meter_stock_fsm.dc_state = (stock_mode == 0) ? 1U : 0U;
+}
+
+static bool frame_has_voltage_payload_marker(const volatile uint8_t *frame)
+{
+    return frame[8] == 0x02 && frame[9] == 0x00;
+}
+
+static uint8_t observed_frame_family(uint8_t expected_family,
+                                     const volatile uint8_t *frame)
+{
+    if (frame_has_voltage_payload_marker(frame)) {
+        return (uint8_t)FPGA_METER_FRAME_FAMILY_VOLTAGE;
+    }
+    return expected_family;
 }
 
 static bool ui_submode_is_small_current(uint8_t ui_submode)
@@ -700,8 +718,9 @@ static bool apply_verified_frame_range(meter_reading_t *r,
 static bool frame_is_voltage_payload(uint8_t submode,
                                      const volatile uint8_t *frame)
 {
-    if (submode == 0 || submode == 1) return false;
-    return frame[8] == 0x02 && frame[9] == 0x00;
+    return fpga_meter_frame_family_for_submode(submode) !=
+           FPGA_METER_FRAME_FAMILY_VOLTAGE &&
+           frame_has_voltage_payload_marker(frame);
 }
 
 /* ═══════════════════════════════════════════════════════════════════
@@ -820,6 +839,10 @@ void meter_data_invalidate(uint8_t submode)
     r->range_cmd = 0;
     r->continuity_beep = false;
     r->valid = false;
+    r->expected_frame_family =
+        (uint8_t)fpga_meter_frame_family_for_submode(submode);
+    r->observed_frame_family = r->expected_frame_family;
+    r->reject_reason = METER_REJECT_NONE;
     r->display_update_count++;
     memset(r->dbg_frame, 0, sizeof(r->dbg_frame));
     memset(r->dbg_nibbles, 0, sizeof(r->dbg_nibbles));
@@ -861,6 +884,11 @@ void meter_data_process_frame(const volatile uint8_t *frame, uint8_t submode)
     r->submode = submode;
     r->continuity_beep = false;
     r->aux_freq_hz = 0.0f;
+    r->expected_frame_family =
+        (uint8_t)fpga_meter_frame_family_for_submode(submode);
+    r->observed_frame_family =
+        observed_frame_family(r->expected_frame_family, frame);
+    r->reject_reason = METER_REJECT_NONE;
     if (meter_stock_fsm.stock_mode != stock_mode_from_ui_submode(submode)) {
         meter_stock_fsm_reset(stock_mode_from_ui_submode(submode));
     }
@@ -947,6 +975,7 @@ void meter_data_process_frame(const volatile uint8_t *frame, uint8_t submode)
     /* --- Special value detection --- */
 
     if (frame_is_voltage_payload(submode, frame)) {
+        r->reject_reason = METER_REJECT_WRONG_FRAME_FAMILY;
         METER_REJECT_FRAME();
         return;
     }

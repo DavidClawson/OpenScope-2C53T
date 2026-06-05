@@ -2129,6 +2129,10 @@ static void cmd_meter_dump(const char *args)
                      (unsigned)meter_reading.stock_display_cmd,
                      (unsigned)meter_reading.stock_unit_index,
                      (unsigned)meter_reading.stock_composite_index);
+    usb_debug_printf("frame_family expected=%u observed=%u reject=%u\r\n",
+                     (unsigned)meter_reading.expected_frame_family,
+                     (unsigned)meter_reading.observed_frame_family,
+                     (unsigned)meter_reading.reject_reason);
     usb_send_str("frame=");
     for (int i = 0; i < 12; i++) usb_debug_printf("%02X%s", meter_reading.dbg_frame[i], i == 11 ? "" : " ");
     usb_send_str("\r\nnibbles=");
@@ -2150,6 +2154,7 @@ static void cmd_meter_dump(const char *args)
                                 % METER_FRAME_HISTORY_LEN);
         const meter_frame_history_t *h = &meter_frame_history[idx];
         usb_debug_printf("#%u upd=%lu sub=%u cls=%u raw=%d dp=%u unit=%s disp=%s "
+                         "family=%u/%u reject=%u "
                          "f6=%02X f7=%02X f8=%02X f9=%02X extra=%04X aux_freq_i10=%u digits=%02X,%02X,%02X,%02X\r\n",
                          (unsigned)n,
                          h->update_count,
@@ -2159,6 +2164,9 @@ static void cmd_meter_dump(const char *args)
                          (unsigned)h->decimal_pos,
                          h->unit_suffix ? h->unit_suffix : "",
                          h->display_str,
+                         (unsigned)h->expected_frame_family,
+                         (unsigned)h->observed_frame_family,
+                         (unsigned)h->reject_reason,
                          (unsigned)h->flags,
                          (unsigned)h->status,
                          (unsigned)h->meas_flags,
@@ -2387,6 +2395,10 @@ static void cmd_meter_frontend(void)
                      (long)scaled_i100(meter_reading.aux_freq_hz) / 10L,
                      meter_reading.continuity_beep ? 1U : 0U,
                      (unsigned)meter_frame_discard_count);
+    usb_debug_printf("frame_family expected=%u observed=%u reject=%u\r\n",
+                     (unsigned)meter_reading.expected_frame_family,
+                     (unsigned)meter_reading.observed_frame_family,
+                     (unsigned)meter_reading.reject_reason);
     usb_send_str("tx_recent:");
     for (uint8_t i = 0; i < tx_count; i++) {
         uint8_t idx = (uint8_t)((fpga.tx_cmd_history_head + 16U - tx_count + i) & 0x0FU);
@@ -2427,6 +2439,7 @@ static void print_meter_mux_stream_line(uint32_t index)
 
     usb_debug_printf("t=%lu upd=%lu ui_sub=%u rd_sub=%u live=%u cls=%u "
                      "stock_mode=%u raw_low=%02X family=%u mux=%u settle=%u "
+                     "obs_family=%u reject=%u "
                      "seq=%u seq_sub=%u seq_word=%04X seq_apply=%04X "
                      "disp=%s unit=%s raw=%d dp=%u f6=%02X f7=%02X f8=%02X f9=%02X "
                      "extra=%04X discard=%u PC6=%u PB11=%u PC11=%u PC12=%u "
@@ -2442,6 +2455,8 @@ static void print_meter_mux_stream_line(uint32_t index)
                      (unsigned)plan.frame_family,
                      (unsigned)plan.mux_index,
                      (unsigned)plan.settle_ms,
+                     (unsigned)meter_reading.observed_frame_family,
+                     (unsigned)meter_reading.reject_reason,
                      (unsigned)fpga.meter_mode_sequence_count,
                      (unsigned)fpga.meter_mode_sequence_submode,
                      (unsigned)fpga.meter_mode_selector_word,

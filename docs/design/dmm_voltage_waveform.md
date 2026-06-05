@@ -36,14 +36,18 @@ The USB debug shell commands used for validation are:
 
 - `meter dump [delay_ms]`: parsed DMM/UI state, raw 12-byte frame, decoded BCD,
   decimal position, unit, frame[6] history, companion `aux_freq_i10`, and
-  waveform sample count.
+  waveform sample count. It also reports expected/observed frame family and
+  wrong-family reject reason so current/frontend failures are visible as mode
+  activation evidence instead of only `---`.
 - `meter stream [count] [delay_ms]`: compact decoded-frame stream for watching
   range/decimal instability without mixing concurrent serial readers.
 - `meter mux-stream [count] [delay_ms]`: decoded-frame stream plus the tested
   DMM transition plan (`stock_mode`, frame family, mux index, settle time),
-  recent mode-sequence words, and actual frontend GPIO state.
+  observed frame family/reject reason, recent mode-sequence words, and actual
+  frontend GPIO state.
 - `meter frontend`: one-shot DMM selector, transition plan, GPIO, parsed
-  reading, recent USART command pairs, buzzer, and discard-window state.
+  reading, frame-family rejection state, recent USART command pairs, buzzer,
+  and discard-window state.
 - `meter adc-snapshot`: read-only DMM waveform sampler counters and summary.
 - `meter wave`: waveform buffer stats, SPI3 meter-ADC diagnostics, and the
   decoded DMM reading.
