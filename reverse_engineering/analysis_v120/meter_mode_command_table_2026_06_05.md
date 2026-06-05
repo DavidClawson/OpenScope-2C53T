@@ -180,6 +180,7 @@ bytes. The evidence splits like this:
 | clipping auto-range write | `full_decompile.c:2564..2574` increments `(&DAT_200000fa)[uVar20]`, then calls `FUN_080018a4(DAT_200000fa)` for channel 0 or `FUN_08001a58(DAT_200000fb)` for channel 1 and queues command `4` | scope/siggen auto-range path inside `FUN_08001c60`; not DMM |
 | scope main auto-range write | `full_decompile.c:6880..6999` scans sample buffers, enters range selection, then reuses `DAT_200000fa/DAT_200000fb` for DAC/calibration recompute | oscilloscope acquisition path; not DMM |
 | explicit scope-submode mux calls | `full_decompile.c:7564..7565` and `7988..7989` call both mux writers with `DAT_20000128 & 0xf`; `scope_main_fsm_annotated.c` names `DAT_20000128`/state `+0x30` as scope sub-mode | scope runtime reconfiguration, not DMM |
+| DAC1 writes | `FUN_080018a4` at `0x080018A4..0x08001A52` and inline recomputes at `full_decompile.c:2603..2624`, `6960..7020`, `7771..7990` write `0x40007408` from scope calibration tables | scope trigger/comparator threshold; not DMM calibration |
 | waveform calibration/render use | `full_decompile.c:8611..8624`, `9840..9971` index `DAT_080465cc` and calibration deltas through current and saved `DAT_200000fa/DAT_200000fb` | scope display/calibration path, not DMM selector proof |
 
 This means the open firmware can legitimately project the recovered stock DMM
@@ -189,3 +190,7 @@ stock-runtime trace records `0x200000fa/0x200000fb` while switching DMM modes.
 Do not treat scope auto-range writes as evidence for DMM current/voltage range
 decoding, and do not repair a surprising DMM reading by adding a numeric
 coefficient on top of those scope paths.
+
+The same boundary applies to DAC1 (`0x40007408`). Stock DAC1 writes are real
+and table-backed, but current xrefs tie them to the scope trigger/comparator
+path. They are not a recovered meter reference or low-DCV correction source.

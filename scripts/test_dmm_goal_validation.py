@@ -81,6 +81,16 @@ class DmmGoalValidationTests(unittest.TestCase):
         self.assertIn("acceptance proof", coverage["terms"])
         self.assertIn("unproven", coverage["terms"])
 
+    def test_re_coverage_requires_dac1_scope_boundary(self) -> None:
+        coverage = validate_dmm_goal.verify_re_coverage()
+        self.assertIn(
+            "reverse_engineering/analysis_v120/meter_dac1_scope_boundary_2026_06_06.md",
+            coverage["docs"],
+        )
+        self.assertIn("DAC1", coverage["terms"])
+        self.assertIn("scope trigger", coverage["terms"])
+        self.assertIn("not DMM calibration", coverage["terms"])
+
 
 if __name__ == "__main__":
     unittest.main()

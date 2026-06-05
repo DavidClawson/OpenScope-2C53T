@@ -30,6 +30,12 @@
 > `h2_extracted/FINDINGS.md`. Treat the body below as historical
 > hypothesis archaeology except where it identifies what is *not*
 > meter calibration.
+>
+> **Update 2026-06-06:** The DAC1 boundary was re-audited against
+> `full_decompile.c` after the low-DCV work. See
+> `meter_dac1_scope_boundary_2026_06_06.md`: DAC1 (`0x40007408`) writes
+> are scope trigger/comparator evidence, not a DMM calibration path.
+> Do not resurrect the H1 "meter DAC reference" fix.
 
 **Status:** The claim in `CLAUDE.md` that stock firmware loads
 "301-byte cal data from SPI flash per channel" for meter calibration
