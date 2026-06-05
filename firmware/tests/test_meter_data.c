@@ -53,6 +53,23 @@ static int expect_normal_reading(const char *display,
     return 1;
 }
 
+static int expect_payload_cleared(const char *display)
+{
+    ASSERT_STR_EQ(meter_reading.display_str, display);
+    ASSERT_STR_EQ(meter_reading.unit_suffix, "");
+    ASSERT(close_to(meter_reading.value, 0.0f, 0.001f));
+    ASSERT(meter_reading.raw_bcd == 0);
+    ASSERT(meter_reading.decimal_pos == 0);
+    ASSERT(meter_reading.unit_variant == 0);
+    ASSERT(meter_reading.digits[0] == 0);
+    ASSERT(meter_reading.digits[1] == 0);
+    ASSERT(meter_reading.digits[2] == 0);
+    ASSERT(meter_reading.digits[3] == 0);
+    ASSERT(close_to(meter_reading.aux_freq_hz, 0.0f, 0.001f));
+    ASSERT(!meter_reading.continuity_beep);
+    return 1;
+}
+
 static void process_frame(const uint8_t frame[12], uint8_t submode)
 {
     meter_data_process_frame((const volatile uint8_t *)frame, submode);
@@ -472,6 +489,48 @@ static int test_special_frames_clear_stale_aux_frequency(void)
     return 1;
 }
 
+static int test_special_frames_clear_stale_payload_fields(void)
+{
+    uint8_t normal[12];
+    uint8_t overload[12];
+    uint8_t blank[12];
+    uint8_t partial_blank[12];
+    uint8_t invalid[12];
+
+    build_segment_frame(normal, 2, 2, 6, 1, 0x00, 0x00, 0x00, 0x00, 0);
+    build_segment_frame(overload, 0x0A, 0x0B, 0, 0, 0x00, 0x00, 0x00, 0x00, 0);
+    build_segment_frame(blank, 0x10, 0x10, 0x10, 0x10, 0x00, 0x00, 0x00, 0x00, 0);
+    build_segment_frame(partial_blank, 0x10, 0x11, 0x10, 0x10, 0x00, 0x00, 0x00, 0x00, 0);
+    build_segment_frame(invalid, 0xFF, 0, 0, 0, 0x00, 0x00, 0x00, 0x00, 0);
+
+    meter_data_init();
+    process_frame(normal, 2);
+    ASSERT(expect_normal_reading("22.61", "mA", 22.61f, 0.001f));
+    process_frame(overload, 2);
+    ASSERT(meter_reading.result_class == METER_RESULT_OVERLOAD);
+    ASSERT(meter_reading.bar_fraction == 1.0f);
+    ASSERT(expect_payload_cleared("OL"));
+
+    process_frame(normal, 2);
+    ASSERT(expect_normal_reading("22.61", "mA", 22.61f, 0.001f));
+    process_frame(blank, 2);
+    ASSERT(meter_reading.result_class == METER_RESULT_BLANK);
+    ASSERT(expect_payload_cleared("---"));
+
+    process_frame(normal, 2);
+    ASSERT(expect_normal_reading("22.61", "mA", 22.61f, 0.001f));
+    process_frame(partial_blank, 2);
+    ASSERT(meter_reading.result_class == METER_RESULT_BLANK);
+    ASSERT(expect_payload_cleared("---"));
+
+    process_frame(normal, 2);
+    ASSERT(expect_normal_reading("22.61", "mA", 22.61f, 0.001f));
+    process_frame(invalid, 2);
+    ASSERT(meter_reading.result_class == METER_RESULT_INVALID);
+    ASSERT(expect_payload_cleared("ERR"));
+    return 1;
+}
+
 static int test_non_voltage_modes_reject_voltage_payloads(void)
 {
     static const uint8_t mains_frame[12] = {
@@ -496,6 +555,49 @@ static int test_non_voltage_modes_reject_voltage_payloads(void)
             ASSERT_STR_EQ(meter_reading.unit_suffix, "");
             ASSERT(close_to(meter_reading.value, 0.0f, 0.001f));
             ASSERT(close_to(meter_reading.aux_freq_hz, 0.0f, 0.001f));
+        }
+    }
+    return 1;
+}
+
+static int test_voltage_payload_clears_stale_reading_in_all_non_voltage_modes(void)
+{
+    static const uint8_t mains_frame[12] = {
+        0x5A, 0xA5, 0xA5, 0xAD, 0xED, 0xBF,
+        0x0D, 0x00, 0x02, 0x00, 0x00, 0x31,
+    };
+    static const uint8_t dcv_frame[12] = {
+        0x5A, 0xA5, 0xC6, 0xF7, 0xEB, 0xEB,
+        0x0F, 0x00, 0x02, 0x00, 0x01, 0x4E,
+    };
+    static const uint8_t modes[] = { 3, 4, 5, 6, 7, 8, 9 };
+    const uint8_t *voltage_frames[] = { mains_frame, dcv_frame };
+    uint8_t normal[12];
+
+    for (unsigned m = 0; m < sizeof(modes); m++) {
+        for (unsigned f = 0; f < sizeof(voltage_frames) / sizeof(voltage_frames[0]); f++) {
+            meter_data_init();
+
+            if (modes[m] == 6 || modes[m] == 7) {
+                build_segment_frame(normal, 3, 3, 0, 0, 0x40, 0x00, 0x00, 0x00, 0);
+            } else {
+                build_segment_frame(normal, 1, 2, 3, 4, 0x00, 0x00, 0x00, 0x00, 0);
+            }
+
+            process_frame(normal, modes[m]);
+            ASSERT(meter_reading.valid);
+            ASSERT(meter_reading.result_class == METER_RESULT_NORMAL);
+            ASSERT(meter_reading.raw_bcd != 0);
+            ASSERT_STR_EQ(meter_reading.display_str,
+                          (modes[m] == 6 || modes[m] == 7) ? "3.300" :
+                          (modes[m] == 3 || modes[m] == 5) ? "1.234" :
+                          (modes[m] == 8 || modes[m] == 9) ? "123.4" : "12.34");
+
+            process_frame(voltage_frames[f], modes[m]);
+            ASSERT(!meter_reading.valid);
+            ASSERT(meter_reading.submode == modes[m]);
+            ASSERT(meter_reading.result_class == METER_RESULT_NONE);
+            ASSERT(expect_payload_cleared("---"));
         }
     }
     return 1;
@@ -570,7 +672,9 @@ int main(void)
     TEST(continuity_frame_sets_beep_from_segment_pattern);
     TEST(non_continuity_terminal_frames_clear_stale_beep);
     TEST(special_frames_clear_stale_aux_frequency);
+    TEST(special_frames_clear_stale_payload_fields);
     TEST(non_voltage_modes_reject_voltage_payloads);
+    TEST(voltage_payload_clears_stale_reading_in_all_non_voltage_modes);
     TEST(special_voltage_family_frames_are_rejected_outside_voltage);
     TEST(voltage_payload_clears_stale_current_reading);
 

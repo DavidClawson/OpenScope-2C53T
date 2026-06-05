@@ -41,8 +41,8 @@ The USB debug shell commands used for validation are:
   range/decimal instability without mixing concurrent serial readers.
 - `meter mux-stream [count] [delay_ms]`: decoded-frame stream plus expected
   DMM function/range selectors and actual frontend GPIO state.
-- `meter frontend`: one-shot DMM selector, GPIO, parsed reading, buzzer, and
-  discard-window state.
+- `meter frontend`: one-shot DMM selector, GPIO, parsed reading, recent USART
+  command pairs, buzzer, and discard-window state.
 - `meter adc-snapshot`: read-only DMM waveform sampler counters and summary.
 - `meter wave`: waveform buffer stats, SPI3 meter-ADC diagnostics, and the
   decoded DMM reading.

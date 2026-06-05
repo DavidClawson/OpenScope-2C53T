@@ -92,10 +92,10 @@ Simplest real-world measurement — use the built-in DMM to measure a battery.
       use `meter-dump`, `meter-mux-stream`, and `command "meter wave"`.
       Capture the raw 12-byte DMM frame, decoded BCD, decimal position, unit,
       `aux_freq_i10`, expected function/range selectors, GPIO frontend state,
-      `samples_total`, `delta_250ms`, SPI path, selector, raw min/max/RMS,
-      estimated frequency, and the decoded DMM reading. `delta_250ms` should
-      show the case-5 sample path advancing much faster than the few-hertz
-      decoded DMM frames.
+      recent FPGA USART command pairs, `samples_total`, `delta_250ms`, SPI path,
+      selector, raw min/max/RMS, estimated frequency, and the decoded DMM
+      reading. `delta_250ms` should show the case-5 sample path advancing much
+      faster than the few-hertz decoded DMM frames.
 - [ ] If `meter wave` shows flat samples, sweep the candidate path explicitly:
       `meter wave reset`, `meter wave path direct`, `meter wave selector 0`,
       `meter wave selector 1`, then repeat for `meter wave path preacq`.

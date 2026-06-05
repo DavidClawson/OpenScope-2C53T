@@ -587,6 +587,18 @@ static void usart2_send_frame(const uint8_t *frame)
     }
 }
 
+static void fpga_record_tx_cmd(uint8_t cmd_hi, uint8_t cmd_lo)
+{
+    uint8_t idx = fpga.tx_cmd_history_head & 0x0F;
+
+    fpga.tx_cmd_hi_history[idx] = cmd_hi;
+    fpga.tx_cmd_lo_history[idx] = cmd_lo;
+    fpga.tx_cmd_history_head = (uint8_t)((idx + 1U) & 0x0F);
+    if (fpga.tx_cmd_history_count < 16U) {
+        fpga.tx_cmd_history_count++;
+    }
+}
+
 /*
  * Build and send a USART command frame (10 bytes).
  * Format: [0][1] [cmd_hi][cmd_lo] [0..0] [checksum]
@@ -595,6 +607,8 @@ static void usart2_send_frame(const uint8_t *frame)
 static void usart2_send_cmd(uint8_t cmd_hi, uint8_t cmd_lo)
 {
     uint8_t frame[FPGA_TX_FRAME_SIZE] = {0};
+    fpga_record_tx_cmd(cmd_hi, cmd_lo);
+    fpga.tx_count++;
     frame[2] = cmd_hi;
     frame[3] = cmd_lo;
     /* NOTE: byte[8] was previously 0xAA based on protocol doc, but the
@@ -1549,6 +1563,7 @@ static void fpga_usart_tx_task(void *pv)
          * We previously hardcoded byte[8]=0xAA based on protocol doc,
          * but this likely caused checksum failures (zero echo frames). */
         fpga.tx_count++;
+        fpga_record_tx_cmd(cmd_hi, cmd_lo);
         fpga.tx_index = 0;
         memset((void *)fpga.tx_frame, 0, FPGA_TX_FRAME_SIZE);
         fpga.tx_frame[2] = cmd_hi;

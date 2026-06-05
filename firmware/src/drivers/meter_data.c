@@ -103,6 +103,20 @@ static void meter_record_history(void)
     r->update_count++; \
 } while (0)
 
+static void meter_clear_payload(meter_reading_t *r)
+{
+    r->value = 0.0f;
+    r->raw_bcd = 0;
+    memset(r->digits, 0, sizeof(r->digits));
+    r->decimal_pos = 0;
+    r->negative = false;
+    r->unit_suffix = "";
+    r->unit_variant = 0;
+    r->bar_fraction = 0.0f;
+    r->aux_freq_hz = 0.0f;
+    r->continuity_beep = false;
+}
+
 /* ═══════════════════════════════════════════════════════════════════
  * BCD Nibble Lookup
  *
@@ -825,40 +839,38 @@ void meter_data_process_frame(const volatile uint8_t *frame, uint8_t submode)
 
     /* Overload: "OL" */
     if (digit0 == 0x0A && digit1 == 0x0B) {
+        meter_clear_payload(r);
         r->result_class = METER_RESULT_OVERLOAD;
         strcpy(r->display_str, "OL");
-        r->value = 0.0f;
         r->bar_fraction = 1.0f;
-        r->continuity_beep = false;
         METER_FINISH_FRAME();
         return;
     }
 
     /* Blank display */
     if (digit0 == 0x10 && digit1 == 0x10) {
+        meter_clear_payload(r);
         r->result_class = METER_RESULT_BLANK;
         strcpy(r->display_str, "---");
-        r->value = 0.0f;
-        r->bar_fraction = 0.0f;
-        r->continuity_beep = false;
         METER_FINISH_FRAME();
         return;
     }
 
     /* Partial blank */
     if (digit0 == 0x10 && digit1 == 0x11) {
+        meter_clear_payload(r);
         r->result_class = METER_RESULT_BLANK;
         strcpy(r->display_str, "---");
-        r->value = 0.0f;
-        r->bar_fraction = 0.0f;
         METER_FINISH_FRAME();
         return;
     }
 
     /* Continuity detection */
     if (digit1 == 0x12 && digit2 == 0x0A && digit3 == 5) {
+        meter_clear_payload(r);
         r->result_class = METER_RESULT_CONTINUITY;
         r->continuity_beep = true;
+        r->unit_suffix = "Ohm";
         /* Still try to show a value if digit0 is valid */
         if (digit0 <= 9) {
             r->digits[0] = digit0;
@@ -878,10 +890,9 @@ void meter_data_process_frame(const volatile uint8_t *frame, uint8_t submode)
 
     /* Invalid digits */
     if (digit0 == 0xFF || digit1 == 0xFF || digit2 == 0xFF || digit3 == 0xFF) {
+        meter_clear_payload(r);
         r->result_class = METER_RESULT_INVALID;
         strcpy(r->display_str, "ERR");
-        r->value = 0.0f;
-        r->bar_fraction = 0.0f;
         METER_FINISH_FRAME();
         return;
     }

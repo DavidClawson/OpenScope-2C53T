@@ -2050,6 +2050,7 @@ static void cmd_meter_frontend(void)
 {
     uint16_t extra = meter_dbg_extra();
     fpga_meter_selector_t selectors = fpga_meter_expected_selectors(meter_submode);
+    uint8_t tx_count = fpga.tx_cmd_history_count;
 
     usb_send_str("=== DMM Frontend ===\r\n");
     usb_debug_printf("mode=%lu startup=%s meter_submode=%u (%s) reading_submode=%u valid=%u class=%u updates=%lu\r\n",
@@ -2078,6 +2079,14 @@ static void cmd_meter_frontend(void)
                      (long)scaled_i100(meter_reading.aux_freq_hz) / 10L,
                      meter_reading.continuity_beep ? 1U : 0U,
                      (unsigned)meter_frame_discard_count);
+    usb_send_str("tx_recent:");
+    for (uint8_t i = 0; i < tx_count; i++) {
+        uint8_t idx = (uint8_t)((fpga.tx_cmd_history_head + 16U - tx_count + i) & 0x0FU);
+        usb_debug_printf(" %02X%02X",
+                         (unsigned)fpga.tx_cmd_hi_history[idx],
+                         (unsigned)fpga.tx_cmd_lo_history[idx]);
+    }
+    usb_send_str("\r\n");
     usb_debug_printf("control PC6_spi=%u PB11_active=%u PC11_meter_mux=%u PC7_probe=%u PC0_ready=%u\r\n",
                      gpio_level(GPIOC, 6),
                      gpio_level(GPIOB, 11),
