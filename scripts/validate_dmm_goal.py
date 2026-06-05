@@ -144,6 +144,7 @@ def verify_re_coverage() -> dict[str, Any]:
         "shared local splits", "eight-entry stock selector table",
         "without binary stock evidence", "uA is unresolved and unexposed",
         "H2 table binary guard", "tail bytes", "0x1C340", "no ACK/apply proof",
+        "transition phase matrix", "busy transition frame", "stable frame",
     ]
 
     haystack = ""

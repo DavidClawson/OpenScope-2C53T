@@ -302,6 +302,42 @@ static void test_rx_frame_gate_preserves_discard_budget_while_busy(void)
                  transition_skips, 1U);
 }
 
+static void test_every_submode_transition_drains_before_accepting_frames(void)
+{
+    for (uint8_t mode = 0; mode < FPGA_METER_LOCAL_SUBMODE_COUNT; mode++) {
+        char name[96];
+        fpga_meter_transition_plan_t plan =
+            fpga_meter_transition_plan_for_submode(mode);
+        uint8_t discard = plan.discard_frames;
+        uint32_t transition_skips = 0;
+
+        snprintf(name, sizeof(name), "mode %u busy frame rejected", (unsigned)mode);
+        EXPECT_EQ_U8(name,
+                     fpga_meter_rx_frame_should_parse(true, &discard, &transition_skips) ? 1U : 0U,
+                     0U);
+        snprintf(name, sizeof(name), "mode %u busy keeps full discard", (unsigned)mode);
+        EXPECT_EQ_U8(name, discard, plan.discard_frames);
+        snprintf(name, sizeof(name), "mode %u busy skip counted", (unsigned)mode);
+        EXPECT_EQ_U8(name, transition_skips, 1U);
+
+        for (uint8_t i = 0; i < plan.discard_frames; i++) {
+            snprintf(name, sizeof(name), "mode %u discard frame %u",
+                     (unsigned)mode, (unsigned)i);
+            EXPECT_EQ_U8(name,
+                         fpga_meter_rx_frame_should_parse(false, &discard, &transition_skips) ? 1U : 0U,
+                         0U);
+        }
+        snprintf(name, sizeof(name), "mode %u discard drained", (unsigned)mode);
+        EXPECT_EQ_U8(name, discard, 0U);
+        snprintf(name, sizeof(name), "mode %u stable frame accepted", (unsigned)mode);
+        EXPECT_EQ_U8(name,
+                     fpga_meter_rx_frame_should_parse(false, &discard, &transition_skips) ? 1U : 0U,
+                     1U);
+        snprintf(name, sizeof(name), "mode %u stable keeps busy skip count", (unsigned)mode);
+        EXPECT_EQ_U8(name, transition_skips, 1U);
+    }
+}
+
 int main(void)
 {
     test_stock_table_bytes();
@@ -313,6 +349,7 @@ int main(void)
     test_local_splits_do_not_invent_extra_stock_selectors();
     test_fallbacks();
     test_rx_frame_gate_preserves_discard_budget_while_busy();
+    test_every_submode_transition_drains_before_accepting_frames();
 
     if (failures) {
         printf("%d fpga meter plan test(s) failed\n", failures);
