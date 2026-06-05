@@ -1498,6 +1498,32 @@ static int test_large_current_submodes_use_active_local_range_state(void)
     return 1;
 }
 
+static int test_current_submodes_do_not_expose_unproven_microamp_unit(void)
+{
+    uint8_t current_frame[12];
+    uint8_t ac_current_frame[12];
+    static const uint8_t modes[] = { 2, 3, 4, 5 };
+
+    build_segment_frame(current_frame, 2, 2, 6, 1, 0x00,
+                        0x00, 0x00, 0x00, 0);
+    build_segment_frame(ac_current_frame, 2, 2, 6, 1, 0x00,
+                        0x00, 0x00, 0x00, 0x0031);
+
+    for (unsigned i = 0; i < sizeof(modes); i++) {
+        uint8_t mode = modes[i];
+        const uint8_t *frame = (mode == 4 || mode == 5) ?
+                               ac_current_frame : current_frame;
+
+        meter_data_init();
+        process_frame(frame, mode);
+        ASSERT(meter_reading.valid);
+        ASSERT_STR_EQ(meter_reading.unit_suffix,
+                      (mode == 2 || mode == 4) ? "mA" : "A");
+        ASSERT(strcmp(meter_reading.unit_suffix, "uA") != 0);
+    }
+    return 1;
+}
+
 static int test_snapshot_returns_coherent_latest_completed_reading(void)
 {
     uint8_t ol_frame[12];
@@ -1574,6 +1600,7 @@ int main(void)
     TEST(low_dcv_voltage_payload_clears_stale_current_reading);
     TEST(stock_fsm_debug_fields_follow_mode_and_frames);
     TEST(large_current_submodes_use_active_local_range_state);
+    TEST(current_submodes_do_not_expose_unproven_microamp_unit);
     TEST(snapshot_returns_coherent_latest_completed_reading);
 
     printf("\n%d/%d tests passed\n", tests_passed, tests_run);

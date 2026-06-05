@@ -384,8 +384,8 @@ static void format_4digit_unsigned(float v, char *s)
  * Indexed by [local submode][local unit_variant]. Stock display evidence is
  * narrower than this UI table: `meter_fsm_deep_dive.md` and full_decompile.c
  * prove DCA formatter indices 4 (mA) and 3 (A), while ACA case 3 proves index
- * 5 (mA-like). No inspected stock path proves a uA selector or a separate AC A
- * formatter. The local variants therefore document UI intent and keep stale
+ * 5 (mA-like). No inspected stock path proves a uA selector/range or a
+ * separate AC A formatter. The local variants therefore document UI intent and keep stale
  * voltage/current data visibly separated; they must not be used as proof of an
  * unresolved hardware range state.
  *
@@ -397,9 +397,9 @@ static const char * const unit_suffix_table[11][3] = {
     /*                v0       v1       v2    */
     /* 0 DCV      */ { "V",    "mV",    "mV"   },
     /* 1 ACV      */ { "V",    "mV",    "mV"   },
-    /* 2 DCA(mA)  */ { "mA",   "uA",    "mA"   },
+    /* 2 DCA(mA)  */ { "mA",   "mA",    "mA"   },
     /* 3 DCA(A)   */ { "A",    "A",     "A"    },
-    /* 4 ACA(mA)  */ { "mA",   "uA",    "mA"   },
+    /* 4 ACA(mA)  */ { "mA",   "mA",    "mA"   },
     /* 5 local AC A */ { "A",  "A",     "A"    },
     /* 6 Ohm      */ { "Ohm",  "kOhm",  "MOhm" },
     /* 7 Cont     */ { "Ohm",  "Ohm",   "Ohm"  },

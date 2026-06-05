@@ -57,7 +57,7 @@ typedef struct {
      * Points to a static string (never NULL). Example values:
      *   DCV:         "V", "mV"
      *   ACV:         "V", "mV"
-     *   DCA/ACA:     "A", "mA" (uA is a local placeholder, not stock-proven)
+     *   DCA/ACA:     "A", "mA" (uA is unresolved and not exposed as a local mode)
      *   Resistance:  "Ohm", "kOhm", "MOhm"
      *   Frequency:   "Hz", "kHz", "MHz"
      *   Capacitance: "nF", "uF"
@@ -66,8 +66,9 @@ typedef struct {
     const char *unit_suffix;
 
     /* Local unit/range variant (0..2) within the current submode. DC current
-     * has stock formatter evidence for mA/A; AC A and uA remain local policy
-     * until stock range state or live current traces prove them. */
+     * has stock formatter evidence for mA/A; AC A remains local policy, and
+     * uA remains unexposed until stock range state or live current traces prove
+     * it. */
     uint8_t  unit_variant;
 
     /* Bar graph fraction (0.0 - 1.0) */

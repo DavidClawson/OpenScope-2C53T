@@ -93,8 +93,8 @@ No inspected stock path proves a separate uA selector, and no inspected AC path
 proves an A-range ACA formatter. The stock evidence so far distinguishes DC
 current ranges through frame/display unit state, not through additional
 command-table slots. Until the runtime writer for the stock range state is
-recovered or bench-proven, local uA and AC A labels are parser/UI policy on top
-of the two recovered current slots.
+recovered or bench-proven, uA is unresolved and unexposed in the local UI, while
+AC A remains parser/UI policy on top of the recovered ACA current slot.
 
 ## Voltage Frame-Family Marker Boundary
 

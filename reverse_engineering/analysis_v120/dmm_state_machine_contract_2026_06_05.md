@@ -61,6 +61,12 @@ eight-entry stock selector table. A future hard input must not cause the port to
 new 0x05xx selector for one side of a local split unless a recovered stock
 writer or repeatable stock-runtime trace proves it.
 
+The current software model does not expose a separate uA local submode. uA is
+unresolved and unexposed until stock range state or live current traces prove a
+real microamp frontend/range path. Current tests therefore assert that the
+implemented current submodes render only the recovered/local mA and A units,
+not an invented uA unit.
+
 ## Current Evidence Boundary
 
 The software contract proves parser/state safety only:

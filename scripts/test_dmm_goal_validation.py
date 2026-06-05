@@ -115,6 +115,7 @@ class DmmGoalValidationTests(unittest.TestCase):
         self.assertIn("shared local splits", coverage["terms"])
         self.assertIn("eight-entry stock selector table", coverage["terms"])
         self.assertIn("without binary stock evidence", coverage["terms"])
+        self.assertIn("uA is unresolved and unexposed", coverage["terms"])
 
     def test_unrecovered_meter_coefficients_are_absent(self) -> None:
         result = validate_dmm_goal.verify_no_unrecovered_meter_coefficients()
