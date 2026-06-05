@@ -46,8 +46,9 @@ The USB debug shell commands used for validation are:
 - `meter adc-snapshot`: read-only DMM waveform sampler counters and summary.
 - `meter wave`: waveform buffer stats, SPI3 meter-ADC diagnostics, and the
   decoded DMM reading.
-- `meter wave path [direct|preacq]` and `meter wave selector [auto|0|1]`:
-  explicit diagnostics for the candidate DMM waveform SPI path.
+- `meter wave path [direct|preacq]`, `meter wave selector [auto|0..255]`,
+  and `meter wave preacq [auto|0..255]`: explicit diagnostics for the
+  candidate DMM waveform SPI path.
 - `mode meter [submode] [layout]`: switch the UI and FPGA frontend to a DMM
   submode from USB before capturing evidence.
 
@@ -66,8 +67,11 @@ the UI renderer.
 
 ## Rendering
 
-The full DMM voltage layout keeps the large numeric reading and bar graph, then
-draws a compact waveform panel below them:
+The full DMM voltage layout keeps the large numeric reading and bar graph. A
+compact waveform panel is allowed only after the candidate sample source shows
+real peak-to-peak movement; when the source is flat `0xFF`, the firmware must
+show the waveform as unavailable rather than drawing a synthetic or scaled
+trace.
 
 - The trace is auto-scaled to the raw min/max in the sample buffer.
 - A faint envelope shows the recent raw range so clipped or noisy shapes do not
@@ -151,5 +155,8 @@ about 50 Hz. The `aux_freq_i10` value is still empirical live metadata from
 The waveform source is still not solved. A post-flash sweep across
 `direct/preacq` SPI paths and selector `0/1` showed the candidate sample stream
 advancing at about 1 kHz but every sample remained `0xFF`, with `p2p=0` and no
-usable DMM-path shape. That blocks claiming the voltage waveform overlay works
-on the real COM + V/Ohm/C jacks.
+usable DMM-path shape. A later diagnostic build expanded the sweep to
+`preacq=0x80..0x8F` and `selector=0..7`; all 128 combinations still returned
+`pre_rx=FF`, `last=FF`, `min=FF`, and `max=FF` while the USART2 DMM reading
+remained live at about `4.995..4.997 V` on a 5 V DC lab supply. That blocks
+claiming the voltage waveform overlay works on the real COM + V/Ohm/C jacks.
