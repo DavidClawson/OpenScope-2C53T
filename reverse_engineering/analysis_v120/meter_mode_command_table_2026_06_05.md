@@ -914,6 +914,40 @@ tails. It deliberately does not prove that any inspected DMM runtime branch
 writes those bytes during local range switching, and it does not turn the DAC1
 tail into a DMM calibration coefficient.
 
+### Mux GPIO State Projection Guard, 2026-06-06
+
+The open firmware now exposes a pure `fpga_meter_mux_gpio_state_for_submode`
+model so the stock mux projection can be unit-tested without touching hardware.
+The model starts from the same baseline used by
+`fpga_set_meter_frontend_for_submode`: PC12 high, PE4 high, PE5 low, PE6 high,
+PA15 high, PA10 high, PB10 low, PB11 high, with PB9 and PA6 kept low by the
+auxiliary AFE boundary below. It then applies the 10-way switch bodies from
+`FUN_080018a4` (`0x080018A4..0x080019B6`) and `FUN_08001a58`
+(`0x08001A58..0x08001BAA`).
+
+Final projected levels for the local DMM submodes are:
+
+| Local submode | Stock slot | PC12 | PE4 | PE5 | PE6 | PA15 | PA10 | PB10 | PB11 | PB9 | PA6 | Evidence/gap |
+| --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | --- |
+| 0 DCV | 0 | 1 | 1 | 0 | 1 | 1 | 1 | 0 | 1 | 0 | 0 | Stock slot 0 projection |
+| 1 ACV | 1 | 1 | 1 | 0 | 1 | 1 | 1 | 1 | 1 | 0 | 0 | Stock slot 1 projection |
+| 2 DC current small | 2 | 1 | 1 | 1 | 0 | 1 | 0 | 1 | 0 | 0 | 0 | Shares recovered stock slot 2 |
+| 3 DC current A | 2 | 1 | 1 | 1 | 0 | 1 | 0 | 1 | 0 | 0 | 0 | Local split, no extra stock slot recovered |
+| 4 AC current small | 3 | 1 | 1 | 0 | 0 | 1 | 0 | 0 | 1 | 0 | 0 | Shares recovered stock slot 3 |
+| 5 AC current A | 3 | 1 | 1 | 0 | 0 | 1 | 0 | 0 | 1 | 0 | 0 | Local split, no extra stock slot recovered |
+| 6 Resistance | 4 | 1 | 1 | 1 | 0 | 1 | 0 | 1 | 1 | 0 | 0 | Stock slot 4 projection |
+| 7 Continuity | 6 | 0 | 1 | 0 | 1 | 0 | 1 | 1 | 1 | 0 | 0 | Stock slot 6 projection |
+| 8 Diode | 7 | 0 | 0 | 0 | 1 | 0 | 1 | 1 | 0 | 0 | 0 | Stock slot 7 projection |
+| 9 Capacitance | 5 | 0 | 1 | 0 | 1 | 0 | 1 | 0 | 1 | 0 | 0 | Shares recovered stock slot 5 |
+| 10 Temperature | 5 | 0 | 1 | 0 | 1 | 0 | 1 | 0 | 1 | 0 | 0 | Local split, no extra stock slot recovered |
+
+This is a mux GPIO state projection guard: it makes the current stock-slot
+projection explicit and testable, but it remains a policy boundary. No
+currently recovered DMM branch proves a separate runtime writer for small/A
+current, capacitance/temperature, or a low-DCV physical range. A future change
+must update the stock-offset evidence, this table, and the unit tests together
+instead of reacting to a surprising reading with decoder-side coefficients.
+
 ### Auxiliary AFE PB9/PA6 Guard, 2026-06-06
 
 The stock master-init sequence leaves PB9 and PA6 configured as outputs only,

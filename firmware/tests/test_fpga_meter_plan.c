@@ -27,6 +27,34 @@ static int failures;
         } \
     } while (0)
 
+static void expect_mux_state(const char *label,
+                             const fpga_meter_mux_gpio_state_t *got,
+                             const fpga_meter_mux_gpio_state_t *want)
+{
+    char name[96];
+
+    snprintf(name, sizeof(name), "%s pc12", label);
+    EXPECT_EQ_U8(name, got->pc12, want->pc12);
+    snprintf(name, sizeof(name), "%s pe4", label);
+    EXPECT_EQ_U8(name, got->pe4, want->pe4);
+    snprintf(name, sizeof(name), "%s pe5", label);
+    EXPECT_EQ_U8(name, got->pe5, want->pe5);
+    snprintf(name, sizeof(name), "%s pe6", label);
+    EXPECT_EQ_U8(name, got->pe6, want->pe6);
+    snprintf(name, sizeof(name), "%s pa15", label);
+    EXPECT_EQ_U8(name, got->pa15, want->pa15);
+    snprintf(name, sizeof(name), "%s pa10", label);
+    EXPECT_EQ_U8(name, got->pa10, want->pa10);
+    snprintf(name, sizeof(name), "%s pb10", label);
+    EXPECT_EQ_U8(name, got->pb10, want->pb10);
+    snprintf(name, sizeof(name), "%s pb11", label);
+    EXPECT_EQ_U8(name, got->pb11, want->pb11);
+    snprintf(name, sizeof(name), "%s pb9", label);
+    EXPECT_EQ_U8(name, got->pb9, want->pb9);
+    snprintf(name, sizeof(name), "%s pa6", label);
+    EXPECT_EQ_U8(name, got->pa6, want->pa6);
+}
+
 static void test_stock_table_bytes(void)
 {
     static const uint8_t expected[FPGA_METER_STOCK_MODE_COUNT] = {
@@ -160,6 +188,34 @@ static void test_transition_plan_covers_mux_family_and_settle_policy(void)
         EXPECT_EQ_U8(name, plan.voltage_function_axis ? 1U : 0U,
                      expected_family[i] == FPGA_METER_FRAME_FAMILY_VOLTAGE ?
                      1U : 0U);
+    }
+}
+
+static void test_mux_gpio_state_matches_stock_projection_for_every_submode(void)
+{
+    static const fpga_meter_mux_gpio_state_t expected[FPGA_METER_LOCAL_SUBMODE_COUNT] = {
+        { 1, 1, 0, 1, 1, 1, 0, 1, 0, 0 },
+        { 1, 1, 0, 1, 1, 1, 1, 1, 0, 0 },
+        { 1, 1, 1, 0, 1, 0, 1, 0, 0, 0 },
+        { 1, 1, 1, 0, 1, 0, 1, 0, 0, 0 },
+        { 1, 1, 0, 0, 1, 0, 0, 1, 0, 0 },
+        { 1, 1, 0, 0, 1, 0, 0, 1, 0, 0 },
+        { 1, 1, 1, 0, 1, 0, 1, 1, 0, 0 },
+        { 0, 1, 0, 1, 0, 1, 1, 1, 0, 0 },
+        { 0, 0, 0, 1, 0, 1, 1, 0, 0, 0 },
+        { 0, 1, 0, 1, 0, 1, 0, 1, 0, 0 },
+        { 0, 1, 0, 1, 0, 1, 0, 1, 0, 0 },
+    };
+
+    for (uint8_t i = 0; i < FPGA_METER_LOCAL_SUBMODE_COUNT; i++) {
+        char name[48];
+        fpga_meter_mux_gpio_state_t state;
+
+        snprintf(name, sizeof(name), "mux gpio submode %u", (unsigned)i);
+        EXPECT_EQ_U8(name,
+                     fpga_meter_mux_gpio_state_for_submode(i, &state) ? 1U : 0U,
+                     1U);
+        expect_mux_state(name, &state, &expected[i]);
     }
 }
 
@@ -323,10 +379,41 @@ static void test_local_splits_do_not_invent_extra_stock_selectors(void)
     }
 }
 
+static void test_local_splits_share_mux_gpio_state(void)
+{
+    static const struct {
+        uint8_t a;
+        uint8_t b;
+        const char *label;
+    } shared_slots[] = {
+        { 2, 3, "DC current small/A" },
+        { 4, 5, "AC current small/A" },
+        { 9, 10, "capacitance/temperature" },
+    };
+
+    for (unsigned i = 0; i < sizeof(shared_slots) / sizeof(shared_slots[0]); i++) {
+        fpga_meter_mux_gpio_state_t a;
+        fpga_meter_mux_gpio_state_t b;
+        char name[80];
+
+        snprintf(name, sizeof(name), "%s mux gpio A", shared_slots[i].label);
+        EXPECT_EQ_U8(name,
+                     fpga_meter_mux_gpio_state_for_submode(shared_slots[i].a, &a) ? 1U : 0U,
+                     1U);
+        snprintf(name, sizeof(name), "%s mux gpio B", shared_slots[i].label);
+        EXPECT_EQ_U8(name,
+                     fpga_meter_mux_gpio_state_for_submode(shared_slots[i].b, &b) ? 1U : 0U,
+                     1U);
+        snprintf(name, sizeof(name), "%s mux gpio shared", shared_slots[i].label);
+        expect_mux_state(name, &a, &b);
+    }
+}
+
 static void test_fallbacks(void)
 {
     fpga_meter_transition_plan_t plan =
         fpga_meter_transition_plan_for_submode(99);
+    fpga_meter_mux_gpio_state_t state = { 0 };
 
     EXPECT_EQ_U8("bad stock mode is invalid",
                  fpga_meter_stock_cmd_low_for_mode(99), 0);
@@ -359,6 +446,13 @@ static void test_fallbacks(void)
     EXPECT_EQ_U16("bad plan settle", plan.settle_ms, 0U);
     EXPECT_EQ_U8("bad plan voltage axis",
                  plan.voltage_function_axis ? 1U : 0U, 0U);
+    EXPECT_EQ_U8("bad submode no mux gpio state",
+                 fpga_meter_mux_gpio_state_for_submode(99, &state) ? 1U : 0U,
+                 0U);
+    EXPECT_EQ_U8("bad submode keeps baseline pc12", state.pc12, 1U);
+    EXPECT_EQ_U8("null mux gpio state is rejected",
+                 fpga_meter_mux_gpio_state_for_submode(0, NULL) ? 1U : 0U,
+                 0U);
 }
 
 static void test_rx_frame_gate_preserves_discard_budget_while_busy(void)
@@ -437,10 +531,12 @@ int main(void)
     test_wire_words_are_raw_05_family();
     test_stock_apply_words_for_runtime_family_switch();
     test_transition_plan_covers_mux_family_and_settle_policy();
+    test_mux_gpio_state_matches_stock_projection_for_every_submode();
     test_transition_settle_discard_policy_is_explicit_for_every_submode();
     test_state_machine_contract_is_exhaustive();
     test_frame_family_mismatch_policy_matrix_is_exhaustive();
     test_local_splits_do_not_invent_extra_stock_selectors();
+    test_local_splits_share_mux_gpio_state();
     test_fallbacks();
     test_rx_frame_gate_preserves_discard_budget_while_busy();
     test_every_submode_transition_drains_before_accepting_frames();

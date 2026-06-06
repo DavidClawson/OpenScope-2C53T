@@ -42,6 +42,19 @@ typedef struct {
     bool voltage_function_axis;
 } fpga_meter_transition_plan_t;
 
+typedef struct {
+    uint8_t pc12;
+    uint8_t pe4;
+    uint8_t pe5;
+    uint8_t pe6;
+    uint8_t pa15;
+    uint8_t pa10;
+    uint8_t pb10;
+    uint8_t pb11;
+    uint8_t pb9;
+    uint8_t pa6;
+} fpga_meter_mux_gpio_state_t;
+
 bool fpga_meter_submode_is_valid(uint8_t submode);
 uint8_t fpga_meter_stock_mode_for_submode(uint8_t submode);
 uint8_t fpga_meter_stock_cmd_low_for_mode(uint8_t stock_mode);
@@ -51,6 +64,8 @@ fpga_meter_frame_family_t fpga_meter_frame_family_for_submode(uint8_t submode);
 bool fpga_meter_frame_family_is_recovered(uint8_t family);
 bool fpga_meter_frame_family_is_acceptable(uint8_t expected, uint8_t observed);
 fpga_meter_transition_plan_t fpga_meter_transition_plan_for_submode(uint8_t submode);
+bool fpga_meter_mux_gpio_state_for_submode(uint8_t submode,
+                                           fpga_meter_mux_gpio_state_t *out);
 bool fpga_meter_rx_frame_should_parse(bool transition_busy,
                                       volatile uint8_t *discard_count,
                                       volatile uint32_t *transition_skip_count);

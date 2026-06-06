@@ -18,6 +18,62 @@ static const uint8_t stock_meter_cmd_low[FPGA_METER_STOCK_MODE_COUNT] = {
     0x14, 0x0C, 0x17, 0x0B, 0x0A, 0x12, 0x11, 0x10
 };
 
+typedef struct {
+    uint8_t pc12;
+    uint8_t pe4;
+    uint8_t pe5;
+    uint8_t pe6;
+} fpga_meter_portc_porte_state_t;
+
+typedef struct {
+    uint8_t pa15;
+    uint8_t pa10;
+    uint8_t pb10;
+    uint8_t pb11;
+} fpga_meter_porta_portb_state_t;
+
+/*
+ * Stock source of truth:
+ * - FUN_080018a4 @ 0x080018A4 projects ms[0x02] into PC12/PE4/PE5/PE6.
+ * - FUN_08001a58 @ 0x08001A58 projects ms[0x03] into PA15/PA10/PB10/PB11.
+ *
+ * The stock writers only touch the pins selected by each switch arm. These
+ * final levels include the open firmware's stock-like pre-seed before applying
+ * that projection. PB9 and PA6 are kept low because the recovered stock sites
+ * only prove reset/output-low setup for the auxiliary AFE pins.
+ */
+static const fpga_meter_mux_gpio_state_t meter_mux_baseline = {
+    1, 1, 0, 1,
+    1, 1, 0, 1,
+    0, 0
+};
+
+static const fpga_meter_portc_porte_state_t stock_portc_porte_mux[10] = {
+    { 1, 1, 0, 1 },
+    { 1, 1, 0, 1 },
+    { 1, 1, 1, 0 },
+    { 1, 1, 0, 0 },
+    { 1, 1, 1, 0 },
+    { 0, 1, 0, 1 },
+    { 0, 1, 0, 1 },
+    { 0, 0, 0, 1 },
+    { 0, 1, 0, 0 },
+    { 0, 1, 1, 0 },
+};
+
+static const fpga_meter_porta_portb_state_t stock_porta_portb_mux[10] = {
+    { 1, 1, 0, 1 },
+    { 1, 1, 1, 1 },
+    { 1, 0, 1, 0 },
+    { 1, 0, 0, 1 },
+    { 1, 0, 1, 1 },
+    { 0, 1, 0, 1 },
+    { 0, 1, 1, 1 },
+    { 0, 1, 1, 0 },
+    { 0, 0, 0, 1 },
+    { 0, 0, 1, 1 },
+};
+
 bool fpga_meter_submode_is_valid(uint8_t submode)
 {
     return submode < FPGA_METER_LOCAL_SUBMODE_COUNT;
@@ -191,6 +247,37 @@ fpga_meter_transition_plan_t fpga_meter_transition_plan_for_submode(uint8_t subm
     plan.voltage_function_axis =
         (plan.frame_family == FPGA_METER_FRAME_FAMILY_VOLTAGE);
     return plan;
+}
+
+bool fpga_meter_mux_gpio_state_for_submode(uint8_t submode,
+                                           fpga_meter_mux_gpio_state_t *out)
+{
+    fpga_meter_transition_plan_t plan =
+        fpga_meter_transition_plan_for_submode(submode);
+    fpga_meter_portc_porte_state_t ce;
+    fpga_meter_porta_portb_state_t ab;
+
+    if (out == 0) {
+        return false;
+    }
+    *out = meter_mux_baseline;
+
+    if (plan.portc_porte_mux >= 10 || plan.porta_portb_mux >= 10) {
+        return false;
+    }
+
+    ce = stock_portc_porte_mux[plan.portc_porte_mux];
+    ab = stock_porta_portb_mux[plan.porta_portb_mux];
+
+    out->pc12 = ce.pc12;
+    out->pe4 = ce.pe4;
+    out->pe5 = ce.pe5;
+    out->pe6 = ce.pe6;
+    out->pa15 = ab.pa15;
+    out->pa10 = ab.pa10;
+    out->pb10 = ab.pb10;
+    out->pb11 = ab.pb11;
+    return true;
 }
 
 bool fpga_meter_rx_frame_should_parse(bool transition_busy,

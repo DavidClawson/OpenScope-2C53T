@@ -488,10 +488,12 @@ def verify_transition_plan_property_contract() -> dict[str, Any]:
     text = (REPO / rel).read_text(encoding="utf-8", errors="replace")
     required_tests = [
         "transition_plan_covers_mux_family_and_settle_policy",
+        "mux_gpio_state_matches_stock_projection_for_every_submode",
         "transition_settle_discard_policy_is_explicit_for_every_submode",
         "state_machine_contract_is_exhaustive",
         "frame_family_mismatch_policy_matrix_is_exhaustive",
         "local_splits_do_not_invent_extra_stock_selectors",
+        "local_splits_share_mux_gpio_state",
         "fallbacks",
         "rx_frame_gate_preserves_discard_budget_while_busy",
         "every_submode_transition_drains_before_accepting_frames",
@@ -514,6 +516,10 @@ def verify_transition_plan_property_contract() -> dict[str, Any]:
             r"\{\s*9,\s*10,\s*\"capacitance/temperature\"\s*\}",
         "transition plan iterates every local submode":
             r"for \(uint8_t i = 0; i < FPGA_METER_LOCAL_SUBMODE_COUNT; i\+\+\)",
+        "mux gpio state table covers every local submode":
+            r"static const fpga_meter_mux_gpio_state_t expected\[FPGA_METER_LOCAL_SUBMODE_COUNT\]\s*=",
+        "auxiliary AFE pins stay low in tested mux states":
+            r"\{\s*1,\s*1,\s*0,\s*1,\s*1,\s*1,\s*0,\s*1,\s*0,\s*0\s*\}",
         "phase matrix iterates every local submode":
             r"for \(uint8_t mode = 0; mode < FPGA_METER_LOCAL_SUBMODE_COUNT; mode\+\+\)",
         "planned discards drain in order":
@@ -533,6 +539,10 @@ def verify_transition_plan_property_contract() -> dict[str, Any]:
         "FPGA_METER_FRAME_FAMILY_DIODE",
         "FPGA_METER_FRAME_FAMILY_EXTENDED",
         "fpga_meter_frame_family_is_acceptable",
+        "fpga_meter_mux_gpio_state_for_submode",
+        "expect_mux_state",
+        "mux gpio submode",
+        "mux gpio shared",
         "families[e] == families[o]",
         "busy frame rejected",
         "stable frame accepted",
@@ -791,6 +801,9 @@ def verify_re_coverage() -> dict[str, Any]:
         "scope/siggen mux callers are not DMM runtime range proof",
         "mux writer body guard", "gpio_pc12_pe_write_block",
         "gpio_pa15_pb11_pb10_write_block", "DAC1/scope calibration tail",
+        "Mux GPIO State Projection Guard", "fpga_meter_mux_gpio_state_for_submode",
+        "Final projected levels", "Stock slot 0 projection",
+        "Local split, no extra stock slot recovered",
         "runtime mux-state writer guard", "0x08001EE8", "0x0801A526",
         "mux-state RAM-map boundary", "DAT_200000fa (25 refs)",
         "DAT_200000fb (11 refs)", "function-level refs",
