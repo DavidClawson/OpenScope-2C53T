@@ -765,6 +765,45 @@ static int test_stock_formatter_families_have_regression_fixtures(void)
     return 1;
 }
 
+static int test_passive_formatter_debug_fields_cover_diode_and_extended_splits(void)
+{
+    uint8_t frame[12];
+
+    meter_data_init();
+    build_segment_frame(frame, 6, 7, 8, 9, 0x00, 0x00, 0x00, 0x00, 0);
+    process_frame(frame, 8);
+    ASSERT(expect_normal_reading("678.9", "V", 678.9f, 0.001f));
+    ASSERT(meter_reading.expected_frame_family ==
+           (uint8_t)FPGA_METER_FRAME_FAMILY_DIODE);
+    ASSERT(meter_reading.observed_frame_family ==
+           meter_reading.expected_frame_family);
+    ASSERT(meter_reading.stock_mode == 7);
+    ASSERT(meter_reading.stock_unit_index == 8);
+    ASSERT(meter_reading.stock_composite_index == 12);
+
+    build_segment_frame(frame, 1, 2, 3, 4, 0x00, 0x00, 0x00, 0x00, 0);
+    process_frame(frame, 9);
+    ASSERT(expect_normal_reading("123.4", "nF", 123.4f, 0.001f));
+    ASSERT(meter_reading.expected_frame_family ==
+           (uint8_t)FPGA_METER_FRAME_FAMILY_EXTENDED);
+    ASSERT(meter_reading.observed_frame_family ==
+           meter_reading.expected_frame_family);
+    ASSERT(meter_reading.stock_mode == 5);
+    ASSERT(meter_reading.stock_unit_index == 7);
+    ASSERT(meter_reading.stock_composite_index == 9);
+
+    process_frame(frame, 10);
+    ASSERT(expect_normal_reading("123.4", "C", 123.4f, 0.001f));
+    ASSERT(meter_reading.expected_frame_family ==
+           (uint8_t)FPGA_METER_FRAME_FAMILY_EXTENDED);
+    ASSERT(meter_reading.observed_frame_family ==
+           meter_reading.expected_frame_family);
+    ASSERT(meter_reading.stock_mode == 5);
+    ASSERT(meter_reading.stock_unit_index == 7);
+    ASSERT(meter_reading.stock_composite_index == 9);
+    return 1;
+}
+
 static int test_resistance_low_ohm_fails_closed_without_factory_cal(void)
 {
     uint8_t frame[12];
@@ -1785,6 +1824,7 @@ int main(void)
     TEST(ac_current_rejects_current_frame_without_ac_evidence);
     TEST(ac_modes_require_frequency_hint_boundaries);
     TEST(stock_formatter_families_have_regression_fixtures);
+    TEST(passive_formatter_debug_fields_cover_diode_and_extended_splits);
     TEST(resistance_low_ohm_fails_closed_without_factory_cal);
     TEST(invalidate_clears_stale_reading_before_mode_transition);
     TEST(invalidate_clears_stale_reading_for_every_submode);

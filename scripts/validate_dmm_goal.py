@@ -172,6 +172,7 @@ def verify_state_machine_property_contract() -> dict[str, Any]:
         "acv_rejects_dc_voltage_without_ac_evidence",
         "ac_current_rejects_current_frame_without_ac_evidence",
         "ac_modes_require_frequency_hint_boundaries",
+        "passive_formatter_debug_fields_cover_diode_and_extended_splits",
         "invalid_submode_rejects_without_becoming_dcv",
         "state_machine_property_matrix_covers_all_submodes",
         "invalidate_clears_stale_payload_for_every_ordered_mode_transition",
@@ -223,6 +224,10 @@ def verify_state_machine_property_contract() -> dict[str, Any]:
         "dbg_frame[10]",
         "dbg_frame[11]",
         "FPGA_METER_FRAME_FAMILY_CONTINUITY",
+        "FPGA_METER_FRAME_FAMILY_DIODE",
+        "FPGA_METER_FRAME_FAMILY_EXTENDED",
+        "meter_reading.stock_composite_index == 12",
+        "meter_reading.stock_composite_index == 9",
         "uA",
     ]
 

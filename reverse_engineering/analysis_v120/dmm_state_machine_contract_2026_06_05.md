@@ -92,6 +92,11 @@ The software contract proves parser/state safety only:
 - special/terminal voltage-family frames such as stock `OL` are also rejected
   across every non-voltage submode `{2..10}` instead of being tested only
   against one current mode and resistance
+- diode and the shared capacitance/temperature extended slot have explicit
+  formatter-debug guards: diode must stay on local diode family / stock mode 7
+  and capacitance/temperature must stay on local extended family / stock mode 5;
+  these tests pin stock formatter indices and local suffix overrides without
+  claiming physical diode/capacitance/temperature calibration is solved
 - AC modes fail closed without line-frequency evidence
 - mode invalidation clears stale payloads before transition
 - the first post-transition frames are discarded before parsing
