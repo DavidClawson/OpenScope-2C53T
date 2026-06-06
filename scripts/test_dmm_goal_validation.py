@@ -300,6 +300,23 @@ class DmmGoalValidationTests(unittest.TestCase):
         sequences = result["sequences"]
 
         self.assertEqual(
+            sequences["boot_saved_mode_init_state_restore"]["addr"],
+            "0x08026f50",
+        )
+        self.assertIn(
+            "9a f8 64 0f a0 b1 8a f8 68 0f",
+            sequences["boot_saved_mode_init_state_restore"]["bytes"],
+        )
+        self.assertIn(
+            "01 28 17 d0 03 28 4c d0 02 28 51 d1",
+            sequences["boot_saved_mode_init_state_restore"]["bytes"],
+        )
+        self.assertIn(
+            "9a f8 68 0f 01 21 8a f8 69 1f 01 28 e7 d1",
+            sequences["boot_saved_mode_init_state_restore"]["bytes"],
+        )
+
+        self.assertEqual(
             sequences["meter_transport_enable_resume_reset"]["addr"],
             "0x08026f8e",
         )

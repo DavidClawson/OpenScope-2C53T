@@ -67,11 +67,21 @@ USART2 command path, not the display queue. It is still digital command-path
 evidence only: it does not recover the DMM-specific `ms[0x02]`/`ms[0x03]`
 analog mux writers, relay/range timing, or calibration.
 
-The stock transport transition is now binary-guarded too. This
-`meter transport transition guard` covers the two boot/config branches that
-enable/resume or disable/drain the DMM USART2 path:
+The stock transport transition is now binary-guarded too. The
+saved mode-init restore path is stock-visible at `0x08026F50`: it copies the
+saved `ms[0xF64]` byte into live `ms[0xF68]` before the restored state is
+branched into the same boot transport paths. This
+`meter transport transition guard` now covers the saved-state prelude plus the
+two boot/config branches that enable/resume or disable/drain the DMM USART2
+path:
 
 ```text
+0x08026F50: read saved `ms[0xF64]`
+0x08026F56: if nonzero, copy saved byte to live `ms[0xF68]`
+0x08026F5A..0x08026F64: branch restored state 1/3/2 into boot transport paths
+0x08026F80..0x08026F8C: if no saved state, read live `ms[0xF68]`,
+                        set `ms[0xF69] = 1`, and reuse the same branch logic
+
 0x08026F8E: USART2 CTRL1 |= 0x2000
 0x08026F9E: load task handle 0x20002DA0, call vTaskResume
 0x08026FAC: load task handle 0x20002DA4, call vTaskResume
@@ -91,6 +101,13 @@ enable/resume or disable/drain the DMM USART2 path:
 The guarded byte slices are:
 
 ```text
+0x08026F50:
+  9a f8 64 0f a0 b1 8a f8 68 0f 01 28 17 d0
+  03 28 4c d0 02 28 51 d1 9a f8 54 03 00 07
+  42 f6 50 50 c2 f2 00 00 0c bf 00 21 4f f4
+  70 51 01 80 44 e0 9a f8 68 0f 01 21 8a f8
+  69 1f 01 28 e7 d1
+
 0x08026F8E:
   44 f2 0c 41 c4 f2 00 01 08 68 40 f4 00 50 08 60
   42 f6 a0 50 c2 f2 00 00 00 68 13 f0 32 fb
@@ -110,11 +127,14 @@ The guarded byte slices are:
   00 68 00 21 13 f0 ed fd
 ```
 
-This is stock evidence for the transport side of DMM transitions: pause/drain
-via task suspension and queue reset, then resume with USART2 and PC11 active.
+This is stock evidence for the transport side of DMM transitions: saved
+mode-init restore, pause/drain via task suspension and queue reset, then resume
+with USART2 and PC11 active.
 It does not recover the exact local settle delay or frame-discard count, so the
 open firmware must keep those constants documented as conservative local
-policy until a stock runtime trace proves them.
+policy until a stock runtime trace proves them. It also does not recover a
+physical analog range writer for `ms[0x02]`/`ms[0x03]` or any factory
+calibration coefficient.
 
 The runtime UI/mode-switch path carries the same transport shape and is now
 covered by the `runtime mode-switch transport guard`.  This is distinct from

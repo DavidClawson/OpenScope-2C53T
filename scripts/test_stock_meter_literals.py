@@ -41,6 +41,16 @@ EXPECTED_DVOM_TX_QUEUE_CONSUMER_SEQUENCES = {
     ),
 }
 EXPECTED_METER_TRANSPORT_TRANSITION_SEQUENCES = {
+    "boot_saved_mode_init_state_restore": (
+        0x08026F50,
+        bytes.fromhex(
+            "9a f8 64 0f a0 b1 8a f8 68 0f 01 28 17 d0 "
+            "03 28 4c d0 02 28 51 d1 9a f8 54 03 00 07 "
+            "42 f6 50 50 c2 f2 00 00 0c bf 00 21 4f f4 "
+            "70 51 01 80 44 e0 9a f8 68 0f 01 21 8a f8 "
+            "69 1f 01 28 e7 d1"
+        ),
+    ),
     "meter_transport_enable_resume_reset": (
         0x08026F8E,
         bytes.fromhex(
@@ -732,12 +742,17 @@ def verify_dvom_tx_queue_consumer_sequences() -> dict[str, object]:
 def verify_meter_transport_transition_sequences() -> dict[str, object]:
     """Check stock DMM transport enable/resume and disable/drain slices.
 
-    The boot/config transition code enables USART2 and resumes the two DVOM
-    tasks before resetting meter display/selector state.  Its paired disable
-    path clears USART2 enable, suspends the same task handles, clears PC11,
-    resets the meter semaphore, and drains the raw TX-word queue at
-    `0x20002D74`.  Guard these as stock transport sequencing evidence; the
-    exact local settle/discard constants remain OpenScope policy.
+    The guarded boot restore prelude reads saved byte `ms[0xF64]`, copies it to
+    live mode-init state `ms[0xF68]` when nonzero, and branches state 1/2/3 into
+    the restore-time transport paths.  The following enable tail enables USART2
+    and resumes the two DVOM tasks before resetting meter display/selector
+    state.  Its paired disable path clears USART2 enable, suspends the same
+    task handles, clears PC11, resets the meter semaphore, and drains the raw
+    TX-word queue at `0x20002D74`.
+
+    Guard these as stock restore/transport sequencing evidence; the exact
+    local settle/discard constants remain OpenScope policy, and this is not an
+    analog range writer or calibration source.
     """
     checked: dict[str, dict[str, str]] = {}
     for name, (addr, expected) in EXPECTED_METER_TRANSPORT_TRANSITION_SEQUENCES.items():
