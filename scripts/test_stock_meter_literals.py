@@ -106,6 +106,31 @@ EXPECTED_MUX_STATE_FULL_DECOMPILE_PAIR_WRITES = {
         "classification": "scope_main_fsm autorange increment in FUN_08019e98",
     },
 }
+EXPECTED_MUX_STATE_PAIR_WRITE_CONTEXTS = {
+    "siggen_scope_autorange_pair_write_context": [
+        (2564, "bVar2 = (&DAT_200000fa)[uVar20];"),
+        (2565, "if (bVar2 < 9) {"),
+        (2566, "(&DAT_200000fa)[uVar20] = bVar2 + 1;"),
+        (2567, "if (uVar20 == 0) {"),
+        (2568, "FUN_080018a4(DAT_200000fa);"),
+        (2569, "}"),
+        (2570, "else {"),
+        (2571, "FUN_08001a58(DAT_200000fb);"),
+        (2572, "}"),
+        (2573, "local_31 = 4;"),
+    ],
+    "scope_main_fsm_autorange_pair_write_context": [
+        (8745, "(&DAT_200000fa)[uVar70] = bVar37 + 1;"),
+        (8746, "if (uVar70 == 0) {"),
+        (8747, "FUN_080018a4(DAT_200000fa);"),
+        (8748, "}"),
+        (8749, "else {"),
+        (8750, "FUN_08001a58(DAT_200000fb);"),
+        (8751, "}"),
+        (8752, "local_6b = 4;"),
+        (8753, "FUN_0803acf0(_DAT_20002d6c,&local_6b,0xffffffff);"),
+    ],
+}
 EXPECTED_METER_SELECTOR_XREF_SEQUENCES = {
     0x080042E2: bytes.fromhex(
         "95 f8 2d 0f 4b f2 fc 32 41 1e 00 28 08 bf 07 21 "
@@ -1270,6 +1295,34 @@ def verify_mux_state_full_decompile_surface() -> dict[str, object]:
     }
 
 
+def verify_mux_state_pair_write_contexts() -> dict[str, object]:
+    """Pin the branch/call context that classifies aliased mux-pair writes.
+
+    A single `(&DAT_200000fa)[idx]` assignment is not enough evidence by
+    itself: index 1 can target `DAT_200000fb`. These blocks prove the same
+    branches immediately apply the matching GPIO mux writer and queue command
+    `4`, keeping the writes classified as scope/siggen autorange paths rather
+    than recovered DMM range switching.
+    """
+    lines = FULL_DECOMPILE.read_text(encoding="utf-8", errors="replace").splitlines()
+    checked: dict[str, list[dict[str, object]]] = {}
+    for name, expected_lines in EXPECTED_MUX_STATE_PAIR_WRITE_CONTEXTS.items():
+        actual_lines = [
+            (line_no, lines[line_no - 1].strip())
+            for line_no, _text in expected_lines
+        ]
+        if actual_lines != expected_lines:
+            raise AssertionError(
+                f"{name} mux-state pair-write context drifted: expected "
+                f"{expected_lines}, got {actual_lines}"
+            )
+        checked[name] = [
+            {"line": line_no, "text": text}
+            for line_no, text in actual_lines
+        ]
+    return {"full_decompile": str(FULL_DECOMPILE.relative_to(REPO)), "contexts": checked}
+
+
 def verify_meter_selector_table() -> dict[str, object]:
     """Check the stock eight-entry DMM 0x05xx selector low-byte table.
 
@@ -2160,6 +2213,7 @@ def main() -> None:
     expect_bytes(0x08036C8C, "00 bf 00 bf")
     mux_state_ram_map = verify_mux_state_ram_map_boundary()
     mux_state_full_decompile = verify_mux_state_full_decompile_surface()
+    mux_state_pair_write_contexts = verify_mux_state_pair_write_contexts()
     selector = verify_meter_selector_table()
     selector_xrefs = verify_meter_selector_xref_sequences()
     selector_adjust = verify_meter_selector_adjust_sequences()
@@ -2202,6 +2256,10 @@ def main() -> None:
             f"{len(info['literal_direct_assignments'])} literal direct assignments"
         )
     print(f"stock mux-state full-decompile pair writes: {pair_write_count}")
+    print(
+        "stock mux-state pair-write contexts: "
+        + ", ".join(mux_state_pair_write_contexts["contexts"].keys())
+    )
     print(f"stock meter selector table: {selector['bytes']}")
     print("stock meter selector xref sites: " +
           ", ".join(selector_xrefs["sequences"].keys()))

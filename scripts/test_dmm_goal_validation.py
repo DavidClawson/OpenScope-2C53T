@@ -551,6 +551,30 @@ class DmmGoalValidationTests(unittest.TestCase):
             [item["text"] for item in symbols["DAT_200000fb"]["refs"]],
         )
 
+    def test_stock_mux_state_pair_write_contexts_are_classified(self) -> None:
+        result = stock_meter_literals.verify_mux_state_pair_write_contexts()
+        contexts = result["contexts"]
+
+        self.assertEqual(
+            sorted(contexts),
+            [
+                "scope_main_fsm_autorange_pair_write_context",
+                "siggen_scope_autorange_pair_write_context",
+            ],
+        )
+        for context in contexts.values():
+            texts = [item["text"] for item in context]
+            self.assertIn("FUN_080018a4(DAT_200000fa);", texts)
+            self.assertIn("FUN_08001a58(DAT_200000fb);", texts)
+        self.assertIn(
+            "local_31 = 4;",
+            [item["text"] for item in contexts["siggen_scope_autorange_pair_write_context"]],
+        )
+        self.assertIn(
+            "FUN_0803acf0(_DAT_20002d6c,&local_6b,0xffffffff);",
+            [item["text"] for item in contexts["scope_main_fsm_autorange_pair_write_context"]],
+        )
+
     def test_stock_dvom_tx_queue_consumer_is_binary_grounded(self) -> None:
         result = stock_meter_literals.verify_dvom_tx_queue_consumer_sequences()
         sequences = result["sequences"]

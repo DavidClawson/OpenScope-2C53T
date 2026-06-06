@@ -960,6 +960,32 @@ or stock trace exposes a new literal or aliased write to either byte, that new
 write must be classified as DMM-owned, scope-owned, saved-state, or non-code
 before local mux/range policy changes.
 
+The `mux-state pair-write context guard` also pins the branch/call context
+around those two aliased writes so the classification is not derived from the
+assignment line alone:
+
+```text
+full_decompile.c:2564..2573
+  bVar2 = (&DAT_200000fa)[uVar20];
+  if (bVar2 < 9) {
+    (&DAT_200000fa)[uVar20] = bVar2 + 1;
+    if (uVar20 == 0) FUN_080018a4(DAT_200000fa);
+    else             FUN_08001a58(DAT_200000fb);
+    local_31 = 4;
+
+full_decompile.c:8745..8753
+  (&DAT_200000fa)[uVar70] = bVar37 + 1;
+  if (uVar70 == 0) FUN_080018a4(DAT_200000fa);
+  else             FUN_08001a58(DAT_200000fb);
+  local_6b = 4;
+  FUN_0803acf0(_DAT_20002d6c, &local_6b, 0xffffffff);
+```
+
+Both contexts prove the same index-selected pair write is immediately followed
+by the matching Port C/E or Port A/B mux writer and command `4` enqueue. That is
+why these are kept as scope/siggen autorange paths and negative DMM evidence,
+not as hidden DMM range switching.
+
 The scope-submode mux call guard now pins the two explicit scope reconfiguration
 sites that were previously only present in the broad direct-BL list. Both sites
 read `DAT_20000128` / `state[0x30]`, mask the low nibble, and feed that scope
