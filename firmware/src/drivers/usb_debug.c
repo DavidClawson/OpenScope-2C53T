@@ -545,6 +545,7 @@ static void cmd_help(void)
         "meter auto [start|status|cancel] Async DMM function auto-select\r\n"
         "meter trace                     One machine-readable DMM producer record\r\n"
         "meter frontend                  Show DMM analog frontend GPIO state\r\n"
+        "meter mux-arms <ce> <ab> [ms]   Apply stock mux arms, poll, trace\r\n"
         "meter mux-stream [count] [ms]   Stream DMM frames plus frontend GPIOs\r\n"
         "meter stream [count] [delay_ms] Print compact DMM frame stream\r\n"
         "meter adc-snapshot              Show read-only DMM waveform sampler state\r\n"
@@ -2434,6 +2435,45 @@ static uint16_t meter_dbg_extra(void)
            meter_reading.dbg_frame[11];
 }
 
+static int parse_mux_arm_args(const char *args, uint32_t *portc_porte,
+                              uint32_t *porta_portb, uint32_t *settle_ms,
+                              const char *usage)
+{
+    char buf[48];
+    char *tok;
+    char *saveptr = NULL;
+
+    if (args == NULL || *args == '\0' || strlen(args) >= sizeof(buf)) {
+        usb_send_str(usage);
+        return -1;
+    }
+
+    strcpy(buf, args);
+    tok = strtok_r(buf, " \t", &saveptr);
+    if (tok == NULL || parse_int(tok, portc_porte) != 0 ||
+        *portc_porte > 9) {
+        usb_send_str(usage);
+        return -1;
+    }
+    tok = strtok_r(NULL, " \t", &saveptr);
+    if (tok == NULL || parse_int(tok, porta_portb) != 0 ||
+        *porta_portb > 9) {
+        usb_send_str(usage);
+        return -1;
+    }
+    tok = strtok_r(NULL, " \t", &saveptr);
+    if (tok && (parse_int(tok, settle_ms) != 0 || *settle_ms > 5000)) {
+        usb_send_str(usage);
+        return -1;
+    }
+    tok = strtok_r(NULL, " \t", &saveptr);
+    if (tok) {
+        usb_send_str(usage);
+        return -1;
+    }
+    return 0;
+}
+
 static void print_frame_hex(const char *label, const uint8_t frame[12])
 {
     usb_send_str(label);
@@ -2937,6 +2977,47 @@ static void cmd_meter_mux_stream(const char *args)
         }
         if (delay_ms > 0) vTaskDelay(pdMS_TO_TICKS(delay_ms));
     }
+}
+
+static void cmd_meter_mux_arms(const char *args)
+{
+    uint32_t portc_porte = 0;
+    uint32_t porta_portb = 0;
+    uint32_t settle_ms = 300;
+    uint16_t planned_gpio = 0;
+    uint16_t actual_gpio = 0;
+    const char *usage =
+        "Usage: meter mux-arms <portc_porte 0-9> <porta_portb 0-9> [settle_ms<=5000]\r\n";
+
+    if (parse_mux_arm_args(args, &portc_porte, &porta_portb,
+                           &settle_ms, usage) != 0) {
+        return;
+    }
+    if (current_mode != MODE_MULTIMETER) {
+        usb_send_str("ERR: switch to meter mode before applying DMM mux arms\r\n");
+        return;
+    }
+    if (!fpga_debug_apply_meter_mux_arms((uint8_t)portc_porte,
+                                         (uint8_t)porta_portb,
+                                         &planned_gpio,
+                                         &actual_gpio)) {
+        usb_send_str(usage);
+        return;
+    }
+
+    vTaskDelay(pdMS_TO_TICKS(settle_ms));
+    (void)fpga_send_cmd(0x05, FPGA_CMD_METER_START);
+    vTaskDelay(pdMS_TO_TICKS(350));
+
+    usb_send_str("=== DMM Mux Arms Trace ===\r\n");
+    usb_debug_printf("mux_arms portc_porte=%lu porta_portb=%lu settle_ms=%lu "
+                     "planned_gpio=%03X actual_gpio=%03X\r\n",
+                     portc_porte,
+                     porta_portb,
+                     settle_ms,
+                     (unsigned)planned_gpio,
+                     (unsigned)actual_gpio);
+    cmd_meter_trace();
 }
 
 static void cmd_meter_stream(const char *args)
@@ -4269,6 +4350,8 @@ static void dispatch_command(char *line)
         cmd_meter_trace();
     } else if (strcmp(line, "meter frontend") == 0) {
         cmd_meter_frontend();
+    } else if (strncmp(line, "meter mux-arms ", 15) == 0) {
+        cmd_meter_mux_arms(line + 15);
     } else if (strcmp(line, "meter mux-stream") == 0) {
         cmd_meter_mux_stream("");
     } else if (strncmp(line, "meter mux-stream ", 17) == 0) {

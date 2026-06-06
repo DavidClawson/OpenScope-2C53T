@@ -1361,6 +1361,41 @@ static void fpga_apply_meter_mux_gpio_state(const fpga_meter_mux_gpio_state_t *s
     fpga_gpio_write_level(GPIOA, (1U << 6), state->pa6);
 }
 
+bool fpga_debug_apply_meter_mux_arms(uint8_t portc_porte_mux,
+                                     uint8_t porta_portb_mux,
+                                     uint16_t *planned_gpio,
+                                     uint16_t *actual_gpio)
+{
+    fpga_meter_mux_gpio_state_t mux_state;
+
+    if (!fpga_meter_mux_gpio_state_for_stock_mux_arms(portc_porte_mux,
+                                                       porta_portb_mux,
+                                                       &mux_state)) {
+        return false;
+    }
+
+    /*
+     * Debug-only mux-arm apply.
+     *
+     * The unresolved low-DCV failure is upstream of stock-visible decimal
+     * decoding. This hook lets the USB shell apply explicit stock mux-writer
+     * arms and immediately compare the resulting producer frame against the
+     * planned/live GPIO masks. Keeping this as an explicit diagnostic prevents
+     * a live sweep from becoming an unreviewed production range heuristic.
+     */
+    GPIOB->scr = PB11_MASK;
+    GPIOC->scr = PC6_MASK;
+    GPIOC->scr = (1U << 11);
+    if (planned_gpio != 0) {
+        *planned_gpio = fpga_meter_mux_gpio_mask_from_state(&mux_state);
+    }
+    fpga_apply_meter_mux_gpio_state(&mux_state);
+    if (actual_gpio != 0) {
+        *actual_gpio = fpga_meter_mux_gpio_mask_live();
+    }
+    return true;
+}
+
 static void fpga_set_meter_frontend_for_submode(uint8_t submode)
 {
     fpga_meter_mux_gpio_state_t mux_state;

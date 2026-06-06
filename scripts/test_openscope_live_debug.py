@@ -123,7 +123,9 @@ class ScreenDumpBinTests(unittest.TestCase):
 
 
 class MeterTraceCliTests(unittest.TestCase):
-    TRACE_TEXT = """=== DMM Trace ===
+    TRACE_TEXT = """=== DMM Mux Arms Trace ===
+mux_arms portc_porte=5 porta_portb=0 settle_ms=300 planned_gpio=1BB actual_gpio=1BB
+=== DMM Trace ===
 trace v=1 snapshot=1
 context mode=1 startup=Meter ui_sub=0 reading_sub=0 live=1 valid=1 updates=42
 producer counts tx=33 rx_bytes=512 data=12 echo=33 rx_valid=1
@@ -158,6 +160,10 @@ h2_post_rx n=0 trigger=01 len=2 bytes=FF FF
         parsed = openscope_live_debug.parse_meter_trace_text(self.TRACE_TEXT)
 
         self.assertEqual(parsed["raw_measurement_source"], "USART2_DMM_12_BYTE_PRODUCER_FRAME")
+        self.assertEqual(parsed["mux_arms"]["portc_porte"], 5)
+        self.assertEqual(parsed["mux_arms"]["porta_portb"], 0)
+        self.assertEqual(parsed["mux_arms"]["planned_gpio"], "1BB")
+        self.assertEqual(parsed["mux_arms"]["actual_gpio"], "1BB")
         self.assertEqual(parsed["trace_version"], 1)
         self.assertEqual(parsed["context"]["ui_sub"], 0)
         self.assertEqual(parsed["plan"]["raw_low"], 14)
@@ -252,6 +258,58 @@ h2_post_rx n=0 trigger=01 len=2 bytes=FF FF
         self.assertEqual(rc, 0)
         self.assertIn('"raw_measurement_source": "USART2_DMM_12_BYTE_PRODUCER_FRAME"', out.getvalue())
         self.assertIn('"selector": "0514"', out.getvalue())
+
+    def test_meter_mux_arms_mode_sends_state_changing_trace_command(self) -> None:
+        calls: list[tuple[str, int, str, float]] = []
+        original_run_command = openscope_live_debug.run_command
+        try:
+            def fake_run_command(port: str, baud: int, command: str, timeout: float) -> str:
+                calls.append((port, baud, command, timeout))
+                return self.TRACE_TEXT
+
+            openscope_live_debug.run_command = fake_run_command
+            out = io.StringIO()
+            with contextlib.redirect_stdout(out):
+                rc = openscope_live_debug.main([
+                    "meter-mux-arms",
+                    "5",
+                    "0",
+                    "--settle-ms",
+                    "250",
+                    "--json",
+                    "--port",
+                    "/dev/fake",
+                    "--timeout",
+                    "7",
+                ])
+        finally:
+            openscope_live_debug.run_command = original_run_command
+
+        self.assertEqual(rc, 0)
+        self.assertEqual(calls, [("/dev/fake", 115200, "meter mux-arms 5 0 250", 7.0)])
+        self.assertIn('"mux_arms"', out.getvalue())
+
+    def test_meter_mux_arms_rejects_out_of_range_arm(self) -> None:
+        original_run_command = openscope_live_debug.run_command
+        try:
+            def fake_run_command(*_args: object) -> str:
+                self.fail("out-of-range mux arm should fail before serial command")
+
+            openscope_live_debug.run_command = fake_run_command
+            err = io.StringIO()
+            with contextlib.redirect_stderr(err):
+                rc = openscope_live_debug.main([
+                    "meter-mux-arms",
+                    "10",
+                    "0",
+                    "--port",
+                    "/dev/fake",
+                ])
+        finally:
+            openscope_live_debug.run_command = original_run_command
+
+        self.assertEqual(rc, 4)
+        self.assertIn("Port C/E mux arm", err.getvalue())
 
 
 if __name__ == "__main__":

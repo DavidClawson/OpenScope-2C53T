@@ -353,6 +353,8 @@ def parse_meter_trace_text(text: str) -> dict[str, object]:
             data = _parse_kv_line(line)
             result["trace_version"] = data.get("v")
             result["snapshot"] = data.get("snapshot")
+        elif line.startswith("mux_arms "):
+            result["mux_arms"] = _parse_kv_line(line, WIRE_HEX_KEYS)
         elif line.startswith("context "):
             result["context"] = _parse_kv_line(line)
         elif line.startswith("producer counts "):
@@ -795,6 +797,17 @@ def build_parser() -> argparse.ArgumentParser:
     mux_stream_parser.add_argument("--delay-ms", type=int, default=250, help="firmware stream delay in milliseconds, default 250")
     mux_stream_parser.add_argument("--log", type=Path, help="optional log file for the single stream response")
 
+    mux_arms_parser = subparsers.add_parser(
+        "meter-mux-arms",
+        help="apply explicit DMM stock mux arms, poll once, and read a producer trace",
+    )
+    add_common_serial_args(mux_arms_parser)
+    mux_arms_parser.add_argument("portc_porte", type=int, help="stock Port C/E mux arm, 0..9")
+    mux_arms_parser.add_argument("porta_portb", type=int, help="stock Port A/B mux arm, 0..9")
+    mux_arms_parser.add_argument("--settle-ms", type=int, default=300, help="settle delay before poll, default 300")
+    mux_arms_parser.add_argument("--log", type=Path, help="optional log file for the single trace response")
+    mux_arms_parser.add_argument("--json", action="store_true", help="emit parsed trace JSON instead of raw trace text")
+
     adc_parser = subparsers.add_parser("meter-adc-snapshot", help="read DMM voltage waveform sampler state")
     add_common_serial_args(adc_parser)
     adc_parser.add_argument("--log", type=Path, help="optional log file for the single ADC snapshot response")
@@ -857,6 +870,15 @@ def validate_stream_args(count: int, delay_ms: int) -> None:
         raise ValueError("stream delay must be between 0 and 5000 ms")
 
 
+def validate_mux_arm_args(portc_porte: int, porta_portb: int, settle_ms: int) -> None:
+    if not 0 <= portc_porte <= 9:
+        raise ValueError("Port C/E mux arm must be between 0 and 9")
+    if not 0 <= porta_portb <= 9:
+        raise ValueError("Port A/B mux arm must be between 0 and 9")
+    if not 0 <= settle_ms <= 5000:
+        raise ValueError("mux-arm settle delay must be between 0 and 5000 ms")
+
+
 def main(argv: list[str] | None = None) -> int:
     args = build_parser().parse_args(argv)
 
@@ -866,6 +888,8 @@ def main(argv: list[str] | None = None) -> int:
     try:
         if args.mode in ("meter-stream", "meter-mux-stream"):
             validate_stream_args(args.count, args.delay_ms)
+        if args.mode == "meter-mux-arms":
+            validate_mux_arm_args(args.portc_porte, args.porta_portb, args.settle_ms)
         port = choose_port(args.port)
         with serial_device_lock(port):
             if args.mode == "command":
@@ -929,6 +953,18 @@ def main(argv: list[str] | None = None) -> int:
                 timeout = max(args.timeout, (args.count * args.delay_ms / 1000.0) + 2.0)
                 response = run_command(port, args.baud, command, timeout)
                 print(response)
+                with log_context(args.log) as log_file:
+                    write_log_line(log_file, response)
+                return 0
+
+            if args.mode == "meter-mux-arms":
+                command = f"meter mux-arms {args.portc_porte} {args.porta_portb} {args.settle_ms}"
+                timeout = max(args.timeout, (args.settle_ms / 1000.0) + 3.0)
+                response = run_command(port, args.baud, command, timeout)
+                if args.json:
+                    print(json.dumps(parse_meter_trace_text(response), indent=2, sort_keys=True))
+                else:
+                    print(response)
                 with log_context(args.log) as log_file:
                     write_log_line(log_file, response)
                 return 0

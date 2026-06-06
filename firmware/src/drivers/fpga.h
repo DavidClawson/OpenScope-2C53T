@@ -681,6 +681,19 @@ fpga_meter_selector_t fpga_meter_expected_selectors(uint8_t submode);
 void fpga_meter_reinit(uint8_t submode);
 
 /*
+ * Diagnostic-only DMM mux-arm override.
+ *
+ * Applies a recovered stock FUN_080018A4/FUN_08001A58 GPIO projection for
+ * explicit ms[0x02]/ms[0x03] candidates and reports planned/actual GPIO masks.
+ * This is for controlled live tracing of the unresolved low-DCV producer-frame
+ * fault. It is not a production range selector and must not feed decoder math.
+ */
+bool fpga_debug_apply_meter_mux_arms(uint8_t portc_porte_mux,
+                                     uint8_t porta_portb_mux,
+                                     uint16_t *planned_gpio,
+                                     uint16_t *actual_gpio);
+
+/*
  * Send the stock-like meter wake preamble, then re-apply the current
  * scope configuration. Intended for testing whether the FPGA needs a
  * meter-side wakeup before it will accept scope commands.

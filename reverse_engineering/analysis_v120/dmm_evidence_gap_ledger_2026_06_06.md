@@ -856,6 +856,23 @@ wiring proof boundary. It is not permission to restore decoder coefficients.
   `tx=3 0x0507`, and `tx=1 0x0508`.  This improves the low-DCV trace boundary
   without changing production meter commands or claiming a calibration/source
   fix.
+- Explicit mux-arm live negative: OpenScope app image SHA-256
+  `2583641ecb0d2b884bc8e5b0151e95468b39a6c6640ab8f559712647666c10b6`
+  (`Build: Jun 6 2026 21:29:26`) was flashed through guarded HID IAP after
+  `flash_preflight.py hid-app` classified it as `openscope-app` at
+  `0x08004000`.  The new debug-only `meter mux-arms <ce> <ab> [ms]` command
+  applies explicit stock `ms[0x02]`/`ms[0x03]` GPIO projections, sends one
+  `0x0509` poll, then prints the normal machine-readable `meter trace`.  On the
+  current bench state, `0/0`, `5/5`, `5/0`, and `0/5` all applied their planned
+  GPIO masks exactly (`0BB`, `0AA`, `0BA`, `0AB` respectively), but the settled
+  producer frame stayed materially unchanged at about `2.230..2.231 V`
+  (`raw=2230..2231`, class `1`).  Trace artifacts were stored under
+  `tmp/live_mux_arms_20260606/` in the local run.  This is not the hard
+  image-viewed `0.200 V` validation setup and does not prove the DMM fixed; it
+  is a runtime boundary showing that simply forcing the saved-config default
+  mux arms (`5/5`) or one-sided variants is not an immediate explanation for
+  the current producer-frame value.  The diagnostic hook must remain explicit
+  debug tooling, not production range feedback.
 
 ## Next RE Target
 
