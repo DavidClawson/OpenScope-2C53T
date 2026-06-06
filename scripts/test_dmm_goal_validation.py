@@ -367,6 +367,17 @@ class DmmGoalValidationTests(unittest.TestCase):
             "0x08002b34",
         )
 
+    def test_stock_current_formatter_variant_is_binary_grounded(self) -> None:
+        result = stock_meter_literals.verify_current_formatter_variant_sequences()
+        self.assertEqual(
+            result["sequences"]["display_formatter_dca_variant_units"]["addr"],
+            "0x08002afe",
+        )
+        self.assertEqual(
+            result["sequences"]["display_formatter_dca_variant_one_target"]["addr"],
+            "0x08002b54",
+        )
+
     def test_stock_unit_lookup_boundary_is_binary_grounded(self) -> None:
         result = stock_meter_literals.verify_unit_lookup_boundary_sequences()
         self.assertEqual(

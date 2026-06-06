@@ -515,6 +515,21 @@ EXPECTED_DISPLAY_FORMATTER_DISPATCH_SEQUENCES = {
         ),
     ),
 }
+EXPECTED_CURRENT_FORMATTER_VARIANT_SEQUENCES = {
+    "display_formatter_dca_variant_units": (
+        0x08002AFE,
+        bytes.fromhex(
+            "98 f8 36 0f 01 28 26 d0 02 28 57 d1 03 20 00 e0 "
+            "05 20 98 f8 37 1f 88 f8 2e 0f 88 1c 88 f8 38 0f"
+        ),
+    ),
+    "display_formatter_dca_variant_one_target": (
+        0x08002B54,
+        bytes.fromhex(
+            "98 f8 37 1f 04 20 88 f8 2e 0f 88 f8 38 1f 2a e0"
+        ),
+    ),
+}
 EXPECTED_UNIT_LOOKUP_BOUNDARY_SEQUENCES = {
     "display_unit_lookup_zero_region": (
         0x0804C40C,
@@ -1699,6 +1714,31 @@ def verify_display_formatter_dispatch_sequences() -> dict[str, object]:
     return {"sequences": checked}
 
 
+def verify_current_formatter_variant_sequences() -> dict[str, object]:
+    """Check stock current formatter use of the digital variant shadow.
+
+    `FUN_080028E0` case 2 reads `DAT_2000102E` and uses it only to choose the
+    DCA display unit index: variant 1 branches to unit index 4 with the raw
+    `DAT_2000102F` format state, while variant 2 falls through to unit index 3
+    and the `DAT_2000102F + 2` format state shared with the ACA formatter case.
+    Guard this explicitly so a future DMM pass cannot reinterpret the variant
+    shadow as a recovered physical current range writer or factory coefficient.
+    """
+    checked: dict[str, dict[str, str]] = {}
+    for name, (addr, expected) in EXPECTED_CURRENT_FORMATTER_VARIANT_SEQUENCES.items():
+        actual = read(addr, len(expected))
+        if actual != expected:
+            raise AssertionError(
+                f"{name} {addr:#010x}: expected {expected.hex(' ')}, "
+                f"got {actual.hex(' ')}"
+            )
+        checked[name] = {
+            "addr": f"{addr:#010x}",
+            "bytes": actual.hex(" "),
+        }
+    return {"sequences": checked}
+
+
 def verify_unit_lookup_boundary_sequences() -> dict[str, object]:
     """Check the stock unit lookup negative boundary.
 
@@ -2335,6 +2375,7 @@ def main() -> None:
     selector_state = verify_meter_selector_state_sequences()
     acv_format = verify_acv_format_selector_sequences()
     display_formatter = verify_display_formatter_dispatch_sequences()
+    current_formatter = verify_current_formatter_variant_sequences()
     unit_lookup_boundary = verify_unit_lookup_boundary_sequences()
     mux_restore = verify_meter_mux_restore_sequences()
     aux_afe_pins = verify_meter_aux_afe_pin_sequences()
@@ -2396,6 +2437,8 @@ def main() -> None:
           ", ".join(item["addr"] for item in acv_format["sequences"].values()))
     print("stock display formatter dispatch sites: " +
           ", ".join(item["addr"] for item in display_formatter["sequences"].values()))
+    print("stock current formatter variant sites: " +
+          ", ".join(item["addr"] for item in current_formatter["sequences"].values()))
     print("stock unit lookup boundary sites: " +
           ", ".join(item["addr"] for item in unit_lookup_boundary["sequences"].values()))
     print("stock meter mux restore sites: " +

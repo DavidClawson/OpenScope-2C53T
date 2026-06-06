@@ -421,6 +421,23 @@ variant shadow writer evidence, not a recovered current range writer. Stock
 path yet proves the physical current range source, a uA path, or an AC A
 runtime writer.
 
+The current formatter variant guard pins that display-only branch directly to
+stock bytes:
+
+```text
+0x08002AFE: 98 f8 36 0f 01 28 26 d0 02 28 57 d1 03 20 00 e0
+            05 20 98 f8 37 1f 88 f8 2e 0f 88 1c 88 f8 38 0f
+            FUN_080028E0 case 2 reads DAT_2000102e; variant 2 selects
+            DAT_20001026 = 3 and DAT_20001030 = DAT_2000102f + 2.
+0x08002B54: 98 f8 37 1f 04 20 88 f8 2e 0f 88 f8 38 1f 2a e0
+            Variant 1 branch target writes DAT_20001026 = 4 and
+            DAT_20001030 = DAT_2000102f.
+```
+
+This is formatter/unit-state evidence only. It is deliberately not accepted as
+a physical current range writer, current-jack safety proof, or factory
+calibration coefficient.
+
 Local port:
 
 | Stock meter mode | Low byte | Raw word |
