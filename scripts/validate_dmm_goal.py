@@ -315,6 +315,53 @@ def verify_meter_aux_afe_pin_policy() -> dict[str, Any]:
     }
 
 
+def verify_no_magnitude_range_feedback() -> dict[str, Any]:
+    """Ensure production DMM frontend code does not suggest value-shaped ranging."""
+    checked: dict[str, str] = {}
+    stale: list[str] = []
+    required = [
+        "Range feedback is intentionally not driven from the parsed number",
+        "`frame[8].7`, `frame[3].4`, `frame[4].4`, `frame[5].4`",
+        "Do not infer\n         * a new relay/range command from the decoded number here",
+        "`0.200 V` visual vs `0.4366 V` CDC",
+        "frontend/H2/acceptance evidence problem",
+    ]
+    forbidden = [
+        "TODO: Implement MCU-side auto-ranging with relay switching",
+        "Detect BCD overflow",
+        "Detect BCD underflow",
+        "send higher range params",
+        "send lower range params",
+        "wildly wrong outside it",
+    ]
+
+    for rel in [
+        "firmware/src/drivers/fpga.c",
+        "firmware/src/drivers/meter_data.c",
+        "firmware/src/ui/meter_ui.c",
+    ]:
+        text = (REPO / rel).read_text(encoding="utf-8", errors="replace")
+        checked[rel] = text
+        for snippet in forbidden:
+            if snippet in text:
+                stale.append(f"{rel}: {snippet}")
+
+    missing = [
+        snippet for snippet in required
+        if snippet not in checked["firmware/src/drivers/fpga.c"]
+    ]
+    if missing or stale:
+        raise GateError(
+            "magnitude-derived range feedback boundary drifted: "
+            f"missing={missing} stale={stale}"
+        )
+    return {
+        "checked": list(checked),
+        "required": required,
+        "forbidden": forbidden,
+    }
+
+
 def verify_state_machine_property_contract() -> dict[str, Any]:
     """Anchor the broad DMM software model so the gate cannot pass a thin harness.
 
@@ -776,6 +823,10 @@ def verify_re_coverage() -> dict[str, Any]:
         "scope mux-state consumer guard", "0x0801D2EC", "0x0801D8B8",
         "0x0801F51E", "0x0801F5FC", "0x0801FD66", "0x0801EFC0",
         "0x0801F6F8", "remaining RAM-map consumers", "not DMM range proof",
+        "Magnitude-Derived Range Feedback Boundary", "BCD overflow/underflow",
+        "metadata-driven", "frame[8].7", "frame[3].4", "frame[4].4",
+        "frame[5].4", "not a value-shape classifier",
+        "magnitude-derived relay/range control",
     ]
 
     haystack = ""
@@ -1017,6 +1068,7 @@ def main(argv: list[str] | None = None) -> int:
         report["ac_status_boundary"] = verify_ac_status_boundary()
         report["h2_tx_only_boundary"] = verify_h2_tx_only_boundary()
         report["meter_aux_afe_pin_policy"] = verify_meter_aux_afe_pin_policy()
+        report["no_magnitude_range_feedback"] = verify_no_magnitude_range_feedback()
 
         if not args.skip_live:
             if args.observed_source_voltage is None:

@@ -1751,23 +1751,19 @@ static void fpga_usart_rx_task(void *pv)
         }
         meter_data_process_frame(fpga.rx_frame, meter_submode);
 
-        /* Auto-range feedback commands (0x1B, 0x1C, 0x1E) DISABLED.
+        /*
+         * Range feedback is intentionally not driven from the parsed number.
          *
-         * 2026-04-04 findings: Sending these at runtime causes the FPGA
-         * meter IC to auto-range internally, but the MCU's analog frontend
-         * relays don't track the range changes. Result: correct readings
-         * only in the ~2-10V sweet spot, wildly wrong outside it.
-         *
-         * With these disabled and boot commands 0x1A-0x1E (param=0), the
-         * meter IC stays on a fixed 10V range: accurate 1-10V DCV readings,
-         * BCD wraps above 10V. A relay click at ~0.7V suggests the FPGA
-         * controls some analog switching internally.
-         *
-         * TODO: Implement MCU-side auto-ranging with relay switching:
-         *   1. Detect BCD overflow (>9500) → send higher range params
-         *   2. Detect BCD underflow (<100) → send lower range params
-         *   3. Switch relays via gpio_mux_portc_porte/porta_portb
-         *   4. Need to discover param values for 600mV, 60V, 600V ranges
+         * Early bring-up notes speculated about sending 0x1B/0x1C/0x1E after
+         * BCD overflow/underflow. That is now a known-bad direction for this
+         * DMM port: stock-visible voltage scaling comes from frame metadata
+         * (`frame[8].7`, `frame[3].4`, `frame[4].4`, `frame[5].4`) and the
+         * active stock-like selector state, while the analog frontend must be
+         * set by recovered mux/range writers or safe live traces. Do not infer
+         * a new relay/range command from the decoded number here. The current
+         * unresolved low-DCV case (`0.200 V` visual vs `0.4366 V` CDC) is a
+         * frontend/H2/acceptance evidence problem, not an excuse for a
+         * value-shaped feedback loop.
          */
     }
 }

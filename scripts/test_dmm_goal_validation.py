@@ -199,6 +199,13 @@ class DmmGoalValidationTests(unittest.TestCase):
         self.assertIn("UI/submode surface guard", coverage["terms"])
         self.assertIn("no recovered uA local submode", coverage["terms"])
 
+    def test_re_coverage_requires_magnitude_feedback_boundary(self) -> None:
+        coverage = validate_dmm_goal.verify_re_coverage()
+        self.assertIn("Magnitude-Derived Range Feedback Boundary", coverage["terms"])
+        self.assertIn("BCD overflow/underflow", coverage["terms"])
+        self.assertIn("not a value-shape classifier", coverage["terms"])
+        self.assertIn("magnitude-derived relay/range control", coverage["terms"])
+
     def test_ui_submode_surface_contract_is_anchored(self) -> None:
         result = validate_dmm_goal.verify_ui_submode_surface_contract()
         self.assertIn("firmware/src/ui/meter_ui.c", result["checked"])
@@ -218,6 +225,16 @@ class DmmGoalValidationTests(unittest.TestCase):
         self.assertIn("firmware/src/drivers/flash_fs.c", result["checked"])
         self.assertIn("METER_CAL_LOW_OHM_FACTOR", result["forbidden"])
         self.assertIn("3:/System file/cal_ch1.bin", result["forbidden"])
+
+    def test_magnitude_range_feedback_is_absent(self) -> None:
+        result = validate_dmm_goal.verify_no_magnitude_range_feedback()
+        self.assertIn("firmware/src/drivers/fpga.c", result["checked"])
+        self.assertIn(
+            "Range feedback is intentionally not driven from the parsed number",
+            result["required"],
+        )
+        self.assertIn("Detect BCD overflow", result["forbidden"])
+        self.assertIn("send higher range params", result["forbidden"])
 
     def test_no_ocr_pipeline_guard_is_active(self) -> None:
         result = validate_dmm_goal.verify_no_ocr_pipeline()

@@ -537,6 +537,25 @@ Wrong-family rejection is currently executable for marker-visible foreign frames
 marker gap remains open and must be solved from stock frame metadata, stock
 xrefs, or safe live traces rather than guessed in the decoder.
 
+## Magnitude-Derived Range Feedback Boundary
+
+Older bring-up comments suggested MCU-side auto-ranging by watching for BCD
+overflow/underflow and then sending higher or lower range commands. That path is
+now explicitly rejected for the DMM goal. Stock-visible DCV scaling is
+metadata-driven (`frame[8].7`, `frame[3].4`, `frame[4].4`, `frame[5].4`, plus
+the `frame[2].3` raw extension) and active-state driven, not a value-shape classifier.
+The low-DCV blocker proves why this matters: the frame
+`5A A5 44 8E EF E7 07 24 80 00 01 89` decodes stock-consistently to about
+`0.4366 V` while the visual source/load display showed `0.200 V`; changing
+range commands based on the decoded number would hide the missing
+frontend/H2/acceptance evidence instead of recovering it.
+
+The production RX path therefore keeps range feedback disabled unless future
+stock xrefs or safe live traces recover an actual frontend/range command path.
+`scripts/validate_dmm_goal.py` now rejects the stale BCD-overflow/underflow TODO
+phrasing in firmware drivers/UI, so future work cannot reintroduce
+magnitude-derived relay/range control as an attractive shortcut.
+
 ## Extended Slot 5 Evidence Boundary
 
 Stock slot 5 is solidly recovered as selector `0x0512`. The meaning of the
