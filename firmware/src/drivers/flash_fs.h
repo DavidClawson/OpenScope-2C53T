@@ -67,15 +67,12 @@ flash_fs_error_t flash_fs_raw_status_diag(uint8_t out[4]);
 /* ═══════════════════════════════════════════════════════════════════
  * Factory calibration
  *
- * The stock firmware stores per-channel calibration as 301 bytes
- * in SPI flash, loaded at boot into the RAM block at
- * 0x20000358-0x20000434 in the stock layout. We mirror that here
- * so drivers can read it via a single pointer.
- *
- * Currently a stub: the real SPI flash driver is not yet wired up,
- * so flash_fs_load_factory_cal() will mark the block as "not loaded"
- * and leave the mirror zeroed. Meter/scope paths must fall back to
- * built-in defaults until this is populated.
+ * Fail-closed placeholder only. Stock evidence has not recovered a
+ * host-readable DMM factory-calibration file: bench W25Q `9999.BIN`
+ * is cluster 0 / size 0, and the older 301-byte "per-channel cal"
+ * hypothesis was roll-buffer state, not meter calibration. Keep the
+ * mirror unloaded until a stock xref, W25Q table, SPI3/H2 acceptance
+ * trace, or repeatable live stock trace proves a real source.
  * ═══════════════════════════════════════════════════════════════════ */
 
 #define FACTORY_CAL_CHANNEL_SIZE  301u
@@ -87,9 +84,8 @@ typedef struct {
     uint8_t  ch2[FACTORY_CAL_CHANNEL_SIZE];
 } factory_cal_t;
 
-/* Attempt to load factory cal from flash into the RAM mirror.
- * Safe to call even if flash_fs is not yet backed by a real driver —
- * on failure the mirror is zeroed and `loaded` stays false. */
+/* Attempt to load factory cal from a recovered stock source.
+ * Currently always fails closed: the mirror is zeroed and `loaded` stays false. */
 flash_fs_error_t flash_fs_load_factory_cal(void);
 
 /* Read-only pointer to the cal mirror. Never NULL. */

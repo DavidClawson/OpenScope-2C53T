@@ -62,6 +62,18 @@ Therefore production firmware must continue to fail closed for unrecovered
 factory-calibration cases rather than using `9999.BIN`, W25Q presence, or the
 low-DCV live mismatch as a coefficient source.
 
+## Production Guard
+
+The open firmware `flash_fs_load_factory_cal()` path is a fail-closed placeholder.
+It must not probe invented `cal_ch1.bin` / `cal_ch2.bin` names or
+set `factory_cal_t.loaded` from arbitrary 301-byte files. The 301-byte regions
+at stock state offsets `0x356` and `0x483` were reclassified as oscilloscope
+roll-buffer state in `cal_data_myth_busted.md`, not DMM calibration.
+
+Until a real stock source is recovered, meter code must continue to reject
+unresolved calibration-dependent readings instead of applying loaded flash bytes
+or observed-case coefficients.
+
 ## Remaining Leads
 
 - recover stock xrefs that dereference the `3:/System file/9999.bin` string or

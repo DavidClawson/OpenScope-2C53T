@@ -148,7 +148,16 @@ class DmmGoalValidationTests(unittest.TestCase):
     def test_unrecovered_meter_coefficients_are_absent(self) -> None:
         result = validate_dmm_goal.verify_no_unrecovered_meter_coefficients()
         self.assertIn("firmware/src/drivers/meter_data.c", result["checked"])
+        self.assertIn("firmware/src/drivers/flash_fs.c", result["checked"])
         self.assertIn("METER_CAL_LOW_OHM_FACTOR", result["forbidden"])
+        self.assertIn("3:/System file/cal_ch1.bin", result["forbidden"])
+
+    def test_re_coverage_requires_factory_cal_fail_closed_placeholder(self) -> None:
+        coverage = validate_dmm_goal.verify_re_coverage()
+        self.assertIn("flash_fs_load_factory_cal", coverage["terms"])
+        self.assertIn("fail-closed placeholder", coverage["terms"])
+        self.assertIn("cal_ch1.bin", coverage["terms"])
+        self.assertIn("roll-buffer state", coverage["terms"])
 
     def test_state_machine_property_contract_is_anchored(self) -> None:
         result = validate_dmm_goal.verify_state_machine_property_contract()

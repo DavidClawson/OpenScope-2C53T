@@ -641,11 +641,11 @@ int main(void)
     startup_mode_load();
     current_mode = startup_target_mode();
 
-    /* Factory calibration stub: initializes the flash_fs mutex and
-     * attempts to load per-channel cal blobs from SPI flash into the
-     * RAM mirror. Currently a no-op read (real SPI flash driver is not
-     * yet wired) — meter/scope paths still use built-in defaults.
-     * Phase 3 will apply the loaded coefficients. */
+    /* Factory calibration boundary: initialize the W25Q wrapper, then
+     * leave the calibration mirror unloaded. Stock evidence has not
+     * recovered a host-readable DMM factory-calibration file or H2/SPI3
+     * apply proof, so this path deliberately fails closed instead of
+     * consuming invented filenames or low-voltage coefficients. */
     (void)flash_fs_init();
     (void)flash_fs_load_factory_cal();
 

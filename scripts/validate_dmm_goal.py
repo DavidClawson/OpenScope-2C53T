@@ -97,10 +97,15 @@ def verify_no_unrecovered_meter_coefficients() -> dict[str, Any]:
         "METER_CAL_LOW_OHM_FACTOR",
         "0.0304f",
         "bench-unit stand-in",
+        "3:/System file/cal_ch1.bin",
+        "3:/System file/cal_ch2.bin",
+        "apply these coefficients in meter_data.c",
     ]
     checked = [
         "firmware/src/drivers/meter_data.c",
         "firmware/src/drivers/meter_data.h",
+        "firmware/src/drivers/flash_fs.c",
+        "firmware/src/drivers/flash_fs.h",
     ]
     hits: list[str] = []
     for rel in checked:
@@ -314,6 +319,8 @@ def verify_re_coverage() -> dict[str, Any]:
         "not DMM calibration", "METER_REJECT_UNRESOLVED_CALIBRATION",
         "low-Ohm normal frames therefore", "9999.BIN", "cluster 0",
         "size 0", "not a recovered meter calibration source",
+        "flash_fs_load_factory_cal", "fail-closed placeholder",
+        "cal_ch1.bin", "cal_ch2.bin", "roll-buffer state",
         "shared local splits", "eight-entry stock selector table",
         "without binary stock evidence", "uA is unresolved and unexposed",
         "H2 table binary guard", "tail bytes", "0x1C340", "no ACK/apply proof",

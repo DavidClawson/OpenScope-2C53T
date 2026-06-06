@@ -162,25 +162,26 @@ offset — only for display formatting.
 
 ## Calibration Issue — Low Ω Range
 
-The ~3.04× low reading for 147 Ω is the first clear indication
-that our firmware is missing the per-range gain coefficients that
-stock loads from SPI flash at boot.
+The ~3.04× low reading for 147 Ω is evidence that the low-Ohm
+physical path needs an unrecovered stock/factory correction or range
+state. It is not evidence for the older 301-byte per-channel blob
+hypothesis.
 
 Evidence:
 - 3.3 kΩ / 10 kΩ / 100 kΩ all read with ~2% error (within resistor
   tolerance). These values are on the kΩ sub-ranges.
 - 147 Ω reads at **33% of actual value**. That's a full-scale
   coefficient error, not tolerance drift.
-- The factory cal stub we added in Phase 0.3 (`flash_fs_load_factory_cal`
-  at `src/drivers/flash_fs.c:199`) allocates 301 bytes per channel
-  for exactly this kind of data but does not yet populate it — the
-  SPI flash driver is still stubbed.
+- The older Phase 0.3 factory-cal stub and 301-byte-per-channel story were
+  superseded: state offsets `0x356` and `0x483` are roll-buffer regions, and
+  the bench-unit W25Q `System file/9999.BIN` entry is cluster 0 / size 0.
+  `flash_fs_load_factory_cal()` now deliberately fails closed until a real
+  stock xref, W25Q table, H2/SPI3 acceptance trace, or stock runtime trace
+  proves a calibration source.
 
-**Action:** Log this as a **known issue** and defer to Phase 3
-when the factory cal load is wired to real SPI flash reads. Do
-NOT apply a hardcoded 3× correction: we don't know whether it's
-exactly 3× across the range, and other resistors below ~1 kΩ
-might need different coefficients.
+**Action:** Keep low-Ohm normal frames fail-closed and continue the stock
+RE search. Do NOT apply a hardcoded 3× correction or wire invented W25Q
+filenames into meter_data.c.
 
 ## Gaps Needing More Captures
 

@@ -586,15 +586,18 @@ flash_fs_error_t flash_fs_raw_write_block(uint32_t addr, const void *data, uint3
 /* ═══════════════════════════════════════════════════════════════════
  * Factory calibration mirror
  *
- * Stock firmware path: SPI flash "3:/System file/" contains per-channel
- * calibration blobs (301 bytes each) that are loaded on boot into a
- * RAM block at 0x20000358-0x20000434 and consumed by the meter/scope
- * scaling pipeline.
+ * Stock-grounding boundary: the obvious W25Q lead on the bench unit,
+ * "3:/System file/9999.BIN", is a zero-byte placeholder (cluster 0,
+ * size 0), and the older "301-byte per-channel meter cal blob" label
+ * was reclassified as oscilloscope roll-buffer state. No stock xref or
+ * W25Q file currently proves a host-readable DMM factory-calibration
+ * blob, and H2/SPI3 replay proves byte count only, not FPGA acceptance
+ * or DMM correction.
  *
- * This is a load-only stub. The real SPI flash driver is not yet
- * wired through flash_fs_read(), so this routine currently reads 0
- * bytes and leaves `loaded` false. Drivers consuming factory_cal_t
- * must fall back to built-in defaults in that case.
+ * Keep this mirror as a fail-closed placeholder for a future recovered
+ * source. Until that source is proven, do not probe invented filenames
+ * and do not let meter/scope code consume arbitrary flash bytes as
+ * calibration.
  * ═══════════════════════════════════════════════════════════════════ */
 
 static factory_cal_t g_factory_cal;  /* BSS zero */
@@ -602,27 +605,6 @@ static factory_cal_t g_factory_cal;  /* BSS zero */
 flash_fs_error_t flash_fs_load_factory_cal(void)
 {
     memset(&g_factory_cal, 0, sizeof(g_factory_cal));
-
-    uint32_t br1 = 0;
-    uint32_t br2 = 0;
-
-    flash_fs_error_t r1 = flash_fs_read("3:/System file/cal_ch1.bin",
-                                        g_factory_cal.ch1,
-                                        FACTORY_CAL_CHANNEL_SIZE, &br1);
-    flash_fs_error_t r2 = flash_fs_read("3:/System file/cal_ch2.bin",
-                                        g_factory_cal.ch2,
-                                        FACTORY_CAL_CHANNEL_SIZE, &br2);
-
-    if (r1 == FLASH_FS_OK && r2 == FLASH_FS_OK &&
-        br1 == FACTORY_CAL_CHANNEL_SIZE &&
-        br2 == FACTORY_CAL_CHANNEL_SIZE) {
-        g_factory_cal.loaded = true;
-        /* TODO(phase3): apply these coefficients in meter_data.c */
-        return FLASH_FS_OK;
-    }
-
-    /* Stub path: SPI flash driver not yet populated. Log-only outcome
-     * is implicit — the caller can check flash_fs_factory_cal()->loaded. */
     g_factory_cal.loaded = false;
     return FLASH_FS_ERR_READ;
 }

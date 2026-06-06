@@ -72,7 +72,7 @@ boot sequence.
 | Address | ~Size | Ghidra Name | Likely Purpose | Priority | Evidence |
 |---------|-------|-------------|----------------|----------|----------|
 | 0800039c | ~24 | FUN_0800039c | GPIO or clock init helper | P1 | Called 1x from system_init near GPIO config section, adjacent to FUN_080003b4 (sprintf_to_buffer) |
-| 08001830 | ~100 | FUN_08001830 | Calibration data loader (per-channel) | P1 | Called 2x with buffer at sl+0x356 and sl+0x483 (CH1/CH2 cal offsets), r1=0x12D (301 bytes), r2=byte XOR 0x80 |
+| 08001830 | ~100 | FUN_08001830 | Roll-buffer preload/transform (not DMM cal) | P1 | Called 2x with buffer at sl+0x356 and sl+0x483, r1=0x12D (301 bytes), r2=byte XOR 0x80. Later state-map and cal-boundary audits classify these regions as oscilloscope roll buffers, not recovered meter calibration. |
 | 080022dc | ~200 | FUN_080022dc | LCD/display init helper (color LUT or palette) | P2 | Called 2x during init with RGB565 values derived from bit manipulation, near `0x0804CA24` (font/image data pointer) |
 | 08002c78 | ~200 | FUN_08002c78 | GPIOC probe detect / analog input init | P1 | Called 1x after reading GPIOC_ISTAT (0x40011008) bit 8 check, immediately before RCU_APB2EN enables |
 | 0800b908 | ~512 | FUN_0800b908 | Probe/meter mode init (FPGA command sequence) | P1 | Called 1x during init, 8 bytes after FUN_0800b900 (jump table), in probe detection gap region |
@@ -133,7 +133,7 @@ Addresses: 0803f3b9, 0803f439, 0803f4cb, 0803f4fb, 0803f81f, 0803fa7b, 0803fcc7,
 - **FUN_0800b900** (mode dispatcher): Jump table for meter/probe modes
 - **FUN_0800ba06** (FPGA cmd: channel ranges): Sets CH1/CH2 gain, offset, coupling
 - **FUN_0800bb10** (FPGA cmd: trigger): Sets trigger threshold, mode, holdoff
-- **FUN_08001830** (calibration loader): Loads 301-byte CH1/CH2 calibration data
+- **FUN_08001830** (roll-buffer preload/transform): writes 301-byte CH1/CH2 roll-buffer regions; not recovered DMM calibration data
 - **FUN_08002c78** (analog input init): GPIOC probe detect, pre-clock-enable init
 
 ### P2 -- Needed for full functionality (5 functions)
