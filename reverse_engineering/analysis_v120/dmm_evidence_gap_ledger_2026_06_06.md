@@ -100,6 +100,11 @@ one of:
   `full_decompile.c:2566` in `FUN_08001c60` and `full_decompile.c:8745` in
   `FUN_08019e98`; both are classified and guarded as scope/siggen autorange
   paths, not DMM runtime mux/range writers.
+- Mux writer literal-pointer negative guard: the whole APP image has no static
+  32-bit literal/function-pointer refs to `FUN_080018a4` (`0x080018A4` or
+  `0x080018A5`) or `FUN_08001a58` (`0x08001A58` or `0x08001A59`). This closes
+  the obvious hidden-table escape hatch for these mux writers, but it still does
+  not prove that no computed or state-mediated DMM runtime path exists.
 - Saved-config default boundary: stock `FUN_080223BC` seeds `0x05050000`, so
   default persistent mux bytes are `ms[0x02]=5` and `ms[0x03]=5`. That is
   persistence/default evidence only; it is not a recovered normal runtime DMM

@@ -1041,6 +1041,29 @@ The evidence splits like this:
 | DAC1 writes | `FUN_080018a4` at `0x080018A4..0x08001A52` and inline recomputes at `full_decompile.c:2603..2624`, `6960..7020`, `7771..7990` write `0x40007408` from scope calibration tables | scope trigger/comparator threshold; not DMM calibration |
 | waveform calibration/render use | `full_decompile.c:8611..8624`, `9840..9971` index `DAT_080465cc` and calibration deltas through current and saved `DAT_200000fa/DAT_200000fb` | scope display/calibration path, not DMM selector proof |
 
+### Mux Writer Literal-Pointer Negative Guard, 2026-06-06
+
+The direct `BL` sweep above is now paired with a whole-APP literal-pointer
+sweep. `scripts/test_stock_meter_literals.py` scans for both even and Thumb-bit
+32-bit forms of the two mux writer targets:
+
+```text
+gpio_mux_portc_porte: 0x080018A4 and 0x080018A5
+gpio_mux_porta_portb: 0x08001A58 and 0x08001A59
+```
+
+The current V1.2.0 APP image has no static 32-bit literal/function-pointer refs
+to either mux writer target. This matters because the stock firmware does have
+real `ldr`/`blx` dispatch surfaces elsewhere; without this negative guard, a
+future pass could claim an unverified hidden function-pointer table as the
+missing DMM range path. The boundary remains narrow: this does not prove there
+is no computed or state-mediated path to the mux writers. Any computed or
+state-mediated path still requires a new trace, xref owner, or binary guard
+before being used as DMM runtime range evidence.
+
+A computed or state-mediated path still requires a new trace before it can be
+used as DMM runtime range evidence.
+
 ### Mux Writer Body Guard, 2026-06-06
 
 `scripts/test_stock_meter_literals.py` now also binary-guards representative

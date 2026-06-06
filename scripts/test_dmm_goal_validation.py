@@ -1629,6 +1629,19 @@ class DmmGoalValidationTests(unittest.TestCase):
             "da f7 05 fc",
         )
 
+    def test_stock_meter_mux_literal_pointer_refs_are_absent(self) -> None:
+        result = stock_meter_literals.verify_meter_mux_writer_literal_pointer_refs()
+
+        self.assertEqual(result["gpio_mux_portc_porte"]["target"], "0x080018a4")
+        self.assertEqual(result["gpio_mux_porta_portb"]["target"], "0x08001a58")
+        for info in result.values():
+            self.assertEqual(info["refs"]["even"], [])
+            self.assertEqual(info["refs"]["thumb"], [])
+            self.assertIn(
+                "no static 32-bit literal/function-pointer refs",
+                info["classification"],
+            )
+
     def test_stock_meter_mux_writer_bodies_are_binary_grounded(self) -> None:
         result = stock_meter_literals.verify_meter_mux_writer_body_sequences()
         portc = result["gpio_mux_portc_porte"]

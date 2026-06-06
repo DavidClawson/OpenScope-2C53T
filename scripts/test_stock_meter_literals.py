@@ -1035,6 +1035,34 @@ EXPECTED_MUX_CALLS_BY_TARGET = {
         },
     },
 }
+EXPECTED_MUX_WRITER_LITERAL_POINTER_REFS = {
+    "gpio_mux_portc_porte": {
+        "target": 0x080018A4,
+        "forms": {
+            "even": 0x080018A4,
+            "thumb": 0x080018A5,
+        },
+        "expected_refs": [],
+        "classification": (
+            "no static 32-bit literal/function-pointer refs in the APP image; "
+            "direct BL sites and saved-state callers remain the recovered mux "
+            "writer surface, not hidden DMM runtime range proof"
+        ),
+    },
+    "gpio_mux_porta_portb": {
+        "target": 0x08001A58,
+        "forms": {
+            "even": 0x08001A58,
+            "thumb": 0x08001A59,
+        },
+        "expected_refs": [],
+        "classification": (
+            "no static 32-bit literal/function-pointer refs in the APP image; "
+            "direct BL sites and saved-state callers remain the recovered mux "
+            "writer surface, not hidden DMM runtime range proof"
+        ),
+    },
+}
 EXPECTED_MUX_WRITER_BODY_SEQUENCES = {
     "gpio_mux_portc_porte": {
         "target": 0x080018A4,
@@ -1364,6 +1392,20 @@ def find_direct_thumb_bl_callers(target: int) -> list[int]:
         if addr + 4 + imm == target:
             callers.append(addr)
     return callers
+
+
+def find_literal_word_refs(value: int) -> list[int]:
+    data = BIN.read_bytes()
+    needle = value.to_bytes(4, "little")
+    refs: list[int] = []
+    start = 0
+    while True:
+        off = data.find(needle, start)
+        if off < 0:
+            break
+        refs.append(BASE + off)
+        start = off + 1
+    return refs
 
 
 def expect_f64(addr: int, expected: float) -> None:
@@ -2495,6 +2537,40 @@ def verify_meter_mux_callsite_sequences() -> dict[str, object]:
     return checked
 
 
+def verify_meter_mux_writer_literal_pointer_refs() -> dict[str, object]:
+    """Check the APP image has no static literal pointers to the mux writers.
+
+    Stock has real `ldr`/`blx` dispatch surfaces, so the direct-BL callsite guard
+    is not the whole possible story.  This negative guard scans the whole APP
+    image for 32-bit literal/function-pointer forms of `FUN_080018a4` and
+    `FUN_08001a58`, including Thumb-bit addresses.  Finding none does not prove
+    no computed runtime path exists, but it prevents future work from citing a
+    hidden table entry without adding new binary evidence.
+    """
+    checked: dict[str, object] = {}
+    for name, info in EXPECTED_MUX_WRITER_LITERAL_POINTER_REFS.items():
+        forms: dict[str, int] = info["forms"]  # type: ignore[assignment]
+        refs_by_form: dict[str, list[str]] = {}
+        flat_refs: list[str] = []
+        for form_name, value in forms.items():
+            refs = find_literal_word_refs(value)
+            refs_by_form[form_name] = [f"{addr:#010x}" for addr in refs]
+            flat_refs.extend(refs_by_form[form_name])
+        expected_refs = list(info["expected_refs"])  # type: ignore[arg-type]
+        if sorted(flat_refs) != sorted(expected_refs):
+            raise AssertionError(
+                f"{name} literal pointer refs drifted: expected "
+                f"{expected_refs}, got {sorted(flat_refs)}"
+            )
+        checked[name] = {
+            "target": f"{int(info['target']):#010x}",
+            "forms": {key: f"{value:#010x}" for key, value in forms.items()},
+            "refs": refs_by_form,
+            "classification": str(info["classification"]),
+        }
+    return checked
+
+
 def verify_meter_mux_writer_body_sequences() -> dict[str, object]:
     """Check stock GPIO mux writer body slices and their scope-calibration tails.
 
@@ -2826,6 +2902,7 @@ def main() -> None:
     meter_probe_branches = verify_meter_probe_branch_sequences()
     runtime_mode_init_callers = verify_runtime_mode_init_dispatch_caller_sequences()
     mux_calls = verify_meter_mux_callsite_sequences()
+    mux_literal_refs = verify_meter_mux_writer_literal_pointer_refs()
     mux_bodies = verify_meter_mux_writer_body_sequences()
     mux_scope_tails = verify_mux_writer_scope_tail_contexts()
     runtime_mux_writers = verify_runtime_mux_state_writer_sequences()
@@ -2927,6 +3004,13 @@ def main() -> None:
           ", ".join(item["addr"] for item in runtime_mode_init_callers["sequences"].values()))
     for name, info in mux_calls.items():
         print(f"stock {name} direct BL sites: " + ", ".join(info["calls"]))
+    for name, info in mux_literal_refs.items():
+        refs = [
+            ref for refs_for_form in info["refs"].values()
+            for ref in refs_for_form
+        ]
+        print(f"stock {name} literal/function-pointer refs: " +
+              (", ".join(refs) if refs else "none"))
     for name, info in mux_bodies.items():
         print(f"stock {name} body slices: " +
               ", ".join(info["slices"].keys()))

@@ -1203,7 +1203,9 @@ static void fpga_apply_meter_mux_gpio_state(const fpga_meter_mux_gpio_state_t *s
      * tested fpga_meter_plan projection directly so production writes cannot
      * drift away from the state-machine table. This is not a recovered stock
      * runtime DMM mux writer: the guarded saved-config default ms[0x02]=5 /
-     * ms[0x03]=5 is persistence evidence only, and the low-DCV mismatch still
+     * ms[0x03]=5 is persistence evidence only, and the stock APP has no static
+     * literal/function-pointer refs to either mux writer beyond guarded direct
+     * callsites. The low-DCV mismatch still
      * needs a new writer, trace, H2/apply proof, or factory-calibration source.
      * PB9/PA6 remain low because stock currently proves output configuration
      * only, not mode-specific assertion.
