@@ -4135,6 +4135,40 @@ static void fpga_send_meter_mode_sequence(uint8_t submode)
                         plan.settle_ms);
 }
 
+static void fpga_apply_meter_transition(uint8_t submode, bool wake_preamble)
+{
+    fpga_meter_transition_plan_t plan =
+        fpga_meter_transition_plan_for_submode(submode);
+
+    meter_transition_busy = true;
+
+    meter_data_invalidate(submode);
+    if (!fpga_meter_submode_is_valid(submode)) {
+        meter_transition_busy = false;
+        return;
+    }
+
+    /*
+     * Single production DMM transition path.
+     *
+     * Stock evidence proves pause/drain/resume transport shape, selector/apply
+     * 0x05xx words, probe/start tail, and saved-state mux writer bodies. Exact
+     * settle/discard counts and the runtime analog range writer remain open,
+     * so both normal mode switches and reinit use the same conservative local
+     * ordering here instead of carrying two handwritten sequences that can
+     * diverge around the missing evidence boundary.
+     */
+    fpga_meter_reset_transport();
+    if (wake_preamble) {
+        fpga_send_meter_wake_preamble();
+    }
+    fpga_set_meter_frontend_for_submode(submode);
+    fpga_scope_delay_ms(plan.settle_ms);
+    fpga_send_meter_mode_sequence(submode);
+    fpga_meter_discard_next_frames(plan.discard_frames);
+    meter_transition_busy = false;
+}
+
 void fpga_set_meter_mode(uint8_t submode)
 {
 #if FPGA_WARM_HANDOFF_TEST
@@ -4144,9 +4178,6 @@ void fpga_set_meter_mode(uint8_t submode)
     return;
 #endif
     if (!fpga.initialized) return;
-    fpga_meter_transition_plan_t plan =
-        fpga_meter_transition_plan_for_submode(submode);
-    meter_transition_busy = true;
 
     /* Stop DAC output if signal gen was running */
     {
@@ -4155,17 +4186,7 @@ void fpga_set_meter_mode(uint8_t submode)
         if (dac_output_is_running()) dac_output_stop();
     }
 
-    meter_data_invalidate(submode);
-    if (!fpga_meter_submode_is_valid(submode)) {
-        meter_transition_busy = false;
-        return;
-    }
-    fpga_meter_reset_transport();
-    fpga_set_meter_frontend_for_submode(submode);
-    fpga_scope_delay_ms(plan.settle_ms);
-    fpga_send_meter_mode_sequence(submode);
-    fpga_meter_discard_next_frames(plan.discard_frames);
-    meter_transition_busy = false;
+    fpga_apply_meter_transition(submode, false);
 }
 
 void fpga_meter_reinit(uint8_t submode)
@@ -4175,22 +4196,7 @@ void fpga_meter_reinit(uint8_t submode)
     return;
 #endif
     if (!fpga.initialized) return;
-    fpga_meter_transition_plan_t plan =
-        fpga_meter_transition_plan_for_submode(submode);
-    meter_transition_busy = true;
-
-    meter_data_invalidate(submode);
-    if (!fpga_meter_submode_is_valid(submode)) {
-        meter_transition_busy = false;
-        return;
-    }
-    fpga_meter_reset_transport();
-    fpga_send_meter_wake_preamble();
-    fpga_set_meter_frontend_for_submode(submode);
-    fpga_scope_delay_ms(plan.settle_ms);
-    fpga_send_meter_mode_sequence(submode);
-    fpga_meter_discard_next_frames(plan.discard_frames);
-    meter_transition_busy = false;
+    fpga_apply_meter_transition(submode, true);
 }
 
 void fpga_scope_wake(void)

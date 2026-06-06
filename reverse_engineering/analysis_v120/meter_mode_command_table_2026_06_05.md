@@ -638,6 +638,16 @@ as a uniform local settle/discard policy for all valid local submodes; invalid
 submodes emit no settle/discard, no selector, and no apply word. Exact stock
 settle/discard counts remain open.
 
+The open firmware now routes both `fpga_set_meter_mode()` and
+`fpga_meter_reinit()` through one `fpga_apply_meter_transition()` production
+path: invalidate the active reading, reset/drain the meter transport, optionally
+send the wake preamble used by reinit, apply the table-driven frontend mux
+state, wait the local settle window, send selector/apply/probe/start words from
+the transition plan, and arm the planned discard budget. This unifies the
+software state machine around the stock-visible transport shape; it is not proof
+of exact stock settle counts, the unrecovered runtime `ms[0x02]`/`ms[0x03]`
+analog writer, or any factory meter coefficient.
+
 ## GPIO Mux Evidence Boundary
 
 Stock master init calls the two GPIO mux functions from saved meter state:

@@ -282,6 +282,38 @@ class DmmGoalValidationTests(unittest.TestCase):
             result["forbidden_body"],
         )
 
+    def test_meter_transition_production_contract_uses_single_path(self) -> None:
+        result = validate_dmm_goal.verify_meter_transition_production_contract()
+        self.assertEqual(result["checked"], "firmware/src/drivers/fpga.c")
+        self.assertIn(
+            "fpga_meter_reset_transport();",
+            result["required_helper"],
+        )
+        self.assertIn(
+            "fpga_apply_meter_transition(submode, false);",
+            result["required_set_mode"],
+        )
+        self.assertIn(
+            "fpga_apply_meter_transition(submode, true);",
+            result["required_reinit"],
+        )
+        self.assertIn(
+            "fpga_send_meter_mode_sequence(submode);",
+            result["forbidden_public"],
+        )
+        self.assertEqual(
+            result["order"],
+            [
+                "meter_data_invalidate(submode);",
+                "if (!fpga_meter_submode_is_valid(submode))",
+                "fpga_meter_reset_transport();",
+                "fpga_set_meter_frontend_for_submode(submode);",
+                "fpga_scope_delay_ms(plan.settle_ms);",
+                "fpga_send_meter_mode_sequence(submode);",
+                "fpga_meter_discard_next_frames(plan.discard_frames);",
+            ],
+        )
+
     def test_no_ocr_pipeline_guard_is_active(self) -> None:
         result = validate_dmm_goal.verify_no_ocr_pipeline()
 

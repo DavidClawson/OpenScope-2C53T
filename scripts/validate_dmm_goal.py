@@ -396,6 +396,105 @@ def verify_meter_sequence_tail_uses_transition_plan() -> dict[str, Any]:
     }
 
 
+def verify_meter_transition_production_contract() -> dict[str, Any]:
+    """Ensure normal DMM mode changes and reinit share one transition path."""
+    rel = "firmware/src/drivers/fpga.c"
+    text = (REPO / rel).read_text(encoding="utf-8", errors="replace")
+
+    def between(start: str, end: str) -> str:
+        start_at = text.find(start)
+        if start_at < 0:
+            raise GateError(f"could not locate {start!r}")
+        end_at = text.find(end, start_at)
+        if end_at < 0:
+            raise GateError(f"could not locate end marker {end!r} after {start!r}")
+        return text[start_at:end_at]
+
+    helper = between(
+        "static void fpga_apply_meter_transition(uint8_t submode, bool wake_preamble)",
+        "\nvoid fpga_set_meter_mode",
+    )
+    set_mode = between(
+        "void fpga_set_meter_mode(uint8_t submode)",
+        "\nvoid fpga_meter_reinit",
+    )
+    reinit = between(
+        "void fpga_meter_reinit(uint8_t submode)",
+        "\nvoid fpga_scope_wake",
+    )
+
+    required_helper = [
+        "fpga_meter_transition_plan_t plan =",
+        "meter_transition_busy = true;",
+        "meter_data_invalidate(submode);",
+        "if (!fpga_meter_submode_is_valid(submode))",
+        "meter_transition_busy = false;",
+        "fpga_meter_reset_transport();",
+        "if (wake_preamble)",
+        "fpga_send_meter_wake_preamble();",
+        "fpga_set_meter_frontend_for_submode(submode);",
+        "fpga_scope_delay_ms(plan.settle_ms);",
+        "fpga_send_meter_mode_sequence(submode);",
+        "fpga_meter_discard_next_frames(plan.discard_frames);",
+    ]
+    order = [
+        "meter_data_invalidate(submode);",
+        "if (!fpga_meter_submode_is_valid(submode))",
+        "fpga_meter_reset_transport();",
+        "fpga_set_meter_frontend_for_submode(submode);",
+        "fpga_scope_delay_ms(plan.settle_ms);",
+        "fpga_send_meter_mode_sequence(submode);",
+        "fpga_meter_discard_next_frames(plan.discard_frames);",
+    ]
+    required_set_mode = [
+        "if (!fpga.initialized) return;",
+        "dac_output_is_running()",
+        "dac_output_stop();",
+        "fpga_apply_meter_transition(submode, false);",
+    ]
+    required_reinit = [
+        "if (!fpga.initialized) return;",
+        "fpga_apply_meter_transition(submode, true);",
+    ]
+    forbidden_public = [
+        "fpga_meter_reset_transport();",
+        "fpga_set_meter_frontend_for_submode(submode);",
+        "fpga_scope_delay_ms(plan.settle_ms);",
+        "fpga_send_meter_mode_sequence(submode);",
+        "fpga_meter_discard_next_frames(plan.discard_frames);",
+    ]
+
+    missing_helper = [snippet for snippet in required_helper if snippet not in helper]
+    missing_set_mode = [snippet for snippet in required_set_mode if snippet not in set_mode]
+    missing_reinit = [snippet for snippet in required_reinit if snippet not in reinit]
+    stale_public = [
+        snippet for snippet in forbidden_public
+        if snippet in set_mode or snippet in reinit
+    ]
+    ordering = [helper.find(snippet) for snippet in order]
+    bad_order = (
+        any(index < 0 for index in ordering) or
+        any(left >= right for left, right in zip(ordering, ordering[1:]))
+    )
+
+    if missing_helper or missing_set_mode or missing_reinit or stale_public or bad_order:
+        raise GateError(
+            "meter production transition contract drifted: "
+            f"missing_helper={missing_helper} "
+            f"missing_set_mode={missing_set_mode} "
+            f"missing_reinit={missing_reinit} "
+            f"stale_public={stale_public} bad_order={bad_order}"
+        )
+    return {
+        "checked": rel,
+        "required_helper": required_helper,
+        "required_set_mode": required_set_mode,
+        "required_reinit": required_reinit,
+        "forbidden_public": forbidden_public,
+        "order": order,
+    }
+
+
 def verify_no_magnitude_range_feedback() -> dict[str, Any]:
     """Ensure production DMM frontend code does not suggest value-shaped ranging."""
     checked: dict[str, str] = {}
@@ -1199,6 +1298,7 @@ def main(argv: list[str] | None = None) -> int:
         report["meter_aux_afe_pin_policy"] = verify_meter_aux_afe_pin_policy()
         report["meter_expected_selector_plan_word"] = verify_meter_expected_selector_uses_plan_word()
         report["meter_sequence_tail_transition_plan"] = verify_meter_sequence_tail_uses_transition_plan()
+        report["meter_transition_production_contract"] = verify_meter_transition_production_contract()
         report["no_magnitude_range_feedback"] = verify_no_magnitude_range_feedback()
 
         if not args.skip_live:
