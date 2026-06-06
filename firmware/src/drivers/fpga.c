@@ -119,6 +119,7 @@ volatile uint8_t meter_frame_discard_count;
 volatile uint32_t meter_transition_frame_skip_count;
 
 static void fpga_scope_delay_ms(uint32_t ms);
+static uint8_t fpga_probe_cmd_byte(void);
 
 void fpga_meter_adc_diag_reset(void)
 {
@@ -884,6 +885,60 @@ static void fpga_record_meter_transition_snapshot(
     if (fpga.meter_transition_history_count < FPGA_METER_TRANSITION_HISTORY) {
         fpga.meter_transition_history_count++;
     }
+}
+
+static void fpga_arm_meter_first_rx_latch(
+    uint8_t submode,
+    const fpga_meter_transition_plan_t *plan,
+    uint16_t planned_gpio,
+    uint16_t actual_gpio)
+{
+    /*
+     * Arm a one-shot producer latch at the transition/apply boundary.
+     *
+     * Low-DCV failures are visible in the 12-byte DMM frame before display
+     * formatting. Freezing the first producer frame after a transition lets the
+     * bench trace say whether the wrong digits appeared immediately after the
+     * selected mux/command/H2 state, without turning the trace into a
+     * value-shaped correction loop.
+     */
+    fpga.meter_first_rx_after_transition_valid = 0;
+    fpga.meter_first_rx_after_transition_submode = submode;
+    fpga.meter_first_rx_after_transition_seq = fpga.meter_mode_sequence_count;
+    fpga.meter_first_rx_after_transition_selector = plan->selector_word;
+    fpga.meter_first_rx_after_transition_apply =
+        plan->has_apply_word ? plan->apply_word : 0;
+    fpga.meter_first_rx_after_transition_probe =
+        plan->has_probe_detect ?
+        (uint16_t)(0x0500U | fpga_probe_cmd_byte()) : 0;
+    fpga.meter_first_rx_after_transition_start = plan->start_word;
+    fpga.meter_first_rx_after_transition_planned_gpio = planned_gpio;
+    fpga.meter_first_rx_after_transition_actual_gpio = actual_gpio;
+    fpga.meter_first_rx_after_transition_h2_bytes = fpga.h2_bytes_sent;
+    fpga.meter_first_rx_after_transition_h2_done = fpga.h2_upload_done;
+    fpga.meter_first_rx_after_transition_h2_post_ok =
+        fpga.post_h2_spi3_boot_ok;
+    fpga.meter_first_rx_after_transition_h2_post_mask =
+        fpga.post_h2_spi3_boot_mask;
+    fpga.meter_first_rx_after_transition_armed = 1;
+}
+
+static void fpga_capture_meter_first_rx_latch(void)
+{
+    if (fpga.meter_first_rx_after_transition_armed == 0) {
+        return;
+    }
+
+    memcpy((void *)fpga.meter_first_rx_after_transition_frame,
+           (const void *)fpga.rx_frame, FPGA_RX_FRAME_SIZE);
+    fpga.meter_first_rx_after_transition_data = fpga.last_rx_frame_count;
+    fpga.meter_first_rx_after_transition_tx = fpga.last_rx_tx_count;
+    fpga.meter_first_rx_after_transition_echo = fpga.last_rx_echo_count;
+    fpga.meter_first_rx_after_transition_busy = fpga.last_rx_transition_busy;
+    fpga.meter_first_rx_after_transition_discard =
+        fpga.last_rx_discard_remaining;
+    fpga.meter_first_rx_after_transition_valid = 1;
+    fpga.meter_first_rx_after_transition_armed = 0;
 }
 
 /*
@@ -1889,6 +1944,7 @@ void USART2_IRQHandler(void)
                 event.discard_remaining = fpga.last_rx_discard_remaining;
                 event.transition_busy = fpga.last_rx_transition_busy;
                 fpga_record_rx_data_frame();
+                fpga_capture_meter_first_rx_latch();
                 fpga.rx_index = 0;
 
                 /* Hand complete frame ownership to dvom_RX (only if RTOS is running). */
@@ -4693,6 +4749,7 @@ static void fpga_apply_meter_transition(uint8_t submode, bool wake_preamble)
     fpga_send_meter_mode_sequence(submode);
     fpga_record_meter_transition_snapshot(submode, &plan, planned_gpio,
                                           actual_gpio, tx_before, frame_before);
+    fpga_arm_meter_first_rx_latch(submode, &plan, planned_gpio, actual_gpio);
     fpga_meter_discard_next_frames(plan.discard_frames);
     meter_transition_busy = false;
 }

@@ -387,6 +387,11 @@ def parse_meter_trace_text(text: str) -> dict[str, object]:
         elif line.startswith("parsed_frame="):
             frame = _parse_frame_bytes(line.split("=", 1)[1])
             result["parsed_frame"] = _frame_record(frame)
+        elif line.startswith("first_transition_rx "):
+            prefix, frame_text = line.split(" frame=", 1)
+            record = _parse_kv_line(prefix, WIRE_HEX_KEYS)
+            record["frame"] = _frame_record(_parse_frame_bytes(frame_text))
+            result["first_transition_rx"] = record
         elif line.startswith("last_echo_frame="):
             frame = _parse_hex_bytes(line.split("=", 1)[1], 10)
             result["last_echo_frame"] = _frame_record(frame)

@@ -245,6 +245,34 @@ typedef struct {
     volatile uint8_t  meter_transition_history_head;
     volatile uint8_t  meter_transition_history_count;
 
+    /* First producer frame after the latest DMM transition.
+     *
+     * This is a frozen diagnostic record for the low-DCV producer fault: it
+     * captures the first stock-visible 12-byte DMM frame after the frontend and
+     * USART sequence were applied. It must not feed decoder math, range
+     * selection, or calibration decisions.
+     */
+    volatile uint8_t  meter_first_rx_after_transition_armed;
+    volatile uint8_t  meter_first_rx_after_transition_valid;
+    volatile uint8_t  meter_first_rx_after_transition_submode;
+    volatile uint16_t meter_first_rx_after_transition_seq;
+    volatile uint16_t meter_first_rx_after_transition_selector;
+    volatile uint16_t meter_first_rx_after_transition_apply;
+    volatile uint16_t meter_first_rx_after_transition_probe;
+    volatile uint16_t meter_first_rx_after_transition_start;
+    volatile uint16_t meter_first_rx_after_transition_planned_gpio;
+    volatile uint16_t meter_first_rx_after_transition_actual_gpio;
+    volatile uint16_t meter_first_rx_after_transition_data;
+    volatile uint16_t meter_first_rx_after_transition_tx;
+    volatile uint16_t meter_first_rx_after_transition_echo;
+    volatile uint8_t  meter_first_rx_after_transition_busy;
+    volatile uint8_t  meter_first_rx_after_transition_discard;
+    volatile uint8_t  meter_first_rx_after_transition_frame[FPGA_RX_FRAME_SIZE];
+    volatile uint32_t meter_first_rx_after_transition_h2_bytes;
+    volatile uint8_t  meter_first_rx_after_transition_h2_done;
+    volatile uint8_t  meter_first_rx_after_transition_h2_post_ok;
+    volatile uint8_t  meter_first_rx_after_transition_h2_post_mask;
+
     /* Acquisition mode (set by mode switch, read by acq task) */
     volatile uint8_t acq_mode;         /* fpga_acq_mode_t */
 

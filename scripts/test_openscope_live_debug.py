@@ -139,6 +139,7 @@ stock_fsm mode=0 variant=0 format=0 dc_state=1 display_cmd=0 unit_index=0 compos
 transition busy=0 discard_now=0 skip_count=2
 producer_frame=5A A5 44 8E EF E7 07 24 80 00 01 89
 parsed_frame=5A A5 44 8E EF E7 07 24 80 00 01 89
+first_transition_rx valid=1 armed=0 sub=0 seq=2 selector=0514 apply=0000 probe=0507 start=0509 planned_gpio=0BB actual_gpio=0BB data=9 tx=33 echo=33 busy=1 discard=2 h2_bytes=115638 h2_done=1 h2_post_ok=5 h2_post_mask=1F frame=5A A5 44 8E EF E7 07 24 80 00 01 89
 last_echo_frame=AA 55 00 09 00 00 00 AA 00 09
 transition_history newest_first:
 mth n=0 sub=0 seq=2 selector=0514 apply=0000 probe=0507 start=0509 tx=29..33 data=8..9 planned_gpio=0BB actual_gpio=0BB
@@ -184,6 +185,18 @@ h2_post_rx n=0 trigger=01 len=2 bytes=FF FF
         self.assertEqual(
             parsed["last_echo_frame"]["hex"],
             "AA 55 00 09 00 00 00 AA 00 09",
+        )
+        self.assertEqual(parsed["first_transition_rx"]["valid"], 1)
+        self.assertEqual(parsed["first_transition_rx"]["selector"], "0514")
+        self.assertEqual(parsed["first_transition_rx"]["apply"], "0000")
+        self.assertEqual(parsed["first_transition_rx"]["probe"], "0507")
+        self.assertEqual(parsed["first_transition_rx"]["planned_gpio"], "0BB")
+        self.assertEqual(parsed["first_transition_rx"]["actual_gpio"], "0BB")
+        self.assertEqual(parsed["first_transition_rx"]["h2_bytes"], 115638)
+        self.assertEqual(parsed["first_transition_rx"]["h2_post_mask"], "1F")
+        self.assertEqual(
+            parsed["first_transition_rx"]["frame"]["hex"],
+            "5A A5 44 8E EF E7 07 24 80 00 01 89",
         )
         self.assertEqual(
             parsed["tx_history"][0]["frame"]["hex"],

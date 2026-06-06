@@ -2545,6 +2545,26 @@ static void cmd_meter_trace(void)
     uint16_t mth_frame_after[FPGA_METER_TRANSITION_HISTORY];
     uint16_t mth_planned_gpio[FPGA_METER_TRANSITION_HISTORY];
     uint16_t mth_actual_gpio[FPGA_METER_TRANSITION_HISTORY];
+    uint8_t first_rx_valid;
+    uint8_t first_rx_armed;
+    uint8_t first_rx_submode;
+    uint16_t first_rx_seq;
+    uint16_t first_rx_selector;
+    uint16_t first_rx_apply;
+    uint16_t first_rx_probe;
+    uint16_t first_rx_start;
+    uint16_t first_rx_planned_gpio;
+    uint16_t first_rx_actual_gpio;
+    uint16_t first_rx_data;
+    uint16_t first_rx_tx;
+    uint16_t first_rx_echo;
+    uint8_t first_rx_busy;
+    uint8_t first_rx_discard;
+    uint8_t first_rx_frame[FPGA_RX_FRAME_SIZE];
+    uint32_t first_rx_h2_bytes;
+    uint8_t first_rx_h2_done;
+    uint8_t first_rx_h2_post_ok;
+    uint8_t first_rx_h2_post_mask;
     uint8_t producer_frame[FPGA_RX_FRAME_SIZE];
     uint16_t rx_sync_data_start;
     uint16_t rx_sync_echo_start;
@@ -2584,6 +2604,29 @@ static void cmd_meter_trace(void)
     h2_rx_other_count = fpga.h2_rx_other_count;
     h2_close_rx_len = fpga.h2_close_rx_len;
     memcpy(h2_close_rx, (const void *)fpga.h2_close_rx, sizeof(h2_close_rx));
+    first_rx_valid = fpga.meter_first_rx_after_transition_valid;
+    first_rx_armed = fpga.meter_first_rx_after_transition_armed;
+    first_rx_submode = fpga.meter_first_rx_after_transition_submode;
+    first_rx_seq = fpga.meter_first_rx_after_transition_seq;
+    first_rx_selector = fpga.meter_first_rx_after_transition_selector;
+    first_rx_apply = fpga.meter_first_rx_after_transition_apply;
+    first_rx_probe = fpga.meter_first_rx_after_transition_probe;
+    first_rx_start = fpga.meter_first_rx_after_transition_start;
+    first_rx_planned_gpio =
+        fpga.meter_first_rx_after_transition_planned_gpio;
+    first_rx_actual_gpio = fpga.meter_first_rx_after_transition_actual_gpio;
+    first_rx_data = fpga.meter_first_rx_after_transition_data;
+    first_rx_tx = fpga.meter_first_rx_after_transition_tx;
+    first_rx_echo = fpga.meter_first_rx_after_transition_echo;
+    first_rx_busy = fpga.meter_first_rx_after_transition_busy;
+    first_rx_discard = fpga.meter_first_rx_after_transition_discard;
+    memcpy(first_rx_frame,
+           (const void *)fpga.meter_first_rx_after_transition_frame,
+           FPGA_RX_FRAME_SIZE);
+    first_rx_h2_bytes = fpga.meter_first_rx_after_transition_h2_bytes;
+    first_rx_h2_done = fpga.meter_first_rx_after_transition_h2_done;
+    first_rx_h2_post_ok = fpga.meter_first_rx_after_transition_h2_post_ok;
+    first_rx_h2_post_mask = fpga.meter_first_rx_after_transition_h2_post_mask;
     rxh_count = fpga.rx_frame_history_count;
     if (rxh_count > FPGA_RX_FRAME_HISTORY) rxh_count = FPGA_RX_FRAME_HISTORY;
     for (uint8_t n = 0; n < rxh_count; n++) {
@@ -2736,6 +2779,32 @@ static void cmd_meter_trace(void)
                      meter_transition_frame_skip_count);
     print_frame_hex("producer_frame=", producer_frame);
     print_frame_hex("parsed_frame=", snap.dbg_frame);
+    usb_debug_printf("first_transition_rx valid=%u armed=%u sub=%u seq=%u "
+                     "selector=%04X apply=%04X probe=%04X start=%04X "
+                     "planned_gpio=%03X actual_gpio=%03X data=%u tx=%u "
+                     "echo=%u busy=%u discard=%u h2_bytes=%lu h2_done=%u "
+                     "h2_post_ok=%u h2_post_mask=%02X frame=",
+                     (unsigned)first_rx_valid,
+                     (unsigned)first_rx_armed,
+                     (unsigned)first_rx_submode,
+                     first_rx_seq,
+                     first_rx_selector,
+                     first_rx_apply,
+                     first_rx_probe,
+                     first_rx_start,
+                     first_rx_planned_gpio,
+                     first_rx_actual_gpio,
+                     first_rx_data,
+                     first_rx_tx,
+                     first_rx_echo,
+                     (unsigned)first_rx_busy,
+                     (unsigned)first_rx_discard,
+                     first_rx_h2_bytes,
+                     (unsigned)first_rx_h2_done,
+                     (unsigned)first_rx_h2_post_ok,
+                     (unsigned)first_rx_h2_post_mask);
+    print_volatile_frame_inline(first_rx_frame);
+    usb_send_str("\r\n");
     usb_send_str("last_echo_frame=");
     for (uint8_t i = 0; i < FPGA_RX_ECHO_FRAME_SIZE; i++) {
         usb_debug_printf("%s%02X", i == 0 ? "" : " ",
