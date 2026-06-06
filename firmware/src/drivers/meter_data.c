@@ -501,6 +501,81 @@ static bool dcv_frame_has_unresolved_status20(const meter_reading_t *r,
            (frame[7] & 0x20U) != 0;
 }
 
+static void meter_sync_stock_fsm_debug(meter_reading_t *r);
+static void meter_stock_fsm_apply(uint8_t ui_submode,
+                                  const volatile uint8_t *frame,
+                                  const uint8_t raw_digits[4]);
+
+static bool frame_has_zero_detect_status(const volatile uint8_t *frame)
+{
+    /*
+     * Stock DMM RX notes identify frame[7].3 as the zero-detect /
+     * very-low-value indicator seen with shorted probes.  Use it only as a
+     * terminal short/zero state in modes where zero is physically unambiguous;
+     * it is not voltage-family evidence, AC evidence, or a range multiplier.
+     */
+    return (frame[7] & 0x08U) != 0;
+}
+
+static bool submode_accepts_zero_detect_short(uint8_t submode)
+{
+    return submode == 0 || submode == 2 || submode == 3 ||
+           submode == 6 || submode == 7 || submode == 8 || submode == 9;
+}
+
+static void finish_zero_detect_short(meter_reading_t *r, uint8_t submode,
+                                     const volatile uint8_t *frame)
+{
+    meter_clear_payload(r);
+    r->valid = true;
+    r->reject_reason = METER_REJECT_NONE;
+    r->bcd_value = 0;
+    r->digits[0] = 0;
+    r->digits[1] = 0;
+    r->digits[2] = 0;
+    r->digits[3] = 0;
+
+    if (submode == 0) {
+        r->result_class = METER_RESULT_NORMAL;
+        r->decimal_pos = 1;
+        r->unit_suffix = "V";
+        strcpy(r->display_str, "0.000");
+    } else if (submode == 2) {
+        r->result_class = METER_RESULT_NORMAL;
+        r->decimal_pos = 2;
+        r->unit_suffix = "mA";
+        strcpy(r->display_str, "0.00");
+    } else if (submode == 3) {
+        r->result_class = METER_RESULT_NORMAL;
+        r->decimal_pos = 1;
+        r->unit_suffix = "A";
+        strcpy(r->display_str, "0.000");
+    } else if (submode == 8) {
+        r->result_class = METER_RESULT_NORMAL;
+        r->decimal_pos = 1;
+        r->unit_suffix = "V";
+        strcpy(r->display_str, "0.000");
+    } else if (submode == 9) {
+        r->result_class = METER_RESULT_NORMAL;
+        r->decimal_pos = 3;
+        r->unit_suffix = "nF";
+        strcpy(r->display_str, "0.0");
+    } else {
+        r->result_class = (submode == 7) ? METER_RESULT_CONTINUITY
+                                         : METER_RESULT_NORMAL;
+        r->decimal_pos = 3;
+        r->unit_suffix = "Ohm";
+        r->continuity_beep = (submode == 7);
+        strcpy(r->display_str, (submode == 7) ? "CONT" : "0.0");
+    }
+
+    r->value = 0.0f;
+    r->unit_variant = 0;
+    r->bar_fraction = 0.0f;
+    meter_stock_fsm_apply(submode, frame, r->dbg_raw_digits);
+    meter_sync_stock_fsm_debug(r);
+}
+
 static bool ui_submode_is_small_current(uint8_t ui_submode)
 {
     return ui_submode == 2 || ui_submode == 4;
@@ -1226,6 +1301,14 @@ void meter_data_process_frame(const volatile uint8_t *frame, uint8_t submode)
     if (meter_submode_invalid(submode)) {
         r->reject_reason = METER_REJECT_INVALID_SUBMODE;
         METER_REJECT_FRAME();
+        return;
+    }
+
+    if (frame_has_zero_detect_status(frame) &&
+        submode_accepts_zero_detect_short(submode) &&
+        !frame_has_voltage_payload_marker(frame)) {
+        finish_zero_detect_short(r, submode, frame);
+        METER_FINISH_FRAME();
         return;
     }
 

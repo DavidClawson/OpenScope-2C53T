@@ -1750,7 +1750,7 @@ static int test_dcv_rejects_reported_low_input_numeric_shapes_without_marker(voi
     return 1;
 }
 
-static int test_dcv_rejects_current_live_special_frame_after_low_input_reports(void)
+static int test_dcv_zero_detect_short_frame_reports_zero_not_low_input_number(void)
 {
     uint8_t frame[12] = {
         0x5A, 0xA5, 0x04, 0xE0, 0x5B, 0x8E,
@@ -1759,13 +1759,90 @@ static int test_dcv_rejects_current_live_special_frame_after_low_input_reports(v
 
     meter_data_init();
     process_frame(frame, 0);
-    ASSERT(!meter_reading.valid);
-    ASSERT(meter_reading.reject_reason == METER_REJECT_WRONG_FRAME_FAMILY);
-    ASSERT(expect_payload_cleared("---"));
+    ASSERT(meter_reading.valid);
+    ASSERT(meter_reading.reject_reason == METER_REJECT_NONE);
+    ASSERT(meter_reading.result_class == METER_RESULT_NORMAL);
+    ASSERT_STR_EQ(meter_reading.display_str, "0.000");
+    ASSERT_STR_EQ(meter_reading.unit_suffix, "V");
+    ASSERT(close_to(meter_reading.value, 0.0f, 0.001f));
     ASSERT(meter_reading.dbg_raw_digits[0] == 0x10);
     ASSERT(meter_reading.dbg_raw_digits[1] == 0x00);
     ASSERT(meter_reading.dbg_raw_digits[2] == 0x04);
     ASSERT(meter_reading.dbg_raw_digits[3] == 0x07);
+    return 1;
+}
+
+static int test_passive_zero_detect_short_frames_report_short_state(void)
+{
+    uint8_t frame[12] = {
+        0x5A, 0xA5, 0x04, 0xE0, 0x9B, 0xEA,
+        0x07, 0x28, 0x00, 0x00, 0x01, 0x4B,
+    };
+
+    meter_data_init();
+    process_frame(frame, 6);
+    ASSERT(meter_reading.valid);
+    ASSERT(meter_reading.reject_reason == METER_REJECT_NONE);
+    ASSERT(meter_reading.result_class == METER_RESULT_NORMAL);
+    ASSERT_STR_EQ(meter_reading.display_str, "0.0");
+    ASSERT_STR_EQ(meter_reading.unit_suffix, "Ohm");
+    ASSERT(!meter_reading.continuity_beep);
+    ASSERT(close_to(meter_reading.value, 0.0f, 0.001f));
+
+    meter_data_init();
+    process_frame(frame, 7);
+    ASSERT(meter_reading.valid);
+    ASSERT(meter_reading.reject_reason == METER_REJECT_NONE);
+    ASSERT(meter_reading.result_class == METER_RESULT_CONTINUITY);
+    ASSERT_STR_EQ(meter_reading.display_str, "CONT");
+    ASSERT_STR_EQ(meter_reading.unit_suffix, "Ohm");
+    ASSERT(meter_reading.continuity_beep);
+    ASSERT(close_to(meter_reading.value, 0.0f, 0.001f));
+    return 1;
+}
+
+static int test_zero_detect_short_frames_report_terminal_zero_modes(void)
+{
+    uint8_t frame[12] = {
+        0x5A, 0xA5, 0x04, 0xE0, 0x9B, 0xEA,
+        0x07, 0x28, 0x00, 0x00, 0x01, 0x4B,
+    };
+
+    meter_data_init();
+    process_frame(frame, 2);
+    ASSERT(meter_reading.valid);
+    ASSERT(meter_reading.reject_reason == METER_REJECT_NONE);
+    ASSERT(meter_reading.result_class == METER_RESULT_NORMAL);
+    ASSERT_STR_EQ(meter_reading.display_str, "0.00");
+    ASSERT_STR_EQ(meter_reading.unit_suffix, "mA");
+    ASSERT(close_to(meter_reading.value, 0.0f, 0.001f));
+
+    meter_data_init();
+    process_frame(frame, 3);
+    ASSERT(meter_reading.valid);
+    ASSERT(meter_reading.reject_reason == METER_REJECT_NONE);
+    ASSERT(meter_reading.result_class == METER_RESULT_NORMAL);
+    ASSERT_STR_EQ(meter_reading.display_str, "0.000");
+    ASSERT_STR_EQ(meter_reading.unit_suffix, "A");
+    ASSERT(close_to(meter_reading.value, 0.0f, 0.001f));
+
+    meter_data_init();
+    process_frame(frame, 8);
+    ASSERT(meter_reading.valid);
+    ASSERT(meter_reading.reject_reason == METER_REJECT_NONE);
+    ASSERT(meter_reading.result_class == METER_RESULT_NORMAL);
+    ASSERT_STR_EQ(meter_reading.display_str, "0.000");
+    ASSERT_STR_EQ(meter_reading.unit_suffix, "V");
+    ASSERT(close_to(meter_reading.value, 0.0f, 0.001f));
+
+    meter_data_init();
+    process_frame(frame, 9);
+    ASSERT(meter_reading.valid);
+    ASSERT(meter_reading.reject_reason == METER_REJECT_NONE);
+    ASSERT(meter_reading.result_class == METER_RESULT_NORMAL);
+    ASSERT_STR_EQ(meter_reading.display_str, "0.0");
+    ASSERT_STR_EQ(meter_reading.unit_suffix, "nF");
+    ASSERT(close_to(meter_reading.value, 0.0f, 0.001f));
     return 1;
 }
 
@@ -2506,7 +2583,9 @@ int main(void)
     TEST(dcv_rejects_live_status20_class_bit_wrong_family);
     TEST(dcv_rejects_live_status20_marker_frame_04366_regression);
     TEST(dcv_rejects_reported_low_input_numeric_shapes_without_marker);
-    TEST(dcv_rejects_current_live_special_frame_after_low_input_reports);
+    TEST(dcv_zero_detect_short_frame_reports_zero_not_low_input_number);
+    TEST(passive_zero_detect_short_frames_report_short_state);
+    TEST(zero_detect_short_frames_report_terminal_zero_modes);
     TEST(mixed_special_voltage_digits_do_not_become_numeric_dcv);
     TEST(frame6_0x40_is_not_a_global_resistance_family_marker);
     TEST(voltage_mode_mains_frame_uses_stock_range_hint);
