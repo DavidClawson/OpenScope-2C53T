@@ -541,6 +541,69 @@ def verify_autoscan_property_contract() -> dict[str, Any]:
     }
 
 
+def verify_ui_submode_surface_contract() -> dict[str, Any]:
+    """Keep unresolved current ranges out of the user-visible mode surface."""
+    checked = [
+        "firmware/src/ui/ui.h",
+        "firmware/src/ui/meter_ui.c",
+        "firmware/src/drivers/fpga_meter_plan.h",
+        "firmware/src/drivers/meter_auto.c",
+        "firmware/src/drivers/meter_data.h",
+    ]
+    required = {
+        "firmware/src/ui/ui.h": [
+            "#define METER_SUBMODE_COUNT     11",
+        ],
+        "firmware/src/drivers/fpga_meter_plan.h": [
+            "#define FPGA_METER_LOCAL_SUBMODE_COUNT 11u",
+        ],
+        "firmware/src/ui/meter_ui.c": [
+            "uA is intentionally absent from this UI/submode",
+            "{ \"DC mA\",       \"mA\"",
+            "{ \"DC Current\",  \"A\"",
+            "{ \"AC mA\",       \"mA\"",
+            "{ \"AC Current\",  \"A\"",
+            "{ \"Temperature\", \"C\"",
+        ],
+        "firmware/src/drivers/meter_auto.c": [
+            "static const uint8_t meter_auto_candidate_order[] = {\n"
+            "    0, 1, 6, 7, 8, 9, 10, 2, 4, 3, 5\n"
+            "};",
+        ],
+        "firmware/src/drivers/meter_data.h": [
+            "uA is unresolved and not exposed as a local mode",
+        ],
+    }
+    forbidden = {
+        "firmware/src/drivers/meter_auto.c": [
+            "uA",
+            "microamp",
+            "11,",
+        ],
+    }
+
+    missing: list[str] = []
+    hits: list[str] = []
+    for rel in checked:
+        text = (REPO / rel).read_text(encoding="utf-8", errors="replace")
+        for snippet in required.get(rel, []):
+            if snippet not in text:
+                missing.append(f"{rel}: {snippet}")
+        for snippet in forbidden.get(rel, []):
+            if snippet in text:
+                hits.append(f"{rel}: {snippet}")
+    if missing or hits:
+        raise GateError(
+            "UI/submode surface contract check failed: "
+            f"missing={missing} forbidden_hits={hits}"
+        )
+    return {
+        "checked": checked,
+        "required": required,
+        "forbidden": forbidden,
+    }
+
+
 def verify_re_coverage() -> dict[str, Any]:
     required_docs = [
         "reverse_engineering/analysis_v120/meter_stock_multiplier_tables_2026_06_05.md",
@@ -579,6 +642,7 @@ def verify_re_coverage() -> dict[str, Any]:
         "not a recovered stock unit string table", "zero-filled lookup region",
         "shared local splits", "eight-entry stock selector table",
         "without binary stock evidence", "uA is unresolved and unexposed",
+        "UI/submode surface guard", "no recovered uA local submode",
         "H2 table binary guard", "tail bytes", "0x1C340", "no ACK/apply proof",
         "transition phase matrix", "busy transition frame", "stable frame",
         "transition settle/discard policy guard",
@@ -903,6 +967,7 @@ def main(argv: list[str] | None = None) -> int:
         report["state_machine_property_contract"] = verify_state_machine_property_contract()
         report["transition_plan_property_contract"] = verify_transition_plan_property_contract()
         report["autoscan_property_contract"] = verify_autoscan_property_contract()
+        report["ui_submode_surface_contract"] = verify_ui_submode_surface_contract()
         report["re_comment_coverage"] = verify_re_coverage()
         report["no_unrecovered_meter_coefficients"] = verify_no_unrecovered_meter_coefficients()
         report["no_ocr_pipeline"] = verify_no_ocr_pipeline()

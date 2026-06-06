@@ -180,6 +180,21 @@ class DmmGoalValidationTests(unittest.TestCase):
         self.assertIn("eight-entry stock selector table", coverage["terms"])
         self.assertIn("without binary stock evidence", coverage["terms"])
         self.assertIn("uA is unresolved and unexposed", coverage["terms"])
+        self.assertIn("UI/submode surface guard", coverage["terms"])
+        self.assertIn("no recovered uA local submode", coverage["terms"])
+
+    def test_ui_submode_surface_contract_is_anchored(self) -> None:
+        result = validate_dmm_goal.verify_ui_submode_surface_contract()
+        self.assertIn("firmware/src/ui/meter_ui.c", result["checked"])
+        self.assertIn("firmware/src/drivers/meter_auto.c", result["checked"])
+        self.assertIn(
+            "uA is intentionally absent from this UI/submode",
+            result["required"]["firmware/src/ui/meter_ui.c"],
+        )
+        self.assertIn(
+            "uA",
+            result["forbidden"]["firmware/src/drivers/meter_auto.c"],
+        )
 
     def test_unrecovered_meter_coefficients_are_absent(self) -> None:
         result = validate_dmm_goal.verify_no_unrecovered_meter_coefficients()

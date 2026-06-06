@@ -486,7 +486,10 @@ proves an A-range ACA formatter. The stock evidence so far distinguishes DC
 current ranges through frame/display unit state, not through additional
 command-table slots. Until the runtime writer for the stock range state is
 recovered or bench-proven, uA is unresolved and unexposed in the local UI, while
-AC A remains parser/UI policy on top of the recovered ACA current slot.
+AC A remains parser/UI policy on top of the recovered ACA current slot. The
+UI/submode surface guard now makes that absence explicit: there is no recovered
+uA local submode, the UI mode table remains 11 entries, and autoscan must not
+add a hidden microamp candidate without new stock/runtime evidence.
 
 ## Voltage Frame-Family Marker Boundary
 

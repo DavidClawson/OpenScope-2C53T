@@ -4,7 +4,9 @@
  * 11 local sub-modes mapped onto the recovered stock DMM selector families.
  * Current ranges and the capacitance/temperature split are local UI policy
  * over shared stock slots until additional stock/runtime evidence proves a
- * narrower hardware selector.
+ * narrower hardware selector. uA is intentionally absent from this UI/submode
+ * surface: no recovered stock selector, formatter path, or safe live trace
+ * proves a microamp frontend/range yet.
  *   0: DC Voltage      1: AC Voltage      2: DC mA
  *   3: DC A            4: AC mA           5: AC A
  *   6: Resistance      7: Continuity      8: Diode

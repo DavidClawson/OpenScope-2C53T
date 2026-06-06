@@ -67,11 +67,12 @@ eight-entry stock selector table. A future hard input must not cause the port to
 new 0x05xx selector for one side of a local split unless a recovered stock
 writer or repeatable stock-runtime trace proves it.
 
-The current software model does not expose a separate uA local submode. uA is
-unresolved and unexposed until stock range state or live current traces prove a
+The current software model does not expose a separate uA local submode. The
+UI/submode surface guard treats this as a deliberate fail-closed boundary: no recovered uA local submode exists until stock range state or live current traces prove a
 real microamp frontend/range path. Current tests therefore assert that the
 implemented current submodes render only the recovered/local mA and A units,
-not an invented uA unit.
+not an invented uA unit, and the goal gate statically checks that the UI mode
+table and autoscan candidate list stay at the 11 recovered/local submodes.
 
 ## Current Evidence Boundary
 
