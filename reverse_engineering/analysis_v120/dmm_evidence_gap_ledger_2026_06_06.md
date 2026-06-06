@@ -1370,8 +1370,10 @@ Interpretation: the live shorted-probe failure is still upstream of display
 formatting and not fixed by USART2 header parsing. The next root cause remains
 the producer/apply/calibration path that leaves H2/SPI3 readback all-`0xFF` and
 factory calibration unloaded while the DMM ASIC still emits untrusted data
-frames. Do not use this evidence to loosen the H2 acceptance gate or to invent
-voltage/ohm/current coefficients.
+frames. This evidence must not be used to invent voltage/ohm/current
+coefficients. A later stock-H2 audit corrected the acceptance boundary below:
+all-`0xFF` H2/SPI3 readback is unresolved diagnostics, not a recovered stock
+condition that kills every DMM frame before the parser sees it.
 
 Final committed diagnostic image
 `97da781a5887d8601f99bc6bde0df6fed6f2069e46e9a01afaaab00ad80b394e`
@@ -1380,3 +1382,54 @@ confirmed build `Jun 7 2026 00:49:36`. Shorted-probe DCV still failed closed
 with `valid=0 display=---`, `producer_frame=5A A5 04 00 00 00 00 20 00 00 01
 4A`, `parsed_frame=00 00 00 00 00 00 00 00 00 00 00 00`, `echo_start=0`, raw
 RX data-frame bytes only, and all H2/SPI3 readback still `0xFF`.
+
+## 2026-06-07 H2 Parse Gate Removal and Shorted-Probe Negatives
+
+OpenScope diagnostic image
+`71df45cc1eca613d203085bacfc19e89021629d7c38e13855b9a6e70aeebd873`
+was flashed through guarded HID IAP after `flash_preflight.py hid-app`
+classified it as an OpenScope app image at `0x08004000`. This build removes the
+OpenScope-only `all-0xFF H2/SPI3 => invalidate DMM frame` handoff gate. Stock
+V1.2.0 evidence proves H2 TX geometry and post-H2 trigger bytes, but no
+recovered compare/store/branch proves that all-`0xFF` MISO is a global DMM frame
+acceptance failure. H2/SPI3 readback remains reported in `status` and
+`meter trace`; the stock-visible frame parser now decides whether a frame is
+usable.
+
+Live status after the guarded flash still showed H2/SPI3 all-`0xFF`:
+`SPI3 OK: 0`, first byte `0xFF`, `h2 rx_nonff=0`, `post_h2_rx_nonff=0`,
+`factory_cal loaded=0`, and `IOMUX remap5 spi3_gmux LIVE: 0x00000000`.
+
+With the user's probes still shorted:
+
+- DCV `mode meter 0 0` remained wrong/fail-closed, not fixed: trace
+  `tmp/dcv_shorted_h2_gate_removed_trace.json` showed `display=---`,
+  `valid=0`, `reject=1`, GPIO `0BB`, `config=0508`, `selector=0514`,
+  `probe=0507`, `start=0509`, and settled producer frame
+  `5A A5 04 00 00 00 00 20 00 00 01 4A`.
+- Continuity `mode meter 7 0` remained wrong, not fixed: trace
+  `tmp/continuity_shorted_h2_gate_removed_trace.json` showed GPIO `0EA`,
+  `selector=0511`, `apply=0516`, bank `1/00/2C`, `probe=0507`, `start=0509`,
+  and producer frame `5A A5 04 00 00 00 00 20 00 00 01 4C`. The paired dump
+  later showed `display=ERR`, `beep=0`, not the required continuity-on state.
+- Manual stock-variant tail probe with `0x00/0x12`, `0x00/0x13`,
+  `0x00/0x14`, `0x00/0x09`, `0x00/0x07` after selecting continuity did not fix
+  the shorted-probe case. Trace
+  `tmp/continuity_shorted_manual_variant_tail_0x_trace.json` still showed
+  `display=ERR`, `beep=0`, producer frame
+  `5A A5 04 00 1A CA 0F 28 00 00 01 46`.
+- Manual probe-tail override `0x050A` after selecting continuity also did not
+  fix the shorted-probe case. Trace
+  `tmp/continuity_shorted_manual_probe_050a_trace.json` still showed
+  `display=ERR`, `beep=0`, producer frame
+  `5A A5 04 00 1A 0A 0A 28 00 00 01 4C`.
+
+Interpretation: removing the false H2 parse gate is a diagnostic/stock-boundary
+fix, not the DMM functional fix. The shorted-probe producer remains wrong after
+correct-looking selector/apply/GPIO state, after manual state-9 variant-tail
+bytes, and after the alternate PC7 probe tail. The next root-cause target is
+still the DMM-owned producer/apply/calibration/frontend state before display
+formatting: especially the unrecovered analog apply/hold path, real stock
+consumer of the command-byte queue, or W25Q/system-file/factory state. Do not
+convert any of these negative probes into a coefficient, magnitude branch, OCR
+flow, or prose validator.

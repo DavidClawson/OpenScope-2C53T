@@ -396,28 +396,6 @@ static void fpga_h2_record_body_rx(uint8_t rx_byte)
     }
 }
 
-static bool fpga_h2_spi3_accepted(void)
-{
-    if (!fpga.h2_upload_done) {
-        return false;
-    }
-    if ((fpga.h2_rx_00_count + fpga.h2_rx_other_count) != 0U) {
-        return true;
-    }
-    for (uint8_t i = 0; i < FPGA_POST_H2_TRIGGER_HISTORY; i++) {
-        uint8_t len = fpga.post_h2_spi3_rx_len[i];
-        if (len > FPGA_POST_H2_RX_HISTORY) {
-            len = FPGA_POST_H2_RX_HISTORY;
-        }
-        for (uint8_t j = 0; j < len; j++) {
-            if (fpga.post_h2_spi3_rx[i][j] != 0xFFU) {
-                return true;
-            }
-        }
-    }
-    return false;
-}
-
 static void fpga_h2_record_close_rx(uint8_t rx_byte)
 {
     uint8_t len = fpga.h2_close_rx_len;
@@ -2223,16 +2201,17 @@ static void fpga_usart_rx_task(void *pv)
             parse_submode = event.mode_sequence_submode;
         }
         /*
-         * A completed H2 byte count is TX choreography only. If SPI3/H2 and the
-         * stock post-H2 triggers only ever read 0xFF, the FPGA-side DMM path has
-         * not produced acceptance evidence. Fail closed at the producer handoff
-         * instead of letting OL-shaped or voltage-shaped frames become confident
-         * readings while the frontend/calibration state is still unproved.
+         * H2/SPI3 readback remains diagnostics, not an acceptance gate.
+         *
+         * Stock V1.2.0 evidence proves the H2 TX geometry and the post-H2 SPI3
+         * trigger bytes, but no recovered compare/store/branch says "all 0xFF
+         * MISO means DMM frames must be killed". Earlier OpenScope code added
+         * that global gate while chasing the low-DCV bug; it hid the real USART2
+         * producer frames and turned an unresolved H2/apply question into a fake
+         * display fix. Let meter_data_process_frame() enforce the stock-visible
+         * frame family/range rules, and keep H2/MISO counts in status/trace for
+         * the still-unresolved calibration/frontend investigation.
          */
-        if (!fpga_h2_spi3_accepted()) {
-            meter_data_invalidate(parse_submode);
-            continue;
-        }
         meter_data_process_frame(event.frame, parse_submode);
 
         /*
@@ -3804,9 +3783,9 @@ void fpga_init(void)
      * configuration. It does not write SPI3_GMUX/remap5. The AT32 HAL's
      * SPI3_GMUX_0010 route also maps SPI3 CS/I2S_WS onto PA15 and MCK onto PB10,
      * while this board uses PB6 as software CS and PA15/PB10 as DMM frontend
-     * control pins. Leaving SPI3_GMUX forced has correlated with all-0xFF MISO
-     * and unaccepted H2 on the live board, so mirror stock/attic scopediag:
-     * keep only SWJTAG_GMUX_010 and explicitly clear SPI3_GMUX bits.
+     * control pins. Clearing SPI3_GMUX has also tested negative for fixing the
+     * all-0xFF H2 readback, so keep it as stock/scopediag route evidence only:
+     * do not infer DMM range, calibration, or coefficients from this pin route.
      */
     gpio_pin_remap_config(SWJTAG_GMUX_010, TRUE);
     gpio_pin_remap_config(SPI3_GMUX_0010, FALSE);
@@ -4539,7 +4518,7 @@ void fpga_init(void)
 
     /* Bit-bang test removed: direct GPIO probing can disturb the live SPI3
      * path. GMUX forcing is not accepted as a DMM/H2 fix; stock/scopediag keep
-     * SPI3_GMUX clear and current live proof still requires non-0xFF MISO. */
+     * SPI3_GMUX clear and live DMM evidence is still judged from actual frames. */
 
     fpga.initialized = true;
     fpga.acq_mode = FPGA_ACQ_NORMAL + 1;  /* Default to normal scope mode */
