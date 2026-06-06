@@ -2414,6 +2414,34 @@ static void cmd_meter_trace(void)
         (uint16_t)(gpio_level(GPIOC, 7) ? 0x0507U : 0x050AU) : 0U;
     uint16_t extra = have_snap ?
         (((uint16_t)snap.dbg_frame[10] << 8) | snap.dbg_frame[11]) : 0;
+    uint8_t rxh_count;
+    uint8_t rxh_frames[FPGA_RX_FRAME_HISTORY][FPGA_RX_FRAME_SIZE];
+    uint16_t rxh_data[FPGA_RX_FRAME_HISTORY];
+    uint16_t rxh_tx[FPGA_RX_FRAME_HISTORY];
+    uint16_t rxh_echo[FPGA_RX_FRAME_HISTORY];
+    uint16_t rxh_seq[FPGA_RX_FRAME_HISTORY];
+    uint8_t rxh_seq_sub[FPGA_RX_FRAME_HISTORY];
+    uint8_t rxh_busy[FPGA_RX_FRAME_HISTORY];
+    uint8_t rxh_discard[FPGA_RX_FRAME_HISTORY];
+
+    taskENTER_CRITICAL();
+    rxh_count = fpga.rx_frame_history_count;
+    if (rxh_count > FPGA_RX_FRAME_HISTORY) rxh_count = FPGA_RX_FRAME_HISTORY;
+    for (uint8_t n = 0; n < rxh_count; n++) {
+        uint8_t idx = (uint8_t)((fpga.rx_frame_history_head +
+                                 FPGA_RX_FRAME_HISTORY - 1U - n) %
+                                FPGA_RX_FRAME_HISTORY);
+        memcpy(rxh_frames[n], (const void *)fpga.rx_frame_history[idx],
+               FPGA_RX_FRAME_SIZE);
+        rxh_data[n] = fpga.rx_history_frame_count[idx];
+        rxh_tx[n] = fpga.rx_history_tx_count[idx];
+        rxh_echo[n] = fpga.rx_history_echo_count[idx];
+        rxh_seq[n] = fpga.rx_history_sequence_count[idx];
+        rxh_seq_sub[n] = fpga.rx_history_sequence_submode[idx];
+        rxh_busy[n] = fpga.rx_history_transition_busy[idx];
+        rxh_discard[n] = fpga.rx_history_discard_remaining[idx];
+    }
+    taskEXIT_CRITICAL();
 
     usb_send_str("=== DMM Trace ===\r\n");
     usb_debug_printf("trace v=1 snapshot=%u\r\n", have_snap ? 1U : 0U);
@@ -2497,26 +2525,19 @@ static void cmd_meter_trace(void)
     print_volatile_frame_hex("producer_frame=", fpga.rx_frame);
     print_frame_hex("parsed_frame=", snap.dbg_frame);
     usb_send_str("producer_history newest_first:\r\n");
-    {
-        uint8_t count = fpga.rx_frame_history_count;
-        if (count > FPGA_RX_FRAME_HISTORY) count = FPGA_RX_FRAME_HISTORY;
-        for (uint8_t n = 0; n < count; n++) {
-            uint8_t idx = (uint8_t)((fpga.rx_frame_history_head +
-                                     FPGA_RX_FRAME_HISTORY - 1U - n) %
-                                    FPGA_RX_FRAME_HISTORY);
-            usb_debug_printf("rxh n=%u data=%u tx=%u echo=%u seq=%u seq_sub=%u "
-                             "busy=%u discard=%u frame=",
-                             (unsigned)n,
-                             fpga.rx_history_frame_count[idx],
-                             fpga.rx_history_tx_count[idx],
-                             fpga.rx_history_echo_count[idx],
-                             fpga.rx_history_sequence_count[idx],
-                             (unsigned)fpga.rx_history_sequence_submode[idx],
-                             (unsigned)fpga.rx_history_transition_busy[idx],
-                             (unsigned)fpga.rx_history_discard_remaining[idx]);
-            print_volatile_frame_inline(fpga.rx_frame_history[idx]);
-            usb_send_str("\r\n");
-        }
+    for (uint8_t n = 0; n < rxh_count; n++) {
+        usb_debug_printf("rxh n=%u data=%u tx=%u echo=%u seq=%u seq_sub=%u "
+                         "busy=%u discard=%u frame=",
+                         (unsigned)n,
+                         rxh_data[n],
+                         rxh_tx[n],
+                         rxh_echo[n],
+                         rxh_seq[n],
+                         (unsigned)rxh_seq_sub[n],
+                         (unsigned)rxh_busy[n],
+                         (unsigned)rxh_discard[n]);
+        print_volatile_frame_inline(rxh_frames[n]);
+        usb_send_str("\r\n");
     }
     usb_debug_printf("gpio control PC6=%u PB11=%u PC11=%u PC7=%u PC0=%u\r\n",
                      gpio_level(GPIOC, 6),
