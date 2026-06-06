@@ -539,7 +539,10 @@ No inspected stock path proves a fixed "discard exactly N frames" or "settle
 exactly 20 ms" window after every mode switch. The open firmware's current
 two-frame discard plus 20 ms settle is a conservative local transition policy
 that should be replaced only when a stock path or repeatable bench capture
-proves the exact rule.
+proves the exact rule. The transition settle/discard policy guard now pins this
+as a uniform local settle/discard policy for all valid local submodes; invalid
+submodes emit no settle/discard, no selector, and no apply word. Exact stock
+settle/discard counts remain open.
 
 ## GPIO Mux Evidence Boundary
 

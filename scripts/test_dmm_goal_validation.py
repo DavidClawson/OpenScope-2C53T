@@ -293,6 +293,10 @@ class DmmGoalValidationTests(unittest.TestCase):
             result["tests"],
         )
         self.assertIn(
+            "transition_settle_discard_policy_is_explicit_for_every_submode",
+            result["tests"],
+        )
+        self.assertIn(
             "rx_frame_gate_preserves_discard_budget_while_busy",
             result["tests"],
         )
@@ -317,6 +321,10 @@ class DmmGoalValidationTests(unittest.TestCase):
         self.assertIn("fpga_meter_frame_family_is_acceptable",
                       result["snippet_anchors"])
         self.assertIn("bad submode word", result["snippet_anchors"])
+        self.assertIn("uniform local settle/discard",
+                      result["snippet_anchors"])
+        self.assertIn("invalid submodes emit no settle/discard",
+                      result["snippet_anchors"])
         self.assertIn("stable frame accepted", result["snippet_anchors"])
 
     def test_autoscan_property_contract_is_anchored(self) -> None:

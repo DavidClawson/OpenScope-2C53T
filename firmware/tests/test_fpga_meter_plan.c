@@ -163,6 +163,50 @@ static void test_transition_plan_covers_mux_family_and_settle_policy(void)
     }
 }
 
+static void test_transition_settle_discard_policy_is_explicit_for_every_submode(void)
+{
+    for (uint8_t i = 0; i < FPGA_METER_LOCAL_SUBMODE_COUNT; i++) {
+        char name[72];
+        fpga_meter_transition_plan_t plan =
+            fpga_meter_transition_plan_for_submode(i);
+
+        snprintf(name, sizeof(name), "uniform local settle/discard valid %u",
+                 (unsigned)i);
+        EXPECT_EQ_U8(name, fpga_meter_submode_is_valid(i) ? 1U : 0U, 1U);
+        snprintf(name, sizeof(name), "uniform local discard policy %u",
+                 (unsigned)i);
+        EXPECT_EQ_U8(name, plan.discard_frames,
+                     FPGA_METER_TRANSITION_DISCARD_FRAMES);
+        snprintf(name, sizeof(name), "uniform local settle policy %u",
+                 (unsigned)i);
+        EXPECT_EQ_U16(name, plan.settle_ms,
+                      FPGA_METER_TRANSITION_SETTLE_MS);
+    }
+
+    {
+        fpga_meter_transition_plan_t plan =
+            fpga_meter_transition_plan_for_submode(FPGA_METER_LOCAL_SUBMODE_COUNT);
+
+        EXPECT_EQ_U8("invalid submodes emit no settle/discard valid",
+                     fpga_meter_submode_is_valid(FPGA_METER_LOCAL_SUBMODE_COUNT) ? 1U : 0U,
+                     0U);
+        EXPECT_EQ_U8("invalid submodes emit no settle/discard stock",
+                     plan.stock_mode, FPGA_METER_INVALID_STOCK_MODE);
+        EXPECT_EQ_U8("invalid submodes emit no settle/discard mux",
+                     plan.mux_index, FPGA_METER_INVALID_STOCK_MODE);
+        EXPECT_EQ_U8("invalid submodes emit no settle/discard frame family",
+                     plan.frame_family, FPGA_METER_FRAME_FAMILY_INVALID);
+        EXPECT_EQ_U8("invalid submodes emit no settle/discard discard",
+                     plan.discard_frames, 0U);
+        EXPECT_EQ_U16("invalid submodes emit no settle/discard settle",
+                      plan.settle_ms, 0U);
+        EXPECT_EQ_U16("invalid submodes emit no settle/discard selector",
+                      plan.selector_word, FPGA_METER_INVALID_SELECTOR_WORD);
+        EXPECT_EQ_U8("invalid submodes emit no settle/discard apply",
+                     plan.has_apply_word ? 1U : 0U, 0U);
+    }
+}
+
 static void test_state_machine_contract_is_exhaustive(void)
 {
     uint16_t seen_local_submodes = 0;
@@ -393,6 +437,7 @@ int main(void)
     test_wire_words_are_raw_05_family();
     test_stock_apply_words_for_runtime_family_switch();
     test_transition_plan_covers_mux_family_and_settle_policy();
+    test_transition_settle_discard_policy_is_explicit_for_every_submode();
     test_state_machine_contract_is_exhaustive();
     test_frame_family_mismatch_policy_matrix_is_exhaustive();
     test_local_splits_do_not_invent_extra_stock_selectors();

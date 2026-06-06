@@ -415,6 +415,7 @@ def verify_transition_plan_property_contract() -> dict[str, Any]:
     text = (REPO / rel).read_text(encoding="utf-8", errors="replace")
     required_tests = [
         "transition_plan_covers_mux_family_and_settle_policy",
+        "transition_settle_discard_policy_is_explicit_for_every_submode",
         "state_machine_contract_is_exhaustive",
         "frame_family_mismatch_policy_matrix_is_exhaustive",
         "local_splits_do_not_invent_extra_stock_selectors",
@@ -467,6 +468,8 @@ def verify_transition_plan_property_contract() -> dict[str, Any]:
         "bad plan portc/porte mux",
         "bad plan porta/portb mux",
         "bad plan discard",
+        "uniform local settle/discard",
+        "invalid submodes emit no settle/discard",
     ]
 
     missing_tests = [
@@ -578,6 +581,10 @@ def verify_re_coverage() -> dict[str, Any]:
         "without binary stock evidence", "uA is unresolved and unexposed",
         "H2 table binary guard", "tail bytes", "0x1C340", "no ACK/apply proof",
         "transition phase matrix", "busy transition frame", "stable frame",
+        "transition settle/discard policy guard",
+        "uniform local settle/discard policy",
+        "invalid submodes emit no settle/discard",
+        "exact stock settle/discard counts remain open",
         "selector consumer xrefs", "0x080042E2", "0x080048BA", "0x20002D54",
         "selector adjuster guard", "0x080041F8", "0x080047CC",
         "decrement/increment", "wrap over 0..7", "0x1D", "0x1B",

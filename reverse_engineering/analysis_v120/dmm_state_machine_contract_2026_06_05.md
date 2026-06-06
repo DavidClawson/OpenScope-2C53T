@@ -109,6 +109,9 @@ The software contract proves parser/state safety only:
 - mode invalidation clears stale payloads before transition
 - the first post-transition frames are discarded before parsing
 - local current and extended splits remain local policy over shared stock slots
+- the transition settle/discard policy guard is explicit: every valid local
+  submode uses the same uniform local settle/discard policy, invalid submodes emit no settle/discard,
+  and exact stock settle/discard counts remain open
 - the transition phase matrix is exercised for every local submode: a
   `busy transition frame` is rejected without consuming the discard budget,
   then each planned discard frame drains in order, and only the following

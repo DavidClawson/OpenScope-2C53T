@@ -148,6 +148,13 @@ fpga_meter_transition_plan_t fpga_meter_transition_plan_for_submode(uint8_t subm
     plan.submode = submode;
     plan.stock_mode = fpga_meter_stock_mode_for_submode(submode);
     plan.frame_family = (uint8_t)fpga_meter_frame_family_for_submode(submode);
+    /*
+     * Stock proves the transport shape around mode changes: pause/drain/reset
+     * before resuming DMM traffic. It does not yet prove an exact frame count
+     * or millisecond delay for every local submode. Keep these as a uniform
+     * local settle/discard policy, guarded by tests and RE notes, until a stock
+     * path or repeatable bench trace recovers narrower timing.
+     */
     plan.discard_frames = FPGA_METER_TRANSITION_DISCARD_FRAMES;
     plan.settle_ms = FPGA_METER_TRANSITION_SETTLE_MS;
     plan.selector_word = fpga_meter_stock_cmd_word_for_submode(submode);
