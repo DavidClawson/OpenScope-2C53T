@@ -74,6 +74,15 @@ implemented current submodes render only the recovered/local mA and A units,
 not an invented uA unit, and the goal gate statically checks that the UI mode
 table and autoscan candidate list stay at the 11 recovered/local submodes.
 
+`DAT_2000102e` remains a stock digital variant shadow, not a recovered current
+range writer. The selector state writer guard pins the RX/FSM byte writes at
+`0x08037220`, `0x080372E0`, `0x08037328`, `0x08037338`, and `0x080373A8`, and
+the display formatter dispatch guard pins the case-2 reads that choose current
+display unit indices. That proves current formatter behavior, but it does not
+prove the physical current range source, uA, or factory calibration. New DMM
+scenarios must therefore extend the state-machine evidence or bench traces,
+not add magnitude-based rescue branches.
+
 ## Current Evidence Boundary
 
 The software contract proves parser/state safety only:

@@ -500,10 +500,12 @@ static void meter_stock_fsm_apply(uint8_t ui_submode,
      * full_decompile.c:2931..3009 computes DAT_20001026 (unit/display index)
      * and DAT_20001030 (composite decimal/template index) from stock mode,
      * frame[6], frame[7], and DAT_2000102e; meter_fsm_deep_dive.md records
-     * that only DCV writes the stock DAT_2000102e variant state itself. Local
-     * current submodes therefore seed `variant` from UI range policy before
-     * entering the stock-shaped cases: DC slot 2 has mA/A formatter evidence,
-     * while AC slot 3 currently has ACA mA evidence and a local AC A override.
+     * that stock uses DAT_2000102e as a digital variant shadow. The guarded
+     * stock RX/FSM write sites prove formatter state, not a recovered current
+     * range writer. Local current submodes therefore seed `variant` from UI
+     * range policy before entering the stock-shaped cases: DC slot 2 has mA/A
+     * formatter evidence, while AC slot 3 currently has ACA mA evidence and a
+     * local AC A override.
      * This function must not decide exponent or mode from the raw BCD value;
      * all decisions come from active UI/stock mode plus frame flags.
      */

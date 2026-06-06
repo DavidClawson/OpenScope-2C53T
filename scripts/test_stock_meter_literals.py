@@ -1612,8 +1612,11 @@ def verify_meter_selector_state_sequences() -> dict[str, object]:
 
     These sequences prove RAM-state coupling around `DAT_20001025` and adjacent
     formatter bytes: init clears the selector, RX classification can force mode
-    8 or mode 1, and later RX branches update `DAT_2000102E`/`DAT_2000102F`/
-    `DAT_20001027` before the display formatter consumes them.
+    8 or mode 1, and later RX branches update the `DAT_2000102E` variant
+    shadow plus `DAT_2000102F`/`DAT_20001027` before the display formatter
+    consumes them.  The current formatter reads that variant shadow for its
+    mA/A display choice, but these guarded byte sequences are not a recovered
+    current range writer.
 
     This is still digital DMM FSM evidence only.  It does not recover the
     analog mux bytes `ms[0x02]`/`ms[0x03]` or any factory calibration source.

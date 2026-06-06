@@ -414,6 +414,13 @@ digital stock DMM FSM around selector and formatter shadow bytes; it still does
 not recover `ms[0x02]`/`ms[0x03]`, the analog frontend range writer, or a
 factory calibration coefficient.
 
+Important boundary for current ranges: the guarded `DAT_2000102e` sites are
+variant shadow writer evidence, not a recovered current range writer. Stock
+`FUN_080028E0` case 2 reads `DAT_2000102e` to choose current display unit index
+`4` or `3`, so the current formatter reads `DAT_2000102e`; no inspected stock
+path yet proves the physical current range source, a uA path, or an AC A
+runtime writer.
+
 Local port:
 
 | Stock meter mode | Low byte | Raw word |

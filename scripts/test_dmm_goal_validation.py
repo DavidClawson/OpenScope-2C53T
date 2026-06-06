@@ -702,10 +702,18 @@ class DmmGoalValidationTests(unittest.TestCase):
         self.assertEqual(sequences["init_selector_reset"]["addr"], "0x08026fde")
         self.assertEqual(sequences["rx_force_mode_8"]["addr"], "0x08036d14")
         self.assertEqual(sequences["rx_force_mode_1"]["addr"], "0x08036d50")
+        self.assertEqual(sequences["rx_shadow_zero"]["addr"], "0x08037220")
+        self.assertEqual(sequences["rx_shadow_extended"]["addr"], "0x080372e0")
+        self.assertEqual(sequences["rx_shadow_one"]["addr"], "0x08037328")
+        self.assertEqual(sequences["rx_shadow_two"]["addr"], "0x08037338")
         self.assertEqual(sequences["rx_shadow_two_with_frame_bit"]["addr"], "0x080373a8")
         self.assertIn("8a f8 2d 0f", sequences["init_selector_reset"]["bytes"])
         self.assertIn("87 f8 2d 0f", sequences["rx_force_mode_8"]["bytes"])
         self.assertIn("86 f8 2d 0f", sequences["rx_force_mode_1"]["bytes"])
+        self.assertIn("87 f8 36 0f", sequences["rx_shadow_zero"]["bytes"])
+        self.assertIn("87 f8 36 0f", sequences["rx_shadow_extended"]["bytes"])
+        self.assertIn("87 f8 36 2f", sequences["rx_shadow_one"]["bytes"])
+        self.assertIn("87 f8 36 0f", sequences["rx_shadow_two"]["bytes"])
         self.assertIn("87 f8 36 2f", sequences["rx_shadow_two_with_frame_bit"]["bytes"])
 
     def test_stock_meter_mux_restore_sites_are_binary_grounded(self) -> None:
