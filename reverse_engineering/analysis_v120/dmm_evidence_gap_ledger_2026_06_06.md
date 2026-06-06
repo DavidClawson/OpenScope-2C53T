@@ -1334,3 +1334,49 @@ PA15/PB10, but it is not sufficient to fix H2/SPI3 acceptance or shorted-probes
 DMM behavior. The remaining root cause is earlier or elsewhere in the live
 SPI3/H2 apply path: peripheral/pin electrical state, PC6/PB6 framing/timing,
 stock transaction semantics, or a recovered W25Q/system-file/factory state.
+
+## 2026-06-07 Raw USART2 RX Trace: Echo Parser Negative
+
+OpenScope diagnostic image
+`f580a05397fe1aa1195b6215222b0b01eb583eaba382d9ae2ebc39e611ed705d`
+was flashed through guarded HID IAP after `flash_preflight.py hid-app`
+classified it as an OpenScope app image. This build added a 32-byte raw
+USART2 RX ring sampled before the `5A A5` data-frame / `AA 55` echo-frame
+header filter. The ring records byte value, active TX count, TX byte index,
+and RX parser index; it is diagnostic-only and is not used by decoder math,
+mode choice, or calibration.
+
+Live shorted-probe evidence:
+
+- `status` showed `Echo frames: 0`, `rx_sync echo_start=0`, and all SPI3/H2
+  readback still `0xFF` (`spi_ok=0`, `post_h2_rx_nonff=0`, `factory_cal
+  loaded=0`).
+- Continuity `mode meter 7 0` used GPIO `0EA`, `selector=0511`, `apply=0516`,
+  `probe=0507`, `start=0509`. Raw RX bytes showed normal data-frame layout
+  only, for example newest complete frame bytes in reverse order:
+  `48 01 00 00 20 00 00 00 00 04 A5 5A`. No raw `AA 55` echo header was
+  present. The decoded/display state remained not-correct for shorted probes:
+  continuity reached `display=ERR`/special frames rather than a proved ON state.
+- DCV `mode meter 0 0` used GPIO `0BB`, `config=0508`, `selector=0514`,
+  `probe=0507`, `start=0509`. Raw RX again showed only data frames, for example
+  `49 01 00 00 20 00 00 00 00 04 A5 5A`, with `echo_start=0`. The user-visible
+  value failed closed as `---`, not the required 0 V.
+- Some older data frames contain byte `0xAA` as payload data, e.g.
+  `5A A5 04 E0 9B AA 0D 28 00 00 01 42`; the raw ring gives `rxi` values that
+  distinguish those payload bytes from a possible echo header. This rules out
+  a simple "our parser skipped 0xAA" explanation for the missing echo.
+
+Interpretation: the live shorted-probe failure is still upstream of display
+formatting and not fixed by USART2 header parsing. The next root cause remains
+the producer/apply/calibration path that leaves H2/SPI3 readback all-`0xFF` and
+factory calibration unloaded while the DMM ASIC still emits untrusted data
+frames. Do not use this evidence to loosen the H2 acceptance gate or to invent
+voltage/ohm/current coefficients.
+
+Final committed diagnostic image
+`97da781a5887d8601f99bc6bde0df6fed6f2069e46e9a01afaaab00ad80b394e`
+was then built and flashed with the H2/SPI3 acceptance gate restored. CDC
+confirmed build `Jun 7 2026 00:49:36`. Shorted-probe DCV still failed closed
+with `valid=0 display=---`, `producer_frame=5A A5 04 00 00 00 00 20 00 00 01
+4A`, `parsed_frame=00 00 00 00 00 00 00 00 00 00 00 00`, `echo_start=0`, raw
+RX data-frame bytes only, and all H2/SPI3 readback still `0xFF`.

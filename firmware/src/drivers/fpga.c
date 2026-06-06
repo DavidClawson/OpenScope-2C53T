@@ -806,6 +806,21 @@ static void fpga_record_tx_frame(const uint8_t *frame)
     }
 }
 
+static void fpga_record_rx_raw_byte(uint8_t byte, uint8_t rx_index_before)
+{
+    uint8_t idx = fpga.rx_raw_history_head;
+
+    fpga.rx_raw_history[idx] = byte;
+    fpga.rx_raw_history_tx_count[idx] = fpga.tx_count;
+    fpga.rx_raw_history_tx_index[idx] = fpga.tx_index;
+    fpga.rx_raw_history_rx_index[idx] = rx_index_before;
+    fpga.rx_raw_history_head =
+        (uint8_t)((idx + 1U) % FPGA_RX_RAW_HISTORY);
+    if (fpga.rx_raw_history_count < FPGA_RX_RAW_HISTORY) {
+        fpga.rx_raw_history_count++;
+    }
+}
+
 static void fpga_record_rx_data_frame(void)
 {
     uint8_t idx = fpga.rx_frame_history_head;
@@ -1973,6 +1988,18 @@ void USART2_IRQHandler(void)
     if (USART2->sts & USART_RDBF_FLAG) {
         fpga.rx_byte_count++;
         uint8_t byte = (uint8_t)USART2->dt;
+        uint8_t rx_index_before = fpga.rx_index;
+
+        /*
+         * Raw USART2 byte trace, before header filtering.
+         *
+         * Stock V1.2.0 proves 12-byte `5A A5` data frames and 10-byte `AA 55`
+         * echo frames share this RX stream. Live DMM runs currently show
+         * `echo_start=0`; this ring answers whether 0xAA is absent on the wire or
+         * merely lost to our sync state. It is diagnostic only and must not feed
+         * decoder math, mode selection, or calibration.
+         */
+        fpga_record_rx_raw_byte(byte, rx_index_before);
 
         if (fpga.rx_index == 0) {
             /* Looking for frame header first byte */

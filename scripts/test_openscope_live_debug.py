@@ -66,10 +66,13 @@ decoded display={display} unit=V value_i10000={value_i10000} raw=0 dp=0 class=1 
 stock_fsm mode={submode} variant=0 format=0 dc_state=0 display_cmd=0 unit_index=0 composite=0
 transition busy=0 discard_now=0 skip_count=0
 producer_frame=5A A5 04 E0 9B EF 07 28 00 00 01 4B
-parsed_frame=5A A5 04 E0 9B EF 07 28 00 00 01 4B
-first_transition_rx valid=1 armed=0 sub={submode} seq=2 config=0000 selector={selector} apply={apply} probe=0507 start=0509 planned_gpio=0BB actual_gpio=0BB data=9 tx=33 echo=0 busy=0 discard=2 h2_bytes=115638 h2_done=1 h2_post_ok=5 h2_post_mask=1F frame=5A A5 04 E0 9B EF 07 28 00 00 01 4B
-last_echo_frame=00 00 00 00 00 00 00 00 00 00
-transition_history newest_first:
+    parsed_frame=5A A5 04 E0 9B EF 07 28 00 00 01 4B
+    first_transition_rx valid=1 armed=0 sub={submode} seq=2 config=0000 selector={selector} apply={apply} probe=0507 start=0509 planned_gpio=0BB actual_gpio=0BB data=9 tx=33 echo=0 busy=0 discard=2 h2_bytes=115638 h2_done=1 h2_post_ok=5 h2_post_mask=1F frame=5A A5 04 E0 9B EF 07 28 00 00 01 4B
+    last_echo_frame=00 00 00 00 00 00 00 00 00 00
+    rx_raw newest_first:
+    rxraw n=0 tx=33 txi=10 rxi=11 byte=4B
+    rxraw n=1 tx=33 txi=10 rxi=10 byte=01
+    transition_history newest_first:
 mth n=0 sub={submode} seq=2 config=0000 selector={selector} apply={apply} probe=0507 start=0509 tx=29..33 data=8..9 planned_gpio=0BB actual_gpio=0BB
 producer_history newest_first:
 rxh n=0 data=12 tx=33 echo=0 seq=2 seq_sub={submode} busy=0 discard=0 frame=5A A5 04 E0 9B EF 07 28 00 00 01 4B
@@ -218,6 +221,10 @@ producer_frame=5A A5 44 8E EF E7 07 24 80 00 01 89
 parsed_frame=5A A5 44 8E EF E7 07 24 80 00 01 89
 first_transition_rx valid=1 armed=0 sub=0 seq=2 config=0508 selector=0514 apply=0000 probe=0507 start=0509 planned_gpio=0BB actual_gpio=0BB data=9 tx=33 echo=33 busy=1 discard=2 h2_bytes=115638 h2_done=1 h2_post_ok=5 h2_post_mask=1F frame=5A A5 44 8E EF E7 07 24 80 00 01 89
 last_echo_frame=AA 55 00 09 00 00 00 AA 00 09
+rx_raw newest_first:
+rxraw n=0 tx=33 txi=10 rxi=11 byte=89
+rxraw n=1 tx=33 txi=10 rxi=10 byte=01
+rxraw n=2 tx=33 txi=10 rxi=0 byte=5A
 transition_history newest_first:
 mth n=0 sub=0 seq=2 config=0508 selector=0514 apply=0000 probe=0507 start=0509 tx=29..33 data=8..9 planned_gpio=0BB actual_gpio=0BB
 producer_history newest_first:
@@ -265,6 +272,8 @@ h2_post_rx n=0 trigger=01 len=2 bytes=FF FF
             parsed["last_echo_frame"]["hex"],
             "AA 55 00 09 00 00 00 AA 00 09",
         )
+        self.assertEqual(parsed["rx_raw"][0]["byte"], "89")
+        self.assertEqual(parsed["rx_raw"][2]["rxi"], 0)
         self.assertEqual(parsed["first_transition_rx"]["valid"], 1)
         self.assertEqual(parsed["first_transition_rx"]["config"], "0508")
         self.assertEqual(parsed["first_transition_rx"]["selector"], "0514")

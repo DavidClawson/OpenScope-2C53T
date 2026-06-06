@@ -39,6 +39,7 @@
 #define FPGA_TX_FRAME_HISTORY 16
 #define FPGA_RX_FRAME_SIZE    12
 #define FPGA_RX_FRAME_HISTORY 8
+#define FPGA_RX_RAW_HISTORY   32
 #define FPGA_METER_TRANSITION_HISTORY 4
 #define FPGA_POST_H2_TRIGGER_HISTORY 5
 #define FPGA_POST_H2_RX_HISTORY 8
@@ -193,6 +194,12 @@ typedef struct {
     volatile uint16_t rx_data_tx_busy_drop_count; /* Data frames dropped before TX byte pump completed */
     volatile uint16_t rx_echo_valid_count;      /* Echo frames passing stock byte[3]/byte[7] checks */
     volatile uint16_t rx_echo_bad_count;        /* Echo frames failing stock byte[3]/byte[7] checks */
+    volatile uint8_t  rx_raw_history[FPGA_RX_RAW_HISTORY];
+    volatile uint16_t rx_raw_history_tx_count[FPGA_RX_RAW_HISTORY];
+    volatile uint8_t  rx_raw_history_tx_index[FPGA_RX_RAW_HISTORY];
+    volatile uint8_t  rx_raw_history_rx_index[FPGA_RX_RAW_HISTORY];
+    volatile uint8_t  rx_raw_history_head;
+    volatile uint8_t  rx_raw_history_count;
     volatile uint16_t last_rx_frame_count; /* Data-frame count when latest frame arrived */
     volatile uint16_t last_rx_tx_count;    /* TX count visible at latest data-frame arrival */
     volatile uint16_t last_rx_echo_count;  /* Echo count visible at latest data-frame arrival */

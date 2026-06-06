@@ -391,6 +391,7 @@ def parse_meter_trace_text(text: str) -> dict[str, object]:
         "raw_text": text,
         "transition_history": [],
         "producer_history": [],
+        "rx_raw": [],
         "tx_history": [],
         "tx_control_history": [],
         "h2_post_rx": [],
@@ -447,6 +448,11 @@ def parse_meter_trace_text(text: str) -> dict[str, object]:
         elif line.startswith("last_echo_frame="):
             frame = _parse_hex_bytes(line.split("=", 1)[1], 10)
             result["last_echo_frame"] = _frame_record(frame)
+        elif line.startswith("rxraw "):
+            record = _parse_kv_line(line, {"byte"})
+            cast = result["rx_raw"]
+            assert isinstance(cast, list)
+            cast.append(record)
         elif line.startswith("mth "):
             record = _parse_kv_line(line, WIRE_HEX_KEYS)
             for key in ("tx", "data"):

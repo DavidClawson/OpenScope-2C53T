@@ -392,6 +392,15 @@ static void fpga_diag_clear(void)
     fpga.rx_data_tx_busy_drop_count = 0;
     fpga.rx_echo_valid_count = 0;
     fpga.rx_echo_bad_count = 0;
+    memset((void *)fpga.rx_raw_history, 0, sizeof(fpga.rx_raw_history));
+    memset((void *)fpga.rx_raw_history_tx_count, 0,
+           sizeof(fpga.rx_raw_history_tx_count));
+    memset((void *)fpga.rx_raw_history_tx_index, 0,
+           sizeof(fpga.rx_raw_history_tx_index));
+    memset((void *)fpga.rx_raw_history_rx_index, 0,
+           sizeof(fpga.rx_raw_history_rx_index));
+    fpga.rx_raw_history_head = 0;
+    fpga.rx_raw_history_count = 0;
     fpga_meter_probe_tail_override = -1;
     fpga.spi3_ok_count = 0;
     fpga.spi3_timeout_count = 0;
@@ -2634,6 +2643,11 @@ static void cmd_meter_trace(void)
     uint16_t rx_sync_bad_second;
     uint16_t rx_sync_stray;
     uint8_t last_echo_frame[FPGA_RX_ECHO_FRAME_SIZE];
+    uint8_t rxraw_count;
+    uint8_t rxraw_byte[FPGA_RX_RAW_HISTORY];
+    uint16_t rxraw_tx[FPGA_RX_RAW_HISTORY];
+    uint8_t rxraw_tx_index[FPGA_RX_RAW_HISTORY];
+    uint8_t rxraw_rx_index[FPGA_RX_RAW_HISTORY];
     uint8_t post_h2_trigger[FPGA_POST_H2_TRIGGER_HISTORY];
     uint8_t post_h2_rx_len[FPGA_POST_H2_TRIGGER_HISTORY];
     uint8_t post_h2_rx[FPGA_POST_H2_TRIGGER_HISTORY][FPGA_POST_H2_RX_HISTORY];
@@ -2654,6 +2668,19 @@ static void cmd_meter_trace(void)
     rx_sync_stray = fpga.rx_sync_stray_count;
     memcpy(last_echo_frame, (const void *)fpga.last_rx_echo_frame,
            sizeof(last_echo_frame));
+    rxraw_count = fpga.rx_raw_history_count;
+    if (rxraw_count > FPGA_RX_RAW_HISTORY) {
+        rxraw_count = FPGA_RX_RAW_HISTORY;
+    }
+    for (uint8_t n = 0; n < rxraw_count; n++) {
+        uint8_t idx = (uint8_t)((fpga.rx_raw_history_head +
+                                 FPGA_RX_RAW_HISTORY - 1U - n) %
+                                FPGA_RX_RAW_HISTORY);
+        rxraw_byte[n] = fpga.rx_raw_history[idx];
+        rxraw_tx[n] = fpga.rx_raw_history_tx_count[idx];
+        rxraw_tx_index[n] = fpga.rx_raw_history_tx_index[idx];
+        rxraw_rx_index[n] = fpga.rx_raw_history_rx_index[idx];
+    }
     memcpy(post_h2_trigger, (const void *)fpga.post_h2_spi3_trigger,
            sizeof(post_h2_trigger));
     memcpy(post_h2_rx_len, (const void *)fpga.post_h2_spi3_rx_len,
@@ -2891,6 +2918,15 @@ static void cmd_meter_trace(void)
                          (unsigned)last_echo_frame[i]);
     }
     usb_send_str("\r\n");
+    usb_send_str("rx_raw newest_first:\r\n");
+    for (uint8_t n = 0; n < rxraw_count; n++) {
+        usb_debug_printf("rxraw n=%u tx=%u txi=%u rxi=%u byte=%02X\r\n",
+                         (unsigned)n,
+                         rxraw_tx[n],
+                         (unsigned)rxraw_tx_index[n],
+                         (unsigned)rxraw_rx_index[n],
+                         (unsigned)rxraw_byte[n]);
+    }
     usb_send_str("transition_history newest_first:\r\n");
     for (uint8_t n = 0; n < mth_count; n++) {
         usb_debug_printf("mth n=%u sub=%u seq=%u config=%04X selector=%04X "
