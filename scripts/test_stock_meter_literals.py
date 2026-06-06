@@ -14,6 +14,7 @@ REPO = Path(__file__).resolve().parents[1]
 BIN = REPO / "archive/2C53T Firmware V1.2.0/APP_2C53T_V1.2.0_251015.bin"
 RAM_MAP = REPO / "reverse_engineering/analysis_v120/ram_map.txt"
 FULL_DECOMPILE = REPO / "reverse_engineering/analysis_v120/full_decompile.c"
+FUNCTION_NAMES = REPO / "reverse_engineering/analysis_v120/function_names.md"
 BASE = 0x08000000
 EXPECTED_SHA256 = "a17c5c35c97bb898f15672a1747bc1041d8ed507c16999ddba0d1e4e2ec0c760"
 EXPECTED_METER_SELECTOR_TABLE = bytes.fromhex("14 0c 17 0b 0a 12 11 10")
@@ -1537,6 +1538,46 @@ EXPECTED_SCOPE_MUX_STATE_CONSUMER_SEQUENCES = {
             "0a eb 4a 02 0e eb 02 1b 80 38 7c 08 cb f8 68 00"
         ),
     ),
+}
+EXPECTED_SCOPE_TRIGGER_OVERLAY_105B_CONTEXT = {
+    "ram_map": (
+        "0x2000105B DAT_2000105b (12 refs): FUN_08021b40@08021b40, "
+        "unknown@0800e6aa, unknown@0800e652, unknown@0800e67e, "
+        "unknown@08014ac8, unknown@080146da, unknown@0801475c, "
+        "unknown@0801416e, unknown@080142be"
+    ),
+    "function_names": [
+        (
+            "| 08019af8 | 332 | `scope_draw_trigger_marker` | LOW | "
+            "Draws trigger level marker on scope display; called by FUN_08021b40 | 1 | 0 |"
+        ),
+        (
+            "| 08021b40 | 516 | `scope_draw_trigger_overlay` | MEDIUM | "
+            "Draws trigger level overlay on scope screen; calls scope_draw_trigger_marker | 0 | 1 |"
+        ),
+    ],
+    "required_lines": [
+        (12837, "if (DAT_2000012c == 0) {"),
+        (12839, "uVar10 = (uint)DAT_2000105b;"),
+        (12843, "iVar7 = (int)(char)(&DAT_200000fc)[uVar9];"),
+        (12846, "*(undefined2 *)(uVar10 * 4 + 0x80bb40c + uVar9 * 2));"),
+        (12847, "uVar10 = (uint)DAT_2000105b;"),
+        (12850, "uVar2 = *(undefined2 *)(uVar10 * 4 + 0x80bb40c + uVar9 * 2);"),
+        (12897, "iVar5 = (int)DAT_200000fc;"),
+        (12899, "*(undefined2 *)((uint)DAT_2000105b * 4 + 0x80bb40c));"),
+        (12900, "iVar5 = (int)DAT_200000fd;"),
+        (12902, "*(undefined2 *)((uint)DAT_2000105b * 4 + 0x80bb40e));"),
+    ],
+    "line_range": (12837, 12902),
+    "forbidden_substrings": [
+        "FUN_080018a4",
+        "FUN_08001a58",
+        "0x20002D74",
+        "0x20002d74",
+        "0x0500",
+    ],
+    "app_shadow_addr": 0x080B740C,
+    "app_shadow_zero_len": 32,
 }
 
 
@@ -3138,6 +3179,82 @@ def verify_scope_mux_state_consumer_sequences() -> dict[str, object]:
     return {"sequences": checked}
 
 
+def verify_scope_trigger_overlay_105b_boundary() -> dict[str, object]:
+    """Check `DAT_2000105B` / `0x080BB40C` is scope overlay evidence.
+
+    Older high-flash notes left `DAT_2000105B` looking like a tempting
+    "mode/range" selector.  The current stock decompile names its visible owner
+    as `FUN_08021B40` / `scope_draw_trigger_overlay`: it reads channel offset
+    bytes `DAT_200000fc/fd`, indexes halfwords from `0x080BB40C/0x080BB40E`,
+    and calls/draws trigger markers.  Guarding that surface keeps future DMM
+    work from promoting the nearby `ms[0xF63]` state byte into the missing
+    DMM `ms[0x02]`/`ms[0x03]` range writer or a calibration source.
+    """
+    ram_map_lines = RAM_MAP.read_text(encoding="utf-8", errors="replace").splitlines()
+    expected_ram_map = str(EXPECTED_SCOPE_TRIGGER_OVERLAY_105B_CONTEXT["ram_map"])
+    if expected_ram_map not in ram_map_lines:
+        raise AssertionError(f"{RAM_MAP}: DAT_2000105b RAM-map entry drifted")
+
+    function_names = FUNCTION_NAMES.read_text(encoding="utf-8", errors="replace")
+    for expected_line in EXPECTED_SCOPE_TRIGGER_OVERLAY_105B_CONTEXT["function_names"]:
+        if expected_line not in function_names:
+            raise AssertionError(f"{FUNCTION_NAMES}: missing {expected_line}")
+
+    lines = FULL_DECOMPILE.read_text(encoding="utf-8", errors="replace").splitlines()
+    required_lines = EXPECTED_SCOPE_TRIGGER_OVERLAY_105B_CONTEXT["required_lines"]
+    actual_lines = [(line_no, lines[line_no - 1].strip()) for line_no, _ in required_lines]
+    if actual_lines != required_lines:
+        raise AssertionError(
+            "scope trigger overlay DAT_2000105b context drifted: expected "
+            f"{required_lines}, got {actual_lines}"
+        )
+
+    line_start, line_end = EXPECTED_SCOPE_TRIGGER_OVERLAY_105B_CONTEXT["line_range"]
+    block = [
+        {"line": line_no, "text": lines[line_no - 1].strip()}
+        for line_no in range(line_start, line_end + 1)
+    ]
+    forbidden_hits = [
+        item for item in block
+        if any(
+            pattern in item["text"]
+            for pattern in EXPECTED_SCOPE_TRIGGER_OVERLAY_105B_CONTEXT["forbidden_substrings"]
+        )
+    ]
+    if forbidden_hits:
+        raise AssertionError(
+            "scope trigger overlay DAT_2000105b block contains DMM command/writer forms: "
+            f"{forbidden_hits}"
+        )
+
+    shadow_addr = int(EXPECTED_SCOPE_TRIGGER_OVERLAY_105B_CONTEXT["app_shadow_addr"])
+    zero_len = int(EXPECTED_SCOPE_TRIGGER_OVERLAY_105B_CONTEXT["app_shadow_zero_len"])
+    app_shadow = read(shadow_addr, zero_len)
+    if app_shadow != bytes(zero_len):
+        raise AssertionError(
+            f"{shadow_addr:#010x}: expected zero-filled APP-slot shadow, got "
+            f"{app_shadow.hex(' ')}"
+        )
+
+    return {
+        "ram_map": expected_ram_map,
+        "function_names": list(EXPECTED_SCOPE_TRIGGER_OVERLAY_105B_CONTEXT["function_names"]),
+        "full_decompile": str(FULL_DECOMPILE.relative_to(REPO)),
+        "required_lines": [
+            {"line": line_no, "text": text}
+            for line_no, text in actual_lines
+        ],
+        "app_shadow_zero": {
+            "addr": f"{shadow_addr:#010x}",
+            "len": zero_len,
+        },
+        "classification": (
+            "scope trigger-overlay halfword/style boundary, not DMM mux/range "
+            "state, not a raw 0x05xx command source, and not calibration"
+        ),
+    }
+
+
 def main() -> None:
     if not BIN.exists():
         print(f"stock meter literal pools: skipped; missing {BIN}", file=sys.stderr)
@@ -3219,6 +3336,7 @@ def main() -> None:
     scope_ui_mux_lut_consumers = verify_scope_ui_mux_lut_consumer_sequences()
     watchdog_reload_boundary = verify_watchdog_reload_state_boundary_sequences()
     scope_mux_state_consumers = verify_scope_mux_state_consumer_sequences()
+    scope_trigger_overlay_105b = verify_scope_trigger_overlay_105b_boundary()
     for symbol, info in mux_state_ram_map["symbols"].items():
         print(
             f"stock mux-state RAM-map boundary {symbol}: "
@@ -3347,6 +3465,12 @@ def main() -> None:
           ", ".join(item["addr"] for item in watchdog_reload_boundary["sequences"].values()))
     print("stock scope mux-state consumer sites: " +
           ", ".join(item["addr"] for item in scope_mux_state_consumers["sequences"].values()))
+    print(
+        "stock scope trigger-overlay 105B boundary: "
+        + scope_trigger_overlay_105b["app_shadow_zero"]["addr"]
+        + " zero-filled APP shadow; "
+        + scope_trigger_overlay_105b["classification"]
+    )
     print("stock meter literal pools: ok")
 
 

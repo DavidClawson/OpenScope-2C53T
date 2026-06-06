@@ -119,6 +119,14 @@ one of:
   `0x080018A5`) or `FUN_08001a58` (`0x08001A58` or `0x08001A59`). This closes
   the obvious hidden-table escape hatch for these mux writers, but it still does
   not prove that no computed or state-mediated DMM runtime path exists.
+- Scope Trigger Overlay 105B Boundary: `DAT_2000105B` and the
+  `0x080BB40C`/`0x080BB40E` halfword lookup are now guarded as
+  `FUN_08021B40` / `scope_draw_trigger_overlay` evidence. The inspected block
+  reads scope/channel drawing state and `DAT_200000FC`/`DAT_200000FD` offsets,
+  not DMM selector words, not `0x20002D74`, not the mux writers, and not an
+  analog range/calibration source. The current downloaded APP image has a
+  zero-filled app-slot shadow at `0x080B740C`, so this high-flash-looking
+  address is not a recovered DMM command/range/calibration table.
 - Saved-config default boundary: stock `FUN_080223BC` seeds `0x05050000`, so
   default persistent mux bytes are `ms[0x02]=5` and `ms[0x03]=5`. That is
   persistence/default evidence only; it is not a recovered normal runtime DMM

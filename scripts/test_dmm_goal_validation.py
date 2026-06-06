@@ -1949,6 +1949,24 @@ class DmmGoalValidationTests(unittest.TestCase):
             sequences["scope_measurement_engine_mux_scale_consumer"]["bytes"],
         )
 
+    def test_stock_scope_trigger_overlay_105b_boundary_is_negative_dmm_evidence(self) -> None:
+        result = stock_meter_literals.verify_scope_trigger_overlay_105b_boundary()
+
+        self.assertIn("DAT_2000105b", result["ram_map"])
+        self.assertIn("scope_draw_trigger_overlay", "\n".join(result["function_names"]))
+        self.assertEqual(
+            result["app_shadow_zero"],
+            {"addr": "0x080b740c", "len": 32},
+        )
+        self.assertIn("scope trigger-overlay", result["classification"])
+        self.assertIn("not DMM mux/range", result["classification"])
+        self.assertIn("not a raw 0x05xx command source", result["classification"])
+        required_text = "\n".join(item["text"] for item in result["required_lines"])
+        self.assertIn("DAT_2000105b", required_text)
+        self.assertIn("0x80bb40c", required_text)
+        self.assertIn("DAT_200000fc", required_text)
+        self.assertIn("DAT_200000fd", required_text)
+
     def test_re_coverage_requires_all_scope_mux_state_consumer_sites(self) -> None:
         coverage = validate_dmm_goal.verify_re_coverage()
         for term in (
