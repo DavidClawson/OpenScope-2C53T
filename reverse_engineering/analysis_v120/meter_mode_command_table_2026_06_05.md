@@ -1402,6 +1402,15 @@ without moving PB11 earlier than the recovered SPI3/H2 safety boundary. It is a
 frontend activation ordering fix candidate, not proof that low-DCV physical
 calibration is solved.
 
+2026-06-06 live negative check on commit `9e1bd36`: guarded HID IAP flashing of
+that boot-order change did not fix the low-DCV bench state. With image-view
+evidence showing the source at `0.200 V`, the 2C53T LCD and CDC reported
+`0.4332 V`; the frontend dump showed the expected slot-0 projection
+(`PC12=1 PE4=1 PE5=0 PE6=1; PA15=1 PA10=1 PB10=0; PB9=0 PA6=0`) and PB11/PC11
+both high. ACV on the same DC input still rejected as `display=---`,
+`reject=3`. Therefore this ordering is kept as stock-like cleanup and guardable
+state-machine hygiene, but it is not the missing low-DCV correction.
+
 The projection still remains a policy boundary. No currently recovered DMM
 branch proves a separate runtime writer for small/A current,
 capacitance/temperature, or a low-DCV physical range. A future change must

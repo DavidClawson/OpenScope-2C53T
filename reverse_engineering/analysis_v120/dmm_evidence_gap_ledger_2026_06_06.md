@@ -597,6 +597,23 @@ wiring proof boundary. It is not permission to restore decoder coefficients.
   closes "wrong queue target alone" as insufficient; the remaining live wrong
   value is still upstream of display formatting and requires deeper stock
   command/materialization or AFE/H2-effect recovery.
+- Boot frontend-before-activation live negative check: open firmware commit
+  `9e1bd360eeadcc5fa7b092c8f12bbf886b81e608` (`firmware/build/firmware.bin`
+  SHA-256 `b322e60ab8180bcc7cee3733967be6d851bbb1813a740be3345d5b85aa95a8d3`)
+  was flashed through guarded HID IAP after `flash_preflight.py hid-app`
+  accepted the image as an OpenScope app. This build keeps PB11 unconfigured
+  during SPI3/H2 replay, then applies `fpga_set_meter_frontend_for_submode(0)`
+  before the boot meter activation block. Live image-view evidence from
+  `tmp/live_boot_frontend_webcam_video0_dcv_after_wait.jpg` shows the source at
+  `0.200 V`, while the 2C53T LCD and CDC both show `0.4332 V`. CDC dump frames
+  include `5A A5 44 8E 8F AF 0D 24 80 00 01 36`, `display=0.4332 V`,
+  `class=1`, and the frontend dump confirms the planned slot-0 DCV projection:
+  `PC12=1 PE4=1 PE5=0 PE6=1; PA15=1 PA10=1 PB10=0 PB9=0 PA6=0; PB11=1;
+  PC11=1`. ACV on the same DC input still failed closed as `display=---`,
+  `reject=3`. This closes "boot DCV projection before activation" as
+  insufficient by itself; the remaining wrong value is still a DMM frame
+  production / stock command-materialization / H2-acceptance-effect /
+  factory-calibration gap, not a decimal decoder or one-point multiplier target.
 
 ## Next RE Target
 
