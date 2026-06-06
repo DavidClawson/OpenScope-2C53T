@@ -415,6 +415,12 @@ local capacitance and temperature split is narrower:
 - `meter_math_pipeline_annotated.c` contains a mode-5 conversion path using
   `value = value * 9 / 5 + 32` when the flag at `+0xF39` is set, with a
   Fahrenheit `32.0f` literal nearby.
+- The display formatter dispatch guard binary-pins `FUN_080028E0` switch
+  slices at `0x08002AA0`, `0x08002B20`, and `0x08002B34`: stock writes
+  `DAT_20001026` unit index `7` and `DAT_20001030 = DAT_2000102f + 9` for
+  mode 5, and `DAT_20001026` unit indices 8/9/10/11 with
+  `DAT_20001030 = DAT_2000102f + 10`, i.e. format offsets +9/+10, for
+  modes 6/7.
 - The local port maps both capacitance and temperature to stock slot 5 and
   parses both as the extended frame family.
 

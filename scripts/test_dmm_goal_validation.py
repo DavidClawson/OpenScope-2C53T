@@ -171,6 +171,21 @@ class DmmGoalValidationTests(unittest.TestCase):
             "0x080271a8",
         )
 
+    def test_stock_display_formatter_dispatch_is_binary_grounded(self) -> None:
+        result = stock_meter_literals.verify_display_formatter_dispatch_sequences()
+        self.assertEqual(
+            result["sequences"]["display_formatter_mode_switch_cases"]["addr"],
+            "0x08002aa0",
+        )
+        self.assertEqual(
+            result["sequences"]["display_formatter_mode5_extended"]["addr"],
+            "0x08002b20",
+        )
+        self.assertEqual(
+            result["sequences"]["display_formatter_modes6_7_unit_offsets"]["addr"],
+            "0x08002b34",
+        )
+
     def test_state_machine_property_contract_is_anchored(self) -> None:
         result = validate_dmm_goal.verify_state_machine_property_contract()
         self.assertEqual(result["file"], "firmware/tests/test_meter_data.c")

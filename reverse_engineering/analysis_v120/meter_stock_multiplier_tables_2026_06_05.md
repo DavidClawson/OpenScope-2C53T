@@ -133,3 +133,11 @@ There is no stock-only evidence here for a one-point low-voltage coefficient. Tr
   - mode 5: `7`
   - mode 6: `8/9`
   - mode 7: `10/11`
+
+The display formatter dispatch guard in `scripts/test_stock_meter_literals.py`
+now binary-pins the stock switch body at `0x08002AA0`, the mode-5 extended
+case at `0x08002B20`, and the modes-6/7 unit-offset cases at `0x08002B34`.
+This guards `DAT_20001026` unit index `7`, unit indices 8/9/10/11, and
+`DAT_20001030` format offsets +9/+10 as display-formatter evidence.
+It is not a runtime analog range writer and does not prove separate
+capacitance-vs-temperature selector words.

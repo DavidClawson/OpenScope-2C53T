@@ -199,6 +199,46 @@ EXPECTED_ACV_FORMAT_SELECTOR_SEQUENCES = {
         bytes.fromhex("87 f8 37 4f 01 20 49 e0"),
     ),
 }
+EXPECTED_DISPLAY_FORMATTER_DISPATCH_SEQUENCES = {
+    "display_formatter_mode_switch_cases": (
+        0x08002AA0,
+        bytes.fromhex(
+            "6c 55 07 28 c2 f2 00 05 00 f2 87 80 df e8 00 f0 "
+            "04 1b 27 2f 12 38 42 4a 98 f8 2f 0f 03 28 72 d8 "
+            "05 21 df e8 00 f0 02 5a 64 69 00 20 88 f8 2e 0f "
+            "ff 20 66 e0 98 f8 37 1f 06 20 88 f8 2e 0f 48 1d "
+            "88 f8 38 0f 69 e0 98 f8 36 0f 41 1e 02 29 38 bf "
+            "88 f8 2e 0f 98 f8 37 0f 88 f8 38 0f 5d e0 98 f8 "
+            "36 0f 01 28 26 d0 02 28 57 d1 03 20 00 e0 05 20 "
+            "98 f8 37 1f 88 f8 2e 0f 88 1c 88 f8 38 0f 4c e0 "
+            "98 f8 37 1f 07 20 88 f8 2e 0f 01 f1 09 00 88 f8 "
+            "38 0f 42 e0 98 f8 36 0f 02 28 13 d0 01 28 16 d1 "
+            "08 20 12 e0 98 f8 36 0f 02 28 0d d0 01 28 0e d1 "
+            "0a 20 0a e0 98 f8 37 1f 04 20 88 f8 2e 0f 88 f8 "
+            "38 1f 2a e0 09 20 00 e0 0b 20 88 f8 2e 0f 98 f8 "
+            "37 0f 0a 30 88 f8 38 0f 1f e0 98 f8 36 0f 41 1e "
+            "02 29 38 bf 88 f8 2e 0f 98 f8 37 0f 09 e0 98 f8 "
+            "36 0f 02 28 02 d1 03 21 88 f8 2e 1f 98 f8 37 0f "
+            "02 30 88 f8 38 0f"
+        ),
+    ),
+    "display_formatter_mode5_extended": (
+        0x08002B20,
+        bytes.fromhex(
+            "98 f8 37 1f 07 20 88 f8 2e 0f 01 f1 09 00 88 f8 38 0f"
+        ),
+    ),
+    "display_formatter_modes6_7_unit_offsets": (
+        0x08002B34,
+        bytes.fromhex(
+            "98 f8 36 0f 02 28 13 d0 01 28 16 d1 08 20 12 e0 "
+            "98 f8 36 0f 02 28 0d d0 01 28 0e d1 0a 20 0a e0 "
+            "98 f8 37 1f 04 20 88 f8 2e 0f 88 f8 38 1f 2a e0 "
+            "09 20 00 e0 0b 20 88 f8 2e 0f 98 f8 37 0f 0a 30 "
+            "88 f8 38 0f"
+        ),
+    ),
+}
 EXPECTED_MUX_RESTORE_SEQUENCES = {
     0x08025544: bytes.fromhex("a0 78 dc f7 ad f9 e0 78 dc f7 84 fa"),
     0x0802723E: bytes.fromhex(
@@ -909,6 +949,33 @@ def verify_acv_format_selector_sequences() -> dict[str, object]:
     return {"sequences": checked}
 
 
+def verify_display_formatter_dispatch_sequences() -> dict[str, object]:
+    """Check stock display formatter mode-family dispatch evidence.
+
+    `FUN_080028E0` writes display-only state bytes after the meter parser has
+    classified a frame: `DAT_20001026` is the unit index and `DAT_20001030` is
+    the format template offset.  The guarded mode switch pins the stock offsets
+    for DCA/ACA/resistance/mode 5/modes 6-7, including mode 5 unit index 7 with
+    `DAT_2000102f + 9` and modes 6/7 unit indices 8/9/10/11 with
+    `DAT_2000102f + 10`.  This is formatter evidence only; it does not prove a
+    separate capacitance-vs-temperature selector or any runtime analog range
+    writer.
+    """
+    checked: dict[str, dict[str, str]] = {}
+    for name, (addr, expected) in EXPECTED_DISPLAY_FORMATTER_DISPATCH_SEQUENCES.items():
+        actual = read(addr, len(expected))
+        if actual != expected:
+            raise AssertionError(
+                f"{name} {addr:#010x}: expected {expected.hex(' ')}, "
+                f"got {actual.hex(' ')}"
+            )
+        checked[name] = {
+            "addr": f"{addr:#010x}",
+            "bytes": actual.hex(" "),
+        }
+    return {"sequences": checked}
+
+
 def verify_meter_mux_restore_sequences() -> dict[str, object]:
     """Check stock saved-state ms[0x02]/ms[0x03] mux apply call sites.
 
@@ -1345,6 +1412,7 @@ def main() -> None:
     runtime_transport_transitions = verify_runtime_mode_switch_transport_sequences()
     selector_state = verify_meter_selector_state_sequences()
     acv_format = verify_acv_format_selector_sequences()
+    display_formatter = verify_display_formatter_dispatch_sequences()
     mux_restore = verify_meter_mux_restore_sequences()
     saved_config_unpack = verify_meter_saved_config_unpack_sequences()
     saved_config_pack = verify_meter_saved_config_pack_sequences()
@@ -1375,6 +1443,8 @@ def main() -> None:
           ", ".join(item["addr"] for item in selector_state["sequences"].values()))
     print("stock ACV format selector sites: " +
           ", ".join(item["addr"] for item in acv_format["sequences"].values()))
+    print("stock display formatter dispatch sites: " +
+          ", ".join(item["addr"] for item in display_formatter["sequences"].values()))
     print("stock meter mux restore sites: " +
           ", ".join(mux_restore["sequences"].keys()))
     print("stock meter saved-config unpack sites: " +
