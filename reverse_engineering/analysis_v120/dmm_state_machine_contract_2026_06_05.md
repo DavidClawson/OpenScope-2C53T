@@ -80,11 +80,18 @@ The software contract proves parser/state safety only:
 - wrong-family voltage frames clear stale current/passive readings
 - low-DCV `frame[8]=0x80` and `frame[8]=0x82` class-4 voltage frames clear
   stale current/passive readings outside voltage modes
+- a dedicated low-DCV stale-current guard now walks every implemented current
+  submode `{2,3,4,5}` so DC mA, DC A, AC mA, and AC A all fail closed instead
+  of retaining a prior current payload when a voltage-family class-4 frame
+  appears
 - the 32-case range-class matrix covers all stock bit combinations and the
   optional `+10000` extension
 - marker-visible wrong-family frames are now covered as an explicit matrix:
   stock voltage metadata and continuity segment markers must clear stale
   payloads in every local submode whose expected frame family differs
+- special/terminal voltage-family frames such as stock `OL` are also rejected
+  across every non-voltage submode `{2..10}` instead of being tested only
+  against one current mode and resistance
 - AC modes fail closed without line-frequency evidence
 - mode invalidation clears stale payloads before transition
 - the first post-transition frames are discarded before parsing

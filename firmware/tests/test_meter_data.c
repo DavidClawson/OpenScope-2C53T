@@ -1501,29 +1501,28 @@ static int test_voltage_payload_clears_stale_reading_in_all_non_voltage_modes(vo
 static int test_special_voltage_family_frames_are_rejected_outside_voltage(void)
 {
     uint8_t ol_voltage_frame[12];
+    static const uint8_t special_voltage_reject_modes[] = {
+        2, 3, 4, 5, 6, 7, 8, 9, 10
+    };
 
     build_segment_frame(ol_voltage_frame, 0x0A, 0x0B, 0, 0, 0x00,
                         0x00, 0x02, 0x00, 0x0031);
 
-    meter_data_init();
-    process_frame(ol_voltage_frame, 2);
-    ASSERT(!meter_reading.valid);
-    ASSERT(meter_reading.result_class == METER_RESULT_NONE);
-    ASSERT_STR_EQ(meter_reading.display_str, "---");
-    ASSERT_STR_EQ(meter_reading.unit_suffix, "");
-    ASSERT(expect_family_debug((uint8_t)FPGA_METER_FRAME_FAMILY_CURRENT,
-                               (uint8_t)FPGA_METER_FRAME_FAMILY_VOLTAGE,
-                               METER_REJECT_WRONG_FRAME_FAMILY));
+    for (unsigned i = 0; i < sizeof(special_voltage_reject_modes); i++) {
+        uint8_t mode = special_voltage_reject_modes[i];
 
-    meter_data_init();
-    process_frame(ol_voltage_frame, 6);
-    ASSERT(!meter_reading.valid);
-    ASSERT(meter_reading.result_class == METER_RESULT_NONE);
-    ASSERT_STR_EQ(meter_reading.display_str, "---");
-    ASSERT_STR_EQ(meter_reading.unit_suffix, "");
-    ASSERT(expect_family_debug((uint8_t)FPGA_METER_FRAME_FAMILY_RESISTANCE,
-                               (uint8_t)FPGA_METER_FRAME_FAMILY_VOLTAGE,
-                               METER_REJECT_WRONG_FRAME_FAMILY));
+        meter_data_init();
+        process_frame(ol_voltage_frame, mode);
+        ASSERT(!meter_reading.valid);
+        ASSERT(meter_reading.submode == mode);
+        ASSERT(meter_reading.result_class == METER_RESULT_NONE);
+        ASSERT_STR_EQ(meter_reading.display_str, "---");
+        ASSERT_STR_EQ(meter_reading.unit_suffix, "");
+        ASSERT(expect_family_debug(
+            (uint8_t)fpga_meter_frame_family_for_submode(mode),
+            (uint8_t)FPGA_METER_FRAME_FAMILY_VOLTAGE,
+            METER_REJECT_WRONG_FRAME_FAMILY));
+    }
     return 1;
 }
 
@@ -1597,27 +1596,39 @@ static int test_low_dcv_voltage_payload_clears_stale_current_reading(void)
         0x0A, 0x00, 0x82, 0x00, 0x01, 0x7F,
     };
     uint8_t current_frame[12];
-    uint32_t updates_after_current;
-    uint32_t display_updates_after_current;
+    uint8_t ac_current_frame[12];
+    static const uint8_t low_dcv_current_modes[] = { 2, 3, 4, 5 };
 
-    build_segment_frame(current_frame, 1, 8, 6, 7, 0x4A, 0x20, 0x00, 0x00, 0);
+    build_segment_frame(current_frame, 2, 2, 6, 1, 0x00, 0x00, 0x00, 0x00, 0);
+    build_segment_frame(ac_current_frame, 2, 2, 6, 1, 0x00, 0x00, 0x00, 0x00, 0x0031);
 
-    meter_data_init();
-    process_frame(current_frame, 2);
-    ASSERT(expect_normal_reading("18.67", "mA", 18.67f, 0.001f));
-    updates_after_current = meter_reading.update_count;
-    display_updates_after_current = meter_reading.display_update_count;
+    for (unsigned i = 0; i < sizeof(low_dcv_current_modes); i++) {
+        uint8_t mode = low_dcv_current_modes[i];
+        const uint8_t *active_current =
+            (mode == 4 || mode == 5) ? ac_current_frame : current_frame;
+        uint32_t updates_after_current;
+        uint32_t display_updates_after_current;
 
-    process_frame(low_dcv_frame, 2);
-    ASSERT(!meter_reading.valid);
-    ASSERT(meter_reading.update_count == updates_after_current + 1);
-    ASSERT(meter_reading.display_update_count == display_updates_after_current + 1);
-    ASSERT(meter_reading.submode == 2);
-    ASSERT(meter_reading.result_class == METER_RESULT_NONE);
-    ASSERT(expect_payload_cleared("---"));
-    ASSERT(expect_family_debug((uint8_t)FPGA_METER_FRAME_FAMILY_CURRENT,
-                               (uint8_t)FPGA_METER_FRAME_FAMILY_VOLTAGE,
-                               METER_REJECT_WRONG_FRAME_FAMILY));
+        meter_data_init();
+        process_frame(active_current, mode);
+        ASSERT(expect_normal_reading((mode == 2 || mode == 4) ? "22.61" : "2.261",
+                                     (mode == 2 || mode == 4) ? "mA" : "A",
+                                     (mode == 2 || mode == 4) ? 22.61f : 2.261f,
+                                     0.001f));
+        updates_after_current = meter_reading.update_count;
+        display_updates_after_current = meter_reading.display_update_count;
+
+        process_frame(low_dcv_frame, mode);
+        ASSERT(!meter_reading.valid);
+        ASSERT(meter_reading.update_count == updates_after_current + 1);
+        ASSERT(meter_reading.display_update_count == display_updates_after_current + 1);
+        ASSERT(meter_reading.submode == mode);
+        ASSERT(meter_reading.result_class == METER_RESULT_NONE);
+        ASSERT(expect_payload_cleared("---"));
+        ASSERT(expect_family_debug((uint8_t)FPGA_METER_FRAME_FAMILY_CURRENT,
+                                   (uint8_t)FPGA_METER_FRAME_FAMILY_VOLTAGE,
+                                   METER_REJECT_WRONG_FRAME_FAMILY));
+    }
     return 1;
 }
 

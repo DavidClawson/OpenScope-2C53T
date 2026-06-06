@@ -177,6 +177,7 @@ def verify_state_machine_property_contract() -> dict[str, Any]:
         "invalidate_clears_stale_payload_for_every_ordered_mode_transition",
         "marker_visible_family_mismatch_matrix_clears_stale_payload",
         "voltage_payload_clears_stale_reading_in_all_non_voltage_modes",
+        "low_dcv_voltage_payload_clears_stale_current_reading",
         "dcv_aux_extra_bytes_do_not_change_stock_range_class",
         "large_current_submodes_use_active_local_range_state",
         "current_submodes_do_not_expose_unproven_microamp_unit",
@@ -204,6 +205,12 @@ def verify_state_machine_property_contract() -> dict[str, Any]:
         "all non-voltage modes reject voltage frames":
             r"static const uint8_t (wrong_family_)?modes\[\]\s*=\s*"
             r"\{\s*2,\s*3,\s*4,\s*5,\s*6,\s*7,\s*8,\s*9,\s*10\s*\};",
+        "special voltage terminal frames reject in every non-voltage submode":
+            r"static const uint8_t special_voltage_reject_modes\[\]\s*=\s*"
+            r"\{\s*2,\s*3,\s*4,\s*5,\s*6,\s*7,\s*8,\s*9,\s*10\s*\};",
+        "low dcv stale-current guard covers all current submodes":
+            r"static const uint8_t low_dcv_current_modes\[\]\s*=\s*"
+            r"\{\s*2,\s*3,\s*4,\s*5\s*\};",
     }
     required_snippets = [
         "METER_REJECT_MISSING_AC_EVIDENCE",
