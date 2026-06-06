@@ -39,6 +39,7 @@
 #define FPGA_TX_FRAME_HISTORY 16
 #define FPGA_RX_FRAME_SIZE    12
 #define FPGA_RX_FRAME_HISTORY 8
+#define FPGA_METER_TRANSITION_HISTORY 4
 
 /* RX frame headers */
 #define FPGA_RX_DATA_HDR_0    0x5A   /* Data frame: 0x5A 0xA5 */
@@ -214,6 +215,20 @@ typedef struct {
     volatile uint16_t meter_mode_apply_word;
     volatile uint16_t meter_mode_probe_word;
     volatile uint16_t meter_mode_start_word;
+    volatile uint8_t  meter_transition_history_submode[FPGA_METER_TRANSITION_HISTORY];
+    volatile uint16_t meter_transition_history_selector[FPGA_METER_TRANSITION_HISTORY];
+    volatile uint16_t meter_transition_history_apply[FPGA_METER_TRANSITION_HISTORY];
+    volatile uint16_t meter_transition_history_probe[FPGA_METER_TRANSITION_HISTORY];
+    volatile uint16_t meter_transition_history_start[FPGA_METER_TRANSITION_HISTORY];
+    volatile uint16_t meter_transition_history_sequence_count[FPGA_METER_TRANSITION_HISTORY];
+    volatile uint16_t meter_transition_history_tx_before[FPGA_METER_TRANSITION_HISTORY];
+    volatile uint16_t meter_transition_history_tx_after[FPGA_METER_TRANSITION_HISTORY];
+    volatile uint16_t meter_transition_history_frame_before[FPGA_METER_TRANSITION_HISTORY];
+    volatile uint16_t meter_transition_history_frame_after[FPGA_METER_TRANSITION_HISTORY];
+    volatile uint16_t meter_transition_history_planned_gpio[FPGA_METER_TRANSITION_HISTORY];
+    volatile uint16_t meter_transition_history_actual_gpio[FPGA_METER_TRANSITION_HISTORY];
+    volatile uint8_t  meter_transition_history_head;
+    volatile uint8_t  meter_transition_history_count;
 
     /* Acquisition mode (set by mode switch, read by acq task) */
     volatile uint8_t acq_mode;         /* fpga_acq_mode_t */

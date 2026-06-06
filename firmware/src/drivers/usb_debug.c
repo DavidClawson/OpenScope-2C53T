@@ -402,6 +402,20 @@ static void fpga_diag_clear(void)
     memset((void *)fpga.rx_history_transition_busy, 0, sizeof(fpga.rx_history_transition_busy));
     fpga.rx_frame_history_head = 0;
     fpga.rx_frame_history_count = 0;
+    memset((void *)fpga.meter_transition_history_submode, 0, sizeof(fpga.meter_transition_history_submode));
+    memset((void *)fpga.meter_transition_history_selector, 0, sizeof(fpga.meter_transition_history_selector));
+    memset((void *)fpga.meter_transition_history_apply, 0, sizeof(fpga.meter_transition_history_apply));
+    memset((void *)fpga.meter_transition_history_probe, 0, sizeof(fpga.meter_transition_history_probe));
+    memset((void *)fpga.meter_transition_history_start, 0, sizeof(fpga.meter_transition_history_start));
+    memset((void *)fpga.meter_transition_history_sequence_count, 0, sizeof(fpga.meter_transition_history_sequence_count));
+    memset((void *)fpga.meter_transition_history_tx_before, 0, sizeof(fpga.meter_transition_history_tx_before));
+    memset((void *)fpga.meter_transition_history_tx_after, 0, sizeof(fpga.meter_transition_history_tx_after));
+    memset((void *)fpga.meter_transition_history_frame_before, 0, sizeof(fpga.meter_transition_history_frame_before));
+    memset((void *)fpga.meter_transition_history_frame_after, 0, sizeof(fpga.meter_transition_history_frame_after));
+    memset((void *)fpga.meter_transition_history_planned_gpio, 0, sizeof(fpga.meter_transition_history_planned_gpio));
+    memset((void *)fpga.meter_transition_history_actual_gpio, 0, sizeof(fpga.meter_transition_history_actual_gpio));
+    fpga.meter_transition_history_head = 0;
+    fpga.meter_transition_history_count = 0;
     memset((void *)fpga.diag_ch1_raw, 0, sizeof(fpga.diag_ch1_raw));
     memset((void *)fpga.diag_ch2_raw, 0, sizeof(fpga.diag_ch2_raw));
     fpga.diag_data_varies = 0;
@@ -2423,6 +2437,19 @@ static void cmd_meter_trace(void)
     uint8_t rxh_seq_sub[FPGA_RX_FRAME_HISTORY];
     uint8_t rxh_busy[FPGA_RX_FRAME_HISTORY];
     uint8_t rxh_discard[FPGA_RX_FRAME_HISTORY];
+    uint8_t mth_count;
+    uint8_t mth_submode[FPGA_METER_TRANSITION_HISTORY];
+    uint16_t mth_selector[FPGA_METER_TRANSITION_HISTORY];
+    uint16_t mth_apply[FPGA_METER_TRANSITION_HISTORY];
+    uint16_t mth_probe[FPGA_METER_TRANSITION_HISTORY];
+    uint16_t mth_start[FPGA_METER_TRANSITION_HISTORY];
+    uint16_t mth_seq[FPGA_METER_TRANSITION_HISTORY];
+    uint16_t mth_tx_before[FPGA_METER_TRANSITION_HISTORY];
+    uint16_t mth_tx_after[FPGA_METER_TRANSITION_HISTORY];
+    uint16_t mth_frame_before[FPGA_METER_TRANSITION_HISTORY];
+    uint16_t mth_frame_after[FPGA_METER_TRANSITION_HISTORY];
+    uint16_t mth_planned_gpio[FPGA_METER_TRANSITION_HISTORY];
+    uint16_t mth_actual_gpio[FPGA_METER_TRANSITION_HISTORY];
 
     taskENTER_CRITICAL();
     rxh_count = fpga.rx_frame_history_count;
@@ -2440,6 +2467,27 @@ static void cmd_meter_trace(void)
         rxh_seq_sub[n] = fpga.rx_history_sequence_submode[idx];
         rxh_busy[n] = fpga.rx_history_transition_busy[idx];
         rxh_discard[n] = fpga.rx_history_discard_remaining[idx];
+    }
+    mth_count = fpga.meter_transition_history_count;
+    if (mth_count > FPGA_METER_TRANSITION_HISTORY) {
+        mth_count = FPGA_METER_TRANSITION_HISTORY;
+    }
+    for (uint8_t n = 0; n < mth_count; n++) {
+        uint8_t idx = (uint8_t)((fpga.meter_transition_history_head +
+                                 FPGA_METER_TRANSITION_HISTORY - 1U - n) %
+                                FPGA_METER_TRANSITION_HISTORY);
+        mth_submode[n] = fpga.meter_transition_history_submode[idx];
+        mth_selector[n] = fpga.meter_transition_history_selector[idx];
+        mth_apply[n] = fpga.meter_transition_history_apply[idx];
+        mth_probe[n] = fpga.meter_transition_history_probe[idx];
+        mth_start[n] = fpga.meter_transition_history_start[idx];
+        mth_seq[n] = fpga.meter_transition_history_sequence_count[idx];
+        mth_tx_before[n] = fpga.meter_transition_history_tx_before[idx];
+        mth_tx_after[n] = fpga.meter_transition_history_tx_after[idx];
+        mth_frame_before[n] = fpga.meter_transition_history_frame_before[idx];
+        mth_frame_after[n] = fpga.meter_transition_history_frame_after[idx];
+        mth_planned_gpio[n] = fpga.meter_transition_history_planned_gpio[idx];
+        mth_actual_gpio[n] = fpga.meter_transition_history_actual_gpio[idx];
     }
     taskEXIT_CRITICAL();
 
@@ -2524,6 +2572,25 @@ static void cmd_meter_trace(void)
                      meter_transition_frame_skip_count);
     print_volatile_frame_hex("producer_frame=", fpga.rx_frame);
     print_frame_hex("parsed_frame=", snap.dbg_frame);
+    usb_send_str("transition_history newest_first:\r\n");
+    for (uint8_t n = 0; n < mth_count; n++) {
+        usb_debug_printf("mth n=%u sub=%u seq=%u selector=%04X apply=%04X "
+                         "probe=%04X start=%04X tx=%u..%u data=%u..%u "
+                         "planned_gpio=%03X actual_gpio=%03X\r\n",
+                         (unsigned)n,
+                         (unsigned)mth_submode[n],
+                         mth_seq[n],
+                         mth_selector[n],
+                         mth_apply[n],
+                         mth_probe[n],
+                         mth_start[n],
+                         mth_tx_before[n],
+                         mth_tx_after[n],
+                         mth_frame_before[n],
+                         mth_frame_after[n],
+                         mth_planned_gpio[n],
+                         mth_actual_gpio[n]);
+    }
     usb_send_str("producer_history newest_first:\r\n");
     for (uint8_t n = 0; n < rxh_count; n++) {
         usb_debug_printf("rxh n=%u data=%u tx=%u echo=%u seq=%u seq_sub=%u "

@@ -720,6 +720,83 @@ static void fpga_record_rx_data_frame(void)
     }
 }
 
+static uint16_t fpga_meter_mux_gpio_mask_from_state(
+    const fpga_meter_mux_gpio_state_t *state)
+{
+    uint16_t mask = 0;
+
+    if (state->pc12) mask |= (1U << 0);
+    if (state->pe4)  mask |= (1U << 1);
+    if (state->pe5)  mask |= (1U << 2);
+    if (state->pe6)  mask |= (1U << 3);
+    if (state->pa15) mask |= (1U << 4);
+    if (state->pa10) mask |= (1U << 5);
+    if (state->pb10) mask |= (1U << 6);
+    if (state->pb11) mask |= (1U << 7);
+    if (state->pb9)  mask |= (1U << 8);
+    if (state->pa6)  mask |= (1U << 9);
+    return mask;
+}
+
+static uint16_t fpga_meter_mux_gpio_mask_live(void)
+{
+    uint16_t mask = 0;
+
+    if (GPIOC->idt & (1U << 12)) mask |= (1U << 0);
+    if (GPIOE->idt & (1U << 4))  mask |= (1U << 1);
+    if (GPIOE->idt & (1U << 5))  mask |= (1U << 2);
+    if (GPIOE->idt & (1U << 6))  mask |= (1U << 3);
+    if (GPIOA->idt & (1U << 15)) mask |= (1U << 4);
+    if (GPIOA->idt & (1U << 10)) mask |= (1U << 5);
+    if (GPIOB->idt & (1U << 10)) mask |= (1U << 6);
+    if (GPIOB->idt & PB11_MASK)  mask |= (1U << 7);
+    if (GPIOB->idt & (1U << 9))  mask |= (1U << 8);
+    if (GPIOA->idt & (1U << 6))  mask |= (1U << 9);
+    return mask;
+}
+
+static void fpga_record_meter_transition_snapshot(
+    uint8_t submode,
+    const fpga_meter_transition_plan_t *plan,
+    uint16_t planned_gpio,
+    uint16_t actual_gpio,
+    uint16_t tx_before,
+    uint16_t frame_before)
+{
+    uint8_t idx = fpga.meter_transition_history_head;
+
+    /*
+     * DMM transition/apply trace.
+     *
+     * Capture the planned mux projection and the actual GPIO levels observed
+     * immediately after the frontend writer, then pair them with the selector
+     * words and producer counters surrounding the USART sequence. This is the
+     * runtime evidence bridge between the stock-like writer/apply path and the
+     * later producer RX frames; it must never drive value/range decisions.
+     */
+    fpga.meter_transition_history_submode[idx] = submode;
+    fpga.meter_transition_history_selector[idx] = plan->selector_word;
+    fpga.meter_transition_history_apply[idx] =
+        plan->has_apply_word ? plan->apply_word : 0;
+    fpga.meter_transition_history_probe[idx] =
+        plan->has_probe_detect ?
+        (uint16_t)((GPIOC->idt & (1U << 7)) ? 0x0507U : 0x050AU) : 0;
+    fpga.meter_transition_history_start[idx] = plan->start_word;
+    fpga.meter_transition_history_sequence_count[idx] =
+        fpga.meter_mode_sequence_count;
+    fpga.meter_transition_history_tx_before[idx] = tx_before;
+    fpga.meter_transition_history_tx_after[idx] = fpga.tx_count;
+    fpga.meter_transition_history_frame_before[idx] = frame_before;
+    fpga.meter_transition_history_frame_after[idx] = fpga.frame_count;
+    fpga.meter_transition_history_planned_gpio[idx] = planned_gpio;
+    fpga.meter_transition_history_actual_gpio[idx] = actual_gpio;
+    fpga.meter_transition_history_head =
+        (uint8_t)((idx + 1U) % FPGA_METER_TRANSITION_HISTORY);
+    if (fpga.meter_transition_history_count < FPGA_METER_TRANSITION_HISTORY) {
+        fpga.meter_transition_history_count++;
+    }
+}
+
 /*
  * Build and send a USART command frame (10 bytes).
  * Format: [0][1] [cmd_hi][cmd_lo] [0..0] [checksum]
@@ -4314,6 +4391,11 @@ static void fpga_apply_meter_transition(uint8_t submode, bool wake_preamble)
 {
     fpga_meter_transition_plan_t plan =
         fpga_meter_transition_plan_for_submode(submode);
+    fpga_meter_mux_gpio_state_t planned_mux;
+    uint16_t planned_gpio;
+    uint16_t actual_gpio;
+    uint16_t tx_before;
+    uint16_t frame_before;
 
     meter_transition_busy = true;
 
@@ -4337,9 +4419,16 @@ static void fpga_apply_meter_transition(uint8_t submode, bool wake_preamble)
     if (wake_preamble) {
         fpga_send_meter_wake_preamble();
     }
+    (void)fpga_meter_mux_gpio_state_for_submode(submode, &planned_mux);
+    planned_gpio = fpga_meter_mux_gpio_mask_from_state(&planned_mux);
+    tx_before = fpga.tx_count;
+    frame_before = fpga.frame_count;
     fpga_set_meter_frontend_for_submode(submode);
+    actual_gpio = fpga_meter_mux_gpio_mask_live();
     fpga_scope_delay_ms(plan.settle_ms);
     fpga_send_meter_mode_sequence(submode);
+    fpga_record_meter_transition_snapshot(submode, &plan, planned_gpio,
+                                          actual_gpio, tx_before, frame_before);
     fpga_meter_discard_next_frames(plan.discard_frames);
     meter_transition_busy = false;
 }

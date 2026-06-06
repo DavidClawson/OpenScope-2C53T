@@ -645,6 +645,17 @@ wiring proof boundary. It is not permission to restore decoder coefficients.
   only appear during discarded transition frames, or whether they are tied to a
   specific selector/apply sequence.  It is still diagnostic-only and must not be
   used as a feedback path for range decisions or observed-case correction.
+- Runtime transition/apply history extension: `meter trace` now also records a
+  small DMM transition ring (`mth` rows) that pairs the stock-like selector,
+  optional apply word, probe/start words, and producer counters with the planned
+  mux GPIO projection and the actual GPIO levels sampled immediately after
+  `fpga_set_meter_frontend_for_submode()`.  The GPIO mask bits are
+  `PC12, PE4, PE5, PE6, PA15, PA10, PB10, PB11, PB9, PA6`.  This is the
+  runtime bridge needed for the next low-DCV capture: it can prove whether the
+  `0.436x V` producer frames followed the intended DCV writer state or whether
+  the wrong frame begins at/after a specific selector/apply transition.  It is
+  not an inferred factory coefficient, not an image-derived proof path, and not
+  a range feedback mechanism.
 
 ## Next RE Target
 
