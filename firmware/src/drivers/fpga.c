@@ -74,6 +74,7 @@ volatile bool     fpga_meter_adc_sampler_enabled;
 volatile bool     fpga_meter_adc_use_preacq;
 volatile int16_t  fpga_meter_adc_selector_override = -1;
 volatile int16_t  fpga_meter_adc_preacq_override = -1;
+volatile int16_t  fpga_meter_probe_tail_override = -1;
 volatile uint32_t fpga_meter_adc_enqueue_attempts;
 volatile uint32_t fpga_meter_adc_enqueue_success;
 volatile uint32_t fpga_meter_adc_enqueue_drops;
@@ -393,6 +394,28 @@ static void fpga_h2_record_body_rx(uint8_t rx_byte)
     } else {
         fpga.h2_rx_other_count++;
     }
+}
+
+static bool fpga_h2_spi3_accepted(void)
+{
+    if (!fpga.h2_upload_done) {
+        return false;
+    }
+    if ((fpga.h2_rx_00_count + fpga.h2_rx_other_count) != 0U) {
+        return true;
+    }
+    for (uint8_t i = 0; i < FPGA_POST_H2_TRIGGER_HISTORY; i++) {
+        uint8_t len = fpga.post_h2_spi3_rx_len[i];
+        if (len > FPGA_POST_H2_RX_HISTORY) {
+            len = FPGA_POST_H2_RX_HISTORY;
+        }
+        for (uint8_t j = 0; j < len; j++) {
+            if (fpga.post_h2_spi3_rx[i][j] != 0xFFU) {
+                return true;
+            }
+        }
+    }
+    return false;
 }
 
 static void fpga_h2_record_close_rx(uint8_t rx_byte)
@@ -1441,6 +1464,10 @@ static uint8_t fpga_probe_cmd_byte(void)
      * coefficient; the physical "probe present" label remains a hardware
      * interpretation layered on top of the stock branch polarity.
      */
+    if (fpga_meter_probe_tail_override == 0x07 ||
+        fpga_meter_probe_tail_override == FPGA_CMD_METER_NOPROBE) {
+        return (uint8_t)fpga_meter_probe_tail_override;
+    }
     return (GPIOC->idt & (1U << 7)) ? 0x07 : FPGA_CMD_METER_NOPROBE;
 }
 
@@ -1982,6 +2009,23 @@ void USART2_IRQHandler(void)
             /* Check for complete frame */
             if (fpga.rx_buf[0] == FPGA_RX_DATA_HDR_0 &&
                 fpga.rx_index >= FPGA_RX_FRAME_SIZE) {
+                /*
+                 * Stock USART2 RX does not release a 12-byte DMM data frame to
+                 * dvom_RX while the 10-byte TX pump is still active. The
+                 * decompiled ISR gate is `usart2_tx_byte_index == 10` plus the
+                 * UI exchange lock. The open firmware has no equivalent display
+                 * lock, but it does have the same TX byte index. Dropping data
+                 * frames that arrive before the command frame finished prevents
+                 * command-overlap bytes from becoming plausible voltage/current
+                 * readings during DMM mode/range churn; it is producer hygiene,
+                 * not a value or range correction.
+                 */
+                if (fpga.tx_index < FPGA_TX_FRAME_SIZE) {
+                    fpga.rx_data_tx_busy_drop_count++;
+                    fpga.rx_index = 0;
+                    return;
+                }
+
                 /* Complete data frame (12 bytes): copy to diagnostic buffer and
                  * enqueue an immutable event for dvom_RX. A binary semaphore over
                  * fpga.rx_frame let later ISR frames overwrite the bytes before
@@ -2033,10 +2077,24 @@ void USART2_IRQHandler(void)
 
             } else if (fpga.rx_buf[0] == FPGA_RX_ECHO_HDR_0 &&
                        fpga.rx_index >= FPGA_RX_ECHO_FRAME_SIZE) {
-                /* Complete echo frame (10 bytes): just acknowledge */
+                /*
+                 * Complete echo frame (10 bytes).
+                 *
+                 * Stock validates byte[3] against the just-sent command low byte
+                 * and byte[7] against the fixed 0xAA integrity marker. Keep the
+                 * same validation as diagnostics so a bad echo cannot be treated
+                 * as transport confidence while debugging wrong DMM producer
+                 * frames. Data frames are still handled independently above.
+                 */
                 memcpy((void *)fpga.last_rx_echo_frame, (const void *)fpga.rx_buf,
                        FPGA_RX_ECHO_FRAME_SIZE);
-                fpga.echo_count++;
+                if (fpga.rx_buf[3] == fpga.last_tx_frame[3] &&
+                    fpga.rx_buf[7] == 0xAAU) {
+                    fpga.rx_echo_valid_count++;
+                    fpga.echo_count++;
+                } else {
+                    fpga.rx_echo_bad_count++;
+                }
                 fpga.rx_index = 0;
             }
         }
@@ -2136,6 +2194,17 @@ static void fpga_usart_rx_task(void *pv)
         uint8_t parse_submode = meter_submode;
         if (fpga_meter_submode_is_valid(event.mode_sequence_submode)) {
             parse_submode = event.mode_sequence_submode;
+        }
+        /*
+         * A completed H2 byte count is TX choreography only. If SPI3/H2 and the
+         * stock post-H2 triggers only ever read 0xFF, the FPGA-side DMM path has
+         * not produced acceptance evidence. Fail closed at the producer handoff
+         * instead of letting OL-shaped or voltage-shaped frames become confident
+         * readings while the frontend/calibration state is still unproved.
+         */
+        if (!fpga_h2_spi3_accepted()) {
+            meter_data_invalidate(parse_submode);
+            continue;
         }
         meter_data_process_frame(event.frame, parse_submode);
 

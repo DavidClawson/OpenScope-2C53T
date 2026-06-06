@@ -190,6 +190,9 @@ typedef struct {
     volatile uint16_t rx_sync_echo_header_count; /* Completed 0xAA 0x55 header */
     volatile uint16_t rx_sync_bad_second_count; /* Header byte 1 rejected */
     volatile uint16_t rx_sync_stray_count;      /* Byte ignored while unsynced */
+    volatile uint16_t rx_data_tx_busy_drop_count; /* Data frames dropped before TX byte pump completed */
+    volatile uint16_t rx_echo_valid_count;      /* Echo frames passing stock byte[3]/byte[7] checks */
+    volatile uint16_t rx_echo_bad_count;        /* Echo frames failing stock byte[3]/byte[7] checks */
     volatile uint16_t last_rx_frame_count; /* Data-frame count when latest frame arrived */
     volatile uint16_t last_rx_tx_count;    /* TX count visible at latest data-frame arrival */
     volatile uint16_t last_rx_echo_count;  /* Echo count visible at latest data-frame arrival */
@@ -615,6 +618,7 @@ extern volatile bool     fpga_meter_adc_sampler_enabled;
 extern volatile bool     fpga_meter_adc_use_preacq;
 extern volatile int16_t  fpga_meter_adc_selector_override;
 extern volatile int16_t  fpga_meter_adc_preacq_override;
+extern volatile int16_t  fpga_meter_probe_tail_override;
 extern volatile uint32_t fpga_meter_adc_enqueue_attempts;
 extern volatile uint32_t fpga_meter_adc_enqueue_success;
 extern volatile uint32_t fpga_meter_adc_enqueue_drops;

@@ -389,6 +389,10 @@ static void fpga_diag_clear(void)
     fpga.rx_sync_echo_header_count = 0;
     fpga.rx_sync_bad_second_count = 0;
     fpga.rx_sync_stray_count = 0;
+    fpga.rx_data_tx_busy_drop_count = 0;
+    fpga.rx_echo_valid_count = 0;
+    fpga.rx_echo_bad_count = 0;
+    fpga_meter_probe_tail_override = -1;
     fpga.spi3_ok_count = 0;
     fpga.spi3_timeout_count = 0;
     fpga.spi3_total_timeouts = 0;
@@ -554,6 +558,7 @@ static void cmd_help(void)
         "meter auto [start|status|cancel] Async DMM function auto-select\r\n"
         "meter trace                     One machine-readable DMM producer record\r\n"
         "meter frontend                  Show DMM analog frontend GPIO state\r\n"
+        "meter probe-tail [auto|07|0a]   Override stock PC7-gated DMM tail for diagnostics\r\n"
         "meter boot-sequence [ms]        Replay stock DMM boot word order + trace\r\n"
         "meter pc11-timing [lo hi]       Probe DMM PC11 gate timing + trace\r\n"
         "meter mux-arms <ce> <ab> [ms]   Apply stock mux arms, poll, trace\r\n"
@@ -664,6 +669,12 @@ static void cmd_status(void)
         fpga.rx_sync_echo_header_count,
         fpga.rx_sync_bad_second_count,
         fpga.rx_sync_stray_count
+    );
+    usb_debug_printf(
+        "RX gates: data_tx_busy_drop=%u echo_valid=%u echo_bad=%u\r\n",
+        fpga.rx_data_tx_busy_drop_count,
+        fpga.rx_echo_valid_count,
+        fpga.rx_echo_bad_count
     );
     usb_debug_printf(
         "SPI3 OK: %u\r\n"
@@ -2775,13 +2786,17 @@ static void cmd_meter_trace(void)
                      (unsigned)fpga.last_rx_transition_busy,
                      (unsigned)fpga.last_rx_discard_remaining);
     usb_debug_printf("rx_sync data_start=%u echo_start=%u data_hdr=%u "
-                     "echo_hdr=%u bad_second=%u stray=%u\r\n",
+                     "echo_hdr=%u bad_second=%u stray=%u "
+                     "data_tx_busy_drop=%u echo_valid=%u echo_bad=%u\r\n",
                      rx_sync_data_start,
                      rx_sync_echo_start,
                      rx_sync_data_header,
                      rx_sync_echo_header,
                      rx_sync_bad_second,
-                     rx_sync_stray);
+                     rx_sync_stray,
+                     fpga.rx_data_tx_busy_drop_count,
+                     fpga.rx_echo_valid_count,
+                     fpga.rx_echo_bad_count);
     usb_debug_printf("plan stock_mode=%u raw_low=%02X family=%u mux=%u "
                      "portc_porte=%u porta_portb=%u settle_ms=%u discard=%u "
                      "bank=%u/%02X/%02X\r\n",
@@ -3061,12 +3076,13 @@ static void cmd_meter_frontend(void)
     usb_send_str("\r\n");
     usb_print_last_tx_frame();
     usb_print_recent_tx_frames();
-    usb_debug_printf("control PC6_spi=%u PB11_active=%u PC11_meter_mux=%u PC7_probe=%u PC0_ready=%u\r\n",
+    usb_debug_printf("control PC6_spi=%u PB11_active=%u PC11_meter_mux=%u PC7_probe=%u PC0_ready=%u probe_tail_override=%d\r\n",
                      gpio_level(GPIOC, 6),
                      gpio_level(GPIOB, 11),
                      gpio_level(GPIOC, 11),
                      gpio_level(GPIOC, 7),
-                     gpio_level(GPIOC, 0));
+                     gpio_level(GPIOC, 0),
+                     (int)fpga_meter_probe_tail_override);
     usb_debug_printf("port_c_e PC12_route=%u PE4=%u PE5=%u PE6=%u\r\n",
                      gpio_level(GPIOC, 12),
                      gpio_level(GPIOE, 4),
@@ -3078,6 +3094,38 @@ static void cmd_meter_frontend(void)
                      gpio_level(GPIOB, 10),
                      gpio_level(GPIOB, 9),
                      gpio_level(GPIOA, 6));
+}
+
+static void cmd_meter_probe_tail(const char *args)
+{
+    while (args != NULL && (*args == ' ' || *args == '\t')) args++;
+
+    if (args == NULL || *args == '\0') {
+        if (fpga_meter_probe_tail_override < 0) {
+            usb_debug_printf("meter probe-tail=auto PC7=%u live=%02X\r\n",
+                             gpio_level(GPIOC, 7),
+                             gpio_level(GPIOC, 7) ? 0x07U : FPGA_CMD_METER_NOPROBE);
+        } else {
+            usb_debug_printf("meter probe-tail=%02X override=1 PC7=%u\r\n",
+                             (unsigned)fpga_meter_probe_tail_override,
+                             gpio_level(GPIOC, 7));
+        }
+        return;
+    }
+
+    if (strcmp(args, "auto") == 0) {
+        fpga_meter_probe_tail_override = -1;
+        usb_send_str("meter probe-tail=auto\r\n");
+    } else if (strcmp(args, "07") == 0 || strcmp(args, "7") == 0) {
+        fpga_meter_probe_tail_override = 0x07;
+        usb_send_str("meter probe-tail=07\r\n");
+    } else if (strcmp(args, "0a") == 0 || strcmp(args, "0A") == 0 ||
+               strcmp(args, "10") == 0) {
+        fpga_meter_probe_tail_override = FPGA_CMD_METER_NOPROBE;
+        usb_send_str("meter probe-tail=0A\r\n");
+    } else {
+        usb_send_str("Usage: meter probe-tail [auto|07|0a]\r\n");
+    }
 }
 
 static void print_meter_mux_stream_line(uint32_t index)
@@ -4645,6 +4693,10 @@ static void dispatch_command(char *line)
         cmd_meter_trace();
     } else if (strcmp(line, "meter frontend") == 0) {
         cmd_meter_frontend();
+    } else if (strcmp(line, "meter probe-tail") == 0) {
+        cmd_meter_probe_tail("");
+    } else if (strncmp(line, "meter probe-tail ", 17) == 0) {
+        cmd_meter_probe_tail(line + 17);
     } else if (strcmp(line, "meter boot-sequence") == 0) {
         cmd_meter_boot_sequence("");
     } else if (strncmp(line, "meter boot-sequence ", 20) == 0) {

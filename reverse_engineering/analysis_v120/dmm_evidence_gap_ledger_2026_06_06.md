@@ -1259,3 +1259,50 @@ Interpretation: this commit fixes a stock trigger-dispatch mismatch in the
 OpenScope post-H2 command materialization path, but it does not fix the live
 shorted-probes DMM failure. The first wrong producer point is still downstream
 or elsewhere in DMM frontend/state application.
+
+## 2026-06-07 H2/SPI3 Acceptance Gate and Probe-Tail Negative
+
+OpenScope diagnostic image
+`1d4357e2d480a54f1a964e9239a1e280a82d0ea40891a178b5c6a680c30db7b8`
+was flashed through guarded HID IAP after `flash_preflight.py hid-app`
+classified it as an `openscope-app` image.
+
+Two stock-visible producer hypotheses were checked on the live unit with the
+user's probes still shorted:
+
+- TX-overlap gating: the USART2 ISR now drops 12-byte DMM data frames that
+  complete before the 10-byte TX pump has finished, matching the stock
+  `usart2_tx_byte_index == 10` release boundary. Live counters incremented
+  (`data_tx_busy_drop`), but DCV and continuity producer frames did not become
+  correct.
+- Probe-tail override: `meter probe-tail 0a` forced the stock PC7-gated tail
+  from `0x0507` to `0x050A`. TX history proved `050A` was sent, but DCV still
+  rendered `---` and continuity still rendered `OL`, with the same special
+  producer frames. The stock PC7 branch is therefore not the missing
+  shorted-probes state.
+
+The live root evidence remained unchanged:
+
+- SPI3/H2 readback and post-H2 trigger readback were all `0xFF`
+  (`h2 rx_nonff=0`, `post_h2_rx_nonff=0`, `spi_ok=0`).
+- `factory_cal loaded=0`.
+- DCV `mode meter 0 0` had planned/actual GPIO `0BB`, command plan
+  `config=0508 selector=0514 probe=0507 start=0509`, producer frame
+  `5A A5 E4 2E 63 25 07 00 00 00 00 00`.
+- Continuity `mode meter 7 0` had planned/actual GPIO `0EA`, command plan
+  `selector=0511 apply=0516 probe=0507 start=0509`, producer frame
+  `5A A5 E4 2E 63 25 07 00 00 00 00 00`.
+
+The firmware now fails closed at the DMM producer handoff when H2/SPI3
+acceptance is absent: a completed 115,638-byte H2 TX count is not enough.
+At least one non-`0xFF` byte from the H2 body or stock post-H2 SPI3 trigger
+readback is required before parsed DMM frames can become user-visible readings.
+After this gate, shorted-probes DCV and continuity both showed
+`valid=0 display=---`, while `meter trace` still preserved the raw producer
+frame and all H2/post-H2 counters for root-cause work.
+
+Interpretation: this is a safety/diagnostic correction, not the final DMM fix.
+It prevents fake volts/ohms/OL readings from an unaccepted H2/SPI3 state. The
+next actual repair remains the first all-`0xFF` SPI3/H2 divergence: physical
+SPI3 routing/timing, PC6/PB6 framing, H2 transaction semantics, or recovered
+W25Q/system-file/factory-calibration/application state.
