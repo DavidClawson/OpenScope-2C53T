@@ -272,7 +272,7 @@ void meter_mode_handler(uint8_t *rx_frame) {
     //           else:
     //               check bit3 -> range change
     //
-    //   case 3: check status_byte bit2 (AC/DC flag)
+    //   case 3: check status_byte bit2 (status/decimal helper, not recovered as AC-present confidence)
     //           check flags_byte bit6 (hold flag)
     //           set cal_coeff, advance state
     //
@@ -5699,4 +5699,4 @@ void usart_tx_config_writer(uint8_t *config_base, uint8_t *params) {
     0x08039868:  ands       r1, r3                                  
     0x0803986A:  str        r1, [r0]                                
     0x0803986C:  ldr        r0, [r2]                                
-    0x0803986E:  orrs       r0, r4                                  
+    0x0803986E:  orrs       r0, r4

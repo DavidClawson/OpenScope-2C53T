@@ -574,7 +574,8 @@ meter_mode_handler:
  *     Else: read frame[7] bits
  *       frame[7] bit 5 (lsls r0, #0x1A, MI): if set → probe_type = 2, dp_source = 0
  *         Also checks frame[7] bit 4 and frame[2] bit 1 for sub-conditions
- *       frame[7] bit 2 (AC/DC flag for DCV): sets probe_type
+ *       frame[7] bit 2: status/decimal helper branch; it can set probe_type
+ *         in this stock FSM slice but is not recovered as AC-present confidence
  *       frame[7] bit 0 (polarity):
  *         if 0 → probe_type = 2
  *         if 1 → probe_type = 1

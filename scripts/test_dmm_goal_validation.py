@@ -196,6 +196,17 @@ class DmmGoalValidationTests(unittest.TestCase):
         self.assertIn("py" + "tess" + "eract", result["forbidden"])
         self.assertIn("image_" + "to_string", result["forbidden"])
 
+    def test_ac_status_boundary_guard_is_active(self) -> None:
+        result = validate_dmm_goal.verify_ac_status_boundary()
+
+        self.assertIn(
+            "reverse_engineering/analysis_v120/FPGA_TASK_ANALYSIS.md",
+            result["checked"],
+        )
+        self.assertIn("rx[7] bit 2 = " + "AC flag", result["forbidden"])
+        self.assertIn("AC/DC " + "flag for DCV", result["forbidden"])
+        self.assertIn("not recovered as AC-present confidence", result["required"])
+
     def test_re_coverage_requires_factory_cal_fail_closed_placeholder(self) -> None:
         coverage = validate_dmm_goal.verify_re_coverage()
         self.assertIn("flash_fs_load_factory_cal", coverage["terms"])

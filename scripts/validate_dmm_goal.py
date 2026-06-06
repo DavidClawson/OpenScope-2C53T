@@ -147,6 +147,45 @@ def verify_no_ocr_pipeline() -> dict[str, Any]:
     return {"checked": checked, "forbidden": forbidden}
 
 
+def verify_ac_status_boundary() -> dict[str, Any]:
+    checked = [
+        "reverse_engineering/analysis_v120/FPGA_TASK_ANALYSIS.md",
+        "reverse_engineering/analysis_v120/fpga_comms_deep_dive.c",
+        "reverse_engineering/analysis_v120/meter_math_pipeline_annotated.c",
+        "reverse_engineering/analysis_v120/meter_fsm_deep_dive.md",
+        "reverse_engineering/analysis_v120/fpga_task_decompile.txt",
+        "scripts/decompile_fpga_task.py",
+    ]
+    forbidden = [
+        "rx[7] bit 2 = " + "AC flag",
+        "Bit 2: " + "AC flag",
+        "AC/DC " + "flag for DCV",
+        "status_byte bit2 (" + "AC/DC flag)",
+        "AC flag / " + "decimal helper",
+    ]
+    required = [
+        "not recovered as AC-present confidence",
+        "status/decimal helper",
+    ]
+    hits: list[str] = []
+    missing: list[str] = []
+    for rel in checked:
+        text = (REPO / rel).read_text(encoding="utf-8", errors="replace")
+        lowered = text.lower()
+        for needle in forbidden:
+            if needle.lower() in lowered:
+                hits.append(f"{rel}: {needle}")
+        for needle in required:
+            if needle.lower() not in lowered:
+                missing.append(f"{rel}: {needle}")
+    if hits or missing:
+        raise GateError(
+            "AC status boundary drifted: "
+            f"forbidden_hits={hits} missing_required={missing}"
+        )
+    return {"checked": checked, "forbidden": forbidden, "required": required}
+
+
 def verify_h2_tx_only_boundary() -> dict[str, Any]:
     """Ensure H2 diagnostics keep TX-complete separate from FPGA acceptance."""
     required = {
@@ -761,6 +800,7 @@ def main(argv: list[str] | None = None) -> int:
         report["re_comment_coverage"] = verify_re_coverage()
         report["no_unrecovered_meter_coefficients"] = verify_no_unrecovered_meter_coefficients()
         report["no_ocr_pipeline"] = verify_no_ocr_pipeline()
+        report["ac_status_boundary"] = verify_ac_status_boundary()
         report["h2_tx_only_boundary"] = verify_h2_tx_only_boundary()
 
         if not args.skip_live:

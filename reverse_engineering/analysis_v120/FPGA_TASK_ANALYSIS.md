@@ -344,7 +344,8 @@ State 2 (OVERLOAD/RANGE):
     Else: check bit 3 for range change
 
 State 3 (AC/DC):
-    rx[7] bit 2 = AC flag
+    rx[7] bit 2 participates in stock status/decimal helper branches
+      (not recovered as AC-present confidence)
     rx[6] bit 6 = hold flag
 
 State 4 (RANGE INDICATOR):

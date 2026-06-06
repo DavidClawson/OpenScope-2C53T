@@ -233,9 +233,9 @@
  * [7] 0xAA  (integrity marker, MUST match)
  * [8-9] Response data
  *
- * STATUS BYTE (rx[7]) BIT FIELDS:
+ * DATA-FRAME STATUS BYTE (rx[7]) BIT FIELDS:
  *   Bit 0: Polarity / calibration coefficient select
- *   Bit 2: AC flag
+ *   Bit 2: status/decimal helper; not recovered as AC-present confidence
  *   Bit 3: Range change indicator
  *
  * FLAGS BYTE (rx[6]) BIT FIELDS:

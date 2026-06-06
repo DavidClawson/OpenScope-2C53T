@@ -49,7 +49,7 @@
 | 30472, 30483, 30529, 30552 | `(rx_integrity_marker & 1) == 0` | bit 0 direct | test polarity bit (0x01 mask) |
 | 30494 | `(int)((uint)rx_integrity_marker << 0x1c) < 0` | bit 4 (0x10 mask) | DCA case 2: range indicator |
 | 30495 | `(-1 < (int)((uint)rx_integrity_marker << 0x1d))` | bit 2 inverted | secondary range rule |
-| 30507 | `(int)((uint)rx_integrity_marker << 0x1d) < 0` | bit 2 (0x04 mask) | ACA case 3: decimal selector |
+| 30507 | `(int)((uint)rx_integrity_marker << 0x1d) < 0` | bit 2 (0x04 mask) | ACA case 3: decimal/status selector |
 
 **Quoted frame validation (USART2 ISR):**
 
@@ -67,7 +67,7 @@ Evidence chain:
 2. Frame format per meter_data.c line 8-14: bytes [0-1] = header (0x5A, 0xA5), [2-6] = BCD, **[7] = status flags**, [8-11] = extra data.
 3. Lines 30433-30507 extract individual bits from it to control decimal position — exactly matches meter_data.c "meter_mode_handler" comments (line 158-162):
    - **bit 0 (0x01)**: polarity / decimal state selector (lines 30466, 30472, 30483, etc.)
-   - **bit 2 (0x04)**: AC flag / decimal helper (lines 30437, 30452, 30495, 30507)
+   - **bit 2 (0x04)**: status/decimal helper (lines 30437, 30452, 30495, 30507); not recovered as AC-present confidence
    - **bit 4 (0x10)**: range indicator (lines 30449, 30494)
    - **bit 5 (0x20)**: DCV sub-state entry flag (line 30434 tests `<< 0x1a`)
 
