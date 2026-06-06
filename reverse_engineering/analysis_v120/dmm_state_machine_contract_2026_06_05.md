@@ -134,6 +134,11 @@ The software contract proves parser/state safety only:
   the transition is busy and while the destination discards drain, a valid
   prior-source frame is not handed to the parser and the invalidated destination
   payload remains blank
+- the transition-phase marker matrix then feeds the first stable frame after
+  the destination discard budget with both recovered marker-visible families
+  (low-DCV voltage and continuity segment). The parser must use the destination
+  state: same-family stable markers can render, AC destinations still require
+  AC evidence, and foreign markers clear the payload as wrong-family frames.
 - the ordered mode-transition stale matrix now covers every source submode to
   every destination submode, so a valid prior-mode payload cannot survive a
   transition just because it remains numerically plausible
@@ -147,7 +152,10 @@ the marker-visible low-DCV/continuity cases, the pure all-family mismatch
 policy matrix, and the all-source/all-destination transition stale matrix to
 remain present and registered in `main()`. They also require the
 transport-gate source-frame matrix so transition safety stays a software
-state-machine property, not a camera/OCR or multiplier-tuning exercise.
+state-machine property, and the stable-marker-after-transition matrix so the
+first accepted post-transition frame follows destination state rather than
+prior-mode payload shape. This is not a camera/OCR or multiplier-tuning
+exercise.
 
 Live validation only switches DCV/ACV on the energized bench input. Passive and
 current modes stay unprobed in that live path: passive voltage-payload rejection

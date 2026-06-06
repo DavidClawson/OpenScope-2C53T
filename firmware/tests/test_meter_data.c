@@ -1153,6 +1153,87 @@ static int test_transport_gate_blocks_source_frames_during_every_transition(void
     return 1;
 }
 
+static int test_transition_phase_marker_frames_follow_destination_state(void)
+{
+    struct marker_case {
+        uint8_t family;
+        const uint8_t *frame;
+    };
+    uint8_t low_dcv_frame[12] = {
+        0x5A, 0xA5, 0x44, 0x8E, 0xEF, 0xE7,
+        0x07, 0x24, 0x80, 0x00, 0x01, 0x89,
+    };
+    uint8_t continuity_frame[12];
+    const struct marker_case markers[] = {
+        { FPGA_METER_FRAME_FAMILY_VOLTAGE, low_dcv_frame },
+        { FPGA_METER_FRAME_FAMILY_CONTINUITY, continuity_frame },
+    };
+
+    build_segment_frame(continuity_frame, 0, 0x12, 0x0A, 5,
+                        0x00, 0x00, 0x00, 0x00, 0);
+
+    for (uint8_t dest = 0; dest < FPGA_METER_LOCAL_SUBMODE_COUNT; dest++) {
+        for (unsigned m = 0; m < sizeof(markers) / sizeof(markers[0]); m++) {
+            fpga_meter_transition_plan_t dest_plan =
+                fpga_meter_transition_plan_for_submode(dest);
+            uint8_t discard = dest_plan.discard_frames;
+            uint32_t transition_skips = 0;
+            uint8_t seed[12];
+
+            meter_data_init();
+            build_valid_frame_for_mode(seed, 0);
+            process_frame(seed, 0);
+            ASSERT(meter_reading.valid);
+            ASSERT(meter_reading.submode == 0);
+
+            meter_data_invalidate(dest);
+            ASSERT(!meter_reading.valid);
+            ASSERT(meter_reading.submode == dest);
+            ASSERT(meter_reading.expected_frame_family == dest_plan.frame_family);
+            ASSERT(expect_payload_cleared("---"));
+
+            ASSERT(!fpga_meter_rx_frame_should_parse(true, &discard,
+                                                     &transition_skips));
+            ASSERT(discard == dest_plan.discard_frames);
+            ASSERT(transition_skips == 1);
+            ASSERT(!meter_reading.valid);
+            ASSERT(meter_reading.submode == dest);
+
+            for (uint8_t i = 0; i < dest_plan.discard_frames; i++) {
+                ASSERT(!fpga_meter_rx_frame_should_parse(false, &discard,
+                                                         &transition_skips));
+                ASSERT(!meter_reading.valid);
+                ASSERT(meter_reading.submode == dest);
+            }
+            ASSERT(discard == 0);
+            ASSERT(fpga_meter_rx_frame_should_parse(false, &discard,
+                                                    &transition_skips));
+
+            process_frame(markers[m].frame, dest);
+            ASSERT(meter_reading.submode == dest);
+            ASSERT(meter_reading.expected_frame_family == dest_plan.frame_family);
+            ASSERT(meter_reading.observed_frame_family == markers[m].family);
+            if ((dest == 1 || dest == 4 || dest == 5) &&
+                dest_plan.frame_family == markers[m].family) {
+                ASSERT(!meter_reading.valid);
+                ASSERT(meter_reading.reject_reason ==
+                       METER_REJECT_MISSING_AC_EVIDENCE);
+                ASSERT(expect_payload_cleared("---"));
+            } else if (dest_plan.frame_family == markers[m].family) {
+                ASSERT(meter_reading.valid);
+                ASSERT(meter_reading.reject_reason == METER_REJECT_NONE);
+                ASSERT(meter_reading.result_class == METER_RESULT_NORMAL ||
+                       meter_reading.result_class == METER_RESULT_CONTINUITY);
+            } else {
+                ASSERT(!meter_reading.valid);
+                ASSERT(meter_reading.reject_reason == METER_REJECT_WRONG_FRAME_FAMILY);
+                ASSERT(expect_payload_cleared("---"));
+            }
+        }
+    }
+    return 1;
+}
+
 static int test_marker_visible_family_mismatch_matrix_clears_stale_payload(void)
 {
     struct marker_case {
@@ -1947,6 +2028,7 @@ int main(void)
     TEST(state_machine_property_matrix_covers_all_submodes);
     TEST(invalidate_clears_stale_payload_for_every_ordered_mode_transition);
     TEST(transport_gate_blocks_source_frames_during_every_transition);
+    TEST(transition_phase_marker_frames_follow_destination_state);
     TEST(marker_visible_family_mismatch_matrix_clears_stale_payload);
     TEST(unclassified_normal_frames_follow_active_family_only);
     TEST(frame6_0x40_is_not_a_global_resistance_family_marker);

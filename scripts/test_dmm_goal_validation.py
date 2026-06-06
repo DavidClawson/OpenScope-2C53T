@@ -595,6 +595,10 @@ class DmmGoalValidationTests(unittest.TestCase):
             result["tests"],
         )
         self.assertIn(
+            "transition_phase_marker_frames_follow_destination_state",
+            result["tests"],
+        )
+        self.assertIn(
             "unclassified_normal_frames_follow_active_family_only",
             result["tests"],
         )
@@ -612,6 +616,14 @@ class DmmGoalValidationTests(unittest.TestCase):
         )
         self.assertIn(
             "unclassified normal frames are active-plan classified",
+            result["regex_anchors"],
+        )
+        self.assertIn(
+            "transition phase marker matrix iterates every destination submode",
+            result["regex_anchors"],
+        )
+        self.assertIn(
+            "stable marker frames follow destination parser state",
             result["regex_anchors"],
         )
         self.assertIn("METER_REJECT_MISSING_AC_EVIDENCE",

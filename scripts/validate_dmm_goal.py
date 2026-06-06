@@ -730,6 +730,7 @@ def verify_state_machine_property_contract() -> dict[str, Any]:
         "state_machine_property_matrix_covers_all_submodes",
         "invalidate_clears_stale_payload_for_every_ordered_mode_transition",
         "transport_gate_blocks_source_frames_during_every_transition",
+        "transition_phase_marker_frames_follow_destination_state",
         "marker_visible_family_mismatch_matrix_clears_stale_payload",
         "unclassified_normal_frames_follow_active_family_only",
         "frame6_0x40_is_not_a_global_resistance_family_marker",
@@ -763,6 +764,13 @@ def verify_state_machine_property_contract() -> dict[str, Any]:
             r"uint8_t discard = dest_plan\.discard_frames;",
         "transition gate blocks busy source frames":
             r"fpga_meter_rx_frame_should_parse\(true, &discard,\s*&transition_skips\)",
+        "transition phase marker matrix iterates every destination submode":
+            r"test_transition_phase_marker_frames_follow_destination_state[\s\S]*"
+            r"for \(uint8_t dest = 0; dest < FPGA_METER_LOCAL_SUBMODE_COUNT; dest\+\+\)",
+        "stable marker frames follow destination parser state":
+            r"test_transition_phase_marker_frames_follow_destination_state[\s\S]*"
+            r"process_frame\(markers\[m\]\.frame, dest\);[\s\S]*"
+            r"meter_reading\.expected_frame_family == dest_plan\.frame_family",
         "unclassified normal frames iterate every local submode":
             r"static const uint8_t modes\[FPGA_METER_LOCAL_SUBMODE_COUNT\]\s*=\s*"
             r"\{\s*0,\s*1,\s*2,\s*3,\s*4,\s*5,\s*6,\s*7,\s*8,\s*9,\s*10\s*\};",
