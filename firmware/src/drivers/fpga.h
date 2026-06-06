@@ -179,6 +179,13 @@ typedef struct {
     volatile uint16_t echo_count;     /* Echo frame counter (0xAA 0x55) */
     volatile uint16_t tx_count;       /* TX commands sent */
     volatile uint16_t rx_byte_count;  /* Raw RX bytes received */
+    volatile uint16_t last_rx_frame_count; /* Data-frame count when latest frame arrived */
+    volatile uint16_t last_rx_tx_count;    /* TX count visible at latest data-frame arrival */
+    volatile uint16_t last_rx_echo_count;  /* Echo count visible at latest data-frame arrival */
+    volatile uint16_t last_rx_mode_sequence_count; /* DMM selector sequence visible at RX arrival */
+    volatile uint8_t  last_rx_mode_sequence_submode; /* DMM sequence submode visible at RX arrival */
+    volatile uint8_t  last_rx_discard_remaining; /* Transition discard budget at RX arrival */
+    volatile uint8_t  last_rx_transition_busy;   /* Meter transition gate state at RX arrival */
     volatile uint8_t  tx_cmd_hi_history[16]; /* Last sent USART command high bytes */
     volatile uint8_t  tx_cmd_lo_history[16]; /* Last sent USART command low bytes */
     volatile uint8_t  tx_cmd_history_head;   /* Next history slot */

@@ -2,6 +2,8 @@
 from __future__ import annotations
 
 from pathlib import Path
+import contextlib
+import io
 import importlib.util
 import tempfile
 import unittest
@@ -118,6 +120,33 @@ class ScreenDumpBinTests(unittest.TestCase):
                     None,
                     True,
                 )
+
+
+class MeterTraceCliTests(unittest.TestCase):
+    def test_meter_trace_mode_sends_read_only_trace_command(self) -> None:
+        calls: list[tuple[str, int, str, float]] = []
+        original_run_command = openscope_live_debug.run_command
+        try:
+            def fake_run_command(port: str, baud: int, command: str, timeout: float) -> str:
+                calls.append((port, baud, command, timeout))
+                return "=== DMM Trace ===\ntrace v=1 snapshot=1"
+
+            openscope_live_debug.run_command = fake_run_command
+            out = io.StringIO()
+            with contextlib.redirect_stdout(out):
+                rc = openscope_live_debug.main([
+                    "meter-trace",
+                    "--port",
+                    "/dev/fake",
+                    "--timeout",
+                    "7",
+                ])
+        finally:
+            openscope_live_debug.run_command = original_run_command
+
+        self.assertEqual(rc, 0)
+        self.assertEqual(calls, [("/dev/fake", 115200, "meter trace", 7.0)])
+        self.assertIn("trace v=1 snapshot=1", out.getvalue())
 
 
 if __name__ == "__main__":

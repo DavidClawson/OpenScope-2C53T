@@ -614,6 +614,27 @@ wiring proof boundary. It is not permission to restore decoder coefficients.
   insufficient by itself; the remaining wrong value is still a DMM frame
   production / stock command-materialization / H2-acceptance-effect /
   factory-calibration gap, not a decimal decoder or one-point multiplier target.
+- Runtime producer trace hook: open firmware build
+  `Jun 6 2026 19:55` (`firmware/build/firmware.bin` SHA-256
+  `02ba377f779277a925ede77116ff97fc92fe57770ebd909c8ddb615432425be8`)
+  was accepted by `flash_preflight.py hid-app` as `kind: openscope-app`,
+  flashed through guarded HID IAP, and booted back to CDC.  The new read-only
+  `meter trace` command records the transport/selector counters at the exact
+  point the USART2 ISR copies a `0x5A 0xA5` data frame into firmware-owned
+  `fpga.rx_frame`, then prints the parsed `meter_data_snapshot()` beside that
+  producer frame.  A live post-flash trace reported:
+  `producer_last_rx data=33 tx=29 echo=0 seq=1 seq_sub=0 busy=0 discard=0`,
+  `wire selector=0514 apply=0000 probe=0507 start=0509`,
+  `gpio_frontend PC12=1 PE4=1 PE5=0 PE6=1 PA15=1 PA10=1 PB10=0 PB9=0 PA6=0`,
+  `h2 bytes=115638 done=1 post_enq=5 post_ok=5 post_drop=0 post_mask=1F`,
+  and matching producer/parser bytes
+  `5A A5 A4 BD 8D CF 47 20 00 00 01 38`, decoded as `raw=2235`,
+  `display=2.235 V`.  This validates the trace surface and proves, for that
+  live frame, that parser/UI formatting did not alter the firmware-owned data
+  frame.  It is not a low-DCV fix and it is not evidence that the visible
+  `0.200 V` blocker is resolved; the next low-DCV run should capture this same
+  trace while the image-viewed source/load display is at the intended hard-case
+  voltage.
 
 ## Next RE Target
 

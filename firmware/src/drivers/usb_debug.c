@@ -504,6 +504,7 @@ static void cmd_help(void)
         "meter dump [delay_ms]           Show parsed DMM/UI/raw frame state\r\n"
         "meter autoscan [settle_ms]      Probe DMM submodes and select best live mode\r\n"
         "meter auto [start|status|cancel] Async DMM function auto-select\r\n"
+        "meter trace                     One machine-readable DMM producer record\r\n"
         "meter frontend                  Show DMM analog frontend GPIO state\r\n"
         "meter mux-stream [count] [ms]   Stream DMM frames plus frontend GPIOs\r\n"
         "meter stream [count] [delay_ms] Print compact DMM frame stream\r\n"
@@ -1947,6 +1948,13 @@ static int32_t scaled_i100(float value)
     return (int32_t)(scaled - 0.5f);
 }
 
+static int32_t scaled_i10000(float value)
+{
+    float scaled = value * 10000.0f;
+    if (scaled >= 0.0f) return (int32_t)(scaled + 0.5f);
+    return (int32_t)(scaled - 0.5f);
+}
+
 static void print_i100(const char *label, float value, const char *suffix)
 {
     int32_t scaled = scaled_i100(value);
@@ -2355,6 +2363,149 @@ static uint16_t meter_dbg_extra(void)
 {
     return ((uint16_t)meter_reading.dbg_frame[10] << 8) |
            meter_reading.dbg_frame[11];
+}
+
+static void print_frame_hex(const char *label, const uint8_t frame[12])
+{
+    usb_send_str(label);
+    for (int i = 0; i < 12; i++) {
+        usb_debug_printf("%02X%s", (unsigned)frame[i], i == 11 ? "" : " ");
+    }
+    usb_send_str("\r\n");
+}
+
+static void print_volatile_frame_hex(const char *label,
+                                     const volatile uint8_t frame[12])
+{
+    usb_send_str(label);
+    for (int i = 0; i < 12; i++) {
+        usb_debug_printf("%02X%s", (unsigned)frame[i], i == 11 ? "" : " ");
+    }
+    usb_send_str("\r\n");
+}
+
+static void cmd_meter_trace(void)
+{
+    meter_reading_t snap;
+    bool have_snap = meter_data_snapshot(&snap);
+    bool live = have_snap && current_mode == MODE_MULTIMETER &&
+                snap.valid && snap.submode == meter_submode;
+    fpga_meter_selector_t selectors = fpga_meter_expected_selectors(meter_submode);
+    fpga_meter_transition_plan_t plan =
+        fpga_meter_transition_plan_for_submode(meter_submode);
+    uint16_t plan_probe_word = plan.has_probe_detect ?
+        (uint16_t)(gpio_level(GPIOC, 7) ? 0x0507U : 0x050AU) : 0U;
+    uint16_t extra = have_snap ?
+        (((uint16_t)snap.dbg_frame[10] << 8) | snap.dbg_frame[11]) : 0;
+
+    usb_send_str("=== DMM Trace ===\r\n");
+    usb_debug_printf("trace v=1 snapshot=%u\r\n", have_snap ? 1U : 0U);
+    if (!have_snap) return;
+
+    usb_debug_printf("context mode=%lu startup=%s ui_sub=%u "
+                     "reading_sub=%u live=%u valid=%u updates=%lu\r\n",
+                     (uint32_t)current_mode,
+                     startup_mode_name(startup_mode),
+                     (unsigned)meter_submode,
+                     (unsigned)snap.submode,
+                     live ? 1U : 0U,
+                     snap.valid ? 1U : 0U,
+                     snap.update_count);
+    usb_debug_printf("producer counts tx=%u rx_bytes=%u data=%u echo=%u "
+                     "rx_valid=%u\r\n",
+                     fpga.tx_count,
+                     fpga.rx_byte_count,
+                     fpga.frame_count,
+                     fpga.echo_count,
+                     fpga.rx_frame_valid ? 1U : 0U);
+    usb_debug_printf("producer_last_rx data=%u tx=%u echo=%u seq=%u "
+                     "seq_sub=%u busy=%u discard=%u\r\n",
+                     fpga.last_rx_frame_count,
+                     fpga.last_rx_tx_count,
+                     fpga.last_rx_echo_count,
+                     fpga.last_rx_mode_sequence_count,
+                     (unsigned)fpga.last_rx_mode_sequence_submode,
+                     (unsigned)fpga.last_rx_transition_busy,
+                     (unsigned)fpga.last_rx_discard_remaining);
+    usb_debug_printf("plan stock_mode=%u raw_low=%02X family=%u mux=%u "
+                     "portc_porte=%u porta_portb=%u settle_ms=%u discard=%u\r\n",
+                     (unsigned)selectors.function_selector,
+                     (unsigned)selectors.range_selector,
+                     (unsigned)plan.frame_family,
+                     (unsigned)plan.mux_index,
+                     (unsigned)plan.portc_porte_mux,
+                     (unsigned)plan.porta_portb_mux,
+                     (unsigned)plan.settle_ms,
+                     (unsigned)plan.discard_frames);
+    usb_debug_printf("wire selector=%04X apply=%04X has_apply=%u probe=%04X "
+                     "start=%04X seq_count=%u seq_sub=%u\r\n",
+                     (unsigned)plan.selector_word,
+                     (unsigned)plan.apply_word,
+                     plan.has_apply_word ? 1U : 0U,
+                     (unsigned)plan_probe_word,
+                     (unsigned)plan.start_word,
+                     (unsigned)fpga.meter_mode_sequence_count,
+                     (unsigned)fpga.meter_mode_sequence_submode);
+    usb_debug_printf("last_sequence selector=%04X apply=%04X probe=%04X "
+                     "start=%04X\r\n",
+                     (unsigned)fpga.meter_mode_selector_word,
+                     (unsigned)fpga.meter_mode_apply_word,
+                     (unsigned)fpga.meter_mode_probe_word,
+                     (unsigned)fpga.meter_mode_start_word);
+    usb_debug_printf("decoded display=%s unit=%s value_i10000=%ld raw=%d "
+                     "dp=%u class=%u reject=%u family=%u/%u extra=%04X\r\n",
+                     snap.valid ? snap.display_str : "---",
+                     (snap.valid && snap.unit_suffix) ? snap.unit_suffix : "",
+                     (long)scaled_i10000(snap.value),
+                     snap.bcd_value,
+                     (unsigned)snap.decimal_pos,
+                     (unsigned)snap.result_class,
+                     (unsigned)snap.reject_reason,
+                     (unsigned)snap.expected_frame_family,
+                     (unsigned)snap.observed_frame_family,
+                     (unsigned)extra);
+    usb_debug_printf("stock_fsm mode=%u variant=%u format=%u dc_state=%u "
+                     "display_cmd=%u unit_index=%u composite=%u\r\n",
+                     (unsigned)snap.stock_mode,
+                     (unsigned)snap.stock_variant,
+                     (unsigned)snap.stock_format,
+                     (unsigned)snap.stock_dc_state,
+                     (unsigned)snap.stock_display_cmd,
+                     (unsigned)snap.stock_unit_index,
+                     (unsigned)snap.stock_composite_index);
+    usb_debug_printf("transition busy=%u discard_now=%u skip_count=%lu\r\n",
+                     fpga_meter_transition_busy() ? 1U : 0U,
+                     (unsigned)meter_frame_discard_count,
+                     meter_transition_frame_skip_count);
+    print_volatile_frame_hex("producer_frame=", fpga.rx_frame);
+    print_frame_hex("parsed_frame=", snap.dbg_frame);
+    usb_debug_printf("gpio control PC6=%u PB11=%u PC11=%u PC7=%u PC0=%u\r\n",
+                     gpio_level(GPIOC, 6),
+                     gpio_level(GPIOB, 11),
+                     gpio_level(GPIOC, 11),
+                     gpio_level(GPIOC, 7),
+                     gpio_level(GPIOC, 0));
+    usb_debug_printf("gpio_frontend PC12=%u PE4=%u PE5=%u PE6=%u PA15=%u "
+                     "PA10=%u PB10=%u PB9=%u PA6=%u\r\n",
+                     gpio_level(GPIOC, 12),
+                     gpio_level(GPIOE, 4),
+                     gpio_level(GPIOE, 5),
+                     gpio_level(GPIOE, 6),
+                     gpio_level(GPIOA, 15),
+                     gpio_level(GPIOA, 10),
+                     gpio_level(GPIOB, 10),
+                     gpio_level(GPIOB, 9),
+                     gpio_level(GPIOA, 6));
+    usb_debug_printf("h2 bytes=%lu done=%u post_enq=%u post_ok=%u "
+                     "post_drop=%u post_mask=%02X spi_ok=%u spi_to=%u\r\n",
+                     fpga.h2_bytes_sent,
+                     fpga.h2_upload_done ? 1U : 0U,
+                     (unsigned)fpga.post_h2_spi3_boot_enqueued,
+                     (unsigned)fpga.post_h2_spi3_boot_ok,
+                     (unsigned)fpga.post_h2_spi3_boot_dropped,
+                     (unsigned)fpga.post_h2_spi3_boot_mask,
+                     fpga.spi3_ok_count,
+                     fpga.spi3_total_timeouts);
 }
 
 static void cmd_meter_frontend(void)
@@ -3847,6 +3998,8 @@ static void dispatch_command(char *line)
         cmd_meter_auto_async("");
     } else if (strncmp(line, "meter auto ", 11) == 0) {
         cmd_meter_auto_async(line + 11);
+    } else if (strcmp(line, "meter trace") == 0) {
+        cmd_meter_trace();
     } else if (strcmp(line, "meter frontend") == 0) {
         cmd_meter_frontend();
     } else if (strcmp(line, "meter mux-stream") == 0) {

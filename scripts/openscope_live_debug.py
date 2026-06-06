@@ -607,6 +607,10 @@ def build_parser() -> argparse.ArgumentParser:
     add_common_serial_args(frontend_parser)
     frontend_parser.add_argument("--log", type=Path, help="optional log file for the single frontend response")
 
+    trace_parser = subparsers.add_parser("meter-trace", help="read one machine-readable DMM producer trace")
+    add_common_serial_args(trace_parser)
+    trace_parser.add_argument("--log", type=Path, help="optional log file for the single trace response")
+
     stream_parser = subparsers.add_parser("meter-stream", help='run firmware-side compact stream, default "meter stream"')
     add_common_serial_args(stream_parser)
     stream_parser.add_argument("--count", type=int, default=32, help="firmware stream count, default 32")
@@ -727,6 +731,13 @@ def main(argv: list[str] | None = None) -> int:
 
             if args.mode == "meter-frontend":
                 response = run_command(port, args.baud, "meter frontend", args.timeout)
+                print(response)
+                with log_context(args.log) as log_file:
+                    write_log_line(log_file, response)
+                return 0
+
+            if args.mode == "meter-trace":
+                response = run_command(port, args.baud, "meter trace", args.timeout)
                 print(response)
                 with log_context(args.log) as log_file:
                     write_log_line(log_file, response)

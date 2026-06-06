@@ -1561,6 +1561,23 @@ void USART2_IRQHandler(void)
                        FPGA_RX_FRAME_SIZE);
                 fpga.rx_frame_valid = true;
                 fpga.frame_count++;
+                /*
+                 * Producer-side DMM trace anchor.
+                 *
+                 * The low-DCV blocker is upstream of display formatting: the
+                 * 12-byte stock-visible frame already contains the wrong
+                 * digits. Capture the transport/selector state at the exact
+                 * point that data frame becomes firmware-owned, before the
+                 * dvom_RX task parses or rejects it. This is diagnostic only;
+                 * it must not feed range decisions or value-shaped fixes.
+                 */
+                fpga.last_rx_frame_count = fpga.frame_count;
+                fpga.last_rx_tx_count = fpga.tx_count;
+                fpga.last_rx_echo_count = fpga.echo_count;
+                fpga.last_rx_mode_sequence_count = fpga.meter_mode_sequence_count;
+                fpga.last_rx_mode_sequence_submode = fpga.meter_mode_sequence_submode;
+                fpga.last_rx_discard_remaining = meter_frame_discard_count;
+                fpga.last_rx_transition_busy = meter_transition_busy ? 1U : 0U;
                 fpga.rx_index = 0;
 
                 /* Signal meter processing task (only if RTOS is running) */
