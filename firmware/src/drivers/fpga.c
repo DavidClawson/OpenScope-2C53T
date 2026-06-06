@@ -3742,20 +3742,14 @@ void fpga_init(void)
     usart2_send_cmd(0x05, 0x14);  /* Meter variant setup */
     systick_delay_ms(50);
 
-    /* Meter channel gain/offset/coupling initialization (0x1A-0x1E).
-     * Stock firmware meter_basic mode (case 1 in FUN_0800b908) sends these
-     * at boot to configure the FPGA meter IC.
-     *
-     * Discovered 2026-04-04:
-     *   param=0 → 10V range (1-10V accurate, BCD wraps at 10000 counts)
-     *   param=1 → same as param=0 (no range change observed)
-     *   Relay click heard at ~0.7V — FPGA controls some analog switching
-     *   Below ~1V: readings incorrect (meter IC internal range mismatch)
-     *   Above 10V: BCD wraps (11V→0.99, 12V→2, 13V→3)
-     *
-     * TODO: Find params for other ranges (600mV, 60V, 600V) to enable
-     *       full auto-ranging. May require different command codes or
-     *       MCU-side relay switching via gpio_mux functions. */
+    /* Stock command-bank replay (0x1A..0x1E).
+     * FUN_0800B908 queues these bytes in the meter-basic boot arm, and scope
+     * paths use the same command numbers for channel gain/offset/coupling.
+     * That is command sequencing evidence only. It does not prove DMM range
+     * parameters, a low-DCV correction, or a runtime writer for ms[0x02] /
+     * ms[0x03]. Keep the unresolved 0.200 V -> 0.4366 V case pointed at a
+     * recovered stock writer, H2/apply proof, factory-cal source, or safe
+     * multi-point trace instead of tuning these bytes from one observation. */
     usart2_send_cmd(0x00, FPGA_CMD_CH1_GAIN);    /* 0x1A: CH1 gain */
     systick_delay_ms(10);
     usart2_send_cmd(0x00, FPGA_CMD_CH1_OFFSET);  /* 0x1B: CH1 offset */
@@ -4056,7 +4050,8 @@ void fpga_enter_siggen_mode(void)
      * Then falls through to case 9 tail: 0x14, 0x09, [0x07/0x0A]
      *
      * 0x02-0x06 = siggen setup (freq, wave, amplitude, offset, duty)
-     * 0x08 = meter configure range (shared)
+     * 0x08 = shared meter configure/setup byte; not a recovered DMM range
+     *        selector or low-DCV correction source
      * 0x14 = meter variant setup
      * 0x09 = meter start measurement
      * 0x07/0x0A = probe detect */
@@ -4065,7 +4060,7 @@ void fpga_enter_siggen_mode(void)
     fpga_send_cmd(0x00, 0x04);  /* Siggen: amplitude */
     fpga_send_cmd(0x00, 0x05);  /* Siggen: offset */
     fpga_send_cmd(0x00, 0x06);  /* Siggen: duty cycle */
-    fpga_send_cmd(0x00, 0x08);  /* Meter: configure range */
+    fpga_send_cmd(0x00, 0x08);  /* Shared meter configure/setup byte */
 
     /* Case 9 tail: meter variant + probe detect */
     fpga_send_cmd(0x00, 0x14);

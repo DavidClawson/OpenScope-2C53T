@@ -659,6 +659,10 @@ def verify_no_magnitude_range_feedback() -> dict[str, Any]:
         "Do not infer\n         * a new relay/range command from the decoded number here",
         "`0.200 V` visual vs `0.4366 V` CDC",
         "frontend/H2/acceptance evidence problem",
+        "Stock command-bank replay (0x1A..0x1E)",
+        "command sequencing evidence only",
+        "It does not prove DMM range\n     * parameters, a low-DCV correction, or a runtime writer for ms[0x02] /\n     * ms[0x03]",
+        "shared meter configure/setup byte; not a recovered DMM range",
     ]
     forbidden = [
         "TODO: Implement MCU-side auto-ranging with relay switching",
@@ -667,6 +671,14 @@ def verify_no_magnitude_range_feedback() -> dict[str, Any]:
         "send higher range params",
         "send lower range params",
         "wildly wrong outside it",
+        "param=0",
+        "10V range",
+        "Below ~1V",
+        "Above 10V",
+        "TODO: Find params",
+        "Meter channel gain/offset/coupling initialization",
+        "configure the FPGA meter IC",
+        "Meter: configure range",
     ]
 
     for rel in [

@@ -53,7 +53,10 @@ one of:
   banks (`0x00/0x09/(0x07|0x0A)`, `0x1A..0x1E`,
   `0x00/0x08/0x09/(0x07|0x0A)`, `0x16..0x19`,
   `0x00/0x12/0x13/0x14/0x09/(0x07|0x0A)`). This is command-byte sequencing,
-  not analog mux/range writing.
+  not analog mux/range writing. Production comments now keep the `0x1A..0x1E`
+  and `0x08` replay bytes out of the low-DCV range-param bucket: old notes such
+  as `param=0 -> 10V range`, `Below ~1V`, or `Meter: configure range` are stale
+  unless a stock writer/trace ties those bytes to DMM physical range state.
 - Mux writers: `FUN_080018a4` and `FUN_08001a58` are 10-way GPIO hardware
   writers. Current direct runtime mux-state writers are classified as
   scope/siggen paths, not DMM range proof.

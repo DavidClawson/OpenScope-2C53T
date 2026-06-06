@@ -290,8 +290,11 @@ class DmmGoalValidationTests(unittest.TestCase):
             "Range feedback is intentionally not driven from the parsed number",
             result["required"],
         )
+        self.assertIn("Stock command-bank replay (0x1A..0x1E)",
+                      result["required"])
         self.assertIn("Detect BCD overflow", result["forbidden"])
         self.assertIn("send higher range params", result["forbidden"])
+        self.assertIn("Meter: configure range", result["forbidden"])
 
     def test_meter_aux_afe_policy_uses_mux_state_model(self) -> None:
         result = validate_dmm_goal.verify_meter_aux_afe_pin_policy()

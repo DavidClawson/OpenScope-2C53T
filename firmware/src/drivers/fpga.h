@@ -79,12 +79,16 @@
 #define FPGA_CMD_METER_VAR_13 0x13   /* Meter variant config */
 #define FPGA_CMD_METER_VAR_14 0x14   /* Meter variant config */
 
-/* Channel gain/offset/coupling (sent at boot + runtime auto-range) */
-#define FPGA_CMD_CH1_GAIN     0x1A   /* CH1 gain setting */
-#define FPGA_CMD_CH1_OFFSET   0x1B   /* CH1 offset setting */
-#define FPGA_CMD_CH2_GAIN     0x1C   /* CH2 gain setting */
-#define FPGA_CMD_CH2_OFFSET   0x1D   /* CH2 offset setting */
-#define FPGA_CMD_COUPLING     0x1E   /* Coupling / bandwidth limit */
+/* Stock mode-init command bank 0x1A..0x1E. Scope xrefs use these as channel
+ * gain/offset/coupling commands, while the DMM boot dispatcher also queues
+ * them. That proves command sequencing only; it is not a recovered DMM
+ * range-selector, low-DCV calibration source, or runtime ms[0x02]/ms[0x03]
+ * mux writer. */
+#define FPGA_CMD_CH1_GAIN     0x1A   /* CH1 gain / stock command-bank byte */
+#define FPGA_CMD_CH1_OFFSET   0x1B   /* CH1 offset / stock command-bank byte */
+#define FPGA_CMD_CH2_GAIN     0x1C   /* CH2 gain / stock command-bank byte */
+#define FPGA_CMD_CH2_OFFSET   0x1D   /* CH2 offset / stock command-bank byte */
+#define FPGA_CMD_COUPLING     0x1E   /* Coupling/BW / stock command-bank byte */
 
 /* Frequency counter (system_mode 4) */
 #define FPGA_CMD_FREQ_CFG     0x1F   /* Freq counter config */

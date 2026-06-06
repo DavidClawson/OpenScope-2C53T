@@ -249,8 +249,10 @@ static uint8_t bcd_nibble_lookup(uint8_t combined)
  * and the cap/temp split remain local UI policy unless the stock FSM or live
  * evidence proves a narrower hardware state.
  *
- * Bench references:
- *   DCV (0): 1-10V range, raw 9899 → 9.899 V, decimal after digit 1
+ * Bench/stock references:
+ *   DCV (0): stock frame-bit class metadata selects decimal scaling; the
+ *       visually observed 0.200 V -> 0.4366 V mismatch is unresolved
+ *       frontend/range/calibration evidence, not a fallback decimal tweak
  *   ACV (1): stock frame[7] display format, broader AC sweep still needed
  *   Resistance (6): 20k range, raw 9899 → 98.99 kΩ, decimal after digit 2
  *   Continuity (7): 200Ω range, raw 16 → 1.6 Ω, decimal after digit 3
