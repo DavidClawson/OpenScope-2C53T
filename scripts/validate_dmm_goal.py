@@ -313,6 +313,11 @@ def verify_state_machine_property_contract() -> dict[str, Any]:
         "low dcv stale-current guard covers all current submodes":
             r"static const uint8_t low_dcv_current_modes\[\]\s*=\s*"
             r"\{\s*2,\s*3,\s*4,\s*5\s*\};",
+        "local AC A display keeps stock ACA unit index":
+            r"process_frame\(ac_current_frame,\s*5\);[\s\S]*"
+            r"ASSERT\(expect_normal_reading\(\"2\.261\",\s*\"A\",\s*2\.261f,\s*0\.001f\)\);[\s\S]*"
+            r"ASSERT\(meter_reading\.stock_mode == 3\);[\s\S]*"
+            r"ASSERT\(meter_reading\.stock_unit_index == 5\);",
     }
     required_snippets = [
         "METER_REJECT_MISSING_AC_EVIDENCE",
@@ -371,6 +376,21 @@ def verify_transition_plan_property_contract() -> dict[str, Any]:
         "every_submode_transition_drains_before_accepting_frames",
     ]
     required_regexes = {
+        "local stock-mode mapping preserves recovered shared slots":
+            r"static const uint8_t expected_stock_mode\[FPGA_METER_LOCAL_SUBMODE_COUNT\]\s*=\s*"
+            r"\{\s*0,\s*1,\s*2,\s*2,\s*3,\s*3,\s*4,\s*6,\s*7,\s*5,\s*5\s*\};",
+        "local selector words preserve recovered stock command table":
+            r"static const uint16_t expected_words\[FPGA_METER_LOCAL_SUBMODE_COUNT\]\s*=\s*"
+            r"\{\s*0x0514,\s*0x050C,\s*0x0517,\s*0x0517,\s*0x050B,\s*"
+            r"0x050B,\s*0x050A,\s*0x0511,\s*0x0510,\s*0x0512,\s*0x0512\s*\};",
+        "runtime apply words stay limited to recovered helper slots":
+            r"static const uint16_t expected_apply\[FPGA_METER_LOCAL_SUBMODE_COUNT\]\s*=\s*"
+            r"\{\s*0x0000,\s*0x050D,\s*0x050E,\s*0x050E,\s*0x0000,\s*"
+            r"0x0000,\s*0x0000,\s*0x0516,\s*0x0515,\s*0x0000,\s*0x0000\s*\};",
+        "shared local split pairs remain explicit":
+            r"\{\s*2,\s*3,\s*\"DC current small/A\"\s*\}[\s\S]*"
+            r"\{\s*4,\s*5,\s*\"AC current small/A\"\s*\}[\s\S]*"
+            r"\{\s*9,\s*10,\s*\"capacitance/temperature\"\s*\}",
         "transition plan iterates every local submode":
             r"for \(uint8_t i = 0; i < FPGA_METER_LOCAL_SUBMODE_COUNT; i\+\+\)",
         "phase matrix iterates every local submode":
@@ -396,6 +416,10 @@ def verify_transition_plan_property_contract() -> dict[str, Any]:
         "busy frame rejected",
         "stable frame accepted",
         "all recovered stock slots covered",
+        "bad submode word",
+        "bad plan portc/porte mux",
+        "bad plan porta/portb mux",
+        "bad plan discard",
     ]
 
     missing_tests = [

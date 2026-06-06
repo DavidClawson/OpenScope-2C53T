@@ -1812,7 +1812,7 @@ static int test_large_current_submodes_use_active_local_range_state(void)
     ASSERT(meter_reading.decimal_pos == 1);
     ASSERT(meter_reading.stock_mode == 3);
     ASSERT(meter_reading.stock_variant == 2);
-    ASSERT(meter_reading.stock_unit_index == 3);
+    ASSERT(meter_reading.stock_unit_index == 5);
     return 1;
 }
 

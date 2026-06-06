@@ -276,6 +276,10 @@ class DmmGoalValidationTests(unittest.TestCase):
                       result["regex_anchors"])
         self.assertIn("all non-voltage modes reject voltage frames",
                       result["regex_anchors"])
+        self.assertIn(
+            "local AC A display keeps stock ACA unit index",
+            result["regex_anchors"],
+        )
         self.assertIn("METER_REJECT_MISSING_AC_EVIDENCE",
                       result["snippet_anchors"])
         self.assertIn("not a standalone cross-mode family marker",
@@ -302,8 +306,17 @@ class DmmGoalValidationTests(unittest.TestCase):
                       result["regex_anchors"])
         self.assertIn("planned discards drain in order",
                       result["regex_anchors"])
+        self.assertIn(
+            "local selector words preserve recovered stock command table",
+            result["regex_anchors"],
+        )
+        self.assertIn(
+            "shared local split pairs remain explicit",
+            result["regex_anchors"],
+        )
         self.assertIn("fpga_meter_frame_family_is_acceptable",
                       result["snippet_anchors"])
+        self.assertIn("bad submode word", result["snippet_anchors"])
         self.assertIn("stable frame accepted", result["snippet_anchors"])
 
     def test_autoscan_property_contract_is_anchored(self) -> None:

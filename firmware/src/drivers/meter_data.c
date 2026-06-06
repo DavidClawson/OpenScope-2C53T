@@ -622,8 +622,7 @@ static void meter_stock_fsm_apply(uint8_t ui_submode,
 
     case 3:
         meter_stock_fsm.display_cmd = format_result;
-        meter_stock_fsm.unit_index =
-            ui_submode_is_large_current(ui_submode) ? 3U : 5U;
+        meter_stock_fsm.unit_index = 5U;
         meter_stock_fsm.composite_index = meter_stock_fsm.format + 2U;
         break;
 
