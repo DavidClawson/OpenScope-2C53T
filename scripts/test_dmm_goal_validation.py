@@ -231,6 +231,14 @@ class DmmGoalValidationTests(unittest.TestCase):
         self.assertIn("firmware/src/drivers/flash_fs.c", result["checked"])
         self.assertIn("METER_CAL_LOW_OHM_FACTOR", result["forbidden"])
         self.assertIn("3:/System file/cal_ch1.bin", result["forbidden"])
+        self.assertIn(
+            "DCA formatter variant branch at 0x08002AFE/0x08002B54",
+            result["required_meter_data"],
+        )
+        self.assertIn(
+            "DAT_2000102e == 2 selects unit index 3",
+            result["required_meter_data"],
+        )
 
     def test_magnitude_range_feedback_is_absent(self) -> None:
         result = validate_dmm_goal.verify_no_magnitude_range_feedback()

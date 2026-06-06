@@ -101,6 +101,12 @@ def verify_no_unrecovered_meter_coefficients() -> dict[str, Any]:
         "3:/System file/cal_ch2.bin",
         "apply these coefficients in meter_data.c",
     ]
+    required_meter_data = [
+        "DCA formatter variant branch at 0x08002AFE/0x08002B54",
+        "DAT_2000102e == 1 selects unit index 4",
+        "DAT_2000102e == 2 selects unit index 3",
+        "That proves formatter state only, not a recovered physical current range writer",
+    ]
     checked = [
         "firmware/src/drivers/meter_data.c",
         "firmware/src/drivers/meter_data.h",
@@ -108,15 +114,28 @@ def verify_no_unrecovered_meter_coefficients() -> dict[str, Any]:
         "firmware/src/drivers/flash_fs.h",
     ]
     hits: list[str] = []
+    missing: list[str] = []
     for rel in checked:
         text = (REPO / rel).read_text(encoding="utf-8", errors="replace")
         for needle in forbidden:
             if needle in text:
                 hits.append(f"{rel}: {needle}")
-    if hits:
-        raise GateError("unrecovered meter calibration coefficient still present: " +
-                        "; ".join(hits))
-    return {"checked": checked, "forbidden": forbidden}
+        if rel == "firmware/src/drivers/meter_data.c":
+            compact_text = " ".join(text.split()).replace(" * ", " ")
+            missing.extend(
+                needle for needle in required_meter_data
+                if needle not in compact_text
+            )
+    if hits or missing:
+        raise GateError(
+            "unrecovered meter calibration/formatter boundary drifted: "
+            f"forbidden_hits={hits} missing_meter_data={missing}"
+        )
+    return {
+        "checked": checked,
+        "forbidden": forbidden,
+        "required_meter_data": required_meter_data,
+    }
 
 
 def verify_no_ocr_pipeline() -> dict[str, Any]:
