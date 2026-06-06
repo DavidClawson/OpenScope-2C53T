@@ -1128,3 +1128,39 @@ state-8 byte-bank prefix being missing from the local transition path. The next
 root-cause target should be the analog apply/hold or relay/frontend state that
 produces OL/unmarked frames after the correct-looking selector, apply, bank,
 and GPIO snapshot.
+
+Follow-up image SHA-256
+`e76bfe96997987d03e8004ee9a4ee79a3cbdeed93cb8ee12578b1bbe2c10b6ea`
+was flashed through guarded HID IAP after `flash_preflight.py hid-app`
+classified it as an `openscope-app` image at `0x08004000`. This image adds a
+DCV fail-closed guard for unresolved `frame[7]=0x20/0x24` producer states and
+uses `meter_data_snapshot()` for `meter dump` / `meter stream`, so CDC debug
+readback no longer mixes fields from different completed readings.
+
+Live result with the user's shorted probes:
+
+- The bad low-input numeric shapes are no longer accepted by the parser:
+  status-20/no-marker frames and the previous `0.4366 V` marker frame now clear
+  payload to `---` instead of becoming confident voltages.
+- DCV still does not meet the shorted-probes requirement. A sequential trace
+  after `mode meter 0 0` showed `selector=0514`, `config=0508`,
+  `probe=0507`, `start=0509`, `planned_gpio=actual_gpio=0BB`, but the producer
+  stayed in OL/special/unmarked frames such as
+  `5A A5 E4 2E 63 25 07 00 00 00 01 4C` and
+  `5A A5 04 E0 DB 8F 0F 28 00 00 01 4C`.
+- Continuity still does not meet the shorted-probes requirement. A sequential
+  trace after `mode meter 7 0` showed `selector=0511`, `apply=0516`,
+  `bank=1/00/2C`, `probe=0507`, `start=0509`,
+  `planned_gpio=actual_gpio=0EA`, but the settled dump remained `OL`/`ERR` with
+  `beep=0` instead of the recovered continuity marker.
+- Replaying the stock DCV boot order `0508,0509,0507,0514` with
+  `meter boot-sequence 100` was also negative: DCV still rendered `---`, and
+  continuity still rendered `OL` with no beep.
+
+Interpretation: this commit removes the dangerous false-positive display path
+for the known bad low-input frames, but it is not the final DMM fix. The live
+shorted-probes failure remains upstream of stock decimal decoding and continuity
+marker parsing. Do not continue by adding coefficients, OCR/image parsing, or
+more prose acceptance checks; continue at the runtime analog apply/hold/relay
+frontend state, stock command materialization, or a proved stock/H2 acceptance
+effect.

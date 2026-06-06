@@ -2149,6 +2149,9 @@ static void cmd_meter_dump(const char *args)
 {
     uint32_t delay = 0;
     meter_autoselect_status_t auto_st;
+    meter_reading_t snap;
+    bool have_snap;
+    bool live;
 
     if (args && *args) {
         if (parse_int(args, &delay) != 0 || delay > 5000) {
@@ -2158,7 +2161,14 @@ static void cmd_meter_dump(const char *args)
     }
     if (delay > 0) vTaskDelay(pdMS_TO_TICKS(delay));
 
-    bool live = meter_reading.valid && meter_reading.submode == meter_submode;
+    memset(&snap, 0, sizeof(snap));
+    snap.display_str[0] = '-';
+    snap.display_str[1] = '-';
+    snap.display_str[2] = '-';
+    snap.display_str[3] = '\0';
+    snap.unit_suffix = "";
+    have_snap = meter_data_snapshot(&snap);
+    live = have_snap && snap.valid && snap.submode == meter_submode;
     meter_autoselect_get_status(&auto_st);
 
     usb_send_str("=== DMM State ===\r\n");
@@ -2193,48 +2203,48 @@ static void cmd_meter_dump(const char *args)
                      (unsigned)meter_screen_last_continuity_flash,
                      live ? 1U : 0U);
     usb_debug_printf("valid=%u reading_submode=%u class=%u updates=%lu display=%s unit=%s\r\n",
-                     meter_reading.valid ? 1U : 0U,
-                     (unsigned)meter_reading.submode,
-                     (unsigned)meter_reading.result_class,
-                     meter_reading.update_count,
-                     live ? meter_reading.display_str : "---",
-                     (live && meter_reading.unit_suffix) ? meter_reading.unit_suffix : "");
+                     snap.valid ? 1U : 0U,
+                     (unsigned)snap.submode,
+                     (unsigned)snap.result_class,
+                     snap.update_count,
+                     live ? snap.display_str : "---",
+                     (live && snap.unit_suffix) ? snap.unit_suffix : "");
     usb_debug_printf("transition_discard_remaining=%u transition_frame_skips=%lu\r\n",
                      (unsigned)meter_frame_discard_count,
                      meter_transition_frame_skip_count);
     usb_debug_printf("bcd_value=%d decimal_pos=%u negative=%u unit_variant=%u bar_i100=%ld aux_freq_i10=%ld\r\n",
-                     meter_reading.bcd_value,
-                     (unsigned)meter_reading.decimal_pos,
-                     meter_reading.negative ? 1U : 0U,
-                     (unsigned)meter_reading.unit_variant,
-                     (long)scaled_i100(meter_reading.bar_fraction),
-                     (long)scaled_i100(meter_reading.aux_freq_hz) / 10L);
+                     snap.bcd_value,
+                     (unsigned)snap.decimal_pos,
+                     snap.negative ? 1U : 0U,
+                     (unsigned)snap.unit_variant,
+                     (long)scaled_i100(snap.bar_fraction),
+                     (long)scaled_i100(snap.aux_freq_hz) / 10L);
     usb_debug_printf("flags ac=%u auto=%u hold=%u probe=%u range_ind=%u range_cmd=%u beep=%u\r\n",
-                     meter_reading.is_ac ? 1U : 0U,
-                     meter_reading.is_auto_range ? 1U : 0U,
-                     meter_reading.is_hold ? 1U : 0U,
-                     (unsigned)meter_reading.probe_type,
-                     (unsigned)meter_reading.range_indicator,
-                     (unsigned)meter_reading.range_cmd,
-                     meter_reading.continuity_beep ? 1U : 0U);
+                     snap.is_ac ? 1U : 0U,
+                     snap.is_auto_range ? 1U : 0U,
+                     snap.is_hold ? 1U : 0U,
+                     (unsigned)snap.probe_type,
+                     (unsigned)snap.range_indicator,
+                     (unsigned)snap.range_cmd,
+                     snap.continuity_beep ? 1U : 0U);
     usb_debug_printf("stock_fsm mode=%u variant=%u format=%u dc_state=%u display_cmd=%u unit_index=%u composite=%u\r\n",
-                     (unsigned)meter_reading.stock_mode,
-                     (unsigned)meter_reading.stock_variant,
-                     (unsigned)meter_reading.stock_format,
-                     (unsigned)meter_reading.stock_dc_state,
-                     (unsigned)meter_reading.stock_display_cmd,
-                     (unsigned)meter_reading.stock_unit_index,
-                     (unsigned)meter_reading.stock_composite_index);
+                     (unsigned)snap.stock_mode,
+                     (unsigned)snap.stock_variant,
+                     (unsigned)snap.stock_format,
+                     (unsigned)snap.stock_dc_state,
+                     (unsigned)snap.stock_display_cmd,
+                     (unsigned)snap.stock_unit_index,
+                     (unsigned)snap.stock_composite_index);
     usb_debug_printf("frame_family expected=%u observed=%u reject=%u\r\n",
-                     (unsigned)meter_reading.expected_frame_family,
-                     (unsigned)meter_reading.observed_frame_family,
-                     (unsigned)meter_reading.reject_reason);
+                     (unsigned)snap.expected_frame_family,
+                     (unsigned)snap.observed_frame_family,
+                     (unsigned)snap.reject_reason);
     usb_send_str("frame=");
-    for (int i = 0; i < 12; i++) usb_debug_printf("%02X%s", meter_reading.dbg_frame[i], i == 11 ? "" : " ");
+    for (int i = 0; i < 12; i++) usb_debug_printf("%02X%s", snap.dbg_frame[i], i == 11 ? "" : " ");
     usb_send_str("\r\nnibbles=");
-    for (int i = 0; i < 4; i++) usb_debug_printf("%02X%s", meter_reading.dbg_nibbles[i], i == 3 ? "" : " ");
+    for (int i = 0; i < 4; i++) usb_debug_printf("%02X%s", snap.dbg_nibbles[i], i == 3 ? "" : " ");
     usb_send_str(" raw_digits=");
-    for (int i = 0; i < 4; i++) usb_debug_printf("%02X%s", meter_reading.dbg_raw_digits[i], i == 3 ? "" : " ");
+    for (int i = 0; i < 4; i++) usb_debug_printf("%02X%s", snap.dbg_raw_digits[i], i == 3 ? "" : " ");
     usb_send_str("\r\nf6_history=");
     uint8_t f6_count = meter_f6_history_count;
     if (f6_count > METER_F6_HISTORY_LEN) f6_count = METER_F6_HISTORY_LEN;
@@ -3213,32 +3223,35 @@ static void cmd_meter_stream(const char *args)
 
     usb_debug_printf("stream count=%lu delay_ms=%lu\r\n", count, delay_ms);
     for (uint32_t i = 0; i < count; i++) {
-        if (meter_reading.update_count != last_update) {
-            last_update = meter_reading.update_count;
-            uint16_t extra = ((uint16_t)meter_reading.dbg_frame[10] << 8) |
-                             meter_reading.dbg_frame[11];
+        meter_reading_t snap;
+
+        if (meter_data_snapshot(&snap) &&
+            snap.update_count != last_update) {
+            last_update = snap.update_count;
+            uint16_t extra = ((uint16_t)snap.dbg_frame[10] << 8) |
+                             snap.dbg_frame[11];
             usb_debug_printf("%lu upd=%lu sub=%u cls=%u family=%u/%u reject=%u "
                              "raw=%d dp=%u unit=%s disp=%s "
                              "f6=%02X f7=%02X f8=%02X f9=%02X extra=%04X aux_freq_i10=%ld wave=%lu beep=%u\r\n",
                              i,
-                             meter_reading.update_count,
-                             (unsigned)meter_reading.submode,
-                             (unsigned)meter_reading.result_class,
-                             (unsigned)meter_reading.expected_frame_family,
-                             (unsigned)meter_reading.observed_frame_family,
-                             (unsigned)meter_reading.reject_reason,
-                             meter_reading.bcd_value,
-                             (unsigned)meter_reading.decimal_pos,
-                             meter_reading.unit_suffix ? meter_reading.unit_suffix : "",
-                             meter_reading.display_str,
-                             (unsigned)meter_reading.dbg_frame[6],
-                             (unsigned)meter_reading.dbg_frame[7],
-                             (unsigned)meter_reading.dbg_frame[8],
-                             (unsigned)meter_reading.dbg_frame[9],
+                             snap.update_count,
+                             (unsigned)snap.submode,
+                             (unsigned)snap.result_class,
+                             (unsigned)snap.expected_frame_family,
+                             (unsigned)snap.observed_frame_family,
+                             (unsigned)snap.reject_reason,
+                             snap.bcd_value,
+                             (unsigned)snap.decimal_pos,
+                             snap.unit_suffix ? snap.unit_suffix : "",
+                             snap.display_str,
+                             (unsigned)snap.dbg_frame[6],
+                             (unsigned)snap.dbg_frame[7],
+                             (unsigned)snap.dbg_frame[8],
+                             (unsigned)snap.dbg_frame[9],
                              (unsigned)extra,
-                             (long)scaled_i100(meter_reading.aux_freq_hz) / 10L,
+                             (long)scaled_i100(snap.aux_freq_hz) / 10L,
                              meter_voltage_wave_sample_count(),
-                             meter_reading.continuity_beep ? 1U : 0U);
+                             snap.continuity_beep ? 1U : 0U);
         }
         if (delay_ms > 0) vTaskDelay(pdMS_TO_TICKS(delay_ms));
     }

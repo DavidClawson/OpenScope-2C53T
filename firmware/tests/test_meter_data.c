@@ -1037,7 +1037,7 @@ static int test_state_machine_property_matrix_covers_all_submodes(void)
         0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10
     };
     uint8_t voltage_frame[12];
-    uint8_t low_dcv_frame[12] = {
+    uint8_t unresolved_low_dcv_frame[12] = {
         0x5A, 0xA5, 0x44, 0x8E, 0xEF, 0xE7,
         0x07, 0x24, 0x82, 0x00, 0x01, 0x89,
     };
@@ -1108,7 +1108,7 @@ static int test_state_machine_property_matrix_covers_all_submodes(void)
         }
 
         if (plan.frame_family != FPGA_METER_FRAME_FAMILY_VOLTAGE) {
-            process_frame(low_dcv_frame, mode);
+            process_frame(unresolved_low_dcv_frame, mode);
             ASSERT(!meter_reading.valid);
             ASSERT(meter_reading.submode == mode);
             ASSERT(meter_reading.reject_reason == METER_REJECT_WRONG_FRAME_FAMILY);
@@ -1172,7 +1172,7 @@ static int test_goal_surface_property_enumerates_dmm_state_machine(void)
     uint8_t unclassified_active_policy_seen = 0;
     uint8_t invalid_submode_seen = 0;
     unsigned stale_transition_pairs = 0;
-    uint8_t low_dcv_frame[12] = {
+    uint8_t unresolved_low_dcv_frame[12] = {
         0x5A, 0xA5, 0x44, 0x8E, 0xEF, 0xE7,
         0x07, 0x24, 0x82, 0x00, 0x01, 0x89,
     };
@@ -1256,17 +1256,17 @@ static int test_goal_surface_property_enumerates_dmm_state_machine(void)
             unclassified_active_policy_seen |= (uint8_t)(1U << plan.frame_family);
         }
 
-        process_frame(low_dcv_frame, mode);
+        process_frame(unresolved_low_dcv_frame, mode);
         if (plan.frame_family == FPGA_METER_FRAME_FAMILY_VOLTAGE) {
-            if (mode == 1) {
-                ASSERT(!meter_reading.valid);
+            ASSERT(!meter_reading.valid);
+            ASSERT(expect_payload_cleared("---"));
+            if (mode == 0) {
+                ASSERT(meter_reading.reject_reason ==
+                       METER_REJECT_WRONG_FRAME_FAMILY);
+            } else {
                 ASSERT(meter_reading.reject_reason ==
                        METER_REJECT_MISSING_AC_EVIDENCE);
                 ac_evidence_seen |= 1U << 0;
-            } else {
-                ASSERT(meter_reading.valid);
-                ASSERT(meter_reading.bcd_value == 4366);
-                ASSERT_STR_EQ(meter_reading.display_str, "0.4366");
             }
         } else {
             ASSERT(!meter_reading.valid);
@@ -1475,13 +1475,13 @@ static int test_transition_phase_marker_frames_follow_destination_state(void)
         uint8_t family;
         const uint8_t *frame;
     };
-    uint8_t low_dcv_frame[12] = {
-        0x5A, 0xA5, 0x44, 0x8E, 0xEF, 0xE7,
-        0x07, 0x24, 0x82, 0x00, 0x01, 0x89,
+    uint8_t voltage_frame[12] = {
+        0x5A, 0xA5, 0x4E, 0xCE, 0x8F, 0x8A,
+        0x0A, 0x00, 0x82, 0x00, 0x01, 0x7F,
     };
     uint8_t continuity_frame[12];
     const struct marker_case markers[] = {
-        { FPGA_METER_FRAME_FAMILY_VOLTAGE, low_dcv_frame },
+        { FPGA_METER_FRAME_FAMILY_VOLTAGE, voltage_frame },
         { FPGA_METER_FRAME_FAMILY_CONTINUITY, continuity_frame },
     };
 
@@ -1557,16 +1557,16 @@ static int test_marker_visible_family_mismatch_matrix_clears_stale_payload(void)
         const char *name;
         const uint8_t *frame;
     };
-    uint8_t low_dcv_frame[12] = {
-        0x5A, 0xA5, 0x44, 0x8E, 0xEF, 0xE7,
-        0x07, 0x24, 0x82, 0x00, 0x01, 0x89,
+    uint8_t voltage_frame[12] = {
+        0x5A, 0xA5, 0x4E, 0xCE, 0x8F, 0x8A,
+        0x0A, 0x00, 0x82, 0x00, 0x01, 0x7F,
     };
     uint8_t continuity_frame[12];
     const struct marker_case markers[] = {
         {
             FPGA_METER_FRAME_FAMILY_VOLTAGE,
-            "low-dcv-voltage",
-            low_dcv_frame,
+            "voltage-marker",
+            voltage_frame,
         },
         {
             FPGA_METER_FRAME_FAMILY_CONTINUITY,
@@ -1703,6 +1703,69 @@ static int test_dcv_rejects_live_status20_class_bit_wrong_family(void)
     ASSERT(expect_family_debug(FPGA_METER_FRAME_FAMILY_VOLTAGE,
                                FPGA_METER_FRAME_FAMILY_VOLTAGE,
                                METER_REJECT_WRONG_FRAME_FAMILY));
+    return 1;
+}
+
+static int test_dcv_rejects_live_status20_marker_frame_04366_regression(void)
+{
+    /*
+     * The same low-input live failure with the 0x82 marker still has status
+     * 0x24. Stock only proves that bit 5 participates in DCV formatter state;
+     * it is not proof that the upstream producer has delivered a settled DCV
+     * payload. This frame must fail closed until the writer/apply path is
+     * recovered from stock/runtime evidence.
+     */
+    uint8_t frame[12] = {
+        0x5A, 0xA5, 0x44, 0x8E, 0xEF, 0xE7,
+        0x07, 0x24, 0x82, 0x00, 0x01, 0x89,
+    };
+
+    meter_data_init();
+    process_frame(frame, 0);
+    ASSERT(!meter_reading.valid);
+    ASSERT(meter_reading.reject_reason == METER_REJECT_WRONG_FRAME_FAMILY);
+    ASSERT(expect_payload_cleared("---"));
+    ASSERT(meter_reading.dbg_frame[8] == 0x82);
+    return 1;
+}
+
+static int test_dcv_rejects_reported_low_input_numeric_shapes_without_marker(void)
+{
+    static const uint8_t frames[][12] = {
+        /* Reported 0.1 V -> about 2.23 V: BCD-like producer data, no marker. */
+        { 0x5A, 0xA5, 0xA4, 0xBD, 0x8D, 0xAF,
+          0x4D, 0x20, 0x00, 0x00, 0x01, 0x36 },
+        /* Reported 0.4 V -> about 153/154 V: unmarked status20 producer data. */
+        { 0x5A, 0xA5, 0xCC, 0x47, 0xFE, 0xEB,
+          0x47, 0x20, 0x00, 0x00, 0x01, 0x3C },
+    };
+
+    for (unsigned i = 0; i < sizeof(frames) / sizeof(frames[0]); i++) {
+        meter_data_init();
+        process_frame(frames[i], 0);
+        ASSERT(!meter_reading.valid);
+        ASSERT(meter_reading.reject_reason == METER_REJECT_WRONG_FRAME_FAMILY);
+        ASSERT(expect_payload_cleared("---"));
+    }
+    return 1;
+}
+
+static int test_dcv_rejects_current_live_special_frame_after_low_input_reports(void)
+{
+    uint8_t frame[12] = {
+        0x5A, 0xA5, 0x04, 0xE0, 0x5B, 0x8E,
+        0x0A, 0x28, 0x00, 0x00, 0x01, 0x43,
+    };
+
+    meter_data_init();
+    process_frame(frame, 0);
+    ASSERT(!meter_reading.valid);
+    ASSERT(meter_reading.reject_reason == METER_REJECT_WRONG_FRAME_FAMILY);
+    ASSERT(expect_payload_cleared("---"));
+    ASSERT(meter_reading.dbg_raw_digits[0] == 0x10);
+    ASSERT(meter_reading.dbg_raw_digits[1] == 0x00);
+    ASSERT(meter_reading.dbg_raw_digits[2] == 0x04);
+    ASSERT(meter_reading.dbg_raw_digits[3] == 0x07);
     return 1;
 }
 
@@ -2441,6 +2504,9 @@ int main(void)
     TEST(unclassified_normal_frames_follow_active_family_only);
     TEST(dcv_rejects_live_unmarked_frame8_00_regression);
     TEST(dcv_rejects_live_status20_class_bit_wrong_family);
+    TEST(dcv_rejects_live_status20_marker_frame_04366_regression);
+    TEST(dcv_rejects_reported_low_input_numeric_shapes_without_marker);
+    TEST(dcv_rejects_current_live_special_frame_after_low_input_reports);
     TEST(mixed_special_voltage_digits_do_not_become_numeric_dcv);
     TEST(frame6_0x40_is_not_a_global_resistance_family_marker);
     TEST(voltage_mode_mains_frame_uses_stock_range_hint);

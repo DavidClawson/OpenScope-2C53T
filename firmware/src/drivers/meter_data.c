@@ -483,6 +483,24 @@ static bool voltage_frame_missing_required_marker(const meter_reading_t *r,
            !frame_has_voltage_payload_marker(frame);
 }
 
+static bool dcv_frame_has_unresolved_status20(const meter_reading_t *r,
+                                              const volatile uint8_t *frame)
+{
+    /*
+     * DCV producer/apply failure boundary:
+     * multiple live low-input failures carried frame[7]=0x20/0x24 and either no
+     * voltage marker or the weak 0x82 marker, then decoded to confident but
+     * physically impossible DCV values such as 0.4366 V at a visible 0.200 V
+     * source/load. Stock formatter evidence shows bit 5 drives DCV display state
+     * transitions; it does not prove this frame is a settled DC voltage payload.
+     * Until a stock xref ties status bit 5 to a valid DCV producer state, fail
+     * closed instead of treating this transitional state as measurement data.
+     */
+    return r->expected_frame_family == FPGA_METER_FRAME_FAMILY_VOLTAGE &&
+           r->submode == 0 &&
+           (frame[7] & 0x20U) != 0;
+}
+
 static bool ui_submode_is_small_current(uint8_t ui_submode)
 {
     return ui_submode == 2 || ui_submode == 4;
@@ -1212,6 +1230,7 @@ void meter_data_process_frame(const volatile uint8_t *frame, uint8_t submode)
     }
 
     if (voltage_frame_missing_required_marker(r, frame) ||
+        dcv_frame_has_unresolved_status20(r, frame) ||
         frame_is_voltage_payload(submode, frame) ||
         frame_family_mismatch(r)) {
         r->reject_reason = METER_REJECT_WRONG_FRAME_FAMILY;
