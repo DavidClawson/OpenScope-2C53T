@@ -217,6 +217,10 @@ typedef struct {
     volatile uint16_t tx_frame_history_tx_count[FPGA_TX_FRAME_HISTORY];
     volatile uint8_t  tx_frame_history_head;
     volatile uint8_t  tx_frame_history_count;
+    volatile uint8_t  tx_control_frame_history[FPGA_TX_FRAME_HISTORY][FPGA_TX_FRAME_SIZE];
+    volatile uint16_t tx_control_frame_history_tx_count[FPGA_TX_FRAME_HISTORY];
+    volatile uint8_t  tx_control_frame_history_head;
+    volatile uint8_t  tx_control_frame_history_count;
 
     /* DMM mode-sequence diagnostics. Polling quickly overwrites tx_recent
      * with 0x0509, so keep the last explicit mode switch separately. */

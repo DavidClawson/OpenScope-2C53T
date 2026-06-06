@@ -401,6 +401,12 @@ static void fpga_diag_clear(void)
            sizeof(fpga.tx_frame_history_tx_count));
     fpga.tx_frame_history_head = 0;
     fpga.tx_frame_history_count = 0;
+    memset((void *)fpga.tx_control_frame_history, 0,
+           sizeof(fpga.tx_control_frame_history));
+    memset((void *)fpga.tx_control_frame_history_tx_count, 0,
+           sizeof(fpga.tx_control_frame_history_tx_count));
+    fpga.tx_control_frame_history_head = 0;
+    fpga.tx_control_frame_history_count = 0;
     memset((void *)fpga.rx_frame_history, 0, sizeof(fpga.rx_frame_history));
     memset((void *)fpga.rx_history_frame_count, 0, sizeof(fpga.rx_history_frame_count));
     memset((void *)fpga.rx_history_tx_count, 0, sizeof(fpga.rx_history_tx_count));
@@ -2477,6 +2483,9 @@ static void cmd_meter_trace(void)
     uint8_t txh_count;
     uint8_t txh_frames[FPGA_TX_FRAME_HISTORY][FPGA_TX_FRAME_SIZE];
     uint16_t txh_tx[FPGA_TX_FRAME_HISTORY];
+    uint8_t txc_count;
+    uint8_t txc_frames[FPGA_TX_FRAME_HISTORY][FPGA_TX_FRAME_SIZE];
+    uint16_t txc_tx[FPGA_TX_FRAME_HISTORY];
     uint8_t mth_count;
     uint8_t mth_submode[FPGA_METER_TRANSITION_HISTORY];
     uint16_t mth_selector[FPGA_METER_TRANSITION_HISTORY];
@@ -2545,6 +2554,18 @@ static void cmd_meter_trace(void)
         memcpy(txh_frames[n], (const void *)fpga.tx_frame_history[idx],
                FPGA_TX_FRAME_SIZE);
         txh_tx[n] = fpga.tx_frame_history_tx_count[idx];
+    }
+    txc_count = fpga.tx_control_frame_history_count;
+    if (txc_count > FPGA_TX_FRAME_HISTORY) {
+        txc_count = FPGA_TX_FRAME_HISTORY;
+    }
+    for (uint8_t n = 0; n < txc_count; n++) {
+        uint8_t idx = (uint8_t)((fpga.tx_control_frame_history_head +
+                                 FPGA_TX_FRAME_HISTORY - 1U - n) %
+                                FPGA_TX_FRAME_HISTORY);
+        memcpy(txc_frames[n], (const void *)fpga.tx_control_frame_history[idx],
+               FPGA_TX_FRAME_SIZE);
+        txc_tx[n] = fpga.tx_control_frame_history_tx_count[idx];
     }
     mth_count = fpga.meter_transition_history_count;
     if (mth_count > FPGA_METER_TRANSITION_HISTORY) {
@@ -2702,6 +2723,12 @@ static void cmd_meter_trace(void)
     for (uint8_t n = 0; n < txh_count; n++) {
         usb_debug_printf("txh n=%u tx=%u frame=", (unsigned)n, txh_tx[n]);
         print_tx_frame_inline(txh_frames[n]);
+        usb_send_str("\r\n");
+    }
+    usb_send_str("tx_control_history newest_first:\r\n");
+    for (uint8_t n = 0; n < txc_count; n++) {
+        usb_debug_printf("txc n=%u tx=%u frame=", (unsigned)n, txc_tx[n]);
+        print_tx_frame_inline(txc_frames[n]);
         usb_send_str("\r\n");
     }
     usb_debug_printf("gpio control PC6=%u PB11=%u PC11=%u PC7=%u PC0=%u\r\n",

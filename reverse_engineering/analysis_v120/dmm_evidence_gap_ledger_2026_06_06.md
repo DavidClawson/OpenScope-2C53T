@@ -837,6 +837,25 @@ wiring proof boundary. It is not permission to restore decoder coefficients.
   preceding USART2 command frame by counter, instead of only by wall-clock
   ordering.  It still is not a low-DCV fix, not stock ACK proof, and not a
   calibration coefficient.
+- Byte-dispatch bridge live negative + non-poll TX control ring: a sequential
+  run on the same bench state first reset DCV with `mode meter 0`, captured a
+  baseline producer frame around `2.236 V`, then sent `fpga stock bridge dynamic
+  ch1`, waited for settle, and captured another trace.  The candidate emitted
+  seven TX frames including dynamic raw words `0x0510` and `0x0511` plus
+  display/update byte `0x1B`, but the settled producer value stayed at the same
+  raw/class (`raw=2236`, class `1`).  This is a live negative for promoting that
+  existing bench bridge into the production DCV fix.  Because the 4 Hz poll task
+  quickly overwrites the ordinary TX history with `0x0509`, the next diagnostic
+  build adds a separate non-poll `tx_control_history` ring to `meter trace`.
+  OpenScope app image SHA-256
+  `594da221a95bc02c52f51e928d54cc358d8aa2368a3dea5bfae403afb0883b0f`
+  (`Build: Jun 6 2026 21:19:53`) was flashed through guarded HID IAP and booted
+  back to CDC.  A live settled trace showed `tx_history` newest entries were all
+  poll frames (`0x0509`), while `tx_control_history` still retained the setup
+  frames by TX counter: `tx=6 0x0507`, `tx=5 0x0514`, `tx=4 0x0514`,
+  `tx=3 0x0507`, and `tx=1 0x0508`.  This improves the low-DCV trace boundary
+  without changing production meter commands or claiming a calibration/source
+  fix.
 
 ## Next RE Target
 

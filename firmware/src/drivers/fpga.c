@@ -690,6 +690,27 @@ static void fpga_record_tx_frame(const uint8_t *frame)
     if (fpga.tx_frame_history_count < FPGA_TX_FRAME_HISTORY) {
         fpga.tx_frame_history_count++;
     }
+
+    /*
+     * Control TX ring.
+     *
+     * The meter poll task emits 0x0509 continuously, so the ordinary TX ring can
+     * be all poll frames by the time a settled DMM trace is captured. Keep a
+     * second diagnostic-only ring for non-poll frames so low-DCV/live experiments
+     * can still see the last selector/apply/setup commands that preceded the
+     * wrong producer frame. This must not feed range decisions.
+     */
+    if (frame[2] != 0x05U || frame[3] != FPGA_CMD_METER_START) {
+        idx = fpga.tx_control_frame_history_head;
+        memcpy((void *)fpga.tx_control_frame_history[idx], frame,
+               FPGA_TX_FRAME_SIZE);
+        fpga.tx_control_frame_history_tx_count[idx] = fpga.tx_count;
+        fpga.tx_control_frame_history_head =
+            (uint8_t)((idx + 1U) % FPGA_TX_FRAME_HISTORY);
+        if (fpga.tx_control_frame_history_count < FPGA_TX_FRAME_HISTORY) {
+            fpga.tx_control_frame_history_count++;
+        }
+    }
 }
 
 static void fpga_record_rx_data_frame(void)

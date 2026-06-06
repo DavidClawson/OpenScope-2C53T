@@ -340,6 +340,7 @@ def parse_meter_trace_text(text: str) -> dict[str, object]:
         "transition_history": [],
         "producer_history": [],
         "tx_history": [],
+        "tx_control_history": [],
         "h2_post_rx": [],
     }
 
@@ -410,6 +411,13 @@ def parse_meter_trace_text(text: str) -> dict[str, object]:
             record = _parse_kv_line(prefix)
             record["frame"] = _frame_record(_parse_hex_bytes(frame_text, 10))
             cast = result["tx_history"]
+            assert isinstance(cast, list)
+            cast.append(record)
+        elif line.startswith("txc "):
+            prefix, frame_text = line.split(" frame=", 1)
+            record = _parse_kv_line(prefix)
+            record["frame"] = _frame_record(_parse_hex_bytes(frame_text, 10))
+            cast = result["tx_control_history"]
             assert isinstance(cast, list)
             cast.append(record)
         elif line.startswith("gpio control "):
