@@ -645,11 +645,48 @@ defaults `ms[0x02] = 5` and `ms[0x03] = 5` before later default fields are
 filled. This is a saved-config pack/default guard: it proves persistence layout
 and default mux-state bytes, but still not a runtime DMM range writer.
 
-The visible caller of this packer is now guarded too. `probe_change_handler`
-(`0x080396C8..0x08039734`) increments the auto-power-off/probe-change counter
-at `ms[0xF6C]`, checks threshold constants `0x0384`, `0x0708`, and `0x0E10`,
-then calls `FUN_080223BC(0x55)` at `0x0803972E` only on the controlled
-shutdown/config-save path:
+The raw direct-BL sweep for this packer is now guarded too. It found four
+BL-shaped stock hits to `FUN_080223BC`: `0x08002F8C`, `0x08002FE2`,
+`0x08005B4A`, and `0x0803972E`. The classification matters more than the raw
+count: a sweep over the whole image sees literal pools and branch islands, so
+these are not automatically executable DMM range writers.
+
+The first executable-looking call is a housekeeping threshold path near the end
+of the stock `FUN_08002C78` region. It reaches `FUN_080223BC(0x55)` at
+`0x08002F8C` after the surrounding counter/state checks:
+
+```text
+0x08002F80 housekeeping threshold saved-config pack caller:
+  6d af 7b e7 09 29 de d1 e7 e7 55 20 1f f0 16 fa
+```
+
+The next raw hit, `0x08002FE2`, sits inside the post-function literal/data
+region between the `0x08002F8C` call tail and the next function prologue. It is
+guarded as direct-BL-shaped bytes, not as a classified executable DMM caller:
+
+```text
+0x08002F90 post-function literal/data region with BL-shaped bytes:
+  cd cc cc cc cc cc 4c 3f 3d 0a d7 a3 70 3d 10 40
+  d7 a3 70 3d 0a d7 0f 40 5c 8f c2 f5 28 5c 0f 40
+  f6 28 5c 8f c2 f5 0e 40 8f c2 f5 28 5c 8f 0e 40
+  52 b8 1e 85 eb 51 0e 40 29 5c 8f c2 f5 28 0e 40
+  ec 51 b8 1e 85 eb 0d 40 71 3d 0a d7 a3 70 0d 40
+  55 20 1f f0 eb f9 00 00
+```
+
+The `0x08005B4A` hit is likewise guarded as direct-BL-shaped bytes in a branch
+island immediately before the selector seed function at `0x08005B50`:
+
+```text
+0x08005B40 branch island before selector seed:
+  bd e8 f0 41 35 f0 d4 b8 00 20 1c f0 37 fc 00 00
+  2d e9 f0 43 81 b0 40 f2 f8 05
+```
+
+Finally, `probe_change_handler` (`0x080396C8..0x08039734`) increments the
+auto-power-off/probe-change counter at `ms[0xF6C]`, checks threshold constants
+`0x0384`, `0x0708`, and `0x0E10`, then calls `FUN_080223BC(0x55)` at
+`0x0803972E` only on the controlled shutdown/config-save path:
 
 ```text
 0x080396F4 saved-config pack caller guard:
@@ -660,11 +697,12 @@ shutdown/config-save path:
 ```
 
 This `saved-config pack caller guard` makes the boundary explicit: the packer
-is stock evidence for persistence and power-off save behavior, not normal
-runtime DMM range switching. The missing runtime DMM evidence remains a writer
-or trace that ties live DMM selector/range transitions to `ms[0x02]` and
-`ms[0x03]`, or proves that those bytes are not the runtime DMM range source.
-In short: `0x0803972E` is controlled shutdown/config-save evidence, not normal runtime DMM range switching.
+is stock evidence for persistence, housekeeping save, and power-off save
+behavior, not normal runtime DMM range switching. The missing runtime DMM
+evidence remains a writer or trace that ties live DMM selector/range transitions
+to `ms[0x02]` and `ms[0x03]`, or proves that those bytes are not the runtime
+DMM range source. In short: none of the guarded `FUN_080223BC` direct-BL-shaped
+hits is recovered as a normal runtime DMM range writer.
 
 ### USART TX Config Writer Meter-Case Guard, 2026-06-06
 

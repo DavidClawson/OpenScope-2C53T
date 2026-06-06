@@ -677,7 +677,38 @@ class DmmGoalValidationTests(unittest.TestCase):
     def test_stock_meter_saved_config_pack_caller_is_binary_grounded(self) -> None:
         result = stock_meter_literals.verify_meter_saved_config_pack_caller_sequences()
         sequences = result["sequences"]
+        direct_callers = result["direct_callers"]
+        classifications = result["classifications"]
 
+        self.assertEqual(
+            direct_callers,
+            ["0x08002f8c", "0x08002fe2", "0x08005b4a", "0x0803972e"],
+        )
+
+        self.assertEqual(
+            sequences["housekeeping_threshold_saved_config_pack_caller"]["addr"],
+            "0x08002f80",
+        )
+        self.assertIn(
+            "55 20 1f f0 16 fa",
+            sequences["housekeeping_threshold_saved_config_pack_caller"]["bytes"],
+        )
+        self.assertEqual(
+            sequences["post_function_literal_pool_bl_shaped_bytes"]["addr"],
+            "0x08002f90",
+        )
+        self.assertIn(
+            "55 20 1f f0 eb f9 00 00",
+            sequences["post_function_literal_pool_bl_shaped_bytes"]["bytes"],
+        )
+        self.assertEqual(
+            sequences["branch_island_bl_shaped_bytes_before_selector_seed"]["addr"],
+            "0x08005b40",
+        )
+        self.assertIn(
+            "00 20 1c f0 37 fc 00 00",
+            sequences["branch_island_bl_shaped_bytes_before_selector_seed"]["bytes"],
+        )
         self.assertEqual(
             sequences["probe_change_poweroff_saved_config_pack_caller"]["addr"],
             "0x080396f4",
@@ -693,6 +724,17 @@ class DmmGoalValidationTests(unittest.TestCase):
         self.assertIn(
             "55 20 e8 f7 45 fe",
             sequences["probe_change_poweroff_saved_config_pack_caller"]["bytes"],
+        )
+        self.assertIn(
+            "housekeeping threshold path",
+            classifications["0x08002f8c"],
+        )
+        self.assertIn("literal/data region", classifications["0x08002fe2"])
+        self.assertIn("branch island", classifications["0x08005b4a"])
+        self.assertIn("controlled shutdown", classifications["0x0803972e"])
+        self.assertIn(
+            "not normal runtime DMM range switching",
+            classifications["0x0803972e"],
         )
 
     def test_stock_usart_tx_config_writer_meter_case_is_binary_grounded(self) -> None:

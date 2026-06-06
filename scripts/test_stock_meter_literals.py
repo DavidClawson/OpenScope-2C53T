@@ -469,6 +469,30 @@ EXPECTED_METER_SAVED_CONFIG_PACK_SEQUENCES = {
     ),
 }
 EXPECTED_METER_SAVED_CONFIG_PACK_CALLER_SEQUENCES = {
+    "housekeeping_threshold_saved_config_pack_caller": (
+        0x08002F80,
+        bytes.fromhex(
+            "6d af 7b e7 09 29 de d1 e7 e7 55 20 1f f0 16 fa"
+        ),
+    ),
+    "post_function_literal_pool_bl_shaped_bytes": (
+        0x08002F90,
+        bytes.fromhex(
+            "cd cc cc cc cc cc 4c 3f 3d 0a d7 a3 70 3d 10 40 "
+            "d7 a3 70 3d 0a d7 0f 40 5c 8f c2 f5 28 5c 0f 40 "
+            "f6 28 5c 8f c2 f5 0e 40 8f c2 f5 28 5c 8f 0e 40 "
+            "52 b8 1e 85 eb 51 0e 40 29 5c 8f c2 f5 28 0e 40 "
+            "ec 51 b8 1e 85 eb 0d 40 71 3d 0a d7 a3 70 0d 40 "
+            "55 20 1f f0 eb f9 00 00"
+        ),
+    ),
+    "branch_island_bl_shaped_bytes_before_selector_seed": (
+        0x08005B40,
+        bytes.fromhex(
+            "bd e8 f0 41 35 f0 d4 b8 00 20 1c f0 37 fc 00 00 "
+            "2d e9 f0 43 81 b0 40 f2 f8 05"
+        ),
+    ),
     "probe_change_poweroff_saved_config_pack_caller": (
         0x080396F4,
         bytes.fromhex(
@@ -477,6 +501,26 @@ EXPECTED_METER_SAVED_CONFIG_PACK_CALLER_SEQUENCES = {
             "04 d9 09 e0 90 b2 b0 f5 61 6f 05 d8 80 bd 90 b2 "
             "b0 f5 e1 6f 98 bf 80 bd 55 20 e8 f7 45 fe 00 00"
         ),
+    ),
+}
+EXPECTED_METER_SAVED_CONFIG_PACK_DIRECT_CALLS = [
+    0x08002F8C,
+    0x08002FE2,
+    0x08005B4A,
+    0x0803972E,
+]
+EXPECTED_METER_SAVED_CONFIG_PACK_CALLER_CLASSES = {
+    "0x08002f8c": (
+        "executable housekeeping threshold path; not normal runtime DMM range switching"
+    ),
+    "0x08002fe2": (
+        "direct-BL-shaped bytes inside post-function literal/data region"
+    ),
+    "0x08005b4a": (
+        "direct-BL-shaped bytes in branch island before selector seed function"
+    ),
+    "0x0803972e": (
+        "controlled shutdown/config-save path; not normal runtime DMM range switching"
     ),
 }
 EXPECTED_USART_TX_CONFIG_WRITER_SEQUENCES = {
@@ -1481,14 +1525,13 @@ def verify_meter_saved_config_pack_sequences() -> dict[str, object]:
 
 
 def verify_meter_saved_config_pack_caller_sequences() -> dict[str, object]:
-    """Check the visible stock caller of the saved-config packer.
+    """Check and classify raw stock direct-BL hits to the config packer.
 
-    `probe_change_handler` (`0x080396C8..0x08039734`) increments the
-    auto-power-off/probe-change counter at `ms[0xF6C]`, compares it against
-    15/30/60 minute thresholds, and calls `FUN_080223BC(0x55)` at
-    `0x0803972E` only after the threshold trips.  This proves the guarded
-    packer is reached by controlled shutdown/config-save flow, not by normal
-    runtime DMM range switching.
+    The direct sweep intentionally covers all BL-shaped stock bytes, including
+    literal/branch-island false positives.  That keeps the evidence honest:
+    `0x0803972E` is a controlled shutdown/config-save call, `0x08002F8C`
+    appears in a housekeeping threshold path, and the other two hits are not
+    classified as normal executable DMM range writers.
     """
     checked: dict[str, dict[str, str]] = {}
     for name, (addr, expected) in EXPECTED_METER_SAVED_CONFIG_PACK_CALLER_SEQUENCES.items():
@@ -1502,7 +1545,23 @@ def verify_meter_saved_config_pack_caller_sequences() -> dict[str, object]:
             "addr": f"{addr:#010x}",
             "bytes": actual.hex(" "),
         }
-    return {"sequences": checked}
+    direct_calls = find_direct_thumb_bl_callers(0x080223BC)
+    if direct_calls != EXPECTED_METER_SAVED_CONFIG_PACK_DIRECT_CALLS:
+        raise AssertionError(
+            "FUN_080223BC direct BL-shaped hits drifted: expected "
+            f"{[f'{addr:#010x}' for addr in EXPECTED_METER_SAVED_CONFIG_PACK_DIRECT_CALLS]}, "
+            f"got {[f'{addr:#010x}' for addr in direct_calls]}"
+        )
+    direct_callers = [f"{addr:#010x}" for addr in direct_calls]
+    if sorted(direct_callers) != sorted(EXPECTED_METER_SAVED_CONFIG_PACK_CALLER_CLASSES):
+        raise AssertionError(
+            "saved-config pack caller classifications no longer cover direct hits"
+        )
+    return {
+        "sequences": checked,
+        "direct_callers": direct_callers,
+        "classifications": dict(EXPECTED_METER_SAVED_CONFIG_PACK_CALLER_CLASSES),
+    }
 
 
 def verify_usart_tx_config_writer_meter_case_sequences() -> dict[str, object]:
@@ -1966,6 +2025,8 @@ def main() -> None:
           ", ".join(item["addr"] for item in saved_config_pack["sequences"].values()))
     print("stock meter saved-config pack caller sites: " +
           ", ".join(item["addr"] for item in saved_config_pack_callers["sequences"].values()))
+    print("stock meter saved-config pack direct BL-shaped hits: " +
+          ", ".join(saved_config_pack_callers["direct_callers"]))
     print("stock USART TX config writer meter-case sites: " +
           ", ".join(item["addr"] for item in usart_tx_config_writer["sequences"].values()))
     print("stock USART TX config writer visible callers: " +
