@@ -141,8 +141,13 @@ static void build_segment_frame(uint8_t frame[12],
 
 static bool test_frame_has_voltage_payload_marker(const uint8_t frame[12])
 {
-    return (((frame[8] & 0x7FU) == 0x02U) || ((frame[8] & 0x80U) != 0)) &&
-           frame[9] == 0x00;
+    if (frame[9] != 0x00) {
+        return false;
+    }
+    if ((frame[8] & 0x7FU) == 0x02U) {
+        return true;
+    }
+    return ((frame[8] & 0x80U) != 0) && ((frame[7] & 0x04U) != 0);
 }
 
 static bool test_raw_digits_are_continuity_marker(const uint8_t raw_digits[4])
@@ -1676,6 +1681,31 @@ static int test_dcv_rejects_live_unmarked_frame8_00_regression(void)
     return 1;
 }
 
+static int test_dcv_rejects_live_status20_class_bit_wrong_family(void)
+{
+    /*
+     * Live low-input regression, captured after the 0.05 V / source-off reports:
+     * the producer emitted a stock class-bit frame, but with status 0x20 and
+     * frame[6]=0x4x. The stock-shaped debug formatter moved to unit index 5, and
+     * displaying it as a confident 0.7 V was a frame-family leak, not a decimal
+     * exponent issue.
+     */
+    uint8_t frame[12] = {
+        0x5A, 0xA5, 0x84, 0x0A, 0x0A, 0xEA,
+        0x47, 0x20, 0x80, 0x00, 0x01, 0x3F,
+    };
+
+    meter_data_init();
+    process_frame(frame, 0);
+    ASSERT(!meter_reading.valid);
+    ASSERT(meter_reading.reject_reason == METER_REJECT_WRONG_FRAME_FAMILY);
+    ASSERT(expect_payload_cleared("---"));
+    ASSERT(expect_family_debug(FPGA_METER_FRAME_FAMILY_VOLTAGE,
+                               FPGA_METER_FRAME_FAMILY_VOLTAGE,
+                               METER_REJECT_WRONG_FRAME_FAMILY));
+    return 1;
+}
+
 static int test_frame6_0x40_is_not_a_global_resistance_family_marker(void)
 {
     /*
@@ -2380,6 +2410,7 @@ int main(void)
     TEST(marker_visible_family_mismatch_matrix_clears_stale_payload);
     TEST(unclassified_normal_frames_follow_active_family_only);
     TEST(dcv_rejects_live_unmarked_frame8_00_regression);
+    TEST(dcv_rejects_live_status20_class_bit_wrong_family);
     TEST(frame6_0x40_is_not_a_global_resistance_family_marker);
     TEST(voltage_mode_mains_frame_uses_stock_range_hint);
     TEST(dcv_high_range_frame_stays_voltage_across_current_transition);

@@ -971,6 +971,30 @@ wiring proof boundary. It is not permission to restore decoder coefficients.
   actually near `1.5005 V`, the remaining bug is still upstream of stock
   decimal decoding: frontend writer/apply state, H2/SPI3 acceptance, or missing
   factory/system-file calibration evidence.
+- Low-DCV producer-family threshold boundary: OpenScope app image SHA-256
+  `b00f944242259e14710507c06db96a2690a28c6e7fe44947c5d7566624a796e2`
+  was flashed through guarded HID IAP after `flash_preflight.py hid-app`
+  classified it as `openscope-app` at `0x08004000`. The build string still
+  reported `Build: Jun 6 2026 22:38:57`, so the image SHA and live behavior are
+  the provenance markers for this run. A live low-DCV stream near the user's
+  reported threshold showed the same DCV selector/control state throughout:
+  `seq_word=0514`, `seq_apply=0508`, `PC12=1 PE4=1 PE5=0 PE6=1 PA15=1 PA10=1
+  PB10=0 PB9=0 PA6=0`. With no GPIO or command change, the producer alternated
+  between voltage-marked frames such as
+  `5A A5 E6 AF 4D 0E 0A 00 82 00 01 47` (`raw=8241`,
+  `display=0.8241 V`) and unmarked frames such as
+  `5A A5 E4 2E 63 25 07 00 00 00 01 47` (`reject=1`, display cleared to
+  `---`). User-visible observations in the same sweep were `0.570 V -> ---`
+  and `0.93 V -> 0.9244`. This is not evidence for ohms mode selection: it is
+  evidence that under the current DCV setup the producer crosses between
+  stock-visible voltage-family metadata (`frame[8]=0x82`) and an unmarked frame
+  family (`frame[8]=0x00`) around the low-voltage boundary. The decoder must
+  keep failing closed on `frame[8]=0x00` DCV frames, but it must not reject all
+  `frame[8]=0x82, frame[7]=0x00` frames by magnitude or by `frame[6]` alone:
+  the live `0.93 V` point and the stock 1.5 V rotating fixture use that marked
+  shape. The unresolved fix remains upstream: recover/apply the missing
+  frontend/range/state/calibration source that makes sub-1V DCV produce the
+  correct stock-visible voltage frame, rather than tuning decoder coefficients.
 
 ## Next RE Target
 

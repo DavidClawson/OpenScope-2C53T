@@ -434,10 +434,19 @@ static bool frame_has_voltage_payload_marker(const volatile uint8_t *frame)
      * stock voltage decimal-class bit. Live low-DCV frames can arrive as
      * `0x80` (class bit only) or `0x82` (class bit plus the low DCV marker).
      * Both forms must clear stale current/passive readings when they leak into
-     * the wrong local mode. This is metadata-based fail-closed behavior; it
-     * must not depend on whether the BCD count happens to resemble any unit. */
-    return (((frame[8] & 0x7FU) == 0x02U) || ((frame[8] & 0x80U) != 0)) &&
-           frame[9] == 0x00;
+     * the wrong local mode. Class-bit-only frames also need the DCV formatter
+     * status bit seen on stock/bench voltage frames (`frame[7]=0x24` family);
+     * live low-input wrong-family frames such as `... f6=4x f7=20 f8=80 ...`
+     * drive the stock debug formatter to unit index 5 and are not accepted as
+     * confident volts. This is metadata-based fail-closed behavior; it must not
+     * depend on whether the BCD count happens to resemble any unit. */
+    if (frame[9] != 0x00) {
+        return false;
+    }
+    if ((frame[8] & 0x7FU) == 0x02U) {
+        return true;
+    }
+    return ((frame[8] & 0x80U) != 0) && ((frame[7] & 0x04U) != 0);
 }
 
 static bool raw_digits_are_continuity_marker(const uint8_t raw_digits[4])
