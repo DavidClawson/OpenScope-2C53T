@@ -39,6 +39,27 @@ The firmware binary must be present at:
 (monitor) include @run_2c53t.resc
 ```
 
+### Stock DMM Trace Oracle
+
+For DMM reverse engineering, prefer the trace-only stock runner before any
+hardware-in-loop proxy attempt:
+
+```bash
+cd emulator/renode
+renode --disable-gui run_stock_dmm_trace.resc
+```
+
+`run_stock_dmm_trace.resc` loads the archived stock V1.2.0 app from the repo,
+hooks the recovered DMM selector/mux/formatter entry points, and logs USART2 TX
+frames plus the stock RAM bytes around `ms[0x02]`, `ms[0x03]`,
+`DAT_20001025`, and adjacent formatter state. `stock_dmm_trace.py` only returns
+generic ACK/status transport responses; it does not inject synthetic measured
+voltages and is not evidence that the analog FPGA/DMM frontend is modeled.
+
+Do not connect this runner directly to the real FPGA/ASIC buses. A live proxy
+would need an interposer or another proven way to guarantee that only one
+master drives USART2, SPI3, and the frontend GPIO lines.
+
 ## What to Expect
 
 The emulation will boot the firmware. Since many peripherals (FPGA via USART2,

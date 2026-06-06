@@ -1017,6 +1017,38 @@ wiring proof boundary. It is not permission to restore decoder coefficients.
   marked voltage frame. The remaining blocker is still producer-side state
   before stock decimal decoding: an unrecovered dispatcher/materializer,
   range/frontend writer, ASIC/H2 acceptance path, or factory-calibration source.
+- Low-DCV false-voltage parser hardening: OpenScope app image SHA-256
+  `2b983d96e076064cd1ae0ded505e11e93ecfb786f9e8d7abc630b09daaac94f8`
+  was flashed through guarded HID IAP after `flash_preflight.py hid-app`
+  classified it as an `openscope-app` image at `0x08004000`. The parser no
+  longer accepts bare `frame[8]=0x80` as confident voltage-family metadata:
+  bit 7 remains the stock class-4 decimal exponent only after low bits `0x02`
+  prove the voltage family (`0x82` remains valid for the known good low-DCV
+  fixtures). The live `0.200 V -> 0.4366 V` frame
+  `5A A5 44 8E EF E7 07 24 80 00 01 89` now fails closed in tests as
+  `METER_REJECT_WRONG_FRAME_FAMILY` instead of being blessed as a normal DCV
+  reading.
+
+  The parser also now rejects mixed special/digit segment codes before normal
+  BCD assembly. Only raw digit codes `0..9` enter the numeric path after the
+  explicit OL/blank/continuity terminal cases; codes such as `0x0C..0x14` no
+  longer get clamped into decimal digits. Post-flash live CDC on the current
+  bench state repeatedly produced
+  `5A A5 E4 2E 63 25 07 00 00 00 01 47` with raw digits `0A 0B 0C 0D`; the
+  firmware reported `display=---`, `valid=0`, `bcd_value=0`, and `reject=1`
+  across `meter-trace` and five `meter-dump` polls. This closes the immediate
+  read-function class of false confident voltages from unmarked/special frames.
+  It still does not prove the analog/frontend producer path correct at every
+  low voltage: marked `0x82` frames continue to decode by stock decimal math,
+  while missing marked frames remain a producer/range/calibration problem.
+
+  A stock-in-Renode DMM trace oracle was added under `emulator/renode/` to log
+  stock USART2 command frames and RAM state around `ms[0x02]`, `ms[0x03]`,
+  `DAT_20001025`, and adjacent formatter bytes. It is trace-only, uses generic
+  ACK/status transport responses, and must not be treated as a real analog
+  frontend model or hardware-in-loop proxy. The current host has neither
+  `renode` nor the Python `unicorn` module installed, so this trace path is
+  prepared but not executed in this run.
 
 ## Next RE Target
 

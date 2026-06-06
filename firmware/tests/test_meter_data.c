@@ -100,9 +100,15 @@ static uint8_t segment_nibble_for_code(uint8_t code)
     case 9: return 0xCF;
     case 0x0A: return 0xEE;  /* OL high / continuity marker */
     case 0x0B: return 0x23;  /* OL low */
+    case 0x0C: return 0x65;  /* special */
+    case 0x0D: return 0x27;  /* special */
+    case 0x0E: return 0x61;  /* special */
+    case 0x0F: return 0x04;  /* special */
     case 0x10: return 0x00;  /* blank */
     case 0x11: return 0xE1;  /* partial blank */
     case 0x12: return 0xEC;  /* continuity */
+    case 0x13: return 0xE5;  /* mode-change/special */
+    case 0x14: return 0x24;  /* special */
     case 0xFF: return 0x01;  /* invalid/unmapped */
     default: return 0x01;
     }
@@ -144,10 +150,7 @@ static bool test_frame_has_voltage_payload_marker(const uint8_t frame[12])
     if (frame[9] != 0x00) {
         return false;
     }
-    if ((frame[8] & 0x7FU) == 0x02U) {
-        return true;
-    }
-    return ((frame[8] & 0x80U) != 0) && ((frame[7] & 0x04U) != 0);
+    return (frame[8] & 0x7FU) == 0x02U;
 }
 
 static bool test_raw_digits_are_continuity_marker(const uint8_t raw_digits[4])
@@ -326,14 +329,15 @@ static int test_dcv_live_1v5_rotating_frames_keep_stock_class4(void)
     return 1;
 }
 
-static int test_dcv_live_0200_frame_preserves_stock_math_as_unresolved_frontend(void)
+static int test_dcv_live_0200_bare_class_bit_fails_closed(void)
 {
     /*
      * Live visual check on 2026-06-05: the PSU/load display showed 0.200 V,
-     * while this DCV frame rendered 0.4366 V. Keep that mismatch visible here:
-     * stock-visible decoder math is still raw 4366 / 10^4 from frame[8].7.
-     * Correcting the physical 0.200 V case belongs in recovered frontend/range
-     * or factory-calibration state, not in a one-point display coefficient.
+     * while this bare-class-bit DCV frame rendered 0.4366 V. Good low-DCV
+     * frames recovered so far use frame[8]=0x82; this frame only has the
+     * exponent bit 0x80. The exponent bit is not enough voltage-family proof,
+     * so the parser fails closed instead of turning producer-state leakage into
+     * a confident wrong voltage.
      */
     static const uint8_t frame[12] = {
         0x5A, 0xA5, 0x44, 0x8E, 0xEF, 0xE7,
@@ -343,15 +347,11 @@ static int test_dcv_live_0200_frame_preserves_stock_math_as_unresolved_frontend(
     meter_data_init();
     process_frame(frame, 0);
 
-    ASSERT(meter_reading.valid);
-    ASSERT(meter_reading.result_class == METER_RESULT_NORMAL);
-    ASSERT(meter_reading.bcd_value == 4366);
-    ASSERT(meter_reading.decimal_pos == 1);
-    ASSERT_STR_EQ(meter_reading.display_str, "0.4366");
-    ASSERT_STR_EQ(meter_reading.unit_suffix, "V");
-    ASSERT(close_to(meter_reading.value, 0.4366f, 0.0001f));
-    ASSERT(!close_to(meter_reading.value, 0.2000f, 0.05f));
-    ASSERT((meter_reading.dbg_frame[2] & 0x08U) == 0);
+    ASSERT(!meter_reading.valid);
+    ASSERT(meter_reading.result_class == METER_RESULT_NONE);
+    ASSERT(meter_reading.reject_reason == METER_REJECT_WRONG_FRAME_FAMILY);
+    ASSERT(expect_payload_cleared("---"));
+    ASSERT((meter_reading.dbg_frame[8] & 0x7FU) == 0);
     ASSERT((meter_reading.dbg_frame[8] & 0x80U) != 0);
     return 1;
 }
@@ -664,7 +664,7 @@ static int test_acv_rejects_live_low_dcv_status24_without_frequency_hint(void)
     ASSERT(expect_payload_cleared("---"));
     ASSERT(expect_family_debug((uint8_t)FPGA_METER_FRAME_FAMILY_VOLTAGE,
                                (uint8_t)FPGA_METER_FRAME_FAMILY_VOLTAGE,
-                               METER_REJECT_MISSING_AC_EVIDENCE));
+                               METER_REJECT_WRONG_FRAME_FAMILY));
     return 1;
 }
 
@@ -1039,7 +1039,7 @@ static int test_state_machine_property_matrix_covers_all_submodes(void)
     uint8_t voltage_frame[12];
     uint8_t low_dcv_frame[12] = {
         0x5A, 0xA5, 0x44, 0x8E, 0xEF, 0xE7,
-        0x07, 0x24, 0x80, 0x00, 0x01, 0x89,
+        0x07, 0x24, 0x82, 0x00, 0x01, 0x89,
     };
     uint8_t ac_voltage_frame[12];
     uint8_t current_frame[12];
@@ -1174,7 +1174,7 @@ static int test_goal_surface_property_enumerates_dmm_state_machine(void)
     unsigned stale_transition_pairs = 0;
     uint8_t low_dcv_frame[12] = {
         0x5A, 0xA5, 0x44, 0x8E, 0xEF, 0xE7,
-        0x07, 0x24, 0x80, 0x00, 0x01, 0x89,
+        0x07, 0x24, 0x82, 0x00, 0x01, 0x89,
     };
     uint8_t continuity_marker[12];
     uint8_t frame[12];
@@ -1477,7 +1477,7 @@ static int test_transition_phase_marker_frames_follow_destination_state(void)
     };
     uint8_t low_dcv_frame[12] = {
         0x5A, 0xA5, 0x44, 0x8E, 0xEF, 0xE7,
-        0x07, 0x24, 0x80, 0x00, 0x01, 0x89,
+        0x07, 0x24, 0x82, 0x00, 0x01, 0x89,
     };
     uint8_t continuity_frame[12];
     const struct marker_case markers[] = {
@@ -1559,7 +1559,7 @@ static int test_marker_visible_family_mismatch_matrix_clears_stale_payload(void)
     };
     uint8_t low_dcv_frame[12] = {
         0x5A, 0xA5, 0x44, 0x8E, 0xEF, 0xE7,
-        0x07, 0x24, 0x80, 0x00, 0x01, 0x89,
+        0x07, 0x24, 0x82, 0x00, 0x01, 0x89,
     };
     uint8_t continuity_frame[12];
     const struct marker_case markers[] = {
@@ -1703,6 +1703,36 @@ static int test_dcv_rejects_live_status20_class_bit_wrong_family(void)
     ASSERT(expect_family_debug(FPGA_METER_FRAME_FAMILY_VOLTAGE,
                                FPGA_METER_FRAME_FAMILY_VOLTAGE,
                                METER_REJECT_WRONG_FRAME_FAMILY));
+    return 1;
+}
+
+static int test_mixed_special_voltage_digits_do_not_become_numeric_dcv(void)
+{
+    uint8_t frame[12];
+
+    /*
+     * The segment lookup's 0x0C..0x14 outputs are not decimal digits. A mixed
+     * special/digit frame can otherwise look plausibly numeric after the old
+     * clamp-to-zero path, especially in DCV where frame[8] may legitimately
+     * carry voltage metadata. This guards the read function itself: only 0..9
+     * enter the normal BCD assembly path after the explicit OL/blank/continuity
+     * terminal cases above it.
+     */
+    build_segment_frame(frame, 1, 2, 0x0C, 3,
+                        0x00, 0x00, 0x82, 0x00, 0);
+
+    meter_data_init();
+    process_frame(frame, 0);
+    ASSERT(meter_reading.valid);
+    ASSERT(meter_reading.result_class == METER_RESULT_INVALID);
+    ASSERT_STR_EQ(meter_reading.display_str, "ERR");
+    ASSERT_STR_EQ(meter_reading.unit_suffix, "");
+    ASSERT(meter_reading.bcd_value == 0);
+    ASSERT(close_to(meter_reading.value, 0.0f, 0.001f));
+    ASSERT(meter_reading.dbg_raw_digits[0] == 1);
+    ASSERT(meter_reading.dbg_raw_digits[1] == 2);
+    ASSERT(meter_reading.dbg_raw_digits[2] == 0x0C);
+    ASSERT(meter_reading.dbg_raw_digits[3] == 3);
     return 1;
 }
 
@@ -2380,7 +2410,7 @@ int main(void)
     TEST(dcv_1v4979_frame_uses_stock_extended_raw_and_class4);
     TEST(dcv_live_1v5_frame_uses_stock_extended_raw_and_class4);
     TEST(dcv_live_1v5_rotating_frames_keep_stock_class4);
-    TEST(dcv_live_0200_frame_preserves_stock_math_as_unresolved_frontend);
+    TEST(dcv_live_0200_bare_class_bit_fails_closed);
     TEST(dcv_stock_range_class_priority_table);
     TEST(dcv_stock_range_class_priority_all_bit_combinations);
     TEST(dcv_class4_priority_requires_frame8_bit7);
@@ -2411,6 +2441,7 @@ int main(void)
     TEST(unclassified_normal_frames_follow_active_family_only);
     TEST(dcv_rejects_live_unmarked_frame8_00_regression);
     TEST(dcv_rejects_live_status20_class_bit_wrong_family);
+    TEST(mixed_special_voltage_digits_do_not_become_numeric_dcv);
     TEST(frame6_0x40_is_not_a_global_resistance_family_marker);
     TEST(voltage_mode_mains_frame_uses_stock_range_hint);
     TEST(dcv_high_range_frame_stays_voltage_across_current_transition);

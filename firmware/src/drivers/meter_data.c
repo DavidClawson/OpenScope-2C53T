@@ -429,30 +429,29 @@ static void meter_stock_fsm_reset(uint8_t stock_mode)
 
 static bool frame_has_voltage_payload_marker(const volatile uint8_t *frame)
 {
-    /* Stock USART2 DMM frames carry voltage family metadata in frame[8]:
-     * `0x02` for common DCV-class payloads, and bit 7 as the highest-priority
-     * stock voltage decimal-class bit. Live low-DCV frames can arrive as
-     * `0x80` (class bit only) or `0x82` (class bit plus the low DCV marker).
-     * Both forms must clear stale current/passive readings when they leak into
-     * the wrong local mode. Class-bit-only frames also need the DCV formatter
-     * status bit seen on stock/bench voltage frames (`frame[7]=0x24` family);
-     * live low-input wrong-family frames such as `... f6=4x f7=20 f8=80 ...`
-     * drive the stock debug formatter to unit index 5 and are not accepted as
-     * confident volts. This is metadata-based fail-closed behavior; it must not
-     * depend on whether the BCD count happens to resemble any unit. */
+    /* Stock USART2 DMM frames carry voltage family metadata in frame[8].
+     * The recovered confident voltage marker is low bits `0x02`; bit 7 is the
+     * highest-priority stock decimal-class bit, not sufficient family evidence
+     * by itself. The live low-DCV false positives that triggered this pass were
+     * bare `0x80` class-bit frames, while good low-DCV captures use `0x82`
+     * (family marker plus class bit). Treating `0x80` alone as volts turns
+     * wrong-family/special producer state into plausible DC readings. */
     if (frame[9] != 0x00) {
         return false;
     }
-    if ((frame[8] & 0x7FU) == 0x02U) {
-        return true;
-    }
-    return ((frame[8] & 0x80U) != 0) && ((frame[7] & 0x04U) != 0);
+    return (frame[8] & 0x7FU) == 0x02U;
 }
 
 static bool raw_digits_are_continuity_marker(const uint8_t raw_digits[4])
 {
     return raw_digits[1] == 0x12 && raw_digits[2] == 0x0A &&
            raw_digits[3] == 5;
+}
+
+static bool raw_digits_are_all_bcd(const uint8_t raw_digits[4])
+{
+    return raw_digits[0] <= 9 && raw_digits[1] <= 9 &&
+           raw_digits[2] <= 9 && raw_digits[3] <= 9;
 }
 
 static uint8_t observed_frame_family(uint8_t expected_family,
@@ -473,11 +472,12 @@ static bool voltage_frame_missing_required_marker(const meter_reading_t *r,
      * Live low-DCV failure boundary:
      * 5A A5 CC 47 FE EB 47 20 00 00 01 3C repeatedly decoded to a confident
      * 154 V reading even though frame[8]/frame[9] carried no stock-visible
-     * voltage metadata. Stock evidence and fixtures expose voltage payloads as
-     * frame[8]=0x02, 0x80, or 0x82 with frame[9]=0. A voltage-mode frame without
-     * that marker is an upstream producer/apply/calibration problem, not a
-     * decoder default; fail closed so wrong-family frames cannot masquerade as
-     * sane DCV/ACV readings.
+     * voltage metadata. Stock evidence and fixtures expose confident voltage
+     * payloads as frame[8]=0x02 or 0x82 with frame[9]=0; bare 0x80 only proves
+     * the class-4 decimal exponent if the frame is already voltage-family. A
+     * voltage-mode frame without the low-bit marker is an upstream
+     * producer/apply/calibration problem, not a decoder default; fail closed so
+     * wrong-family frames cannot masquerade as sane DCV/ACV readings.
      */
     return r->expected_frame_family == FPGA_METER_FRAME_FAMILY_VOLTAGE &&
            !frame_has_voltage_payload_marker(frame);
@@ -1286,25 +1286,36 @@ void meter_data_process_frame(const volatile uint8_t *frame, uint8_t submode)
         return;
     }
 
+    if (!raw_digits_are_all_bcd(r->dbg_raw_digits)) {
+        /*
+         * The segment lookup returns real digit values only for 0..9. Other
+         * stock-visible codes represent OL glyphs, blanks, continuity icons,
+         * mode-change/special states, or unmapped patterns. The terminal cases
+         * above handle the known complete glyph families; any remaining mixed
+         * special/digit frame is not a numeric payload. Do not clamp those
+         * codes into decimal digits, because that turns transient meter-ASIC
+         * state into confident-looking voltages such as the low-DCV live
+         * failures the user is seeing.
+         */
+        meter_clear_payload(r);
+        r->result_class = METER_RESULT_INVALID;
+        strcpy(r->display_str, "ERR");
+        METER_FINISH_FRAME();
+        return;
+    }
+
+    /* --- Normal BCD value --- */
+
     if (resistance_low_ohm_calibration_unresolved(submode, flags)) {
         r->reject_reason = METER_REJECT_UNRESOLVED_CALIBRATION;
         METER_REJECT_FRAME();
         return;
     }
 
-    /* --- Normal BCD value --- */
-
-    /* Mask off special code high bits for assembly */
-    uint8_t d0 = (digit0 >= 0x10) ? (digit0 - 0x10) : digit0;
-    uint8_t d1 = (digit1 >= 0x10) ? (digit1 - 0x10) : digit1;
-    uint8_t d2 = (digit2 >= 0x10) ? (digit2 - 0x10) : digit2;
-    uint8_t d3 = (digit3 >= 0x10) ? (digit3 - 0x10) : digit3;
-
-    /* Clamp individual digits to valid BCD range */
-    if (d0 > 9) d0 = 0;
-    if (d1 > 9) d1 = 0;
-    if (d2 > 9) d2 = 0;
-    if (d3 > 9) d3 = 0;
+    uint8_t d0 = digit0;
+    uint8_t d1 = digit1;
+    uint8_t d2 = digit2;
+    uint8_t d3 = digit3;
 
     r->digits[0] = d0;
     r->digits[1] = d1;
