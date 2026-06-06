@@ -142,6 +142,14 @@ raw extension: `4977` becomes `14977`, then `frame[8].7` selects class `4` and
 renders `1.4977 V`. The local port does not infer a multiplier from the numeric
 digits, and it does not use a one-point low-voltage coefficient.
 
+The same rule now has an executable aux-byte invariance guard in
+`firmware/tests/test_meter_data.c`: DCV frames vary `[10..11]` across
+`0000`, the empirical line-frequency-like `0031`, and live blocker/range values
+such as `014E`, `017F`, and `03FF` while holding the same stock range-bit class
+decision. The decoded value must remain `extended_raw / 10^class`. These bytes
+may be surfaced as auxiliary evidence where stock/live traces justify it, but
+they are not a hidden DCV range or low-voltage calibration selector.
+
 ## Local Port
 
 `firmware/src/drivers/meter_data.c` now has a single stock-style DMM display

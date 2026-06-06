@@ -488,6 +488,65 @@ static int test_dcv_extra_frequency_hint_does_not_set_voltage_range(void)
     return 1;
 }
 
+static int test_dcv_aux_extra_bytes_do_not_change_stock_range_class(void)
+{
+    static const char *display_no_extend[] = {
+        "5008", "500.8", "50.08", "5.008", "0.5008"
+    };
+    static const char *display_extend[] = {
+        "15008", "1500.8", "150.08", "15.008", "1.5008"
+    };
+    static const float expected_no_extend[] = {
+        5008.0f, 500.8f, 50.08f, 5.008f, 0.5008f
+    };
+    static const float expected_extend[] = {
+        15008.0f, 1500.8f, 150.08f, 15.008f, 1.5008f
+    };
+    static const uint16_t extra_cases[] = {
+        0x0000, 0x0031, 0x014E, 0x017F, 0x03FF, 0xFFFF
+    };
+
+    for (uint8_t bits = 0; bits < 16; bits++) {
+        uint8_t expected_class =
+            (bits & 0x8U) ? 4U :
+            (bits & 0x4U) ? 3U :
+            (bits & 0x2U) ? 2U :
+            (bits & 0x1U) ? 1U : 0U;
+
+        for (uint8_t extend = 0; extend < 2; extend++) {
+            for (unsigned i = 0; i < sizeof(extra_cases) / sizeof(extra_cases[0]); i++) {
+                uint8_t frame[12];
+
+                build_segment_frame(frame, 5, 0, 0, 8,
+                                    0x00, 0x00, 0x02, 0x00, extra_cases[i]);
+                if (bits & 0x1U) frame[5] |= 0x10U;
+                if (bits & 0x2U) frame[4] |= 0x10U;
+                if (bits & 0x4U) frame[3] |= 0x10U;
+                if (bits & 0x8U) frame[8] |= 0x80U;
+                if (extend) frame[2] |= 0x08U;
+
+                meter_data_init();
+                process_frame(frame, 0);
+
+                ASSERT(meter_reading.valid);
+                ASSERT(meter_reading.result_class == METER_RESULT_NORMAL);
+                ASSERT(meter_reading.bcd_value == (extend ? 15008 : 5008));
+                ASSERT_STR_EQ(meter_reading.display_str,
+                              extend ? display_extend[expected_class]
+                                     : display_no_extend[expected_class]);
+                ASSERT_STR_EQ(meter_reading.unit_suffix, "V");
+                ASSERT(close_to(meter_reading.value,
+                                extend ? expected_extend[expected_class]
+                                       : expected_no_extend[expected_class],
+                                0.0003f));
+                ASSERT(meter_reading.dbg_frame[10] == (uint8_t)(extra_cases[i] >> 8));
+                ASSERT(meter_reading.dbg_frame[11] == (uint8_t)extra_cases[i]);
+            }
+        }
+    }
+    return 1;
+}
+
 static int test_dcv_7005_without_class_bits_stays_class0(void)
 {
     uint8_t frame[12];
@@ -1660,6 +1719,7 @@ int main(void)
     TEST(dcv_class4_priority_requires_frame8_bit7);
     TEST(dcv_synthetic_5008_without_class_bits_stays_class0);
     TEST(dcv_extra_frequency_hint_does_not_set_voltage_range);
+    TEST(dcv_aux_extra_bytes_do_not_change_stock_range_class);
     TEST(dcv_7005_without_class_bits_stays_class0);
     TEST(dcv_range_frames_are_not_latched_from_acv_mains);
     TEST(acv_mains_frame_uses_high_voltage_scale_and_frequency);

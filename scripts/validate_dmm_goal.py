@@ -176,6 +176,7 @@ def verify_state_machine_property_contract() -> dict[str, Any]:
         "invalidate_clears_stale_payload_for_every_ordered_mode_transition",
         "marker_visible_family_mismatch_matrix_clears_stale_payload",
         "voltage_payload_clears_stale_reading_in_all_non_voltage_modes",
+        "dcv_aux_extra_bytes_do_not_change_stock_range_class",
         "large_current_submodes_use_active_local_range_state",
         "current_submodes_do_not_expose_unproven_microamp_unit",
     ]
@@ -187,6 +188,9 @@ def verify_state_machine_property_contract() -> dict[str, Any]:
             r"for \(uint8_t bits = 0; bits < 16; bits\+\+\)",
         "range class +10000 extension is covered":
             r"for \(uint8_t extend = 0; extend < 2; extend\+\+\)",
+        "dcv auxiliary extra bytes are varied independently":
+            r"static const uint16_t extra_cases\[\]\s*=\s*"
+            r"\{\s*0x0000,\s*0x0031,\s*0x014E,\s*0x017F,\s*0x03FF,\s*0xFFFF\s*\};",
         "ordered source submodes are exhaustive":
             r"for \(uint8_t source = 0; source < FPGA_METER_LOCAL_SUBMODE_COUNT; source\+\+\)",
         "ordered destination submodes are exhaustive":
@@ -202,6 +206,8 @@ def verify_state_machine_property_contract() -> dict[str, Any]:
         "0.4366",
         "0.2000f",
         "one-point display coefficient",
+        "dbg_frame[10]",
+        "dbg_frame[11]",
         "FPGA_METER_FRAME_FAMILY_CONTINUITY",
         "uA",
     ]
