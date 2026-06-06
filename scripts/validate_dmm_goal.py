@@ -282,10 +282,9 @@ def verify_meter_aux_afe_pin_policy() -> dict[str, Any]:
         raise GateError("could not locate fpga_set_meter_frontend_for_submode block")
     body = match.group("body")
     required_body = [
-        "PB9/PA6 auxiliary AFE controls are stock-configured as outputs",
-        "current stock\n     * xrefs do not recover a BOP/BCR level write",
-        "GPIOB->clr = (1U << 9);",
-        "GPIOA->clr = (1U << 6);",
+        "Invalid local submodes still apply the baseline state",
+        "(void)fpga_meter_mux_gpio_state_for_submode(submode, &mux_state);",
+        "fpga_apply_meter_mux_gpio_state(&mux_state);",
     ]
     missing_body = [snippet for snippet in required_body if snippet not in body]
     forbidden_body = [
@@ -299,6 +298,10 @@ def verify_meter_aux_afe_pin_policy() -> dict[str, Any]:
         "no stock BOP/BCR level write has been recovered",
         "GPIOB->clr = (1U << 9);",
         "GPIOA->clr = (1U << 6);",
+        "static void fpga_apply_meter_mux_gpio_state",
+        "fpga_gpio_write_level(GPIOB, (1U << 9), state->pb9);",
+        "fpga_gpio_write_level(GPIOA, (1U << 6), state->pa6);",
+        "production writes cannot\n     * drift away from the state-machine table",
     ]
     missing_file = [snippet for snippet in required_file if snippet not in text]
     if missing_body or stale_body or missing_file:
@@ -804,6 +807,8 @@ def verify_re_coverage() -> dict[str, Any]:
         "Mux GPIO State Projection Guard", "fpga_meter_mux_gpio_state_for_submode",
         "Final projected levels", "Stock slot 0 projection",
         "Local split, no extra stock slot recovered",
+        "production DMM frontend apply path now",
+        "tested state-machine table and hardware-facing writes cannot",
         "runtime mux-state writer guard", "0x08001EE8", "0x0801A526",
         "mux-state RAM-map boundary", "DAT_200000fa (25 refs)",
         "DAT_200000fb (11 refs)", "function-level refs",

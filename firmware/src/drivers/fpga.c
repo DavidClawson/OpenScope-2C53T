@@ -1173,174 +1173,53 @@ fpga_meter_selector_t fpga_meter_expected_selectors(uint8_t submode)
     return selectors;
 }
 
-static void fpga_apply_meter_portc_porte_mux(uint8_t mux)
+static void fpga_gpio_write_level(gpio_type *gpio, uint32_t mask, uint8_t high)
 {
-    /*
-     * Analog frontend mux projection, Port C/E half.
-     * The source-of-truth stock path is the recovered gpio_mux_portc_porte()
-     * writer fed by meter state byte ms[0x02]. These writes touch AT32 GPIO
-     * BOP/BCR aliases (`scr`/`clr`) directly: PC12 and PE4/PE5/PE6 select
-     * which probe/AFE path is exposed to the meter IC. The mux value is a stock
-     * selector-family index projected by fpga_meter_plan; current range and the
-     * cap/temp split are not treated as separate hardware truth until a stock
-     * writer or live trace proves extra state.
-     */
-    switch (mux) {
-    case 0:
-        GPIOC->scr = (1U << 12);
-        GPIOE->clr = (1U << 5);
-        GPIOE->scr = (1U << 6);
-        break;
-    case 1:
-        GPIOC->scr = (1U << 12);
-        GPIOE->scr = (1U << 6);
-        break;
-    case 2:
-        GPIOC->scr = (1U << 12);
-        GPIOE->scr = (1U << 5);
-        GPIOE->clr = (1U << 6);
-        break;
-    case 3:
-        GPIOC->scr = (1U << 12);
-        GPIOE->scr = (1U << 4);
-        GPIOE->clr = (1U << 6);
-        break;
-    case 4:
-        GPIOC->scr = (1U << 12);
-        GPIOE->scr = (1U << 5);
-        GPIOE->clr = (1U << 6);
-        break;
-    case 5:
-        GPIOC->clr = (1U << 12);
-        GPIOE->clr = (1U << 5);
-        GPIOE->scr = (1U << 6);
-        break;
-    case 6:
-        GPIOC->clr = (1U << 12);
-        GPIOE->scr = (1U << 6);
-        break;
-    case 7:
-        GPIOC->clr = (1U << 12);
-        GPIOE->clr = (1U << 4);
-        GPIOE->scr = (1U << 6);
-        break;
-    case 8:
-        GPIOC->clr = (1U << 12);
-        GPIOE->scr = (1U << 4);
-        GPIOE->clr = (1U << 6);
-        break;
-    case 9:
-        GPIOC->clr = (1U << 12);
-        GPIOE->scr = (1U << 5);
-        GPIOE->clr = (1U << 6);
-        break;
-    default:
-        break;
+    if (high) {
+        gpio->scr = mask;
+    } else {
+        gpio->clr = mask;
     }
 }
 
-static void fpga_apply_meter_porta_portb_mux(uint8_t mux)
+static void fpga_apply_meter_mux_gpio_state(const fpga_meter_mux_gpio_state_t *state)
 {
     /*
-     * Analog frontend mux projection, Port A/B half.
-     * The stock counterpart writes PA15, PA10, PB10, and PB11 from meter state
-     * byte ms[0x03]. PB11 is also the FPGA active-measurement gate, so this is
-     * deliberately sequenced before the 0x05xx USART selector words below.
-     * Because no recovered stock path distinguishes AC A/uA or cap/temp with an
-     * additional ms[0x03] value, shared stock slots keep shared mux state here.
+     * Analog frontend mux projection. The recovered stock GPIO writers
+     * FUN_080018a4 and FUN_08001a58 consume ms[0x02]/ms[0x03] and write
+     * PC12/PE4/PE5/PE6 plus PA15/PA10/PB10/PB11. The open firmware applies the
+     * tested fpga_meter_plan projection directly so production writes cannot
+     * drift away from the state-machine table. PB9/PA6 remain low because stock
+     * currently proves output configuration only, not mode-specific assertion.
      */
-    switch (mux) {
-    case 0:
-        GPIOA->scr = (1U << 15);
-        GPIOB->scr = PB11_MASK;
-        GPIOB->clr = (1U << 10);
-        GPIOA->scr = (1U << 10);
-        break;
-    case 1:
-        GPIOA->scr = (1U << 15);
-        GPIOB->scr = (1U << 10);
-        GPIOA->scr = (1U << 10);
-        break;
-    case 2:
-        GPIOB->clr = PB11_MASK;
-        GPIOA->scr = (1U << 15);
-        GPIOB->scr = (1U << 10);
-        GPIOA->clr = (1U << 10);
-        break;
-    case 3:
-        GPIOA->scr = (1U << 15);
-        GPIOB->scr = PB11_MASK;
-        GPIOB->clr = (1U << 10);
-        GPIOA->clr = (1U << 10);
-        break;
-    case 4:
-        GPIOA->scr = (1U << 15);
-        GPIOB->scr = (1U << 10);
-        GPIOA->clr = (1U << 10);
-        break;
-    case 5:
-        GPIOA->clr = (1U << 15);
-        GPIOB->scr = PB11_MASK;
-        GPIOB->clr = (1U << 10);
-        GPIOA->scr = (1U << 10);
-        break;
-    case 6:
-        GPIOA->clr = (1U << 15);
-        GPIOB->scr = (1U << 10);
-        GPIOA->scr = (1U << 10);
-        break;
-    case 7:
-        GPIOB->clr = PB11_MASK;
-        GPIOA->clr = (1U << 15);
-        GPIOB->scr = (1U << 10);
-        GPIOA->scr = (1U << 10);
-        break;
-    case 8:
-        GPIOA->clr = (1U << 15);
-        GPIOB->scr = PB11_MASK;
-        GPIOB->clr = (1U << 10);
-        GPIOA->clr = (1U << 10);
-        break;
-    case 9:
-        GPIOA->clr = (1U << 15);
-        GPIOB->scr = (1U << 10);
-        GPIOA->clr = (1U << 10);
-        break;
-    default:
-        break;
-    }
+    fpga_gpio_write_level(GPIOC, (1U << 12), state->pc12);
+    fpga_gpio_write_level(GPIOE, (1U << 4), state->pe4);
+    fpga_gpio_write_level(GPIOE, (1U << 5), state->pe5);
+    fpga_gpio_write_level(GPIOE, (1U << 6), state->pe6);
+    fpga_gpio_write_level(GPIOA, (1U << 15), state->pa15);
+    fpga_gpio_write_level(GPIOA, (1U << 10), state->pa10);
+    fpga_gpio_write_level(GPIOB, (1U << 10), state->pb10);
+    fpga_gpio_write_level(GPIOB, PB11_MASK, state->pb11);
+    fpga_gpio_write_level(GPIOB, (1U << 9), state->pb9);
+    fpga_gpio_write_level(GPIOA, (1U << 6), state->pa6);
 }
 
 static void fpga_set_meter_frontend_for_submode(uint8_t submode)
 {
-    fpga_meter_transition_plan_t plan =
-        fpga_meter_transition_plan_for_submode(submode);
+    fpga_meter_mux_gpio_state_t mux_state;
 
     GPIOB->scr = PB11_MASK;
     GPIOC->scr = PC6_MASK;
     GPIOC->scr = (1U << 11);
 
     /*
-     * PB9/PA6 auxiliary AFE controls are stock-configured as outputs during
-     * master init (`0x080241D4` PB9, `0x080241E2` PA6), but current stock
-     * xrefs do not recover a BOP/BCR level write for either pin. Match the
-     * reset/output-low state in DMM frontend setup instead of asserting an
-     * invented "analog enable" high level; if a later stock trace proves a
-     * mode-specific level, put it in the table-driven transition plan.
+     * Invalid local submodes still apply the baseline state returned by the
+     * model, then emit no selector/apply word in the transition path. That
+     * keeps the hardware side fail-closed instead of falling through to a
+     * fabricated frontend split.
      */
-    GPIOB->clr = (1U << 9);
-    GPIOA->clr = (1U << 6);
-
-    GPIOC->scr = (1U << 12);
-    GPIOE->scr = (1U << 4);
-    GPIOE->clr = (1U << 5);
-    GPIOE->scr = (1U << 6);
-    GPIOA->scr = (1U << 15);
-    GPIOA->scr = (1U << 10);
-    GPIOB->clr = (1U << 10);
-
-    fpga_apply_meter_portc_porte_mux(plan.portc_porte_mux);
-    fpga_apply_meter_porta_portb_mux(plan.porta_portb_mux);
+    (void)fpga_meter_mux_gpio_state_for_submode(submode, &mux_state);
+    fpga_apply_meter_mux_gpio_state(&mux_state);
 }
 
 static void fpga_send_meter_wake_preamble(void)

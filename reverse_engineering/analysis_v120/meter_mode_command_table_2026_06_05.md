@@ -942,10 +942,16 @@ Final projected levels for the local DMM submodes are:
 | 10 Temperature | 5 | 0 | 1 | 0 | 1 | 0 | 1 | 0 | 1 | 0 | 0 | Local split, no extra stock slot recovered |
 
 This is a mux GPIO state projection guard: it makes the current stock-slot
-projection explicit and testable, but it remains a policy boundary. No
-currently recovered DMM branch proves a separate runtime writer for small/A
-current, capacitance/temperature, or a low-DCV physical range. A future change
-must update the stock-offset evidence, this table, and the unit tests together
+projection explicit and testable, and the production DMM frontend apply path now
+uses this same `fpga_meter_mux_gpio_state_for_submode` model before writing GPIO
+BOP/BCR registers. That removes the earlier duplicated switch body in
+`fpga.c`, so the tested state-machine table and hardware-facing writes cannot
+silently diverge.
+
+The projection still remains a policy boundary. No currently recovered DMM
+branch proves a separate runtime writer for small/A current,
+capacitance/temperature, or a low-DCV physical range. A future change must
+update the stock-offset evidence, this table, and the unit tests together
 instead of reacting to a surprising reading with decoder-side coefficients.
 
 ### Auxiliary AFE PB9/PA6 Guard, 2026-06-06
@@ -955,7 +961,7 @@ but the current stock xrefs show no recovered stock BOP/BCR level write for
 either pin. The guarded stock bytes are:
 
 ```text
-0x080241D4 auxiliary AFE PB9/PA6 output config:
+0x080241D4 auxiliary AFE PB9 output config; 0x080241E2 PA6 output config:
   4f f4 00 70 18 90 28 46 21 46 0c f0 8d f8
   40 20 18 90 40 f6 00 00 c4 f2 01 00 21 46 0c f0 84 f8
 ```
@@ -973,11 +979,12 @@ _DAT_40010810 = 0x40   ; PA6 set high
 _DAT_40010814 = 0x40   ; PA6 set low
 ```
 
-So this is configuration evidence only. The open firmware now keeps PB9/PA6 in
-the stock-reset/output-low state in DMM frontend setup instead of asserting the
-old bench-inferred high level. If a later stock trace proves mode-specific
-PB9/PA6 levels, that evidence must update the table-driven transition plan and
-this guard together.
+So this is configuration evidence only. The open firmware now applies PB9/PA6
+through the same tested mux GPIO state model as the recovered stock slot pins,
+and that table keeps them in the stock-reset/output-low state instead of
+asserting the old bench-inferred high level. If a later stock trace proves
+mode-specific PB9/PA6 levels, that evidence must update the table-driven
+transition plan and this guard together.
 
 ### Runtime Mux-State Writer Guard, 2026-06-06
 

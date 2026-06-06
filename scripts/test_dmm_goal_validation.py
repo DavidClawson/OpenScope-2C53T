@@ -236,6 +236,18 @@ class DmmGoalValidationTests(unittest.TestCase):
         self.assertIn("Detect BCD overflow", result["forbidden"])
         self.assertIn("send higher range params", result["forbidden"])
 
+    def test_meter_aux_afe_policy_uses_mux_state_model(self) -> None:
+        result = validate_dmm_goal.verify_meter_aux_afe_pin_policy()
+        self.assertEqual(result["checked"], "firmware/src/drivers/fpga.c")
+        self.assertIn(
+            "fpga_apply_meter_mux_gpio_state(&mux_state);",
+            result["required_body"],
+        )
+        self.assertIn(
+            "fpga_gpio_write_level(GPIOB, (1U << 9), state->pb9);",
+            result["required_file"],
+        )
+
     def test_no_ocr_pipeline_guard_is_active(self) -> None:
         result = validate_dmm_goal.verify_no_ocr_pipeline()
 
