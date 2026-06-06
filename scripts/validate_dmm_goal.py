@@ -514,6 +514,59 @@ def verify_meter_transition_production_contract() -> dict[str, Any]:
     }
 
 
+def verify_meter_apply_pair_production_comment() -> dict[str, Any]:
+    """Ensure stock-derived apply words stay documented at their use site."""
+    rel = "firmware/src/drivers/fpga_meter_plan.c"
+    text = (REPO / rel).read_text(encoding="utf-8", errors="replace")
+    match = re.search(
+        r"bool fpga_meter_stock_apply_cmd_word_for_submode"
+        r"\(uint8_t submode, uint16_t \*word\)"
+        r"(?P<body>[\s\S]*?)\n}\n\nfpga_meter_frame_family_t",
+        text,
+    )
+    if match is None:
+        raise GateError("could not locate meter stock apply-word helper")
+    body = match.group("body")
+    required_body = [
+        "Stock V1.2.0 dynamic raw-word helper boundary",
+        "0x08006120 gates and masks",
+        "0x08006194 / 0x0800626A choose low-byte pairs",
+        "0x08006288 emits 0x0500 | low",
+        "ACV 0x0C/0x0D",
+        "DCA 0x17/0x0E",
+        "continuity 0x11/0x16",
+        "diode 0x10/0x15",
+        "no recovered",
+        "DCV",
+        "ACA",
+        "resistance",
+        "capacitance",
+        "temperature",
+        "microamp",
+        "must not be filled from the parsed numeric value",
+        "one-point live observations",
+        "local range guesses",
+    ]
+    forbidden_body = [
+        "looks like",
+        "raw_bcd",
+        "display_value",
+        "magnitude-based",
+    ]
+    missing_body = [snippet for snippet in required_body if snippet not in body]
+    stale_body = [snippet for snippet in forbidden_body if snippet in body]
+    if missing_body or stale_body:
+        raise GateError(
+            "meter apply-word production comment drifted from stock boundary: "
+            f"missing_body={missing_body} stale_body={stale_body}"
+        )
+    return {
+        "checked": rel,
+        "required_body": required_body,
+        "forbidden_body": forbidden_body,
+    }
+
+
 def verify_no_magnitude_range_feedback() -> dict[str, Any]:
     """Ensure production DMM frontend code does not suggest value-shaped ranging."""
     checked: dict[str, str] = {}
@@ -1373,6 +1426,7 @@ def main(argv: list[str] | None = None) -> int:
         report["meter_expected_selector_plan_word"] = verify_meter_expected_selector_uses_plan_word()
         report["meter_sequence_tail_transition_plan"] = verify_meter_sequence_tail_uses_transition_plan()
         report["meter_transition_production_contract"] = verify_meter_transition_production_contract()
+        report["meter_apply_pair_production_comment"] = verify_meter_apply_pair_production_comment()
         report["no_magnitude_range_feedback"] = verify_no_magnitude_range_feedback()
 
         if not args.skip_live:

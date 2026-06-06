@@ -176,6 +176,18 @@ bool fpga_meter_stock_apply_cmd_word_for_submode(uint8_t submode, uint16_t *word
     uint8_t stock_mode = fpga_meter_stock_mode_for_submode(submode);
     uint8_t low;
 
+    /*
+     * Stock V1.2.0 dynamic raw-word helper boundary:
+     *   0x08006120 gates and masks the selector-side state,
+     *   0x08006194 / 0x0800626A choose low-byte pairs, and
+     *   0x08006288 emits 0x0500 | low through the dvom_TX raw-word path.
+     *
+     * Recovered apply pairs are ACV 0x0C/0x0D, DCA 0x17/0x0E,
+     * continuity 0x11/0x16, and diode 0x10/0x15.  There is no recovered
+     * apply pair yet for DCV, ACA, resistance, capacitance, temperature, or
+     * microamp modes; those must not be filled from the parsed numeric value,
+     * one-point live observations, or local range guesses.
+     */
     switch (stock_mode) {
     case 1:
         low = 0x0D;

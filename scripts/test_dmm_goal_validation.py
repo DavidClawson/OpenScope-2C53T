@@ -325,6 +325,25 @@ class DmmGoalValidationTests(unittest.TestCase):
             ],
         )
 
+    def test_meter_apply_words_are_stock_bound_at_use_site(self) -> None:
+        result = validate_dmm_goal.verify_meter_apply_pair_production_comment()
+
+        self.assertEqual(result["checked"], "firmware/src/drivers/fpga_meter_plan.c")
+        self.assertIn("0x08006120 gates and masks", result["required_body"])
+        self.assertIn(
+            "0x08006194 / 0x0800626A choose low-byte pairs",
+            result["required_body"],
+        )
+        self.assertIn("ACV 0x0C/0x0D", result["required_body"])
+        self.assertIn("DCA 0x17/0x0E", result["required_body"])
+        self.assertIn("continuity 0x11/0x16", result["required_body"])
+        self.assertIn("diode 0x10/0x15", result["required_body"])
+        self.assertIn(
+            "must not be filled from the parsed numeric value",
+            result["required_body"],
+        )
+        self.assertIn("display_value", result["forbidden_body"])
+
     def test_no_ocr_pipeline_guard_is_active(self) -> None:
         result = validate_dmm_goal.verify_no_ocr_pipeline()
 
