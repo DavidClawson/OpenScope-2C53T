@@ -690,10 +690,10 @@ static void cmd_status(void)
     /* Split FPGA diag into separate printf to avoid buffer overflow */
     usb_debug_printf(
         "\r\n=== FPGA Diag ===\r\n"
-        "IOMUX remap: 0x%08lX (init)\r\n"
-        "IOMUX remap5: 0x%08lX (init)\r\n"
-        "IOMUX remap LIVE: 0x%08lX\r\n"
-        "IOMUX remap5 LIVE: 0x%08lX\r\n"
+        "IOMUX remap compat: 0x%08lX (init)\r\n"
+        "IOMUX remap5 spi3_gmux: 0x%08lX (init)\r\n"
+        "IOMUX remap compat LIVE: 0x%08lX\r\n"
+        "IOMUX remap5 spi3_gmux LIVE: 0x%08lX\r\n"
         "SPI3 CTRL1: 0x%04lX  STS: 0x%04lX\r\n"
         "PB4(MISO) IDT: %d  PC6(EN): %d  PB6(CS): %d\r\n",
         fpga.diag_remap5,

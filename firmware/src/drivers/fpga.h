@@ -305,8 +305,8 @@ typedef struct {
 
     /* Init handshake diagnostic (captured during fpga_init) */
     volatile uint8_t  init_hs[12];         /* Handshake response bytes (11 used + probe) */
-    volatile uint32_t diag_remap5;         /* IOMUX remap5 (spi3_gmux) */
-    volatile uint32_t diag_remap7;         /* IOMUX remap7 (swjtag_gmux) */
+    volatile uint32_t diag_remap5;         /* IOMUX compatible remap register */
+    volatile uint32_t diag_remap7;         /* IOMUX remap5: AT32 SPI3 GMUX */
     volatile uint32_t diag_spi_ctrl1;      /* SPI3 CTRL1 after init */
     volatile uint32_t diag_spi_sts;        /* SPI3 STS after init */
 

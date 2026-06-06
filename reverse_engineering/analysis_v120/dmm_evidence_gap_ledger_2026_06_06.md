@@ -1306,3 +1306,31 @@ It prevents fake volts/ohms/OL readings from an unaccepted H2/SPI3 state. The
 next actual repair remains the first all-`0xFF` SPI3/H2 divergence: physical
 SPI3 routing/timing, PC6/PB6 framing, H2 transaction semantics, or recovered
 W25Q/system-file/factory-calibration/application state.
+
+## 2026-06-07 SPI3 GMUX Stock-Alignment Live Negative
+
+OpenScope image
+`63c6c230fcc57b583aaa8ce46025248b41b35846b8060ad350600ee9dfbbbab0`
+was flashed through guarded HID IAP after `flash_preflight.py hid-app`
+classified it as an OpenScope app image. This build mirrored stock/scopediag by
+keeping `SWJTAG_GMUX_010` but explicitly clearing `SPI3_GMUX_0010`; `status`
+confirmed `IOMUX remap5 spi3_gmux LIVE: 0x00000000`.
+
+Live result with the user's probes still shorted:
+
+- SPI3/H2 remained all-`0xFF`: `SPI3 OK: 0`, first byte `0xFF`,
+  `h2 rx_nonff=0`, `post_h2_rx_nonff=0`, and every H2 close/post-H2 byte was
+  `FF`.
+- DCV `mode meter 0 0` failed closed with `valid=0 display=---`,
+  `selector=0514`, `config=0508`, `probe=0507`, `start=0509`, GPIO `0BB`, and
+  producer frame `5A A5 E4 2E 63 25 07 00 00 00 00 00`.
+- Continuity `mode meter 7 0` also failed closed with `valid=0 display=---`,
+  `selector=0511`, `apply=0516`, `probe=0507`, `start=0509`, GPIO `0EA`, and
+  producer frame `5A A5 04 00 00 00 00 20 00 00 01 49`.
+
+Interpretation: clearing `SPI3_GMUX_0010` is still the stock-aligned and
+least-risky runtime configuration because the forced AT32 route also touches
+PA15/PB10, but it is not sufficient to fix H2/SPI3 acceptance or shorted-probes
+DMM behavior. The remaining root cause is earlier or elsewhere in the live
+SPI3/H2 apply path: peripheral/pin electrical state, PC6/PB6 framing/timing,
+stock transaction semantics, or a recovered W25Q/system-file/factory state.

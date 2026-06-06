@@ -3751,18 +3751,7 @@ void fpga_init(void)
      * - Clear bit [28] = 0 (SPI3 on PB3/PB4/PB5)
      * Stock firmware: (reg & ~0xF000) | 0x2000 at AFIO+0x08 per CLAUDE.md,
      * but the actual SWJ_CFG is at bits [26:24] of offset 0x04. */
-    /* AT32F403A requires BOTH legacy remap AND GMUX configuration.
-     * Unlike STM32F1, the AT32 GMUX system OVERRIDES the legacy remap.
-     * GMUX=0000 (default) means SPI3 is NOT connected to any pins!
-     *
-     * Required settings:
-     *   1. SWJTAG_GMUX_010: Disable JTAG-DP, keep SW-DP (frees PB3/PB4/PB5)
-     *   2. SPI3_GMUX_0010:  Route SPI3 to PB3(SCK)/PB4(MISO)/PB5(MOSI)
-     *
-     * From AT32 example: spi/halfduplex_dma_jtagpin/src/main.c lines 173-174.
-     * The AT32 HAL gpio_pin_remap_config() handles both legacy and GMUX regs.
-     */
-    /* AT32F403A pin remapping — need BOTH legacy AND GMUX for JTAG disable.
+    /* AT32F403A pin remapping: keep legacy SWJ_CFG and SWJTAG_GMUX aligned.
      *
      * The legacy SWJ_CFG in IOMUX->remap (offset 0x04) defaults to 000
      * (full JTAG enabled) on reset. PB3=JTDO, PB4=NJTRST in that state.
@@ -3770,8 +3759,8 @@ void fpga_init(void)
      * Both must be set to free PB3/PB4 for SPI3 use.
      *
      * Legacy: SWJ_CFG bits [26:24] = 010 → JTAG off, SWD on
-     *         Do NOT touch bit 28 (SPI3_MUX) — let GMUX handle SPI3 routing
-     * GMUX:  SWJTAG = 010, SPI3 = 0010 (PB3/PB4/PB5)
+     *         Do NOT touch bit 28 (SPI3_MUX), stock leaves SPI3 on PB3/PB4/PB5.
+     * GMUX:  SWJTAG = 010 only; leave SPI3_GMUX cleared like stock/scopediag.
      */
     /* Legacy JTAG disable — write-only bits, only modify SWJ_CFG [26:24] */
     {
@@ -3781,27 +3770,19 @@ void fpga_init(void)
         IOMUX->remap = remap;
     }
 
-    /* GMUX remap — AT32-specific pin routing fabric.
+    /*
+     * GMUX remap (AT32-specific).
      *
-     * CRITICAL: on AT32 the GMUX overrides the legacy remap and its
-     * SPI3 default routes SPI3 to PC10/11/12, NOT PB3/4/5. The legacy
-     * SWJ_CFG=010 write above frees the JTAG pins but does NOT by itself
-     * connect SPI3 to them. We MUST call SPI3_GMUX_0010 to route
-     * SPI3 → PB3(SCK)/PB4(MISO)/PB5(MOSI)/PB6.
-     *
-     * Stock V1.2.0 is a GD32 binary and never writes the AT32 SPI3_GMUX/remap5
-     * register block; that absence proves only the stock legacy/JTAG path, not
-     * AT32 routing requirements. Earlier AT32 bench tests saw no SCK without
-     * SPI3_GMUX_0010, and the vendor AT32 halfduplex SPI3/JTAG-pin example uses
-     * the same GMUX value for PB3/PB4/PB5. A live 2026-06-06 reversible test
-     * cleared remap5 at runtime and SPI3 MISO remained all-0xFF, so this GMUX
-     * setting is not the present low-DCV/H2-apply fix either. Treat it as an
-     * empirical AT32 routing requirement until stock-on-AT32 or logic-analyzer
-     * evidence proves a better mapping; do not infer DMM range/calibration
-     * behavior from it.
+     * Stock V1.2.0 proves only the JTAG/SWD remap plus PB3/PB4/PB5 GPIO
+     * configuration. It does not write SPI3_GMUX/remap5. The AT32 HAL's
+     * SPI3_GMUX_0010 route also maps SPI3 CS/I2S_WS onto PA15 and MCK onto PB10,
+     * while this board uses PB6 as software CS and PA15/PB10 as DMM frontend
+     * control pins. Leaving SPI3_GMUX forced has correlated with all-0xFF MISO
+     * and unaccepted H2 on the live board, so mirror stock/attic scopediag:
+     * keep only SWJTAG_GMUX_010 and explicitly clear SPI3_GMUX bits.
      */
     gpio_pin_remap_config(SWJTAG_GMUX_010, TRUE);
-    gpio_pin_remap_config(SPI3_GMUX_0010, TRUE);  /* route SPI3 → PB3/PB4/PB5/PB6 */
+    gpio_pin_remap_config(SPI3_GMUX_0010, FALSE);
 
     /* ---------------------------------------------------------------
      * Step 2: USART2 init — 9600 baud, 8N1, TX+RX with interrupts
@@ -4131,8 +4112,8 @@ void fpga_init(void)
     GPIOC->scr = PC6_MASK;
 
     /* Capture register state for diagnostics */
-    fpga.diag_remap5 = IOMUX->remap;   /* STM32-compatible remap (offset 0x04) */
-    fpga.diag_remap7 = IOMUX->remap5;  /* GMUX remap5 (spi3_gmux) */
+    fpga.diag_remap5 = IOMUX->remap;   /* STM32-compatible remap */
+    fpga.diag_remap7 = IOMUX->remap5;  /* AT32 GMUX remap5: spi3_gmux lives here */
     fpga.diag_spi_ctrl1 = FPGA_SPI->ctrl1;
     fpga.diag_spi_sts = FPGA_SPI->sts;
 
@@ -4529,9 +4510,9 @@ void fpga_init(void)
 
     systick_delay_ms(10);
 
-    /* Bit-bang test REMOVED — it was disrupting the GMUX pin connection.
-     * The GMUX fix (SPI3_GMUX_0010) was the real issue, not the protocol.
-     * See project_spi3_miso_dead.md for the bit-bang test results. */
+    /* Bit-bang test removed: direct GPIO probing can disturb the live SPI3
+     * path. GMUX forcing is not accepted as a DMM/H2 fix; stock/scopediag keep
+     * SPI3_GMUX clear and current live proof still requires non-0xFF MISO. */
 
     fpga.initialized = true;
     fpga.acq_mode = FPGA_ACQ_NORMAL + 1;  /* Default to normal scope mode */
