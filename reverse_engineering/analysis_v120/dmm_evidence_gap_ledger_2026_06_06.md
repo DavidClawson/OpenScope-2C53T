@@ -73,6 +73,11 @@ one of:
   and `0x08` replay bytes out of the low-DCV range-param bucket: old notes such
   as `param=0 -> 10V range`, `Below ~1V`, or `Meter: configure range` are stale
   unless a stock writer/trace ties those bytes to DMM physical range state.
+- Meter basic raw-word queue guard: stock materializes `0x0508` at
+  `0x080033CA`, `0x0509` at `0x08003BA4`, and `0x0514` at `0x08005B7A` onto
+  the raw-word queue path. Those words ground wake/start/variant sequencing;
+  they are not DMM runtime range state, low-DCV correction words, or factory
+  calibration coefficients.
 - Mux writers: `FUN_080018a4` and `FUN_08001a58` are 10-way GPIO hardware
   writers. Current direct runtime mux-state writers are classified as
   scope/siggen paths, not DMM range proof.

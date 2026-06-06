@@ -367,6 +367,45 @@ EXPECTED_DVOM_TX_QUEUE_CONSUMER_SEQUENCES = {
         ),
     ),
 }
+EXPECTED_METER_BASIC_RAW_WORD_SEQUENCES = {
+    "meter_basic_configure_0508": {
+        "addr": 0x080033CA,
+        "word": "0x0508",
+        "classification": (
+            "stock raw-word queue materializer for the meter configure word; "
+            "command sequencing only, not a DMM range writer or calibration"
+        ),
+        "bytes": bytes.fromhex(
+            "42 f6 74 50 42 f6 54 51 c2 f2 00 00 c2 f2 00 01 "
+            "00 68 4f f4 a1 63 4f f0 ff 32 0b 80 19 e1"
+        ),
+    },
+    "meter_basic_start_0509": {
+        "addr": 0x08003BA4,
+        "word": "0x0509",
+        "classification": (
+            "stock raw-word queue materializer for the meter start/poll word; "
+            "command sequencing only, not a DMM range writer or calibration"
+        ),
+        "bytes": bytes.fromhex(
+            "42 f6 74 50 42 f6 54 51 c2 f2 00 00 c2 f2 00 01 "
+            "00 68 40 f2 09 53 4f f0 ff 32 0b 80 28 e2"
+        ),
+    },
+    "meter_basic_variant_0514": {
+        "addr": 0x08005B7A,
+        "word": "0x0514",
+        "classification": (
+            "stock raw-word queue materializer for the meter variant/setup word; "
+            "command sequencing only, not a DMM range writer or calibration"
+        ),
+        "bytes": bytes.fromhex(
+            "42 f6 74 50 42 f6 54 51 c2 f2 00 00 c2 f2 00 01 "
+            "40 f2 14 52 00 68 00 26 0a 80 4f f0 ff 32 "
+            "85 f8 5d 6f"
+        ),
+    },
+}
 EXPECTED_ROLL_BUFFER_PRELOAD_SEQUENCES = {
     "roll_buffer_transform_entry": (
         0x08001830,
@@ -1764,6 +1803,34 @@ def verify_dvom_tx_queue_consumer_sequences() -> dict[str, object]:
     return {"sequences": checked}
 
 
+def verify_meter_basic_raw_word_sequences() -> dict[str, object]:
+    """Check stock direct raw-word materializers for basic meter bring-up.
+
+    These sites enqueue `0x0508`, `0x0509`, and `0x0514` through the same
+    `0x20002D74` raw-word path as the selector/apply helpers.  They ground the
+    local wake/start/probe tail as stock command sequencing.  They are not
+    analog `ms[0x02]`/`ms[0x03]` range writers, low-DCV correction words, or
+    factory calibration coefficients.
+    """
+    checked: dict[str, dict[str, str]] = {}
+    for name, info in EXPECTED_METER_BASIC_RAW_WORD_SEQUENCES.items():
+        addr: int = info["addr"]  # type: ignore[assignment]
+        expected: bytes = info["bytes"]  # type: ignore[assignment]
+        actual = read(addr, len(expected))
+        if actual != expected:
+            raise AssertionError(
+                f"{name} {addr:#010x}: expected {expected.hex(' ')}, "
+                f"got {actual.hex(' ')}"
+            )
+        checked[name] = {
+            "addr": f"{addr:#010x}",
+            "word": str(info["word"]),
+            "bytes": actual.hex(" "),
+            "classification": str(info["classification"]),
+        }
+    return {"sequences": checked}
+
+
 def verify_roll_buffer_preload_sequences() -> dict[str, object]:
     """Check init-only 301-byte roll-buffer preload evidence.
 
@@ -2668,6 +2735,7 @@ def main() -> None:
     selector_adjust = verify_meter_selector_adjust_sequences()
     dynamic_raw_word_helpers = verify_dynamic_raw_word_helper_sequences()
     dvom_tx_consumers = verify_dvom_tx_queue_consumer_sequences()
+    meter_basic_raw_words = verify_meter_basic_raw_word_sequences()
     roll_buffer_preload = verify_roll_buffer_preload_sequences()
     transport_transitions = verify_meter_transport_transition_sequences()
     runtime_transport_transitions = verify_runtime_mode_switch_transport_sequences()
@@ -2736,6 +2804,8 @@ def main() -> None:
           ", ".join(item["addr"] for item in dynamic_raw_word_helpers["sequences"].values()))
     print("stock dvom_TX raw-word consumer sites: " +
           ", ".join(item["addr"] for item in dvom_tx_consumers["sequences"].values()))
+    print("stock meter basic raw-word sites: " +
+          ", ".join(item["addr"] for item in meter_basic_raw_words["sequences"].values()))
     print("stock roll-buffer preload sites: " +
           ", ".join(item["addr"] for item in roll_buffer_preload["sequences"].values()))
     print("stock meter transport transition sites: " +

@@ -1233,8 +1233,16 @@ static void fpga_send_meter_wake_preamble(void)
     fpga_set_meter_frontend_for_submode(0);
     fpga_scope_delay_ms(20);
 
-    /* Boot-time meter bring-up uses cmd_hi=0x05 for this block. Keep that
-     * path available as a live experiment before scope mode re-entry. */
+    /*
+     * Boot-time meter bring-up uses cmd_hi=0x05 for this block. Stock
+     * V1.2.0 has binary-guarded raw-word materializers for the configure
+     * word 0x0508 at 0x080033CA, the start/poll word 0x0509 at 0x08003BA4,
+     * and the variant/setup word 0x0514 at 0x08005B7A. The probe word is the
+     * same 0x0507/0x050A GPIOC bit-7 branch guarded in FUN_0800B908.
+     *
+     * That is stock command sequencing evidence only. It is not a recovered
+     * analog range writer, low-DCV correction, or factory calibration source.
+     */
     fpga_timed_send_cmd(0x05, 0x08, 10);
     fpga_timed_send_cmd(0x05, FPGA_CMD_METER_START, 10);
     fpga_timed_send_cmd(0x05, probe_cmd, 10);
@@ -4113,13 +4121,16 @@ static void fpga_send_meter_mode_sequence(uint8_t submode)
     fpga.meter_mode_probe_word = plan.has_probe_detect ? probe_word : 0;
     fpga.meter_mode_start_word = plan.start_word;
     /*
-     * USART2 selector sequence.
+     * USART2 selector/start sequence.
      * Stock evidence proves raw meter command words in the 0x05xx family and
-     * 10-tick command pacing; it does not prove that every local submode owns a
-     * unique selector. The optional apply word mirrors recovered family-switch
-     * words (ACV, DCA, continuity, diode). The fixed settle/discard constants
-     * are conservative local policy and are reported in debug output instead of
-     * being hidden as stock fact.
+     * 10-tick command pacing. The guarded basic materializers are 0x0508
+     * (0x080033CA), 0x0509 (0x08003BA4), and 0x0514 (0x08005B7A); selector and
+     * apply words are separate digital state-machine evidence. This does not
+     * prove that every local submode owns a unique physical selector. The
+     * optional apply word mirrors recovered family-switch words (ACV, DCA,
+     * continuity, diode). The fixed settle/discard constants are conservative
+     * local policy and are reported in debug output instead of being hidden as
+     * stock fact.
      */
     fpga_wire_send_word(plan.selector_word, plan.settle_ms);
     if (plan.has_apply_word) {

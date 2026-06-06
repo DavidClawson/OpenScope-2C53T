@@ -228,6 +228,12 @@ class DmmGoalValidationTests(unittest.TestCase):
         self.assertIn("DAT_200000fd + 100", coverage["terms"])
         self.assertIn("scope threshold/calibration context", coverage["terms"])
         self.assertIn("not missing DMM runtime range state", coverage["terms"])
+        self.assertIn("Meter Basic Raw-Word Queue Guard", coverage["terms"])
+        self.assertIn("0x080033CA", coverage["terms"])
+        self.assertIn("0x08003BA4", coverage["terms"])
+        self.assertIn("0x08005B7A", coverage["terms"])
+        self.assertIn("wake/start/variant sequencing", coverage["terms"])
+        self.assertIn("not DMM runtime range state", coverage["terms"])
 
     def test_re_coverage_requires_w25q_system_file_boundary(self) -> None:
         coverage = validate_dmm_goal.verify_re_coverage()
@@ -304,6 +310,9 @@ class DmmGoalValidationTests(unittest.TestCase):
         )
         self.assertIn("Stock command-bank replay (0x1A..0x1E)",
                       result["required"])
+        self.assertIn("0x0508 at 0x080033CA", result["required"])
+        self.assertIn("0x0509 at 0x08003BA4", result["required"])
+        self.assertIn("0x0514 at 0x08005B7A", result["required"])
         self.assertIn("Detect BCD overflow", result["forbidden"])
         self.assertIn("send higher range params", result["forbidden"])
         self.assertIn("Meter: configure range", result["forbidden"])
@@ -1487,6 +1496,39 @@ class DmmGoalValidationTests(unittest.TestCase):
         self.assertIn(
             "07 00 58 bf 0a 20",
             banks["meter_variant_boot_tail"]["ordered_snippets"],
+        )
+
+    def test_stock_meter_basic_raw_word_materializers_are_guarded(self) -> None:
+        result = stock_meter_literals.verify_meter_basic_raw_word_sequences()
+        sequences = result["sequences"]
+
+        self.assertEqual(
+            sequences["meter_basic_configure_0508"]["addr"],
+            "0x080033ca",
+        )
+        self.assertEqual(
+            sequences["meter_basic_start_0509"]["addr"],
+            "0x08003ba4",
+        )
+        self.assertEqual(
+            sequences["meter_basic_variant_0514"]["addr"],
+            "0x08005b7a",
+        )
+        self.assertEqual(
+            sequences["meter_basic_configure_0508"]["word"],
+            "0x0508",
+        )
+        self.assertEqual(
+            sequences["meter_basic_start_0509"]["word"],
+            "0x0509",
+        )
+        self.assertEqual(
+            sequences["meter_basic_variant_0514"]["word"],
+            "0x0514",
+        )
+        self.assertIn(
+            "not a DMM range writer or calibration",
+            sequences["meter_basic_start_0509"]["classification"],
         )
 
     def test_stock_runtime_mode_init_dispatch_callers_are_binary_grounded(self) -> None:

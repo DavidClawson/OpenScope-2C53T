@@ -122,6 +122,29 @@ analog mux/range proof: it still does not find a runtime writer for
 `ms[0x02]`/`ms[0x03]`, does not prove relay/AFE settling, and does not provide
 a factory calibration source for the low-DCV blocker.
 
+### Meter Basic Raw-Word Queue Guard, 2026-06-06
+
+The basic meter raw-word materializers are now binary-guarded separately from
+the selector table and dynamic apply helper:
+
+```text
+0x080033CA meter_basic_configure_0508:
+  materializes `0x0508` and stores it to the raw-word queue path.
+
+0x08003BA4 meter_basic_start_0509:
+  materializes `0x0509` and stores it to the raw-word queue path.
+
+0x08005B7A meter_basic_variant_0514:
+  materializes `0x0514`, clears the `bRam20001055` blocker byte, then follows
+  the display/update tail.
+```
+
+This grounds the open firmware wake/start/probe tail as stock command
+sequencing. It does not recover an analog range writer, low-DCV correction,
+factory calibration coefficient, exact settle/discard count, or H2/SPI3 apply
+effect. The probe word remains the stock GPIOC bit-7 branch (`0x0507` or
+`0x050A`) guarded in `FUN_0800B908`.
+
 The stock raw-word queue consumer is now binary-guarded as well. This
 `dvom_TX raw-word consumer guard` proves that the `dvom_TX` task at
 `0x080373F4` uses queue handle `0x20002D74`, blocks in `xQueueReceive`, then
@@ -496,13 +519,14 @@ selector-table lookup; that would let diagnostics drift from the actual
 transition command.
 
 The runtime tail is also modeled through the same transition plan. Valid local
-submodes carry the stock-family start word `0x0509` plus the probe-detect tail
-(`0x0507` or `0x050A`, selected from live GPIOC bit 7); invalid submodes carry
-no selector, no apply word, no probe-detect tail, and no start word. This keeps
-the production USART2 sequence and debug mirrors tied to one software
-state-machine object. It is still command-sequence evidence only: it does not
-recover exact settle/discard counts, a DMM-specific `ms[0x02]`/`ms[0x03]`
-runtime analog range writer, or the low-DCV frontend/calibration gap.
+submodes carry the stock-family start word `0x0509`, grounded at `0x08003BA4`,
+plus the probe-detect tail (`0x0507` or `0x050A`, selected from live GPIOC bit
+7); invalid submodes carry no selector, no apply word, no probe-detect tail,
+and no start word. This keeps the production USART2 sequence and debug mirrors
+tied to one software state-machine object. It is still command-sequence
+evidence only: it does not recover exact settle/discard counts, a DMM-specific
+`ms[0x02]`/`ms[0x03]` runtime analog range writer, or the low-DCV
+frontend/calibration gap.
 
 The live validation helper is intentionally narrower than the software state
 matrix. On an energized voltage source it may switch only DCV (`mode meter 0 0`)

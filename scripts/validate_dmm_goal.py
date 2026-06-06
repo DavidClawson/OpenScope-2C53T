@@ -664,6 +664,9 @@ def verify_no_magnitude_range_feedback() -> dict[str, Any]:
         "Stock command-bank replay (0x1A..0x1E)",
         "command sequencing evidence only",
         "It does not prove DMM range\n     * parameters, a low-DCV correction, or a runtime writer for ms[0x02] /\n     * ms[0x03]",
+        "0x0508 at 0x080033CA",
+        "0x0509 at 0x08003BA4",
+        "0x0514 at 0x08005B7A",
         "shared meter configure/setup byte; not a recovered DMM range",
     ]
     forbidden = [
@@ -1263,6 +1266,10 @@ def verify_re_coverage() -> dict[str, Any]:
         "command-dispatch entry evidence only",
         "command-byte banks", "0x1A..0x1E", "0x16..0x19", "0x12/0x13/0x14",
         "boot-time command queue", "not a DMM calibration or range-writer proof",
+        "Meter Basic Raw-Word Queue Guard", "0x080033CA", "0x08003BA4",
+        "0x08005B7A", "0x0508", "0x0509", "0x0514",
+        "wake/start/variant sequencing",
+        "not DMM runtime range state",
         "runtime mode-init dispatcher caller evidence", "0x08006418",
         "0x08006548", "ms[0xF68]", "tail-call", "FUN_0800B908",
         "not a runtime analog range writer",
