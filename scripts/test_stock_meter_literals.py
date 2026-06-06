@@ -40,6 +40,25 @@ EXPECTED_DVOM_TX_QUEUE_CONSUMER_SEQUENCES = {
         ),
     ),
 }
+EXPECTED_ROLL_BUFFER_PRELOAD_SEQUENCES = {
+    "roll_buffer_transform_entry": (
+        0x08001830,
+        bytes.fromhex(
+            "02 f0 ff 03 43 ea 03 22 42 ea 02 42 ff f7 40 bd "
+            "10 b5 20 3a c0 f0 0b 80 b1 e8 18 50 a0 e8 18 50 "
+            "b1 e8 18 50 a0 e8 18 50 20 3a bf f4 f5 af"
+        ),
+    ),
+    "master_init_roll_buffer_callers": (
+        0x080271A8,
+        bytes.fromhex(
+            "9a f8 04 10 0a f2 56 30 81 f0 80 02 40 f2 2d 11 "
+            "da f7 3a fb a0 07 45 f2 34 04 c4 f2 01 04 11 d4 "
+            "9a f8 05 10 0a f2 83 40 81 f0 80 02 40 f2 2d 11 "
+            "da f7 2a fb 06 e0 02 20 45 f2 34 04 8a f8 15 00"
+        ),
+    ),
+}
 EXPECTED_METER_TRANSPORT_TRANSITION_SEQUENCES = {
     "boot_saved_mode_init_state_restore": (
         0x08026F50,
@@ -758,6 +777,31 @@ def verify_dvom_tx_queue_consumer_sequences() -> dict[str, object]:
     return {"sequences": checked}
 
 
+def verify_roll_buffer_preload_sequences() -> dict[str, object]:
+    """Check init-only 301-byte roll-buffer preload evidence.
+
+    Stock master init calls `FUN_08001830` twice at `0x080271A8..0x080271DC`:
+    once with `state + 0x356`, once with `state + 0x483`, both with count
+    `0x12D` and `state[4/5] ^ 0x80`.  Later RAM-map work identifies those
+    destinations as oscilloscope roll-buffer regions, not a DMM factory
+    calibration source.  Guarding this sequence keeps the old 301-byte cal
+    myth from becoming a production meter coefficient again.
+    """
+    checked: dict[str, dict[str, str]] = {}
+    for name, (addr, expected) in EXPECTED_ROLL_BUFFER_PRELOAD_SEQUENCES.items():
+        actual = read(addr, len(expected))
+        if actual != expected:
+            raise AssertionError(
+                f"{name} {addr:#010x}: expected {expected.hex(' ')}, "
+                f"got {actual.hex(' ')}"
+            )
+        checked[name] = {
+            "addr": f"{addr:#010x}",
+            "bytes": actual.hex(" "),
+        }
+    return {"sequences": checked}
+
+
 def verify_meter_transport_transition_sequences() -> dict[str, object]:
     """Check stock DMM transport enable/resume and disable/drain slices.
 
@@ -1296,6 +1340,7 @@ def main() -> None:
     selector = verify_meter_selector_table()
     selector_xrefs = verify_meter_selector_xref_sequences()
     dvom_tx_consumers = verify_dvom_tx_queue_consumer_sequences()
+    roll_buffer_preload = verify_roll_buffer_preload_sequences()
     transport_transitions = verify_meter_transport_transition_sequences()
     runtime_transport_transitions = verify_runtime_mode_switch_transport_sequences()
     selector_state = verify_meter_selector_state_sequences()
@@ -1320,6 +1365,8 @@ def main() -> None:
           ", ".join(selector_xrefs["sequences"].keys()))
     print("stock dvom_TX raw-word consumer sites: " +
           ", ".join(item["addr"] for item in dvom_tx_consumers["sequences"].values()))
+    print("stock roll-buffer preload sites: " +
+          ", ".join(item["addr"] for item in roll_buffer_preload["sequences"].values()))
     print("stock meter transport transition sites: " +
           ", ".join(item["addr"] for item in transport_transitions["sequences"].values()))
     print("stock runtime mode-switch transport sites: " +

@@ -321,6 +321,8 @@ def verify_re_coverage() -> dict[str, Any]:
         "size 0", "not a recovered meter calibration source",
         "flash_fs_load_factory_cal", "fail-closed placeholder",
         "cal_ch1.bin", "cal_ch2.bin", "roll-buffer state",
+        "roll-buffer preload guard", "0x08001830", "0x080271A8",
+        "state+0x356", "state+0x483", "0x12D",
         "shared local splits", "eight-entry stock selector table",
         "without binary stock evidence", "uA is unresolved and unexposed",
         "H2 table binary guard", "tail bytes", "0x1C340", "no ACK/apply proof",

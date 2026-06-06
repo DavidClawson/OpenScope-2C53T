@@ -239,9 +239,13 @@ identify additional format variants.
 1. **Phase 1 can ship a working resistance decoder today.** 4 out
    of 5 broken readings fixed from 7 data points. No decompiler
    guessing.
-2. **Phase 3 (factory cal load) is elevated in importance.** The
-   147 Ω miss is a concrete motivation — we have a specific
-   symptom tied to a specific fix.
-3. **Future meter modes (ACV, current, freq, cap) can be added
-   incrementally** by capturing one or two reference frames per
-   mode and extending the `frame[6]` table.
+2. **Factory calibration/range evidence is unresolved, not a queued
+   "load the cal file" task.** The 147 Ω miss is a concrete symptom,
+   but the old 301-byte W25Q story was disproven; any fix must come
+   from stock xrefs, W25Q/H2 acceptance evidence, or repeatable live
+   stock traces.
+3. **Future meter modes (ACV, current, freq, cap) need stock-backed
+   frame-family and state-machine evidence.** Do not grow `frame[6]`
+   or unit tables from one or two reference frames alone; add
+   adversarial property tests for wrong-family, stale-frame, and
+   AC/current-safety cases as each mode is recovered.

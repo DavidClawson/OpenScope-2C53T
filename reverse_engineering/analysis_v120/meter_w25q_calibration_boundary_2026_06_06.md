@@ -70,6 +70,11 @@ set `factory_cal_t.loaded` from arbitrary 301-byte files. The 301-byte regions
 at stock state offsets `0x356` and `0x483` were reclassified as oscilloscope
 roll-buffer state in `cal_data_myth_busted.md`, not DMM calibration.
 
+The roll-buffer preload guard now binary-pins `FUN_08001830` / `0x08001830` and the
+master-init callers at `0x080271A8`: stock passes `state+0x356` and
+`state+0x483`, count `0x12D`, and `state[4/5] ^ 0x80`. That proves init-time
+roll-buffer preload/transform shape, not a meter calibration table.
+
 Until a real stock source is recovered, meter code must continue to reject
 unresolved calibration-dependent readings instead of applying loaded flash bytes
 or observed-case coefficients.

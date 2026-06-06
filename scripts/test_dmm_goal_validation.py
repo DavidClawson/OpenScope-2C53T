@@ -158,6 +158,18 @@ class DmmGoalValidationTests(unittest.TestCase):
         self.assertIn("fail-closed placeholder", coverage["terms"])
         self.assertIn("cal_ch1.bin", coverage["terms"])
         self.assertIn("roll-buffer state", coverage["terms"])
+        self.assertIn("roll-buffer preload guard", coverage["terms"])
+
+    def test_stock_roll_buffer_preload_is_binary_grounded(self) -> None:
+        result = stock_meter_literals.verify_roll_buffer_preload_sequences()
+        self.assertEqual(
+            result["sequences"]["roll_buffer_transform_entry"]["addr"],
+            "0x08001830",
+        )
+        self.assertEqual(
+            result["sequences"]["master_init_roll_buffer_callers"]["addr"],
+            "0x080271a8",
+        )
 
     def test_state_machine_property_contract_is_anchored(self) -> None:
         result = validate_dmm_goal.verify_state_machine_property_contract()

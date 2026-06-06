@@ -284,15 +284,16 @@ exists because the same function preloads some shared state, but
 the downstream consumer (trigger comparator) is only active in
 scope mode.
 
-## Corrections needed to other docs
+## Correction Status
 
-- **`CLAUDE.md`**: (1) Remove the claim that "301-byte cal data
-  loaded from SPI flash per channel." (2) Remove the recently-added
-  "Meter DAC reference calibration" note — that was H1 and is wrong.
-- **`gap_functions_annotated.c:530`**: The "calibration_loader" label
-  on FUN_08001830 is speculative. Rename to `roll_buffer_preload` or
-  similar, and note the uncertainty.
-- **`meter_frame_capture_log.md`**: The "factory cal load" note in
-  the Calibration Issue section should point to H2 (411-byte FPGA
-  exchange) rather than a non-existent 301-byte MCU blob or
-  DAC reference cal.
+- **Applied 2026-06-06:** `gap_functions_annotated.c` now calls
+  `FUN_08001830` `roll_buffer_preload_or_transform`, not
+  `calibration_loader`, and the stock literal guard pins its body plus the
+  two master-init callers at `0x080271A8..0x080271DC`.
+- **Applied 2026-06-06:** `meter_frame_capture_log.md` now treats low-Ohm
+  as an unresolved stock/factory range/calibration boundary and explicitly
+  rejects wiring invented 301-byte W25Q files into `meter_data.c`.
+- **Remaining external/documentation hygiene:** any future `CLAUDE.md` or
+  copied handoff note must keep the same boundary: the 301-byte regions are
+  roll-buffer state, DAC1 is scope trigger/comparator evidence, and meter
+  factory calibration remains unrecovered.

@@ -861,7 +861,7 @@ void adc_prescaler_init(void *config_a, void *config_b) {
  * suggesting it's the default/init entry in that table.
  *
  * Context from the disassembly:
- *   - Called after calibration_loader (both CH1 and CH2 cal data loaded)
+ *   - Called after roll_buffer_preload_or_transform (CH1/CH2 roll buffers)
  *   - Called after checking state[0x23A] (some feature flag)
  *   - Followed by relay/GPIO configuration based on state[0x14]
  *     (acquisition mode: 1=scope1ch, 2=scope2ch, 3=meter)
@@ -955,7 +955,7 @@ void probe_mode_init(void) {
  *    Multiple acquisition modes (normal, dual, roll, bulk) with
  *    per-sample VFP calibration and trigger detection.
  *
- *  The init-only functions (calibration_loader, analog_input_init,
+ *  The init-only functions (roll_buffer_preload_or_transform, analog_input_init,
  *  probe_mode_init) set up the initial state that these runtime
  *  layers operate on.
  *
