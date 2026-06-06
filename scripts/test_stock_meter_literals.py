@@ -499,6 +499,70 @@ EXPECTED_RUNTIME_MODE_SWITCH_TRANSPORT_SEQUENCES = {
         ),
     ),
 }
+EXPECTED_METER_TRANSPORT_OPERATION_GUARDS = {
+    "boot_enable_resume_reset": {
+        "sequence": "meter_transport_enable_resume_reset",
+        "classification": (
+            "stock restore-time enable/resume/reset transport operations; "
+            "not exact local settle/discard timing or analog range proof"
+        ),
+        "ordered_snippets": [
+            ("usart2_enable", "44 f2 0c 41 c4 f2 00 01 08 68 40 f4 00 50 08 60"),
+            ("resume_dvom_tx_task_0x20002da0", "42 f6 a0 50 c2 f2 00 00 00 68 13 f0 32 fb"),
+            ("resume_dvom_rx_task_0x20002da4", "42 f6 a4 50 c2 f2 00 00 00 68 13 f0 2b fb"),
+            ("pc11_set_gpioc_bop", "41 f2 00 01 4f f4 00 60 c4 f2 01 01 08 61"),
+            ("meter_float_sentinels_reset", "ca f8 48 0f ca f8 4c 0f ca f8 50 0f"),
+            ("selector_shadow_reset", "aa f8 35 1f ff 21 8a f8 5d 0f 8a f8 2d 0f"),
+        ],
+    },
+    "boot_disable_suspend_drain": {
+        "sequence": "meter_transport_disable_suspend_drain",
+        "classification": (
+            "stock restore-time disable/suspend/drain transport operations; "
+            "not exact local settle/discard timing or analog range proof"
+        ),
+        "ordered_snippets": [
+            ("usart2_disable", "44 f2 0c 41 c4 f2 00 01 08 68 20 f4 00 50 08 60"),
+            ("suspend_dvom_tx_task_0x20002da0", "42 f6 a0 50 c2 f2 00 00 00 68 13 f0 b2 fb"),
+            ("suspend_dvom_rx_task_0x20002da4", "42 f6 a4 50 c2 f2 00 00 00 68 13 f0 ab fb"),
+            ("pc11_clear_gpioc_bcr", "4f f4 00 60 c8 f8 00 00"),
+            ("reset_meter_sem_queue_0x20002d7c", "42 f6 7c 50 c2 f2 00 00 00 68 00 21 14 f0 ad f9"),
+            ("reset_raw_tx_word_queue_0x20002d74", "42 f6 74 50 c2 f2 00 00 00 68 00 21 13 f0 ed fd"),
+        ],
+    },
+    "runtime_enable_resume_tail": {
+        "sequence": "runtime_mode_switch_enable_resume_tail",
+        "classification": (
+            "stock runtime mode-switch enable/resume transport operations; "
+            "not exact local settle/discard timing or analog range proof"
+        ),
+        "ordered_snippets": [
+            ("set_mode_state_1", "01 20 84 f8 68 0f"),
+            ("usart2_enable", "44 f2 0c 40 c4 f2 00 00 01 68 41 f4 00 51 01 60"),
+            ("resume_dvom_tx_task_0x20002da0", "42 f6 a0 50 c2 f2 00 00 00 68 33 f0 46 f9"),
+            ("resume_dvom_rx_task_0x20002da4", "42 f6 a4 50 c2 f2 00 00 00 68 33 f0 3f f9"),
+            ("pc11_set_gpioc_bop", "41 f2 10 00 c4 f2 01 00 4f f4 00 61 01 60"),
+            ("selector_shadow_reset", "a4 f8 35 1f ff 21 84 f8 5d 0f"),
+            ("tail_call_mode_init_dispatcher", "bd e8 10 40 04 f0 93 ba"),
+        ],
+    },
+    "runtime_disable_suspend_drain": {
+        "sequence": "runtime_mode_switch_disable_suspend_drain",
+        "classification": (
+            "stock runtime mode-switch disable/suspend/drain transport operations; "
+            "not exact local settle/discard timing or analog range proof"
+        ),
+        "ordered_snippets": [
+            ("usart2_disable", "44 f2 0c 40 c4 f2 00 00 01 68 21 f4 00 51 01 60"),
+            ("suspend_dvom_tx_task_0x20002da0", "42 f6 a0 50 c2 f2 00 00 00 68 33 f0 aa f9"),
+            ("suspend_dvom_rx_task_0x20002da4", "42 f6 a4 50 c2 f2 00 00 00 68 33 f0 a3 f9"),
+            ("pc11_clear_gpioc_bcr", "41 f2 14 00 c4 f2 01 00 4f f4 00 61 01 60"),
+            ("reset_meter_sem_queue_0x20002d7c", "42 f6 7c 50 c2 f2 00 00 00 68 00 21 00 25 33 f0 a1 ff"),
+            ("reset_raw_tx_word_queue_0x20002d74", "42 f6 74 50 c2 f2 00 00 00 68 00 21 33 f0 e1 fb"),
+            ("clear_stale_meter_state", "01 20 84 f8 36 0f 00 20 c7 f6 c0 70"),
+        ],
+    },
+}
 EXPECTED_METER_SELECTOR_STATE_SEQUENCES = {
     "init_selector_reset": (
         0x08026FDE,
@@ -2121,6 +2185,52 @@ def verify_runtime_mode_switch_transport_sequences() -> dict[str, object]:
     return {"sequences": checked}
 
 
+def verify_meter_transport_operation_guards() -> dict[str, object]:
+    """Check semantic stock transport operations inside guarded byte slices.
+
+    The larger byte-slice guards catch drift in the stock functions. This
+    operation guard makes the state-machine evidence explicit: which slices
+    enable/disable USART2, resume/suspend the two DVOM task handles, assert or
+    clear PC11, reset the meter queues, and tail-call the command-bank
+    dispatcher. It is still transport evidence only; exact local settle delays
+    and discard counts remain OpenScope policy until a stock trace recovers
+    them.
+    """
+    sequence_bytes: dict[str, str] = {}
+    for name, (addr, expected) in EXPECTED_METER_TRANSPORT_TRANSITION_SEQUENCES.items():
+        actual = read(addr, len(expected))
+        if actual != expected:
+            raise AssertionError(f"{name}: sequence bytes drifted before operation guard")
+        sequence_bytes[name] = actual.hex(" ")
+    for name, (addr, expected) in EXPECTED_RUNTIME_MODE_SWITCH_TRANSPORT_SEQUENCES.items():
+        actual = read(addr, len(expected))
+        if actual != expected:
+            raise AssertionError(f"{name}: sequence bytes drifted before operation guard")
+        sequence_bytes[name] = actual.hex(" ")
+
+    checked: dict[str, object] = {}
+    for name, expected in EXPECTED_METER_TRANSPORT_OPERATION_GUARDS.items():
+        sequence_name = str(expected["sequence"])
+        operations = _require_named_ordered_hex_snippets(
+            name,
+            sequence_bytes[sequence_name],
+            list(expected["ordered_snippets"]),
+        )
+        checked[name] = {
+            "sequence": sequence_name,
+            "operations": operations,
+            "classification": str(expected["classification"]),
+        }
+    return {
+        "guards": checked,
+        "classification": (
+            "stock DMM transport operations guard: USART2 gate, DVOM task "
+            "resume/suspend, PC11 set/clear, queue reset/drain, and dispatcher "
+            "tail-call evidence; not exact settle/discard timing"
+        ),
+    }
+
+
 def verify_meter_selector_state_sequences() -> dict[str, object]:
     """Check stock selector/shadow-state writers used by the DMM FSM.
 
@@ -2590,6 +2700,22 @@ def _require_ordered_hex_snippets(name: str, haystack_hex: str, snippets: list[s
         if found < 0:
             raise AssertionError(f"{name}: missing ordered command snippet {snippet}")
         pos = found + len(snippet)
+
+
+def _require_named_ordered_hex_snippets(
+    name: str,
+    haystack_hex: str,
+    snippets: list[tuple[str, str]],
+) -> list[dict[str, str]]:
+    pos = 0
+    checked: list[dict[str, str]] = []
+    for op_name, snippet in snippets:
+        found = haystack_hex.find(snippet, pos)
+        if found < 0:
+            raise AssertionError(f"{name}: missing {op_name} snippet {snippet}")
+        checked.append({"op": op_name, "snippet": snippet})
+        pos = found + len(snippet)
+    return checked
 
 
 def verify_boot_mode_init_dmm_command_banks() -> dict[str, object]:
@@ -3064,6 +3190,7 @@ def main() -> None:
     roll_buffer_preload = verify_roll_buffer_preload_sequences()
     transport_transitions = verify_meter_transport_transition_sequences()
     runtime_transport_transitions = verify_runtime_mode_switch_transport_sequences()
+    transport_operation_guards = verify_meter_transport_operation_guards()
     selector_state = verify_meter_selector_state_sequences()
     acv_format = verify_acv_format_selector_sequences()
     display_formatter = verify_display_formatter_dispatch_sequences()
@@ -3140,6 +3267,11 @@ def main() -> None:
           ", ".join(item["addr"] for item in transport_transitions["sequences"].values()))
     print("stock runtime mode-switch transport sites: " +
           ", ".join(item["addr"] for item in runtime_transport_transitions["sequences"].values()))
+    print("stock meter transport operation guards: " +
+          "; ".join(
+              f"{name}=" + ",".join(op["op"] for op in item["operations"])
+              for name, item in transport_operation_guards["guards"].items()
+          ))
     print("stock meter selector state sites: " +
           ", ".join(item["addr"] for item in selector_state["sequences"].values()))
     print("stock ACV format selector sites: " +

@@ -251,6 +251,37 @@ policy until a stock runtime trace proves them. It also does not recover a
 physical analog range writer for `ms[0x02]`/`ms[0x03]` or any factory
 calibration coefficient.
 
+### Meter Transport Operation Guard, 2026-06-06
+
+The transport byte-slice guard is now paired with an operation-order guard. The
+new check names the stock operations inside the already-guarded slices, so the
+state-machine boundary is not just a blob comparison:
+
+```text
+boot enable/resume/reset:
+  USART2 enable -> resume DVOM task 0x20002DA0 -> resume DVOM task 0x20002DA4
+  -> set PC11 through GPIOC_BOP -> reset meter float sentinels
+  -> reset selector/shadow bytes
+
+boot disable/suspend/drain:
+  USART2 disable -> suspend DVOM task 0x20002DA0 -> suspend DVOM task 0x20002DA4
+  -> clear PC11 through GPIOC_BCR -> reset meter semaphore/queue 0x20002D7C
+  -> reset raw TX-word queue 0x20002D74
+
+runtime enable/resume tail:
+  set mode-state 1 -> USART2 enable -> resume both DVOM tasks
+  -> set PC11 -> reset selector/shadow bytes -> tail-call FUN_0800B908
+
+runtime disable/suspend/drain:
+  USART2 disable -> suspend both DVOM tasks -> clear PC11
+  -> reset 0x20002D7C -> reset 0x20002D74 -> clear stale meter state
+```
+
+This strengthens the stock reset/resume/drain evidence used by the local DMM
+transition model. It still does not recover exact settle/discard timing, an
+analog `ms[0x02]`/`ms[0x03]` writer, H2/SPI3 acceptance, or a low-DCV
+calibration source.
+
 The runtime UI/mode-switch path carries the same transport shape and is now
 covered by the `runtime mode-switch transport guard`.  This is distinct from
 the boot/config branch above: `mode_switch_handler` dispatches on the live mode

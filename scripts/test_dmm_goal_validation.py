@@ -1177,6 +1177,51 @@ class DmmGoalValidationTests(unittest.TestCase):
             sequences["meter_transport_disable_suspend_drain"]["bytes"],
         )
 
+    def test_stock_meter_transport_operation_guards_are_binary_grounded(self) -> None:
+        result = stock_meter_literals.verify_meter_transport_operation_guards()
+        guards = result["guards"]
+
+        self.assertIn("not exact settle/discard timing", result["classification"])
+
+        boot_enable_ops = [op["op"] for op in guards["boot_enable_resume_reset"]["operations"]]
+        self.assertEqual(
+            boot_enable_ops,
+            [
+                "usart2_enable",
+                "resume_dvom_tx_task_0x20002da0",
+                "resume_dvom_rx_task_0x20002da4",
+                "pc11_set_gpioc_bop",
+                "meter_float_sentinels_reset",
+                "selector_shadow_reset",
+            ],
+        )
+
+        boot_disable_ops = [op["op"] for op in guards["boot_disable_suspend_drain"]["operations"]]
+        self.assertEqual(
+            boot_disable_ops,
+            [
+                "usart2_disable",
+                "suspend_dvom_tx_task_0x20002da0",
+                "suspend_dvom_rx_task_0x20002da4",
+                "pc11_clear_gpioc_bcr",
+                "reset_meter_sem_queue_0x20002d7c",
+                "reset_raw_tx_word_queue_0x20002d74",
+            ],
+        )
+
+        runtime_enable_ops = [
+            op["op"] for op in guards["runtime_enable_resume_tail"]["operations"]
+        ]
+        self.assertIn("tail_call_mode_init_dispatcher", runtime_enable_ops)
+        self.assertIn("pc11_set_gpioc_bop", runtime_enable_ops)
+
+        runtime_disable_ops = [
+            op["op"] for op in guards["runtime_disable_suspend_drain"]["operations"]
+        ]
+        self.assertIn("pc11_clear_gpioc_bcr", runtime_disable_ops)
+        self.assertIn("reset_raw_tx_word_queue_0x20002d74", runtime_disable_ops)
+        self.assertIn("clear_stale_meter_state", runtime_disable_ops)
+
     def test_stock_meter_selector_state_writers_are_binary_grounded(self) -> None:
         result = stock_meter_literals.verify_meter_selector_state_sequences()
         sequences = result["sequences"]

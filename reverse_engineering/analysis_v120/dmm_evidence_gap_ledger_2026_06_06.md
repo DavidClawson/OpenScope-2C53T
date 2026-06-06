@@ -86,6 +86,13 @@ one of:
   `0x0A`). This is probe/tail sequencing only; it is not DMM runtime range state,
   not a physical range/calibration source, not a low-DCV correction, and not
   H2/SPI3 apply proof.
+- Meter transport operation guard: stock restore/runtime slices now have named
+  operation-order checks for USART2 enable/disable, DVOM task resume/suspend,
+  PC11 set/clear, queue reset/drain (`0x20002D7C` and `0x20002D74`), selector
+  reset, stale-state clear, and the runtime tail-call to `FUN_0800B908`. This is
+  reset/resume/drain evidence only; exact settle/discard timing, analog
+  `ms[0x02]`/`ms[0x03]` writers, H2/SPI3 acceptance, and low-DCV calibration
+  remain unresolved.
 - Meter basic raw-word queue guard: stock materializes `0x0508` at
   `0x080033CA`, `0x0509` at `0x08003BA4`, and `0x0514` at `0x08005B7A` onto
   the raw-word queue path. Those words ground wake/start/variant sequencing;
