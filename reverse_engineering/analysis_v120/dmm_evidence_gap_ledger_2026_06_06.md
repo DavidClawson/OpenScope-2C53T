@@ -1164,3 +1164,43 @@ marker parsing. Do not continue by adding coefficients, OCR/image parsing, or
 more prose acceptance checks; continue at the runtime analog apply/hold/relay
 frontend state, stock command materialization, or a proved stock/H2 acceptance
 effect.
+
+## 2026-06-07 PC11 Timing Probe Is Negative
+
+OpenScope diagnostic image SHA-256
+`c7c908d1c3ccf0786afa8e8920962ec2a87f3985de9e3c4b4576fc69977c398c`
+was flashed through guarded HID IAP after `flash_preflight.py hid-app`
+classified it as an `openscope-app` image. This image added a diagnostic-only
+`meter pc11-timing [low_ms] [high_ms]` command: hold PC11 low while applying
+the planned submode mux GPIO projection, wait, raise PC11, wait again, then
+send the unchanged stock-like submode command sequence.
+
+With the user's probes shorted, both tested timings were negative:
+
+- DCV `250/250 ms`: planned/actual GPIO `0BB`, command plan
+  `config=0508 selector=0514 probe=0507 start=0509`; settled dump stayed
+  `display=---`, with special/OL-like producer frames such as
+  `5A A5 04 E0 FB 47 0E 28 00 00 01 45`.
+- Continuity `250/250 ms`: planned/actual GPIO `0EA`, command plan
+  `selector=0511 apply=0516 bank=1/00/2C probe=0507 start=0509`; settled dump
+  stayed invalid/`---`, no continuity marker and `beep=0`.
+- DCV `500/500 ms`: planned/actual GPIO still `0BB`; settled dump stayed
+  `display=---` with producer frame
+  `5A A5 E4 2E 63 25 07 00 00 00 01 4C`.
+- Continuity `500/500 ms`: planned/actual GPIO still `0EA`; settled dump
+  stayed `display=OL`, `beep=0`, producer frame
+  `5A A5 E4 2E 63 25 07 00 00 00 01 4D`.
+
+Interpretation: PC11 gate timing around mux projection is not a sufficient fix
+for the shorted-probes failure. The diagnostic command remains useful for
+future controlled transitions, but production must not adopt this as a
+range/multiplier workaround. The next root-cause lane remains the producer-side
+apply/materialization path: H2/SPI3 acceptance semantics, stock status/acq cases,
+meter command state, or an adjacent AFE state not captured by the current
+selector/GPIO snapshot.
+
+The H2 diagnostic wording is also corrected after this run: the old
+`post_ok=5` label meant only that five queued post-H2 SPI3 trigger handlers ran.
+It did not prove FPGA ACK, H2 apply, or factory calibration load. New debug
+output uses `post_run` plus explicit non-`0xFF` RX counters so future traces do
+not treat all-`0xFF` MISO as acceptance evidence.

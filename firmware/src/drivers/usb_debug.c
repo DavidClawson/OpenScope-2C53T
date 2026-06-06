@@ -555,6 +555,7 @@ static void cmd_help(void)
         "meter trace                     One machine-readable DMM producer record\r\n"
         "meter frontend                  Show DMM analog frontend GPIO state\r\n"
         "meter boot-sequence [ms]        Replay stock DMM boot word order + trace\r\n"
+        "meter pc11-timing [lo hi]       Probe DMM PC11 gate timing + trace\r\n"
         "meter mux-arms <ce> <ab> [ms]   Apply stock mux arms, poll, trace\r\n"
         "meter mux-stream [count] [ms]   Stream DMM frames plus frontend GPIOs\r\n"
         "meter stream [count] [delay_ms] Print compact DMM frame stream\r\n"
@@ -584,6 +585,36 @@ static void cmd_help(void)
         "uptime                          Show uptime\r\n"
         "\r\n"
     );
+}
+
+static uint16_t count_non_ff_bytes(const uint8_t *bytes, uint8_t len)
+{
+    uint16_t count = 0;
+
+    for (uint8_t i = 0; i < len; i++) {
+        if (bytes[i] != 0xFFU) {
+            count++;
+        }
+    }
+
+    return count;
+}
+
+static uint16_t count_post_h2_non_ff_snapshot(
+    uint8_t rx_len[FPGA_POST_H2_TRIGGER_HISTORY],
+    uint8_t rx[FPGA_POST_H2_TRIGGER_HISTORY][FPGA_POST_H2_RX_HISTORY])
+{
+    uint16_t count = 0;
+
+    for (uint8_t i = 0; i < FPGA_POST_H2_TRIGGER_HISTORY; i++) {
+        uint8_t shown = rx_len[i];
+        if (shown > FPGA_POST_H2_RX_HISTORY) {
+            shown = FPGA_POST_H2_RX_HISTORY;
+        }
+        count = (uint16_t)(count + count_non_ff_bytes(rx[i], shown));
+    }
+
+    return count;
 }
 
 static void cmd_version(void)
@@ -683,14 +714,14 @@ static void cmd_status(void)
         "TX complete: %s (no recovered FPGA ACK)\r\n"
         "0x3A close status: %02X (stock: F8)\r\n"
         "0x03 scope status: %02X %02X %02X %02X (stock: 00 01 42 2E)\r\n"
-        "post-H2 SPI3 boot: enq=%u ok=%u drop=%u mask=0x%02X\r\n",
+        "post-H2 SPI3 boot: enq=%u run=%u drop=%u mask=0x%02X\r\n",
         fpga.h2_bytes_sent,
         fpga.h2_upload_done ? "YES" : "NO",
         fpga.h2_close_status,
         fpga.scope_status[0], fpga.scope_status[1],
         fpga.scope_status[2], fpga.scope_status[3],
         fpga.post_h2_spi3_boot_enqueued,
-        fpga.post_h2_spi3_boot_ok,
+        fpga.post_h2_spi3_boot_run_count,
         fpga.post_h2_spi3_boot_dropped,
         fpga.post_h2_spi3_boot_mask
     );
@@ -2582,7 +2613,7 @@ static void cmd_meter_trace(void)
     uint8_t first_rx_frame[FPGA_RX_FRAME_SIZE];
     uint32_t first_rx_h2_bytes;
     uint8_t first_rx_h2_done;
-    uint8_t first_rx_h2_post_ok;
+    uint8_t first_rx_h2_post_run;
     uint8_t first_rx_h2_post_mask;
     uint8_t producer_frame[FPGA_RX_FRAME_SIZE];
     uint16_t rx_sync_data_start;
@@ -2645,7 +2676,7 @@ static void cmd_meter_trace(void)
            FPGA_RX_FRAME_SIZE);
     first_rx_h2_bytes = fpga.meter_first_rx_after_transition_h2_bytes;
     first_rx_h2_done = fpga.meter_first_rx_after_transition_h2_done;
-    first_rx_h2_post_ok = fpga.meter_first_rx_after_transition_h2_post_ok;
+    first_rx_h2_post_run = fpga.meter_first_rx_after_transition_h2_post_run_count;
     first_rx_h2_post_mask = fpga.meter_first_rx_after_transition_h2_post_mask;
     rxh_count = fpga.rx_frame_history_count;
     if (rxh_count > FPGA_RX_FRAME_HISTORY) rxh_count = FPGA_RX_FRAME_HISTORY;
@@ -2816,7 +2847,7 @@ static void cmd_meter_trace(void)
                      "start=%04X "
                      "planned_gpio=%03X actual_gpio=%03X data=%u tx=%u "
                      "echo=%u busy=%u discard=%u h2_bytes=%lu h2_done=%u "
-                     "h2_post_ok=%u h2_post_mask=%02X frame=",
+                     "h2_post_run=%u h2_post_mask=%02X frame=",
                      (unsigned)first_rx_valid,
                      (unsigned)first_rx_armed,
                      (unsigned)first_rx_submode,
@@ -2835,7 +2866,7 @@ static void cmd_meter_trace(void)
                      (unsigned)first_rx_discard,
                      first_rx_h2_bytes,
                      (unsigned)first_rx_h2_done,
-                     (unsigned)first_rx_h2_post_ok,
+                     (unsigned)first_rx_h2_post_run,
                      (unsigned)first_rx_h2_post_mask);
     print_volatile_frame_inline(first_rx_frame);
     usb_send_str("\r\n");
@@ -2913,21 +2944,29 @@ static void cmd_meter_trace(void)
                      gpio_level(GPIOB, 10),
                      gpio_level(GPIOB, 9),
                      gpio_level(GPIOA, 6));
-    usb_debug_printf("h2 bytes=%lu done=%u post_enq=%u post_ok=%u "
-                     "post_drop=%u post_mask=%02X spi_ok=%u spi_to=%u "
-                     "rx00=%lu rxff=%lu rxother=%lu close_len=%u\r\n",
+    uint16_t h2_close_nonff = count_non_ff_bytes(h2_close_rx, h2_close_rx_len);
+    uint16_t post_h2_nonff =
+        count_post_h2_non_ff_snapshot(post_h2_rx_len, post_h2_rx);
+
+    usb_debug_printf("h2 bytes=%lu done=%u post_enq=%u post_run=%u "
+                     "post_drop=%u post_mask=%02X post_rx_nonff=%u "
+                     "spi_ok=%u spi_to=%u rx00=%lu rxff=%lu rxother=%lu "
+                     "rx_nonff=%lu close_len=%u close_nonff=%u\r\n",
                      fpga.h2_bytes_sent,
                      fpga.h2_upload_done ? 1U : 0U,
                      (unsigned)fpga.post_h2_spi3_boot_enqueued,
-                     (unsigned)fpga.post_h2_spi3_boot_ok,
+                     (unsigned)fpga.post_h2_spi3_boot_run_count,
                      (unsigned)fpga.post_h2_spi3_boot_dropped,
                      (unsigned)fpga.post_h2_spi3_boot_mask,
+                     (unsigned)post_h2_nonff,
                      fpga.spi3_ok_count,
                      fpga.spi3_total_timeouts,
                      h2_rx_00_count,
                      h2_rx_ff_count,
                      h2_rx_other_count,
-                     (unsigned)h2_close_rx_len);
+                     h2_rx_00_count + h2_rx_other_count,
+                     (unsigned)h2_close_rx_len,
+                     (unsigned)h2_close_nonff);
     usb_debug_printf("factory_cal loaded=%u ch_size=%u channels=%u\r\n",
                      (factory_cal != NULL && factory_cal->loaded) ? 1U : 0U,
                      (unsigned)FACTORY_CAL_CHANNEL_SIZE,
@@ -3207,6 +3246,67 @@ static void cmd_meter_boot_sequence(const char *args)
                      (unsigned)meter_submode,
                      meter_submode_name(meter_submode),
                      settle_ms,
+                     (unsigned)planned_gpio,
+                     (unsigned)actual_gpio);
+    cmd_meter_trace();
+}
+
+static void cmd_meter_pc11_timing(const char *args)
+{
+    uint32_t low_ms = 250;
+    uint32_t high_ms = 250;
+    uint16_t planned_gpio = 0;
+    uint16_t actual_gpio = 0;
+    const char *usage = "Usage: meter pc11-timing [low_ms<=5000] [high_ms<=5000]\r\n";
+
+    if (args != NULL && *args != '\0') {
+        char buf[48];
+        char *saveptr = NULL;
+        char *tok;
+
+        strncpy(buf, args, sizeof(buf) - 1);
+        buf[sizeof(buf) - 1] = '\0';
+        tok = strtok_r(buf, " \t", &saveptr);
+        if (tok != NULL &&
+            (parse_int(tok, &low_ms) != 0 || low_ms > 5000U)) {
+            usb_send_str(usage);
+            return;
+        }
+        tok = strtok_r(NULL, " \t", &saveptr);
+        if (tok != NULL &&
+            (parse_int(tok, &high_ms) != 0 || high_ms > 5000U)) {
+            usb_send_str(usage);
+            return;
+        }
+        if (strtok_r(NULL, " \t", &saveptr) != NULL) {
+            usb_send_str(usage);
+            return;
+        }
+    }
+    if (current_mode != MODE_MULTIMETER) {
+        usb_send_str("ERR: switch to meter mode before probing DMM PC11 timing\r\n");
+        return;
+    }
+    if (!fpga_debug_send_meter_pc11_timing(meter_submode,
+                                           low_ms,
+                                           high_ms,
+                                           &planned_gpio,
+                                           &actual_gpio)) {
+        usb_send_str(usage);
+        return;
+    }
+
+    vTaskDelay(pdMS_TO_TICKS(high_ms));
+    (void)fpga_send_cmd(0x05, FPGA_CMD_METER_START);
+    vTaskDelay(pdMS_TO_TICKS(350));
+
+    usb_send_str("=== DMM PC11 Timing Trace ===\r\n");
+    usb_debug_printf("pc11_timing submode=%u (%s) low_ms=%lu high_ms=%lu "
+                     "planned_gpio=%03X actual_gpio=%03X\r\n",
+                     (unsigned)meter_submode,
+                     meter_submode_name(meter_submode),
+                     low_ms,
+                     high_ms,
                      (unsigned)planned_gpio,
                      (unsigned)actual_gpio);
     cmd_meter_trace();
@@ -3599,9 +3699,9 @@ static void cmd_spi3_acqtest(void)
     usb_debug_printf("SPI3 STS:   0x%08lX\r\n", *(volatile uint32_t *)0x40003C08);
     usb_debug_printf("H2 tx:   %d  bytes: %lu (no ACK proof)\r\n",
                      fpga.h2_upload_done, fpga.h2_bytes_sent);
-    usb_debug_printf("post-H2 SPI3 boot: enq=%u ok=%u drop=%u mask=0x%02X\r\n",
+    usb_debug_printf("post-H2 SPI3 boot: enq=%u run=%u drop=%u mask=0x%02X\r\n",
                      fpga.post_h2_spi3_boot_enqueued,
-                     fpga.post_h2_spi3_boot_ok,
+                     fpga.post_h2_spi3_boot_run_count,
                      fpga.post_h2_spi3_boot_dropped,
                      fpga.post_h2_spi3_boot_mask);
 
@@ -4549,6 +4649,10 @@ static void dispatch_command(char *line)
         cmd_meter_boot_sequence("");
     } else if (strncmp(line, "meter boot-sequence ", 20) == 0) {
         cmd_meter_boot_sequence(line + 20);
+    } else if (strcmp(line, "meter pc11-timing") == 0) {
+        cmd_meter_pc11_timing("");
+    } else if (strncmp(line, "meter pc11-timing ", 18) == 0) {
+        cmd_meter_pc11_timing(line + 18);
     } else if (strncmp(line, "meter mux-arms ", 15) == 0) {
         cmd_meter_mux_arms(line + 15);
     } else if (strcmp(line, "meter mux-stream") == 0) {

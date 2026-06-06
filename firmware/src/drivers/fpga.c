@@ -62,6 +62,8 @@
 #define SPI3_CS_ASSERT()    (GPIOB->clr = PB6_MASK)   /* PB6 LOW */
 #define SPI3_CS_DEASSERT()  (GPIOB->scr = PB6_MASK)   /* PB6 HIGH */
 
+static void fpga_send_meter_mode_sequence(uint8_t submode);
+
 /* ═══════════════════════════════════════════════════════════════════
  * Global State
  * ═══════════════════════════════════════════════════════════════════ */
@@ -926,8 +928,8 @@ static void fpga_arm_meter_first_rx_latch(
     fpga.meter_first_rx_after_transition_actual_gpio = actual_gpio;
     fpga.meter_first_rx_after_transition_h2_bytes = fpga.h2_bytes_sent;
     fpga.meter_first_rx_after_transition_h2_done = fpga.h2_upload_done;
-    fpga.meter_first_rx_after_transition_h2_post_ok =
-        fpga.post_h2_spi3_boot_ok;
+    fpga.meter_first_rx_after_transition_h2_post_run_count =
+        fpga.post_h2_spi3_boot_run_count;
     fpga.meter_first_rx_after_transition_h2_post_mask =
         fpga.post_h2_spi3_boot_mask;
     fpga.meter_first_rx_after_transition_armed = 1;
@@ -1623,6 +1625,69 @@ bool fpga_debug_send_meter_boot_order(uint8_t submode, uint32_t delay_ms,
     return true;
 }
 
+bool fpga_debug_send_meter_pc11_timing(uint8_t submode,
+                                       uint32_t low_ms,
+                                       uint32_t high_ms,
+                                       uint16_t *planned_gpio,
+                                       uint16_t *actual_gpio)
+{
+    fpga_meter_transition_plan_t plan;
+    fpga_meter_mux_gpio_state_t mux_state;
+
+    if (!fpga.initialized || !fpga_meter_submode_is_valid(submode)) {
+        return false;
+    }
+    if (low_ms > 5000U || high_ms > 5000U) {
+        return false;
+    }
+
+    plan = fpga_meter_transition_plan_for_submode(submode);
+    if (!fpga_meter_mux_gpio_state_for_submode(submode, &mux_state)) {
+        return false;
+    }
+
+    /*
+     * PC11 timing probe.
+     *
+     * Stock runtime drain clears PC11 while the DMM USART/tasks/queues are
+     * drained, and the enable path asserts PC11 before entering the mode-init
+     * tail. The normal open transition already has correct-looking settled
+     * selector/GPIO snapshots, but shorted probes still produce OL/special
+     * frames. This diagnostic keeps PC11 low during mux projection, then raises
+     * it with an explicit delay before sending the existing stock-like command
+     * plan unchanged. A useful result must change the producer frames; this path
+     * is not a numeric correction and is intentionally not used by production
+     * fpga_set_meter_mode().
+     */
+    meter_data_invalidate(submode);
+    fpga_meter_reset_transport();
+
+    GPIOC->clr = (1U << 11);
+    GPIOB->scr = PB11_MASK;
+    GPIOC->scr = PC6_MASK;
+    fpga_apply_meter_mux_gpio_state(&mux_state);
+    GPIOC->clr = (1U << 11);
+
+    if (planned_gpio != 0) {
+        *planned_gpio = fpga_meter_mux_gpio_mask_from_state(&mux_state);
+    }
+    fpga_scope_delay_ms(low_ms);
+
+    GPIOC->scr = (1U << 11);
+    fpga_scope_delay_ms(high_ms);
+
+    if (actual_gpio != 0) {
+        *actual_gpio = fpga_meter_mux_gpio_mask_live();
+    }
+
+    fpga_send_meter_mode_sequence(submode);
+    fpga_arm_meter_first_rx_latch(submode, &plan,
+                                  planned_gpio != 0 ? *planned_gpio : 0,
+                                  actual_gpio != 0 ? *actual_gpio : 0);
+    fpga_meter_discard_next_frames(plan.discard_frames);
+    return true;
+}
+
 static uint8_t fpga_scope_trigger_lsb(const scope_state_t *ss)
 {
     int level = 128 - ss->trigger.level;
@@ -2302,7 +2367,7 @@ static void fpga_run_stock_post_h2_spi3_trigger(uint8_t trigger_byte)
 
     SPI3_CS_DEASSERT();
     fpga.spi3_probing = false;
-    fpga.post_h2_spi3_boot_ok++;
+    fpga.post_h2_spi3_boot_run_count++;
 }
 
 static void fpga_enqueue_stock_post_h2_spi3_boot_triggers(void)

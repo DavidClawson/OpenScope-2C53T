@@ -276,7 +276,7 @@ typedef struct {
     volatile uint8_t  meter_first_rx_after_transition_frame[FPGA_RX_FRAME_SIZE];
     volatile uint32_t meter_first_rx_after_transition_h2_bytes;
     volatile uint8_t  meter_first_rx_after_transition_h2_done;
-    volatile uint8_t  meter_first_rx_after_transition_h2_post_ok;
+    volatile uint8_t  meter_first_rx_after_transition_h2_post_run_count;
     volatile uint8_t  meter_first_rx_after_transition_h2_post_mask;
 
     /* Acquisition mode (set by mode switch, read by acq task) */
@@ -444,7 +444,7 @@ typedef struct {
     volatile uint8_t  h2_close_rx_len;
     volatile uint8_t  h2_close_rx[6];
     volatile uint8_t  post_h2_spi3_boot_enqueued;
-    volatile uint8_t  post_h2_spi3_boot_ok;
+    volatile uint8_t  post_h2_spi3_boot_run_count;
     volatile uint8_t  post_h2_spi3_boot_dropped;
     volatile uint8_t  post_h2_spi3_boot_mask;
     volatile uint8_t  post_h2_spi3_trigger[FPGA_POST_H2_TRIGGER_HISTORY];
@@ -743,6 +743,20 @@ bool fpga_debug_apply_meter_mux_arms(uint8_t portc_porte_mux,
 bool fpga_debug_send_meter_boot_order(uint8_t submode, uint32_t delay_ms,
                                       uint16_t *planned_gpio,
                                       uint16_t *actual_gpio);
+
+/*
+ * Diagnostic-only PC11 meter-MUX timing probe.
+ *
+ * Holds PC11 low while applying the planned submode mux projection, waits,
+ * raises PC11, waits again, then sends the unchanged stock-like submode command
+ * sequence. This probes analog gate timing around the producer-frame fault; it
+ * must not become a decoder/multiplier or production range heuristic.
+ */
+bool fpga_debug_send_meter_pc11_timing(uint8_t submode,
+                                       uint32_t low_ms,
+                                       uint32_t high_ms,
+                                       uint16_t *planned_gpio,
+                                       uint16_t *actual_gpio);
 
 /*
  * Send the stock-like meter wake preamble, then re-apply the current
