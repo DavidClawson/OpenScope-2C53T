@@ -141,3 +141,11 @@ This guards `DAT_20001026` unit index `7`, unit indices 8/9/10/11, and
 `DAT_20001030` format offsets +9/+10 as display-formatter evidence.
 It is not a runtime analog range writer and does not prove separate
 capacitance-vs-temperature selector words.
+
+The unit lookup boundary guard also pins the stock draw-call slice at
+`0x08009AE4`, where the renderer computes `0x0804C40C + mode * 0x30 +
+DAT_20001026 * 4`, and the first 48 bytes at `0x0804C40C`. In the downloaded
+V1.2.0 APP image that zero-filled lookup region is not a valid in-image Thumb
+pointer table. Therefore `DAT_20001026` is stock formatter state, but
+`0x0804C40C` is not a recovered stock unit string table and must not be used as
+proof for local unit suffix text.

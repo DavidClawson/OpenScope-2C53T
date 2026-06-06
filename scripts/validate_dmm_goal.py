@@ -326,6 +326,8 @@ def verify_re_coverage() -> dict[str, Any]:
         "display formatter dispatch guard", "0x08002AA0", "0x08002B20",
         "0x08002B34", "DAT_20001026", "DAT_20001030",
         "unit indices 8/9/10/11", "format offsets +9/+10",
+        "unit lookup boundary guard", "0x0804C40C", "0x08009AE4",
+        "not a recovered stock unit string table", "zero-filled lookup region",
         "shared local splits", "eight-entry stock selector table",
         "without binary stock evidence", "uA is unresolved and unexposed",
         "H2 table binary guard", "tail bytes", "0x1C340", "no ACK/apply proof",

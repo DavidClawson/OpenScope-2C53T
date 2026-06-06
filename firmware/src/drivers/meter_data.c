@@ -389,8 +389,12 @@ static void format_4digit_unsigned(float v, char *s)
  * voltage/current data visibly separated; they must not be used as proof of an
  * unresolved hardware range state.
  *
- * Strings are ASCII-only so the font renderer doesn't need Greek
- * mu/ohm glyphs.
+ * Strings are ASCII-only so the font renderer doesn't need Greek mu/ohm
+ * glyphs. Stock formatter writes DAT_20001026 indices, but the downloaded
+ * V1.2.0 APP image does not contain a recovered stock unit string table at
+ * 0x0804C40C; that region is a documented negative boundary. The suffix text
+ * below is local UI text attached to stock formatter indices, not a recovered
+ * stock string dump.
  * ═══════════════════════════════════════════════════════════════════ */
 
 static const char * const unit_suffix_table[11][3] = {

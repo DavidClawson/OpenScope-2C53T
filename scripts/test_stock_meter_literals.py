@@ -239,6 +239,23 @@ EXPECTED_DISPLAY_FORMATTER_DISPATCH_SEQUENCES = {
         ),
     ),
 }
+EXPECTED_UNIT_LOOKUP_BOUNDARY_SEQUENCES = {
+    "display_unit_lookup_zero_region": (
+        0x0804C40C,
+        bytes.fromhex(
+            "00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 "
+            "00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 "
+            "00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00"
+        ),
+    ),
+    "display_unit_lookup_draw_call": (
+        0x08009AE4,
+        bytes.fromhex(
+            "95 f8 60 0f 4c f2 3c 42 95 f8 2e 1f 00 eb 40 00 "
+            "c0 f6 04 02 02 eb 00 10 00 eb 81 00 50 f8 30 0c"
+        ),
+    ),
+}
 EXPECTED_MUX_RESTORE_SEQUENCES = {
     0x08025544: bytes.fromhex("a0 78 dc f7 ad f9 e0 78 dc f7 84 fa"),
     0x0802723E: bytes.fromhex(
@@ -976,6 +993,50 @@ def verify_display_formatter_dispatch_sequences() -> dict[str, object]:
     return {"sequences": checked}
 
 
+def verify_unit_lookup_boundary_sequences() -> dict[str, object]:
+    """Check the stock unit lookup negative boundary.
+
+    Stock draw code at `0x08009AE4` computes
+    `0x0804C40C + DAT_20001058 * 0x30 + DAT_20001026 * 4` and loads one word
+    for the unit-render call.  Older notes treated the base as a recovered
+    12-entry unit-string pointer table, but the downloaded V1.2.0 image has a
+    zero-filled first 48 bytes there.  Those words are not valid in-image
+    Thumb/text pointers, so they are negative evidence: stock
+    formatter unit indices are real, but unit string contents are not recovered
+    from this APP image.
+    """
+    checked: dict[str, dict[str, str]] = {}
+    for name, (addr, expected) in EXPECTED_UNIT_LOOKUP_BOUNDARY_SEQUENCES.items():
+        actual = read(addr, len(expected))
+        if actual != expected:
+            raise AssertionError(
+                f"{name} {addr:#010x}: expected {expected.hex(' ')}, "
+                f"got {actual.hex(' ')}"
+            )
+        checked[name] = {
+            "addr": f"{addr:#010x}",
+            "bytes": actual.hex(" "),
+        }
+
+    words = struct.unpack(
+        "<12I",
+        read(EXPECTED_UNIT_LOOKUP_BOUNDARY_SEQUENCES["display_unit_lookup_zero_region"][0], 48),
+    )
+    thumb_pointers = [
+        value for value in words
+        if (value & 1) and BASE <= (value & ~1) < BASE + BIN.stat().st_size
+    ]
+    if thumb_pointers:
+        raise AssertionError(
+            "0x0804C40C unexpectedly contains in-image Thumb pointers: "
+            + ", ".join(f"{value:#010x}" for value in thumb_pointers)
+        )
+    checked["display_unit_lookup_zero_region"]["words"] = " ".join(
+        f"{value:#010x}" for value in words
+    )
+    return {"sequences": checked, "thumb_pointers": thumb_pointers}
+
+
 def verify_meter_mux_restore_sequences() -> dict[str, object]:
     """Check stock saved-state ms[0x02]/ms[0x03] mux apply call sites.
 
@@ -1413,6 +1474,7 @@ def main() -> None:
     selector_state = verify_meter_selector_state_sequences()
     acv_format = verify_acv_format_selector_sequences()
     display_formatter = verify_display_formatter_dispatch_sequences()
+    unit_lookup_boundary = verify_unit_lookup_boundary_sequences()
     mux_restore = verify_meter_mux_restore_sequences()
     saved_config_unpack = verify_meter_saved_config_unpack_sequences()
     saved_config_pack = verify_meter_saved_config_pack_sequences()
@@ -1445,6 +1507,8 @@ def main() -> None:
           ", ".join(item["addr"] for item in acv_format["sequences"].values()))
     print("stock display formatter dispatch sites: " +
           ", ".join(item["addr"] for item in display_formatter["sequences"].values()))
+    print("stock unit lookup boundary sites: " +
+          ", ".join(item["addr"] for item in unit_lookup_boundary["sequences"].values()))
     print("stock meter mux restore sites: " +
           ", ".join(mux_restore["sequences"].keys()))
     print("stock meter saved-config unpack sites: " +

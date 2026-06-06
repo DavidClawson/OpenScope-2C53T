@@ -186,6 +186,18 @@ class DmmGoalValidationTests(unittest.TestCase):
             "0x08002b34",
         )
 
+    def test_stock_unit_lookup_boundary_is_binary_grounded(self) -> None:
+        result = stock_meter_literals.verify_unit_lookup_boundary_sequences()
+        self.assertEqual(
+            result["sequences"]["display_unit_lookup_zero_region"]["addr"],
+            "0x0804c40c",
+        )
+        self.assertEqual(
+            result["sequences"]["display_unit_lookup_draw_call"]["addr"],
+            "0x08009ae4",
+        )
+        self.assertEqual(result["thumb_pointers"], [])
+
     def test_state_machine_property_contract_is_anchored(self) -> None:
         result = validate_dmm_goal.verify_state_machine_property_contract()
         self.assertEqual(result["file"], "firmware/tests/test_meter_data.c")

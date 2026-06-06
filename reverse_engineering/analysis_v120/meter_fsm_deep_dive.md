@@ -332,11 +332,20 @@ Index mapping (from write patterns):
 | 10 | Frequency | 1 | kHz |
 | 11 | Frequency | 2 | MHz |
 
-**Flash table location:** `0x804c40c + index * 4 = 48-byte table`
+**Corrected 2026-06-06:** the draw path still computes
+`0x804c40c + index * 4`, but the downloaded V1.2.0 APP image does not contain a
+recovered unit-string pointer table there. The unit lookup boundary guard pins
+the draw-call slice at `0x08009AE4` and the first 48 bytes at `0x0804C40C`;
+that zero-filled lookup region is not valid in-image Thumb pointer evidence.
+Therefore the formatter unit indices are stock evidence, while the actual suffix
+strings remain local/inferred.
+
+**Flash table location claimed by the decompile:** `0x804c40c + index * 4`
 
 Formula: `flash_addr = 0x804c40c + DAT_20001026 * 4`
 
-Each entry is a 4-byte pointer to a string in flash.
+Older wording said each entry is a 4-byte pointer to a string in flash. That is
+now treated as an overclaim for this downloaded APP image.
 
 **Access pattern:** Only read at line 3781 inside a drawing function. Each entry is dereferenced as a pointer to a UI element definition (likely font/color/position data plus the string itself).
 
@@ -731,7 +740,10 @@ where per_submode_offset is:
 
 ### For display strings:
 
-1. **Our meter_data.c unit_suffix_table is correct.** Verified against display formatter logic (lines 2889–2963).
+1. **Our meter_data.c unit_suffix_table is local UI text.** It is attached to
+   stock formatter indices from lines 2889–2963, but it is not verified as a
+   byte-for-byte stock string table because `0x0804C40C` is not recovered
+   string-table evidence in the downloaded V1.2.0 APP image.
 
 2. **DAT_20001026 to string lookup** goes through flash table 0x804c40c. We supply our own ASCII table at boot — no dependency on stock flash.
 
@@ -768,4 +780,3 @@ where per_submode_offset is:
 **Decomp Source:** decompiled_2C53T_v2.c (38,837 lines)  
 **Methodology:** Verbatim quote + bit-shift translation + multi-site cross-reference  
 **Confidence:** High on Q1, Q2, Q4, Q6, Q7 (direct quotes). Medium on Q3 (function purpose inferred). Medium-low on Q5 (state mapping unverified).
-
