@@ -322,6 +322,46 @@ class DmmGoalValidationTests(unittest.TestCase):
         self.assertIn("c0 f6 0b 02", result["sequences"]["0x080048ba"])
         self.assertIn("00 f5 a0 60", result["sequences"]["0x080048ba"])
 
+    def test_stock_meter_selector_adjusters_are_binary_grounded(self) -> None:
+        result = stock_meter_literals.verify_meter_selector_adjust_sequences()
+        sequences = result["sequences"]
+        self.assertEqual(
+            sequences["selector_adjust_prev_prologue"]["addr"],
+            "0x080041f8",
+        )
+        self.assertEqual(
+            sequences["selector_adjust_prev_meter_case"]["addr"],
+            "0x080042d4",
+        )
+        self.assertEqual(
+            sequences["selector_adjust_next_prologue"]["addr"],
+            "0x080047cc",
+        )
+        self.assertEqual(
+            sequences["selector_adjust_next_meter_case"]["addr"],
+            "0x080048ac",
+        )
+        self.assertIn(
+            "95 f8 5d 0f 00 f0 f0 00 b0 28",
+            sequences["selector_adjust_prev_meter_case"]["bytes"],
+        )
+        self.assertIn(
+            "41 1e 00 28 08 bf 07 21",
+            sequences["selector_adjust_prev_meter_case"]["bytes"],
+        )
+        self.assertIn(
+            "07 28 38 bf 41 1c",
+            sequences["selector_adjust_next_meter_case"]["bytes"],
+        )
+        self.assertIn(
+            "1d 21 38 68 21 70",
+            sequences["selector_adjust_next_meter_case"]["bytes"],
+        )
+        self.assertIn(
+            "1b 21 38 68 21 70",
+            sequences["selector_adjust_next_meter_case"]["bytes"],
+        )
+
     def test_stock_dvom_tx_queue_consumer_is_binary_grounded(self) -> None:
         result = stock_meter_literals.verify_dvom_tx_queue_consumer_sequences()
         sequences = result["sequences"]

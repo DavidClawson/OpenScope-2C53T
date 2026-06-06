@@ -333,6 +333,8 @@ def verify_re_coverage() -> dict[str, Any]:
         "H2 table binary guard", "tail bytes", "0x1C340", "no ACK/apply proof",
         "transition phase matrix", "busy transition frame", "stable frame",
         "selector consumer xrefs", "0x080042E2", "0x080048BA", "0x20002D54",
+        "selector adjuster guard", "0x080041F8", "0x080047CC",
+        "decrement/increment", "wrap over 0..7", "0x1D", "0x1B",
         "dvom_TX raw-word consumer guard", "0x080373F4", "0x20002D74",
         "USART2 command path",
         "meter transport transition guard", "0x08026F8E", "0x0802700A",

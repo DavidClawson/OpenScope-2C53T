@@ -27,6 +27,62 @@ EXPECTED_METER_SELECTOR_XREF_SEQUENCES = {
         "00 f5 a0 60 c2 f2 00 01 08 80"
     ),
 }
+EXPECTED_METER_SELECTOR_ADJUST_SEQUENCES = {
+    "selector_adjust_prev_prologue": (
+        0x080041F8,
+        bytes.fromhex(
+            "f0 b5 85 b0 40 f2 f8 05 c2 f2 00 05 95 f8 68 0f "
+            "09 28 00 f2 db 82 df e8 10 f0 0a 00 61 00 ca 00 "
+            "eb 00 0b 01 3d 00 2a 01 d9 02 d9 02 42 01"
+        ),
+    ),
+    "selector_adjust_prev_meter_case": (
+        0x080042D4,
+        bytes.fromhex(
+            "95 f8 5d 0f 00 f0 f0 00 b0 28 00 f0 71 82 95 f8 "
+            "2d 0f 4b f2 fc 32 41 1e 00 28 08 bf 07 21 c8 b2 "
+            "c0 f6 0b 02 10 5c 85 f8 2d 1f 42 f6 54 51 00 f5 "
+            "a0 60 c2 f2 00 01 08 80 42 f6 74 50 c2 f2 00 00 "
+            "00 68 00 26 4f f0 ff 32 85 f8 5d 6f 36 f0 e6 fc "
+            "42 f6 6c 57 42 f6 53 54 c2 f2 00 07 c2 f2 00 04 "
+            "1d 21 38 68 21 70 21 46 4f f0 ff 32 36 f0 d6 fc "
+            "1b 21 38 68 21 70 21 46 4f f0 ff 32 36 f0 ce fc "
+            "95 f8 2d 0f 95 f8 3c 1f 02 28 18 bf 01 20 85 f8 "
+            "36 0f 00 20 c7 f6 c0 70 c5 f8 48 0f c5 f8 4c 0f "
+            "00 29 c5 f8 50 0f 18 bf 85 f8 3c 6f 95 f8 3d 0f "
+            "50 b1 00 20 85 f8 3d 0f 1a 21 38 68 21 70 21 46 "
+            "4f f0 ff 32 36 f0 aa fc 05 b0 bd e8 f0 40 fe f7 "
+            "9d ba"
+        ),
+    ),
+    "selector_adjust_next_prologue": (
+        0x080047CC,
+        bytes.fromhex(
+            "f0 b5 85 b0 40 f2 f8 05 c2 f2 00 05 95 f8 68 0f "
+            "09 28 00 f2 cd 81 df e8 10 f0 0a 00 63 00 cc 00 "
+            "ed 00 05 01 41 00 23 01 cb 01 cb 01 3d 01"
+        ),
+    ),
+    "selector_adjust_next_meter_case": (
+        0x080048AC,
+        bytes.fromhex(
+            "95 f8 5d 0f 00 f0 f0 00 b0 28 00 f0 61 81 95 f8 "
+            "2d 0f 00 21 4b f2 fc 32 07 28 38 bf 41 1c c8 b2 "
+            "c0 f6 0b 02 10 5c 85 f8 2d 1f 42 f6 54 51 00 f5 "
+            "a0 60 c2 f2 00 01 08 80 42 f6 74 50 c2 f2 00 00 "
+            "00 68 00 26 4f f0 ff 32 85 f8 5d 6f 36 f0 fa f9 "
+            "42 f6 6c 57 42 f6 53 54 c2 f2 00 07 c2 f2 00 04 "
+            "1d 21 38 68 21 70 21 46 4f f0 ff 32 36 f0 ea f9 "
+            "1b 21 38 68 21 70 21 46 4f f0 ff 32 36 f0 e2 f9 "
+            "95 f8 2d 0f 95 f8 3c 1f 02 28 18 bf 01 20 85 f8 "
+            "36 0f 00 20 c7 f6 c0 70 c5 f8 48 0f c5 f8 4c 0f "
+            "00 29 c5 f8 50 0f 18 bf 85 f8 3c 6f 95 f8 3d 0f "
+            "50 b1 00 20 85 f8 3d 0f 1a 21 38 68 21 70 21 46 "
+            "4f f0 ff 32 36 f0 be f9 05 b0 bd e8 f0 40 fd f7 "
+            "b1 bf"
+        ),
+    ),
+}
 EXPECTED_DVOM_TX_QUEUE_CONSUMER_SEQUENCES = {
     "dvom_tx_raw_word_consumer": (
         0x080373F4,
@@ -808,6 +864,36 @@ def verify_meter_selector_xref_sequences() -> dict[str, object]:
     return {"sequences": checked}
 
 
+def verify_meter_selector_adjust_sequences() -> dict[str, object]:
+    """Check stock prev/next selector stepping around the raw-word table.
+
+    The guarded `0x080041F8`/`0x080047CC` handlers are the paired stock adjust
+    owners for the selector state while `ms[0xF68] == 1`: they gate on
+    `bRam20001055 & 0xF0 != 0xB0`, decrement/increment `DAT_20001025` with
+    wrap over 0..7, load `0x080BB3FC + DAT_20001025`, stage
+    `0x0500 | table[selector]` at `0x20002D54`, enqueue it through
+    `0x20002D74`, then queue display commands `0x1D` and `0x1B` and reset the
+    visible value state before tail-calling `FUN_080028E0`.
+
+    This is digital selector stepping and raw-word emission evidence.  It is
+    not the missing analog `ms[0x02]`/`ms[0x03]` runtime range writer and does
+    not explain the low-DCV physical mismatch.
+    """
+    checked: dict[str, dict[str, str]] = {}
+    for name, (addr, expected) in EXPECTED_METER_SELECTOR_ADJUST_SEQUENCES.items():
+        actual = read(addr, len(expected))
+        if actual != expected:
+            raise AssertionError(
+                f"{name} {addr:#010x}: expected {expected.hex(' ')}, "
+                f"got {actual.hex(' ')}"
+            )
+        checked[name] = {
+            "addr": f"{addr:#010x}",
+            "bytes": actual.hex(" "),
+        }
+    return {"sequences": checked}
+
+
 def verify_dvom_tx_queue_consumer_sequences() -> dict[str, object]:
     """Check the stock dvom_TX task that consumes raw DMM/FPGA TX words.
 
@@ -1467,6 +1553,7 @@ def main() -> None:
     expect_bytes(0x08036C8C, "00 bf 00 bf")
     selector = verify_meter_selector_table()
     selector_xrefs = verify_meter_selector_xref_sequences()
+    selector_adjust = verify_meter_selector_adjust_sequences()
     dvom_tx_consumers = verify_dvom_tx_queue_consumer_sequences()
     roll_buffer_preload = verify_roll_buffer_preload_sequences()
     transport_transitions = verify_meter_transport_transition_sequences()
@@ -1493,6 +1580,8 @@ def main() -> None:
     print(f"stock meter selector table: {selector['bytes']}")
     print("stock meter selector xref sites: " +
           ", ".join(selector_xrefs["sequences"].keys()))
+    print("stock meter selector adjust sites: " +
+          ", ".join(item["addr"] for item in selector_adjust["sequences"].values()))
     print("stock dvom_TX raw-word consumer sites: " +
           ", ".join(item["addr"] for item in dvom_tx_consumers["sequences"].values()))
     print("stock roll-buffer preload sites: " +

@@ -30,6 +30,39 @@ before queueing through the `0x20002D74` raw-word path.  This is selector-table
 consumer evidence only; it still does not recover the analog mux bytes
 `ms[0x02]`/`ms[0x03]` or any physical correction coefficient.
 
+The selector adjuster guard now pins the paired prev/next handlers that own the
+same digital selector step around those consumer xrefs:
+
+```text
+0x080041F8 selector_adjust_prev prologue:
+  loads state base `0x200000F8`, reads `ms[0xF68]`, bounds it to 0..9,
+  and dispatches through the mixed adjustment TBB table.
+
+0x080042D4 selector_adjust_prev meter case:
+  rejects the blocked `bRam20001055 & 0xF0 == 0xB0` state,
+  decrements `DAT_20001025` with wrap over 0..7,
+  loads `0x080BB3FC + DAT_20001025`,
+  stages `0x0500 | table[selector]` at `0x20002D54`,
+  enqueues the raw word through `0x20002D74`,
+  queues display/update commands `0x1D` and `0x1B`,
+  resets value/dirty state, and tail-calls `FUN_080028E0`.
+
+0x080047CC selector_adjust_next prologue:
+  same state-base and `ms[0xF68]` TBB owner for the positive adjustment side.
+
+0x080048AC selector_adjust_next meter case:
+  rejects the same blocked state, increments `DAT_20001025` with wrap over
+  0..7, emits the same raw-word and `0x1D`/`0x1B` display-update sequence,
+  resets value/dirty state, and tail-calls `FUN_080028E0`.
+```
+
+This is stronger stock evidence for the digital DMM selector state machine:
+the stock UI/runtime adjustment owners decrement/increment the eight-entry
+selector and emit the matching `0x05xx` raw word.  It is still deliberately
+bounded evidence.  It does not recover a runtime analog range writer for
+`ms[0x02]`/`ms[0x03]`, relay/AFE switching, factory calibration, or the
+low-DCV `0.200 V` visual versus `0.4366 V` CDC blocker.
+
 The stock raw-word queue consumer is now binary-guarded as well. This
 `dvom_TX raw-word consumer guard` proves that the `dvom_TX` task at
 `0x080373F4` uses queue handle `0x20002D74`, blocks in `xQueueReceive`, then
