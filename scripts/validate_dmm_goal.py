@@ -573,6 +573,7 @@ def verify_transition_plan_property_contract() -> dict[str, Any]:
         "transition_settle_discard_policy_is_explicit_for_every_submode",
         "state_machine_contract_is_exhaustive",
         "frame_family_mismatch_policy_matrix_is_exhaustive",
+        "logical_function_capability_matrix_covers_all_dmm_modes",
         "local_splits_do_not_invent_extra_stock_selectors",
         "local_splits_share_mux_gpio_state",
         "fallbacks",
@@ -601,6 +602,10 @@ def verify_transition_plan_property_contract() -> dict[str, Any]:
             r"static const fpga_meter_mux_gpio_state_t expected\[FPGA_METER_LOCAL_SUBMODE_COUNT\]\s*=",
         "auxiliary AFE pins stay low in tested mux states":
             r"\{\s*1,\s*1,\s*0,\s*1,\s*1,\s*1,\s*0,\s*1,\s*0,\s*0\s*\}",
+        "logical DMM function table covers microamp gaps":
+            r"static const uint8_t expected_submode\[FPGA_METER_LOGICAL_FUNCTION_COUNT\]\s*=\s*"
+            r"\{\s*0,\s*1,\s*FPGA_METER_INVALID_LOCAL_SUBMODE,\s*2,\s*3,\s*"
+            r"FPGA_METER_INVALID_LOCAL_SUBMODE,\s*4,\s*5,\s*6,\s*7,\s*8,\s*9,\s*10,\s*\};",
         "phase matrix iterates every local submode":
             r"for \(uint8_t mode = 0; mode < FPGA_METER_LOCAL_SUBMODE_COUNT; mode\+\+\)",
         "planned discards drain in order":
@@ -637,6 +642,9 @@ def verify_transition_plan_property_contract() -> dict[str, Any]:
         "bad plan has no start",
         "plan probe detect",
         "plan start word",
+        "all logical DMM functions covered",
+        "DC uA is unresolved",
+        "AC uA is unresolved",
         "uniform local settle/discard",
         "invalid submodes emit no settle/discard",
     ]
@@ -676,6 +684,7 @@ def verify_autoscan_property_contract() -> dict[str, Any]:
         "dc_voltage_scores_without_frequency_or_nonzero_magnitude",
         "ac_voltage_requires_frequency_evidence",
         "current_auto_scores_respect_ac_evidence",
+        "unresolved_microamp_functions_are_not_autoscan_candidates",
         "temperature_scores_as_passive_candidate",
         "continuity_marker_beats_resistance_normal",
     ]
@@ -689,6 +698,8 @@ def verify_autoscan_property_contract() -> dict[str, Any]:
         "r.aux_freq_hz = 66.0f",
         "r.is_ac = true;\n    ASSERT(meter_auto_score(1, &r) == 0);",
         "r.submode = 4;\n    ASSERT(meter_auto_score(4, &r) == 0);",
+        "FPGA_METER_FUNCTION_DC_UA",
+        "FPGA_METER_INVALID_LOCAL_SUBMODE",
         "meter_auto_score(4, &r) == 0",
         "meter_auto_score(5, &r) == 0",
         "meter_auto_score(4, &r) == 50",
@@ -732,6 +743,9 @@ def verify_ui_submode_surface_contract() -> dict[str, Any]:
         ],
         "firmware/src/drivers/fpga_meter_plan.h": [
             "#define FPGA_METER_LOCAL_SUBMODE_COUNT 11u",
+            "#define FPGA_METER_LOGICAL_FUNCTION_COUNT 13u",
+            "FPGA_METER_FUNCTION_DC_UA",
+            "FPGA_METER_FUNCTION_AC_UA",
         ],
         "firmware/src/ui/meter_ui.c": [
             "uA is intentionally absent from this UI/submode",
@@ -820,6 +834,8 @@ def verify_re_coverage() -> dict[str, Any]:
         "shared local splits", "eight-entry stock selector table",
         "without binary stock evidence", "uA is unresolved and unexposed",
         "UI/submode surface guard", "no recovered uA local submode",
+        "logical DMM function matrix", "DC uA", "AC uA",
+        "FPGA_METER_INVALID_LOCAL_SUBMODE", "13-function matrix",
         "H2 table binary guard", "tail bytes", "0x1C340", "no ACK/apply proof",
         "SPI3 init choreography correction", "0x08026B7C..0x08026C30",
         "H2 byte count remains diagnostic only",

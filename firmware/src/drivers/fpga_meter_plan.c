@@ -18,6 +18,33 @@ static const uint8_t stock_meter_cmd_low[FPGA_METER_STOCK_MODE_COUNT] = {
     0x14, 0x0C, 0x17, 0x0B, 0x0A, 0x12, 0x11, 0x10
 };
 
+/*
+ * Logical DMM function surface.
+ * The user-facing goal includes the usual DMM current families uA/mA/A, but
+ * stock V1.2.0 evidence recovered so far exposes only shared current slots for
+ * mA/A-like behavior. No selector-table entry, formatter path, mux writer, or
+ * safe live trace proves a microamp frontend/range. Model that absence
+ * explicitly: DC_UA and AC_UA map to INVALID, so autoscan/UI work cannot
+ * quietly introduce a microamp path until new stock/live evidence changes this
+ * table and its tests.
+ */
+static const uint8_t
+logical_function_local_submode[FPGA_METER_LOGICAL_FUNCTION_COUNT] = {
+    0,                                /* DCV */
+    1,                                /* ACV */
+    FPGA_METER_INVALID_LOCAL_SUBMODE, /* DC uA unresolved */
+    2,                                /* DC mA */
+    3,                                /* DC A */
+    FPGA_METER_INVALID_LOCAL_SUBMODE, /* AC uA unresolved */
+    4,                                /* AC mA */
+    5,                                /* AC A */
+    6,                                /* Resistance */
+    7,                                /* Continuity */
+    8,                                /* Diode */
+    9,                                /* Capacitance */
+    10,                               /* Temperature */
+};
+
 typedef struct {
     uint8_t pc12;
     uint8_t pe4;
@@ -77,6 +104,31 @@ static const fpga_meter_porta_portb_state_t stock_porta_portb_mux[10] = {
 bool fpga_meter_submode_is_valid(uint8_t submode)
 {
     return submode < FPGA_METER_LOCAL_SUBMODE_COUNT;
+}
+
+bool fpga_meter_logical_function_is_valid(uint8_t function)
+{
+    return function < FPGA_METER_LOGICAL_FUNCTION_COUNT;
+}
+
+uint8_t fpga_meter_submode_for_logical_function(uint8_t function)
+{
+    if (!fpga_meter_logical_function_is_valid(function)) {
+        return FPGA_METER_INVALID_LOCAL_SUBMODE;
+    }
+    return logical_function_local_submode[function];
+}
+
+bool fpga_meter_logical_function_is_supported(uint8_t function)
+{
+    return fpga_meter_submode_is_valid(
+        fpga_meter_submode_for_logical_function(function));
+}
+
+bool fpga_meter_logical_function_is_unresolved(uint8_t function)
+{
+    return fpga_meter_logical_function_is_valid(function) &&
+           !fpga_meter_logical_function_is_supported(function);
 }
 
 uint8_t fpga_meter_stock_mode_for_submode(uint8_t submode)

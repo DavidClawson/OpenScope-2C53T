@@ -6,11 +6,29 @@
 
 #define FPGA_METER_LOCAL_SUBMODE_COUNT 11u
 #define FPGA_METER_STOCK_MODE_COUNT    8u
+#define FPGA_METER_LOGICAL_FUNCTION_COUNT 13u
 #define FPGA_METER_TRANSITION_DISCARD_FRAMES 2u
 #define FPGA_METER_TRANSITION_SETTLE_MS      20u
 #define FPGA_METER_INVALID_STOCK_MODE        0xFFu
+#define FPGA_METER_INVALID_LOCAL_SUBMODE     0xFFu
 #define FPGA_METER_INVALID_SELECTOR_WORD     0x0000u
 #define FPGA_METER_START_WORD                0x0509u
+
+typedef enum {
+    FPGA_METER_FUNCTION_DCV = 0,
+    FPGA_METER_FUNCTION_ACV = 1,
+    FPGA_METER_FUNCTION_DC_UA = 2,
+    FPGA_METER_FUNCTION_DC_MA = 3,
+    FPGA_METER_FUNCTION_DC_A = 4,
+    FPGA_METER_FUNCTION_AC_UA = 5,
+    FPGA_METER_FUNCTION_AC_MA = 6,
+    FPGA_METER_FUNCTION_AC_A = 7,
+    FPGA_METER_FUNCTION_RESISTANCE = 8,
+    FPGA_METER_FUNCTION_CONTINUITY = 9,
+    FPGA_METER_FUNCTION_DIODE = 10,
+    FPGA_METER_FUNCTION_CAPACITANCE = 11,
+    FPGA_METER_FUNCTION_TEMPERATURE = 12,
+} fpga_meter_logical_function_t;
 
 typedef enum {
     FPGA_METER_FRAME_FAMILY_VOLTAGE = 0,
@@ -59,6 +77,10 @@ typedef struct {
 } fpga_meter_mux_gpio_state_t;
 
 bool fpga_meter_submode_is_valid(uint8_t submode);
+bool fpga_meter_logical_function_is_valid(uint8_t function);
+bool fpga_meter_logical_function_is_supported(uint8_t function);
+bool fpga_meter_logical_function_is_unresolved(uint8_t function);
+uint8_t fpga_meter_submode_for_logical_function(uint8_t function);
 uint8_t fpga_meter_stock_mode_for_submode(uint8_t submode);
 uint8_t fpga_meter_stock_cmd_low_for_mode(uint8_t stock_mode);
 uint16_t fpga_meter_stock_cmd_word_for_submode(uint8_t submode);

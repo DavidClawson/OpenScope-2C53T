@@ -82,6 +82,69 @@ static void test_local_submode_mapping(void)
     }
 }
 
+static void test_logical_function_capability_matrix_covers_all_dmm_modes(void)
+{
+    static const uint8_t expected_submode[FPGA_METER_LOGICAL_FUNCTION_COUNT] = {
+        0,
+        1,
+        FPGA_METER_INVALID_LOCAL_SUBMODE,
+        2,
+        3,
+        FPGA_METER_INVALID_LOCAL_SUBMODE,
+        4,
+        5,
+        6,
+        7,
+        8,
+        9,
+        10,
+    };
+    uint16_t seen_functions = 0;
+    uint16_t seen_supported_submodes = 0;
+
+    for (uint8_t fn = 0; fn < FPGA_METER_LOGICAL_FUNCTION_COUNT; fn++) {
+        char name[72];
+        uint8_t submode = fpga_meter_submode_for_logical_function(fn);
+
+        seen_functions |= (uint16_t)(1U << fn);
+        if (fpga_meter_submode_is_valid(submode)) {
+            seen_supported_submodes |= (uint16_t)(1U << submode);
+        }
+
+        snprintf(name, sizeof(name), "logical function valid %u", (unsigned)fn);
+        EXPECT_EQ_U8(name,
+                     fpga_meter_logical_function_is_valid(fn) ? 1U : 0U,
+                     1U);
+        snprintf(name, sizeof(name), "logical function submode %u", (unsigned)fn);
+        EXPECT_EQ_U8(name, submode, expected_submode[fn]);
+        snprintf(name, sizeof(name), "logical function supported %u", (unsigned)fn);
+        EXPECT_EQ_U8(name,
+                     fpga_meter_logical_function_is_supported(fn) ? 1U : 0U,
+                     expected_submode[fn] != FPGA_METER_INVALID_LOCAL_SUBMODE);
+        snprintf(name, sizeof(name), "logical function unresolved %u", (unsigned)fn);
+        EXPECT_EQ_U8(name,
+                     fpga_meter_logical_function_is_unresolved(fn) ? 1U : 0U,
+                     expected_submode[fn] == FPGA_METER_INVALID_LOCAL_SUBMODE);
+    }
+
+    EXPECT_EQ_U16("all logical DMM functions covered", seen_functions,
+                  (uint16_t)((1U << FPGA_METER_LOGICAL_FUNCTION_COUNT) - 1U));
+    EXPECT_EQ_U16("all supported local submodes represented", seen_supported_submodes,
+                  (uint16_t)((1U << FPGA_METER_LOCAL_SUBMODE_COUNT) - 1U));
+    EXPECT_EQ_U8("DC uA is unresolved",
+                 fpga_meter_logical_function_is_unresolved(FPGA_METER_FUNCTION_DC_UA) ? 1U : 0U,
+                 1U);
+    EXPECT_EQ_U8("AC uA is unresolved",
+                 fpga_meter_logical_function_is_unresolved(FPGA_METER_FUNCTION_AC_UA) ? 1U : 0U,
+                 1U);
+    EXPECT_EQ_U8("invalid logical function rejected",
+                 fpga_meter_logical_function_is_valid(FPGA_METER_LOGICAL_FUNCTION_COUNT) ? 1U : 0U,
+                 0U);
+    EXPECT_EQ_U8("invalid logical function maps invalid submode",
+                 fpga_meter_submode_for_logical_function(FPGA_METER_LOGICAL_FUNCTION_COUNT),
+                 FPGA_METER_INVALID_LOCAL_SUBMODE);
+}
+
 static void test_wire_words_are_raw_05_family(void)
 {
     static const uint16_t expected_words[FPGA_METER_LOCAL_SUBMODE_COUNT] = {
@@ -543,6 +606,7 @@ int main(void)
 {
     test_stock_table_bytes();
     test_local_submode_mapping();
+    test_logical_function_capability_matrix_covers_all_dmm_modes();
     test_wire_words_are_raw_05_family();
     test_stock_apply_words_for_runtime_family_switch();
     test_transition_plan_covers_mux_family_and_settle_policy();

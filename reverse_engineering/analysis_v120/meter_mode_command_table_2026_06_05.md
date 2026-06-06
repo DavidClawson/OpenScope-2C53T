@@ -513,6 +513,19 @@ UI/submode surface guard now makes that absence explicit: there is no recovered
 uA local submode, the UI mode table remains 11 entries, and autoscan must not
 add a hidden microamp candidate without new stock/runtime evidence.
 
+The open-firmware state-machine model now carries a separate logical DMM
+function matrix so the "all modes" requirement includes the unresolved
+microamp families instead of forgetting them. Guard label: logical DMM function matrix.
+The logical functions are: DCV, ACV, DC uA,
+DC mA, DC A, AC uA, AC mA, AC A, resistance, continuity, diode, capacitance,
+and temperature. DC uA and AC uA map to `FPGA_METER_INVALID_LOCAL_SUBMODE`;
+every other logical function maps to the current 0..10 local submode table above.
+`test_fpga_meter_plan` guards the complete 13-function matrix, and
+`test_meter_auto` guards that the unresolved uA entries cannot become autoscan
+candidates or score as current readings. Changing that requires new stock
+selector/formatter/mux evidence or safe current-jack, series-load-limited live
+traces.
+
 ## Voltage Frame-Family Marker Boundary
 
 Low-DCV live and synthetic failure frames use both `frame[8]=0x80` and

@@ -177,6 +177,40 @@ static int test_current_auto_scores_respect_ac_evidence(void)
     return 1;
 }
 
+static int test_unresolved_microamp_functions_are_not_autoscan_candidates(void)
+{
+    size_t count = 0;
+    const uint8_t *candidates = meter_auto_candidates(&count);
+    uint8_t dc_ua =
+        fpga_meter_submode_for_logical_function(FPGA_METER_FUNCTION_DC_UA);
+    uint8_t ac_ua =
+        fpga_meter_submode_for_logical_function(FPGA_METER_FUNCTION_AC_UA);
+    meter_reading_t r;
+
+    ASSERT(dc_ua == FPGA_METER_INVALID_LOCAL_SUBMODE);
+    ASSERT(ac_ua == FPGA_METER_INVALID_LOCAL_SUBMODE);
+    ASSERT(fpga_meter_logical_function_is_unresolved(FPGA_METER_FUNCTION_DC_UA));
+    ASSERT(fpga_meter_logical_function_is_unresolved(FPGA_METER_FUNCTION_AC_UA));
+
+    for (size_t i = 0; i < count; i++) {
+        ASSERT(candidates[i] != dc_ua);
+        ASSERT(candidates[i] != ac_ua);
+        ASSERT(fpga_meter_submode_is_valid(candidates[i]));
+    }
+
+    r = normal_reading(dc_ua, 2261);
+    r.expected_frame_family = (uint8_t)FPGA_METER_FRAME_FAMILY_INVALID;
+    r.observed_frame_family = (uint8_t)FPGA_METER_FRAME_FAMILY_INVALID;
+    ASSERT(meter_auto_score(dc_ua, &r) == 0);
+
+    r = normal_reading(ac_ua, 2261);
+    r.expected_frame_family = (uint8_t)FPGA_METER_FRAME_FAMILY_INVALID;
+    r.observed_frame_family = (uint8_t)FPGA_METER_FRAME_FAMILY_INVALID;
+    r.aux_freq_hz = 49.0f;
+    ASSERT(meter_auto_score(ac_ua, &r) == 0);
+    return 1;
+}
+
 static int test_temperature_scores_as_passive_candidate(void)
 {
     meter_reading_t r = normal_reading(10, 248);
@@ -213,6 +247,7 @@ int main(void)
     TEST(dc_voltage_scores_without_frequency_or_nonzero_magnitude);
     TEST(ac_voltage_requires_frequency_evidence);
     TEST(current_auto_scores_respect_ac_evidence);
+    TEST(unresolved_microamp_functions_are_not_autoscan_candidates);
     TEST(temperature_scores_as_passive_candidate);
     TEST(continuity_marker_beats_resistance_normal);
 

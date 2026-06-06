@@ -198,6 +198,8 @@ class DmmGoalValidationTests(unittest.TestCase):
         self.assertIn("uA is unresolved and unexposed", coverage["terms"])
         self.assertIn("UI/submode surface guard", coverage["terms"])
         self.assertIn("no recovered uA local submode", coverage["terms"])
+        self.assertIn("logical DMM function matrix", coverage["terms"])
+        self.assertIn("13-function matrix", coverage["terms"])
 
     def test_re_coverage_requires_magnitude_feedback_boundary(self) -> None:
         coverage = validate_dmm_goal.verify_re_coverage()
@@ -213,6 +215,10 @@ class DmmGoalValidationTests(unittest.TestCase):
         self.assertIn(
             "uA is intentionally absent from this UI/submode",
             result["required"]["firmware/src/ui/meter_ui.c"],
+        )
+        self.assertIn(
+            "#define FPGA_METER_LOGICAL_FUNCTION_COUNT 13u",
+            result["required"]["firmware/src/drivers/fpga_meter_plan.h"],
         )
         self.assertIn(
             "uA",
@@ -400,7 +406,13 @@ class DmmGoalValidationTests(unittest.TestCase):
             "frame_family_mismatch_policy_matrix_is_exhaustive",
             result["tests"],
         )
+        self.assertIn(
+            "logical_function_capability_matrix_covers_all_dmm_modes",
+            result["tests"],
+        )
         self.assertIn("phase matrix iterates every local submode",
+                      result["regex_anchors"])
+        self.assertIn("logical DMM function table covers microamp gaps",
                       result["regex_anchors"])
         self.assertIn("frame-family policy iterates observed families",
                       result["regex_anchors"])
@@ -419,6 +431,8 @@ class DmmGoalValidationTests(unittest.TestCase):
         self.assertIn("bad submode word", result["snippet_anchors"])
         self.assertIn("FPGA_METER_START_WORD", result["snippet_anchors"])
         self.assertIn("bad plan has no start", result["snippet_anchors"])
+        self.assertIn("DC uA is unresolved", result["snippet_anchors"])
+        self.assertIn("AC uA is unresolved", result["snippet_anchors"])
         self.assertIn("uniform local settle/discard",
                       result["snippet_anchors"])
         self.assertIn("invalid submodes emit no settle/discard",
@@ -431,6 +445,10 @@ class DmmGoalValidationTests(unittest.TestCase):
         self.assertIn("ac_voltage_requires_frequency_evidence", result["tests"])
         self.assertIn("current_auto_scores_respect_ac_evidence", result["tests"])
         self.assertIn(
+            "unresolved_microamp_functions_are_not_autoscan_candidates",
+            result["tests"],
+        )
+        self.assertIn(
             "dc_voltage_scores_without_frequency_or_nonzero_magnitude",
             result["tests"],
         )
@@ -439,6 +457,7 @@ class DmmGoalValidationTests(unittest.TestCase):
             "r.is_ac = true;\n    ASSERT(meter_auto_score(1, &r) == 0);",
             result["snippet_anchors"],
         )
+        self.assertIn("FPGA_METER_FUNCTION_DC_UA", result["snippet_anchors"])
         self.assertIn("meter_auto_score(4, &r) == 0", result["snippet_anchors"])
         self.assertIn("r.bcd_value = 0", result["snippet_anchors"])
 
