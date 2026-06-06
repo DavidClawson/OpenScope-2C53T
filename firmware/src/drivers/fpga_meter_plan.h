@@ -87,6 +87,7 @@ uint16_t fpga_meter_stock_cmd_word_for_submode(uint8_t submode);
 bool fpga_meter_stock_apply_cmd_word_for_submode(uint8_t submode, uint16_t *word);
 fpga_meter_frame_family_t fpga_meter_frame_family_for_submode(uint8_t submode);
 bool fpga_meter_frame_family_is_recovered(uint8_t family);
+bool fpga_meter_frame_family_has_stock_marker(uint8_t family);
 bool fpga_meter_frame_family_is_acceptable(uint8_t expected, uint8_t observed);
 fpga_meter_transition_plan_t fpga_meter_transition_plan_for_submode(uint8_t submode);
 bool fpga_meter_mux_gpio_state_for_submode(uint8_t submode,

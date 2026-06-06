@@ -573,6 +573,7 @@ def verify_transition_plan_property_contract() -> dict[str, Any]:
         "transition_settle_discard_policy_is_explicit_for_every_submode",
         "state_machine_contract_is_exhaustive",
         "frame_family_mismatch_policy_matrix_is_exhaustive",
+        "frame_family_marker_visibility_documents_observed_gaps",
         "logical_function_capability_matrix_covers_all_dmm_modes",
         "local_splits_do_not_invent_extra_stock_selectors",
         "local_splits_share_mux_gpio_state",
@@ -614,6 +615,16 @@ def verify_transition_plan_property_contract() -> dict[str, Any]:
             r"for \(unsigned e = 0; e < sizeof\(families\); e\+\+\)",
         "frame-family policy iterates observed families":
             r"for \(unsigned o = 0; o < sizeof\(families\); o\+\+\)",
+        "marker-visible families stay limited to voltage and continuity":
+            r"static const uint8_t marker_visible\[\]\s*=\s*"
+            r"\{\s*FPGA_METER_FRAME_FAMILY_VOLTAGE,\s*"
+            r"FPGA_METER_FRAME_FAMILY_CONTINUITY,\s*\};",
+        "active-plan-only families stay marker-unproven":
+            r"static const uint8_t active_plan_only\[\]\s*=\s*"
+            r"\{\s*FPGA_METER_FRAME_FAMILY_CURRENT,\s*"
+            r"FPGA_METER_FRAME_FAMILY_RESISTANCE,\s*"
+            r"FPGA_METER_FRAME_FAMILY_DIODE,\s*"
+            r"FPGA_METER_FRAME_FAMILY_EXTENDED,\s*\};",
     }
     required_snippets = [
         "FPGA_METER_TRANSITION_DISCARD_FRAMES",
@@ -626,6 +637,7 @@ def verify_transition_plan_property_contract() -> dict[str, Any]:
         "FPGA_METER_FRAME_FAMILY_DIODE",
         "FPGA_METER_FRAME_FAMILY_EXTENDED",
         "fpga_meter_frame_family_is_acceptable",
+        "fpga_meter_frame_family_has_stock_marker",
         "fpga_meter_mux_gpio_state_for_submode",
         "expect_mux_state",
         "mux gpio submode",

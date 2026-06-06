@@ -407,6 +407,10 @@ class DmmGoalValidationTests(unittest.TestCase):
             result["tests"],
         )
         self.assertIn(
+            "frame_family_marker_visibility_documents_observed_gaps",
+            result["tests"],
+        )
+        self.assertIn(
             "logical_function_capability_matrix_covers_all_dmm_modes",
             result["tests"],
         )
@@ -416,6 +420,14 @@ class DmmGoalValidationTests(unittest.TestCase):
                       result["regex_anchors"])
         self.assertIn("frame-family policy iterates observed families",
                       result["regex_anchors"])
+        self.assertIn(
+            "marker-visible families stay limited to voltage and continuity",
+            result["regex_anchors"],
+        )
+        self.assertIn(
+            "active-plan-only families stay marker-unproven",
+            result["regex_anchors"],
+        )
         self.assertIn("planned discards drain in order",
                       result["regex_anchors"])
         self.assertIn(
@@ -427,6 +439,8 @@ class DmmGoalValidationTests(unittest.TestCase):
             result["regex_anchors"],
         )
         self.assertIn("fpga_meter_frame_family_is_acceptable",
+                      result["snippet_anchors"])
+        self.assertIn("fpga_meter_frame_family_has_stock_marker",
                       result["snippet_anchors"])
         self.assertIn("bad submode word", result["snippet_anchors"])
         self.assertIn("FPGA_METER_START_WORD", result["snippet_anchors"])

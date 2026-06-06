@@ -565,6 +565,16 @@ Wrong-family rejection is currently executable for marker-visible foreign frames
 marker gap remains open and must be solved from stock frame metadata, stock
 xrefs, or safe live traces rather than guessed in the decoder.
 
+The production state-machine model now keeps that distinction explicit:
+`fpga_meter_frame_family_is_recovered()` means the active transition plan has a
+stock selector/formatter family for the selected local submode, while
+`fpga_meter_frame_family_has_stock_marker()` means a foreign RX frame can be
+recognized without trusting the active plan. The marker-visible set is only
+voltage and continuity. Current, resistance, diode, and extended families are
+active-plan-only until new stock metadata or safe live traces prove their
+independent frame markers. `test_fpga_meter_plan` guards this boundary with
+`frame_family_marker_visibility_documents_observed_gaps`.
+
 ## Magnitude-Derived Range Feedback Boundary
 
 Older bring-up comments suggested MCU-side auto-ranging by watching for BCD

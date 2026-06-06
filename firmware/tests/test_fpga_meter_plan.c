@@ -413,6 +413,55 @@ static void test_frame_family_mismatch_policy_matrix_is_exhaustive(void)
                  0U);
 }
 
+static void test_frame_family_marker_visibility_documents_observed_gaps(void)
+{
+    static const uint8_t marker_visible[] = {
+        FPGA_METER_FRAME_FAMILY_VOLTAGE,
+        FPGA_METER_FRAME_FAMILY_CONTINUITY,
+    };
+    static const uint8_t active_plan_only[] = {
+        FPGA_METER_FRAME_FAMILY_CURRENT,
+        FPGA_METER_FRAME_FAMILY_RESISTANCE,
+        FPGA_METER_FRAME_FAMILY_DIODE,
+        FPGA_METER_FRAME_FAMILY_EXTENDED,
+    };
+
+    for (unsigned i = 0; i < sizeof(marker_visible); i++) {
+        char name[80];
+
+        snprintf(name, sizeof(name), "marker-visible family %u recovered",
+                 (unsigned)marker_visible[i]);
+        EXPECT_EQ_U8(name,
+                     fpga_meter_frame_family_is_recovered(marker_visible[i]) ? 1U : 0U,
+                     1U);
+        snprintf(name, sizeof(name), "marker-visible family %u has stock marker",
+                 (unsigned)marker_visible[i]);
+        EXPECT_EQ_U8(name,
+                     fpga_meter_frame_family_has_stock_marker(marker_visible[i]) ? 1U : 0U,
+                     1U);
+    }
+
+    for (unsigned i = 0; i < sizeof(active_plan_only); i++) {
+        char name[80];
+
+        snprintf(name, sizeof(name), "active-plan family %u recovered",
+                 (unsigned)active_plan_only[i]);
+        EXPECT_EQ_U8(name,
+                     fpga_meter_frame_family_is_recovered(active_plan_only[i]) ? 1U : 0U,
+                     1U);
+        snprintf(name, sizeof(name), "active-plan family %u has no stock marker",
+                 (unsigned)active_plan_only[i]);
+        EXPECT_EQ_U8(name,
+                     fpga_meter_frame_family_has_stock_marker(active_plan_only[i]) ? 1U : 0U,
+                     0U);
+    }
+
+    EXPECT_EQ_U8("invalid family has no stock marker",
+                 fpga_meter_frame_family_has_stock_marker(
+                     FPGA_METER_FRAME_FAMILY_INVALID) ? 1U : 0U,
+                 0U);
+}
+
 static void test_local_splits_do_not_invent_extra_stock_selectors(void)
 {
     static const struct {
@@ -614,6 +663,7 @@ int main(void)
     test_transition_settle_discard_policy_is_explicit_for_every_submode();
     test_state_machine_contract_is_exhaustive();
     test_frame_family_mismatch_policy_matrix_is_exhaustive();
+    test_frame_family_marker_visibility_documents_observed_gaps();
     test_local_splits_do_not_invent_extra_stock_selectors();
     test_local_splits_share_mux_gpio_state();
     test_fallbacks();

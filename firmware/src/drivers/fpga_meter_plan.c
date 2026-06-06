@@ -226,12 +226,32 @@ fpga_meter_frame_family_t fpga_meter_frame_family_for_submode(uint8_t submode)
 
 bool fpga_meter_frame_family_is_recovered(uint8_t family)
 {
+    /*
+     * Active-plan families recovered from stock selector/formatter evidence.
+     * This answers "what family does the selected DMM mode expect?", not "can
+     * a foreign frame from this family be independently recognized on the RX
+     * wire?"  Keep the latter boundary in fpga_meter_frame_family_has_stock_marker().
+     */
     return family == FPGA_METER_FRAME_FAMILY_VOLTAGE ||
            family == FPGA_METER_FRAME_FAMILY_CURRENT ||
            family == FPGA_METER_FRAME_FAMILY_RESISTANCE ||
            family == FPGA_METER_FRAME_FAMILY_CONTINUITY ||
            family == FPGA_METER_FRAME_FAMILY_DIODE ||
            family == FPGA_METER_FRAME_FAMILY_EXTENDED;
+}
+
+bool fpga_meter_frame_family_has_stock_marker(uint8_t family)
+{
+    /*
+     * Marker-visible families recovered so far. Voltage carries stock-visible
+     * metadata in frame[8]/frame[9], and continuity has a distinctive segment
+     * marker. Current, resistance, diode, and extended normal digit frames are
+     * only active-plan classified until stock xrefs or safe live traces recover
+     * family metadata; do not promote BCD shape, frame[6], or unit text into a
+     * marker.
+     */
+    return family == FPGA_METER_FRAME_FAMILY_VOLTAGE ||
+           family == FPGA_METER_FRAME_FAMILY_CONTINUITY;
 }
 
 bool fpga_meter_frame_family_is_acceptable(uint8_t expected, uint8_t observed)

@@ -447,7 +447,9 @@ static bool raw_digits_are_continuity_marker(const uint8_t raw_digits[4])
 static uint8_t observed_frame_family(uint8_t expected_family,
                                      const volatile uint8_t *frame)
 {
-    if (frame_has_voltage_payload_marker(frame)) {
+    if (fpga_meter_frame_family_has_stock_marker(
+            (uint8_t)FPGA_METER_FRAME_FAMILY_VOLTAGE) &&
+        frame_has_voltage_payload_marker(frame)) {
         return (uint8_t)FPGA_METER_FRAME_FAMILY_VOLTAGE;
     }
     return expected_family;
@@ -1112,7 +1114,9 @@ void meter_data_process_frame(const volatile uint8_t *frame, uint8_t submode)
     r->dbg_raw_digits[1] = digit1;
     r->dbg_raw_digits[2] = digit2;
     r->dbg_raw_digits[3] = digit3;
-    if (!frame_has_voltage_payload_marker(frame) &&
+    if (fpga_meter_frame_family_has_stock_marker(
+            (uint8_t)FPGA_METER_FRAME_FAMILY_CONTINUITY) &&
+        !frame_has_voltage_payload_marker(frame) &&
         raw_digits_are_continuity_marker(r->dbg_raw_digits)) {
         r->observed_frame_family =
             (uint8_t)FPGA_METER_FRAME_FAMILY_CONTINUITY;
