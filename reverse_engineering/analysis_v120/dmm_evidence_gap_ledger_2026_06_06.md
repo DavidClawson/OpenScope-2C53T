@@ -1106,3 +1106,25 @@ capture the exact transition history, including whether the byte-bank prefix was
 actually sent for the switch that produced the first post-transition frame, and
 pair that with GPIO/mux state and producer frames. Do not replace this with
 OCR, prose validators, one-point coefficients, or magnitude-based mode guesses.
+
+Follow-up image SHA-256
+`5bf8e1625da694d5bd3e66530c3e8162f9334a154d697758a2c7d03d4e78e6b0`
+was flashed after extending `meter trace` transition history with the
+byte-bank fields. The shorted-probes sweep still failed, but the transition
+history now proves the continuity/diode bank prefix was present for the
+switches being judged:
+
+```
+sub=7 seq=9 selector=0511 apply=0516 bank=1/00/2C
+planned_gpio=0EA actual_gpio=0EA tx=554..560
+decoded display=OL family=3/3 reject=0 beep=0
+
+sub=8 seq=10 selector=0510 apply=0515 bank=1/00/2C
+planned_gpio=068 actual_gpio=068 tx=600..606
+```
+
+Therefore the remaining shorted-probes failure is not explained by the
+state-8 byte-bank prefix being missing from the local transition path. The next
+root-cause target should be the analog apply/hold or relay/frontend state that
+produces OL/unmarked frames after the correct-looking selector, apply, bank,
+and GPIO snapshot.

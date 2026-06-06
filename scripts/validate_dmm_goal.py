@@ -720,7 +720,7 @@ def verify_state_machine_property_contract() -> dict[str, Any]:
     text = (REPO / rel).read_text(encoding="utf-8", errors="replace")
     required_tests = [
         "dcv_stock_range_class_priority_all_bit_combinations",
-        "dcv_live_0200_frame_preserves_stock_math_as_unresolved_frontend",
+        "dcv_live_0200_bare_class_bit_fails_closed",
         "acv_rejects_dc_voltage_without_ac_evidence",
         "ac_current_rejects_current_frame_without_ac_evidence",
         "ac_modes_require_frequency_hint_boundaries",

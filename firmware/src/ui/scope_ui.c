@@ -754,13 +754,9 @@ static uint16_t gpio_prev_a = 0, gpio_prev_b = 0;
 static uint16_t gpio_prev_c = 0, gpio_prev_d = 0, gpio_prev_e = 0;
 static bool gpio_scan_started = false;
 
-/* Rapid-sample toggle counters (prev_state = 0xFF means "not initialized") */
-static uint32_t pa1_toggle_count = 0;
-static uint8_t  pa1_prev_state = 0xFF;
+/* Debug overlay toggle indicators derived from the accumulated GPIO masks. */
 static uint32_t pb3_toggle_count = 0;  /* SPI3 SCK — should toggle if GMUX works */
-static uint8_t  pb3_prev_state = 0xFF;
 static uint32_t pb4_toggle_count = 0;  /* SPI3 MISO — should toggle if FPGA responds */
-static uint8_t  pb4_prev_state = 0xFF;
 
 static void gpio_scan_update(void)
 {
