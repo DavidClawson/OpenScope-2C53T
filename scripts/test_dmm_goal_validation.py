@@ -194,6 +194,18 @@ class DmmGoalValidationTests(unittest.TestCase):
             result["checked"]["firmware/src/drivers/usb_debug.c"],
         )
         self.assertIn(
+            "Replay H2 TX + sample MISO; no ACK/apply proof",
+            result["checked"]["firmware/src/drivers/usb_debug.c"],
+        )
+        self.assertIn(
+            "TX/sample diagnostic only; not calibration proof",
+            result["checked"]["firmware/src/drivers/usb_debug.c"],
+        )
+        self.assertIn(
+            "H2 Upload " + "Verification",
+            result["forbidden"]["firmware/src/drivers/usb_debug.c"],
+        )
+        self.assertIn(
             "H2 means bytes streamed, not recovered FPGA acceptance",
             result["checked"]["firmware/src/ui/scope_ui.c"],
         )

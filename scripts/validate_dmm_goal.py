@@ -229,6 +229,10 @@ def verify_h2_tx_only_boundary() -> dict[str, Any]:
         "firmware/src/drivers/usb_debug.c": [
             "TX complete: %s (no recovered FPGA ACK)",
             "Bytes sent: %lu / 115638",
+            "Replay H2 TX + sample MISO; no ACK/apply proof",
+            "H2 TX Replay Diagnostic",
+            "Samples MISO only; no recovered ACK/apply proof",
+            "TX/sample diagnostic only; not calibration proof",
         ],
         "reverse_engineering/analysis_v120/spi3_bulk_cal_resolved.md": [
             "The open firmware now streams the",
@@ -264,6 +268,11 @@ def verify_h2_tx_only_boundary() -> dict[str, Any]:
             "4+4 dummy SPI exchanges",
             "Recommended Test Sequence",
             "The dummy exchanges are the most likely fix",
+        ],
+        "firmware/src/drivers/usb_debug.c": [
+            "spi3 h2verify                   Re-upload H2 + capture FPGA " + "responses",
+            "H2 Upload " + "Verification",
+            "accepting the data, we might see non-FF " + "responses (ACK bytes",
         ],
     }
 

@@ -526,7 +526,7 @@ static void cmd_help(void)
         "spi3 gowin                      Read+decode Gowin ID/USERCODE/STATUS regs\r\n"
         "spi3 scopetest [bank]           Full scope seq: USART cfg->PC0->0x04/05 read\r\n"
         "spi3 acqtest                    Decomposer Phase 20 validation test\r\n"
-        "spi3 h2verify                   Re-upload H2 + capture FPGA responses\r\n"
+        "spi3 h2txdiag                   Replay H2 TX + sample MISO; no ACK/apply proof\r\n"
         "reboot bootloader               Reboot into USB HID updater\r\n"
         "uptime                          Show uptime\r\n"
         "\r\n"
@@ -2987,16 +2987,17 @@ static void cmd_spi3_acqtest(void)
 }
 
 /* ═══════════════════════════════════════════════════════════════════
- * H2 Upload Verification — Re-upload with response capture
+ * H2 TX Replay Diagnostic — sample MISO without claiming acceptance
  *
- * Re-sends the 115,638-byte H2 cal table while capturing the FPGA's
- * simultaneous responses at key points. If the FPGA is actually
- * accepting the data, we might see non-FF responses (ACK bytes,
- * status changes, or block-boundary markers).
+ * Re-sends the 115,638-byte H2 table while sampling the FPGA's simultaneous
+ * MISO bytes at key points. Stock-visible evidence proves the TX stream and
+ * table layout only; no recovered ACK/apply condition ties this diagnostic to
+ * FPGA acceptance or DMM physical calibration.
  * ═══════════════════════════════════════════════════════════════════ */
-static void cmd_spi3_h2verify(void)
+static void cmd_spi3_h2txdiag(void)
 {
-    usb_send_str("=== H2 Upload Verification ===\r\n\r\n");
+    usb_send_str("=== H2 TX Replay Diagnostic ===\r\n");
+    usb_send_str("Samples MISO only; no recovered ACK/apply proof.\r\n\r\n");
 
     /* Pre-upload state */
     usb_debug_printf("PC0 before: %d\r\n", (GPIOC->idt & 1) ? 1 : 0);
@@ -3091,7 +3092,8 @@ static void cmd_spi3_h2verify(void)
     for (int i = 0; i < 16; i++) usb_debug_printf("%02X ", resp_post[i]);
     usb_send_str("\r\n");
 
-    usb_debug_printf("\r\nTotal non-FF during upload: %d / 115638\r\n", total_nonff);
+    usb_debug_printf("\r\nTotal non-FF during TX replay: %d / 115638\r\n", total_nonff);
+    usb_send_str("Interpretation: TX/sample diagnostic only; not calibration proof.\r\n");
     usb_debug_printf("PC0 final: %d\r\n", (GPIOC->idt & 1) ? 1 : 0);
     usb_send_str("=== Done ===\r\n");
 }
@@ -3785,8 +3787,9 @@ static void dispatch_command(char *line)
         cmd_spi3_scopetest(line[14] == ' ' ? line + 15 : "");
     } else if (strcmp(line, "spi3 acqtest") == 0) {
         cmd_spi3_acqtest();
-    } else if (strcmp(line, "spi3 h2verify") == 0) {
-        cmd_spi3_h2verify();
+    } else if (strcmp(line, "spi3 h2txdiag") == 0 ||
+               strcmp(line, "spi3 h2verify") == 0) {
+        cmd_spi3_h2txdiag();
     } else if (strcmp(line, "spi3 probe") == 0) {
         /* Bit-bang SPI3 probe: disable SPI peripheral, manually toggle
          * SCK and read MISO to test if the FPGA drives the line. */
