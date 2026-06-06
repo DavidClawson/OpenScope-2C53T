@@ -888,6 +888,24 @@ wiring proof boundary. It is not permission to restore decoder coefficients.
   ACK/status during the H2 body or close sequence, so future calibration claims
   still need stock xrefs, W25Q/system-file evidence, or a runtime effect trace
   instead of invented coefficients.
+- Producer stream trace extension: OpenScope app image SHA-256
+  `a97563febdcbdf1f62d579141f7b5d99f94121a0de74c39e0586d997f2418235`
+  (`Build: Jun 6 2026 21:44:06`) was flashed through guarded HID IAP after
+  `flash_preflight.py hid-app` classified it as `openscope-app` at
+  `0x08004000`.  `meter mux-stream` now prints each changed reading with
+  producer counters, the active stock-like selector/apply words, current
+  frontend GPIO state, and the full 12-byte stock-visible frame.  This fixes a
+  diagnostic truncation where `usb_debug_printf()` cut the long stream line at
+  255 bytes.  A live stream on the current bench state showed stable DCV
+  frames under `seq_word=0514`, `seq_apply=0000`, `PC12=1 PE4=1 PE5=0 PE6=1
+  PA15=1 PA10=1 PB10=0 PB9=0 PA6=0`, with frames such as
+  `5A A5 A4 BD 8D CF 47 20 00 00 01 3F` and
+  `5A A5 A4 BD 8D CF 47 20 00 00 01 3C`, decoded as `raw=2235`,
+  `display=2.235 V`.  This is a better capture tool for the next controlled
+  low-DCV sweep: it can show exactly which producer frames appear while the
+  physical input changes, without OCR, magnitude feedback, or decoder-side
+  coefficients.  It is not itself a correction and was not the image-viewed
+  `0.200 V` validation case.
 
 ## Next RE Target
 

@@ -2929,49 +2929,57 @@ static void cmd_meter_frontend(void)
 
 static void print_meter_mux_stream_line(uint32_t index)
 {
+    meter_reading_t snap;
+    bool have_snap = meter_data_snapshot(&snap);
     bool live = current_mode == MODE_MULTIMETER &&
-                meter_reading.valid &&
-                meter_reading.submode == meter_submode;
+                have_snap &&
+                snap.valid &&
+                snap.submode == meter_submode;
     fpga_meter_selector_t selectors = fpga_meter_expected_selectors(meter_submode);
     fpga_meter_transition_plan_t plan =
         fpga_meter_transition_plan_for_submode(meter_submode);
 
     usb_debug_printf("t=%lu upd=%lu ui_sub=%u rd_sub=%u live=%u cls=%u "
-                     "stock_mode=%u raw_low=%02X family=%u mux=%u portc_porte=%u porta_portb=%u settle=%u "
-                     "obs_family=%u reject=%u "
-                     "seq=%u seq_sub=%u seq_word=%04X seq_apply=%04X "
-                     "disp=%s unit=%s raw=%d dp=%u f6=%02X f7=%02X f8=%02X f9=%02X "
-                     "extra=%04X discard=%u PC6=%u PB11=%u PC11=%u PC12=%u "
-                     "PE4=%u PE5=%u PE6=%u PA15=%u PA10=%u PB10=%u PB9=%u PA6=%u\r\n",
+                     "stock_mode=%u raw_low=%02X family=%u mux=%u "
+                     "portc_porte=%u porta_portb=%u settle=%u ",
                      index,
-                     meter_reading.update_count,
+                     have_snap ? snap.update_count : 0UL,
                      (unsigned)meter_submode,
-                     (unsigned)meter_reading.submode,
+                     have_snap ? (unsigned)snap.submode : 0U,
                      live ? 1U : 0U,
-                     (unsigned)meter_reading.result_class,
+                     have_snap ? (unsigned)snap.result_class : 0U,
                      (unsigned)selectors.function_selector,
                      (unsigned)selectors.range_selector,
                      (unsigned)plan.frame_family,
                      (unsigned)plan.mux_index,
                      (unsigned)plan.portc_porte_mux,
                      (unsigned)plan.porta_portb_mux,
-                     (unsigned)plan.settle_ms,
-                     (unsigned)meter_reading.observed_frame_family,
-                     (unsigned)meter_reading.reject_reason,
+                     (unsigned)plan.settle_ms);
+    usb_debug_printf("obs_family=%u reject=%u seq=%u seq_sub=%u "
+                     "seq_word=%04X seq_apply=%04X tx=%u data=%u echo=%u ",
+                     have_snap ? (unsigned)snap.observed_frame_family : 0U,
+                     have_snap ? (unsigned)snap.reject_reason : 0U,
                      (unsigned)fpga.meter_mode_sequence_count,
                      (unsigned)fpga.meter_mode_sequence_submode,
                      (unsigned)fpga.meter_mode_selector_word,
                      (unsigned)fpga.meter_mode_apply_word,
-                     meter_reading.valid ? meter_reading.display_str : "---",
-                     (meter_reading.valid && meter_reading.unit_suffix) ? meter_reading.unit_suffix : "",
-                     meter_reading.bcd_value,
-                     (unsigned)meter_reading.decimal_pos,
-                     (unsigned)meter_reading.dbg_frame[6],
-                     (unsigned)meter_reading.dbg_frame[7],
-                     (unsigned)meter_reading.dbg_frame[8],
-                     (unsigned)meter_reading.dbg_frame[9],
+                     fpga.tx_count,
+                     fpga.frame_count,
+                     fpga.echo_count);
+    usb_debug_printf("disp=%s unit=%s raw=%d dp=%u f6=%02X f7=%02X "
+                     "f8=%02X f9=%02X extra=%04X discard=%u ",
+                     (have_snap && snap.valid) ? snap.display_str : "---",
+                     (have_snap && snap.valid && snap.unit_suffix) ? snap.unit_suffix : "",
+                     have_snap ? snap.bcd_value : 0,
+                     have_snap ? (unsigned)snap.decimal_pos : 0U,
+                     have_snap ? (unsigned)snap.dbg_frame[6] : 0U,
+                     have_snap ? (unsigned)snap.dbg_frame[7] : 0U,
+                     have_snap ? (unsigned)snap.dbg_frame[8] : 0U,
+                     have_snap ? (unsigned)snap.dbg_frame[9] : 0U,
                      (unsigned)meter_dbg_extra(),
-                     (unsigned)meter_frame_discard_count,
+                     (unsigned)meter_frame_discard_count);
+    usb_debug_printf("PC6=%u PB11=%u PC11=%u PC12=%u PE4=%u PE5=%u PE6=%u "
+                     "PA15=%u PA10=%u PB10=%u PB9=%u PA6=%u frame=",
                      gpio_level(GPIOC, 6),
                      gpio_level(GPIOB, 11),
                      gpio_level(GPIOC, 11),
@@ -2984,6 +2992,10 @@ static void print_meter_mux_stream_line(uint32_t index)
                      gpio_level(GPIOB, 10),
                      gpio_level(GPIOB, 9),
                      gpio_level(GPIOA, 6));
+    if (have_snap) {
+        print_volatile_frame_inline(snap.dbg_frame);
+    }
+    usb_send_str("\r\n");
 }
 
 static void cmd_meter_mux_stream(const char *args)
