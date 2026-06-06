@@ -874,6 +874,123 @@ EXPECTED_BOOT_MODE_INIT_DMM_DIRECT_CALLS = [
     0x08005572,
     0x080271F8,
 ]
+EXPECTED_BOOT_MODE_INIT_DMM_TBH_STATE_MAP = {
+    0: {
+        "target": 0x0800B93E,
+        "commands": ["0x00", "0x01", "0x0B", "0x0C", "0x0D", "0x0E", "0x0F", "0x10", "0x11"],
+        "ordered_snippets": [
+            "00 21 28 68",
+            "01 21 28 68",
+            "0b 21 28 68",
+            "0c 21 28 68",
+            "0d 21 28 68",
+            "0e 21 28 68",
+            "0f 21 28 68",
+            "10 21 28 68",
+            "11 20",
+        ],
+        "classification": "state 0 queues the scope-like 0x0B..0x11 setup bank; not DMM range proof",
+    },
+    1: {
+        "target": 0x0800B9D6,
+        "commands": ["0x00", "0x09", "0x07/0x0A probe branch", "0x1A", "0x1B", "0x1C", "0x1D", "0x1E"],
+        "ordered_snippets": [
+            "00 21 28 68",
+            "09 21 28 68",
+            "07 21 00 06 58 bf 0a 21",
+            "1a 21 28 68",
+            "1b 21 28 68",
+            "1c 21 28 68",
+            "1d 21 28 68",
+            "1e 20",
+        ],
+        "classification": "state 1 queues the basic meter probe plus 0x1A..0x1E bank",
+    },
+    2: {
+        "target": 0x0800BA6C,
+        "commands": ["0x02", "0x03", "0x04", "0x05", "0x06", "0x08"],
+        "ordered_snippets": [
+            "02 21 28 68",
+            "03 21 28 68",
+            "04 21 28 68",
+            "05 21 28 68",
+            "06 21 28 68",
+            "08 21 cf e0",
+        ],
+        "classification": "state 2 queues the 0x02..0x08 setup bank; not raw selector words",
+    },
+    3: {
+        "target": 0x0800BACE,
+        "commands": ["0x00", "0x08", "0x09", "0x07/0x0A probe branch", "0x16", "0x17", "0x18", "0x19"],
+        "ordered_snippets": [
+            "00 21 28 68",
+            "08 21 28 68",
+            "09 21 28 68",
+            "07 21 00 06 58 bf 0a 21",
+            "16 21 28 68",
+            "17 21 28 68",
+            "18 21 28 68",
+            "19 20",
+        ],
+        "classification": "state 3 queues the extended meter probe plus 0x16..0x19 bank",
+    },
+    4: {
+        "target": 0x0800BB64,
+        "commands": ["0x00", "0x1F", "0x09", "0x20", "0x21"],
+        "ordered_snippets": [
+            "00 21 28 68",
+            "1f 21 28 68",
+            "09 21 28 68",
+            "20 21 28 68",
+            "21 20",
+        ],
+        "classification": "state 4 queues the 0x1F..0x21 bank; command queue evidence only",
+    },
+    5: {
+        "target": 0x0800BBBE,
+        "commands": ["0x00", "0x25", "0x09", "0x26", "0x27", "0x28"],
+        "ordered_snippets": [
+            "00 21 28 68",
+            "25 21 28 68",
+            "09 21 28 68",
+            "26 21 28 68",
+            "27 21 28 68",
+            "28 20",
+        ],
+        "classification": "state 5 queues the 0x25..0x28 bank; command queue evidence only",
+    },
+    6: {
+        "target": 0x0800BC2A,
+        "commands": ["0x29"],
+        "ordered_snippets": ["29 20"],
+        "classification": "state 6 queues only 0x29 before the common send tail",
+    },
+    7: {
+        "target": 0x0800BC2E,
+        "commands": ["0x15"],
+        "ordered_snippets": ["15 20"],
+        "classification": "state 7 queues only 0x15 before the common send tail",
+    },
+    8: {
+        "target": 0x0800BCA6,
+        "commands": ["0x00", "0x2C"],
+        "ordered_snippets": ["00 21 28 68", "2c 20"],
+        "classification": "state 8 queues 0x00 then 0x2C; command queue evidence only",
+    },
+    9: {
+        "target": 0x0800BC32,
+        "commands": ["0x00", "0x12", "0x13", "0x14", "0x09", "0x07/0x0A probe branch"],
+        "ordered_snippets": [
+            "00 21 28 68",
+            "12 21 28 68",
+            "13 21 28 68",
+            "14 21 28 68",
+            "09 21 28 68",
+            "07 00 58 bf 0a 20",
+        ],
+        "classification": "state 9 queues the variant/probe bank; command queue evidence only",
+    },
+}
 EXPECTED_BOOT_MODE_INIT_DMM_COMMAND_BANKS = {
     "meter_basic_boot_probe_prefix": {
         "commands": ["0x00", "0x09", "0x07/0x0A probe branch"],
@@ -1406,6 +1523,21 @@ def find_literal_word_refs(value: int) -> list[int]:
         refs.append(BASE + off)
         start = off + 1
     return refs
+
+
+def decode_thumb_tbh_targets(addr: int, entry_count: int) -> list[int]:
+    data = BIN.read_bytes()
+    off = addr - BASE
+    instr = data[off : off + 4]
+    if instr != bytes.fromhex("df e8 10 f0"):
+        raise AssertionError(f"{addr:#010x}: expected Thumb TBH [pc,r0,lsl#1], got {instr.hex(' ')}")
+    pc_base = addr + 4
+    targets: list[int] = []
+    for index in range(entry_count):
+        entry_off = off + 4 + index * 2
+        halfword = int.from_bytes(data[entry_off : entry_off + 2], "little")
+        targets.append(pc_base + halfword * 2)
+    return targets
 
 
 def expect_f64(addr: int, expected: float) -> None:
@@ -2404,6 +2536,53 @@ def verify_boot_mode_init_dmm_sequences() -> dict[str, object]:
     }
 
 
+def verify_boot_mode_init_dmm_tbh_state_map() -> dict[str, object]:
+    """Decode the stock `FUN_0800B908` TBH state-to-command-bank map.
+
+    The surrounding byte guards prove individual command-bank slices. This
+    guard ties those slices back to `ms[0xF68]` states 0..9 by decoding the
+    actual Thumb TBH table at `0x0800B926`. It is mode-init command queue
+    evidence only: the state byte selects one-byte command banks sent to
+    `0x20002D6C`, not raw `0x05xx` selector words, analog mux bytes, or
+    factory calibration coefficients.
+    """
+    targets = decode_thumb_tbh_targets(
+        0x0800B926,
+        len(EXPECTED_BOOT_MODE_INIT_DMM_TBH_STATE_MAP),
+    )
+    states: dict[str, dict[str, object]] = {}
+    for state, expected in EXPECTED_BOOT_MODE_INIT_DMM_TBH_STATE_MAP.items():
+        target = targets[state]
+        expected_target = int(expected["target"])
+        if target != expected_target:
+            raise AssertionError(
+                f"mode-init TBH state {state}: expected target "
+                f"{expected_target:#010x}, got {target:#010x}"
+            )
+        span = read(target, 0xC0).hex(" ")
+        _require_ordered_hex_snippets(
+            f"mode-init TBH state {state}",
+            span,
+            list(expected["ordered_snippets"]),
+        )
+        states[str(state)] = {
+            "target": f"{target:#010x}",
+            "commands": list(expected["commands"]),
+            "classification": str(expected["classification"]),
+        }
+    return {
+        "table": "0x0800b926",
+        "source_state": "ms[0xF68]",
+        "queue": "0x20002D6C",
+        "states": states,
+        "classification": (
+            "ms[0xF68] selects stock mode-init command banks; not DMM "
+            "ms[0x02]/ms[0x03] analog mux state, not raw selector words, "
+            "and not low-DCV calibration"
+        ),
+    }
+
+
 def _require_ordered_hex_snippets(name: str, haystack_hex: str, snippets: list[str]) -> None:
     pos = 0
     for snippet in snippets:
@@ -2898,6 +3077,7 @@ def main() -> None:
     saved_config_pack_callers = verify_meter_saved_config_pack_caller_sequences()
     usart_tx_config_writer = verify_usart_tx_config_writer_meter_case_sequences()
     boot_mode_init = verify_boot_mode_init_dmm_sequences()
+    boot_mode_init_tbh = verify_boot_mode_init_dmm_tbh_state_map()
     boot_mode_init_banks = verify_boot_mode_init_dmm_command_banks()
     meter_probe_branches = verify_meter_probe_branch_sequences()
     runtime_mode_init_callers = verify_runtime_mode_init_dispatch_caller_sequences()
@@ -2990,6 +3170,11 @@ def main() -> None:
           ", ".join(item["addr"] for item in usart_tx_config_writer["callers"].values()))
     print("stock boot mode-init DMM sequence sites: " +
           ", ".join(item["addr"] for item in boot_mode_init["sequences"].values()))
+    print("stock boot mode-init DMM TBH state map: " +
+          "; ".join(
+              f"{state}->{item['target']}:" + ",".join(item["commands"])
+              for state, item in boot_mode_init_tbh["states"].items()
+          ))
     print("stock boot mode-init DMM command banks: " +
           "; ".join(
               f"{name}=" + ",".join(item["commands"])

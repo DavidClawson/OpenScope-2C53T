@@ -1523,6 +1523,43 @@ class DmmGoalValidationTests(unittest.TestCase):
             banks["meter_variant_boot_tail"]["ordered_snippets"],
         )
 
+    def test_stock_boot_mode_init_dmm_tbh_state_map_is_binary_grounded(self) -> None:
+        result = stock_meter_literals.verify_boot_mode_init_dmm_tbh_state_map()
+        states = result["states"]
+
+        self.assertEqual(result["table"], "0x0800b926")
+        self.assertEqual(result["source_state"], "ms[0xF68]")
+        self.assertEqual(result["queue"], "0x20002D6C")
+        self.assertEqual(states["0"]["target"], "0x0800b93e")
+        self.assertEqual(states["1"]["target"], "0x0800b9d6")
+        self.assertEqual(states["2"]["target"], "0x0800ba6c")
+        self.assertEqual(states["3"]["target"], "0x0800bace")
+        self.assertEqual(states["4"]["target"], "0x0800bb64")
+        self.assertEqual(states["5"]["target"], "0x0800bbbe")
+        self.assertEqual(states["6"]["target"], "0x0800bc2a")
+        self.assertEqual(states["7"]["target"], "0x0800bc2e")
+        self.assertEqual(states["8"]["target"], "0x0800bca6")
+        self.assertEqual(states["9"]["target"], "0x0800bc32")
+        self.assertEqual(
+            states["0"]["commands"],
+            ["0x00", "0x01", "0x0B", "0x0C", "0x0D", "0x0E", "0x0F", "0x10", "0x11"],
+        )
+        self.assertEqual(
+            states["1"]["commands"],
+            ["0x00", "0x09", "0x07/0x0A probe branch", "0x1A", "0x1B", "0x1C", "0x1D", "0x1E"],
+        )
+        self.assertEqual(
+            states["3"]["commands"],
+            ["0x00", "0x08", "0x09", "0x07/0x0A probe branch", "0x16", "0x17", "0x18", "0x19"],
+        )
+        self.assertEqual(
+            states["9"]["commands"],
+            ["0x00", "0x12", "0x13", "0x14", "0x09", "0x07/0x0A probe branch"],
+        )
+        self.assertIn("not DMM ms[0x02]/ms[0x03]", result["classification"])
+        self.assertIn("not raw selector words", result["classification"])
+        self.assertIn("not low-DCV calibration", result["classification"])
+
     def test_stock_meter_basic_raw_word_materializers_are_guarded(self) -> None:
         result = stock_meter_literals.verify_meter_basic_raw_word_sequences()
         sequences = result["sequences"]

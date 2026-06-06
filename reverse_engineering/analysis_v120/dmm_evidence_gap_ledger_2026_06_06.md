@@ -73,6 +73,13 @@ one of:
   and `0x08` replay bytes out of the low-DCV range-param bucket: old notes such
   as `param=0 -> 10V range`, `Below ~1V`, or `Meter: configure range` are stale
   unless a stock writer/trace ties those bytes to DMM physical range state.
+- Boot mode-init TBH state map: the `FUN_0800B908` table at `0x0800B926` maps
+  `ms[0xF68]` states `0..9` to command-bank targets `0x0800B93E`,
+  `0x0800B9D6`, `0x0800BA6C`, `0x0800BACE`, `0x0800BB64`, `0x0800BBBE`,
+  `0x0800BC2A`, `0x0800BC2E`, `0x0800BCA6`, and `0x0800BC32`. This ties stock
+  command banks to the selecting state byte, but `ms[0xF68]` is not DMM
+  `ms[0x02]`/`ms[0x03]` analog mux state, not raw selector words, and not
+  low-DCV calibration.
 - Meter probe branch guard: the three `FUN_0800B908` meter arms at `0x0800B9D6`,
   `0x0800BACE`, and `0x0800BC32` read GPIOC bit 7 from `0x40011008` and select
   the `0x07/0x0A` command tail (`PC7` high keeps `0x07`; `PC7` low selects

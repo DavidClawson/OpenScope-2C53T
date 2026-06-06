@@ -352,6 +352,32 @@ documented command-byte banks in order rather than leaving them as prose:
   `0x07`/`0x0A` probe-detect command.
 ```
 
+### Boot Mode-Init TBH State Map Guard, 2026-06-06
+
+The dispatcher guard now decodes the Thumb `TBH [pc,r0,lsl#1]` table at
+`0x0800B926` instead of documenting only the named arms. The source selector is
+`ms[0xF68]` (`[0x200000F8 + 0xF68]`), bounded to states `0..9`; each target
+queues one-byte commands through `0x20002D6C`.
+
+```text
+state 0 -> 0x0800B93E: 0x00, 0x01, 0x0B, 0x0C, 0x0D, 0x0E, 0x0F, 0x10, 0x11
+state 1 -> 0x0800B9D6: 0x00, 0x09, 0x07/0x0A probe branch, 0x1A..0x1E
+state 2 -> 0x0800BA6C: 0x02, 0x03, 0x04, 0x05, 0x06, 0x08
+state 3 -> 0x0800BACE: 0x00, 0x08, 0x09, 0x07/0x0A probe branch, 0x16..0x19
+state 4 -> 0x0800BB64: 0x00, 0x1F, 0x09, 0x20, 0x21
+state 5 -> 0x0800BBBE: 0x00, 0x25, 0x09, 0x26, 0x27, 0x28
+state 6 -> 0x0800BC2A: 0x29
+state 7 -> 0x0800BC2E: 0x15
+state 8 -> 0x0800BCA6: 0x00, 0x2C
+state 9 -> 0x0800BC32: 0x00, 0x12, 0x13, 0x14, 0x09, 0x07/0x0A probe branch
+```
+
+This is stronger stock state-machine evidence than a loose list of command
+bytes: it ties each command bank to the state byte that selects it. It remains a
+narrow boundary. `ms[0xF68]` selects mode-init command banks; it is not DMM
+`ms[0x02]`/`ms[0x03]` analog mux state, not raw `0x05xx` selector words, not a
+factory coefficient, and not low-DCV calibration.
+
 ### Meter Probe Branch Guard, 2026-06-06
 
 The `Meter Probe Branch Guard` now separates the PC7 command-tail branch from
