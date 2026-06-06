@@ -304,6 +304,10 @@ class DmmGoalValidationTests(unittest.TestCase):
             "fpga_gpio_write_level(GPIOB, (1U << 9), state->pb9);",
             result["required_file"],
         )
+        self.assertIn(
+            "saved-config default ms[0x02]=5 /\n     * ms[0x03]=5 is persistence evidence only",
+            result["required_file"],
+        )
 
     def test_meter_expected_selector_uses_plan_word(self) -> None:
         result = validate_dmm_goal.verify_meter_expected_selector_uses_plan_word()

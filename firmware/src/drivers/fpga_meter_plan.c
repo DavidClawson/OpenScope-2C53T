@@ -322,9 +322,14 @@ fpga_meter_transition_plan_t fpga_meter_transition_plan_for_submode(uint8_t subm
      * port uses the recovered stock slot as both mux indices because no scoped
      * disassembly path has yet shown an extra writer that splits small current,
      * A-range current, capacitance, or temperature inside a shared slot.
-     * This is a software state-machine contract only. Physical correctness for
-     * low DCV and shared local ranges still needs stock xrefs or repeatable
-     * live traces; do not hide those gaps with decoder-side value-shape hacks.
+     *
+     * Stock saved-config defaults seed ms[0x02] = 5 and ms[0x03] = 5, but that
+     * is persistence/default evidence only, not a recovered normal runtime DMM
+     * mux writer and not a reason to force every mode through slot 5. Conversely,
+     * selector slot -> mux slot is still a local projection policy. Physical
+     * correctness for low DCV and shared local ranges still needs stock xrefs or
+     * repeatable live traces; do not hide those gaps with decoder-side
+     * value-shape hacks.
      */
     plan.portc_porte_mux = plan.stock_mode;
     plan.porta_portb_mux = plan.stock_mode;

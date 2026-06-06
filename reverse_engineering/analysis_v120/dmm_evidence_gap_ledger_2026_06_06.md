@@ -64,6 +64,10 @@ one of:
   `full_decompile.c:2566` in `FUN_08001c60` and `full_decompile.c:8745` in
   `FUN_08019e98`; both are classified and guarded as scope/siggen autorange
   paths, not DMM runtime mux/range writers.
+- Saved-config default boundary: stock `FUN_080223BC` seeds `0x05050000`, so
+  default persistent mux bytes are `ms[0x02]=5` and `ms[0x03]=5`. That is
+  persistence/default evidence only; it is not a recovered normal runtime DMM
+  mux writer, not a universal frontend setting, and not a low-DCV correction.
 - H2/SPI3: stock proves a byte-exact `0x3B`/table/`0x3A` transfer of
   115,638 bytes from `0x08051D19`. Open firmware `h2_upload_done` and USB
   `H2T` diagnostics mean bytes transmitted only; no recovered FPGA ACK/apply

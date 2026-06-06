@@ -321,6 +321,9 @@ def verify_meter_aux_afe_pin_policy() -> dict[str, Any]:
         "fpga_gpio_write_level(GPIOB, (1U << 9), state->pb9);",
         "fpga_gpio_write_level(GPIOA, (1U << 6), state->pa6);",
         "production writes cannot\n     * drift away from the state-machine table",
+        "not a recovered stock\n     * runtime DMM mux writer",
+        "saved-config default ms[0x02]=5 /\n     * ms[0x03]=5 is persistence evidence only",
+        "low-DCV mismatch still\n     * needs a new writer, trace, H2/apply proof, or factory-calibration source",
     ]
     missing_file = [snippet for snippet in required_file if snippet not in text]
     if missing_body or stale_body or missing_file:
@@ -1278,6 +1281,10 @@ def verify_re_coverage() -> dict[str, Any]:
         "current static mux-state surface is already",
         "classified as negative DMM evidence",
         "not progress unless a new writer, xref owner, or trace is recovered",
+        "Saved-config default boundary",
+        "default persistent mux bytes are `ms[0x02]=5` and `ms[0x03]=5`",
+        "persistence/default evidence only",
+        "not a universal frontend setting",
         "Next RE Target", "multiple DCV points, including low DCV, 5 V, and 32 V",
     ]
 

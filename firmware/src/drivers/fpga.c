@@ -1189,8 +1189,12 @@ static void fpga_apply_meter_mux_gpio_state(const fpga_meter_mux_gpio_state_t *s
      * FUN_080018a4 and FUN_08001a58 consume ms[0x02]/ms[0x03] and write
      * PC12/PE4/PE5/PE6 plus PA15/PA10/PB10/PB11. The open firmware applies the
      * tested fpga_meter_plan projection directly so production writes cannot
-     * drift away from the state-machine table. PB9/PA6 remain low because stock
-     * currently proves output configuration only, not mode-specific assertion.
+     * drift away from the state-machine table. This is not a recovered stock
+     * runtime DMM mux writer: the guarded saved-config default ms[0x02]=5 /
+     * ms[0x03]=5 is persistence evidence only, and the low-DCV mismatch still
+     * needs a new writer, trace, H2/apply proof, or factory-calibration source.
+     * PB9/PA6 remain low because stock currently proves output configuration
+     * only, not mode-specific assertion.
      */
     fpga_gpio_write_level(GPIOC, (1U << 12), state->pc12);
     fpga_gpio_write_level(GPIOE, (1U << 4), state->pe4);
