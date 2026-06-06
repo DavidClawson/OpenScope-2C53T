@@ -119,6 +119,34 @@ def verify_no_unrecovered_meter_coefficients() -> dict[str, Any]:
     return {"checked": checked, "forbidden": forbidden}
 
 
+def verify_no_ocr_pipeline() -> dict[str, Any]:
+    forbidden = [
+        "py" + "tess" + "eract",
+        "easy" + "ocr",
+        "tess" + "eract",
+        "image_" + "to_string",
+        "image-to" + "-text",
+        "image to" + " text",
+    ]
+    checked = [
+        "scripts/validate_dmm_goal.py",
+        "scripts/openscope_live_debug.py",
+    ]
+    hits: list[str] = []
+    for rel in checked:
+        text = (REPO / rel).read_text(encoding="utf-8", errors="replace")
+        lowered = text.lower()
+        for needle in forbidden:
+            if needle.lower() in lowered:
+                hits.append(f"{rel}: {needle}")
+    if hits:
+        raise GateError(
+            "DMM visual validation must remain image-view/manual evidence, "
+            "not an OCR pipeline: " + "; ".join(hits)
+        )
+    return {"checked": checked, "forbidden": forbidden}
+
+
 def verify_h2_tx_only_boundary() -> dict[str, Any]:
     """Ensure H2 diagnostics keep TX-complete separate from FPGA acceptance."""
     required = {
@@ -732,6 +760,7 @@ def main(argv: list[str] | None = None) -> int:
         report["autoscan_property_contract"] = verify_autoscan_property_contract()
         report["re_comment_coverage"] = verify_re_coverage()
         report["no_unrecovered_meter_coefficients"] = verify_no_unrecovered_meter_coefficients()
+        report["no_ocr_pipeline"] = verify_no_ocr_pipeline()
         report["h2_tx_only_boundary"] = verify_h2_tx_only_boundary()
 
         if not args.skip_live:

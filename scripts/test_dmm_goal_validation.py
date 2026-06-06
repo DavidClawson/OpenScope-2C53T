@@ -188,6 +188,14 @@ class DmmGoalValidationTests(unittest.TestCase):
         self.assertIn("METER_CAL_LOW_OHM_FACTOR", result["forbidden"])
         self.assertIn("3:/System file/cal_ch1.bin", result["forbidden"])
 
+    def test_no_ocr_pipeline_guard_is_active(self) -> None:
+        result = validate_dmm_goal.verify_no_ocr_pipeline()
+
+        self.assertIn("scripts/validate_dmm_goal.py", result["checked"])
+        self.assertIn("scripts/openscope_live_debug.py", result["checked"])
+        self.assertIn("py" + "tess" + "eract", result["forbidden"])
+        self.assertIn("image_" + "to_string", result["forbidden"])
+
     def test_re_coverage_requires_factory_cal_fail_closed_placeholder(self) -> None:
         coverage = validate_dmm_goal.verify_re_coverage()
         self.assertIn("flash_fs_load_factory_cal", coverage["terms"])
