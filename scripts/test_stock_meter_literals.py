@@ -584,6 +584,13 @@ EXPECTED_BOOT_MODE_INIT_DMM_SEQUENCES = {
         ),
     ),
 }
+EXPECTED_BOOT_MODE_INIT_DMM_DIRECT_CALLS = [
+    0x08002DAA,
+    0x080051D6,
+    0x0800533A,
+    0x08005572,
+    0x080271F8,
+]
 EXPECTED_BOOT_MODE_INIT_DMM_COMMAND_BANKS = {
     "meter_basic_boot_probe_prefix": {
         "commands": ["0x00", "0x09", "0x07/0x0A probe branch"],
@@ -1571,7 +1578,17 @@ def verify_boot_mode_init_dmm_sequences() -> dict[str, object]:
             "addr": f"{addr:#010x}",
             "bytes": actual.hex(" "),
         }
-    return {"sequences": checked}
+    direct_calls = find_direct_thumb_bl_callers(0x0800B908)
+    if direct_calls != EXPECTED_BOOT_MODE_INIT_DMM_DIRECT_CALLS:
+        raise AssertionError(
+            "FUN_0800B908 direct BL callers drifted: expected "
+            f"{[f'{addr:#010x}' for addr in EXPECTED_BOOT_MODE_INIT_DMM_DIRECT_CALLS]}, "
+            f"got {[f'{addr:#010x}' for addr in direct_calls]}"
+        )
+    return {
+        "sequences": checked,
+        "direct_callers": [f"{addr:#010x}" for addr in direct_calls],
+    }
 
 
 def _require_ordered_hex_snippets(name: str, haystack_hex: str, snippets: list[str]) -> None:

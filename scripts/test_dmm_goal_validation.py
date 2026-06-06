@@ -744,6 +744,7 @@ class DmmGoalValidationTests(unittest.TestCase):
     def test_stock_boot_mode_init_dmm_sequences_are_binary_grounded(self) -> None:
         result = stock_meter_literals.verify_boot_mode_init_dmm_sequences()
         sequences = result["sequences"]
+        direct_callers = result["direct_callers"]
 
         self.assertEqual(
             sequences["mode_init_dispatcher_tbh"]["addr"],
@@ -800,6 +801,16 @@ class DmmGoalValidationTests(unittest.TestCase):
         self.assertIn(
             "14 21 28 68",
             sequences["meter_variant_boot_tail"]["bytes"],
+        )
+        self.assertEqual(
+            direct_callers,
+            [
+                "0x08002daa",
+                "0x080051d6",
+                "0x0800533a",
+                "0x08005572",
+                "0x080271f8",
+            ],
         )
 
     def test_stock_boot_mode_init_dmm_command_banks_are_binary_grounded(self) -> None:

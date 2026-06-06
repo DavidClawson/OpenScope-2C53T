@@ -312,6 +312,20 @@ documented command-byte banks in order rather than leaving them as prose:
   `0x07`/`0x0A` probe-detect command.
 ```
 
+The same binary guard checks the complete direct callsite set for this dispatcher.
+The only direct `BL` instructions to `FUN_0800B908` in the stock APP image are:
+
+```text
+0x08002DAA
+0x080051D6
+0x0800533A
+0x08005572
+0x080271F8
+```
+
+Those are command-dispatch entry evidence only. They do not add a recovered
+DMM runtime analog range writer for `ms[0x02]`/`ms[0x03]`.
+
 This guard is useful because local meter bring-up and mode-resume comments use
 these command families, and future DMM changes must not replace them with
 observed-value guesses. The boundary is just as important: `FUN_0800B908`
