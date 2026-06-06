@@ -602,6 +602,50 @@ def verify_legacy_meter_fsm_unit_lookup_boundary() -> dict[str, Any]:
     }
 
 
+def verify_legacy_meter_fsm_range_command_boundary() -> dict[str, Any]:
+    """Ensure the legacy FSM note no longer overclaims range commands absent."""
+    rel = "reverse_engineering/analysis_v120/meter_fsm_deep_dive.md"
+    text = (REPO / rel).read_text(encoding="utf-8", errors="replace")
+    normalized = " ".join(text.split())
+    required = [
+        "Range-command boundary corrected 2026-06-06",
+        "No magnitude-derived range feedback function was found",
+        "display-side formatter and meter-mode dispatcher, not a range controller",
+        "DMM boot/runtime mode-init command banks",
+        "`0x1A..0x1E`, `0x16..0x19`, `0x12/0x13/0x14`",
+        "runtime dispatcher callers into `FUN_0800B908`",
+        "DMM-owned runtime analog range writer for `ms[0x02]`/`ms[0x03]`",
+        "Do not turn this into a claim that stock sends no meter range commands at all",
+        "DMM-owned runtime range writer",
+        "old \"never sends range commands\" conclusion is too strong",
+    ]
+    forbidden = [
+        "True auto-range is not implemented in stock firmware",
+        "does not send range commands back",
+        "has no code to command FPGA range changes",
+        "never sends range commands back",
+        "autonomous and not firmware-controlled",
+    ]
+    missing = [
+        snippet for snippet in required
+        if " ".join(snippet.split()) not in normalized
+    ]
+    stale = [
+        snippet for snippet in forbidden
+        if " ".join(snippet.split()) in normalized
+    ]
+    if missing or stale:
+        raise GateError(
+            "legacy meter FSM range-command boundary drifted: "
+            f"missing={missing} stale={stale}"
+        )
+    return {
+        "checked": rel,
+        "required": required,
+        "forbidden": forbidden,
+    }
+
+
 def verify_no_magnitude_range_feedback() -> dict[str, Any]:
     """Ensure production DMM frontend code does not suggest value-shaped ranging."""
     checked: dict[str, str] = {}
@@ -1464,6 +1508,9 @@ def main(argv: list[str] | None = None) -> int:
         report["meter_apply_pair_production_comment"] = verify_meter_apply_pair_production_comment()
         report["legacy_meter_fsm_unit_lookup_boundary"] = (
             verify_legacy_meter_fsm_unit_lookup_boundary()
+        )
+        report["legacy_meter_fsm_range_command_boundary"] = (
+            verify_legacy_meter_fsm_range_command_boundary()
         )
         report["no_magnitude_range_feedback"] = verify_no_magnitude_range_feedback()
 

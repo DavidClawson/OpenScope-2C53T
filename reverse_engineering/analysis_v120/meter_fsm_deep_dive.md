@@ -12,7 +12,14 @@
 
 2. **DAT_2000102e (unit_variant) is written in 4 places**, all within the FSM at lines 30425-30464. It's not pre-computed; it's set **only in DCV (case 0)** and persists across frames as a multi-frame state machine flag.
 
-3. **No "range feedback function" was found**. The stock firmware sends display commands (0x1B, 0x1C, 0x1E) to a queue but does not implement auto-ranging. The function at 0x080028E0 (**FUN_080028e0**) is the **display-side formatter and meter-mode dispatcher**, not a range controller. True auto-range is not implemented in stock firmware.
+3. **Range-command boundary corrected 2026-06-06.** No magnitude-derived
+   range feedback function was found in `FUN_080028E0`: that function is the
+   display-side formatter and meter-mode dispatcher, not a range controller.
+   Newer stock guards do prove DMM boot/runtime mode-init command banks
+   (`0x1A..0x1E`, `0x16..0x19`, `0x12/0x13/0x14`) and runtime dispatcher
+   callers into `FUN_0800B908`; what remains missing is the DMM-owned runtime
+   analog range writer for `ms[0x02]`/`ms[0x03]`. Do not turn this into a claim
+   that stock sends no meter range commands at all.
 
 4. **Unit lookup boundary corrected 2026-06-06.** The stock renderer computes a
    lookup address from `DAT_20001026` at `0x08009AE4`, but the downloaded
@@ -280,12 +287,19 @@ Why:
 *     bit 3 (0x08) — range-change / auto-range-in-progress
 ```
 
-So the **stock firmware reads range feedback FROM the FPGA** (in frame[7] bit 3), but **does not send range commands back**. The display just shows what range the FPGA is currently in.
+So this formatter path reads display/status bits from the FPGA and queues
+display-task commands, but it is not the recovered runtime analog range writer.
+Newer binary guards recover DMM mode-init command banks and dispatcher callers;
+they still do not recover the DMM-owned runtime writer for `ms[0x02]` /
+`ms[0x03]` or justify magnitude-derived range control.
 
 ### Uncertainty
 
 - **Why is this called "state_update" in CLAUDE.md notes?** The comment in CLAUDE.md says *"fpga_state_update sets ms[0xF2E] based on meter_mode..."* but 0xF2E is the display state (DAT_20001026). This suggests CLAUDE.md conflated the display formatter with a range controller.
-- **Does FPGA auto-range exist?** The stock firmware has no code to command FPGA range changes. If auto-ranging works in the stock meter, it's **in the FPGA itself**, not firmware-controlled.
+- **Does FPGA auto-range exist?** This formatter path does not prove it either
+  way. Stock has guarded meter command banks and dispatcher callers, but the
+  DMM-owned runtime analog range writer remains unrecovered. Treat auto-range
+  semantics as open until a stock runtime caller/trace proves the state source.
 - **Can we implement firmware-driven auto-range?** Yes, but we would need to add FPGA commands (likely via USART2 TX) to switch ranges, which the current stock firmware does not do.
 
 ---
@@ -721,7 +735,11 @@ where per_submode_offset is:
 
 3. **func_0x08033ef8 source code.** It's called but not defined in the decomp. Likely a jump table (TBB/TBH) in the original binary, collapsed into an external symbol by Ghidra.
 
-4. **FPGA range-selection commands.** The stock firmware reads frame[7] bit 3 (auto-range feedback) but never sends range commands back. If FPGA auto-ranging exists, it's autonomous and not firmware-controlled.
+4. **DMM-owned runtime range writer.** This note did not recover the runtime
+   writer for `ms[0x02]`/`ms[0x03]`. Newer guards recover mode-init command
+   banks and dispatcher callers, so the old "never sends range commands"
+   conclusion is too strong; the open gap is the DMM runtime state source and
+   any stock trace tying it to analog mux/range changes.
 
 5. **Full range indices for all submodes.** We see DAT_2000102e variants for DCV (0, 1, 2) but submodes 1–7 don't set it — they rely on hardcoded display dispatch. Unclear which index is used for, e.g., ACA 10A range vs ACA mA range.
 

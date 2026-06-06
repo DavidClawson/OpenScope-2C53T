@@ -122,6 +122,26 @@ class DmmGoalValidationTests(unittest.TestCase):
             result["forbidden"],
         )
 
+    def test_legacy_meter_fsm_note_does_not_overclaim_range_commands_absent(self) -> None:
+        result = validate_dmm_goal.verify_legacy_meter_fsm_range_command_boundary()
+
+        self.assertEqual(
+            result["checked"],
+            "reverse_engineering/analysis_v120/meter_fsm_deep_dive.md",
+        )
+        self.assertIn(
+            "Range-command boundary corrected 2026-06-06",
+            result["required"],
+        )
+        self.assertIn(
+            "DMM-owned runtime analog range writer for `ms[0x02]`/`ms[0x03]`",
+            result["required"],
+        )
+        self.assertIn(
+            "never sends range commands back",
+            result["forbidden"],
+        )
+
     def test_h2_tx_only_boundary_is_guarded_in_firmware_surfaces(self) -> None:
         result = validate_dmm_goal.verify_h2_tx_only_boundary()
 
