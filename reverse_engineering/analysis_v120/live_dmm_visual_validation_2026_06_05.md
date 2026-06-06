@@ -50,6 +50,14 @@ PC12_route=1 PE4=1 PE5=0 PE6=1
 PA15=1 PA10=1 PB10=0 PB9=1 PA6=1
 ```
 
+The `PB9=1 PA6=1` part of that dump is an earlier flashed local firmware
+state, not stock PB9/PA6 evidence. Current stock V1.2.0 evidence only guards
+PB9/PA6 output configuration at `0x080241D4..0x080241F0` and no direct
+mode-specific BOP/BCR level write has been recovered. The current-head
+stock-boundary policy keeps PB9/PA6 low through the tested mux-state model until
+a stock trace proves otherwise. Do not treat PB9/PA6 high as a low-DCV
+correction.
+
 ## Interpretation
 
 This is a live mismatch, not a display-parser ambiguity. The source/load value

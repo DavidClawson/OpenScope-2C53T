@@ -1145,6 +1145,7 @@ def verify_re_coverage() -> dict[str, Any]:
         "reverse_engineering/analysis_v120/SPI3_INIT_SEQUENCE_DECODED.md",
         "reverse_engineering/analysis_v120/h2_extracted/FINDINGS.md",
         "reverse_engineering/analysis_v120/dmm_evidence_gap_ledger_2026_06_06.md",
+        "reverse_engineering/analysis_v120/live_dmm_visual_validation_2026_06_05.md",
     ]
     required_code = [
         "firmware/src/drivers/meter_data.c",
@@ -1358,6 +1359,11 @@ def verify_re_coverage() -> dict[str, Any]:
         "full_decompile.c:8745",
         "classified and guarded as scope/siggen autorange",
         "current static mux-state surface is already",
+        "PB9=1 PA6=1",
+        "earlier flashed local firmware\nstate",
+        "not stock PB9/PA6 evidence",
+        "current-head\nstock-boundary policy keeps PB9/PA6 low",
+        "Do not treat PB9/PA6 high as a low-DCV\ncorrection",
         "classified as negative DMM evidence",
         "not progress unless a new writer, xref owner, or trace is recovered",
         "Saved-config default boundary",

@@ -482,6 +482,18 @@ class DmmGoalValidationTests(unittest.TestCase):
         )
         self.assertIn("Next RE Target", coverage["terms"])
 
+    def test_re_coverage_requires_live_pb9_pa6_snapshot_boundary(self) -> None:
+        coverage = validate_dmm_goal.verify_re_coverage()
+        self.assertIn(
+            "reverse_engineering/analysis_v120/live_dmm_visual_validation_2026_06_05.md",
+            coverage["docs"],
+        )
+        self.assertIn("PB9=1 PA6=1", coverage["terms"])
+        self.assertIn("earlier flashed local firmware\nstate", coverage["terms"])
+        self.assertIn("not stock PB9/PA6 evidence", coverage["terms"])
+        self.assertIn("current-head\nstock-boundary policy keeps PB9/PA6 low", coverage["terms"])
+        self.assertIn("Do not treat PB9/PA6 high as a low-DCV\ncorrection", coverage["terms"])
+
     def test_re_coverage_requires_selector_shadow_xref_closure(self) -> None:
         coverage = validate_dmm_goal.verify_re_coverage()
         self.assertIn(
