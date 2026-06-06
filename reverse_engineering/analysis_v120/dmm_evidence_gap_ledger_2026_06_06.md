@@ -708,6 +708,23 @@ wiring proof boundary. It is not permission to restore decoder coefficients.
   the same DCV frontend GPIO levels.  Therefore `0x0508` is not sufficient as
   the missing low-DCV fix; any future use must be justified by broader stock
   transition evidence, not by this point.
+- Auxiliary AFE pin live negative: PB9 and PA6 are still unresolved stock
+  outputs, so the current open firmware keeps them low.  A controlled DCV-only
+  low-voltage run manually tested the four PB9/PA6 combinations after
+  `mode meter 0` and a stock DCV raw-word tail (`0x0514 0x0507 0x0509`), without
+  entering current or passive modes.  All four combinations stayed in the same
+  wrong producer range: `PB9=0 PA6=0 -> display=2.232 V`,
+  `PB9=0 PA6=1 -> display=2.233 V`, `PB9=1 PA6=0 -> display=2.233 V`,
+  `PB9=1 PA6=1 -> display=2.233 V`, with unchanged DCV selector and frontend
+  core levels.  Therefore PB9/PA6 alone are not the missing low-DCV frontend
+  state.
+- SPI3 meter-ADC sidecar live negative: the experimental stock case-5 sampler
+  does not currently expose a usable raw DMM measurement source.  On the same
+  DCV low-voltage bench state, direct mode produced `3200/3200` samples at
+  `FF`, and pre-acq mode produced `3160/3160` samples at `FF` with
+  `last_preacq_rx=FF`; the USART DMM producer simultaneously remained valid at
+  `dmm_display=2.233 V`.  Treat this as "case-5 not armed/valid in local
+  firmware" evidence, not as a hidden raw voltage reading.
 
 ## Next RE Target
 
