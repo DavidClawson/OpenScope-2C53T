@@ -283,6 +283,7 @@ def _parse_int_token(value: str) -> int | str:
 
 
 WIRE_HEX_KEYS = {
+    "config",
     "selector",
     "apply",
     "probe",

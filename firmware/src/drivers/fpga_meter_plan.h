@@ -12,6 +12,7 @@
 #define FPGA_METER_INVALID_STOCK_MODE        0xFFu
 #define FPGA_METER_INVALID_LOCAL_SUBMODE     0xFFu
 #define FPGA_METER_INVALID_SELECTOR_WORD     0x0000u
+#define FPGA_METER_CONFIGURE_WORD            0x0508u
 #define FPGA_METER_START_WORD                0x0509u
 
 typedef enum {
@@ -55,6 +56,8 @@ typedef struct {
     uint8_t frame_family;
     uint8_t discard_frames;
     uint16_t settle_ms;
+    bool has_config_word;
+    uint16_t config_word;
     uint16_t selector_word;
     bool has_apply_word;
     uint16_t apply_word;

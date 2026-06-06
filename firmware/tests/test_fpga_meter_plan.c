@@ -240,6 +240,11 @@ static void test_transition_plan_covers_mux_family_and_settle_policy(void)
         0x0000, 0x0000, 0x0516, 0x0515, 0x0000,
         0x0000
     };
+    static const uint16_t expected_config[FPGA_METER_LOCAL_SUBMODE_COUNT] = {
+        0x0508, 0x0000, 0x0000, 0x0000, 0x0000,
+        0x0000, 0x0000, 0x0000, 0x0000, 0x0000,
+        0x0000
+    };
 
     for (uint8_t i = 0; i < FPGA_METER_LOCAL_SUBMODE_COUNT; i++) {
         char name[48];
@@ -265,6 +270,11 @@ static void test_transition_plan_covers_mux_family_and_settle_policy(void)
         EXPECT_EQ_U16(name, plan.settle_ms, FPGA_METER_TRANSITION_SETTLE_MS);
         snprintf(name, sizeof(name), "plan selector %u", (unsigned)i);
         EXPECT_EQ_U16(name, plan.selector_word, expected_selector[i]);
+        snprintf(name, sizeof(name), "plan config exists %u", (unsigned)i);
+        EXPECT_EQ_U8(name, plan.has_config_word ? 1U : 0U,
+                     expected_config[i] != 0 ? 1U : 0U);
+        snprintf(name, sizeof(name), "plan config word %u", (unsigned)i);
+        EXPECT_EQ_U16(name, plan.config_word, expected_config[i]);
         snprintf(name, sizeof(name), "plan apply exists %u", (unsigned)i);
         EXPECT_EQ_U8(name, plan.has_apply_word ? 1U : 0U,
                      expected_apply[i] != 0 ? 1U : 0U);
@@ -399,6 +409,10 @@ static void test_transition_settle_discard_policy_is_explicit_for_every_submode(
                       plan.settle_ms, 0U);
         EXPECT_EQ_U16("invalid submodes emit no settle/discard selector",
                       plan.selector_word, FPGA_METER_INVALID_SELECTOR_WORD);
+        EXPECT_EQ_U8("invalid submodes emit no configure",
+                     plan.has_config_word ? 1U : 0U, 0U);
+        EXPECT_EQ_U16("invalid submodes emit no configure word",
+                      plan.config_word, 0U);
         EXPECT_EQ_U8("invalid submodes emit no settle/discard apply",
                      plan.has_apply_word ? 1U : 0U, 0U);
         EXPECT_EQ_U8("invalid submodes emit no settle/discard probe",

@@ -226,11 +226,13 @@ typedef struct {
      * with 0x0509, so keep the last explicit mode switch separately. */
     volatile uint16_t meter_mode_sequence_count;
     volatile uint8_t  meter_mode_sequence_submode;
+    volatile uint16_t meter_mode_config_word;
     volatile uint16_t meter_mode_selector_word;
     volatile uint16_t meter_mode_apply_word;
     volatile uint16_t meter_mode_probe_word;
     volatile uint16_t meter_mode_start_word;
     volatile uint8_t  meter_transition_history_submode[FPGA_METER_TRANSITION_HISTORY];
+    volatile uint16_t meter_transition_history_config[FPGA_METER_TRANSITION_HISTORY];
     volatile uint16_t meter_transition_history_selector[FPGA_METER_TRANSITION_HISTORY];
     volatile uint16_t meter_transition_history_apply[FPGA_METER_TRANSITION_HISTORY];
     volatile uint16_t meter_transition_history_probe[FPGA_METER_TRANSITION_HISTORY];
@@ -256,6 +258,7 @@ typedef struct {
     volatile uint8_t  meter_first_rx_after_transition_valid;
     volatile uint8_t  meter_first_rx_after_transition_submode;
     volatile uint16_t meter_first_rx_after_transition_seq;
+    volatile uint16_t meter_first_rx_after_transition_config;
     volatile uint16_t meter_first_rx_after_transition_selector;
     volatile uint16_t meter_first_rx_after_transition_apply;
     volatile uint16_t meter_first_rx_after_transition_probe;

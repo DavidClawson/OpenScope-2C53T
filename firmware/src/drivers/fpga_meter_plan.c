@@ -297,6 +297,19 @@ fpga_meter_transition_plan_t fpga_meter_transition_plan_for_submode(uint8_t subm
      */
     plan.discard_frames = FPGA_METER_TRANSITION_DISCARD_FRAMES;
     plan.settle_ms = FPGA_METER_TRANSITION_SETTLE_MS;
+    /*
+     * DCV runtime configure step.
+     *
+     * Stock V1.2.0 has separate evidence for the basic configure word 0x0508
+     * (0x080033CA) and the DCV selector word 0x0514 (0x08005B7A). Boot/wake
+     * emits 0x0508 before 0x0514, while the earlier open firmware only sent
+     * 0x0514 on normal DCV transitions. Low-DCV live failures are
+     * producer-frame faults, so re-materialize this stock basic configure word
+     * for DCV without treating it as a numeric correction or as one of the
+     * dynamic selector/apply pairs.
+     */
+    plan.has_config_word = submode == 0;
+    plan.config_word = plan.has_config_word ? FPGA_METER_CONFIGURE_WORD : 0;
     plan.selector_word = fpga_meter_stock_cmd_word_for_submode(submode);
     plan.has_apply_word =
         fpga_meter_stock_apply_cmd_word_for_submode(submode, &plan.apply_word);
@@ -308,6 +321,8 @@ fpga_meter_transition_plan_t fpga_meter_transition_plan_for_submode(uint8_t subm
         plan.porta_portb_mux = FPGA_METER_INVALID_STOCK_MODE;
         plan.discard_frames = 0;
         plan.settle_ms = 0;
+        plan.has_config_word = false;
+        plan.config_word = 0;
         plan.selector_word = FPGA_METER_INVALID_SELECTOR_WORD;
         plan.has_apply_word = false;
         plan.apply_word = 0;

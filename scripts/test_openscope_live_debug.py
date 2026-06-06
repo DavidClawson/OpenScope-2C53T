@@ -132,17 +132,17 @@ producer counts tx=33 rx_bytes=512 data=12 echo=33 rx_valid=1
 producer_last_rx data=12 tx=33 echo=33 seq=2 seq_sub=0 busy=0 discard=0
 rx_sync data_start=12 echo_start=33 data_hdr=12 echo_hdr=33 bad_second=0 stray=0
 plan stock_mode=0 raw_low=14 family=0 mux=0 portc_porte=0 porta_portb=0 settle_ms=20 discard=2
-wire selector=0514 apply=0000 has_apply=0 probe=0507 start=0509 seq_count=2 seq_sub=0
-last_sequence selector=0514 apply=0000 probe=0507 start=0509
+wire config=0508 has_config=1 selector=0514 apply=0000 has_apply=0 probe=0507 start=0509 seq_count=2 seq_sub=0
+last_sequence config=0508 selector=0514 apply=0000 probe=0507 start=0509
 decoded display=0.4366 unit=V value_i10000=4366 raw=4366 dp=1 class=1 reject=0 family=0/0 extra=0189
 stock_fsm mode=0 variant=0 format=0 dc_state=1 display_cmd=0 unit_index=0 composite=0
 transition busy=0 discard_now=0 skip_count=2
 producer_frame=5A A5 44 8E EF E7 07 24 80 00 01 89
 parsed_frame=5A A5 44 8E EF E7 07 24 80 00 01 89
-first_transition_rx valid=1 armed=0 sub=0 seq=2 selector=0514 apply=0000 probe=0507 start=0509 planned_gpio=0BB actual_gpio=0BB data=9 tx=33 echo=33 busy=1 discard=2 h2_bytes=115638 h2_done=1 h2_post_ok=5 h2_post_mask=1F frame=5A A5 44 8E EF E7 07 24 80 00 01 89
+first_transition_rx valid=1 armed=0 sub=0 seq=2 config=0508 selector=0514 apply=0000 probe=0507 start=0509 planned_gpio=0BB actual_gpio=0BB data=9 tx=33 echo=33 busy=1 discard=2 h2_bytes=115638 h2_done=1 h2_post_ok=5 h2_post_mask=1F frame=5A A5 44 8E EF E7 07 24 80 00 01 89
 last_echo_frame=AA 55 00 09 00 00 00 AA 00 09
 transition_history newest_first:
-mth n=0 sub=0 seq=2 selector=0514 apply=0000 probe=0507 start=0509 tx=29..33 data=8..9 planned_gpio=0BB actual_gpio=0BB
+mth n=0 sub=0 seq=2 config=0508 selector=0514 apply=0000 probe=0507 start=0509 tx=29..33 data=8..9 planned_gpio=0BB actual_gpio=0BB
 producer_history newest_first:
 rxh n=0 data=12 tx=33 echo=33 seq=2 seq_sub=0 busy=0 discard=0 frame=5A A5 44 8E EF E7 07 24 80 00 01 89
 tx_history newest_first:
@@ -170,6 +170,8 @@ h2_post_rx n=0 trigger=01 len=2 bytes=FF FF
         self.assertEqual(parsed["trace_version"], 1)
         self.assertEqual(parsed["context"]["ui_sub"], 0)
         self.assertEqual(parsed["plan"]["raw_low"], 14)
+        self.assertEqual(parsed["wire"]["config"], "0508")
+        self.assertEqual(parsed["wire"]["has_config"], 1)
         self.assertEqual(parsed["wire"]["selector"], "0514")
         self.assertEqual(parsed["wire"]["apply"], "0000")
         self.assertEqual(parsed["decoded"]["display"], "0.4366")
@@ -187,6 +189,7 @@ h2_post_rx n=0 trigger=01 len=2 bytes=FF FF
             "AA 55 00 09 00 00 00 AA 00 09",
         )
         self.assertEqual(parsed["first_transition_rx"]["valid"], 1)
+        self.assertEqual(parsed["first_transition_rx"]["config"], "0508")
         self.assertEqual(parsed["first_transition_rx"]["selector"], "0514")
         self.assertEqual(parsed["first_transition_rx"]["apply"], "0000")
         self.assertEqual(parsed["first_transition_rx"]["probe"], "0507")

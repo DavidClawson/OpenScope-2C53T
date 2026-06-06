@@ -865,6 +865,8 @@ static void fpga_record_meter_transition_snapshot(
      * later producer RX frames; it must never drive value/range decisions.
      */
     fpga.meter_transition_history_submode[idx] = submode;
+    fpga.meter_transition_history_config[idx] =
+        plan->has_config_word ? plan->config_word : 0;
     fpga.meter_transition_history_selector[idx] = plan->selector_word;
     fpga.meter_transition_history_apply[idx] =
         plan->has_apply_word ? plan->apply_word : 0;
@@ -905,6 +907,8 @@ static void fpga_arm_meter_first_rx_latch(
     fpga.meter_first_rx_after_transition_valid = 0;
     fpga.meter_first_rx_after_transition_submode = submode;
     fpga.meter_first_rx_after_transition_seq = fpga.meter_mode_sequence_count;
+    fpga.meter_first_rx_after_transition_config =
+        plan->has_config_word ? plan->config_word : 0;
     fpga.meter_first_rx_after_transition_selector = plan->selector_word;
     fpga.meter_first_rx_after_transition_apply =
         plan->has_apply_word ? plan->apply_word : 0;
@@ -4669,6 +4673,7 @@ static void fpga_send_meter_mode_sequence(uint8_t submode)
     if (!fpga_meter_submode_is_valid(submode)) {
         fpga.meter_mode_sequence_count++;
         fpga.meter_mode_sequence_submode = submode;
+        fpga.meter_mode_config_word = 0;
         fpga.meter_mode_selector_word = FPGA_METER_INVALID_SELECTOR_WORD;
         fpga.meter_mode_apply_word = 0;
         fpga.meter_mode_probe_word = 0;
@@ -4678,6 +4683,7 @@ static void fpga_send_meter_mode_sequence(uint8_t submode)
 
     fpga.meter_mode_sequence_count++;
     fpga.meter_mode_sequence_submode = submode;
+    fpga.meter_mode_config_word = 0;
     fpga.meter_mode_selector_word = plan.selector_word;
     fpga.meter_mode_apply_word = 0;
     fpga.meter_mode_probe_word = plan.has_probe_detect ? probe_word : 0;
@@ -4694,6 +4700,10 @@ static void fpga_send_meter_mode_sequence(uint8_t submode)
      * local policy and are reported in debug output instead of being hidden as
      * stock fact.
      */
+    if (plan.has_config_word) {
+        fpga.meter_mode_config_word = plan.config_word;
+        fpga_wire_send_word(plan.config_word, plan.settle_ms);
+    }
     fpga_wire_send_word(plan.selector_word, plan.settle_ms);
     if (plan.has_apply_word) {
         fpga.meter_mode_apply_word = plan.apply_word;

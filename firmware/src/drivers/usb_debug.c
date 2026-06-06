@@ -423,6 +423,7 @@ static void fpga_diag_clear(void)
     fpga.rx_frame_history_head = 0;
     fpga.rx_frame_history_count = 0;
     memset((void *)fpga.meter_transition_history_submode, 0, sizeof(fpga.meter_transition_history_submode));
+    memset((void *)fpga.meter_transition_history_config, 0, sizeof(fpga.meter_transition_history_config));
     memset((void *)fpga.meter_transition_history_selector, 0, sizeof(fpga.meter_transition_history_selector));
     memset((void *)fpga.meter_transition_history_apply, 0, sizeof(fpga.meter_transition_history_apply));
     memset((void *)fpga.meter_transition_history_probe, 0, sizeof(fpga.meter_transition_history_probe));
@@ -2534,6 +2535,7 @@ static void cmd_meter_trace(void)
     uint16_t txc_tx[FPGA_TX_FRAME_HISTORY];
     uint8_t mth_count;
     uint8_t mth_submode[FPGA_METER_TRANSITION_HISTORY];
+    uint16_t mth_config[FPGA_METER_TRANSITION_HISTORY];
     uint16_t mth_selector[FPGA_METER_TRANSITION_HISTORY];
     uint16_t mth_apply[FPGA_METER_TRANSITION_HISTORY];
     uint16_t mth_probe[FPGA_METER_TRANSITION_HISTORY];
@@ -2549,6 +2551,7 @@ static void cmd_meter_trace(void)
     uint8_t first_rx_armed;
     uint8_t first_rx_submode;
     uint16_t first_rx_seq;
+    uint16_t first_rx_config;
     uint16_t first_rx_selector;
     uint16_t first_rx_apply;
     uint16_t first_rx_probe;
@@ -2608,6 +2611,7 @@ static void cmd_meter_trace(void)
     first_rx_armed = fpga.meter_first_rx_after_transition_armed;
     first_rx_submode = fpga.meter_first_rx_after_transition_submode;
     first_rx_seq = fpga.meter_first_rx_after_transition_seq;
+    first_rx_config = fpga.meter_first_rx_after_transition_config;
     first_rx_selector = fpga.meter_first_rx_after_transition_selector;
     first_rx_apply = fpga.meter_first_rx_after_transition_apply;
     first_rx_probe = fpga.meter_first_rx_after_transition_probe;
@@ -2676,6 +2680,7 @@ static void cmd_meter_trace(void)
                                  FPGA_METER_TRANSITION_HISTORY - 1U - n) %
                                 FPGA_METER_TRANSITION_HISTORY);
         mth_submode[n] = fpga.meter_transition_history_submode[idx];
+        mth_config[n] = fpga.meter_transition_history_config[idx];
         mth_selector[n] = fpga.meter_transition_history_selector[idx];
         mth_apply[n] = fpga.meter_transition_history_apply[idx];
         mth_probe[n] = fpga.meter_transition_history_probe[idx];
@@ -2737,8 +2742,11 @@ static void cmd_meter_trace(void)
                      (unsigned)plan.porta_portb_mux,
                      (unsigned)plan.settle_ms,
                      (unsigned)plan.discard_frames);
-    usb_debug_printf("wire selector=%04X apply=%04X has_apply=%u probe=%04X "
-                     "start=%04X seq_count=%u seq_sub=%u\r\n",
+    usb_debug_printf("wire config=%04X has_config=%u selector=%04X "
+                     "apply=%04X has_apply=%u probe=%04X start=%04X "
+                     "seq_count=%u seq_sub=%u\r\n",
+                     (unsigned)plan.config_word,
+                     plan.has_config_word ? 1U : 0U,
                      (unsigned)plan.selector_word,
                      (unsigned)plan.apply_word,
                      plan.has_apply_word ? 1U : 0U,
@@ -2746,8 +2754,9 @@ static void cmd_meter_trace(void)
                      (unsigned)plan.start_word,
                      (unsigned)fpga.meter_mode_sequence_count,
                      (unsigned)fpga.meter_mode_sequence_submode);
-    usb_debug_printf("last_sequence selector=%04X apply=%04X probe=%04X "
-                     "start=%04X\r\n",
+    usb_debug_printf("last_sequence config=%04X selector=%04X apply=%04X "
+                     "probe=%04X start=%04X\r\n",
+                     (unsigned)fpga.meter_mode_config_word,
                      (unsigned)fpga.meter_mode_selector_word,
                      (unsigned)fpga.meter_mode_apply_word,
                      (unsigned)fpga.meter_mode_probe_word,
@@ -2780,7 +2789,8 @@ static void cmd_meter_trace(void)
     print_frame_hex("producer_frame=", producer_frame);
     print_frame_hex("parsed_frame=", snap.dbg_frame);
     usb_debug_printf("first_transition_rx valid=%u armed=%u sub=%u seq=%u "
-                     "selector=%04X apply=%04X probe=%04X start=%04X "
+                     "config=%04X selector=%04X apply=%04X probe=%04X "
+                     "start=%04X "
                      "planned_gpio=%03X actual_gpio=%03X data=%u tx=%u "
                      "echo=%u busy=%u discard=%u h2_bytes=%lu h2_done=%u "
                      "h2_post_ok=%u h2_post_mask=%02X frame=",
@@ -2788,6 +2798,7 @@ static void cmd_meter_trace(void)
                      (unsigned)first_rx_armed,
                      (unsigned)first_rx_submode,
                      first_rx_seq,
+                     first_rx_config,
                      first_rx_selector,
                      first_rx_apply,
                      first_rx_probe,
@@ -2813,12 +2824,13 @@ static void cmd_meter_trace(void)
     usb_send_str("\r\n");
     usb_send_str("transition_history newest_first:\r\n");
     for (uint8_t n = 0; n < mth_count; n++) {
-        usb_debug_printf("mth n=%u sub=%u seq=%u selector=%04X apply=%04X "
-                         "probe=%04X start=%04X tx=%u..%u data=%u..%u "
+        usb_debug_printf("mth n=%u sub=%u seq=%u config=%04X selector=%04X "
+                         "apply=%04X probe=%04X start=%04X tx=%u..%u data=%u..%u "
                          "planned_gpio=%03X actual_gpio=%03X\r\n",
                          (unsigned)n,
                          (unsigned)mth_submode[n],
                          mth_seq[n],
+                         mth_config[n],
                          mth_selector[n],
                          mth_apply[n],
                          mth_probe[n],
