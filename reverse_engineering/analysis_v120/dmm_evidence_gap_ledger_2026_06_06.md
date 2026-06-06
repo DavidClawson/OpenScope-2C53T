@@ -47,6 +47,12 @@ one of:
   `0x080B43FC` contains low bytes `14 0c 17 0b 0a 12 11 10`.
 - Selector consumers: stock xrefs at `0x080042E2` and `0x080048BA` index
   `DAT_20001025`, build `0x0500 | low`, and store through the raw-word path.
+- Selector/shadow xref closure: `DAT_20001025` has 9 RAM-map refs and
+  `DAT_2000102e` has 7 RAM-map refs. The current closure note keeps those
+  bytes scoped as digital DMM selector/formatter-shadow state: they feed
+  `0x05xx` raw-word commands and display-unit variants, but they are not the
+  missing `ms[0x02]`/`ms[0x03]` analog mux/range writer and not a low-DCV
+  correction.
 - Dynamic apply helper: `0x08006120`, `0x08006194`, `0x0800626A`, and
   `0x08006288` recover only ACV, DCA, continuity, and diode apply pairs.
 - Command dispatcher: `FUN_0800B908` queues boot/runtime mode-init command

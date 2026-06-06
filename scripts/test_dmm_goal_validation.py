@@ -441,6 +441,33 @@ class DmmGoalValidationTests(unittest.TestCase):
         )
         self.assertIn("Next RE Target", coverage["terms"])
 
+    def test_re_coverage_requires_selector_shadow_xref_closure(self) -> None:
+        coverage = validate_dmm_goal.verify_re_coverage()
+        self.assertIn(
+            "reverse_engineering/analysis_v120/dmm_selector_shadow_xref_closure_2026_06_06.md",
+            coverage["docs"],
+        )
+        self.assertIn("DMM Selector/Shadow Xref Closure", coverage["terms"])
+        self.assertIn(
+            "DAT_20001025` (`0x20001025`, `ms[0xF2D]`)",
+            coverage["terms"],
+        )
+        self.assertIn(
+            "DAT_2000102e` (`0x2000102e`, `ms[0xF36]`)",
+            coverage["terms"],
+        )
+        self.assertIn("DAT_20001025` has 9 RAM-map refs", coverage["terms"])
+        self.assertIn("DAT_2000102e` has 7 RAM-map refs", coverage["terms"])
+        self.assertIn(
+            "digital DMM selector/formatter-shadow state",
+            coverage["terms"],
+        )
+        self.assertIn(
+            "not the missing `ms[0x02]`/`ms[0x03]` analog mux/range writer",
+            coverage["terms"],
+        )
+        self.assertIn("not a low-DCV correction", coverage["terms"])
+
     def test_stock_roll_buffer_preload_is_binary_grounded(self) -> None:
         result = stock_meter_literals.verify_roll_buffer_preload_sequences()
         self.assertEqual(
