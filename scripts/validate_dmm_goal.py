@@ -567,6 +567,41 @@ def verify_meter_apply_pair_production_comment() -> dict[str, Any]:
     }
 
 
+def verify_legacy_meter_fsm_unit_lookup_boundary() -> dict[str, Any]:
+    """Ensure the legacy FSM note no longer overclaims stock unit strings."""
+    rel = "reverse_engineering/analysis_v120/meter_fsm_deep_dive.md"
+    text = (REPO / rel).read_text(encoding="utf-8", errors="replace")
+    required = [
+        "Unit lookup boundary corrected 2026-06-06",
+        "0x08009AE4",
+        "zero-filled region at `0x0804C40C`",
+        "not a recovered stock unit-string table",
+        "local suffix text remains inferred/local",
+        "display-state evidence, not recovered stock suffix-string evidence",
+        "Stock unit suffix table contents",
+        "not recovered stock string-table evidence",
+    ]
+    forbidden = [
+        "Unit strings live in flash at 0x804c40c",
+        "DAT_20001026 to string lookup",
+        "goes through flash table 0x804c40c",
+        "Flash string table contents",
+        "Strings in our firmware should follow the unit_variant table",
+    ]
+    missing = [snippet for snippet in required if snippet not in text]
+    stale = [snippet for snippet in forbidden if snippet in text]
+    if missing or stale:
+        raise GateError(
+            "legacy meter FSM unit lookup boundary drifted: "
+            f"missing={missing} stale={stale}"
+        )
+    return {
+        "checked": rel,
+        "required": required,
+        "forbidden": forbidden,
+    }
+
+
 def verify_no_magnitude_range_feedback() -> dict[str, Any]:
     """Ensure production DMM frontend code does not suggest value-shaped ranging."""
     checked: dict[str, str] = {}
@@ -1427,6 +1462,9 @@ def main(argv: list[str] | None = None) -> int:
         report["meter_sequence_tail_transition_plan"] = verify_meter_sequence_tail_uses_transition_plan()
         report["meter_transition_production_contract"] = verify_meter_transition_production_contract()
         report["meter_apply_pair_production_comment"] = verify_meter_apply_pair_production_comment()
+        report["legacy_meter_fsm_unit_lookup_boundary"] = (
+            verify_legacy_meter_fsm_unit_lookup_boundary()
+        )
         report["no_magnitude_range_feedback"] = verify_no_magnitude_range_feedback()
 
         if not args.skip_live:

@@ -14,7 +14,15 @@
 
 3. **No "range feedback function" was found**. The stock firmware sends display commands (0x1B, 0x1C, 0x1E) to a queue but does not implement auto-ranging. The function at 0x080028E0 (**FUN_080028e0**) is the **display-side formatter and meter-mode dispatcher**, not a range controller. True auto-range is not implemented in stock firmware.
 
-4. **Unit strings live in flash at 0x804c40c** (12-entry table, 4 bytes per entry = 48 bytes total). Indexed by `DAT_20001026` which is set by the display formatter. Strings in our firmware should follow the unit_variant table in meter_data.c (already correct).
+4. **Unit lookup boundary corrected 2026-06-06.** The stock renderer computes a
+   lookup address from `DAT_20001026` at `0x08009AE4`, but the downloaded
+   V1.2.0 APP image has a zero-filled region at `0x0804C40C`; this is not a
+   recovered stock unit-string table. Therefore `0x0804C40C` is not a
+   recovered stock unit-string table.
+   Boundary: not a recovered stock unit-string table.
+   `DAT_20001026` remains stock formatter state, while local suffix text
+   remains inferred/local.
+   Boundary: local suffix text remains inferred/local.
 
 5. **DCV sub-state machine (DAT_20001027) persists across frames**. It has 4 states (0, 1, 2, 3) and is reset to 0 only on valid digit frames. The complexity comes from conditional transitions based on frame[6] and frame[7] bit patterns.
 
@@ -137,7 +145,11 @@ Key facts:
    - **1**: mV (millivolt) range — set when entering lower range (line 30445)
    - **2**: special state or overload variant (lines 30451, 30464)
 
-4. **Display formatter uses it** to pick correct unit string. Line 2900: `DAT_20001026 = DAT_2000102e` copies it directly, then line 3781 indexes into flash table at `0x804c40c + DAT_20001026 * 4`.
+4. **Display formatter uses it** as stock unit-index state. Line 2900:
+   `DAT_20001026 = DAT_2000102e` copies it directly, then line 3781 computes
+   the renderer lookup address `0x804c40c + DAT_20001026 * 4`. Newer binary
+   guards show that lookup region is zero-filled in this APP image, so this is
+   display-state evidence, not recovered stock suffix-string evidence.
 
 5. **Submodes 1-7 DO NOT write DAT_2000102e**. They only read the display formatter's copy via DAT_20001026. This means **DCV range switching is tracked per-frame in the FSM, but other submodes rely on static unit tables** (DCA/ACA always mA or A, Ohm always Ω, etc.).
 
@@ -702,7 +714,10 @@ where per_submode_offset is:
 
 1. **Exact bit-to-segment mapping in meter IC.** The BCD lookup table (our meter_data.c line 62–79) decodes FPGA nibbles to digit codes, but the underlying 7-segment LCD drive encoding remains undocumented in the decomp.
 
-2. **Flash string table contents** (0x804c40c). The decomp references the address but not the actual strings. We are relying on inference and our own meter_data.c table.
+2. **Stock unit suffix table contents.** The decomp references
+   `0x0804C40C`, but current binary guards show the downloaded APP image has a
+   zero-filled lookup region there, not a recovered stock string/pointer table.
+   We are relying on stock formatter indices plus local/inferred suffix text.
 
 3. **func_0x08033ef8 source code.** It's called but not defined in the decomp. Likely a jump table (TBB/TBH) in the original binary, collapsed into an external symbol by Ghidra.
 
@@ -745,7 +760,10 @@ where per_submode_offset is:
    byte-for-byte stock string table because `0x0804C40C` is not recovered
    string-table evidence in the downloaded V1.2.0 APP image.
 
-2. **DAT_20001026 to string lookup** goes through flash table 0x804c40c. We supply our own ASCII table at boot — no dependency on stock flash.
+2. **DAT_20001026 to renderer lookup** goes through the stock arithmetic using
+   `0x0804C40C`, but that region is not recovered stock string-table evidence in
+   this image. We supply local ASCII suffixes from formatter indices instead of
+   claiming byte-for-byte stock text.
 
 ---
 

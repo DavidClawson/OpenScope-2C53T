@@ -102,6 +102,26 @@ class DmmGoalValidationTests(unittest.TestCase):
         self.assertIn("DAT_2000105a", coverage["terms"])
         self.assertIn("not DMM ms[0x02]/ms[0x03]", coverage["terms"])
 
+    def test_legacy_meter_fsm_note_does_not_overclaim_unit_strings(self) -> None:
+        result = validate_dmm_goal.verify_legacy_meter_fsm_unit_lookup_boundary()
+
+        self.assertEqual(
+            result["checked"],
+            "reverse_engineering/analysis_v120/meter_fsm_deep_dive.md",
+        )
+        self.assertIn(
+            "Unit lookup boundary corrected 2026-06-06",
+            result["required"],
+        )
+        self.assertIn(
+            "not a recovered stock unit-string table",
+            result["required"],
+        )
+        self.assertIn(
+            "Unit strings live in flash at 0x804c40c",
+            result["forbidden"],
+        )
+
     def test_h2_tx_only_boundary_is_guarded_in_firmware_surfaces(self) -> None:
         result = validate_dmm_goal.verify_h2_tx_only_boundary()
 
