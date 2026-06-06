@@ -1648,3 +1648,34 @@ plus the RAM-map and full-decompile anchors above. If a future pass wants to
 use this state area for DMM behavior, it must first recover a different stock
 writer/consumer tied to meter selector/range transitions; this block itself is
 watchdog/UI housekeeping, not DMM `ms[0x02]`/`ms[0x03]` range proof.
+
+### Button/key Debounce False `ms[0x02]` Guard, 2026-06-06
+
+Another tempting stock disassembly hit is the `[r4,#2]` write at `0x080393A4`.
+The owner context proves it is not DMM meter-state byte 2. This block is inside
+the key/button task scan loop: `0x08039374` loads `0x20002D50` as the current
+button-state halfword, `0x20002D58` as the debounce-counter array, and
+`0x08046528` as the button-map table. The loop then advances `r6` by 3 over the
+button matrix columns and sets `r4 = 0x20002D58 + r6`.
+
+The guarded third-column slice at `0x0803947A` reads and writes `[r4,#2]` while
+debouncing the third key column, optionally writing a mapped key code to
+`[sp,#0x0A]` before the button event queue send at `0x080394F4..0x08039504`.
+
+```text
+0x08039374: movw r0,#0x2D50 ; button state at 0x20002D50
+0x0803937E: movw r3,#0x2D58 ; debounce counters at 0x20002D58
+0x08039382: movw sl,#0x6528 ; button-map table low half
+0x0803938E: movt r3,#0x2000
+0x08039392: movt sl,#0x0804 ; button-map table 0x08046528
+0x080393BC: add.w r4,r3,r6  ; r4 = debounce_counters + matrix-column offset
+0x0803947E: ldrb r5,[r4,#2]
+0x0803948C: strb r5,[r4,#2]
+0x080394BE: strb r1,[r4,#2]
+```
+
+`scripts/test_stock_meter_literals.py` now carries the
+`button/key debounce false ms[0x02] guard` for `0x08039374` and `0x0803947A`.
+This is negative DMM evidence: `[r4,#2]` is the third key-column debounce
+counter, not DMM `ms[0x02]`, not a mux/range writer, not a low-DCV correction,
+and not a factory calibration source.

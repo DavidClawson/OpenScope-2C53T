@@ -1592,6 +1592,26 @@ EXPECTED_SCOPE_TRIGGER_OVERLAY_105B_CONTEXT = {
     "app_shadow_addr": 0x080B740C,
     "app_shadow_zero_len": 32,
 }
+EXPECTED_BUTTON_SCAN_FALSE_MS02_SEQUENCES = {
+    "button_scan_debounce_owner_base": (
+        0x08039374,
+        bytes.fromhex(
+            "42 f6 50 50 c2 f2 00 00 00 88 42 f6 58 53 46 f2 "
+            "28 5a 4f f0 00 09 4f f0 01 0c c2 f2 00 03 c0 f6 "
+            "04 0a 4f f0 02 0e 4f f0 04 08 00 26 00 22 05 e0"
+        ),
+    ),
+    "button_scan_third_column_counter": (
+        0x0803947A,
+        bytes.fromhex(
+            "08 fa 06 f1 a5 78 39 42 1f d0 ff 2d 02 d0 a5 78 "
+            "01 35 a5 70 a5 78 46 2d 05 d1 0a eb 06 05 6d 7c "
+            "01 32 8d f8 0a 50 01 42 3f f4 81 af a1 78 48 29 "
+            "7f f4 7d af 0a eb 06 01 89 78 01 32 8d f8 0a 10 "
+            "a1 78 01 39 a1 70"
+        ),
+    ),
+}
 
 
 def read(addr: int, size: int) -> bytes:
@@ -3278,6 +3298,30 @@ def verify_scope_trigger_overlay_105b_boundary() -> dict[str, object]:
     }
 
 
+def verify_button_scan_false_ms02_boundary_sequences() -> dict[str, object]:
+    """Guard a tempting `[r4,#2]` byte write as key debounce state, not DMM."""
+    checked = {}
+    for name, (addr, expected) in EXPECTED_BUTTON_SCAN_FALSE_MS02_SEQUENCES.items():
+        actual = read(addr, len(expected))
+        if actual != expected:
+            raise AssertionError(
+                f"{name} at {addr:#010x} drifted: "
+                f"{actual.hex(' ')} != {expected.hex(' ')}"
+            )
+        checked[name] = {
+            "addr": f"{addr:#010x}",
+            "bytes": actual.hex(" "),
+        }
+    return {
+        "sequences": checked,
+        "classification": (
+            "button/key debounce counter state: 0x20002D50 button state, "
+            "0x20002D58 debounce counters, 0x08046528 button map table; "
+            "[r4,#2] is the third key-column counter, not DMM ms[0x02]"
+        ),
+    }
+
+
 def main() -> None:
     if not BIN.exists():
         print(f"stock meter literal pools: skipped; missing {BIN}", file=sys.stderr)
@@ -3360,6 +3404,7 @@ def main() -> None:
     watchdog_reload_boundary = verify_watchdog_reload_state_boundary_sequences()
     scope_mux_state_consumers = verify_scope_mux_state_consumer_sequences()
     scope_trigger_overlay_105b = verify_scope_trigger_overlay_105b_boundary()
+    button_scan_false_ms02 = verify_button_scan_false_ms02_boundary_sequences()
     for symbol, info in mux_state_ram_map["symbols"].items():
         print(
             f"stock mux-state RAM-map boundary {symbol}: "
@@ -3494,6 +3539,11 @@ def main() -> None:
         + " zero-filled APP shadow; "
         + scope_trigger_overlay_105b["classification"]
     )
+    print("stock button-scan false ms[0x02] boundary sites: " +
+          ", ".join(
+              item["addr"]
+              for item in button_scan_false_ms02["sequences"].values()
+          ))
     print("stock meter literal pools: ok")
 
 

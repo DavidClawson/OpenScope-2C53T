@@ -647,6 +647,33 @@ class DmmGoalValidationTests(unittest.TestCase):
             coverage["terms"],
         )
 
+    def test_stock_button_scan_false_ms02_boundary_is_binary_grounded(self) -> None:
+        result = stock_meter_literals.verify_button_scan_false_ms02_boundary_sequences()
+
+        self.assertEqual(
+            result["sequences"]["button_scan_debounce_owner_base"]["addr"],
+            "0x08039374",
+        )
+        self.assertEqual(
+            result["sequences"]["button_scan_third_column_counter"]["addr"],
+            "0x0803947a",
+        )
+        self.assertIn("0x20002D50 button state", result["classification"])
+        self.assertIn("0x20002D58 debounce counters", result["classification"])
+        self.assertIn("not DMM ms[0x02]", result["classification"])
+
+    def test_re_coverage_requires_button_scan_false_ms02_boundary(self) -> None:
+        coverage = validate_dmm_goal.verify_re_coverage()
+
+        self.assertIn("Button/key debounce false `ms[0x02]` guard", coverage["terms"])
+        self.assertIn("0x08039374", coverage["terms"])
+        self.assertIn("0x0803947A", coverage["terms"])
+        self.assertIn("0x20002D50", coverage["terms"])
+        self.assertIn("0x20002D58", coverage["terms"])
+        self.assertIn("0x08046528", coverage["terms"])
+        self.assertIn("[r4,#2] is the third key-column debounce counter", coverage["terms"])
+        self.assertIn("not DMM `ms[0x02]`", coverage["terms"])
+
     def test_re_coverage_requires_selector_shadow_xref_closure(self) -> None:
         coverage = validate_dmm_goal.verify_re_coverage()
         self.assertIn(

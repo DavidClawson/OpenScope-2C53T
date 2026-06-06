@@ -137,6 +137,14 @@ one of:
   default persistent mux bytes are `ms[0x02]=5` and `ms[0x03]=5`. That is
   persistence/default evidence only; it is not a recovered normal runtime DMM
   mux writer, not a universal frontend setting, and not a low-DCV correction.
+- Button/key debounce false `ms[0x02]` guard: the tempting `[r4,#2]` byte write
+  at `0x080393A4` belongs to the key/button task, not DMM meter state. The
+  guarded owner sequence at `0x08039374` loads `0x20002D50` button state,
+  `0x20002D58` debounce counters, and `0x08046528` button-map table; the
+  guarded `0x0803947A` third-column sequence reads/writes `[r4,#2]` as the
+  third key-column debounce counter. This is negative DMM evidence, not DMM
+  `ms[0x02]`, not a mux/range writer, not a low-DCV correction, and not a
+  factory calibration source. Plain-language guard: [r4,#2] is the third key-column debounce counter, not DMM state.
 - H2/SPI3: stock proves a byte-exact `0x3B`/table/`0x3A` transfer of
   115,638 bytes from `0x08051D19`. Open firmware `h2_upload_done` and USB
   `H2T` diagnostics mean bytes transmitted only; no recovered FPGA ACK/apply
