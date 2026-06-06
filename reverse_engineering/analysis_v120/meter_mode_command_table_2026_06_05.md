@@ -470,6 +470,14 @@ state-machine object. It is still command-sequence evidence only: it does not
 recover exact settle/discard counts, a DMM-specific `ms[0x02]`/`ms[0x03]`
 runtime analog range writer, or the low-DCV frontend/calibration gap.
 
+The live validation helper is intentionally narrower than the software state
+matrix. On an energized voltage source it may switch only DCV (`mode meter 0 0`)
+and ACV (`mode meter 1 0`) before returning to DCV; passive modes and current
+modes are reported as not probed and rely on the parser/transition property
+tests for stale/wrong-family rejection. Current live probing requires an
+explicit current jack, series circuit, and load-limited source setup before the
+helper may grow any current-mode command.
+
 ## Per-Submode Evidence Matrix
 
 The table below separates stock-disassembly evidence from local policy. `High`

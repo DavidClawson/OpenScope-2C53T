@@ -554,6 +554,19 @@ class DmmGoalValidationTests(unittest.TestCase):
         self.assertIn("not probed", result["current_live"])
         self.assertIn("not probed", result["passive_live"])
 
+    def test_live_validation_safety_contract_is_anchored(self) -> None:
+        result = validate_dmm_goal.verify_live_validation_safety_contract()
+        self.assertEqual(result["checked"], "scripts/validate_dmm_goal.py")
+        self.assertEqual(
+            result["mode_commands"],
+            ["mode meter 0 0", "mode meter 1 0", "mode meter 0 0"],
+        )
+        self.assertIn(
+            '"current_live": "not probed without correct jack and load-limited series wiring; parser tests cover voltage rejection"',
+            result["required"],
+        )
+        self.assertIn("current/passive", result["forbidden"])
+
     def test_stock_meter_selector_table_is_binary_grounded(self) -> None:
         result = stock_meter_literals.verify_meter_selector_table()
         self.assertEqual(result["runtime_addr"], 0x080BB3FC)

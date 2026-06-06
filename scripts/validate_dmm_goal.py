@@ -905,6 +905,47 @@ def verify_ui_submode_surface_contract() -> dict[str, Any]:
     }
 
 
+def verify_live_validation_safety_contract() -> dict[str, Any]:
+    """Keep energized live validation away from passive/current DMM ranges."""
+    rel = "scripts/validate_dmm_goal.py"
+    text = (REPO / rel).read_text(encoding="utf-8", errors="replace")
+    match = re.search(
+        r"def run_live_validation\(args: argparse\.Namespace, outdir: Path\)"
+        r"(?P<body>[\s\S]*?)\n\n\ndef build_parser",
+        text,
+    )
+    if match is None:
+        raise GateError("could not locate run_live_validation body")
+    body = match.group("body")
+
+    required = [
+        '"passive_live": "not probed on energized voltage input; parser tests cover stale/wrong-family rejection"',
+        '"current_live": "not probed without correct jack and load-limited series wiring; parser tests cover voltage rejection"',
+        '"mode meter 0 0"',
+        '"mode meter 1 0"',
+    ]
+    allowed_mode_commands = ["mode meter 0 0", "mode meter 1 0", "mode meter 0 0"]
+    mode_commands = re.findall(r'"(mode meter \d+ 0)"', body)
+    forbidden_commands = [
+        command for command in mode_commands
+        if command not in {"mode meter 0 0", "mode meter 1 0"}
+    ]
+    missing = [snippet for snippet in required if snippet not in body]
+    bad_sequence = mode_commands != allowed_mode_commands
+    if missing or forbidden_commands or bad_sequence:
+        raise GateError(
+            "live validation safety contract drifted: "
+            f"missing={missing} forbidden_commands={forbidden_commands} "
+            f"mode_commands={mode_commands}"
+        )
+    return {
+        "checked": rel,
+        "mode_commands": mode_commands,
+        "required": required,
+        "forbidden": "current/passive meter mode commands in energized live validation",
+    }
+
+
 def verify_re_coverage() -> dict[str, Any]:
     required_docs = [
         "reverse_engineering/analysis_v120/meter_stock_multiplier_tables_2026_06_05.md",
@@ -1290,6 +1331,7 @@ def main(argv: list[str] | None = None) -> int:
         report["transition_plan_property_contract"] = verify_transition_plan_property_contract()
         report["autoscan_property_contract"] = verify_autoscan_property_contract()
         report["ui_submode_surface_contract"] = verify_ui_submode_surface_contract()
+        report["live_validation_safety_contract"] = verify_live_validation_safety_contract()
         report["re_comment_coverage"] = verify_re_coverage()
         report["no_unrecovered_meter_coefficients"] = verify_no_unrecovered_meter_coefficients()
         report["no_ocr_pipeline"] = verify_no_ocr_pipeline()
