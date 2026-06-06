@@ -63,6 +63,48 @@ bounded evidence.  It does not recover a runtime analog range writer for
 `ms[0x02]`/`ms[0x03]`, relay/AFE switching, factory calibration, or the
 low-DCV `0.200 V` visual versus `0.4366 V` CDC blocker.
 
+### Dynamic Raw-Word Helper Guard, 2026-06-06
+
+The helper cluster immediately before the runtime mode-init dispatcher is now
+binary-guarded as another digital command/state-machine path:
+
+```text
+0x08006060 selector_seed_state_pairs:
+  after the `bRam20001055` blocker/lownibble gate, seeds explicit
+  `DAT_20001025` / `DAT_2000102E` pairs: default `1/1`,
+  `3/5`, `5/7`, `6/8`, and `7/10`.
+
+0x080060CA selector_seed_emit_0501:
+  stages raw word `0x0501` at `0x20002D54`, queues it through `0x20002D74`,
+  then queues display/update bytes `0x1D` and `0x1B` through `0x20002D6C`.
+
+0x08006120 dynamic_raw_word_gate_and_mask:
+  runs only when `ms[0xF68] == 1`, rejects `bRam20001055 & 0xF0 == 0xB0`,
+  reads `DAT_20001025`, requires selector mask `0xC6`, reads
+  `DAT_2000102E`, and updates that selector-side state.
+
+0x08006194 / 0x0800626A dynamic low-byte choices:
+  selector-side families choose `0x0C/0x0D`, `0x0E/0x17`,
+  `0x11/0x16`, or `0x10/0x15` depending on the `DAT_2000102E` side.
+
+0x08006288 dynamic_raw_word_emit_tail:
+  writes NaN display sentinels, calls `FUN_080028E0`, ORs the staged low byte
+  with `0x0500`, queues the halfword through `0x20002D74`, then queues
+  display/update byte `0x1B`.
+
+0x080062F8 dynamic_helper_reverse_partner:
+  shares the same outer `ms[0xF68]` gate, clears or updates state, and emits
+  display/update bytes (`0x26`/`0x28` or `0x02`) instead of the dynamic
+  `0x05xx` raw word.
+```
+
+This `dynamic raw-word helper guard` ties the selector bytes, display formatter
+state, and `0x20002D74` raw-word queue together in stock code.  It strengthens
+the digital DMM/FPGA command path model without upgrading the evidence to
+analog mux/range proof: it still does not find a runtime writer for
+`ms[0x02]`/`ms[0x03]`, does not prove relay/AFE settling, and does not provide
+a factory calibration source for the low-DCV blocker.
+
 The stock raw-word queue consumer is now binary-guarded as well. This
 `dvom_TX raw-word consumer guard` proves that the `dvom_TX` task at
 `0x080373F4` uses queue handle `0x20002D74`, blocks in `xQueueReceive`, then

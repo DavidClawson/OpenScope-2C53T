@@ -83,6 +83,91 @@ EXPECTED_METER_SELECTOR_ADJUST_SEQUENCES = {
         ),
     ),
 }
+EXPECTED_DYNAMIC_RAW_WORD_HELPER_SEQUENCES = {
+    "selector_seed_blocker_gate": (
+        0x0800604E,
+        bytes.fromhex(
+            "b0 2a 2b d1 01 31 01 f0 0f 02 53 1e 04 2b 80 f8 "
+            "5d 1f"
+        ),
+    ),
+    "selector_seed_state_pairs": (
+        0x08006060,
+        bytes.fromhex(
+            "33 d8 01 22 01 21 df e8 03 f0 2c 03 24 27 2a 00 "
+            "05 21 03 22 25 e0 40 f2 01 31 42 f6 6c 55 a0 f8 "
+            "69 1f 00 21 42 f6 53 54 c2 f2 00 05 80 f8 6b 1f "
+            "c2 f2 00 04 13 21 28 68 21 70 21 46 4f f0 ff 32 "
+            "34 f0 26 fe 28 68 14 23 31 e0 00 21 80 f8 5d 1f "
+            "b0 bd 07 21 05 22 04 e0 08 21 06 22 01 e0 0a 21 "
+            "07 22 80 f8 2d 2f 80 f8 2e 1f"
+        ),
+    ),
+    "selector_seed_emit_0501": (
+        0x080060CA,
+        bytes.fromhex(
+            "42 f6 74 50 42 f6 54 51 c2 f2 00 00 c2 f2 00 01 "
+            "40 f2 01 52 00 68 0a 80 4f f0 ff 32 34 f0 03 fe "
+            "42 f6 6c 55 42 f6 53 54 c2 f2 00 05 c2 f2 00 04 "
+            "1d 21 28 68 21 70 21 46 4f f0 ff 32 34 f0 f3 fd "
+            "28 68 1b 23 21 46 4f f0 ff 32 23 70 bd e8 b0 40 "
+            "34 f0 e9 bd"
+        ),
+    ),
+    "dynamic_raw_word_gate_and_mask": (
+        0x08006120,
+        bytes.fromhex(
+            "70 b5 40 f2 f8 05 c2 f2 00 05 95 f8 68 0f 05 28 "
+            "35 d0 02 28 42 d0 01 28 49 d1 95 f8 5d 0f 00 f0 "
+            "f0 00 b0 28 43 d0 95 f8 2d 0f 00 26 00 21 07 28 "
+            "c7 f6 c0 76 85 f8 5d 1f 00 f2 bd 80 01 22 02 fa "
+            "00 f1 11 f0 c6 0f 00 f0 b6 80 95 f8 36 1f 01 38 "
+            "01 29 42 f6 54 54 08 bf 02 22 06 28 c2 f2 00 04 "
+            "85 f8 36 2f 00 f2 80 80 df e8 00 f0"
+        ),
+    ),
+    "dynamic_raw_word_lowbyte_pair_0c_0d": (
+        0x08006194,
+        bytes.fromhex("0c 20 01 29 08 bf 0d 20 73 e0"),
+    ),
+    "dynamic_raw_word_lowbyte_pairs_0e17_1116_1015": (
+        0x0800626A,
+        bytes.fromhex(
+            "0e 20 01 29 08 bf 17 20 08 e0 11 20 01 29 08 bf "
+            "16 20 03 e0 10 20 01 29 08 bf 15 20 20 80"
+        ),
+    ),
+    "dynamic_raw_word_emit_tail": (
+        0x08006288,
+        bytes.fromhex(
+            "c5 f8 48 6f c5 f8 4c 6f c5 f8 50 6f fc f7 24 fb "
+            "20 88 4f f0 ff 32 40 f4 a0 61 42 f6 74 50 c2 f2 "
+            "00 00 00 68 21 80 21 46 34 f0 1e fd 42 f6 6c 50 "
+            "42 f6 53 51 c2 f2 00 00 c2 f2 00 01 1b 22 00 68 "
+            "0a 70 4f f0 ff 32 34 f0"
+        ),
+    ),
+    "dynamic_helper_reverse_partner_gate": (
+        0x080062F8,
+        bytes.fromhex(
+            "b0 b5 40 f2 f8 00 c2 f2 00 00 90 f8 68 1f 05 29 "
+            "0d d0 02 29 3e d0 01 29 3b d1 90 f8 5d 1f 01 f0 "
+            "f0 01 b0 29 35 d0 00 21 80 f8 5d 1f"
+        ),
+    ),
+    "dynamic_helper_reverse_partner_display": (
+        0x08006326,
+        bytes.fromhex(
+            "90 f8 1c 1e 00 29 18 bf b0 bd 90 f8 1b 1e 49 b3 "
+            "90 f8 1a 1e 02 22 02 29 08 bf 01 22 02 39 42 f6 "
+            "6c 55 18 bf 4f f0 3f 31 42 f6 53 54 c2 f2 00 05 "
+            "80 f8 1a 2e c0 f8 16 1e c0 f8 12 1e c2 f2 00 04 "
+            "26 21 28 68 21 70 21 46 4f f0 ff 32 34 f0 bd fc "
+            "28 68 28 23 21 46 4f f0 ff 32 23 70 bd e8 b0 40 "
+            "34 f0"
+        ),
+    ),
+}
 EXPECTED_DVOM_TX_QUEUE_CONSUMER_SEQUENCES = {
     "dvom_tx_raw_word_consumer": (
         0x080373F4,
@@ -894,6 +979,40 @@ def verify_meter_selector_adjust_sequences() -> dict[str, object]:
     return {"sequences": checked}
 
 
+def verify_dynamic_raw_word_helper_sequences() -> dict[str, object]:
+    """Check stock helper slices around dynamic `0x0500 | low_byte` words.
+
+    This cluster is adjacent to the runtime mode-init helpers but has a
+    different job.  The guarded `0x08006060` slice seeds `DAT_20001025` and
+    `DAT_2000102E` pairs before emitting fixed raw word `0x0501` through
+    `0x20002D74` and display/update commands `0x1D`/`0x1B`.  The guarded
+    `0x08006120` slice only emits a dynamic raw word when `ms[0xF68] == 1`,
+    the `0xB0` blocker is clear, and the selector matches mask `0xC6`; it then
+    chooses one of the low-byte pairs `0x0C/0x0D`, `0x0E/0x17`,
+    `0x11/0x16`, or `0x10/0x15`, writes NaN display sentinels, calls
+    `FUN_080028E0`, ORs in `0x0500`, queues the halfword through
+    `0x20002D74`, and queues display/update byte `0x1B`.
+
+    The guarded `0x080062F8` partner shares the same outer `ms[0xF68]` gate
+    but clears or updates state and emits display/update bytes instead of the
+    dynamic `0x05xx` word.  These are digital command/state-machine anchors,
+    not analog `ms[0x02]`/`ms[0x03]` range writers or calibration proof.
+    """
+    checked: dict[str, dict[str, str]] = {}
+    for name, (addr, expected) in EXPECTED_DYNAMIC_RAW_WORD_HELPER_SEQUENCES.items():
+        actual = read(addr, len(expected))
+        if actual != expected:
+            raise AssertionError(
+                f"{name} {addr:#010x}: expected {expected.hex(' ')}, "
+                f"got {actual.hex(' ')}"
+            )
+        checked[name] = {
+            "addr": f"{addr:#010x}",
+            "bytes": actual.hex(" "),
+        }
+    return {"sequences": checked}
+
+
 def verify_dvom_tx_queue_consumer_sequences() -> dict[str, object]:
     """Check the stock dvom_TX task that consumes raw DMM/FPGA TX words.
 
@@ -1554,6 +1673,7 @@ def main() -> None:
     selector = verify_meter_selector_table()
     selector_xrefs = verify_meter_selector_xref_sequences()
     selector_adjust = verify_meter_selector_adjust_sequences()
+    dynamic_raw_word_helpers = verify_dynamic_raw_word_helper_sequences()
     dvom_tx_consumers = verify_dvom_tx_queue_consumer_sequences()
     roll_buffer_preload = verify_roll_buffer_preload_sequences()
     transport_transitions = verify_meter_transport_transition_sequences()
@@ -1582,6 +1702,8 @@ def main() -> None:
           ", ".join(selector_xrefs["sequences"].keys()))
     print("stock meter selector adjust sites: " +
           ", ".join(item["addr"] for item in selector_adjust["sequences"].values()))
+    print("stock dynamic raw-word helper sites: " +
+          ", ".join(item["addr"] for item in dynamic_raw_word_helpers["sequences"].values()))
     print("stock dvom_TX raw-word consumer sites: " +
           ", ".join(item["addr"] for item in dvom_tx_consumers["sequences"].values()))
     print("stock roll-buffer preload sites: " +

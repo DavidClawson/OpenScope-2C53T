@@ -362,6 +362,54 @@ class DmmGoalValidationTests(unittest.TestCase):
             sequences["selector_adjust_next_meter_case"]["bytes"],
         )
 
+    def test_stock_dynamic_raw_word_helpers_are_binary_grounded(self) -> None:
+        result = stock_meter_literals.verify_dynamic_raw_word_helper_sequences()
+        sequences = result["sequences"]
+        self.assertEqual(
+            sequences["selector_seed_state_pairs"]["addr"],
+            "0x08006060",
+        )
+        self.assertEqual(
+            sequences["selector_seed_emit_0501"]["addr"],
+            "0x080060ca",
+        )
+        self.assertEqual(
+            sequences["dynamic_raw_word_gate_and_mask"]["addr"],
+            "0x08006120",
+        )
+        self.assertEqual(
+            sequences["dynamic_raw_word_emit_tail"]["addr"],
+            "0x08006288",
+        )
+        self.assertEqual(
+            sequences["dynamic_helper_reverse_partner_gate"]["addr"],
+            "0x080062f8",
+        )
+        self.assertIn(
+            "40 f2 01 52 00 68 0a 80",
+            sequences["selector_seed_emit_0501"]["bytes"],
+        )
+        self.assertIn(
+            "11 f0 c6 0f",
+            sequences["dynamic_raw_word_gate_and_mask"]["bytes"],
+        )
+        self.assertIn(
+            "0c 20 01 29 08 bf 0d 20",
+            sequences["dynamic_raw_word_lowbyte_pair_0c_0d"]["bytes"],
+        )
+        self.assertIn(
+            "0e 20 01 29 08 bf 17 20",
+            sequences["dynamic_raw_word_lowbyte_pairs_0e17_1116_1015"]["bytes"],
+        )
+        self.assertIn(
+            "40 f4 a0 61",
+            sequences["dynamic_raw_word_emit_tail"]["bytes"],
+        )
+        self.assertIn(
+            "1b 22 00 68 0a 70",
+            sequences["dynamic_raw_word_emit_tail"]["bytes"],
+        )
+
     def test_stock_dvom_tx_queue_consumer_is_binary_grounded(self) -> None:
         result = stock_meter_literals.verify_dvom_tx_queue_consumer_sequences()
         sequences = result["sequences"]
