@@ -23,8 +23,10 @@ import argparse
 from contextlib import contextmanager, nullcontext
 import fcntl
 import glob
+import json
 import os
 from pathlib import Path
+import re
 import select
 import sys
 import termios
@@ -272,6 +274,144 @@ def run_command(port: str, baud: int, command: str, timeout: float) -> str:
         serial.drain()
         serial.write_line(command)
         return clean_response(command, serial.read_until_prompt(timeout))
+
+
+def _parse_int_token(value: str) -> int | str:
+    if re.fullmatch(r"-?\d+", value):
+        return int(value, 10)
+    return value
+
+
+WIRE_HEX_KEYS = {
+    "selector",
+    "apply",
+    "probe",
+    "start",
+    "extra",
+    "planned_gpio",
+    "actual_gpio",
+}
+
+
+def _parse_kv_line(line: str, preserve_hex_keys: set[str] | None = None) -> dict[str, int | str]:
+    preserve = preserve_hex_keys or set()
+    return {
+        key: value.upper() if key in preserve else _parse_int_token(value)
+        for key, value in re.findall(r"([A-Za-z0-9_]+)=([^\s]+)", line)
+    }
+
+
+def _parse_frame_bytes(text: str) -> list[int]:
+    parts = [item for item in text.strip().split() if item]
+    if len(parts) != 12:
+        raise ValueError(f"DMM frame must contain 12 bytes, got {len(parts)}: {text!r}")
+    return [int(item, 16) for item in parts]
+
+
+def _frame_record(frame: list[int]) -> dict[str, object]:
+    return {
+        "hex": " ".join(f"{byte:02X}" for byte in frame),
+        "bytes": frame,
+    }
+
+
+def parse_meter_trace_text(text: str) -> dict[str, object]:
+    """Parse the read-only firmware `meter trace` response into JSON data.
+
+    The parser is intentionally mechanical: it records firmware-selected
+    mode/range/mux state, producer-frame bytes, and decoded stock-visible
+    fields without inferring a correction.  This gives the live low-DCV failure
+    a machine-readable trace record while keeping OCR, one-point coefficients,
+    and magnitude-derived range decisions out of the host harness.
+    """
+    if "=== DMM Trace ===" not in text:
+        raise ValueError("meter trace response has no DMM Trace header")
+
+    result: dict[str, object] = {
+        "raw_measurement_source": "USART2_DMM_12_BYTE_PRODUCER_FRAME",
+        "raw_text": text,
+        "transition_history": [],
+        "producer_history": [],
+        "h2_post_rx": [],
+    }
+
+    for raw_line in text.splitlines():
+        line = raw_line.strip()
+        if not line or line == "=== DMM Trace ===":
+            continue
+
+        if line.startswith("trace "):
+            data = _parse_kv_line(line)
+            result["trace_version"] = data.get("v")
+            result["snapshot"] = data.get("snapshot")
+        elif line.startswith("context "):
+            result["context"] = _parse_kv_line(line)
+        elif line.startswith("producer counts "):
+            result["producer_counts"] = _parse_kv_line(line)
+        elif line.startswith("producer_last_rx "):
+            result["producer_last_rx"] = _parse_kv_line(line)
+        elif line.startswith("plan "):
+            result["plan"] = _parse_kv_line(line)
+        elif line.startswith("wire "):
+            result["wire"] = _parse_kv_line(line, WIRE_HEX_KEYS)
+        elif line.startswith("last_sequence "):
+            result["last_sequence"] = _parse_kv_line(line, WIRE_HEX_KEYS)
+        elif line.startswith("decoded "):
+            decoded = _parse_kv_line(line, WIRE_HEX_KEYS)
+            family = decoded.pop("family", None)
+            if isinstance(family, str) and "/" in family:
+                expected, observed = family.split("/", 1)
+                decoded["family_expected"] = int(expected, 10)
+                decoded["family_observed"] = int(observed, 10)
+            result["decoded"] = decoded
+        elif line.startswith("stock_fsm "):
+            result["stock_fsm"] = _parse_kv_line(line)
+        elif line.startswith("transition "):
+            result["transition"] = _parse_kv_line(line)
+        elif line.startswith("producer_frame="):
+            frame = _parse_frame_bytes(line.split("=", 1)[1])
+            result["producer_frame"] = _frame_record(frame)
+        elif line.startswith("parsed_frame="):
+            frame = _parse_frame_bytes(line.split("=", 1)[1])
+            result["parsed_frame"] = _frame_record(frame)
+        elif line.startswith("mth "):
+            record = _parse_kv_line(line, WIRE_HEX_KEYS)
+            for key in ("tx", "data"):
+                value = record.pop(key, None)
+                if isinstance(value, str) and ".." in value:
+                    start, end = value.split("..", 1)
+                    record[f"{key}_before"] = int(start, 10)
+                    record[f"{key}_after"] = int(end, 10)
+            cast = result["transition_history"]
+            assert isinstance(cast, list)
+            cast.append(record)
+        elif line.startswith("rxh "):
+            prefix, frame_text = line.split(" frame=", 1)
+            record = _parse_kv_line(prefix)
+            record["frame"] = _frame_record(_parse_frame_bytes(frame_text))
+            cast = result["producer_history"]
+            assert isinstance(cast, list)
+            cast.append(record)
+        elif line.startswith("gpio control "):
+            result["gpio_control"] = _parse_kv_line(line)
+        elif line.startswith("gpio_frontend "):
+            result["gpio_frontend"] = _parse_kv_line(line)
+        elif line.startswith("h2 bytes="):
+            result["calibration_state"] = _parse_kv_line(line)
+        elif line.startswith("h2_post_rx "):
+            prefix, bytes_text = line.split(" bytes=", 1)
+            record = _parse_kv_line(prefix)
+            record["bytes"] = [
+                int(item, 16) for item in bytes_text.replace("...", "").split()
+            ]
+            cast = result["h2_post_rx"]
+            assert isinstance(cast, list)
+            cast.append(record)
+
+    for key in ("context", "plan", "wire", "decoded", "producer_frame", "gpio_frontend"):
+        if key not in result:
+            raise ValueError(f"meter trace missing {key}")
+    return result
 
 
 def rgb565_to_rgb888(pixel: int) -> tuple[int, int, int]:
@@ -610,6 +750,7 @@ def build_parser() -> argparse.ArgumentParser:
     trace_parser = subparsers.add_parser("meter-trace", help="read one machine-readable DMM producer trace")
     add_common_serial_args(trace_parser)
     trace_parser.add_argument("--log", type=Path, help="optional log file for the single trace response")
+    trace_parser.add_argument("--json", action="store_true", help="emit parsed trace JSON instead of raw trace text")
 
     stream_parser = subparsers.add_parser("meter-stream", help='run firmware-side compact stream, default "meter stream"')
     add_common_serial_args(stream_parser)
@@ -738,7 +879,10 @@ def main(argv: list[str] | None = None) -> int:
 
             if args.mode == "meter-trace":
                 response = run_command(port, args.baud, "meter trace", args.timeout)
-                print(response)
+                if args.json:
+                    print(json.dumps(parse_meter_trace_text(response), indent=2, sort_keys=True))
+                else:
+                    print(response)
                 with log_context(args.log) as log_file:
                     write_log_line(log_file, response)
                 return 0

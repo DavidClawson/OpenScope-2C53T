@@ -123,6 +123,51 @@ class ScreenDumpBinTests(unittest.TestCase):
 
 
 class MeterTraceCliTests(unittest.TestCase):
+    TRACE_TEXT = """=== DMM Trace ===
+trace v=1 snapshot=1
+context mode=1 startup=Meter ui_sub=0 reading_sub=0 live=1 valid=1 updates=42
+producer counts tx=33 rx_bytes=512 data=12 echo=33 rx_valid=1
+producer_last_rx data=12 tx=33 echo=33 seq=2 seq_sub=0 busy=0 discard=0
+plan stock_mode=0 raw_low=14 family=0 mux=0 portc_porte=0 porta_portb=0 settle_ms=20 discard=2
+wire selector=0514 apply=0000 has_apply=0 probe=0507 start=0509 seq_count=2 seq_sub=0
+last_sequence selector=0514 apply=0000 probe=0507 start=0509
+decoded display=0.4366 unit=V value_i10000=4366 raw=4366 dp=1 class=1 reject=0 family=0/0 extra=0189
+stock_fsm mode=0 variant=0 format=0 dc_state=1 display_cmd=0 unit_index=0 composite=0
+transition busy=0 discard_now=0 skip_count=2
+producer_frame=5A A5 44 8E EF E7 07 24 80 00 01 89
+parsed_frame=5A A5 44 8E EF E7 07 24 80 00 01 89
+transition_history newest_first:
+mth n=0 sub=0 seq=2 selector=0514 apply=0000 probe=0507 start=0509 tx=29..33 data=8..9 planned_gpio=0BB actual_gpio=0BB
+producer_history newest_first:
+rxh n=0 data=12 tx=33 echo=33 seq=2 seq_sub=0 busy=0 discard=0 frame=5A A5 44 8E EF E7 07 24 80 00 01 89
+gpio control PC6=1 PB11=1 PC11=1 PC7=1 PC0=1
+gpio_frontend PC12=1 PE4=1 PE5=0 PE6=1 PA15=1 PA10=1 PB10=0 PB9=0 PA6=0
+h2 bytes=115638 done=1 post_enq=5 post_ok=5 post_drop=0 post_mask=1F spi_ok=0 spi_to=0
+h2_post_rx n=0 trigger=01 len=2 bytes=FF FF
+"""
+
+    def test_parse_meter_trace_text_extracts_machine_readable_dcv_record(self) -> None:
+        parsed = openscope_live_debug.parse_meter_trace_text(self.TRACE_TEXT)
+
+        self.assertEqual(parsed["raw_measurement_source"], "USART2_DMM_12_BYTE_PRODUCER_FRAME")
+        self.assertEqual(parsed["trace_version"], 1)
+        self.assertEqual(parsed["context"]["ui_sub"], 0)
+        self.assertEqual(parsed["plan"]["raw_low"], 14)
+        self.assertEqual(parsed["wire"]["selector"], "0514")
+        self.assertEqual(parsed["wire"]["apply"], "0000")
+        self.assertEqual(parsed["decoded"]["display"], "0.4366")
+        self.assertEqual(parsed["decoded"]["raw"], 4366)
+        self.assertEqual(parsed["decoded"]["family_expected"], 0)
+        self.assertEqual(parsed["decoded"]["family_observed"], 0)
+        self.assertEqual(
+            parsed["producer_frame"]["hex"],
+            "5A A5 44 8E EF E7 07 24 80 00 01 89",
+        )
+        self.assertEqual(parsed["gpio_frontend"]["PC12"], 1)
+        self.assertEqual(parsed["gpio_frontend"]["PB9"], 0)
+        self.assertEqual(parsed["calibration_state"]["bytes"], 115638)
+        self.assertEqual(parsed["h2_post_rx"][0]["bytes"], [0xFF, 0xFF])
+
     def test_meter_trace_mode_sends_read_only_trace_command(self) -> None:
         calls: list[tuple[str, int, str, float]] = []
         original_run_command = openscope_live_debug.run_command
@@ -147,6 +192,32 @@ class MeterTraceCliTests(unittest.TestCase):
         self.assertEqual(rc, 0)
         self.assertEqual(calls, [("/dev/fake", 115200, "meter trace", 7.0)])
         self.assertIn("trace v=1 snapshot=1", out.getvalue())
+
+    def test_meter_trace_json_mode_emits_parsed_trace(self) -> None:
+        original_run_command = openscope_live_debug.run_command
+        try:
+            def fake_run_command(port: str, baud: int, command: str, timeout: float) -> str:
+                self.assertEqual((port, baud, command, timeout),
+                                 ("/dev/fake", 115200, "meter trace", 7.0))
+                return self.TRACE_TEXT
+
+            openscope_live_debug.run_command = fake_run_command
+            out = io.StringIO()
+            with contextlib.redirect_stdout(out):
+                rc = openscope_live_debug.main([
+                    "meter-trace",
+                    "--json",
+                    "--port",
+                    "/dev/fake",
+                    "--timeout",
+                    "7",
+                ])
+        finally:
+            openscope_live_debug.run_command = original_run_command
+
+        self.assertEqual(rc, 0)
+        self.assertIn('"raw_measurement_source": "USART2_DMM_12_BYTE_PRODUCER_FRAME"', out.getvalue())
+        self.assertIn('"selector": "0514"', out.getvalue())
 
 
 if __name__ == "__main__":
