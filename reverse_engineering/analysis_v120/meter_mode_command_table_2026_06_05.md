@@ -732,7 +732,9 @@ eight recovered DMM selector words directly to unique `ms[0x02]` and `ms[0x03]`
 bytes. A halfword-aligned binary sweep found all 16 direct `BL` callsites to
 the two mux writers, and `scripts/test_stock_meter_literals.py` now carries a
 mux callsite guard so this list cannot silently shrink back to a partial
-function-map view:
+function-map view. The guard independently scans the whole APP image for direct
+Thumb `BL` callers to `0x080018A4` and `0x08001A58`, then requires the scanned
+callers to match the documented list exactly:
 
 ```text
 gpio_mux_portc_porte target 0x080018A4:

@@ -896,11 +896,19 @@ class DmmGoalValidationTests(unittest.TestCase):
             ],
         )
         self.assertEqual(
+            result["gpio_mux_portc_porte"]["direct_callers"],
+            result["gpio_mux_portc_porte"]["calls"],
+        )
+        self.assertEqual(
             result["gpio_mux_porta_portb"]["calls"],
             [
                 "0x08001f06", "0x08003644", "0x08003e3a", "0x0801a534",
                 "0x0801c7d8", "0x0801d0a0", "0x0802554c", "0x0802724a",
             ],
+        )
+        self.assertEqual(
+            result["gpio_mux_porta_portb"]["direct_callers"],
+            result["gpio_mux_porta_portb"]["calls"],
         )
         self.assertEqual(
             result["gpio_mux_portc_porte"]["sequences"]["0x08025546"],

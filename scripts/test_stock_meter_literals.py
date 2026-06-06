@@ -1672,9 +1672,18 @@ def verify_meter_mux_callsite_sequences() -> dict[str, object]:
                     f"expected {expected.hex(' ')}, got {actual.hex(' ')}"
                 )
             call_bytes[f"{addr:#010x}"] = actual.hex(" ")
+        direct_calls = find_direct_thumb_bl_callers(target)
+        expected_calls = sorted(calls)
+        if direct_calls != expected_calls:
+            raise AssertionError(
+                f"{name} direct BL callers drifted: expected "
+                f"{[f'{addr:#010x}' for addr in expected_calls]}, "
+                f"got {[f'{addr:#010x}' for addr in direct_calls]}"
+            )
         checked[name] = {
             "target": f"{target:#010x}",
             "calls": sorted(call_bytes),
+            "direct_callers": [f"{addr:#010x}" for addr in direct_calls],
             "sequences": call_bytes,
         }
     return checked
