@@ -290,7 +290,7 @@ Update 2026-04-08:
 | +0xF60 | 20000F58 | `draw_x_pos` | uint8 | **2** | Bitmap draw X position |
 | +0xF61 | 20000F59 | `draw_y_pos` | uint8 | **9** | Bitmap draw Y position (heavily accessed) |
 | +0xF62 | 20000F5A | `draw_width` | uint16 | **6** | Bitmap draw width |
-| +0xF64 | 20000F5C | `draw_height` | uint16 | **6** | Bitmap draw height |
+| +0xF64 | 2000105C | `saved_mode_restore` | uint16 | **2 RAM-map refs + boot/config slices** | Saved mode-init state. Config word 12 writes the low halfword here at `0x08025E50`; boot reads the low byte at `0x08026F50` and can copy it into `DAT_20001060` / `+0xF68`. It also has UI renderer comparison refs in `FUN_08015f50`, so it is not a plain bitmap height field. See `dmm_saved_mode_f64_boundary_2026_06_06.md`. |
 | +0xF66–0xF84 | ... | `draw_palette[]` | uint16[] | 3-6 ea. | RGB565 color palette entries for bitmap rendering (16 entries) |
 
 ---

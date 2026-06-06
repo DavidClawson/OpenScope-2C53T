@@ -498,6 +498,38 @@ class DmmGoalValidationTests(unittest.TestCase):
             coverage["terms"],
         )
 
+    def test_re_coverage_requires_saved_mode_f64_boundary(self) -> None:
+        coverage = validate_dmm_goal.verify_re_coverage()
+        self.assertIn(
+            "reverse_engineering/analysis_v120/dmm_saved_mode_f64_boundary_2026_06_06.md",
+            coverage["docs"],
+        )
+        self.assertIn("DMM Saved-Mode `ms[0xF64]` Boundary", coverage["terms"])
+        self.assertIn(
+            "DAT_2000105c` (`0x2000105C`, `ms[0xF64]`)",
+            coverage["terms"],
+        )
+        self.assertIn("saved_mode_f64_config_load", coverage["terms"])
+        self.assertIn("saved_mode_f64_to_live_f68_restore", coverage["terms"])
+        self.assertIn("not display-only bitmap height", coverage["terms"])
+        self.assertIn("Saved-mode `ms[0xF64]` boundary", coverage["terms"])
+        self.assertIn(
+            "DAT_2000105c` has only two RAM-map refs",
+            coverage["terms"],
+        )
+        self.assertIn(
+            "stock config load writes word 12's low halfword",
+            coverage["terms"],
+        )
+        self.assertIn(
+            "boot restore reads it at `0x08026F50`",
+            coverage["terms"],
+        )
+        self.assertIn(
+            "`ms[0xF64]` is saved mode-init state",
+            coverage["terms"],
+        )
+
     def test_stock_roll_buffer_preload_is_binary_grounded(self) -> None:
         result = stock_meter_literals.verify_roll_buffer_preload_sequences()
         self.assertEqual(
@@ -1009,6 +1041,33 @@ class DmmGoalValidationTests(unittest.TestCase):
         )
         self.assertIn("mode-init/command-bank/transport", symbol["classification"])
         self.assertIn("not DMM ms[0x02]/ms[0x03]", symbol["classification"])
+
+    def test_stock_saved_mode_f64_boundary_is_grounded(self) -> None:
+        result = stock_meter_literals.verify_saved_mode_f64_boundary()
+        symbol = result["symbol"]
+        sequences = result["sequences"]
+
+        self.assertEqual(symbol["addr"], "0x2000105C")
+        self.assertEqual(symbol["count"], 2)
+        self.assertEqual(symbol["refs"], ["FUN_08015f50@08015f50"])
+        self.assertIn("saved-mode restore", symbol["classification"])
+        self.assertIn("not DMM ms[0x02]/ms[0x03]", symbol["classification"])
+        self.assertEqual(
+            sequences["saved_mode_f64_config_load"]["addr"],
+            "0x08025e40",
+        )
+        self.assertIn(
+            "aa f8 64 1f 8a f8 08 00 8a f8 09 20",
+            sequences["saved_mode_f64_config_load"]["bytes"],
+        )
+        self.assertEqual(
+            sequences["saved_mode_f64_to_live_f68_restore"]["addr"],
+            "0x08026f50",
+        )
+        self.assertIn(
+            "9a f8 64 0f a0 b1 8a f8 68 0f",
+            sequences["saved_mode_f64_to_live_f68_restore"]["bytes"],
+        )
 
     def test_stock_meter_transport_transitions_are_binary_grounded(self) -> None:
         result = stock_meter_literals.verify_meter_transport_transition_sequences()

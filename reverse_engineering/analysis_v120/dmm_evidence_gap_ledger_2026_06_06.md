@@ -57,6 +57,12 @@ one of:
   gates stock mode-init, command-bank, dynamic raw-word helper, and transport
   paths. It is command-bank/transport state, not physical DMM range state, not
   exact settle/discard proof, and not a low-DCV correction.
+- Saved-mode `ms[0xF64]` boundary: `DAT_2000105c` has only two RAM-map refs in
+  the UI renderer, but stock config load writes word 12's low halfword to
+  `ms[0xF64]` at `0x08025E50`, and boot restore reads it at `0x08026F50` before
+  copying the low byte to live `ms[0xF68]`. This is saved mode-init state, not
+  display-only bitmap height, not physical DMM range state, and not a low-DCV
+  correction.
 - Dynamic apply helper: `0x08006120`, `0x08006194`, `0x0800626A`, and
   `0x08006288` recover only ACV, DCA, continuity, and diode apply pairs.
 - Command dispatcher: `FUN_0800B908` queues boot/runtime mode-init command

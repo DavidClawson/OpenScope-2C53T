@@ -148,6 +148,34 @@ EXPECTED_MODE_STATE_RAM_MAP_REF = {
         "ms[0x02]/ms[0x03] analog range state"
     ),
 }
+EXPECTED_SAVED_MODE_F64_RAM_MAP_REF = {
+    "symbol": "DAT_2000105c",
+    "addr": "0x2000105C",
+    "count": 2,
+    "refs": [
+        "FUN_08015f50@08015f50",
+    ],
+    "classification": (
+        "display-menu compare plus boot/config saved-mode restore byte; not "
+        "DMM ms[0x02]/ms[0x03] analog range state"
+    ),
+}
+EXPECTED_SAVED_MODE_F64_SEQUENCES = {
+    "saved_mode_f64_config_load": (
+        0x08025E40,
+        bytes.fromhex(
+            "d4 e9 0b 01 04 f1 38 03 ca f8 60 0f 08 0c 0a 0e "
+            "aa f8 64 1f 8a f8 08 00 8a f8 09 20 60 6b 01 0c "
+            "aa f8 0a 00"
+        ),
+    ),
+    "saved_mode_f64_to_live_f68_restore": (
+        0x08026F50,
+        bytes.fromhex(
+            "9a f8 64 0f a0 b1 8a f8 68 0f 01 28 17 d0 03 28"
+        ),
+    ),
+}
 EXPECTED_SCOPE_MEASUREMENT_ENGINE_MUX_POINTER_CONSUMER_CONTEXT = {
     "scope_measurement_engine_mux_pointer_consumer_context": {
         "line_range": (11411, 11491),
@@ -1349,6 +1377,66 @@ def verify_mode_state_ram_map_boundary() -> dict[str, object]:
     return {"ram_map": str(RAM_MAP.relative_to(REPO)), "symbol": actual}
 
 
+def verify_saved_mode_f64_boundary() -> dict[str, object]:
+    """Check `ms[0xF64]` as saved-mode restore state, not range state.
+
+    Older notes mapped the same absolute byte as display draw height because
+    the RAM map only exposes two display-menu refs. Stock init/restore evidence
+    is stronger for the DMM goal: config word 12 writes `ms[0xF64]`, and boot
+    copies its low byte into live `ms[0xF68]`.
+    """
+    expected = EXPECTED_SAVED_MODE_F64_RAM_MAP_REF
+    symbol = expected["symbol"]
+    lines = RAM_MAP.read_text(encoding="utf-8", errors="replace").splitlines()
+
+    for line in lines:
+        if f" {symbol} " not in line:
+            continue
+        before_refs, refs_text = line.split(": ", 1)
+        parts = before_refs.split()
+        actual = {
+            "addr": parts[0],
+            "count": int(parts[2].strip("()")),
+            "refs": [item.strip() for item in refs_text.split(",")],
+            "line": line,
+            "classification": expected["classification"],
+        }
+        break
+    else:
+        raise AssertionError(f"{RAM_MAP}: missing {symbol} entry")
+
+    if actual["addr"] != expected["addr"]:
+        raise AssertionError(
+            f"{symbol}: expected addr {expected['addr']}, got {actual['addr']}"
+        )
+    if actual["count"] != expected["count"]:
+        raise AssertionError(
+            f"{symbol}: expected count {expected['count']}, got {actual['count']}"
+        )
+    if actual["refs"] != expected["refs"]:
+        raise AssertionError(
+            f"{symbol}: expected refs {expected['refs']}, got {actual['refs']}"
+        )
+
+    sequences: dict[str, dict[str, object]] = {}
+    for name, (addr, expected_bytes) in EXPECTED_SAVED_MODE_F64_SEQUENCES.items():
+        actual_bytes = read(addr, len(expected_bytes))
+        if actual_bytes != expected_bytes:
+            raise AssertionError(
+                f"{name} @ {addr:#010x}: expected {expected_bytes.hex(' ')}, "
+                f"got {actual_bytes.hex(' ')}"
+            )
+        sequences[name] = {
+            "addr": f"0x{addr:08x}",
+            "bytes": actual_bytes.hex(" "),
+        }
+    return {
+        "ram_map": str(RAM_MAP.relative_to(REPO)),
+        "symbol": actual,
+        "sequences": sequences,
+    }
+
+
 def _parse_full_decompile_symbol_refs() -> dict[str, list[tuple[int, str]]]:
     lines = FULL_DECOMPILE.read_text(encoding="utf-8", errors="replace").splitlines()
     parsed: dict[str, list[tuple[int, str]]] = {}
@@ -2506,6 +2594,7 @@ def main() -> None:
     expect_bytes(0x08036C8C, "00 bf 00 bf")
     mux_state_ram_map = verify_mux_state_ram_map_boundary()
     mode_state_ram_map = verify_mode_state_ram_map_boundary()
+    saved_mode_f64 = verify_saved_mode_f64_boundary()
     mux_state_full_decompile = verify_mux_state_full_decompile_surface()
     mux_state_pair_write_contexts = verify_mux_state_pair_write_contexts()
     scope_measurement_mux_pointer_context = (
@@ -2552,6 +2641,11 @@ def main() -> None:
         "stock mode-state RAM-map boundary "
         f"{mode_state_ram_map['symbol']['addr']}: "
         + ", ".join(mode_state_ram_map["symbol"]["refs"])
+    )
+    print(
+        "stock saved-mode F64 boundary "
+        f"{saved_mode_f64['symbol']['addr']}: "
+        + ", ".join(item["addr"] for item in saved_mode_f64["sequences"].values())
     )
     pair_write_count = len(mux_state_full_decompile["pair_writes"])
     for symbol, info in mux_state_full_decompile["symbols"].items():
