@@ -809,6 +809,35 @@ Do not treat scope auto-range writes as evidence for DMM current/voltage range
 decoding, and do not repair a surprising DMM reading by adding a numeric
 coefficient on top of those scope paths.
 
+The `mux-state RAM-map boundary` is now guarded too.  The stock V1.2.0
+`ram_map.txt` function-level refs for the shared mux-state bytes are:
+
+```text
+DAT_200000fa (25 refs):
+  FUN_08034078@08034078
+  FUN_08001c60@08001c60
+  FUN_08019e98@08019e98
+  FUN_0801f6f8@0801f6f8
+  FUN_0801d2ec@0801d2ec
+  FUN_0801efc0@0801efc0
+  unknown@080151c2
+
+DAT_200000fb (11 refs):
+  FUN_08034078@08034078
+  FUN_08001c60@08001c60
+  FUN_08019e98@08019e98
+  FUN_0801f6f8@0801f6f8
+  FUN_0801d2ec@0801d2ec
+```
+
+Every listed function is already classified in this note as a scope/siggen
+writer, scope/preset owner, scope snapshot path, scope UI/LUT consumer, or
+scope measurement/math consumer.  The guard is negative evidence: the current
+RAM-map surface still does not expose a DMM-owned runtime writer for
+`ms[0x02]`/`ms[0x03]`.  If future RE finds one, it must update the xref map,
+binary guard, and local range policy together rather than citing a stale
+unclassified RAM-map line.
+
 The scope-submode mux call guard now pins the two explicit scope reconfiguration
 sites that were previously only present in the broad direct-BL list. Both sites
 read `DAT_20000128` / `state[0x30]`, mask the low nibble, and feed that scope

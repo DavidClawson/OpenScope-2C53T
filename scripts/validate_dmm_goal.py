@@ -371,6 +371,8 @@ def verify_re_coverage() -> dict[str, Any]:
         "mux writer body guard", "gpio_pc12_pe_write_block",
         "gpio_pa15_pb11_pb10_write_block", "DAC1/scope calibration tail",
         "runtime mux-state writer guard", "0x08001EE8", "0x0801A526",
+        "mux-state RAM-map boundary", "DAT_200000fa (25 refs)",
+        "DAT_200000fb (11 refs)", "function-level refs",
         "negative DMM evidence", "scope snapshot consumer guard",
         "scope-submode mux call guard", "0x0801C7B8", "0x0801D088",
         "DAT_20000128", "state[0x30]", "scope runtime reconfiguration",

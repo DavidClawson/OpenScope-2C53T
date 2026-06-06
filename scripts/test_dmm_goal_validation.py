@@ -410,6 +410,34 @@ class DmmGoalValidationTests(unittest.TestCase):
             sequences["dynamic_raw_word_emit_tail"]["bytes"],
         )
 
+    def test_stock_mux_state_ram_map_boundary_is_classified(self) -> None:
+        result = stock_meter_literals.verify_mux_state_ram_map_boundary()
+        symbols = result["symbols"]
+        self.assertEqual(symbols["DAT_200000fa"]["count"], 25)
+        self.assertEqual(symbols["DAT_200000fb"]["count"], 11)
+        self.assertEqual(
+            symbols["DAT_200000fa"]["refs"],
+            [
+                "FUN_08034078@08034078",
+                "FUN_08001c60@08001c60",
+                "FUN_08019e98@08019e98",
+                "FUN_0801f6f8@0801f6f8",
+                "FUN_0801d2ec@0801d2ec",
+                "FUN_0801efc0@0801efc0",
+                "unknown@080151c2",
+            ],
+        )
+        self.assertEqual(
+            symbols["DAT_200000fb"]["refs"],
+            [
+                "FUN_08034078@08034078",
+                "FUN_08001c60@08001c60",
+                "FUN_08019e98@08019e98",
+                "FUN_0801f6f8@0801f6f8",
+                "FUN_0801d2ec@0801d2ec",
+            ],
+        )
+
     def test_stock_dvom_tx_queue_consumer_is_binary_grounded(self) -> None:
         result = stock_meter_literals.verify_dvom_tx_queue_consumer_sequences()
         sequences = result["sequences"]

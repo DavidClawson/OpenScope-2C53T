@@ -12,9 +12,36 @@ from pathlib import Path
 
 REPO = Path(__file__).resolve().parents[1]
 BIN = REPO / "archive/2C53T Firmware V1.2.0/APP_2C53T_V1.2.0_251015.bin"
+RAM_MAP = REPO / "reverse_engineering/analysis_v120/ram_map.txt"
 BASE = 0x08000000
 EXPECTED_SHA256 = "a17c5c35c97bb898f15672a1747bc1041d8ed507c16999ddba0d1e4e2ec0c760"
 EXPECTED_METER_SELECTOR_TABLE = bytes.fromhex("14 0c 17 0b 0a 12 11 10")
+EXPECTED_MUX_STATE_RAM_MAP_REFS = {
+    "DAT_200000fa": {
+        "addr": "0x200000FA",
+        "count": 25,
+        "refs": [
+            "FUN_08034078@08034078",
+            "FUN_08001c60@08001c60",
+            "FUN_08019e98@08019e98",
+            "FUN_0801f6f8@0801f6f8",
+            "FUN_0801d2ec@0801d2ec",
+            "FUN_0801efc0@0801efc0",
+            "unknown@080151c2",
+        ],
+    },
+    "DAT_200000fb": {
+        "addr": "0x200000FB",
+        "count": 11,
+        "refs": [
+            "FUN_08034078@08034078",
+            "FUN_08001c60@08001c60",
+            "FUN_08019e98@08019e98",
+            "FUN_0801f6f8@0801f6f8",
+            "FUN_0801d2ec@0801d2ec",
+        ],
+    },
+}
 EXPECTED_METER_SELECTOR_XREF_SEQUENCES = {
     0x080042E2: bytes.fromhex(
         "95 f8 2d 0f 4b f2 fc 32 41 1e 00 28 08 bf 07 21 "
@@ -901,6 +928,58 @@ def expect_bytes(addr: int, expected_hex: str) -> None:
         )
 
 
+def _parse_ram_map_mux_state_refs() -> dict[str, dict[str, object]]:
+    lines = RAM_MAP.read_text(encoding="utf-8", errors="replace").splitlines()
+    parsed: dict[str, dict[str, object]] = {}
+    for symbol in EXPECTED_MUX_STATE_RAM_MAP_REFS:
+        for line in lines:
+            if f" {symbol} " not in line:
+                continue
+            before_refs, refs_text = line.split(": ", 1)
+            parts = before_refs.split()
+            parsed[symbol] = {
+                "addr": parts[0],
+                "count": int(parts[2].strip("()")),
+                "refs": [item.strip() for item in refs_text.split(",")],
+                "line": line,
+            }
+            break
+        else:
+            raise AssertionError(f"{RAM_MAP}: missing {symbol} entry")
+    return parsed
+
+
+def verify_mux_state_ram_map_boundary() -> dict[str, object]:
+    """Check the stock RAM-map xref boundary for `DAT_200000fa/fb`.
+
+    `DAT_200000fa` and `DAT_200000fb` are the saved-state mux bytes that feed
+    `gpio_mux_portc_porte` / `gpio_mux_porta_portb` during boot/saved-state
+    restore.  The current V1.2.0 Ghidra RAM map exposes their function-level
+    refs as scope/siggen writers and scope consumers only.  Guarding this map
+    keeps future DMM work from citing an unclassified RAM-map hit as the missing
+    runtime DMM `ms[0x02]`/`ms[0x03]` writer without first adding a real stock
+    xref/trace.
+    """
+    parsed = _parse_ram_map_mux_state_refs()
+    checked: dict[str, dict[str, object]] = {}
+    for symbol, expected in EXPECTED_MUX_STATE_RAM_MAP_REFS.items():
+        actual = parsed[symbol]
+        if actual["addr"] != expected["addr"]:
+            raise AssertionError(
+                f"{symbol}: expected addr {expected['addr']}, got {actual['addr']}"
+            )
+        if actual["count"] != expected["count"]:
+            raise AssertionError(
+                f"{symbol}: expected count {expected['count']}, got {actual['count']}"
+            )
+        if actual["refs"] != expected["refs"]:
+            raise AssertionError(
+                f"{symbol}: expected refs {expected['refs']}, got {actual['refs']}"
+            )
+        checked[symbol] = actual
+    return {"ram_map": str(RAM_MAP.relative_to(REPO)), "symbols": checked}
+
+
 def verify_meter_selector_table() -> dict[str, object]:
     """Check the stock eight-entry DMM 0x05xx selector low-byte table.
 
@@ -1670,6 +1749,7 @@ def main() -> None:
         expect_f32(addr, value)
 
     expect_bytes(0x08036C8C, "00 bf 00 bf")
+    mux_state_ram_map = verify_mux_state_ram_map_boundary()
     selector = verify_meter_selector_table()
     selector_xrefs = verify_meter_selector_xref_sequences()
     selector_adjust = verify_meter_selector_adjust_sequences()
@@ -1697,6 +1777,11 @@ def main() -> None:
     scope_preset_mux_owners = verify_scope_preset_mux_owner_sequences()
     scope_ui_mux_lut_consumers = verify_scope_ui_mux_lut_consumer_sequences()
     scope_mux_state_consumers = verify_scope_mux_state_consumer_sequences()
+    for symbol, info in mux_state_ram_map["symbols"].items():
+        print(
+            f"stock mux-state RAM-map boundary {symbol}: "
+            + ", ".join(info["refs"])
+        )
     print(f"stock meter selector table: {selector['bytes']}")
     print("stock meter selector xref sites: " +
           ", ".join(selector_xrefs["sequences"].keys()))
