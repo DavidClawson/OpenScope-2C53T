@@ -550,6 +550,7 @@ static void cmd_help(void)
         "meter auto [start|status|cancel] Async DMM function auto-select\r\n"
         "meter trace                     One machine-readable DMM producer record\r\n"
         "meter frontend                  Show DMM analog frontend GPIO state\r\n"
+        "meter boot-sequence [ms]        Replay stock DMM boot word order + trace\r\n"
         "meter mux-arms <ce> <ab> [ms]   Apply stock mux arms, poll, trace\r\n"
         "meter mux-stream [count] [ms]   Stream DMM frames plus frontend GPIOs\r\n"
         "meter stream [count] [delay_ms] Print compact DMM frame stream\r\n"
@@ -3058,6 +3059,46 @@ static void cmd_meter_mux_arms(const char *args)
     cmd_meter_trace();
 }
 
+static void cmd_meter_boot_sequence(const char *args)
+{
+    uint32_t settle_ms = 300;
+    uint16_t planned_gpio = 0;
+    uint16_t actual_gpio = 0;
+    const char *usage = "Usage: meter boot-sequence [settle_ms<=5000]\r\n";
+
+    if (args != NULL && *args != '\0') {
+        if (parse_int(args, &settle_ms) != 0 || settle_ms > 5000U) {
+            usb_send_str(usage);
+            return;
+        }
+    }
+    if (current_mode != MODE_MULTIMETER) {
+        usb_send_str("ERR: switch to meter mode before replaying DMM boot order\r\n");
+        return;
+    }
+    if (!fpga_debug_send_meter_boot_order(meter_submode,
+                                          settle_ms,
+                                          &planned_gpio,
+                                          &actual_gpio)) {
+        usb_send_str(usage);
+        return;
+    }
+
+    vTaskDelay(pdMS_TO_TICKS(settle_ms));
+    (void)fpga_send_cmd(0x05, FPGA_CMD_METER_START);
+    vTaskDelay(pdMS_TO_TICKS(350));
+
+    usb_send_str("=== DMM Boot-Order Trace ===\r\n");
+    usb_debug_printf("boot_sequence submode=%u (%s) settle_ms=%lu "
+                     "order=0508,0509,probe,selector planned_gpio=%03X actual_gpio=%03X\r\n",
+                     (unsigned)meter_submode,
+                     meter_submode_name(meter_submode),
+                     settle_ms,
+                     (unsigned)planned_gpio,
+                     (unsigned)actual_gpio);
+    cmd_meter_trace();
+}
+
 static void cmd_meter_stream(const char *args)
 {
     uint32_t count = 16;
@@ -4388,6 +4429,10 @@ static void dispatch_command(char *line)
         cmd_meter_trace();
     } else if (strcmp(line, "meter frontend") == 0) {
         cmd_meter_frontend();
+    } else if (strcmp(line, "meter boot-sequence") == 0) {
+        cmd_meter_boot_sequence("");
+    } else if (strncmp(line, "meter boot-sequence ", 20) == 0) {
+        cmd_meter_boot_sequence(line + 20);
     } else if (strncmp(line, "meter mux-arms ", 15) == 0) {
         cmd_meter_mux_arms(line + 15);
     } else if (strcmp(line, "meter mux-stream") == 0) {

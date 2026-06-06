@@ -1493,6 +1493,59 @@ static void fpga_send_meter_wake_preamble(void)
     fpga_timed_send_cmd(0x05, FPGA_CMD_METER_VAR_14, 20);
 }
 
+bool fpga_debug_send_meter_boot_order(uint8_t submode, uint32_t delay_ms,
+                                      uint16_t *planned_gpio,
+                                      uint16_t *actual_gpio)
+{
+    fpga_meter_transition_plan_t plan;
+    fpga_meter_mux_gpio_state_t mux_state;
+    uint8_t probe_cmd;
+
+    if (!fpga.initialized || !fpga_meter_submode_is_valid(submode)) {
+        return false;
+    }
+    if (delay_ms > 5000U) {
+        delay_ms = 5000U;
+    }
+
+    plan = fpga_meter_transition_plan_for_submode(submode);
+    if (!fpga_meter_mux_gpio_state_for_submode(submode, &mux_state)) {
+        return false;
+    }
+    probe_cmd = fpga_probe_cmd_byte();
+
+    meter_data_invalidate(submode);
+    fpga_meter_reset_transport();
+    fpga_set_meter_frontend_for_submode(submode);
+    if (planned_gpio != 0) {
+        *planned_gpio = fpga_meter_mux_gpio_mask_from_state(&mux_state);
+    }
+    if (actual_gpio != 0) {
+        *actual_gpio = fpga_meter_mux_gpio_mask_live();
+    }
+
+    /*
+     * Replay the stock boot/wake word order against the selected runtime
+     * frontend. A previous direct-word live check only proved that adding
+     * 0x0508 before the selector was insufficient; this hook tests the exact
+     * boot order without rewriting the production transition path.
+     */
+    fpga.meter_mode_sequence_count++;
+    fpga.meter_mode_sequence_submode = submode;
+    fpga.meter_mode_selector_word = plan.selector_word;
+    fpga.meter_mode_apply_word = 0x0508U;
+    fpga.meter_mode_probe_word = (uint16_t)(0x0500U | probe_cmd);
+    fpga.meter_mode_start_word = 0x0509U;
+
+    fpga_timed_send_cmd(0x05, 0x08, 10);
+    fpga_timed_send_cmd(0x05, FPGA_CMD_METER_START, 10);
+    fpga_timed_send_cmd(0x05, probe_cmd, 10);
+    fpga_wire_send_word(plan.selector_word, delay_ms);
+    fpga_meter_discard_next_frames(plan.discard_frames);
+
+    return true;
+}
+
 static uint8_t fpga_scope_trigger_lsb(const scope_state_t *ss)
 {
     int level = 128 - ss->trigger.level;

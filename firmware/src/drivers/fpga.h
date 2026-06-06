@@ -699,6 +699,18 @@ bool fpga_debug_apply_meter_mux_arms(uint8_t portc_porte_mux,
                                      uint16_t *actual_gpio);
 
 /*
+ * Diagnostic-only DMM boot-order replay.
+ *
+ * Applies the current submode frontend, then sends the stock boot/wake command
+ * order 0x0508, 0x0509, 0x0507/0x050A, selector. This is a controlled
+ * producer-path probe for the unresolved low-DCV frame fault, not a production
+ * mode transition or a decoder correction.
+ */
+bool fpga_debug_send_meter_boot_order(uint8_t submode, uint32_t delay_ms,
+                                      uint16_t *planned_gpio,
+                                      uint16_t *actual_gpio);
+
+/*
  * Send the stock-like meter wake preamble, then re-apply the current
  * scope configuration. Intended for testing whether the FPGA needs a
  * meter-side wakeup before it will accept scope commands.

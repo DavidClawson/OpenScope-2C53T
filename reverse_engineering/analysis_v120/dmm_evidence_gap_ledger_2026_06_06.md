@@ -906,6 +906,25 @@ wiring proof boundary. It is not permission to restore decoder coefficients.
   physical input changes, without OCR, magnitude feedback, or decoder-side
   coefficients.  It is not itself a correction and was not the image-viewed
   `0.200 V` validation case.
+- Boot-order replay live negative: OpenScope app image SHA-256
+  `941e5061713e204fdd986d2a966c90e9560aff41b1a6ddb7931825f1bccbd9c2`
+  (`Build: Jun 6 2026 21:49:33`) was flashed through guarded HID IAP after
+  `flash_preflight.py hid-app` classified it as `openscope-app` at
+  `0x08004000`.  The diagnostic-only `meter boot-sequence [ms]` command applies
+  the current DMM submode frontend and replays the stock boot/wake command
+  order `0x0508, 0x0509, 0x0507/0x050A, selector`, then prints the normal
+  machine-readable `meter trace`.  On the current bench state, DCV submode 0
+  applied `planned_gpio=0BB` and `actual_gpio=0BB`; TX history showed the
+  expected replay frames `0x0508`, `0x0509`, `0x0507`, `0x0514`.  The stream
+  then passed through `OL`/blank frames and settled back to the same scale as
+  the prior current-bench DCV traces, with frames such as
+  `5A A5 A4 BD 8D AF 4D 20 00 00 01 3F` decoded as `raw=2232`,
+  `display=2.232 V`.  This is not the image-viewed `0.200 V` validation setup
+  and does not prove a user-visible fix.  It does narrow the upstream search:
+  simply replaying the exact stock boot word order against the current runtime
+  frontend is not enough to correct the producer-frame value, so future work
+  should move toward the runtime writer/apply/calibration path rather than
+  repeating `0x0508` order experiments.
 
 ## Next RE Target
 
