@@ -303,6 +303,12 @@ EXPECTED_DYNAMIC_RAW_WORD_HELPER_SEQUENCES = {
         ),
     ),
 }
+EXPECTED_DYNAMIC_RAW_WORD_APPLY_LOWBYTE_PAIRS = [
+    {"selector_low": "0x0C", "apply_low": "0x0D", "stock_mode": "ACV"},
+    {"selector_low": "0x17", "apply_low": "0x0E", "stock_mode": "DCA"},
+    {"selector_low": "0x11", "apply_low": "0x16", "stock_mode": "continuity"},
+    {"selector_low": "0x10", "apply_low": "0x15", "stock_mode": "diode"},
+]
 EXPECTED_DVOM_TX_QUEUE_CONSUMER_SEQUENCES = {
     "dvom_tx_raw_word_consumer": (
         0x080373F4,
@@ -1547,7 +1553,10 @@ def verify_dynamic_raw_word_helper_sequences() -> dict[str, object]:
             "addr": f"{addr:#010x}",
             "bytes": actual.hex(" "),
         }
-    return {"sequences": checked}
+    return {
+        "sequences": checked,
+        "apply_lowbyte_pairs": EXPECTED_DYNAMIC_RAW_WORD_APPLY_LOWBYTE_PAIRS,
+    }
 
 
 def verify_dvom_tx_queue_consumer_sequences() -> dict[str, object]:

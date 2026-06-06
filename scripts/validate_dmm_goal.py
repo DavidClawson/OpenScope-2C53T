@@ -687,6 +687,7 @@ def verify_transition_plan_property_contract() -> dict[str, Any]:
     text = (REPO / rel).read_text(encoding="utf-8", errors="replace")
     required_tests = [
         "transition_plan_covers_mux_family_and_settle_policy",
+        "stock_apply_words_for_runtime_family_switch",
         "mux_gpio_state_matches_stock_projection_for_every_submode",
         "transition_settle_discard_policy_is_explicit_for_every_submode",
         "state_machine_contract_is_exhaustive",
@@ -711,6 +712,9 @@ def verify_transition_plan_property_contract() -> dict[str, Any]:
             r"static const uint16_t expected_apply\[FPGA_METER_LOCAL_SUBMODE_COUNT\]\s*=\s*"
             r"\{\s*0x0000,\s*0x050D,\s*0x050E,\s*0x050E,\s*0x0000,\s*"
             r"0x0000,\s*0x0000,\s*0x0516,\s*0x0515,\s*0x0000,\s*0x0000\s*\};",
+        "runtime apply words are subset of stock dynamic helper pairs":
+            r"static const uint16_t stock_dynamic_apply_words\[\]\s*=\s*"
+            r"\{\s*0x050D,\s*0x050E,\s*0x0516,\s*0x0515\s*\};",
         "shared local split pairs remain explicit":
             r"\{\s*2,\s*3,\s*\"DC current small/A\"\s*\}[\s\S]*"
             r"\{\s*4,\s*5,\s*\"AC current small/A\"\s*\}[\s\S]*"
@@ -1021,6 +1025,9 @@ def verify_re_coverage() -> dict[str, Any]:
         "dynamic raw-word helper guard", "0x08006060", "0x08006120",
         "0x080062F8", "0x0501", "mask `0xC6`", "0x0C/0x0D",
         "0x0E/0x17", "0x11/0x16", "0x10/0x15",
+        "stock dynamic apply-pair boundary",
+        "ACV 0x0C/0x0D", "DCA 0x17/0x0E",
+        "continuity 0x11/0x16", "diode 0x10/0x15",
         "dvom_TX raw-word consumer guard", "0x080373F4", "0x20002D74",
         "USART2 command path",
         "meter transport transition guard", "0x08026F8E", "0x0802700A",

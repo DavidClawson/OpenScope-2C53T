@@ -98,6 +98,23 @@ binary-guarded as another digital command/state-machine path:
   `0x05xx` raw word.
 ```
 
+The stock dynamic apply-pair boundary recovered from those low-byte choices is:
+
+```text
+ACV 0x0C/0x0D
+DCA 0x17/0x0E
+continuity 0x11/0x16
+diode 0x10/0x15
+```
+
+The local transition plan may use apply words from this set only:
+`0x050D`, `0x050E`, `0x0516`, and `0x0515`. Current local split modes share
+the DCA pair, and no stock helper pair has been recovered for DCV, ACA,
+resistance, capacitance, temperature, or microamp. If one of those modes needs
+different behavior, recover a new stock low-byte pair or range writer first;
+do not create a new apply word from decoded magnitude, unit text, or a single
+bench reading.
+
 This `dynamic raw-word helper guard` ties the selector bytes, display formatter
 state, and `0x20002D74` raw-word queue together in stock code.  It strengthens
 the digital DMM/FPGA command path model without upgrading the evidence to

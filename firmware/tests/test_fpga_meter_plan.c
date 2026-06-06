@@ -164,10 +164,20 @@ static void test_wire_words_are_raw_05_family(void)
 
 static void test_stock_apply_words_for_runtime_family_switch(void)
 {
+    /*
+     * Stock dynamic raw-word helper at 0x08006120 chooses only these
+     * selector/apply low-byte pairs for runtime family-side switching:
+     * ACV 0x0C/0x0D, DCA 0x17/0x0E, continuity 0x11/0x16, diode 0x10/0x15.
+     * Keep the local apply table as a subset of that recovered pair set; do
+     * not add an apply word for a surprising range without new stock xrefs.
+     */
     static const uint16_t expected_apply[FPGA_METER_LOCAL_SUBMODE_COUNT] = {
         0x0000, 0x050D, 0x050E, 0x050E, 0x0000,
         0x0000, 0x0000, 0x0516, 0x0515, 0x0000,
         0x0000
+    };
+    static const uint16_t stock_dynamic_apply_words[] = {
+        0x050D, 0x050E, 0x0516, 0x0515
     };
 
     for (uint8_t i = 0; i < FPGA_METER_LOCAL_SUBMODE_COUNT; i++) {
@@ -182,6 +192,19 @@ static void test_stock_apply_words_for_runtime_family_switch(void)
             snprintf(name, sizeof(name), "apply word %u", (unsigned)i);
             EXPECT_EQ_U16(name, word, expected_apply[i]);
             EXPECT_EQ_U8("apply raw family", (uint8_t)(word >> 8), 0x05);
+            {
+                uint8_t found = 0;
+                for (uint8_t j = 0;
+                     j < sizeof(stock_dynamic_apply_words) /
+                         sizeof(stock_dynamic_apply_words[0]);
+                     j++) {
+                    if (word == stock_dynamic_apply_words[j]) {
+                        found = 1;
+                    }
+                }
+                snprintf(name, sizeof(name), "apply stock pair %u", (unsigned)i);
+                EXPECT_EQ_U8(name, found, 1U);
+            }
         } else {
             snprintf(name, sizeof(name), "apply untouched %u", (unsigned)i);
             EXPECT_EQ_U16(name, word, 0xAAAA);

@@ -653,6 +653,7 @@ class DmmGoalValidationTests(unittest.TestCase):
     def test_stock_dynamic_raw_word_helpers_are_binary_grounded(self) -> None:
         result = stock_meter_literals.verify_dynamic_raw_word_helper_sequences()
         sequences = result["sequences"]
+        apply_pairs = result["apply_lowbyte_pairs"]
         self.assertEqual(
             sequences["selector_seed_state_pairs"]["addr"],
             "0x08006060",
@@ -696,6 +697,26 @@ class DmmGoalValidationTests(unittest.TestCase):
         self.assertIn(
             "1b 22 00 68 0a 70",
             sequences["dynamic_raw_word_emit_tail"]["bytes"],
+        )
+        self.assertEqual(
+            apply_pairs,
+            [
+                {"selector_low": "0x0C", "apply_low": "0x0D", "stock_mode": "ACV"},
+                {"selector_low": "0x17", "apply_low": "0x0E", "stock_mode": "DCA"},
+                {
+                    "selector_low": "0x11",
+                    "apply_low": "0x16",
+                    "stock_mode": "continuity",
+                },
+                {"selector_low": "0x10", "apply_low": "0x15", "stock_mode": "diode"},
+            ],
+        )
+        self.assertEqual(
+            {
+                (item["selector_low"], item["apply_low"])
+                for item in apply_pairs
+            },
+            {("0x0C", "0x0D"), ("0x17", "0x0E"), ("0x11", "0x16"), ("0x10", "0x15")},
         )
 
     def test_stock_mux_state_ram_map_boundary_is_classified(self) -> None:
