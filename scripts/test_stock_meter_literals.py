@@ -1045,6 +1045,37 @@ EXPECTED_MUX_WRITER_BODY_SEQUENCES = {
         },
     },
 }
+EXPECTED_MUX_WRITER_SCOPE_TAIL_CONTEXTS = {
+    "gpio_mux_portc_porte_scope_tail_context": {
+        "line_range": (2274, 2293),
+        "classification": (
+            "scope threshold/calibration tail: DAT_20000125/DAT_2000010c "
+            "select scope tables, DAT_200000fc offsets the threshold, DAC1 is "
+            "updated; not a DMM calibration coefficient"
+        ),
+        "snippets": [
+            "if (DAT_20000125 < 5) {",
+            "if ((DAT_20000125 == 4) || (DAT_2000010c == '\\x03')) {",
+            "fVar5 = (float)VectorSignedToFloat(DAT_200000fc + 100",
+            "_DAT_40007408 = uVar4 & 0xfff | _DAT_40007408 & 0xfffff000;",
+            "_DAT_40007404 = _DAT_40007404 | 1;",
+        ],
+    },
+    "gpio_mux_porta_portb_scope_tail_context": {
+        "line_range": (2375, 2392),
+        "classification": (
+            "scope threshold/calibration tail: DAT_20000125/DAT_2000010c "
+            "select scope tables, DAT_200000fd offsets the threshold, TIM/DAC "
+            "threshold state is updated; not a DMM calibration coefficient"
+        ),
+        "snippets": [
+            "if (DAT_20000125 < 5) {",
+            "if ((DAT_20000125 == 4) || (DAT_2000010c == '\\x03')) {",
+            "fVar5 = (float)VectorSignedToFloat(DAT_200000fd + 100",
+            "_DAT_40001c34 = VectorFloatToUnsigned(",
+        ],
+    },
+}
 EXPECTED_RUNTIME_MUX_STATE_WRITER_SEQUENCES = {
     "siggen_scope_autorange_increment": (
         0x08001EE8,
@@ -2359,6 +2390,38 @@ def verify_meter_mux_writer_body_sequences() -> dict[str, object]:
     return checked
 
 
+def verify_mux_writer_scope_tail_contexts() -> dict[str, object]:
+    """Check mux-writer tails remain classified as scope threshold logic.
+
+    The mux writers are DMM-relevant hardware writers, but their trailing
+    table/DAC math reads adjacent scope state (`DAT_20000125`,
+    `DAT_2000010c`, `DAT_200000fc/fd`) and updates scope threshold registers.
+    Guard this context so those adjacent refs do not become a guessed DMM
+    calibration/range correction for low DCV.
+    """
+    lines = FULL_DECOMPILE.read_text(
+        encoding="utf-8", errors="replace"
+    ).splitlines()
+    checked: dict[str, object] = {}
+
+    for name, info in EXPECTED_MUX_WRITER_SCOPE_TAIL_CONTEXTS.items():
+        start, end = info["line_range"]
+        snippets: list[str] = info["snippets"]
+        segment = "\n".join(lines[start - 1:end])
+        missing = [snippet for snippet in snippets if snippet not in segment]
+        if missing:
+            raise AssertionError(
+                f"{name} full_decompile.c:{start}..{end} missing {missing}"
+            )
+        checked[name] = {
+            "line_range": [start, end],
+            "snippets": snippets,
+            "classification": info["classification"],
+        }
+
+    return {"file": str(FULL_DECOMPILE.relative_to(REPO)), "contexts": checked}
+
+
 def verify_runtime_mux_state_writer_sequences() -> dict[str, object]:
     """Check recovered runtime writes to the DAT_200000fa/fb mux-state pair.
 
@@ -2625,6 +2688,7 @@ def main() -> None:
     runtime_mode_init_callers = verify_runtime_mode_init_dispatch_caller_sequences()
     mux_calls = verify_meter_mux_callsite_sequences()
     mux_bodies = verify_meter_mux_writer_body_sequences()
+    mux_scope_tails = verify_mux_writer_scope_tail_contexts()
     runtime_mux_writers = verify_runtime_mux_state_writer_sequences()
     scope_submode_mux_calls = verify_scope_submode_mux_call_sequences()
     scope_snapshots = verify_scope_snapshot_consumer_sequences()
@@ -2720,6 +2784,8 @@ def main() -> None:
     for name, info in mux_bodies.items():
         print(f"stock {name} body slices: " +
               ", ".join(info["slices"].keys()))
+    print("stock mux-writer scope tail contexts: " +
+          ", ".join(mux_scope_tails["contexts"].keys()))
     print("stock runtime mux-state writer sites: " +
           ", ".join(item["addr"] for item in runtime_mux_writers["sequences"].values()))
     print("stock scope-submode mux call sites: " +

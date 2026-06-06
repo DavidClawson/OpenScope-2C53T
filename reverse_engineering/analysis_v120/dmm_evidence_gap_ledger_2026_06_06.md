@@ -76,6 +76,12 @@ one of:
 - Mux writers: `FUN_080018a4` and `FUN_08001a58` are 10-way GPIO hardware
   writers. Current direct runtime mux-state writers are classified as
   scope/siggen paths, not DMM range proof.
+- Mux writer scope tails: the two hardware writers also read adjacent scope
+  state (`DAT_20000125`, `DAT_2000010c`, `DAT_200000fc/fd + 100`) and update
+  scope threshold/DAC registers (`_DAT_40007408`, `_DAT_40007404`,
+  `_DAT_40001c34`). These refs are now guarded as
+  scope threshold/calibration context, not missing DMM runtime range state,
+  low-DCV correction, or meter calibration coefficients.
 - Mux-state xref closure: the current V1.2.0 RAM-map and text-decompile
   surface has been exhausted as negative DMM evidence. `DAT_200000fa` has
   25 RAM-map refs / 26 full-decompile refs; `DAT_200000fb` has 11 RAM-map refs

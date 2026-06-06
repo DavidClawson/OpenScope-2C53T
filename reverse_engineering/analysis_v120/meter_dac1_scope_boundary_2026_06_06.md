@@ -28,6 +28,22 @@ proves a real calibration path.
 | `FUN_08019e98` uses `DAT_20000128 & 0x0f`, calls both mux writers, and refreshes DAC1/CH2 threshold | `full_decompile.c:7771..7990`, direct calls at `0x0801C780..0x0801C784` | scope submode/range path |
 | Master init applies saved bytes through both mux writers | `0x08025544..0x0802554C`, `0x0802723E..0x0802724A` | boot/saved-state apply only; not runtime DMM calibration proof |
 
+## Mux Writer Scope-Tail Guard
+
+`scripts/test_stock_meter_literals.py` now also guards the decompile context for
+the two mux-writer tails:
+
+- `full_decompile.c:2274..2293`:
+  `gpio_mux_portc_porte` reads `DAT_20000125`, `DAT_2000010c`, and
+  `DAT_200000fc + 100`, then writes `_DAT_40007408` / `_DAT_40007404`.
+- `full_decompile.c:2375..2392`:
+  `gpio_mux_porta_portb` reads `DAT_20000125`, `DAT_2000010c`, and
+  `DAT_200000fd + 100`, then writes `_DAT_40001c34`.
+
+Those adjacent state bytes are scope threshold/calibration selectors and
+offsets. They are not the missing DMM `ms[0x02]`/`ms[0x03]` runtime writer and
+not a low-DCV correction or meter calibration coefficient.
+
 ## Boundary for Open Firmware
 
 - It is valid to project stock DMM selector slots into the recovered GPIO mux

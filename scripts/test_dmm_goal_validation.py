@@ -221,6 +221,13 @@ class DmmGoalValidationTests(unittest.TestCase):
         self.assertIn("DAC1", coverage["terms"])
         self.assertIn("scope trigger", coverage["terms"])
         self.assertIn("not DMM calibration", coverage["terms"])
+        self.assertIn("Mux Writer Scope-Tail Guard", coverage["terms"])
+        self.assertIn("full_decompile.c:2274..2293", coverage["terms"])
+        self.assertIn("full_decompile.c:2375..2392", coverage["terms"])
+        self.assertIn("DAT_200000fc + 100", coverage["terms"])
+        self.assertIn("DAT_200000fd + 100", coverage["terms"])
+        self.assertIn("scope threshold/calibration context", coverage["terms"])
+        self.assertIn("not missing DMM runtime range state", coverage["terms"])
 
     def test_re_coverage_requires_w25q_system_file_boundary(self) -> None:
         coverage = validate_dmm_goal.verify_re_coverage()
@@ -1576,6 +1583,22 @@ class DmmGoalValidationTests(unittest.TestCase):
         self.assertIn("scope_calibration_table_select", porta["slices"])
         self.assertIn("dac1_scope_tail", portc["slices"])
         self.assertIn("dac1_scope_tail", porta["slices"])
+
+    def test_stock_mux_writer_scope_tail_contexts_are_grounded(self) -> None:
+        result = stock_meter_literals.verify_mux_writer_scope_tail_contexts()
+        contexts = result["contexts"]
+        portc = contexts["gpio_mux_portc_porte_scope_tail_context"]
+        porta = contexts["gpio_mux_porta_portb_scope_tail_context"]
+
+        self.assertEqual(result["file"], "reverse_engineering/analysis_v120/full_decompile.c")
+        self.assertEqual(portc["line_range"], [2274, 2293])
+        self.assertEqual(porta["line_range"], [2375, 2392])
+        self.assertIn("DAT_200000fc + 100", "\n".join(portc["snippets"]))
+        self.assertIn("DAT_200000fd + 100", "\n".join(porta["snippets"]))
+        self.assertIn("_DAT_40007408", "\n".join(portc["snippets"]))
+        self.assertIn("_DAT_40001c34", "\n".join(porta["snippets"]))
+        self.assertIn("not a DMM calibration coefficient", portc["classification"])
+        self.assertIn("not a DMM calibration coefficient", porta["classification"])
 
     def test_stock_scope_submode_mux_calls_are_negative_dmm_evidence(self) -> None:
         result = stock_meter_literals.verify_scope_submode_mux_call_sequences()
