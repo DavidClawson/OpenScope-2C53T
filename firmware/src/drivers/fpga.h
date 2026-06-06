@@ -214,6 +214,7 @@ typedef struct {
     volatile uint8_t  tx_cmd_history_count;  /* Valid history entries */
     volatile uint8_t  last_tx_frame[FPGA_TX_FRAME_SIZE]; /* Last full 10-byte USART frame sent */
     volatile uint8_t  tx_frame_history[FPGA_TX_FRAME_HISTORY][FPGA_TX_FRAME_SIZE];
+    volatile uint16_t tx_frame_history_tx_count[FPGA_TX_FRAME_HISTORY];
     volatile uint8_t  tx_frame_history_head;
     volatile uint8_t  tx_frame_history_count;
 

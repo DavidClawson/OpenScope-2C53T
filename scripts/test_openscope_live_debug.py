@@ -143,8 +143,8 @@ mth n=0 sub=0 seq=2 selector=0514 apply=0000 probe=0507 start=0509 tx=29..33 dat
 producer_history newest_first:
 rxh n=0 data=12 tx=33 echo=33 seq=2 seq_sub=0 busy=0 discard=0 frame=5A A5 44 8E EF E7 07 24 80 00 01 89
 tx_history newest_first:
-txh n=0 frame=00 00 05 09 00 00 00 00 00 0E
-txh n=1 frame=00 00 05 07 00 00 00 00 00 0C
+txh n=0 tx=33 frame=00 00 05 09 00 00 00 00 00 0E
+txh n=1 tx=32 frame=00 00 05 07 00 00 00 00 00 0C
 gpio control PC6=1 PB11=1 PC11=1 PC7=1 PC0=1
 gpio_frontend PC12=1 PE4=1 PE5=0 PE6=1 PA15=1 PA10=1 PB10=0 PB9=0 PA6=0
 h2 bytes=115638 done=1 post_enq=5 post_ok=5 post_drop=0 post_mask=1F spi_ok=0 spi_to=0
@@ -178,10 +178,12 @@ h2_post_rx n=0 trigger=01 len=2 bytes=FF FF
             parsed["tx_history"][0]["frame"]["hex"],
             "00 00 05 09 00 00 00 00 00 0E",
         )
+        self.assertEqual(parsed["tx_history"][0]["tx"], 33)
         self.assertEqual(
             parsed["tx_history"][1]["frame"]["hex"],
             "00 00 05 07 00 00 00 00 00 0C",
         )
+        self.assertEqual(parsed["tx_history"][1]["tx"], 32)
         self.assertEqual(parsed["gpio_frontend"]["PC12"], 1)
         self.assertEqual(parsed["gpio_frontend"]["PB9"], 0)
         self.assertEqual(parsed["calibration_state"]["bytes"], 115638)

@@ -684,6 +684,7 @@ static void fpga_record_tx_frame(const uint8_t *frame)
 
     memcpy((void *)fpga.last_tx_frame, frame, FPGA_TX_FRAME_SIZE);
     memcpy((void *)fpga.tx_frame_history[idx], frame, FPGA_TX_FRAME_SIZE);
+    fpga.tx_frame_history_tx_count[idx] = fpga.tx_count;
     fpga.tx_frame_history_head =
         (uint8_t)((idx + 1U) % FPGA_TX_FRAME_HISTORY);
     if (fpga.tx_frame_history_count < FPGA_TX_FRAME_HISTORY) {
