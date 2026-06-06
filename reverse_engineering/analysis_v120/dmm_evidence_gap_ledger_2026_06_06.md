@@ -823,6 +823,20 @@ wiring proof boundary. It is not permission to restore decoder coefficients.
   `0xAA 0x55` echo starts.  This live run was not image-viewed as the hard
   `0.200 V` setup, so it is only a TX/producers trace-surface validation; it
   does not prove the low-DCV blocker fixed.
+- TX-count correlated TX-history smoke: OpenScope app image SHA-256
+  `e108446cb8ff930bd961abfa6b49a693de2a2feabf5c802dfb94d3991dc34884`
+  (`Build: Jun 6 2026 21:13:01`) was flashed through guarded HID IAP and
+  booted back to CDC.  A live `meter trace --json` run showed the `txh` rows
+  now include the producer `tx` counter snapshot: newest `txh n=0 tx=308
+  frame=00 00 05 09 00 00 00 00 00 0E`, with earlier rows stepping back
+  one-for-one through `tx=307`, `tx=306`, and so on.  The paired producer
+  history had matching `tx` snapshots on DMM frames (`rxh n=0 data=441 tx=308
+  ... frame=5A A5 A4 BD 4D 8E 4F 20 00 00 01 43`, decoded `display=2.243 V`).
+  This narrows the next live low-DCV run to a concrete command-to-producer
+  boundary: the wrong producer frame can now be compared to the immediately
+  preceding USART2 command frame by counter, instead of only by wall-clock
+  ordering.  It still is not a low-DCV fix, not stock ACK proof, and not a
+  calibration coefficient.
 
 ## Next RE Target
 
