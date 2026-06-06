@@ -582,6 +582,12 @@ static void cmd_status(void)
 {
     extern volatile uint32_t uptime_seconds;
 
+    /*
+     * Keep the status header in chunks smaller than usb_debug_printf()'s
+     * 256-byte buffer. A single oversized format string silently truncates the
+     * output and can glue the following line onto "SPI3 OK", which makes live
+     * DMM evidence harder to compare across firmware builds.
+     */
     usb_debug_printf(
         "=== System ===\r\n"
         "Uptime: %lus\r\n"
@@ -593,10 +599,7 @@ static void cmd_status(void)
         "RX bytes: %u\r\n"
         "Data frames: %u\r\n"
         "Echo frames: %u\r\n"
-        "RX sync: data_start=%u echo_start=%u data_hdr=%u echo_hdr=%u bad2=%u stray=%u\r\n"
-        "SPI3 OK: %u\r\n"
-        "SPI3 timeouts: %u (total %u)\r\n"
-        "SPI3 first byte: 0x%02X\r\n",
+        "RX sync: data_start=%u echo_start=%u data_hdr=%u echo_hdr=%u bad2=%u stray=%u\r\n",
         (unsigned long)uptime_seconds,
         system_core_clock / 1000000,
         fpga.initialized ? "YES" : "NO",
@@ -610,7 +613,12 @@ static void cmd_status(void)
         fpga.rx_sync_data_header_count,
         fpga.rx_sync_echo_header_count,
         fpga.rx_sync_bad_second_count,
-        fpga.rx_sync_stray_count,
+        fpga.rx_sync_stray_count
+    );
+    usb_debug_printf(
+        "SPI3 OK: %u\r\n"
+        "SPI3 timeouts: %u (total %u)\r\n"
+        "SPI3 first byte: 0x%02X\r\n",
         fpga.spi3_ok_count,
         fpga.spi3_timeout_count, fpga.spi3_total_timeouts,
         fpga.spi3_first_byte

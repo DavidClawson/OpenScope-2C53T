@@ -173,8 +173,11 @@ handshake at 0x0802676E.
 50. Enable TMR3 (IRQ 29) — THIS DRIVES THE USART EXCHANGE
 51. Enable TMR6/TMR7
 
-52. *** PB11 set HIGH *** (FPGA signal, in mode_switch_reset_handler)
-    GPIOB_BOP = 0x800
+52. *** PC11 set HIGH *** (meter transport / mux enable, in mode_switch_reset_handler)
+    GPIOC_BOP = 0x800
+    2026-06-06 correction: this write is GPIOC bit 11 at 0x08026FC6, not
+    GPIOB/PB11. PB11 writes are part of gpio_mux_porta_portb (FUN_08001A58)
+    state projection, not an unconditional H2/SPI3 boot enable.
 
 53. Start FreeRTOS scheduler (tail-call to 0x0803A6D8)
 ```
@@ -236,7 +239,7 @@ handshake at 0x0802676E.
 |------|--------|--------|
 | SPI3 Mode 3 (CPOL=1, CPHA=1) | Fixed in V2 | Required |
 | PC6 HIGH | Fixed in V4 | Required — FPGA SPI enable |
-| **PB11 HIGH** | **MISSING** | **FPGA active mode signal** |
+| PB11 mux projection | Recovered as gpio_mux_porta_portb state, not an unconditional H2 write | Required in meter frontend state; do not set before H2 without new stock evidence |
 | 10-byte USART frames | Fixed in V5 | Correct frame size |
 | Post-H2 SPI3 triggers 1,2,6,7,8 | Recovered 2026-06-06 | Queue target is `0x20002D78`, not USART |
 | SysTick delays | Missing | Timing-sensitive init |

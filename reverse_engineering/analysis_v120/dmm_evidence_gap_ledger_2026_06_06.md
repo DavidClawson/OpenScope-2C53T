@@ -767,6 +767,31 @@ wiring proof boundary. It is not permission to restore decoder coefficients.
   they exist to prove, on the next guarded live firmware, whether the
   `echo_count=0` observation is "no `AA 55` echo stream seen" or a parser/sync
   rejection before the 12-byte DMM producer frame.
+- RX-sync / SPI3 all-FF live boundary: guarded HID flash of OpenScope app image
+  SHA-256 `fe5b1d3a87891c94aa1967c94ddd58e62f6c6a0b35031f3d0a546186ec84e89d`
+  booted as build `Jun 6 2026 20:48:14`.  A live post-flash `meter trace` /
+  `status` run showed USART2 data-frame starts and headers increasing while
+  echo starts stayed zero: `rx_sync data_start=94 echo_start=0 data_hdr=93
+  echo_hdr=0 bad2=1 stray=12` early, then `data_start=318 echo_start=0
+  data_hdr=317 echo_hdr=0` after SPI3 diagnostics.  This proves the current
+  `echo_count=0` observation is not an `AA 55` parser-rejection problem in the
+  firmware RX state machine; no `0xAA` echo-frame starts are appearing while
+  `0x5A 0xA5` data frames are flowing.  The same guarded run showed all local
+  SPI3/H2 diagnostic MISO samples stuck at `FF`: raw CS-low reads, cmd `0x80`
+  reads, USART arm `0x20/0x21` reads, stock case-8 readback, H2 TX replay
+  preamble/body/close sampling, and all five post-H2 trigger readbacks.  This is
+  a runtime producer/apply boundary, not a decoder-math issue and not H2 ACK
+  proof.
+- Reversible SPI3_GMUX live negative: with the same build still running, a
+  controlled CDC session saved the live state, wrote `IOMUX->remap5` at
+  `0x40010028` from `0x02000000` to `0x00000000`, ran `spi3 acqtest` and
+  `spi3 stock-readback`, then restored `0x02000000`.  Clearing remap5 did not
+  produce any non-`FF` SPI3 MISO bytes (`T1..T4` all `0/16` or `0/32` non-FF,
+  `ms46_equiv=0xFFFF`).  Therefore the local `SPI3_GMUX_0010` write is not the
+  current low-DCV/H2-acceptance fix, even though it remains an empirical AT32
+  pin-routing choice.  Future work should move earlier than the USART2 DMM
+  producer frame through stock command/materialization, H2 apply effect, or
+  factory-calibration recovery rather than repeating this GMUX toggle.
 
 ## Next RE Target
 

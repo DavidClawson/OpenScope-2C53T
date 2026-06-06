@@ -3343,13 +3343,17 @@ void fpga_init(void)
      * connect SPI3 to them. We MUST call SPI3_GMUX_0010 to route
      * SPI3 → PB3(SCK)/PB4(MISO)/PB5(MOSI)/PB6.
      *
-     * Do NOT remove this based on "the stock decompilation never writes
-     * SPI3_GMUX." Stock is a GD32 binary; the AT32 GMUX register block
-     * does not exist in its world, so it CANNOT contain such a write —
-     * its absence proves nothing about the AT32's needs. Bench-confirmed
-     * 2026-04-06: SCK does not toggle on PB3 without this call. The HAL's
-     * own JTAG-pin SPI3 example writes both SWJTAG_GMUX_010 and
-     * SPI3_GMUX_0010. See memory feedback_at32_gmux + GitHub issue #11. */
+     * Stock V1.2.0 is a GD32 binary and never writes the AT32 SPI3_GMUX/remap5
+     * register block; that absence proves only the stock legacy/JTAG path, not
+     * AT32 routing requirements. Earlier AT32 bench tests saw no SCK without
+     * SPI3_GMUX_0010, and the vendor AT32 halfduplex SPI3/JTAG-pin example uses
+     * the same GMUX value for PB3/PB4/PB5. A live 2026-06-06 reversible test
+     * cleared remap5 at runtime and SPI3 MISO remained all-0xFF, so this GMUX
+     * setting is not the present low-DCV/H2-apply fix either. Treat it as an
+     * empirical AT32 routing requirement until stock-on-AT32 or logic-analyzer
+     * evidence proves a better mapping; do not infer DMM range/calibration
+     * behavior from it.
+     */
     gpio_pin_remap_config(SWJTAG_GMUX_010, TRUE);
     gpio_pin_remap_config(SPI3_GMUX_0010, TRUE);  /* route SPI3 → PB3/PB4/PB5/PB6 */
 

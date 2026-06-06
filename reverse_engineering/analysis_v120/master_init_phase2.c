@@ -471,9 +471,12 @@ void phase2g_spi3_fpga_handshake(void) {
 
     SPI3_CTRL1 |= 0x40;        // Bit 6 = SPE — SPI enable!
 
-    // --- PB11 = FPGA active mode ---
-    // GPIOB_BSRR = (1 << 11);  // Set PB11 HIGH — tells FPGA to enter active mode
-    // This is critical! Without PB11 HIGH, FPGA won't respond on SPI3.
+    // --- PB11 boundary ---
+    // 2026-06-06 correction: no byte-grounded stock write in this SPI3/H2
+    // block unconditionally sets GPIOB bit 11. PB11 is written by
+    // gpio_mux_porta_portb (FUN_08001A58) from the mux state, while the later
+    // 0x08026FC6 0x800 write is GPIOC bit 11 (PC11), not GPIOB/PB11.
+    // Do not use this phase as evidence for a PB11-before-H2 firmware patch.
 
     // --- SysTick delay (10ms) ---
     SysTick_LOAD = systick_reload * 10;  // ~10ms delay
