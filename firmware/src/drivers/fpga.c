@@ -2262,7 +2262,7 @@ static bool fpga_is_stock_post_h2_spi3_trigger(uint8_t trigger)
            trigger == (FPGA_ACQ_ROLL + 1) ||
            trigger == (FPGA_ACQ_METER_ADC + 1) ||
            trigger == (FPGA_ACQ_SIGGEN + 1) ||
-           trigger == (FPGA_ACQ_CALIBRATE + 1);
+           trigger == (FPGA_ACQ_STATUS + 1);
 }
 
 static uint8_t fpga_stock_timebase_byte(void)
@@ -2284,7 +2284,7 @@ static uint8_t fpga_post_h2_trigger_diag_index(uint8_t trigger_byte)
     case FPGA_ACQ_ROLL + 1:      return 1;
     case FPGA_ACQ_METER_ADC + 1: return 2;
     case FPGA_ACQ_SIGGEN + 1:    return 3;
-    case FPGA_ACQ_CALIBRATE + 1: return 4;
+    case FPGA_ACQ_STATUS + 1:    return 4;
     default:                     return 0xFF;
     }
 }
@@ -2349,15 +2349,16 @@ static void fpga_run_stock_post_h2_spi3_trigger(uint8_t trigger_byte)
         fpga_post_h2_diag_rx(diag_idx, spi3_xfer(fpga_stock_trigger_edge_byte()));
         break;
 
-    case FPGA_ACQ_CALIBRATE + 1:
+    case FPGA_ACQ_STATUS + 1:
+        /*
+         * Stock TBH map at 0x0803753A sends public trigger byte 8 to
+         * 0x08037760, not to the 0x08037800 two-phase calibration readback.
+         * The common pre-dispatch path has already written the trigger byte to
+         * SPI3; this case writes the transformed pre-acquisition/status command
+         * and discards the response. Trigger byte 9 is the calibration path and
+         * is not part of the recovered post-H2 boot queue.
+         */
         fpga.spi3_first_byte = spi3_xfer(fpga_preacq_command_byte());
-        fpga_post_h2_diag_rx(diag_idx, fpga.spi3_first_byte);
-        SPI3_CS_DEASSERT();
-        vTaskDelay(1);
-        SPI3_CS_ASSERT();
-        fpga_post_h2_diag_rx(diag_idx, spi3_xfer(0x0A));
-        fpga_post_h2_diag_rx(diag_idx, spi3_xfer(0xFF));
-        fpga.spi3_first_byte = spi3_xfer(0xFF);
         fpga_post_h2_diag_rx(diag_idx, fpga.spi3_first_byte);
         break;
 
@@ -2377,7 +2378,7 @@ static void fpga_enqueue_stock_post_h2_spi3_boot_triggers(void)
         FPGA_ACQ_ROLL + 1,
         FPGA_ACQ_METER_ADC + 1,
         FPGA_ACQ_SIGGEN + 1,
-        FPGA_ACQ_CALIBRATE + 1,
+        FPGA_ACQ_STATUS + 1,
     };
 
     for (unsigned i = 0; i < sizeof(stock_triggers); i++) {

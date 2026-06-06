@@ -1204,3 +1204,58 @@ The H2 diagnostic wording is also corrected after this run: the old
 It did not prove FPGA ACK, H2 apply, or factory calibration load. New debug
 output uses `post_run` plus explicit non-`0xFF` RX counters so future traces do
 not treat all-`0xFF` MISO as acceptance evidence.
+
+## 2026-06-07 Stock SPI3 Trigger 8 Dispatch Correction
+
+The post-H2 queue evidence says stock queues public SPI3 trigger bytes
+`1, 2, 6, 7, 8` to `0x20002D78`. A byte-grounded check of the queue consumer TBH
+table at `0x0803753A` shows the dispatch targets:
+
+```
+1 -> 0x08037550
+2 -> 0x08037974
+3 -> 0x080379F6
+4 -> 0x080375A8
+5 -> 0x08037690
+6 -> 0x08037D20
+7 -> 0x08037D60
+8 -> 0x08037760
+9 -> 0x080377A0
+```
+
+The important correction is byte `8`: stock dispatches it to `0x08037760`, a
+single status/pre-acquisition command exchange. The two-phase readback beginning
+at `0x08037800` is public trigger byte `9`, which is not part of the recovered
+post-H2 boot queue. The open firmware had incorrectly mapped post-H2 byte `8`
+to the two-phase calibration path. That was a command-materialization error,
+not display math, not `ms+0x46` as a DMM selector, and not a coefficient source.
+
+`scripts/test_stock_h2_table.py` now guards both the post-H2 queued payloads and
+the TBH dispatch targets so trigger byte `8` cannot silently regress into the
+trigger byte `9` path again. Whether this correction fixes the shorted-probes
+producer frames must be decided by guarded live CDC validation after flashing an
+OpenScope app image; it is only stock control-flow alignment until that live
+result exists.
+
+Live result after flashing OpenScope image
+`0966419f45d2d13fa30792d07cff859bf09297b5218fd554472455c452b22448`:
+
+- `version` reported build `Jun  7 2026 00:05:21`.
+- Shorted-probes DCV (`mode meter 0 0`) still failed closed: trace
+  `tmp/dcv_shorted_trace_after_spi3_trigger8_fix.txt` showed
+  `selector=0514`, `config=0508`, `probe=0507`, `start=0509`,
+  planned/actual GPIO `0BB`, latest producer frame
+  `5A A5 E4 2E 63 25 07 00 00 00 00 00`; dump
+  `tmp/dcv_shorted_dump_after_spi3_trigger8_fix.txt` rendered `display=---`,
+  `valid=0`, `frame_family expected=0 observed=0 reject=1`.
+- Shorted-probes continuity (`mode meter 7 0`) still failed as open circuit:
+  trace `tmp/continuity_shorted_trace_after_spi3_trigger8_fix.txt` showed
+  `selector=0511`, `apply=0516`, `probe=0507`, `start=0509`,
+  bank `1/00/2C`, planned/actual GPIO `0EA`; dump
+  `tmp/continuity_shorted_dump_after_spi3_trigger8_fix.txt` rendered
+  `display=OL`, `valid=1`, `beep=0`, `frame_family expected=3 observed=3`.
+
+Interpretation: this commit fixes a stock trigger-dispatch mismatch in the
+OpenScope post-H2 command materialization path, but it does not fix the live
+shorted-probes DMM failure. The first wrong producer point is still downstream
+or elsewhere in DMM frontend/state application.

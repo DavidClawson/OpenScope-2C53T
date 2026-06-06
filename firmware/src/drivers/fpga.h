@@ -111,8 +111,8 @@ typedef enum {
     FPGA_ACQ_EXTENDED    = 4,  /* Extended command only */
     FPGA_ACQ_METER_ADC   = 5,  /* Meter ADC read */
     FPGA_ACQ_SIGGEN      = 6,  /* Signal gen feedback */
-    FPGA_ACQ_CALIBRATE   = 7,  /* Calibration readback */
-    FPGA_ACQ_SELF_TEST   = 8,  /* Self test */
+    FPGA_ACQ_STATUS      = 7,  /* Status/pre-acquisition command exchange */
+    FPGA_ACQ_CALIBRATE   = 8,  /* Calibration readback */
 } fpga_acq_mode_t;
 
 /*

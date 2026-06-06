@@ -289,6 +289,19 @@ EXPECTED_POST_H2_SPI3_QUEUE_SEQUENCE = [
     },
 ]
 
+SPI3_TRIGGER_DISPATCH_TABLE_ADDR = 0x0803753A
+EXPECTED_SPI3_TRIGGER_TARGETS = {
+    1: 0x08037550,
+    2: 0x08037974,
+    3: 0x080379F6,
+    4: 0x080375A8,
+    5: 0x08037690,
+    6: 0x08037D20,
+    7: 0x08037D60,
+    8: 0x08037760,
+    9: 0x080377A0,
+}
+
 
 def _hex(buf: bytes) -> str:
     return buf.hex(" ")
@@ -438,6 +451,36 @@ def verify_post_h2_spi3_queue_sequence() -> list[dict[str, object]]:
     return verified
 
 
+def verify_spi3_trigger_dispatch_table() -> list[dict[str, object]]:
+    """Verify the stock SPI3 queue consumer's public trigger-byte targets.
+
+    The post-H2 boot queue sends public bytes 1, 2, 6, 7, and 8.  Trigger byte 8
+    (`trigger_byte - 1 == 7`) is the status/pre-acquisition exchange target at
+    0x08037760.  The two-phase calibration readback is public trigger byte 9,
+    which is not part of the recovered post-H2 boot queue.
+    """
+    raw = BIN.read_bytes()
+    stock_sha = hashlib.sha256(raw).hexdigest()
+    _assert_equal("stock APP sha256", stock_sha, EXPECTED_STOCK_SHA256)
+
+    table_off = SPI3_TRIGGER_DISPATCH_TABLE_ADDR - BASE_ADDR
+    verified: list[dict[str, object]] = []
+    for trigger, expected_target in EXPECTED_SPI3_TRIGGER_TARGETS.items():
+        halfword = int.from_bytes(raw[table_off + (trigger - 1) * 2:
+                                      table_off + trigger * 2], "little")
+        target = SPI3_TRIGGER_DISPATCH_TABLE_ADDR + 4 + halfword * 2
+        _assert_equal(
+            f"SPI3 trigger {trigger} dispatch target",
+            f"0x{target:08x}",
+            f"0x{expected_target:08x}",
+        )
+        verified.append({
+            "trigger": trigger,
+            "target": f"0x{target:08x}",
+        })
+    return verified
+
+
 def _records(data: bytes) -> list[bytes]:
     _assert_equal("H2 table record remainder", len(data) % RECORD_SIZE, 0)
     return [data[i:i + RECORD_SIZE] for i in range(0, len(data), RECORD_SIZE)]
@@ -531,6 +574,7 @@ def verify_h2_table() -> dict[str, object]:
     preamble_sequence = verify_h2_preamble_sequence()
     close_sequence = verify_h2_close_sequence()
     post_h2_queue_sequence = verify_post_h2_spi3_queue_sequence()
+    spi3_trigger_dispatch = verify_spi3_trigger_dispatch_table()
 
     return {
         "file_offset": f"0x{FILE_OFFSET:05x}",
@@ -543,6 +587,7 @@ def verify_h2_table() -> dict[str, object]:
         "preamble_sequence": preamble_sequence,
         "close_sequence": close_sequence,
         "post_h2_queue_sequence": post_h2_queue_sequence,
+        "spi3_trigger_dispatch": spi3_trigger_dispatch,
     }
 
 
@@ -580,6 +625,12 @@ def main() -> None:
         "stock H2/SPI3 post-H2 queue: "
         + " -> ".join(
             f"{item['payload']}@{item['queue']}" for item in result["post_h2_queue_sequence"]
+        )
+    )
+    print(
+        "stock SPI3 trigger dispatch: "
+        + " -> ".join(
+            f"{item['trigger']}->{item['target']}" for item in result["spi3_trigger_dispatch"]
         )
     )
 
