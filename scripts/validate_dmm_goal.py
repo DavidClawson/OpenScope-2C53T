@@ -356,6 +356,68 @@ def verify_h2_tx_only_boundary() -> dict[str, Any]:
     return {"checked": checked, "forbidden": forbidden}
 
 
+def verify_pc4_post_h2_boundary() -> dict[str, Any]:
+    """Ensure PC4 stays documented as unresolved stock scope-state evidence."""
+    required = {
+        "firmware/src/drivers/fpga.c": [
+            "PC4 post-H2 stock boundary",
+            "0x08026E2E..0x08026E8A",
+            "DAT_2000010f / ms[0x17]",
+            "scope trigger_run_mode",
+            "set only when the byte equals 2",
+            "not DMM ms[0x02]/ms[0x03]",
+            "not an H2 ACK/apply signal",
+            "not a low-DCV correction",
+        ],
+        "reverse_engineering/analysis_v120/SPI3_INIT_SEQUENCE_DECODED.md": [
+            "0x08026E2E..0x08026E8A",
+            "DAT_2000010f` / `ms[0x17]`",
+            "STATE_STRUCTURE.md identifies this byte as `trigger_run_mode`",
+            "not a DMM range byte",
+            "not an H2 ACK/apply proof",
+            "not a low-DCV correction",
+            "left unimplemented until a stock `.data` default",
+        ],
+        "reverse_engineering/analysis_v120/dmm_evidence_gap_ledger_2026_06_06.md": [
+            "PC4 post-H2 trigger-run-mode boundary",
+            "0x08026E2E..0x08026E8A",
+            "DAT_2000010f / `ms[0x17]`",
+            "trigger_run_mode",
+            "not DMM `ms[0x02]`/`ms[0x03]`",
+            "not an H2 ACK/apply signal",
+            "not a low-DCV correction",
+        ],
+    }
+    forbidden = {
+        "firmware/src/drivers/fpga.c": [
+            "GPIOC->scr = (1U << 4)",
+            "GPIOC->clr = (1U << 4)",
+            "PC4_MASK",
+        ],
+    }
+
+    checked: dict[str, list[str]] = {}
+    missing: list[str] = []
+    stale: list[str] = []
+    for rel, snippets in required.items():
+        text = (REPO / rel).read_text(encoding="utf-8", errors="replace")
+        checked[rel] = snippets
+        for snippet in snippets:
+            if snippet not in text:
+                missing.append(f"{rel}: {snippet}")
+    for rel, snippets in forbidden.items():
+        text = (REPO / rel).read_text(encoding="utf-8", errors="replace")
+        for snippet in snippets:
+            if snippet in text:
+                stale.append(f"{rel}: {snippet}")
+    if missing or stale:
+        raise GateError(
+            "PC4 post-H2 boundary drifted: "
+            f"missing={missing} stale={stale}"
+        )
+    return {"checked": checked, "forbidden": forbidden}
+
+
 def verify_meter_aux_afe_pin_policy() -> dict[str, Any]:
     """Ensure PB9/PA6 DMM setup follows recovered stock evidence."""
     rel = "firmware/src/drivers/fpga.c"
@@ -1326,6 +1388,9 @@ def verify_re_coverage() -> dict[str, Any]:
         "H2 table binary guard", "tail bytes", "0x1C340", "no ACK/apply proof",
         "SPI3 init choreography correction", "0x08026B7C..0x08026C30",
         "H2 byte count remains diagnostic only",
+        "PC4 post-H2 trigger-run-mode boundary", "0x08026E2E..0x08026E8A",
+        "DAT_2000010f / `ms[0x17]`", "trigger_run_mode",
+        "not an H2 ACK/apply signal",
         "transition phase matrix", "busy transition frame", "stable frame",
         "transition settle/discard policy guard",
         "uniform local settle/discard policy",
@@ -1772,6 +1837,7 @@ def main(argv: list[str] | None = None) -> int:
         report["no_ocr_pipeline"] = verify_no_ocr_pipeline()
         report["ac_status_boundary"] = verify_ac_status_boundary()
         report["h2_tx_only_boundary"] = verify_h2_tx_only_boundary()
+        report["pc4_post_h2_boundary"] = verify_pc4_post_h2_boundary()
         report["meter_aux_afe_pin_policy"] = verify_meter_aux_afe_pin_policy()
         report["meter_expected_selector_plan_word"] = verify_meter_expected_selector_uses_plan_word()
         report["meter_sequence_tail_transition_plan"] = verify_meter_sequence_tail_uses_transition_plan()

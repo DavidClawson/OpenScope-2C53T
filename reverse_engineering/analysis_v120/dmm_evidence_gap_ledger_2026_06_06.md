@@ -149,6 +149,15 @@ one of:
   115,638 bytes from `0x08051D19`. Open firmware `h2_upload_done` and USB
   `H2T` diagnostics mean bytes transmitted only; no recovered FPGA ACK/apply
   status or DMM calibration effect exists yet.
+- PC4 post-H2 trigger-run-mode boundary: stock `0x08026E2E..0x08026E8A`
+  queues USART2 commands `1,2,6,7,8`, configures GPIOC.4, then reads
+  DAT_2000010f / `ms[0x17]` and sets PC4 only when that byte equals `2`.
+  `STATE_STRUCTURE.md` identifies that byte as `trigger_run_mode`, a scope
+  state (`0=AUTO`, `1=NORMAL`, `2=SINGLE`). This is not DMM `ms[0x02]`/`ms[0x03]`,
+  not an H2 ACK/apply signal, not a low-DCV correction,
+  and not factory calibration. Open firmware therefore keeps PC4 unresolved
+  until a stock `.data` default, trace, or measured multi-mode effect proves
+  the required level.
 - W25Q/system file: bench-unit `System file/9999.BIN` is cluster 0 and size 0,
   so it is not a recovered meter calibration source.
 

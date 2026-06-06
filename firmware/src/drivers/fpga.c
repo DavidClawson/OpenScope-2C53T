@@ -3673,6 +3673,19 @@ void fpga_init(void)
     /* USART boot commands (0x01,0x02,0x06,0x07,0x08) now sent in
      * Step 3b, BEFORE the SPI3 phase — stock-validated Phase 4 order. */
 
+    /*
+     * PC4 post-H2 stock boundary, deliberately unresolved in open firmware.
+     *
+     * Stock V1.2.0 at 0x08026E2E..0x08026E8A queues USART2 commands 1/2/6/7/8,
+     * enables/configures GPIOC.4, then reads DAT_2000010f / ms[0x17].  The
+     * STATE_STRUCTURE note identifies that byte as scope trigger_run_mode.  PC4
+     * is set only when the byte equals 2; otherwise stock clears PC4.
+     * That makes PC4 a post-H2 scope-state boundary, not DMM ms[0x02]/ms[0x03],
+     * not an H2 ACK/apply signal, and not a low-DCV correction.  Leave it
+     * alone until a stock .data default, trace, or
+     * measured multi-mode effect proves what the open firmware should drive.
+     */
+
     /* ---------------------------------------------------------------
      * Step 8: Analog frontend + Meter IC activation
      * Stock firmware configures PB9 and PA6 as outputs during init

@@ -181,6 +181,7 @@ FUN_0803ecf0(queue, 8, ...);  // command 0x08: meter configure
 ### Step 11: PC4 conditional set
 
 ```c
+// 0x08026E2E..0x08026E8A, after USART2 commands 1,2,6,7,8
 CRM_APB2EN |= 0x10;  // GPIOC clock enable
 // Configure PC4 as output
 if (DAT_2000010f == 2) {
@@ -190,9 +191,13 @@ if (DAT_2000010f == 2) {
 }
 ```
 
-**PC4 is set conditionally based on `DAT_2000010f`.** This RAM variable
-comes from the `.data` init section (which is missing from our binary
-dump). Its default value determines whether PC4 starts HIGH or LOW.
+**PC4 is set conditionally based on `DAT_2000010f` / `ms[0x17]`.**
+STATE_STRUCTURE.md identifies this byte as `trigger_run_mode`:
+`0=AUTO`, `1=NORMAL`, `2=SINGLE`.  That makes the post-H2 PC4 branch a
+scope-state boundary, not a DMM range byte, not an H2 ACK/apply proof, and
+not a low-DCV correction.  This branch is left unimplemented until a stock `.data` default,
+stock/open trace, or measured multi-mode effect
+proves which PC4 level should be driven and what that level changes.
 
 ## Current Open-Firmware Boundary
 
@@ -209,7 +214,7 @@ dump). Its default value determines whether PC4 starts HIGH or LOW.
 | H2 bulk upload | ✅ 38,546 x 3-byte records | ✅ same table and 3-byte loop | ✅ TX only |
 | Post-upload CS/`3A`/flush sequence | ✅ CS edges plus `3A`/flush | ✅ mirrored in `fpga.c` | ✅ TX only |
 | USART2 commands 1,2,6,7,8 | ✅ After SPI3/H2 complete | ✅ deferred until after H2 cleanup | ✅ |
-| PC4 conditional set | ✅ Based on `DAT_2000010f` | unresolved in open firmware | gap |
+| PC4 conditional set | ✅ `0x08026E2E..0x08026E8A`, based on `DAT_2000010f` / `ms[0x17]` (`trigger_run_mode`) | documented unresolved; no open PC4 write yet | gap |
 
 ## Remaining Gap
 
@@ -218,4 +223,7 @@ acceptance/effect: whether the FPGA accepted and applied the transmitted table,
 and whether that state explains low-DCV/current/low-Ohm physical correctness.
 Resolving that requires a stock/open-firmware SPI3 trace with MISO/CS timing or
 repeatable live validation across multiple DMM ranges after a preflighted
-OpenScope image. Until then, H2 byte count remains diagnostic only.
+OpenScope image. Until then, H2 byte count remains diagnostic only.  The PC4
+post-H2 trigger-run-mode boundary is a separate unresolved GPIO state boundary;
+it should not be used as a blind low-DCV or DMM-range fix without stock default
+or effect evidence.

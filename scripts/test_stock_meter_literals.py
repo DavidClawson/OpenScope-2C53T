@@ -1612,6 +1612,19 @@ EXPECTED_BUTTON_SCAN_FALSE_MS02_SEQUENCES = {
         ),
     ),
 }
+EXPECTED_PC4_POST_H2_TRIGGER_RUN_MODE_SEQUENCES = {
+    "pc4_post_h2_trigger_run_mode_boundary": (
+        0x08026E2E,
+        bytes.fromhex(
+            "db f8 00 00 41 f2 00 06 40 f0 10 00 cb f8 00 00 "
+            "db f8 00 00 10 ac 40 f0 10 00 cb f8 00 00 00 20 "
+            "8d f8 44 00 04 20 c4 f2 01 06 ad f8 45 00 30 46 "
+            "21 46 8d f8 47 50 10 95 09 f0 49 fa 10 25 30 46 "
+            "21 46 8d f8 46 50 10 95 09 f0 41 fa 9a f8 17 00 "
+            "40 f2 14 47 02 28 14 bf c8 f8 00 50 35 61"
+        ),
+    ),
+}
 
 
 def read(addr: int, size: int) -> bytes:
@@ -3322,6 +3335,31 @@ def verify_button_scan_false_ms02_boundary_sequences() -> dict[str, object]:
     }
 
 
+def verify_pc4_post_h2_trigger_run_mode_sequences() -> dict[str, object]:
+    """Guard stock PC4 post-H2 handling as scope trigger-run state."""
+    checked = {}
+    for name, (addr, expected) in EXPECTED_PC4_POST_H2_TRIGGER_RUN_MODE_SEQUENCES.items():
+        actual = read(addr, len(expected))
+        if actual != expected:
+            raise AssertionError(
+                f"{name} at {addr:#010x} drifted: "
+                f"{actual.hex(' ')} != {expected.hex(' ')}"
+            )
+        checked[name] = {
+            "addr": f"{addr:#010x}",
+            "bytes": actual.hex(" "),
+        }
+    return {
+        "sequences": checked,
+        "classification": (
+            "post-H2 PC4 boundary: stock reads DAT_2000010f / ms[0x17] "
+            "after the USART2 command queue block and sets PC4 only when "
+            "the scope trigger-run mode byte is 2; this is not DMM ms[0x02] "
+            "or ms[0x03], not an H2 ACK/apply signal, and not calibration"
+        ),
+    }
+
+
 def main() -> None:
     if not BIN.exists():
         print(f"stock meter literal pools: skipped; missing {BIN}", file=sys.stderr)
@@ -3405,6 +3443,7 @@ def main() -> None:
     scope_mux_state_consumers = verify_scope_mux_state_consumer_sequences()
     scope_trigger_overlay_105b = verify_scope_trigger_overlay_105b_boundary()
     button_scan_false_ms02 = verify_button_scan_false_ms02_boundary_sequences()
+    pc4_post_h2_trigger_run_mode = verify_pc4_post_h2_trigger_run_mode_sequences()
     for symbol, info in mux_state_ram_map["symbols"].items():
         print(
             f"stock mux-state RAM-map boundary {symbol}: "
@@ -3543,6 +3582,11 @@ def main() -> None:
           ", ".join(
               item["addr"]
               for item in button_scan_false_ms02["sequences"].values()
+          ))
+    print("stock PC4 post-H2 trigger-run-mode boundary sites: " +
+          ", ".join(
+              item["addr"]
+              for item in pc4_post_h2_trigger_run_mode["sequences"].values()
           ))
     print("stock meter literal pools: ok")
 

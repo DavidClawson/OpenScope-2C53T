@@ -311,6 +311,31 @@ class DmmGoalValidationTests(unittest.TestCase):
             ],
         )
 
+    def test_pc4_post_h2_boundary_stays_unresolved_not_dmm_range(self) -> None:
+        result = validate_dmm_goal.verify_pc4_post_h2_boundary()
+
+        self.assertIn("firmware/src/drivers/fpga.c", result["checked"])
+        self.assertIn(
+            "reverse_engineering/analysis_v120/SPI3_INIT_SEQUENCE_DECODED.md",
+            result["checked"],
+        )
+        self.assertIn(
+            "reverse_engineering/analysis_v120/dmm_evidence_gap_ledger_2026_06_06.md",
+            result["checked"],
+        )
+        self.assertIn(
+            "0x08026E2E..0x08026E8A",
+            result["checked"]["firmware/src/drivers/fpga.c"],
+        )
+        self.assertIn(
+            "not DMM ms[0x02]/ms[0x03]",
+            result["checked"]["firmware/src/drivers/fpga.c"],
+        )
+        self.assertIn(
+            "GPIOC->scr = (1U << 4)",
+            result["forbidden"]["firmware/src/drivers/fpga.c"],
+        )
+
     def test_stock_h2_table_is_binary_grounded(self) -> None:
         result = stock_h2_table.verify_h2_table()
         self.assertEqual(result["file_offset"], "0x51d19")
@@ -328,6 +353,18 @@ class DmmGoalValidationTests(unittest.TestCase):
                 (570, 721, False, 0x16440, 0x1C33F, 24320),
             ],
         )
+
+    def test_stock_pc4_post_h2_sequence_is_binary_grounded(self) -> None:
+        result = stock_meter_literals.verify_pc4_post_h2_trigger_run_mode_sequences()
+        sequence = result["sequences"]["pc4_post_h2_trigger_run_mode_boundary"]
+
+        self.assertEqual(sequence["addr"], "0x08026e2e")
+        self.assertIn("9a f8 17 00", sequence["bytes"])
+        self.assertIn("02 28 14 bf", sequence["bytes"])
+        self.assertIn("c8 f8 00 50 35 61", sequence["bytes"])
+        self.assertIn("trigger-run mode byte is 2", result["classification"])
+        self.assertIn("not DMM ms[0x02]", result["classification"])
+        self.assertIn("not an H2 ACK/apply signal", result["classification"])
 
     def test_re_coverage_requires_dac1_scope_boundary(self) -> None:
         coverage = validate_dmm_goal.verify_re_coverage()
@@ -351,6 +388,14 @@ class DmmGoalValidationTests(unittest.TestCase):
         self.assertIn("0x08005B7A", coverage["terms"])
         self.assertIn("wake/start/variant sequencing", coverage["terms"])
         self.assertIn("not DMM runtime range state", coverage["terms"])
+
+    def test_re_coverage_requires_pc4_post_h2_boundary(self) -> None:
+        coverage = validate_dmm_goal.verify_re_coverage()
+        self.assertIn("PC4 post-H2 trigger-run-mode boundary", coverage["terms"])
+        self.assertIn("0x08026E2E..0x08026E8A", coverage["terms"])
+        self.assertIn("DAT_2000010f / `ms[0x17]`", coverage["terms"])
+        self.assertIn("trigger_run_mode", coverage["terms"])
+        self.assertIn("not an H2 ACK/apply signal", coverage["terms"])
 
     def test_re_coverage_requires_w25q_system_file_boundary(self) -> None:
         coverage = validate_dmm_goal.verify_re_coverage()
