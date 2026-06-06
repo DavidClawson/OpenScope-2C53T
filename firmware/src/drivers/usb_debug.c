@@ -653,6 +653,21 @@ static void cmd_status(void)
         fpga.post_h2_spi3_boot_dropped,
         fpga.post_h2_spi3_boot_mask
     );
+    for (uint8_t i = 0; i < FPGA_POST_H2_TRIGGER_HISTORY; i++) {
+        uint8_t len = fpga.post_h2_spi3_rx_len[i];
+        usb_debug_printf("post-H2 rx[%u]: trigger=%02X len=%u bytes=",
+                         (unsigned)i,
+                         (unsigned)fpga.post_h2_spi3_trigger[i],
+                         (unsigned)len);
+        uint8_t shown = len;
+        if (shown > FPGA_POST_H2_RX_HISTORY) shown = FPGA_POST_H2_RX_HISTORY;
+        for (uint8_t j = 0; j < shown; j++) {
+            usb_debug_printf("%s%02X", j == 0 ? "" : " ",
+                             (unsigned)fpga.post_h2_spi3_rx[i][j]);
+        }
+        if (len > FPGA_POST_H2_RX_HISTORY) usb_send_str(" ...");
+        usb_send_str("\r\n");
+    }
 
     fpga_stock_diag_print();
 
@@ -2441,9 +2456,18 @@ static void cmd_meter_trace(void)
     uint16_t mth_planned_gpio[FPGA_METER_TRANSITION_HISTORY];
     uint16_t mth_actual_gpio[FPGA_METER_TRANSITION_HISTORY];
     uint8_t producer_frame[FPGA_RX_FRAME_SIZE];
+    uint8_t post_h2_trigger[FPGA_POST_H2_TRIGGER_HISTORY];
+    uint8_t post_h2_rx_len[FPGA_POST_H2_TRIGGER_HISTORY];
+    uint8_t post_h2_rx[FPGA_POST_H2_TRIGGER_HISTORY][FPGA_POST_H2_RX_HISTORY];
 
     taskENTER_CRITICAL();
     memcpy(producer_frame, (const void *)fpga.rx_frame, FPGA_RX_FRAME_SIZE);
+    memcpy(post_h2_trigger, (const void *)fpga.post_h2_spi3_trigger,
+           sizeof(post_h2_trigger));
+    memcpy(post_h2_rx_len, (const void *)fpga.post_h2_spi3_rx_len,
+           sizeof(post_h2_rx_len));
+    memcpy(post_h2_rx, (const void *)fpga.post_h2_spi3_rx,
+           sizeof(post_h2_rx));
     rxh_count = fpga.rx_frame_history_count;
     if (rxh_count > FPGA_RX_FRAME_HISTORY) rxh_count = FPGA_RX_FRAME_HISTORY;
     for (uint8_t n = 0; n < rxh_count; n++) {
@@ -2625,6 +2649,21 @@ static void cmd_meter_trace(void)
                      (unsigned)fpga.post_h2_spi3_boot_mask,
                      fpga.spi3_ok_count,
                      fpga.spi3_total_timeouts);
+    for (uint8_t i = 0; i < FPGA_POST_H2_TRIGGER_HISTORY; i++) {
+        uint8_t len = post_h2_rx_len[i];
+        uint8_t shown = len;
+        if (shown > FPGA_POST_H2_RX_HISTORY) shown = FPGA_POST_H2_RX_HISTORY;
+        usb_debug_printf("h2_post_rx n=%u trigger=%02X len=%u bytes=",
+                         (unsigned)i,
+                         (unsigned)post_h2_trigger[i],
+                         (unsigned)len);
+        for (uint8_t j = 0; j < shown; j++) {
+            usb_debug_printf("%s%02X", j == 0 ? "" : " ",
+                             (unsigned)post_h2_rx[i][j]);
+        }
+        if (len > FPGA_POST_H2_RX_HISTORY) usb_send_str(" ...");
+        usb_send_str("\r\n");
+    }
 }
 
 static void cmd_meter_frontend(void)

@@ -40,6 +40,8 @@
 #define FPGA_RX_FRAME_SIZE    12
 #define FPGA_RX_FRAME_HISTORY 8
 #define FPGA_METER_TRANSITION_HISTORY 4
+#define FPGA_POST_H2_TRIGGER_HISTORY 5
+#define FPGA_POST_H2_RX_HISTORY 8
 
 /* RX frame headers */
 #define FPGA_RX_DATA_HDR_0    0x5A   /* Data frame: 0x5A 0xA5 */
@@ -393,6 +395,9 @@ typedef struct {
     volatile uint8_t  post_h2_spi3_boot_ok;
     volatile uint8_t  post_h2_spi3_boot_dropped;
     volatile uint8_t  post_h2_spi3_boot_mask;
+    volatile uint8_t  post_h2_spi3_trigger[FPGA_POST_H2_TRIGGER_HISTORY];
+    volatile uint8_t  post_h2_spi3_rx_len[FPGA_POST_H2_TRIGGER_HISTORY];
+    volatile uint8_t  post_h2_spi3_rx[FPGA_POST_H2_TRIGGER_HISTORY][FPGA_POST_H2_RX_HISTORY];
 
     /* Experimental stock runtime shadow for scope-mode bench work.
      * These are NOT the original firmware RAM locations. They are a small

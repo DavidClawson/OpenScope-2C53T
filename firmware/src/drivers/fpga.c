@@ -1892,6 +1892,41 @@ static uint8_t fpga_stock_trigger_edge_byte(void)
     return (uint8_t)ss->trigger.edge;
 }
 
+static uint8_t fpga_post_h2_trigger_diag_index(uint8_t trigger_byte)
+{
+    switch (trigger_byte) {
+    case FPGA_ACQ_FAST_TB + 1:   return 0;
+    case FPGA_ACQ_ROLL + 1:      return 1;
+    case FPGA_ACQ_METER_ADC + 1: return 2;
+    case FPGA_ACQ_SIGGEN + 1:    return 3;
+    case FPGA_ACQ_CALIBRATE + 1: return 4;
+    default:                     return 0xFF;
+    }
+}
+
+static void fpga_post_h2_diag_begin(uint8_t idx, uint8_t trigger_byte)
+{
+    if (idx >= FPGA_POST_H2_TRIGGER_HISTORY) return;
+
+    fpga.post_h2_spi3_trigger[idx] = trigger_byte;
+    fpga.post_h2_spi3_rx_len[idx] = 0;
+    memset((void *)fpga.post_h2_spi3_rx[idx], 0,
+           sizeof(fpga.post_h2_spi3_rx[idx]));
+}
+
+static void fpga_post_h2_diag_rx(uint8_t idx, uint8_t rx_byte)
+{
+    if (idx >= FPGA_POST_H2_TRIGGER_HISTORY) return;
+
+    uint8_t len = fpga.post_h2_spi3_rx_len[idx];
+    if (len < FPGA_POST_H2_RX_HISTORY) {
+        fpga.post_h2_spi3_rx[idx][len] = rx_byte;
+    }
+    if (len < 0xFF) {
+        fpga.post_h2_spi3_rx_len[idx] = (uint8_t)(len + 1U);
+    }
+}
+
 static void fpga_run_stock_post_h2_spi3_trigger(uint8_t trigger_byte)
 {
     /*
@@ -1904,37 +1939,41 @@ static void fpga_run_stock_post_h2_spi3_trigger(uint8_t trigger_byte)
      * coefficients and they are not a recovered H2 ACK; live DMM frames still
      * decide whether this boot choreography is sufficient.
      */
+    uint8_t diag_idx = fpga_post_h2_trigger_diag_index(trigger_byte);
     fpga.spi3_probing = true;
+    fpga_post_h2_diag_begin(diag_idx, trigger_byte);
     SPI3_CS_ASSERT();
-    (void)spi3_xfer(trigger_byte);
+    fpga_post_h2_diag_rx(diag_idx, spi3_xfer(trigger_byte));
 
     switch (trigger_byte) {
     case FPGA_ACQ_FAST_TB + 1:
-        (void)spi3_xfer(fpga_stock_timebase_byte());
+        fpga_post_h2_diag_rx(diag_idx, spi3_xfer(fpga_stock_timebase_byte()));
         break;
 
     case FPGA_ACQ_ROLL + 1:
         for (unsigned i = 0; i < 5; i++) {
-            (void)spi3_xfer(0xFF);
+            fpga_post_h2_diag_rx(diag_idx, spi3_xfer(0xFF));
         }
         break;
 
     case FPGA_ACQ_METER_ADC + 1:
-        (void)spi3_xfer(fpga_meter_adc_select_byte());
+        fpga_post_h2_diag_rx(diag_idx, spi3_xfer(fpga_meter_adc_select_byte()));
         break;
 
     case FPGA_ACQ_SIGGEN + 1:
-        (void)spi3_xfer(fpga_stock_trigger_edge_byte());
+        fpga_post_h2_diag_rx(diag_idx, spi3_xfer(fpga_stock_trigger_edge_byte()));
         break;
 
     case FPGA_ACQ_CALIBRATE + 1:
         fpga.spi3_first_byte = spi3_xfer(fpga_preacq_command_byte());
+        fpga_post_h2_diag_rx(diag_idx, fpga.spi3_first_byte);
         SPI3_CS_DEASSERT();
         vTaskDelay(1);
         SPI3_CS_ASSERT();
-        (void)spi3_xfer(0x0A);
-        (void)spi3_xfer(0xFF);
+        fpga_post_h2_diag_rx(diag_idx, spi3_xfer(0x0A));
+        fpga_post_h2_diag_rx(diag_idx, spi3_xfer(0xFF));
         fpga.spi3_first_byte = spi3_xfer(0xFF);
+        fpga_post_h2_diag_rx(diag_idx, fpga.spi3_first_byte);
         break;
 
     default:
