@@ -6,7 +6,8 @@
  * Created 2026-04-04 as a companion to core_subsystems_annotated.c.
  *
  * Contents:
- *   1. Mode Init Dispatcher (FUN_0800b908, 512B) — boot-time FPGA config
+ *   1. Mode Init Dispatcher (FUN_0800b908, 512B) — stock mode-init
+ *      command-bank dispatcher
  *   2. USART2 ISR (0x080277B4, 304B) — complete RX state machine
  *   3. Meter Data Pipeline — BCD extraction through calibrated display
  *   4. All 9 SPI3 Acquisition Modes — byte-level protocol per mode
@@ -14,7 +15,11 @@
  *
  * KEY CORRECTIONS TO PREVIOUS ANALYSIS:
  *   - The "5 command builder functions" are 10 cases of ONE switch in FUN_0800b908
- *   - FUN_0800b908 runs ONCE at boot, not at runtime
+ *   - 2026-06-06 correction: FUN_0800b908 is not boot-only.  The boot restore
+ *     path uses it, and runtime state/latch helpers at 0x08006418,
+ *     0x0800644E, 0x080064E0, 0x08006548, 0x08006578, 0x08006592, and
+ *     0x080065B2 also tail-call it after mutating ms[0xF68] and neighboring
+ *     mode-init bytes.
  *   - It queues 1-byte cmd codes to usart_cmd_queue, NOT [param,cmd] pairs
  *   - Parameter encoding happens downstream in dispatch handlers
  *   - Previous function names were wrong (see Section 1 corrections table)
@@ -33,9 +38,12 @@
  *  1. MODE INIT DISPATCHER — FUN_0800b908 (512 bytes)
  *
  *  ARCHITECTURAL CORRECTION: This is NOT 5 independent "command builder"
- *  functions. It is a SINGLE function with a 10-case TBH switch, called
- *  ONCE at boot from system_init (FUN_08023A50). Ghidra split the cases
- *  into separate functions because it couldn't recover the jump table.
+ *  functions. It is a SINGLE function with a 10-case TBH switch.  Ghidra
+ *  split the cases into separate functions because it couldn't recover the
+ *  jump table.  The boot path calls it through system init, and later runtime
+ *  helpers can re-enter it after staging ms[0xF68]; see
+ *  dmm_mode_state_f68_boundary_2026_06_06.md and
+ *  meter_mode_command_table_2026_06_05.md.
  *
  *  Purpose: Initialize FPGA to the last-saved operating mode at power-on.
  *  Input: state[0xF68] = current_mode (0-9)
@@ -46,7 +54,7 @@
 /*
  * DATA FLOW:
  *
- *   FUN_0800b908 (boot, runs once)
+ *   FUN_0800b908 (boot restore and runtime mode-init re-entry)
  *       |
  *       | Queues 1-byte FPGA command codes
  *       v
@@ -140,8 +148,12 @@
  * fpga_cmd_set_timebase                | Mode 5 init
  * fpga_cmd_set_probe_atten             | Meter variant mode init (case 9)
  *
- * ALL sends use portMAX_DELAY (blocking), not just the final one.
- * The function is boot-time only — runtime mode changes use different paths.
+ * ALL sends use portMAX_DELAY (blocking), not just the final one.  The
+ * runtime correction above is important for DMM work: B908's byte-command
+ * banks are stock mode-init sequencing evidence, but they still do not prove
+ * analog ms[0x02]/ms[0x03] range writers, low-DCV correction words, or H2
+ * acceptance.  The raw DMM wire-word path remains the separate 0x20002D74
+ * queue guarded in meter_mode_command_table_2026_06_05.md.
  */
 
 

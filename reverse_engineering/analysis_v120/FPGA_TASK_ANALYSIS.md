@@ -282,7 +282,7 @@ are not proof that normal DMM runtime range switching feeds this function.
 | `0x0B-0x11` | Scope | Channel/trigger/timebase | Types 0-3 |
 | `0x12-0x14` | Meter | Variant setup | Type 4-shaped bitfield, runtime caller unresolved |
 | `0x15` | Standalone | Mode 7 | — |
-| `0x16-0x1E` | Meter | Range configurations | Type 4-shaped bitfield, runtime caller unresolved |
+| `0x16-0x1E` | Meter | Command-bank/setup bytes; physical range meaning unresolved | Type 4-shaped bitfield, runtime caller unresolved |
 | `0x1F-0x21` | Mode 4 | Unknown configs | — |
 | `0x25-0x28` | Mode 5 | Unknown configs | — |
 | `0x29` | Mode 6 | Standalone | — |
