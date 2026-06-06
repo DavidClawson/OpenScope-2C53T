@@ -248,6 +248,18 @@ class DmmGoalValidationTests(unittest.TestCase):
             result["required_file"],
         )
 
+    def test_meter_expected_selector_uses_plan_word(self) -> None:
+        result = validate_dmm_goal.verify_meter_expected_selector_uses_plan_word()
+        self.assertEqual(result["checked"], "firmware/src/drivers/fpga.c")
+        self.assertIn(
+            "(uint8_t)(plan.selector_word & 0x00FFU)",
+            result["required_body"],
+        )
+        self.assertIn(
+            "fpga_meter_stock_cmd_low_for_mode(plan.stock_mode)",
+            result["forbidden_body"],
+        )
+
     def test_no_ocr_pipeline_guard_is_active(self) -> None:
         result = validate_dmm_goal.verify_no_ocr_pipeline()
 

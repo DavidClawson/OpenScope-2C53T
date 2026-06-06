@@ -318,6 +318,43 @@ def verify_meter_aux_afe_pin_policy() -> dict[str, Any]:
     }
 
 
+def verify_meter_expected_selector_uses_plan_word() -> dict[str, Any]:
+    """Ensure debug/expected selector metadata mirrors the transition plan word."""
+    rel = "firmware/src/drivers/fpga.c"
+    text = (REPO / rel).read_text(encoding="utf-8", errors="replace")
+
+    match = re.search(
+        r"fpga_meter_selector_t fpga_meter_expected_selectors\(uint8_t submode\)"
+        r"(?P<body>[\s\S]*?)\n}\n\nstatic void fpga_gpio_write_level",
+        text,
+    )
+    if match is None:
+        raise GateError("could not locate fpga_meter_expected_selectors block")
+    body = match.group("body")
+    required_body = [
+        "fpga_meter_transition_plan_t plan =",
+        "selectors.function_selector = plan.stock_mode;",
+        "plan.selector_word != FPGA_METER_INVALID_SELECTOR_WORD",
+        "(uint8_t)(plan.selector_word & 0x00FFU)",
+        "selectors.voltage_function_axis = plan.voltage_function_axis;",
+    ]
+    forbidden_body = [
+        "fpga_meter_stock_cmd_low_for_mode(plan.stock_mode)",
+    ]
+    missing_body = [snippet for snippet in required_body if snippet not in body]
+    stale_body = [snippet for snippet in forbidden_body if snippet in body]
+    if missing_body or stale_body:
+        raise GateError(
+            "meter expected-selector metadata drifted from transition plan: "
+            f"missing_body={missing_body} stale_body={stale_body}"
+        )
+    return {
+        "checked": rel,
+        "required_body": required_body,
+        "forbidden_body": forbidden_body,
+    }
+
+
 def verify_no_magnitude_range_feedback() -> dict[str, Any]:
     """Ensure production DMM frontend code does not suggest value-shaped ranging."""
     checked: dict[str, str] = {}
@@ -1086,6 +1123,7 @@ def main(argv: list[str] | None = None) -> int:
         report["ac_status_boundary"] = verify_ac_status_boundary()
         report["h2_tx_only_boundary"] = verify_h2_tx_only_boundary()
         report["meter_aux_afe_pin_policy"] = verify_meter_aux_afe_pin_policy()
+        report["meter_expected_selector_plan_word"] = verify_meter_expected_selector_uses_plan_word()
         report["no_magnitude_range_feedback"] = verify_no_magnitude_range_feedback()
 
         if not args.skip_live:

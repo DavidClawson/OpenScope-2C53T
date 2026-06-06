@@ -455,6 +455,12 @@ separate modes.
 | 9 | capacitance | 5 | `0x0512` | none | extended |
 | 10 | temperature | 5 | `0x0512` | none | extended |
 
+Production transition code sends `plan.selector_word` as the authoritative
+stock command, and the USB/debug `expected selector` metadata now derives its
+low byte from that same word. Do not rebuild the debug range byte from a second
+selector-table lookup; that would let diagnostics drift from the actual
+transition command.
+
 ## Per-Submode Evidence Matrix
 
 The table below separates stock-disassembly evidence from local policy. `High`

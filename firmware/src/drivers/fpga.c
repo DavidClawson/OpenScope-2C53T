@@ -1167,8 +1167,8 @@ fpga_meter_selector_t fpga_meter_expected_selectors(uint8_t submode)
 
     selectors.function_selector = plan.stock_mode;
     selectors.range_selector =
-        (plan.stock_mode < FPGA_METER_STOCK_MODE_COUNT) ?
-        fpga_meter_stock_cmd_low_for_mode(plan.stock_mode) : 0U;
+        (plan.selector_word != FPGA_METER_INVALID_SELECTOR_WORD) ?
+        (uint8_t)(plan.selector_word & 0x00FFU) : 0U;
     selectors.voltage_function_axis = plan.voltage_function_axis;
     return selectors;
 }
