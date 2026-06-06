@@ -171,6 +171,7 @@ def verify_state_machine_property_contract() -> dict[str, Any]:
         "dcv_live_0200_frame_preserves_stock_math_as_unresolved_frontend",
         "acv_rejects_dc_voltage_without_ac_evidence",
         "ac_current_rejects_current_frame_without_ac_evidence",
+        "ac_modes_require_frequency_hint_boundaries",
         "invalid_submode_rejects_without_becoming_dcv",
         "state_machine_property_matrix_covers_all_submodes",
         "invalidate_clears_stale_payload_for_every_ordered_mode_transition",
@@ -191,6 +192,11 @@ def verify_state_machine_property_contract() -> dict[str, Any]:
         "dcv auxiliary extra bytes are varied independently":
             r"static const uint16_t extra_cases\[\]\s*=\s*"
             r"\{\s*0x0000,\s*0x0031,\s*0x014E,\s*0x017F,\s*0x03FF,\s*0xFFFF\s*\};",
+        "ac evidence boundaries cover all AC submodes":
+            r"static const uint8_t ac_modes\[\]\s*=\s*\{\s*1,\s*4,\s*5\s*\};",
+        "ac evidence rejects below and above frequency window":
+            r"static const uint16_t extras\[\]\s*=\s*"
+            r"\{\s*0x0000,\s*0x002C,\s*0x002D,\s*0x0041,\s*0x0042\s*\};",
         "ordered source submodes are exhaustive":
             r"for \(uint8_t source = 0; source < FPGA_METER_LOCAL_SUBMODE_COUNT; source\+\+\)",
         "ordered destination submodes are exhaustive":
@@ -202,6 +208,7 @@ def verify_state_machine_property_contract() -> dict[str, Any]:
     required_snippets = [
         "METER_REJECT_MISSING_AC_EVIDENCE",
         "METER_REJECT_WRONG_FRAME_FAMILY",
+        "meter_reading.is_ac == ((statuses[s] & 0x04U) != 0)",
         "low-dcv-voltage",
         "0.4366",
         "0.2000f",

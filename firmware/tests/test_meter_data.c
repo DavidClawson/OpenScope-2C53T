@@ -676,6 +676,52 @@ static int test_ac_current_rejects_current_frame_without_ac_evidence(void)
     return 1;
 }
 
+static int test_ac_modes_require_frequency_hint_boundaries(void)
+{
+    static const uint8_t ac_modes[] = { 1, 4, 5 };
+    static const uint8_t statuses[] = { 0x00, 0x01, 0x04, 0x24, 0xFF };
+    static const uint16_t extras[] = { 0x0000, 0x002C, 0x002D, 0x0041, 0x0042 };
+
+    for (unsigned m = 0; m < sizeof(ac_modes); m++) {
+        uint8_t mode = ac_modes[m];
+
+        for (unsigned s = 0; s < sizeof(statuses); s++) {
+            for (unsigned e = 0; e < sizeof(extras) / sizeof(extras[0]); e++) {
+                uint8_t frame[12];
+                bool has_frequency_hint = extras[e] >= 45U && extras[e] <= 65U;
+
+                if (mode == 1) {
+                    build_segment_frame(frame, 2, 2, 8, 2,
+                                        0x00, statuses[s], 0x02, 0x00, extras[e]);
+                } else {
+                    build_segment_frame(frame, 2, 2, 6, 1,
+                                        0x00, statuses[s], 0x00, 0x00, extras[e]);
+                }
+
+                meter_data_init();
+                process_frame(frame, mode);
+
+                ASSERT(meter_reading.submode == mode);
+                ASSERT(meter_reading.is_ac == ((statuses[s] & 0x04U) != 0));
+                if (has_frequency_hint) {
+                    ASSERT(meter_reading.valid);
+                    ASSERT(meter_reading.result_class == METER_RESULT_NORMAL);
+                    ASSERT(meter_reading.reject_reason == METER_REJECT_NONE);
+                    ASSERT(close_to(meter_reading.aux_freq_hz,
+                                    (float)extras[e], 0.001f));
+                } else {
+                    ASSERT(!meter_reading.valid);
+                    ASSERT(meter_reading.result_class == METER_RESULT_NONE);
+                    ASSERT(expect_payload_cleared("---"));
+                    ASSERT(meter_reading.reject_reason ==
+                           METER_REJECT_MISSING_AC_EVIDENCE);
+                }
+            }
+        }
+    }
+    return 1;
+}
+
 static int test_stock_formatter_families_have_regression_fixtures(void)
 {
     uint8_t frame[12];
@@ -1726,6 +1772,7 @@ int main(void)
     TEST(acv_rejects_dc_voltage_without_ac_evidence);
     TEST(acv_rejects_live_low_dcv_status24_without_frequency_hint);
     TEST(ac_current_rejects_current_frame_without_ac_evidence);
+    TEST(ac_modes_require_frequency_hint_boundaries);
     TEST(stock_formatter_families_have_regression_fixtures);
     TEST(resistance_low_ohm_fails_closed_without_factory_cal);
     TEST(invalidate_clears_stale_reading_before_mode_transition);

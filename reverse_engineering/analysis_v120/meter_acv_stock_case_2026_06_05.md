@@ -100,6 +100,13 @@ confidence. ACV/ACA auto confidence therefore remains tied to the independent
 companion frequency hint until a stronger stock xref or repeatable live trace
 proves another AC evidence source.
 
+The parser test suite now carries the same boundary as an all-AC-mode property:
+ACV, AC mA, and AC A frames are run with status bytes `00`, `01`, `04`, `24`,
+and `FF` while `[10..11]` is varied across `0000`, `002C`, `002D`, `0041`, and
+`0042`. Only `45..65` is accepted as the current empirical line-frequency
+window. `frame[7].2` is still mirrored into `is_ac` for diagnostics, but it
+cannot make AC modes valid by itself.
+
 ## Voltage Range-Hint Evidence
 
 The annotated stock RX analysis also exposes ordered range/exponent hint bits in
