@@ -583,6 +583,55 @@ EXPECTED_BOOT_MODE_INIT_DMM_SEQUENCES = {
         ),
     ),
 }
+EXPECTED_BOOT_MODE_INIT_DMM_COMMAND_BANKS = {
+    "meter_basic_boot_probe_prefix": {
+        "commands": ["0x00", "0x09", "0x07/0x0A probe branch"],
+        "ordered_snippets": [
+            "00 21 28 68",
+            "09 21 28 68",
+            "07 21 00 06 58 bf 0a 21",
+        ],
+    },
+    "meter_basic_boot_range_tail": {
+        "commands": ["0x1A", "0x1B", "0x1C", "0x1D", "0x1E"],
+        "ordered_snippets": [
+            "1a 21 28 68",
+            "1b 21 28 68",
+            "1c 21 28 68",
+            "1d 21 28 68",
+            "1e 20",
+        ],
+    },
+    "meter_extended_boot_probe_prefix": {
+        "commands": ["0x00", "0x08", "0x09", "0x07/0x0A probe branch"],
+        "ordered_snippets": [
+            "00 21 28 68",
+            "08 21 28 68",
+            "09 21 28 68",
+            "07 21 00 06 58 bf 0a 21",
+        ],
+    },
+    "meter_extended_boot_range_tail": {
+        "commands": ["0x16", "0x17", "0x18", "0x19"],
+        "ordered_snippets": [
+            "16 21 28 68",
+            "17 21 28 68",
+            "18 21 28 68",
+            "19 20",
+        ],
+    },
+    "meter_variant_boot_tail": {
+        "commands": ["0x00", "0x12", "0x13", "0x14", "0x09", "0x07/0x0A probe branch"],
+        "ordered_snippets": [
+            "00 21 28 68",
+            "12 21 28 68",
+            "13 21 28 68",
+            "14 21 28 68",
+            "09 21 28 68",
+            "07 00 58 bf 0a 20",
+        ],
+    },
+}
 EXPECTED_RUNTIME_MODE_INIT_DISPATCH_CALLER_SEQUENCES = {
     "runtime_mode_init_forward_dispatcher": (
         0x08006418,
@@ -1483,6 +1532,41 @@ def verify_boot_mode_init_dmm_sequences() -> dict[str, object]:
     return {"sequences": checked}
 
 
+def _require_ordered_hex_snippets(name: str, haystack_hex: str, snippets: list[str]) -> None:
+    pos = 0
+    for snippet in snippets:
+        found = haystack_hex.find(snippet, pos)
+        if found < 0:
+            raise AssertionError(f"{name}: missing ordered command snippet {snippet}")
+        pos = found + len(snippet)
+
+
+def verify_boot_mode_init_dmm_command_banks() -> dict[str, object]:
+    """Check documented stock command-byte banks inside `FUN_0800B908` arms.
+
+    The surrounding sequence guard already pins the exact stock bytes.  This
+    extra check extracts the mode-init command banks that local DMM comments and
+    state-machine policy refer to: basic `0x00/0x09/(0x07|0x0A)` probing,
+    range tails `0x1A..0x1E` and `0x16..0x19`, and the variant
+    `0x12/0x13/0x14` family.  These are one-byte commands queued to
+    `0x20002D6C`, not raw `0x05xx` selector words and not analog mux writers.
+    """
+    checked: dict[str, dict[str, object]] = {}
+    for name, expected in EXPECTED_BOOT_MODE_INIT_DMM_COMMAND_BANKS.items():
+        addr, data = EXPECTED_BOOT_MODE_INIT_DMM_SEQUENCES[name]
+        actual = read(addr, len(data))
+        if actual != data:
+            raise AssertionError(f"{name}: sequence bytes drifted before command-bank check")
+        haystack_hex = actual.hex(" ")
+        _require_ordered_hex_snippets(name, haystack_hex, expected["ordered_snippets"])
+        checked[name] = {
+            "addr": f"{addr:#010x}",
+            "commands": list(expected["commands"]),
+            "ordered_snippets": list(expected["ordered_snippets"]),
+        }
+    return {"banks": checked}
+
+
 def verify_runtime_mode_init_dispatch_caller_sequences() -> dict[str, object]:
     """Check runtime helper slices that tail-call the mode-init dispatcher.
 
@@ -1768,6 +1852,7 @@ def main() -> None:
     saved_config_pack_callers = verify_meter_saved_config_pack_caller_sequences()
     usart_tx_config_writer = verify_usart_tx_config_writer_meter_case_sequences()
     boot_mode_init = verify_boot_mode_init_dmm_sequences()
+    boot_mode_init_banks = verify_boot_mode_init_dmm_command_banks()
     runtime_mode_init_callers = verify_runtime_mode_init_dispatch_caller_sequences()
     mux_calls = verify_meter_mux_callsite_sequences()
     mux_bodies = verify_meter_mux_writer_body_sequences()
@@ -1819,6 +1904,11 @@ def main() -> None:
           ", ".join(item["addr"] for item in usart_tx_config_writer["callers"].values()))
     print("stock boot mode-init DMM sequence sites: " +
           ", ".join(item["addr"] for item in boot_mode_init["sequences"].values()))
+    print("stock boot mode-init DMM command banks: " +
+          "; ".join(
+              f"{name}=" + ",".join(item["commands"])
+              for name, item in boot_mode_init_banks["banks"].items()
+          ))
     print("stock runtime mode-init dispatcher caller sites: " +
           ", ".join(item["addr"] for item in runtime_mode_init_callers["sequences"].values()))
     for name, info in mux_calls.items():

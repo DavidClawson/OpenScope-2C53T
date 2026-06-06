@@ -285,7 +285,8 @@ codes with blocking `xQueueGenericSend` calls. It is boot-time command queue
 and resume sequencing evidence, not a DMM calibration or range-writer proof.
 
 `scripts/test_stock_meter_literals.py` now carries a `boot mode-init DMM sequence guard`
-for the DMM-relevant arms:
+for the DMM-relevant arms, plus a command-bank guard that checks the
+documented command-byte banks in order rather than leaving them as prose:
 
 ```text
 0x0800B908 mode_init_dispatcher_tbh:
@@ -319,6 +320,11 @@ queues command bytes to `0x20002D6C`; parameter materialization and raw
 runtime writer for `ms[0x02]`/`ms[0x03]`, does not prove exact settle/discard
 counts, and does not explain the `0.200 V` visual versus `0.4366 V` CDC low-DCV
 blocker.
+
+The guarded command-byte banks are stock command queue evidence:
+`0x00/0x09/(0x07|0x0A)`, `0x1A..0x1E`, `0x00/0x08/0x09/(0x07|0x0A)`,
+`0x16..0x19`, and `0x00/0x12/0x13/0x14/0x09/(0x07|0x0A)`. They are not
+raw selector words, not mux bytes, and not factory calibration coefficients.
 
 ### Runtime Mode-Init Dispatcher Caller Guard, 2026-06-06
 

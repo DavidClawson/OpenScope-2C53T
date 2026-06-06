@@ -718,6 +718,39 @@ class DmmGoalValidationTests(unittest.TestCase):
             sequences["meter_variant_boot_tail"]["bytes"],
         )
 
+    def test_stock_boot_mode_init_dmm_command_banks_are_binary_grounded(self) -> None:
+        result = stock_meter_literals.verify_boot_mode_init_dmm_command_banks()
+        banks = result["banks"]
+
+        self.assertEqual(
+            banks["meter_basic_boot_probe_prefix"]["commands"],
+            ["0x00", "0x09", "0x07/0x0A probe branch"],
+        )
+        self.assertEqual(
+            banks["meter_basic_boot_range_tail"]["commands"],
+            ["0x1A", "0x1B", "0x1C", "0x1D", "0x1E"],
+        )
+        self.assertEqual(
+            banks["meter_extended_boot_probe_prefix"]["commands"],
+            ["0x00", "0x08", "0x09", "0x07/0x0A probe branch"],
+        )
+        self.assertEqual(
+            banks["meter_extended_boot_range_tail"]["commands"],
+            ["0x16", "0x17", "0x18", "0x19"],
+        )
+        self.assertEqual(
+            banks["meter_variant_boot_tail"]["commands"],
+            ["0x00", "0x12", "0x13", "0x14", "0x09", "0x07/0x0A probe branch"],
+        )
+        self.assertIn(
+            "07 21 00 06 58 bf 0a 21",
+            banks["meter_basic_boot_probe_prefix"]["ordered_snippets"],
+        )
+        self.assertIn(
+            "07 00 58 bf 0a 20",
+            banks["meter_variant_boot_tail"]["ordered_snippets"],
+        )
+
     def test_stock_runtime_mode_init_dispatch_callers_are_binary_grounded(self) -> None:
         result = stock_meter_literals.verify_runtime_mode_init_dispatch_caller_sequences()
         sequences = result["sequences"]

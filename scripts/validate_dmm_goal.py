@@ -363,6 +363,7 @@ def verify_re_coverage() -> dict[str, Any]:
         "visible direct callers are TIM5/TIM2 init",
         "boot mode-init DMM sequence guard", "0x0800B908", "0x0800B9D6",
         "0x0800BACE", "0x0800BC32", "0x20002D6C",
+        "command-byte banks", "0x1A..0x1E", "0x16..0x19", "0x12/0x13/0x14",
         "boot-time command queue", "not a DMM calibration or range-writer proof",
         "runtime mode-init dispatcher caller evidence", "0x08006418",
         "0x08006548", "ms[0xF68]", "tail-call", "FUN_0800B908",
