@@ -2184,7 +2184,16 @@ static void cmd_mode(const char *args)
         meter_layout = (uint8_t)layout;
         meter_reset_minmaxavg();
         meter_voltage_wave_reset();
-        fpga_meter_reinit((uint8_t)submode);
+        /*
+         * Match the button-driven production transition path. The explicit
+         * `fpga meter reinit` debug command still performs the DCV wake preamble
+         * when that diagnostic is wanted, but ordinary host mode switches must
+         * not inject an extra DCV materialization before the requested submode.
+         * Shorted-probe traces on 2026-06-07 showed that the wake preamble makes
+         * host/sweep validation diverge from the real UI path and causes the
+         * double relay click reported during sweeps.
+         */
+        fpga_set_meter_mode((uint8_t)submode);
         usb_debug_printf("mode=meter submode=%lu (%s) layout=%lu (%s)\r\n",
                          submode,
                          meter_submode_name((uint8_t)submode),
@@ -2368,7 +2377,12 @@ static void cmd_meter_autoscan(const char *args)
         meter_submode = submode;
         meter_reset_minmaxavg();
         meter_voltage_wave_reset();
-        fpga_meter_reinit(submode);
+        /*
+         * Autoscan is a user-visible mode walk, not a transport wake diagnostic.
+         * Use the same no-wake transition as button left/right so the scan does
+         * not do a DCV preamble before every candidate or double-click relays.
+         */
+        fpga_set_meter_mode(submode);
 
         score = 0;
         for (uint32_t waited = 0; waited < wait_budget_ms; waited += 100U) {
@@ -2406,7 +2420,7 @@ static void cmd_meter_autoscan(const char *args)
     meter_submode = best_mode;
     meter_reset_minmaxavg();
     meter_voltage_wave_reset();
-    fpga_meter_reinit(best_mode);
+    fpga_set_meter_mode(best_mode);
     usb_debug_printf("autoscan selected submode=%u (%s) score=%u\r\n",
                      (unsigned)best_mode,
                      meter_submode_name(best_mode),

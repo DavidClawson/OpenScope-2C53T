@@ -123,7 +123,13 @@ static void meter_autoselect_prepare_candidate(uint8_t submode)
     meter_submode = submode;
     meter_reset_minmaxavg();
     meter_voltage_wave_reset();
-    fpga_meter_reinit(submode);
+    /*
+     * Follow the same transition path as the UI buttons. `fpga_meter_reinit()`
+     * is a stronger debug recovery path with a DCV wake preamble; using it for
+     * every autoscan candidate makes the physical relay path and producer frames
+     * differ from normal user mode changes.
+     */
+    fpga_set_meter_mode(submode);
 }
 
 static uint8_t meter_autoselect_wait_score(uint8_t submode,

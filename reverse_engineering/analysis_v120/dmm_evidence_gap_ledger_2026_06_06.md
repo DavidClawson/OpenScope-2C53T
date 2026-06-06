@@ -1433,3 +1433,43 @@ formatting: especially the unrecovered analog apply/hold path, real stock
 consumer of the command-byte queue, or W25Q/system-file/factory state. Do not
 convert any of these negative probes into a coefficient, magnitude branch, OCR
 flow, or prose validator.
+
+## 2026-06-07 Host/Sweep No-Wake Transition Patch and Negatives
+
+OpenScope diagnostic image
+`87018a59103040bcabb285c79000a92b892570937af82234d140caca5dd3bd69`
+was flashed through guarded HID IAP after `flash_preflight.py hid-app`
+classified it as an OpenScope app image at `0x08004000`. This build changes
+ordinary host `mode meter ...` and autoscan candidate changes to use the same
+no-wake `fpga_set_meter_mode()` path as the UI buttons. The explicit
+`fpga meter reinit` diagnostic still uses the stronger DCV wake preamble.
+
+Reason: live shorted-probe traces showed that host/sweep validation previously
+used `fpga_meter_reinit()`, which inserted a DCV wake/materialization before
+the requested submode. That is not the normal button path and matches the
+double relay click heard during sweeps. The patch removes that validation-path
+distortion; it is not a DMM functional fix.
+
+Live result with probes still shorted:
+
+- `mode meter 7 0` no longer injected the DCV `0508/0507/0514` wake preamble
+  before continuity. The active transition used continuity state
+  `selector=0511`, `apply=0516`, bank `1/00/2C`, `probe=0507`, `start=0509`,
+  GPIO `0EA`.
+- Continuity still failed: settled dump remained `display=ERR`, `beep=0`.
+  Trace `tmp/continuity_shorted_nowake_trace.json` showed producer frames such
+  as `5A A5 04 E0 9B EA 0F 28 00 00 01 44`, not the stock continuity marker.
+- DCV short still failed closed as `display=---`, not 0 V. Trace
+  `tmp/dcv_shorted_nowake_trace.json` showed frames such as
+  `5A A5 04 E0 FB 0F 0A 28 00 00 01 42`.
+- The `meter pc11-timing 200 200` diagnostic was also negative for both
+  continuity and DCV. It changed the transition timing but did not produce the
+  continuity marker or a 0 V DCV frame.
+
+Interpretation: the host/autoscan path now matches the UI no-wake transition
+and should not double-click relays as a validation artefact. The live DMM bug
+remains upstream of decoding and display formatting. Since no-wake and PC11
+timing did not fix the shorted-probe producer frames, the next evidence target
+is still the unrecovered stock analog apply/hold/calibration source or the real
+effect of command-byte queue state on the meter ASIC. Do not replace that with
+coefficients, observed-case voltage multipliers, OCR, or prose validators.
