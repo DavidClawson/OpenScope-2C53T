@@ -520,6 +520,34 @@ class DmmGoalValidationTests(unittest.TestCase):
             ],
         )
 
+    def test_stock_mux_state_full_decompile_surface_is_classified(self) -> None:
+        result = stock_meter_literals.verify_mux_state_full_decompile_surface()
+        symbols = result["symbols"]
+
+        self.assertEqual(symbols["DAT_200000fa"]["count"], 26)
+        self.assertEqual(symbols["DAT_200000fb"]["count"], 10)
+        self.assertEqual(
+            [item["line"] for item in symbols["DAT_200000fa"]["writes"]],
+            [2566, 8745],
+        )
+        self.assertEqual(symbols["DAT_200000fb"]["writes"], [])
+        self.assertIn(
+            "scope/siggen autorange increment",
+            symbols["DAT_200000fa"]["writes"][0]["classification"],
+        )
+        self.assertIn(
+            "scope_main_fsm autorange increment",
+            symbols["DAT_200000fa"]["writes"][1]["classification"],
+        )
+        self.assertIn(
+            "FUN_080018a4(DAT_200000fa);",
+            [item["text"] for item in symbols["DAT_200000fa"]["refs"]],
+        )
+        self.assertIn(
+            "FUN_08001a58(DAT_200000fb);",
+            [item["text"] for item in symbols["DAT_200000fb"]["refs"]],
+        )
+
     def test_stock_dvom_tx_queue_consumer_is_binary_grounded(self) -> None:
         result = stock_meter_literals.verify_dvom_tx_queue_consumer_sequences()
         sequences = result["sequences"]

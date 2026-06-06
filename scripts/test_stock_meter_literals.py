@@ -43,6 +43,64 @@ EXPECTED_MUX_STATE_RAM_MAP_REFS = {
         ],
     },
 }
+EXPECTED_MUX_STATE_FULL_DECOMPILE_REFS = {
+    "DAT_200000fa": [
+        (2564, "bVar2 = (&DAT_200000fa)[uVar20];"),
+        (2566, "(&DAT_200000fa)[uVar20] = bVar2 + 1;"),
+        (2568, "FUN_080018a4(DAT_200000fa);"),
+        (2603, "uVar6 = (uint)DAT_200000fa;"),
+        (2710, "uVar6 = (uint)DAT_200000fa;"),
+        (6881, "bVar37 = (&DAT_200000fa)[uVar70];"),
+        (6999, "uVar49 = (uint)DAT_200000fa;"),
+        (7456, "iVar46 = (uint)DAT_200000fa * 2;"),
+        (7461, "iVar46 = (uint)DAT_200000fa * 2;"),
+        (8617, "(&DAT_080465cc + (uint)(byte)(&DAT_200000fa)[uVar58] * 2),"),
+        (8745, "(&DAT_200000fa)[uVar70] = bVar37 + 1;"),
+        (8747, "FUN_080018a4(DAT_200000fa);"),
+        (9078, "(&DAT_080465cc + (uint)(byte)(&DAT_200000fa)[uVar49] * 2),"),
+        (9841, "((uint)*(ushort *)(&DAT_080465cc + (uint)DAT_200000fa * 2),"),
+        (11043, "[(uint)(byte)(&DAT_200000fa)[uVar6] % 3] << 2,"),
+        (11046, "if ((byte)(&DAT_200000fa)[uVar6] < 3) {"),
+        (
+            11050,
+            "uVar2 = FUN_0803e50a((int)(short)((int)((byte)(&DAT_200000fa)[uVar6] - 3) / 3));",
+        ),
+        (11072, "[(uint)(byte)(&DAT_200000fa)[uVar6] % 3] << 2,"),
+        (11075, "if ((byte)(&DAT_200000fa)[uVar6] < 3) {"),
+        (
+            11080,
+            "uVar2 = FUN_0803e50a((int)(short)((int)((byte)(&DAT_200000fa)[uVar6] - 3) / 3));",
+        ),
+        (11100, "[(uint)(byte)(&DAT_200000fa)[uVar7] % 3] << 2,"),
+        (11103, "if ((byte)(&DAT_200000fa)[uVar7] < 3) {"),
+        (
+            11108,
+            "uVar2 = FUN_0803e50a((int)(short)((int)((byte)(&DAT_200000fa)[uVar7] - 3) / 3));",
+        ),
+        (11411, "pbVar19 = &DAT_200000fa + uVar22;"),
+        (26025, "DAT_20000eb9 = DAT_200000fa;"),
+        (26145, "DAT_20000eb9 = DAT_200000fa;"),
+    ],
+    "DAT_200000fb": [
+        (2571, "FUN_08001a58(DAT_200000fb);"),
+        (2660, "uVar6 = (uint)DAT_200000fb;"),
+        (2734, "uVar6 = (uint)DAT_200000fb;"),
+        (7021, "uVar49 = (uint)DAT_200000fb;"),
+        (7474, "iVar46 = (uint)DAT_200000fb * 2;"),
+        (7479, "iVar46 = (uint)DAT_200000fb * 2;"),
+        (8750, "FUN_08001a58(DAT_200000fb);"),
+        (9969, "((uint)*(ushort *)(&DAT_080465cc + (uint)DAT_200000fb * 2),"),
+        (26035, "_DAT_20000eba = _DAT_200000fb;"),
+        (26155, "_DAT_20000eba = _DAT_200000fb;"),
+    ],
+}
+EXPECTED_MUX_STATE_FULL_DECOMPILE_WRITES = {
+    "DAT_200000fa": {
+        2566: "scope/siggen autorange increment in FUN_08001c60",
+        8745: "scope_main_fsm autorange increment in FUN_08019e98",
+    },
+    "DAT_200000fb": {},
+}
 EXPECTED_METER_SELECTOR_XREF_SEQUENCES = {
     0x080042E2: bytes.fromhex(
         "95 f8 2d 0f 4b f2 fc 32 41 1e 00 28 08 bf 07 21 "
@@ -1126,6 +1184,69 @@ def verify_mux_state_ram_map_boundary() -> dict[str, object]:
     return {"ram_map": str(RAM_MAP.relative_to(REPO)), "symbols": checked}
 
 
+def _parse_full_decompile_symbol_refs() -> dict[str, list[tuple[int, str]]]:
+    lines = FULL_DECOMPILE.read_text(encoding="utf-8", errors="replace").splitlines()
+    parsed: dict[str, list[tuple[int, str]]] = {}
+    for symbol in EXPECTED_MUX_STATE_FULL_DECOMPILE_REFS:
+        parsed[symbol] = [
+            (line_no, line.strip())
+            for line_no, line in enumerate(lines, 1)
+            if symbol in line
+        ]
+    return parsed
+
+
+def verify_mux_state_full_decompile_surface() -> dict[str, object]:
+    """Check the complete full-decompile surface for `DAT_200000fa/fb`.
+
+    The RAM map gives a function-level boundary.  This text-level guard pins
+    the exact visible stock decompile lines so a future DMM pass cannot cite a
+    newly visible `ms[0x02]`/`ms[0x03]` reference as runtime meter evidence
+    without classifying it.  The only direct writes currently visible are the
+    two `DAT_200000fa` autorange increments already guarded as scope/siggen
+    paths; `DAT_200000fb` has no direct decompile-level assignment.
+    """
+    parsed = _parse_full_decompile_symbol_refs()
+    checked: dict[str, dict[str, object]] = {}
+    for symbol, expected_refs in EXPECTED_MUX_STATE_FULL_DECOMPILE_REFS.items():
+        actual_refs = parsed[symbol]
+        if actual_refs != expected_refs:
+            raise AssertionError(
+                f"{symbol} full-decompile refs drifted: expected "
+                f"{expected_refs}, got {actual_refs}"
+            )
+
+        write_lines = [
+            (line_no, line)
+            for line_no, line in actual_refs
+            if line.startswith(f"(&{symbol})") or line.startswith(f"{symbol} =")
+        ]
+        expected_writes = EXPECTED_MUX_STATE_FULL_DECOMPILE_WRITES[symbol]
+        actual_write_lines = [line_no for line_no, _line in write_lines]
+        if actual_write_lines != sorted(expected_writes):
+            raise AssertionError(
+                f"{symbol} full-decompile writes drifted: expected "
+                f"{sorted(expected_writes)}, got {actual_write_lines}"
+            )
+
+        checked[symbol] = {
+            "count": len(actual_refs),
+            "refs": [
+                {"line": line_no, "text": line}
+                for line_no, line in actual_refs
+            ],
+            "writes": [
+                {
+                    "line": line_no,
+                    "text": line,
+                    "classification": expected_writes[line_no],
+                }
+                for line_no, line in write_lines
+            ],
+        }
+    return {"full_decompile": str(FULL_DECOMPILE.relative_to(REPO)), "symbols": checked}
+
+
 def verify_meter_selector_table() -> dict[str, object]:
     """Check the stock eight-entry DMM 0x05xx selector low-byte table.
 
@@ -2015,6 +2136,7 @@ def main() -> None:
 
     expect_bytes(0x08036C8C, "00 bf 00 bf")
     mux_state_ram_map = verify_mux_state_ram_map_boundary()
+    mux_state_full_decompile = verify_mux_state_full_decompile_surface()
     selector = verify_meter_selector_table()
     selector_xrefs = verify_meter_selector_xref_sequences()
     selector_adjust = verify_meter_selector_adjust_sequences()
@@ -2048,6 +2170,11 @@ def main() -> None:
         print(
             f"stock mux-state RAM-map boundary {symbol}: "
             + ", ".join(info["refs"])
+        )
+    for symbol, info in mux_state_full_decompile["symbols"].items():
+        print(
+            f"stock mux-state full-decompile surface {symbol}: "
+            f"{info['count']} refs, {len(info['writes'])} writes"
         )
     print(f"stock meter selector table: {selector['bytes']}")
     print("stock meter selector xref sites: " +

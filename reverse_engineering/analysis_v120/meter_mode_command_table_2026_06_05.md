@@ -930,6 +930,31 @@ RAM-map surface still does not expose a DMM-owned runtime writer for
 binary guard, and local range policy together rather than citing a stale
 unclassified RAM-map line.
 
+The `mux-state full-decompile surface guard` now pins the text-decompile
+surface too, not only the RAM-map function-level surface. It verifies all 26
+`DAT_200000fa` references and all 10 `DAT_200000fb` references currently
+visible in `full_decompile.c` and classifies the only decompile-visible writes
+to the shared mux-state pair:
+
+```text
+DAT_200000fa full-decompile refs: 26
+  full_decompile.c:2566  (&DAT_200000fa)[uVar20] = bVar2 + 1;
+    classification: scope/siggen autorange increment in FUN_08001c60
+  full_decompile.c:8745  (&DAT_200000fa)[uVar70] = bVar37 + 1;
+    classification: scope_main_fsm autorange increment in FUN_08019e98
+
+DAT_200000fb full-decompile refs: 10
+  no direct decompile-level assignment
+```
+
+The rest of the guarded text refs are function calls, scope scale-table
+consumers, or snapshot copies such as `DAT_20000eb9 = DAT_200000fa` and
+`_DAT_20000eba = _DAT_200000fb`. `DAT_200000fb` still has no direct
+decompile-level assignment in the recovered text surface. This narrows the
+DMM gap rather than solving it: if a later decompile or stock trace exposes a
+new write to either byte, that new write must be classified as DMM-owned,
+scope-owned, saved-state, or non-code before local mux/range policy changes.
+
 The scope-submode mux call guard now pins the two explicit scope reconfiguration
 sites that were previously only present in the broad direct-BL list. Both sites
 read `DAT_20000128` / `state[0x30]`, mask the low nibble, and feed that scope
