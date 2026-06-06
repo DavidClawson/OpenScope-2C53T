@@ -522,6 +522,33 @@ class DmmGoalValidationTests(unittest.TestCase):
         self.assertIn("current-head\nstock-boundary policy keeps PB9/PA6 low", coverage["terms"])
         self.assertIn("Do not treat PB9/PA6 high as a low-DCV\ncorrection", coverage["terms"])
 
+    def test_re_coverage_requires_stock_mux_arm_truth_table_boundary(self) -> None:
+        coverage = validate_dmm_goal.verify_re_coverage()
+
+        self.assertIn(
+            "reverse_engineering/analysis_v120/meter_mode_command_table_2026_06_05.md",
+            coverage["docs"],
+        )
+        self.assertIn("Stock Mux Arm Truth Table Guard", coverage["terms"])
+        self.assertIn(
+            "fpga_meter_mux_gpio_state_for_stock_mux_arms",
+            coverage["terms"],
+        )
+        self.assertIn("whole switch-arm truth table", coverage["terms"])
+        self.assertIn("ten switch arms (`0..9`)", coverage["terms"])
+        self.assertIn(
+            "Recovered stock switch arm, not mapped to a local DMM selector",
+            coverage["terms"],
+        )
+        self.assertIn(
+            "Arms `8` and `9` are important negative/unfinished evidence",
+            coverage["terms"],
+        )
+        self.assertIn(
+            "recover a stock DMM-owned writer or trace that selects a specific arm",
+            coverage["terms"],
+        )
+
     def test_re_coverage_requires_selector_shadow_xref_closure(self) -> None:
         coverage = validate_dmm_goal.verify_re_coverage()
         self.assertIn(
@@ -739,12 +766,24 @@ class DmmGoalValidationTests(unittest.TestCase):
             "logical_function_capability_matrix_covers_all_dmm_modes",
             result["tests"],
         )
+        self.assertIn(
+            "mux_writer_stock_arm_truth_table_covers_all_10_switch_arms",
+            result["tests"],
+        )
         self.assertIn("phase matrix iterates every local submode",
                       result["regex_anchors"])
         self.assertIn("logical DMM function table covers microamp gaps",
                       result["regex_anchors"])
         self.assertIn("frame-family policy iterates observed families",
                       result["regex_anchors"])
+        self.assertIn(
+            "stock mux-arm truth table covers all ten switch arms",
+            result["regex_anchors"],
+        )
+        self.assertIn(
+            "stock mux-arm truth table iterates arms 0 through 9",
+            result["regex_anchors"],
+        )
         self.assertIn(
             "marker-visible families stay limited to voltage and continuity",
             result["regex_anchors"],
@@ -767,7 +806,11 @@ class DmmGoalValidationTests(unittest.TestCase):
                       result["snippet_anchors"])
         self.assertIn("fpga_meter_frame_family_has_stock_marker",
                       result["snippet_anchors"])
+        self.assertIn("fpga_meter_mux_gpio_state_for_stock_mux_arms",
+                      result["snippet_anchors"])
         self.assertIn("bad submode word", result["snippet_anchors"])
+        self.assertIn("invalid stock mux arm rejected",
+                      result["snippet_anchors"])
         self.assertIn("FPGA_METER_START_WORD", result["snippet_anchors"])
         self.assertIn("bad plan has no start", result["snippet_anchors"])
         self.assertIn("DC uA is unresolved", result["snippet_anchors"])

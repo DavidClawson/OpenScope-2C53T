@@ -916,6 +916,7 @@ def verify_transition_plan_property_contract() -> dict[str, Any]:
         "transition_plan_covers_mux_family_and_settle_policy",
         "stock_apply_words_for_runtime_family_switch",
         "mux_gpio_state_matches_stock_projection_for_every_submode",
+        "mux_writer_stock_arm_truth_table_covers_all_10_switch_arms",
         "transition_settle_discard_policy_is_explicit_for_every_submode",
         "state_machine_contract_is_exhaustive",
         "frame_family_mismatch_policy_matrix_is_exhaustive",
@@ -950,6 +951,15 @@ def verify_transition_plan_property_contract() -> dict[str, Any]:
             r"for \(uint8_t i = 0; i < FPGA_METER_LOCAL_SUBMODE_COUNT; i\+\+\)",
         "mux gpio state table covers every local submode":
             r"static const fpga_meter_mux_gpio_state_t expected\[FPGA_METER_LOCAL_SUBMODE_COUNT\]\s*=",
+        "stock mux-arm truth table covers all ten switch arms":
+            r"test_mux_writer_stock_arm_truth_table_covers_all_10_switch_arms[\s\S]*"
+            r"static const fpga_meter_mux_gpio_state_t expected\[10\]\s*=",
+        "stock mux-arm truth table iterates arms 0 through 9":
+            r"for \(uint8_t arm = 0; arm < 10; arm\+\+\)",
+        "stock mux-arm invalid fallback is fail closed":
+            r"invalid stock mux arm rejected[\s\S]*"
+            r"invalid stock mux arm keeps baseline pc12[\s\S]*"
+            r"invalid stock mux arm keeps baseline pb9",
         "auxiliary AFE pins stay low in tested mux states":
             r"\{\s*1,\s*1,\s*0,\s*1,\s*1,\s*1,\s*0,\s*1,\s*0,\s*0\s*\}",
         "logical DMM function table covers microamp gaps":
@@ -987,9 +997,12 @@ def verify_transition_plan_property_contract() -> dict[str, Any]:
         "FPGA_METER_FRAME_FAMILY_EXTENDED",
         "fpga_meter_frame_family_is_acceptable",
         "fpga_meter_frame_family_has_stock_marker",
+        "fpga_meter_mux_gpio_state_for_stock_mux_arms",
         "fpga_meter_mux_gpio_state_for_submode",
         "expect_mux_state",
         "mux gpio submode",
+        "stock mux arm",
+        "invalid stock mux arm rejected",
         "mux gpio shared",
         "families[e] == families[o]",
         "busy frame rejected",
@@ -1364,6 +1377,13 @@ def verify_re_coverage() -> dict[str, Any]:
         "DAT_200000fd + 100", "_DAT_40001c34",
         "scope threshold/calibration context",
         "not missing DMM runtime range state",
+        "Stock Mux Arm Truth Table Guard",
+        "fpga_meter_mux_gpio_state_for_stock_mux_arms",
+        "whole switch-arm truth table",
+        "ten switch arms (`0..9`)",
+        "Recovered stock switch arm, not mapped to a local DMM selector",
+        "Arms `8` and `9` are important negative/unfinished evidence",
+        "recover a stock DMM-owned writer or trace that selects a specific arm",
         "Mux GPIO State Projection Guard", "fpga_meter_mux_gpio_state_for_submode",
         "Final projected levels", "Stock slot 0 projection",
         "Local split, no extra stock slot recovered",

@@ -342,11 +342,11 @@ fpga_meter_transition_plan_t fpga_meter_transition_plan_for_submode(uint8_t subm
     return plan;
 }
 
-bool fpga_meter_mux_gpio_state_for_submode(uint8_t submode,
-                                           fpga_meter_mux_gpio_state_t *out)
+bool fpga_meter_mux_gpio_state_for_stock_mux_arms(
+    uint8_t portc_porte_mux,
+    uint8_t porta_portb_mux,
+    fpga_meter_mux_gpio_state_t *out)
 {
-    fpga_meter_transition_plan_t plan =
-        fpga_meter_transition_plan_for_submode(submode);
     fpga_meter_portc_porte_state_t ce;
     fpga_meter_porta_portb_state_t ab;
 
@@ -355,12 +355,12 @@ bool fpga_meter_mux_gpio_state_for_submode(uint8_t submode,
     }
     *out = meter_mux_baseline;
 
-    if (plan.portc_porte_mux >= 10 || plan.porta_portb_mux >= 10) {
+    if (portc_porte_mux >= 10 || porta_portb_mux >= 10) {
         return false;
     }
 
-    ce = stock_portc_porte_mux[plan.portc_porte_mux];
-    ab = stock_porta_portb_mux[plan.porta_portb_mux];
+    ce = stock_portc_porte_mux[portc_porte_mux];
+    ab = stock_porta_portb_mux[porta_portb_mux];
 
     out->pc12 = ce.pc12;
     out->pe4 = ce.pe4;
@@ -371,6 +371,16 @@ bool fpga_meter_mux_gpio_state_for_submode(uint8_t submode,
     out->pb10 = ab.pb10;
     out->pb11 = ab.pb11;
     return true;
+}
+
+bool fpga_meter_mux_gpio_state_for_submode(uint8_t submode,
+                                           fpga_meter_mux_gpio_state_t *out)
+{
+    fpga_meter_transition_plan_t plan =
+        fpga_meter_transition_plan_for_submode(submode);
+
+    return fpga_meter_mux_gpio_state_for_stock_mux_arms(
+        plan.portc_porte_mux, plan.porta_portb_mux, out);
 }
 
 bool fpga_meter_rx_frame_should_parse(bool transition_busy,

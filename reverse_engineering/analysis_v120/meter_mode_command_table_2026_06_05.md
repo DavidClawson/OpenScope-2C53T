@@ -1147,6 +1147,48 @@ tails. It deliberately does not prove that any inspected DMM runtime branch
 writes those bytes during local range switching, and it does not turn the DAC1
 tail into a DMM calibration coefficient.
 
+### Stock Mux Arm Truth Table Guard, 2026-06-06
+
+The mux writers themselves have ten switch arms (`0..9`) even though the
+currently recovered DMM selector table exposes only eight stock slots. The open
+firmware now keeps a pure model helper,
+`fpga_meter_mux_gpio_state_for_stock_mux_arms(portc_porte_mux,
+porta_portb_mux, out)`, so the whole switch-arm truth table is unit-tested
+separately from local UI submode policy.
+
+Offsets/evidence:
+
+- `FUN_080018a4` / `0x080018A4` (`gpio_mux_portc_porte`) projects the
+  `ms[0x02]` arm into PC12/PE4/PE5/PE6.
+- `FUN_08001a58` / `0x08001A58` (`gpio_mux_porta_portb`) projects the
+  `ms[0x03]` arm into PA15/PA10/PB10/PB11.
+- `scripts/test_stock_meter_literals.py` binary-guards both switch prologues
+  and representative GPIO write blocks; `test_fpga_meter_plan` now guards the
+  resulting 10-arm GPIO model.
+
+When the same arm number is applied to both mux writers, the projected GPIO
+levels are:
+
+| Stock mux arm | PC12 | PE4 | PE5 | PE6 | PA15 | PA10 | PB10 | PB11 | PB9 | PA6 | Boundary |
+| ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | --- |
+| 0 | 1 | 1 | 0 | 1 | 1 | 1 | 0 | 1 | 0 | 0 | Used by local DCV projection |
+| 1 | 1 | 1 | 0 | 1 | 1 | 1 | 1 | 1 | 0 | 0 | Used by local ACV projection |
+| 2 | 1 | 1 | 1 | 0 | 1 | 0 | 1 | 0 | 0 | 0 | Shared local DC-current projection |
+| 3 | 1 | 1 | 0 | 0 | 1 | 0 | 0 | 1 | 0 | 0 | Shared local AC-current projection |
+| 4 | 1 | 1 | 1 | 0 | 1 | 0 | 1 | 1 | 0 | 0 | Used by local resistance projection |
+| 5 | 0 | 1 | 0 | 1 | 0 | 1 | 0 | 1 | 0 | 0 | Shared local capacitance/temperature projection |
+| 6 | 0 | 1 | 0 | 1 | 0 | 1 | 1 | 1 | 0 | 0 | Used by local continuity projection |
+| 7 | 0 | 0 | 0 | 1 | 0 | 1 | 1 | 0 | 0 | 0 | Used by local diode projection |
+| 8 | 0 | 1 | 0 | 0 | 0 | 0 | 0 | 1 | 0 | 0 | Recovered stock switch arm, not mapped to a local DMM selector |
+| 9 | 0 | 1 | 1 | 0 | 0 | 0 | 1 | 1 | 0 | 0 | Recovered stock switch arm, not mapped to a local DMM selector |
+
+Arms `8` and `9` are important negative/unfinished evidence. They prove the
+stock mux writers have more hardware states than the recovered DMM selector
+slots, but they do not by themselves identify a low-DCV range, current jack
+range, capacitance path, or temperature path. A future physical correction must
+recover a stock DMM-owned writer or trace that selects a specific arm before
+using either state in production.
+
 ### Mux GPIO State Projection Guard, 2026-06-06
 
 The open firmware now exposes a pure `fpga_meter_mux_gpio_state_for_submode`

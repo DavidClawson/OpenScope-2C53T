@@ -309,6 +309,57 @@ static void test_mux_gpio_state_matches_stock_projection_for_every_submode(void)
     }
 }
 
+static void test_mux_writer_stock_arm_truth_table_covers_all_10_switch_arms(void)
+{
+    /*
+     * The stock mux writers are 10-way switch bodies.  Local DMM submodes only
+     * project the recovered stock slots 0..7 today, but arms 8/9 are still
+     * recovered hardware states and must stay explicit unresolved evidence,
+     * not become hidden low-DCV/current fixes by folklore.
+     */
+    static const fpga_meter_mux_gpio_state_t expected[10] = {
+        { 1, 1, 0, 1, 1, 1, 0, 1, 0, 0 },
+        { 1, 1, 0, 1, 1, 1, 1, 1, 0, 0 },
+        { 1, 1, 1, 0, 1, 0, 1, 0, 0, 0 },
+        { 1, 1, 0, 0, 1, 0, 0, 1, 0, 0 },
+        { 1, 1, 1, 0, 1, 0, 1, 1, 0, 0 },
+        { 0, 1, 0, 1, 0, 1, 0, 1, 0, 0 },
+        { 0, 1, 0, 1, 0, 1, 1, 1, 0, 0 },
+        { 0, 0, 0, 1, 0, 1, 1, 0, 0, 0 },
+        { 0, 1, 0, 0, 0, 0, 0, 1, 0, 0 },
+        { 0, 1, 1, 0, 0, 0, 1, 1, 0, 0 },
+    };
+
+    for (uint8_t arm = 0; arm < 10; arm++) {
+        char name[56];
+        fpga_meter_mux_gpio_state_t state;
+
+        snprintf(name, sizeof(name), "stock mux arm %u", (unsigned)arm);
+        EXPECT_EQ_U8(name,
+                     fpga_meter_mux_gpio_state_for_stock_mux_arms(
+                         arm, arm, &state) ? 1U : 0U,
+                     1U);
+        expect_mux_state(name, &state, &expected[arm]);
+    }
+
+    {
+        fpga_meter_mux_gpio_state_t state;
+
+        EXPECT_EQ_U8("invalid stock mux arm rejected",
+                     fpga_meter_mux_gpio_state_for_stock_mux_arms(
+                         10, 0, &state) ? 1U : 0U,
+                     0U);
+        EXPECT_EQ_U8("invalid stock mux arm keeps baseline pc12",
+                     state.pc12, 1U);
+        EXPECT_EQ_U8("invalid stock mux arm keeps baseline pb9",
+                     state.pb9, 0U);
+        EXPECT_EQ_U8("null stock mux arm output is rejected",
+                     fpga_meter_mux_gpio_state_for_stock_mux_arms(
+                         0, 0, NULL) ? 1U : 0U,
+                     0U);
+    }
+}
+
 static void test_transition_settle_discard_policy_is_explicit_for_every_submode(void)
 {
     for (uint8_t i = 0; i < FPGA_METER_LOCAL_SUBMODE_COUNT; i++) {
@@ -683,6 +734,7 @@ int main(void)
     test_stock_apply_words_for_runtime_family_switch();
     test_transition_plan_covers_mux_family_and_settle_policy();
     test_mux_gpio_state_matches_stock_projection_for_every_submode();
+    test_mux_writer_stock_arm_truth_table_covers_all_10_switch_arms();
     test_transition_settle_discard_policy_is_explicit_for_every_submode();
     test_state_machine_contract_is_exhaustive();
     test_frame_family_mismatch_policy_matrix_is_exhaustive();
