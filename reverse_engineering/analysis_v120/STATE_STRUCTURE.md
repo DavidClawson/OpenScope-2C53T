@@ -34,8 +34,8 @@ These are the fundamental device configuration parameters, set during init and c
 |--------|-------------|------|------|------|-----------|-------------|
 | +0x00 | 200000F8 | `ch1_enable` | uint8 | — | system_init | CH1 enabled flag (0=off, 1=on) |
 | +0x01 | 200000F9 | `ch2_enable` | uint8 | — | system_init | CH2 enabled flag |
-| +0x02 | 200000FA | `meter_function` | uint8 | **25** | scope_fsm, siggen, cursor, timebase, math | Meter function selector (DCV, ACV, Ohm, etc.) |
-| +0x03 | 200000FB | `meter_range` | uint8 | **11** | scope_fsm, siggen, cursor, timebase | Meter range select |
+| +0x02 | 200000FA | `scope_ch1_mux_range` | uint8 | **25** | scope_fsm, siggen, cursor, timebase, math | CH1 scope/siggen mux range. Older notes called this `meter_function`; current DMM RE treats that as a misleading legacy label, not a DCV/ACV/Ohm selector. |
+| +0x03 | 200000FB | `scope_ch2_mux_range` | uint8 | **11** | scope_fsm, siggen, cursor, timebase | CH2 scope/siggen mux range. Not a recovered runtime DMM range writer. |
 | +0x04 | 200000FC | `ch1_adc_offset` | int8 | **71** | gpio_mux_portc, scope_fsm, cursor, timebase, display, math, trigger, spi3_acq | CH1 signed ADC DC offset. Used in VFP calibration: `(float)(raw - ch1_adc_offset)`. Loaded from cal table at init. XOR'd with 0x80 for cal_loader key. |
 | +0x05 | 200000FD | `ch2_adc_offset` | int8 | **51** | gpio_mux_porta, scope_fsm, cursor, timebase, display | CH2 signed ADC DC offset. Same usage as +0x04 but for CH2. |
 | +0x06 | 200000FE | — | — | — | — | (gap / padding) |

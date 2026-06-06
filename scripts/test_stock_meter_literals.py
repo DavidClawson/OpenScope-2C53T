@@ -519,6 +519,25 @@ EXPECTED_RUNTIME_MUX_STATE_WRITER_SEQUENCES = {
         ),
     ),
 }
+EXPECTED_SCOPE_SUBMODE_MUX_CALL_SEQUENCES = {
+    "scope_submode_post_calibration_mux_restore": (
+        0x0801C7B8,
+        bytes.fromhex(
+            "1e f0 9a fa 40 f2 f8 04 c2 f2 00 04 "
+            "94 f8 30 00 00 f0 0f 00 e5 f7 6a f8 "
+            "94 f8 30 00 00 f0 0f 00 e5 f7 3e f9 "
+            "ff f7 58 bb"
+        ),
+    ),
+    "scope_submode_runtime_mux_restore": (
+        0x0801D088,
+        bytes.fromhex(
+            "00 0a 4e 46 96 f8 30 00 00 f0 0f 00 "
+            "e4 f7 06 fc 96 f8 30 00 00 f0 0f 00 "
+            "e4 f7 da fc 96 f8 32 00 b2 46 ff 28"
+        ),
+    ),
+}
 EXPECTED_SCOPE_SNAPSHOT_CONSUMER_SEQUENCES = {
     "scope_measurement_snapshot_from_mux_state": (
         0x08034078,
@@ -1118,6 +1137,30 @@ def verify_runtime_mux_state_writer_sequences() -> dict[str, object]:
     return {"sequences": checked}
 
 
+def verify_scope_submode_mux_call_sequences() -> dict[str, object]:
+    """Check scope-submode mux restore calls that are not DMM range writers.
+
+    Two stock scope paths read `state[0x30]` / `DAT_20000128`, mask it with
+    `0x0f`, then call both GPIO mux writers.  This proves those direct BL sites
+    are scope post-calibration/runtime reconfiguration paths.  They do not read
+    the eight-entry DMM selector table, do not emit DMM selector words, and do
+    not recover a runtime DMM writer for `ms[0x02]`/`ms[0x03]`.
+    """
+    checked: dict[str, dict[str, str]] = {}
+    for name, (addr, expected) in EXPECTED_SCOPE_SUBMODE_MUX_CALL_SEQUENCES.items():
+        actual = read(addr, len(expected))
+        if actual != expected:
+            raise AssertionError(
+                f"{name} {addr:#010x}: expected {expected.hex(' ')}, "
+                f"got {actual.hex(' ')}"
+            )
+        checked[name] = {
+            "addr": f"{addr:#010x}",
+            "bytes": actual.hex(" "),
+        }
+    return {"sequences": checked}
+
+
 def verify_scope_snapshot_consumer_sequences() -> dict[str, object]:
     """Check stock scope measurement snapshots that consume current mux state.
 
@@ -1267,6 +1310,7 @@ def main() -> None:
     mux_calls = verify_meter_mux_callsite_sequences()
     mux_bodies = verify_meter_mux_writer_body_sequences()
     runtime_mux_writers = verify_runtime_mux_state_writer_sequences()
+    scope_submode_mux_calls = verify_scope_submode_mux_call_sequences()
     scope_snapshots = verify_scope_snapshot_consumer_sequences()
     scope_preset_mux_owners = verify_scope_preset_mux_owner_sequences()
     scope_ui_mux_lut_consumers = verify_scope_ui_mux_lut_consumer_sequences()
@@ -1307,6 +1351,8 @@ def main() -> None:
               ", ".join(info["slices"].keys()))
     print("stock runtime mux-state writer sites: " +
           ", ".join(item["addr"] for item in runtime_mux_writers["sequences"].values()))
+    print("stock scope-submode mux call sites: " +
+          ", ".join(item["addr"] for item in scope_submode_mux_calls["sequences"].values()))
     print("stock scope snapshot consumer sites: " +
           ", ".join(item["addr"] for item in scope_snapshots["sequences"].values()))
     print("stock scope/preset mux owner sites: " +

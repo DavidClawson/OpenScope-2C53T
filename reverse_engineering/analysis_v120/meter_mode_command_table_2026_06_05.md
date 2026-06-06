@@ -666,7 +666,7 @@ The evidence splits like this:
 | scope/preset mux owner handlers | `0x08003148` and `0x08003900` wrap the callsites `0x080031E8` / `0x08003644` and `0x080039A2` / `0x08003E3A`; binary disassembly shows they increment/decrement `(&DAT_200000fa)[DAT_2000044c >> 7]`, call `FUN_080018a4` for channel 0 or `FUN_08001a58` for channel 1, then queue command `4` | scope/preset UI mux owners; not DMM runtime range proof |
 | scope UI mux-LUT consumer | `0x080151B0..0x080151F2` in `FUN_08015f50`/`scope_ui_draw_main`; reads `DAT_2000010e`, loads `(&DAT_200000fa)[idx]`, derives the modulo-3 scale index, then reads `DAT_0804bfb8` | scope render/scale consumer; not a DMM range writer |
 | scope main auto-range write | `0x0801A534` / `0x0801A53E`; `full_decompile.c:6880..6999` scans sample buffers, enters range selection, then reuses `DAT_200000fa/DAT_200000fb` for DAC/calibration recompute; `full_decompile.c:8744..8752` performs the actual mux call after `(&DAT_200000fa)[uVar70] = bVar37 + 1` | oscilloscope acquisition path; not DMM |
-| explicit scope-submode mux calls | `full_decompile.c:7564..7565` and `7988..7989` call both mux writers with `DAT_20000128 & 0xf`; `scope_main_fsm_annotated.c` names `DAT_20000128`/state `+0x30` as scope sub-mode | scope runtime reconfiguration, not DMM |
+| explicit scope-submode mux calls | `0x0801C7B8..0x0801C7D8` and `0x0801D088..0x0801D0A0` (`full_decompile.c:7564..7565` and `7988..7989`) read `DAT_20000128`/`state[0x30]`, mask `& 0x0f`, and call both mux writers; `scope_main_fsm_annotated.c` names that byte as scope sub-mode | scope runtime reconfiguration, not DMM |
 | DAC1 writes | `FUN_080018a4` at `0x080018A4..0x08001A52` and inline recomputes at `full_decompile.c:2603..2624`, `6960..7020`, `7771..7990` write `0x40007408` from scope calibration tables | scope trigger/comparator threshold; not DMM calibration |
 | waveform calibration/render use | `full_decompile.c:8611..8624`, `9840..9971` index `DAT_080465cc` and calibration deltas through current and saved `DAT_200000fa/DAT_200000fb` | scope display/calibration path, not DMM selector proof |
 
@@ -727,6 +727,27 @@ records `0x200000fa/0x200000fb` while switching DMM modes, scope/siggen mux call
 Do not treat scope auto-range writes as evidence for DMM current/voltage range
 decoding, and do not repair a surprising DMM reading by adding a numeric
 coefficient on top of those scope paths.
+
+The scope-submode mux call guard now pins the two explicit scope reconfiguration
+sites that were previously only present in the broad direct-BL list. Both sites
+read `DAT_20000128` / `state[0x30]`, mask the low nibble, and feed that scope
+sub-mode byte to both mux writers:
+
+```text
+0x0801C7B8 scope_submode_post_calibration_mux_restore:
+  1e f0 9a fa 40 f2 f8 04 c2 f2 00 04 94 f8 30 00
+  00 f0 0f 00 e5 f7 6a f8 94 f8 30 00 00 f0 0f 00
+  e5 f7 3e f9 ff f7 58 bb
+
+0x0801D088 scope_submode_runtime_mux_restore:
+  00 0a 4e 46 96 f8 30 00 00 f0 0f 00 e4 f7 06 fc
+  96 f8 30 00 00 f0 0f 00 e4 f7 da fc 96 f8 32 00
+  b2 46 ff 28
+```
+
+That makes these callsites negative DMM evidence: they are scope runtime
+reconfiguration paths, not DMM selector-table consumers, not DMM selector-word
+emitters, and not the missing runtime writer for `ms[0x02]`/`ms[0x03]`.
 
 The same boundary applies to DAC1 (`0x40007408`). Stock DAC1 writes are real
 and table-backed, but current xrefs tie them to the scope trigger/comparator

@@ -148,10 +148,11 @@ submode. Either:
       at boot (unlikely — meter UI clearly switches modes), OR
   (b) there's a different call path for meter mode re-calibration
       that uses a different function, OR
-  (c) `DAT_20000128 & 0xf` at line 7421 is actually the meter range
-      variable in some contexts, and the scope-auto-range code path
-      is shared with meter range changes via a common range-index
-      byte
+  (c) older hypothesis, now ruled out by the 2026-06-06
+      scope-submode mux call guard: `DAT_20000128 & 0xf` at the
+      inspected mux callsites is scope sub-mode/runtime reconfiguration,
+      not the recovered DMM range writer. A DMM runtime writer may still
+      exist elsewhere, but this scope path is not it.
 
 **Our firmware**: `fpga.c:737-779` hardcodes the DCV GPIO pattern
 for all meter modes and never writes to `0x40007408` (the DAC1

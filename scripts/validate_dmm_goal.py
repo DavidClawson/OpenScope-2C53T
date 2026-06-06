@@ -352,6 +352,8 @@ def verify_re_coverage() -> dict[str, Any]:
         "gpio_pa15_pb11_pb10_write_block", "DAC1/scope calibration tail",
         "runtime mux-state writer guard", "0x08001EE8", "0x0801A526",
         "negative DMM evidence", "scope snapshot consumer guard",
+        "scope-submode mux call guard", "0x0801C7B8", "0x0801D088",
+        "DAT_20000128", "state[0x30]", "scope runtime reconfiguration",
         "0x08034078", "consumer/snapshot path, not a DMM mux writer",
         "scope/preset mux owner guard", "0x08003148", "0x08003900",
         "not DMM runtime range proof",

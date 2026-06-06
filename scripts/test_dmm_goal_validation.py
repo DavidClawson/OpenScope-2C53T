@@ -637,6 +637,35 @@ class DmmGoalValidationTests(unittest.TestCase):
         self.assertIn("dac1_scope_tail", portc["slices"])
         self.assertIn("dac1_scope_tail", porta["slices"])
 
+    def test_stock_scope_submode_mux_calls_are_negative_dmm_evidence(self) -> None:
+        result = stock_meter_literals.verify_scope_submode_mux_call_sequences()
+        sequences = result["sequences"]
+
+        self.assertEqual(
+            sequences["scope_submode_post_calibration_mux_restore"]["addr"],
+            "0x0801c7b8",
+        )
+        self.assertIn(
+            "94 f8 30 00 00 f0 0f 00 e5 f7 6a f8",
+            sequences["scope_submode_post_calibration_mux_restore"]["bytes"],
+        )
+        self.assertIn(
+            "94 f8 30 00 00 f0 0f 00 e5 f7 3e f9",
+            sequences["scope_submode_post_calibration_mux_restore"]["bytes"],
+        )
+        self.assertEqual(
+            sequences["scope_submode_runtime_mux_restore"]["addr"],
+            "0x0801d088",
+        )
+        self.assertIn(
+            "96 f8 30 00 00 f0 0f 00 e4 f7 06 fc",
+            sequences["scope_submode_runtime_mux_restore"]["bytes"],
+        )
+        self.assertIn(
+            "96 f8 30 00 00 f0 0f 00 e4 f7 da fc",
+            sequences["scope_submode_runtime_mux_restore"]["bytes"],
+        )
+
     def test_stock_runtime_mux_state_writers_are_binary_grounded(self) -> None:
         result = stock_meter_literals.verify_runtime_mux_state_writer_sequences()
         sequences = result["sequences"]
