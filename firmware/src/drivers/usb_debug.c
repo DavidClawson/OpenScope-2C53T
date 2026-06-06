@@ -392,6 +392,16 @@ static void fpga_diag_clear(void)
     memset((void *)fpga.tx_frame_history, 0, sizeof(fpga.tx_frame_history));
     fpga.tx_frame_history_head = 0;
     fpga.tx_frame_history_count = 0;
+    memset((void *)fpga.rx_frame_history, 0, sizeof(fpga.rx_frame_history));
+    memset((void *)fpga.rx_history_frame_count, 0, sizeof(fpga.rx_history_frame_count));
+    memset((void *)fpga.rx_history_tx_count, 0, sizeof(fpga.rx_history_tx_count));
+    memset((void *)fpga.rx_history_echo_count, 0, sizeof(fpga.rx_history_echo_count));
+    memset((void *)fpga.rx_history_sequence_count, 0, sizeof(fpga.rx_history_sequence_count));
+    memset((void *)fpga.rx_history_sequence_submode, 0, sizeof(fpga.rx_history_sequence_submode));
+    memset((void *)fpga.rx_history_discard_remaining, 0, sizeof(fpga.rx_history_discard_remaining));
+    memset((void *)fpga.rx_history_transition_busy, 0, sizeof(fpga.rx_history_transition_busy));
+    fpga.rx_frame_history_head = 0;
+    fpga.rx_frame_history_count = 0;
     memset((void *)fpga.diag_ch1_raw, 0, sizeof(fpga.diag_ch1_raw));
     memset((void *)fpga.diag_ch2_raw, 0, sizeof(fpga.diag_ch2_raw));
     fpga.diag_data_varies = 0;
@@ -2384,6 +2394,13 @@ static void print_volatile_frame_hex(const char *label,
     usb_send_str("\r\n");
 }
 
+static void print_volatile_frame_inline(const volatile uint8_t frame[12])
+{
+    for (int i = 0; i < 12; i++) {
+        usb_debug_printf("%s%02X", i == 0 ? "" : " ", (unsigned)frame[i]);
+    }
+}
+
 static void cmd_meter_trace(void)
 {
     meter_reading_t snap;
@@ -2479,6 +2496,28 @@ static void cmd_meter_trace(void)
                      meter_transition_frame_skip_count);
     print_volatile_frame_hex("producer_frame=", fpga.rx_frame);
     print_frame_hex("parsed_frame=", snap.dbg_frame);
+    usb_send_str("producer_history newest_first:\r\n");
+    {
+        uint8_t count = fpga.rx_frame_history_count;
+        if (count > FPGA_RX_FRAME_HISTORY) count = FPGA_RX_FRAME_HISTORY;
+        for (uint8_t n = 0; n < count; n++) {
+            uint8_t idx = (uint8_t)((fpga.rx_frame_history_head +
+                                     FPGA_RX_FRAME_HISTORY - 1U - n) %
+                                    FPGA_RX_FRAME_HISTORY);
+            usb_debug_printf("rxh n=%u data=%u tx=%u echo=%u seq=%u seq_sub=%u "
+                             "busy=%u discard=%u frame=",
+                             (unsigned)n,
+                             fpga.rx_history_frame_count[idx],
+                             fpga.rx_history_tx_count[idx],
+                             fpga.rx_history_echo_count[idx],
+                             fpga.rx_history_sequence_count[idx],
+                             (unsigned)fpga.rx_history_sequence_submode[idx],
+                             (unsigned)fpga.rx_history_transition_busy[idx],
+                             (unsigned)fpga.rx_history_discard_remaining[idx]);
+            print_volatile_frame_inline(fpga.rx_frame_history[idx]);
+            usb_send_str("\r\n");
+        }
+    }
     usb_debug_printf("gpio control PC6=%u PB11=%u PC11=%u PC7=%u PC0=%u\r\n",
                      gpio_level(GPIOC, 6),
                      gpio_level(GPIOB, 11),

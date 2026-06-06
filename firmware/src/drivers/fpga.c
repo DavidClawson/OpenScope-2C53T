@@ -691,6 +691,35 @@ static void fpga_record_tx_frame(const uint8_t *frame)
     }
 }
 
+static void fpga_record_rx_data_frame(void)
+{
+    uint8_t idx = fpga.rx_frame_history_head;
+
+    /*
+     * Producer-side RX ring.
+     *
+     * This records every complete 0x5A/0xA5 data frame as it crosses from the
+     * FPGA USART stream into firmware ownership, including frames later ignored
+     * by transition/discard logic. It is deliberately diagnostic-only: the ring
+     * proves where the low-DCV mismatch appears, not selector decisions or
+     * value-shaped correction factors.
+     */
+    memcpy((void *)fpga.rx_frame_history[idx], (const void *)fpga.rx_frame,
+           FPGA_RX_FRAME_SIZE);
+    fpga.rx_history_frame_count[idx] = fpga.last_rx_frame_count;
+    fpga.rx_history_tx_count[idx] = fpga.last_rx_tx_count;
+    fpga.rx_history_echo_count[idx] = fpga.last_rx_echo_count;
+    fpga.rx_history_sequence_count[idx] = fpga.last_rx_mode_sequence_count;
+    fpga.rx_history_sequence_submode[idx] = fpga.last_rx_mode_sequence_submode;
+    fpga.rx_history_discard_remaining[idx] = fpga.last_rx_discard_remaining;
+    fpga.rx_history_transition_busy[idx] = fpga.last_rx_transition_busy;
+    fpga.rx_frame_history_head =
+        (uint8_t)((idx + 1U) % FPGA_RX_FRAME_HISTORY);
+    if (fpga.rx_frame_history_count < FPGA_RX_FRAME_HISTORY) {
+        fpga.rx_frame_history_count++;
+    }
+}
+
 /*
  * Build and send a USART command frame (10 bytes).
  * Format: [0][1] [cmd_hi][cmd_lo] [0..0] [checksum]
@@ -1578,6 +1607,7 @@ void USART2_IRQHandler(void)
                 fpga.last_rx_mode_sequence_submode = fpga.meter_mode_sequence_submode;
                 fpga.last_rx_discard_remaining = meter_frame_discard_count;
                 fpga.last_rx_transition_busy = meter_transition_busy ? 1U : 0U;
+                fpga_record_rx_data_frame();
                 fpga.rx_index = 0;
 
                 /* Signal meter processing task (only if RTOS is running) */

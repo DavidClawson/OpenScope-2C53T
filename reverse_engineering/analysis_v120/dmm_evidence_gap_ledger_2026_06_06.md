@@ -635,6 +635,16 @@ wiring proof boundary. It is not permission to restore decoder coefficients.
   `0.200 V` blocker is resolved; the next low-DCV run should capture this same
   trace while the image-viewed source/load display is at the intended hard-case
   voltage.
+- Runtime producer history extension: the follow-on trace hook now keeps a
+  small ISR-owned ring of complete `0x5A 0xA5` data frames with the producer
+  counters visible at each arrival: `tx_count`, `echo_count`, DMM sequence
+  count/submode, transition-busy flag, and discard budget.  `meter trace`
+  prints those `rxh` records newest-first beside the parsed frame.  This is a
+  root-cause tool for the next low-DCV run: it can show whether the wrong
+  `0.436x V` bytes are present in consecutive producer frames, whether they
+  only appear during discarded transition frames, or whether they are tied to a
+  specific selector/apply sequence.  It is still diagnostic-only and must not be
+  used as a feedback path for range decisions or observed-case correction.
 
 ## Next RE Target
 

@@ -38,6 +38,7 @@
 #define FPGA_TX_FRAME_SIZE    10
 #define FPGA_TX_FRAME_HISTORY 16
 #define FPGA_RX_FRAME_SIZE    12
+#define FPGA_RX_FRAME_HISTORY 8
 
 /* RX frame headers */
 #define FPGA_RX_DATA_HDR_0    0x5A   /* Data frame: 0x5A 0xA5 */
@@ -186,6 +187,16 @@ typedef struct {
     volatile uint8_t  last_rx_mode_sequence_submode; /* DMM sequence submode visible at RX arrival */
     volatile uint8_t  last_rx_discard_remaining; /* Transition discard budget at RX arrival */
     volatile uint8_t  last_rx_transition_busy;   /* Meter transition gate state at RX arrival */
+    volatile uint8_t  rx_frame_history[FPGA_RX_FRAME_HISTORY][FPGA_RX_FRAME_SIZE];
+    volatile uint16_t rx_history_frame_count[FPGA_RX_FRAME_HISTORY];
+    volatile uint16_t rx_history_tx_count[FPGA_RX_FRAME_HISTORY];
+    volatile uint16_t rx_history_echo_count[FPGA_RX_FRAME_HISTORY];
+    volatile uint16_t rx_history_sequence_count[FPGA_RX_FRAME_HISTORY];
+    volatile uint8_t  rx_history_sequence_submode[FPGA_RX_FRAME_HISTORY];
+    volatile uint8_t  rx_history_discard_remaining[FPGA_RX_FRAME_HISTORY];
+    volatile uint8_t  rx_history_transition_busy[FPGA_RX_FRAME_HISTORY];
+    volatile uint8_t  rx_frame_history_head;
+    volatile uint8_t  rx_frame_history_count;
     volatile uint8_t  tx_cmd_hi_history[16]; /* Last sent USART command high bytes */
     volatile uint8_t  tx_cmd_lo_history[16]; /* Last sent USART command low bytes */
     volatile uint8_t  tx_cmd_history_head;   /* Next history slot */
