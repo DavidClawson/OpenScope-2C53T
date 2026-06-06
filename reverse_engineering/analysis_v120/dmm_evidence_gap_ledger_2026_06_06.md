@@ -127,6 +127,13 @@ one of:
   `full_decompile.c:2566` in `FUN_08001c60` and `full_decompile.c:8745` in
   `FUN_08019e98`; both are classified and guarded as scope/siggen autorange
   paths, not DMM runtime mux/range writers.
+- Legacy `fpga_task_annotated.c` formatter-state cleanup: `ms[0xF37]` is now
+  documented as `DAT_2000102f` formatter/decimal state, not `meter_cal_coeff`.
+  The old Type-4 `Meter range config` comment is now classified as a
+  Type-4-shaped FPGA config arm with no normal runtime DMM caller tying it to
+  physical range selection. This prevents stale legacy annotations from
+  becoming a low-DCV/current/range coefficient.
+  Machine-readable guard: no normal runtime DMM caller tying it to physical range selection.
 - Mux writer literal-pointer negative guard: the whole APP image has no static
   32-bit literal/function-pointer refs to `FUN_080018a4` (`0x080018A4` or
   `0x080018A5`) or `FUN_08001a58` (`0x08001A58` or `0x08001A59`). This closes

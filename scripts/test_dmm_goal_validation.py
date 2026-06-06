@@ -235,6 +235,10 @@ class DmmGoalValidationTests(unittest.TestCase):
             result["checked"],
         )
         self.assertIn(
+            "reverse_engineering/analysis_v120/fpga_task_annotated.c",
+            result["checked"],
+        )
+        self.assertIn(
             "Legacy correction (2026-06-06)",
             result["required"]["reverse_engineering/FPGA_PROTOCOL_COMPLETE.md"],
         )
@@ -242,9 +246,19 @@ class DmmGoalValidationTests(unittest.TestCase):
             "DAT_2000102f",
             result["required"]["reverse_engineering/FPGA_PROTOCOL_COMPLETE.md"],
         )
+        self.assertIn(
+            "+0xF37 : uint8_t meter_decimal_shift",
+            result["required"]["reverse_engineering/analysis_v120/fpga_task_annotated.c"],
+        )
+        self.assertIn(
+            "Formatter branch value; not AC-present confidence by itself",
+            result["required"]["reverse_engineering/analysis_v120/fpga_task_annotated.c"],
+        )
         self.assertIn("Meter: configure range", result["forbidden"])
         self.assertIn("Meter range config", result["forbidden"])
         self.assertIn("`meter_cal_coeff`", result["forbidden"])
+        self.assertIn("cal_coeff", result["forbidden"])
+        self.assertIn("RANGE INDICATOR CHECK", result["forbidden"])
         self.assertIn("rx[7] bit 2 = AC flag", result["forbidden"])
 
     def test_h2_tx_only_boundary_is_guarded_in_firmware_surfaces(self) -> None:
@@ -718,6 +732,19 @@ class DmmGoalValidationTests(unittest.TestCase):
         self.assertIn("0x08046528", coverage["terms"])
         self.assertIn("[r4,#2] is the third key-column debounce counter", coverage["terms"])
         self.assertIn("not DMM `ms[0x02]`", coverage["terms"])
+        self.assertIn(
+            "reverse_engineering/analysis_v120/fpga_task_annotated.c",
+            coverage["docs"],
+        )
+        self.assertIn("Legacy `fpga_task_annotated.c` formatter-state cleanup",
+                      coverage["terms"])
+        self.assertIn("+0xF37 : uint8_t meter_decimal_shift", coverage["terms"])
+        self.assertIn("not `meter_cal_coeff`", coverage["terms"])
+        self.assertIn("Type-4-shaped FPGA config arm", coverage["terms"])
+        self.assertIn(
+            "no normal runtime DMM caller tying it to physical range selection",
+            coverage["terms"],
+        )
 
     def test_re_coverage_requires_selector_shadow_xref_closure(self) -> None:
         coverage = validate_dmm_goal.verify_re_coverage()
