@@ -1126,28 +1126,9 @@ eight-entry DMM selector table and are not DMM runtime range proof.
 ### Scope UI Mux-LUT Consumer Guard, 2026-06-06
 
 The `ram_map.txt` entry `unknown@080151c2` for `DAT_200000fa` resolves into
-`FUN_08015f50`, already named `scope_ui_draw_main` in `function_names.md`. The
-stock decompile around `full_decompile.c:11411..11438` reads the selected
-channel's mux byte and uses it to index the scope scale table:
-
-```text
-full_decompile.c:11411  pbVar19 = &DAT_200000fa + uVar22;
-full_decompile.c:11412  bVar3 = *pbVar19;
-full_decompile.c:11418  FUN_0803e5da(*(undefined2 *)(&DAT_0804bfb8 + ...), ...)
-full_decompile.c:11435  uVar31 = *pbVar19 / 3;
-full_decompile.c:11438  uVar6 = *(undefined2 *)(&DAT_0804bfb8 + ...);
-full_decompile.c:11488  bVar3 = *pbVar19;
-full_decompile.c:11491  uVar6 = *(undefined2 *)(&DAT_0804bfb8 + ...);
-```
-
-The `scope UI mux-pointer consumer context guard` pins
-`full_decompile.c:11411..11491` and forbids local pointer-write forms such as
-`*pbVar19 =` after `pbVar19 = &DAT_200000fa + uVar22`. This matters because the
-later alias reads no longer contain the literal `DAT_200000fa` symbol. The
-guard keeps this block classified as read-only scope LUT/scale math, not as a
-hidden DMM mux writer.
-
-The corresponding stock instruction slice starts at `0x080151B0`:
+a pre-`FUN_08015f50` stock instruction slice at `0x080151B0`. That slice reads
+`DAT_2000010e` as the active scope channel/index, loads
+`(&DAT_200000fa)[idx]`, and uses `DAT_0804bfb8` as a scope scale table:
 
 ```text
 0x080151B0: movw r8,#0xf8
@@ -1184,6 +1165,24 @@ classified and binary-guarded too. `ram_map.txt` lists `FUN_0801d2ec`
 (`0x0801F6F8`) as additional refs to the mux-state pair.
 Those functions are scope timebase, scope math, and scope measurement-engine
 paths, not DMM runtime range owners.
+
+The `scope measurement-engine mux-pointer consumer context guard` pins
+`full_decompile.c:11411..11491` inside `FUN_0801f6f8` and
+forbids local pointer-write forms such as `*pbVar19 =` after
+`pbVar19 = &DAT_200000fa + uVar22`. This matters because the later alias reads
+no longer contain the literal `DAT_200000fa` symbol. The guard keeps this block
+classified as read-only scope measurement/scale math, not as a hidden DMM mux
+writer:
+
+```text
+full_decompile.c:11411  pbVar19 = &DAT_200000fa + uVar22;
+full_decompile.c:11412  bVar3 = *pbVar19;
+full_decompile.c:11418  FUN_0803e5da(*(undefined2 *)(&DAT_0804bfb8 + ...), ...)
+full_decompile.c:11435  uVar31 = *pbVar19 / 3;
+full_decompile.c:11438  uVar6 = *(undefined2 *)(&DAT_0804bfb8 + ...);
+full_decompile.c:11488  bVar3 = *pbVar19;
+full_decompile.c:11491  uVar6 = *(undefined2 *)(&DAT_0804bfb8 + ...);
+```
 
 `scripts/test_stock_meter_literals.py` carries the `scope mux-state consumer
 guard` for these sites:

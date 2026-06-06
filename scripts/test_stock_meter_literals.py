@@ -131,8 +131,8 @@ EXPECTED_MUX_STATE_PAIR_WRITE_CONTEXTS = {
         (8753, "FUN_0803acf0(_DAT_20002d6c,&local_6b,0xffffffff);"),
     ],
 }
-EXPECTED_SCOPE_UI_MUX_POINTER_CONSUMER_CONTEXT = {
-    "scope_ui_mux_pointer_consumer_context": {
+EXPECTED_SCOPE_MEASUREMENT_ENGINE_MUX_POINTER_CONSUMER_CONTEXT = {
+    "scope_measurement_engine_mux_pointer_consumer_context": {
         "line_range": (11411, 11491),
         "required_lines": [
             (11411, "pbVar19 = &DAT_200000fa + uVar22;"),
@@ -147,7 +147,7 @@ EXPECTED_SCOPE_UI_MUX_POINTER_CONSUMER_CONTEXT = {
             (11491, "uVar6 = *(undefined2 *)(&DAT_0804bfb8 + (uVar18 & 0xff) * 2);"),
         ],
         "forbidden_substrings": ["*pbVar19 =", "pbVar19[0] ="],
-        "classification": "scope_ui_draw_main read-only mux-state pointer consumer, not a writer",
+        "classification": "scope_measurement_engine read-only mux-state pointer consumer, not a writer",
     },
 }
 EXPECTED_METER_SELECTOR_XREF_SEQUENCES = {
@@ -1342,17 +1342,18 @@ def verify_mux_state_pair_write_contexts() -> dict[str, object]:
     return {"full_decompile": str(FULL_DECOMPILE.relative_to(REPO)), "contexts": checked}
 
 
-def verify_scope_ui_mux_pointer_consumer_context() -> dict[str, object]:
+def verify_scope_measurement_engine_mux_pointer_consumer_context() -> dict[str, object]:
     """Check the `&DAT_200000fa + idx` pointer alias is read-only scope math.
 
-    The full-decompile symbol ref at line 11411 is easy to under-classify:
-    later `*pbVar19` uses no longer mention `DAT_200000fa`.  This guard pins
-    the local text surface and fails if the inspected scope UI block grows a
-    write through that alias.
+    The full-decompile symbol ref at line 11411 lives inside `FUN_0801f6f8`
+    (`scope_measurement_engine`) and is easy to under-classify: later
+    `*pbVar19` uses no longer mention `DAT_200000fa`.  This guard pins the
+    local text surface and fails if the inspected scope measurement block grows
+    a write through that alias.
     """
     lines = FULL_DECOMPILE.read_text(encoding="utf-8", errors="replace").splitlines()
     checked: dict[str, dict[str, object]] = {}
-    for name, expected in EXPECTED_SCOPE_UI_MUX_POINTER_CONSUMER_CONTEXT.items():
+    for name, expected in EXPECTED_SCOPE_MEASUREMENT_ENGINE_MUX_POINTER_CONSUMER_CONTEXT.items():
         line_start, line_end = expected["line_range"]
         required_lines = expected["required_lines"]
         actual_lines = [
@@ -2278,7 +2279,9 @@ def main() -> None:
     mux_state_ram_map = verify_mux_state_ram_map_boundary()
     mux_state_full_decompile = verify_mux_state_full_decompile_surface()
     mux_state_pair_write_contexts = verify_mux_state_pair_write_contexts()
-    scope_ui_mux_pointer_context = verify_scope_ui_mux_pointer_consumer_context()
+    scope_measurement_mux_pointer_context = (
+        verify_scope_measurement_engine_mux_pointer_consumer_context()
+    )
     selector = verify_meter_selector_table()
     selector_xrefs = verify_meter_selector_xref_sequences()
     selector_adjust = verify_meter_selector_adjust_sequences()
@@ -2326,8 +2329,8 @@ def main() -> None:
         + ", ".join(mux_state_pair_write_contexts["contexts"].keys())
     )
     print(
-        "stock scope UI mux-pointer consumer contexts: "
-        + ", ".join(scope_ui_mux_pointer_context["contexts"].keys())
+        "stock scope measurement-engine mux-pointer consumer contexts: "
+        + ", ".join(scope_measurement_mux_pointer_context["contexts"].keys())
     )
     print(f"stock meter selector table: {selector['bytes']}")
     print("stock meter selector xref sites: " +
