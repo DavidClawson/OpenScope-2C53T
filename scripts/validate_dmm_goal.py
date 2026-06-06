@@ -219,6 +219,14 @@ def verify_h2_tx_only_boundary() -> dict[str, Any]:
             "TX-side diagnostic only",
             "unresolved acceptance/effect boundary",
         ],
+        "reverse_engineering/analysis_v120/SPI3_INIT_SEQUENCE_DECODED.md": [
+            "2026-06-06 correction",
+            "00 05 00 00",
+            "12 00 00",
+            "15 00 00 3B",
+            "0x08026B7C..0x08026C30",
+            "H2 byte count remains diagnostic only",
+        ],
     }
     forbidden = {
         "reverse_engineering/analysis_v120/spi3_bulk_cal_resolved.md": [
@@ -227,6 +235,14 @@ def verify_h2_tx_only_boundary() -> dict[str, Any]:
         "reverse_engineering/analysis_v120/fpga_h2_spi3_bulk.md": [
             "No\nbulk cal upload via SPI3 cmds 0x3B/0x3A",
             "That's the gap",
+        ],
+        "reverse_engineering/analysis_v120/SPI3_INIT_SEQUENCE_DECODED.md": [
+            "CRITICAL — 4 dummy exchanges",
+            "4 dummy SPI exchanges",
+            "4 more dummy exchanges",
+            "4+4 dummy SPI exchanges",
+            "Recommended Test Sequence",
+            "The dummy exchanges are the most likely fix",
         ],
     }
 
@@ -621,6 +637,7 @@ def verify_re_coverage() -> dict[str, Any]:
         "reverse_engineering/analysis_v120/meter_dac1_scope_boundary_2026_06_06.md",
         "reverse_engineering/analysis_v120/meter_w25q_calibration_boundary_2026_06_06.md",
         "reverse_engineering/analysis_v120/spi3_bulk_cal_resolved.md",
+        "reverse_engineering/analysis_v120/SPI3_INIT_SEQUENCE_DECODED.md",
         "reverse_engineering/analysis_v120/h2_extracted/FINDINGS.md",
     ]
     required_code = [
@@ -651,6 +668,8 @@ def verify_re_coverage() -> dict[str, Any]:
         "without binary stock evidence", "uA is unresolved and unexposed",
         "UI/submode surface guard", "no recovered uA local submode",
         "H2 table binary guard", "tail bytes", "0x1C340", "no ACK/apply proof",
+        "SPI3 init choreography correction", "0x08026B7C..0x08026C30",
+        "H2 byte count remains diagnostic only",
         "transition phase matrix", "busy transition frame", "stable frame",
         "transition settle/discard policy guard",
         "uniform local settle/discard policy",

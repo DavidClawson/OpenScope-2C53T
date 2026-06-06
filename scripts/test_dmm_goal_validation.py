@@ -115,6 +115,10 @@ class DmmGoalValidationTests(unittest.TestCase):
             result["checked"],
         )
         self.assertIn(
+            "reverse_engineering/analysis_v120/SPI3_INIT_SEQUENCE_DECODED.md",
+            result["checked"],
+        )
+        self.assertIn(
             "TX complete: %s (no recovered FPGA ACK)",
             result["checked"]["firmware/src/drivers/usb_debug.c"],
         )
@@ -132,6 +136,18 @@ class DmmGoalValidationTests(unittest.TestCase):
             "That's the gap",
             result["forbidden"][
                 "reverse_engineering/analysis_v120/fpga_h2_spi3_bulk.md"
+            ],
+        )
+        self.assertIn(
+            "15 00 00 3B",
+            result["checked"][
+                "reverse_engineering/analysis_v120/SPI3_INIT_SEQUENCE_DECODED.md"
+            ],
+        )
+        self.assertIn(
+            "The dummy exchanges are the most likely fix",
+            result["forbidden"][
+                "reverse_engineering/analysis_v120/SPI3_INIT_SEQUENCE_DECODED.md"
             ],
         )
 
