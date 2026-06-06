@@ -274,6 +274,11 @@ class DmmGoalValidationTests(unittest.TestCase):
         self.assertIn("firmware/src/drivers/flash_fs.c", result["checked"])
         self.assertIn("METER_CAL_LOW_OHM_FACTOR", result["forbidden"])
         self.assertIn("3:/System file/cal_ch1.bin", result["forbidden"])
+        self.assertIn("apply_stock_dcv_voltage_multiplier", result["forbidden"])
+        self.assertIn(
+            "apply_stock_dcv_decimal_exponent",
+            result["required_meter_data"],
+        )
         self.assertIn(
             "DCA formatter variant branch at 0x08002AFE/0x08002B54",
             result["required_meter_data"],

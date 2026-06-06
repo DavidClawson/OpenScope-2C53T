@@ -99,9 +99,11 @@ def verify_no_unrecovered_meter_coefficients() -> dict[str, Any]:
         "bench-unit stand-in",
         "3:/System file/cal_ch1.bin",
         "3:/System file/cal_ch2.bin",
+        "apply_stock_dcv_voltage_multiplier",
         "apply these coefficients in meter_data.c",
     ]
     required_meter_data = [
+        "apply_stock_dcv_decimal_exponent",
         "DCA formatter variant branch at 0x08002AFE/0x08002B54",
         "DAT_2000102e == 1 selects unit index 4",
         "DAT_2000102e == 2 selects unit index 3",

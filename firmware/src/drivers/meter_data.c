@@ -823,9 +823,9 @@ static void format_stock_decimal_value(int raw_value, uint8_t class_id,
     s[pos] = '\0';
 }
 
-static bool apply_stock_dcv_voltage_multiplier(meter_reading_t *r,
-                                               uint8_t submode,
-                                               const volatile uint8_t *frame)
+static bool apply_stock_dcv_decimal_exponent(meter_reading_t *r,
+                                             uint8_t submode,
+                                             const volatile uint8_t *frame)
 {
     const dcv_stock_class_t *stock_class;
 
@@ -1306,7 +1306,7 @@ void meter_data_process_frame(const volatile uint8_t *frame, uint8_t submode)
     r->result_class = METER_RESULT_NORMAL;
     r->continuity_beep = false;
     format_reading(r, submode);
-    (void)apply_stock_dcv_voltage_multiplier(r, submode, frame);
+    (void)apply_stock_dcv_decimal_exponent(r, submode, frame);
 
     /* ── Resistance kOhm band unit normalization ──
      *
