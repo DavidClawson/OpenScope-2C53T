@@ -414,6 +414,25 @@ narrow boundary. `ms[0xF68]` selects mode-init command banks; it is not DMM
 `ms[0x02]`/`ms[0x03]` analog mux state, not raw `0x05xx` selector words, not a
 factory coefficient, and not low-DCV calibration.
 
+The non-meter-looking banks in the same `TBH` table are guarded as an overlap
+boundary, not as new DMM ranges:
+
+- state 4 queues `0x1F..0x21`, which overlaps stock frequency/acquisition
+  command-family evidence; it is not DMM physical range proof
+- state 5 queues `0x25..0x28`, which overlaps stock timebase/packed-state
+  command-family evidence; it is not capacitance/temperature physical range
+  proof
+- state 6 queues only `0x29`; it is not a DMM calibration or range source
+- state 8 queues `0x00,0x2C`; despite the tempting continuity/diode name for
+  command `0x2C`, this bank is not a continuity/diode physical frontend proof
+
+This matters for local DMM mode work because capacitance and temperature share
+stock selector slot 5 (`0x0512`), continuity uses slot 6 (`0x0511`), and diode
+uses slot 7 (`0x0510`). The `ms[0xF68]` command-bank states above do not split
+those local policies or recover a hidden physical range. A future change must
+recover a DMM-owned consumer, xref owner, or live trace before promoting these
+bytes to DMM frontend behavior.
+
 ### Meter Probe Branch Guard, 2026-06-06
 
 The `Meter Probe Branch Guard` now separates the PC7 command-tail branch from

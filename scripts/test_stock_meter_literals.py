@@ -1073,7 +1073,11 @@ EXPECTED_BOOT_MODE_INIT_DMM_TBH_STATE_MAP = {
             "20 21 28 68",
             "21 20",
         ],
-        "classification": "state 4 queues the 0x1F..0x21 bank; command queue evidence only",
+        "classification": (
+            "state 4 queues the 0x1F..0x21 bank; overlaps stock "
+            "frequency/acquisition command-family evidence, but is command "
+            "queue evidence only, not DMM physical range proof"
+        ),
     },
     5: {
         "target": 0x0800BBBE,
@@ -1086,13 +1090,20 @@ EXPECTED_BOOT_MODE_INIT_DMM_TBH_STATE_MAP = {
             "27 21 28 68",
             "28 20",
         ],
-        "classification": "state 5 queues the 0x25..0x28 bank; command queue evidence only",
+        "classification": (
+            "state 5 queues the 0x25..0x28 bank; overlaps stock timebase/"
+            "packed-state command-family evidence, but is command queue "
+            "evidence only, not capacitance/temperature physical range proof"
+        ),
     },
     6: {
         "target": 0x0800BC2A,
         "commands": ["0x29"],
         "ordered_snippets": ["29 20"],
-        "classification": "state 6 queues only 0x29 before the common send tail",
+        "classification": (
+            "state 6 queues only 0x29 before the common send tail; standalone "
+            "command-bank evidence only, not a DMM calibration or range source"
+        ),
     },
     7: {
         "target": 0x0800BC2E,
@@ -1104,7 +1115,10 @@ EXPECTED_BOOT_MODE_INIT_DMM_TBH_STATE_MAP = {
         "target": 0x0800BCA6,
         "commands": ["0x00", "0x2C"],
         "ordered_snippets": ["00 21 28 68", "2c 20"],
-        "classification": "state 8 queues 0x00 then 0x2C; command queue evidence only",
+        "classification": (
+            "state 8 queues 0x00 then 0x2C; standalone command-bank evidence "
+            "only, not a continuity/diode physical frontend proof"
+        ),
     },
     9: {
         "target": 0x0800BC32,

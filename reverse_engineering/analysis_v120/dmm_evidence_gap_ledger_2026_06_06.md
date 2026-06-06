@@ -80,6 +80,13 @@ one of:
   command banks to the selecting state byte, but `ms[0xF68]` is not DMM
   `ms[0x02]`/`ms[0x03]` analog mux state, not raw selector words, and not
   low-DCV calibration.
+- Non-meter command-bank overlap boundary: `ms[0xF68]` state 4 queues
+  `0x1F..0x21` and state 5 queues `0x25..0x28`, which overlap stock
+  frequency/acquisition and timebase/packed-state command-family evidence.
+  State 6 queues only `0x29`; state 8 queues `0x00,0x2C`. These are
+  command-bank states, not DMM physical range proof, not capacitance/temperature
+  physical range proof, not a DMM calibration/range source, and not a
+  continuity/diode physical frontend proof.
 - Meter probe branch guard: the three `FUN_0800B908` meter arms at `0x0800B9D6`,
   `0x0800BACE`, and `0x0800BC32` read GPIOC bit 7 from `0x40011008` and select
   the `0x07/0x0A` command tail (`PC7` high keeps `0x07`; `PC7` low selects

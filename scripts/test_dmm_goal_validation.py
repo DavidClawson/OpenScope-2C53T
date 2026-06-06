@@ -775,6 +775,25 @@ class DmmGoalValidationTests(unittest.TestCase):
             "`ms[0xF68]` helper gating does not upgrade H2/SPI3 byte-count replay",
             coverage["terms"],
         )
+        self.assertIn("Non-Meter Command-Bank Overlap", coverage["terms"])
+        self.assertIn(
+            "state 4 -> 0x0800BB64: 0x00, 0x1F, 0x09, 0x20, 0x21",
+            coverage["terms"],
+        )
+        self.assertIn(
+            "state 5 -> 0x0800BBBE: 0x00, 0x25, 0x09, 0x26, 0x27, 0x28",
+            coverage["terms"],
+        )
+        self.assertIn("frequency/acquisition command-family evidence",
+                      coverage["terms"])
+        self.assertIn("timebase/packed-state command-family evidence",
+                      coverage["terms"])
+        self.assertIn("not DMM physical range proof", coverage["terms"])
+        self.assertIn("not capacitance/temperature physical range proof",
+                      coverage["terms"])
+        self.assertIn("not a DMM calibration or range source", coverage["terms"])
+        self.assertIn("not a continuity/diode physical frontend proof",
+                      coverage["terms"])
 
     def test_re_coverage_requires_saved_mode_f64_boundary(self) -> None:
         coverage = validate_dmm_goal.verify_re_coverage()
@@ -1920,6 +1939,18 @@ class DmmGoalValidationTests(unittest.TestCase):
             states["9"]["commands"],
             ["0x00", "0x12", "0x13", "0x14", "0x09", "0x07/0x0A probe branch"],
         )
+        self.assertIn("frequency/acquisition command-family evidence",
+                      states["4"]["classification"])
+        self.assertIn("not DMM physical range proof",
+                      states["4"]["classification"])
+        self.assertIn("timebase/packed-state command-family evidence",
+                      states["5"]["classification"])
+        self.assertIn("not capacitance/temperature physical range proof",
+                      states["5"]["classification"])
+        self.assertIn("not a DMM calibration or range source",
+                      states["6"]["classification"])
+        self.assertIn("not a continuity/diode physical frontend proof",
+                      states["8"]["classification"])
         self.assertIn("not DMM ms[0x02]/ms[0x03]", result["classification"])
         self.assertIn("not raw selector words", result["classification"])
         self.assertIn("not low-DCV calibration", result["classification"])
