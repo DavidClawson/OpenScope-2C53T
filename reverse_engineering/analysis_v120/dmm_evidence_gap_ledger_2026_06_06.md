@@ -944,6 +944,33 @@ wiring proof boundary. It is not permission to restore decoder coefficients.
   producer-frame capture explicitly show that no host-readable factory-cal
   mirror is loaded, so future work must recover a real stock/W25Q/H2/runtime
   source before using calibration state.
+- RX ownership and voltage-marker fail-closed boundary: OpenScope app image
+  SHA-256
+  `0e3287ba4af9821a4ea3ad96264d42f30b585af0e06d31553661a6ec53804214`
+  (`Build: Jun 6 2026 21:55:18`) was flashed through guarded HID IAP after
+  `flash_preflight.py hid-app` classified it as `openscope-app` at
+  `0x08004000`. The firmware now moves complete USART2 `5A A5` data frames
+  from the ISR to `dvom_RX` as immutable queue events instead of signalling a
+  binary semaphore over one shared `fpga.rx_frame`. This closes a producer/task
+  ownership race: the parsed frame is now the exact frame event captured by the
+  ISR. The decoder also now rejects DCV/ACV frames that lack the recovered
+  stock-visible voltage metadata in `frame[8]/frame[9]`; the live bad frame
+  `5A A5 CC 47 FE EB 47 20 00 00 01 3C` is covered by a unit test and must
+  render invalid/cleared instead of a confident `154.06 V`.
+
+  The post-flash live trace on the current bench state showed producer and
+  parsed frames matching exactly:
+  `5A A5 CC E7 EB CB 07 24 80 00 01 3F`, decoded as `display=1.5005`,
+  `raw=15005`, `family=0/0`, `reject=0`, with DCV GPIO `planned_gpio=0BB`,
+  `actual_gpio=0BB`, `factory_cal.loaded=0`, and H2 RX still all `FF`. This
+  proves the old unmarked-`frame[8]=00` active-voltage fallback is no longer
+  present in the observed runtime path. It does not prove physical DCV
+  correctness for the user-visible `0.200 V` setup: the webcam still path was
+  attempted through `/dev/video0` and produced a black frame, so no image-viewed
+  source/readout confirmation was available in this run. If the source was not
+  actually near `1.5005 V`, the remaining bug is still upstream of stock
+  decimal decoding: frontend writer/apply state, H2/SPI3 acceptance, or missing
+  factory/system-file calibration evidence.
 
 ## Next RE Target
 

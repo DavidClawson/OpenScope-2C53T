@@ -93,7 +93,19 @@ volatile uint8_t  fpga_meter_adc_max_sample;
 /* FreeRTOS handles */
 static QueueHandle_t     usart_tx_queue  = NULL;  /* 2-byte items: cmd_hi|cmd_lo */
 static QueueHandle_t     spi3_acq_queue  = NULL;  /* 1-byte trigger mode */
-static SemaphoreHandle_t meter_sem       = NULL;  /* Signals meter RX frame ready */
+
+typedef struct {
+    uint8_t frame[FPGA_RX_FRAME_SIZE];
+    uint32_t frame_count;
+    uint32_t tx_count;
+    uint32_t echo_count;
+    uint32_t mode_sequence_count;
+    uint8_t mode_sequence_submode;
+    uint8_t discard_remaining;
+    uint8_t transition_busy;
+} fpga_meter_rx_event_t;
+
+static QueueHandle_t meter_rx_queue = NULL;  /* Complete immutable 12-byte data frames */
 
 static TaskHandle_t      acq_task_handle = NULL;
 static TaskHandle_t      tx_task_handle  = NULL;
@@ -174,7 +186,7 @@ static void fpga_meter_reset_transport(void)
     if (rx_task_handle != NULL) vTaskSuspend(rx_task_handle);
 
     if (usart_tx_queue != NULL) xQueueReset(usart_tx_queue);
-    if (meter_sem != NULL) xQueueReset(meter_sem);
+    if (meter_rx_queue != NULL) xQueueReset(meter_rx_queue);
     if (spi3_acq_queue != NULL) xQueueReset(spi3_acq_queue);
     fpga_meter_adc_reset_generation++;
 
@@ -1840,8 +1852,15 @@ void USART2_IRQHandler(void)
             /* Check for complete frame */
             if (fpga.rx_buf[0] == FPGA_RX_DATA_HDR_0 &&
                 fpga.rx_index >= FPGA_RX_FRAME_SIZE) {
-                /* Complete data frame (12 bytes): copy to stable buffer */
+                /* Complete data frame (12 bytes): copy to diagnostic buffer and
+                 * enqueue an immutable event for dvom_RX. A binary semaphore over
+                 * fpga.rx_frame let later ISR frames overwrite the bytes before
+                 * the task parsed them, which made stale/wrong-family DMM frames
+                 * indistinguishable from legitimate active-mode data. */
+                fpga_meter_rx_event_t event;
                 memcpy((void *)fpga.rx_frame, (const void *)fpga.rx_buf,
+                       FPGA_RX_FRAME_SIZE);
+                memcpy(event.frame, (const void *)fpga.rx_buf,
                        FPGA_RX_FRAME_SIZE);
                 fpga.rx_frame_valid = true;
                 fpga.frame_count++;
@@ -1862,13 +1881,22 @@ void USART2_IRQHandler(void)
                 fpga.last_rx_mode_sequence_submode = fpga.meter_mode_sequence_submode;
                 fpga.last_rx_discard_remaining = meter_frame_discard_count;
                 fpga.last_rx_transition_busy = meter_transition_busy ? 1U : 0U;
+                event.frame_count = fpga.last_rx_frame_count;
+                event.tx_count = fpga.last_rx_tx_count;
+                event.echo_count = fpga.last_rx_echo_count;
+                event.mode_sequence_count = fpga.last_rx_mode_sequence_count;
+                event.mode_sequence_submode = fpga.last_rx_mode_sequence_submode;
+                event.discard_remaining = fpga.last_rx_discard_remaining;
+                event.transition_busy = fpga.last_rx_transition_busy;
                 fpga_record_rx_data_frame();
                 fpga.rx_index = 0;
 
-                /* Signal meter processing task (only if RTOS is running) */
-                if (meter_sem != NULL && xTaskGetSchedulerState() == taskSCHEDULER_RUNNING) {
+                /* Hand complete frame ownership to dvom_RX (only if RTOS is running). */
+                if (meter_rx_queue != NULL &&
+                    xTaskGetSchedulerState() == taskSCHEDULER_RUNNING) {
                     BaseType_t xHigherPriorityTaskWoken = pdFALSE;
-                    xSemaphoreGiveFromISR(meter_sem, &xHigherPriorityTaskWoken);
+                    (void)xQueueSendFromISR(meter_rx_queue, &event,
+                                            &xHigherPriorityTaskWoken);
                     portYIELD_FROM_ISR(xHigherPriorityTaskWoken);
                 }
 
@@ -1946,7 +1974,7 @@ static void fpga_usart_tx_task(void *pv)
 
 /*
  * USART RX Processing Task (dvom_RX equivalent)
- * Wakes on meter_sem when a complete data frame arrives.
+ * Wakes on meter_rx_queue when a complete data frame arrives.
  * Parses BCD meter readings and updates the global meter_reading.
  *
  * Stock note: the decompiled FUN_080028e0 path queues display task indices
@@ -1961,18 +1989,25 @@ static void fpga_usart_rx_task(void *pv)
     (void)pv;
 
     for (;;) {
-        /* Block until USART ISR signals a complete data frame */
-        xSemaphoreTake(meter_sem, portMAX_DELAY);
+        fpga_meter_rx_event_t event;
+
+        /* Block until USART ISR owns a complete data frame. */
+        xQueueReceive(meter_rx_queue, &event, portMAX_DELAY);
 
         /* Parse the meter data from the RX frame.
          * meter_submode is the global from main.c (via ui.h extern). */
         extern volatile uint8_t meter_submode;
-        if (!fpga_meter_rx_frame_should_parse(meter_transition_busy,
+        if (!fpga_meter_rx_frame_should_parse(event.transition_busy != 0U,
                                               &meter_frame_discard_count,
                                               &meter_transition_frame_skip_count)) {
             continue;
         }
-        meter_data_process_frame(fpga.rx_frame, meter_submode);
+
+        uint8_t parse_submode = meter_submode;
+        if (fpga_meter_submode_is_valid(event.mode_sequence_submode)) {
+            parse_submode = event.mode_sequence_submode;
+        }
+        meter_data_process_frame(event.frame, parse_submode);
 
         /*
          * Range feedback is intentionally not driven from the parsed number.
@@ -4278,7 +4313,7 @@ QueueHandle_t fpga_create_tasks(void)
     /* Create queues */
     usart_tx_queue = xQueueCreate(10, sizeof(uint16_t));
     spi3_acq_queue = xQueueCreate(15, sizeof(uint8_t));
-    meter_sem      = xSemaphoreCreateBinary();
+    meter_rx_queue = xQueueCreate(8, sizeof(fpga_meter_rx_event_t));
 
 #if FPGA_BUS_RELEASED_BOOT
     /* Bus-released boot: create NO auto-tasks — the MCU has handed SPI3 to an

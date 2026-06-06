@@ -151,6 +151,8 @@ static bool test_raw_digits_are_continuity_marker(const uint8_t raw_digits[4])
            raw_digits[3] == 5;
 }
 
+static void build_valid_frame_for_mode(uint8_t frame[12], uint8_t mode);
+
 static int test_segment_frame_builder_exercises_cross_byte_lookup(void)
 {
     uint8_t frame[12];
@@ -563,7 +565,7 @@ static int test_dcv_7005_without_class_bits_stays_class0(void)
 {
     uint8_t frame[12];
 
-    build_segment_frame(frame, 7, 0, 0, 5, 0x00, 0x00, 0x00, 0x00, 0);
+    build_segment_frame(frame, 7, 0, 0, 5, 0x00, 0x00, 0x02, 0x00, 0);
     meter_data_init();
     process_frame(frame, 0);
 
@@ -918,24 +920,11 @@ static int test_invalidate_clears_stale_reading_for_every_submode(void)
 static int test_parser_stock_mode_tracks_transition_plan_for_every_submode(void)
 {
     uint8_t frame[12];
-    uint8_t ac_frame[12];
-    uint8_t resistance_frame[12];
-    uint8_t continuity_frame[12];
-
-    build_segment_frame(frame, 1, 2, 3, 4, 0x00, 0x00, 0x00, 0x00, 0);
-    build_segment_frame(ac_frame, 1, 2, 3, 4, 0x00, 0x00, 0x00, 0x00, 0x0031);
-    build_segment_frame(resistance_frame, 1, 2, 3, 4, 0x40, 0x00, 0x00, 0x00, 0);
-    build_segment_frame(continuity_frame, 0, 0x12, 0x0A, 5,
-                        0x00, 0x00, 0x00, 0x00, 0);
 
     for (uint8_t mode = 0; mode < FPGA_METER_LOCAL_SUBMODE_COUNT; mode++) {
         fpga_meter_transition_plan_t plan =
             fpga_meter_transition_plan_for_submode(mode);
-        const uint8_t *good =
-            (mode == 1 || mode == 4 || mode == 5) ? ac_frame :
-            (mode == 6) ? resistance_frame :
-            (mode == 7) ? continuity_frame :
-            frame;
+        build_valid_frame_for_mode(frame, mode);
 
         meter_data_init();
         meter_data_invalidate(mode);
@@ -943,7 +932,7 @@ static int test_parser_stock_mode_tracks_transition_plan_for_every_submode(void)
         ASSERT(meter_reading.submode == mode);
         ASSERT(!meter_reading.valid);
 
-        process_frame(good, mode);
+        process_frame(frame, mode);
         ASSERT(meter_reading.valid);
         ASSERT(meter_reading.submode == mode);
         ASSERT(meter_reading.stock_mode == plan.stock_mode);
@@ -1127,7 +1116,12 @@ static int test_state_machine_property_matrix_covers_all_submodes(void)
 static void build_valid_frame_for_mode(uint8_t frame[12], uint8_t mode)
 {
     switch (mode) {
+    case 0:
+        build_segment_frame(frame, 1, 2, 3, 4, 0x00, 0x00, 0x02, 0x00, 0);
+        break;
     case 1:
+        build_segment_frame(frame, 1, 2, 3, 4, 0x00, 0x00, 0x02, 0x00, 0x0031);
+        break;
     case 4:
     case 5:
         build_segment_frame(frame, 1, 2, 3, 4, 0x00, 0x00, 0x00, 0x00, 0x0031);
@@ -1376,8 +1370,7 @@ static int test_goal_surface_property_enumerates_dmm_state_machine(void)
             (1U << FPGA_METER_FRAME_FAMILY_DIODE) |
             (1U << FPGA_METER_FRAME_FAMILY_EXTENDED)));
     ASSERT(unclassified_active_policy_seen ==
-           ((1U << FPGA_METER_FRAME_FAMILY_VOLTAGE) |
-            (1U << FPGA_METER_FRAME_FAMILY_CURRENT) |
+           ((1U << FPGA_METER_FRAME_FAMILY_CURRENT) |
             (1U << FPGA_METER_FRAME_FAMILY_RESISTANCE) |
             (1U << FPGA_METER_FRAME_FAMILY_DIODE) |
             (1U << FPGA_METER_FRAME_FAMILY_EXTENDED)));
@@ -1620,11 +1613,12 @@ static int test_unclassified_normal_frames_follow_active_family_only(void)
     /*
      * Stock-visible cross-family markers are currently narrow: voltage payload
      * metadata in frame[8]/[9] and the continuity segment pattern. A normal
-     * digit frame with neither marker is an unclassified normal frame: it must
-     * not grow a synthetic current, resistance, diode, or extended "looks like"
-     * classifier. It is interpreted only under the active local transition plan,
-     * and any future marker must come from stock frame metadata or a
-     * documented live trace.
+     * digit frame with neither marker is an unclassified normal frame for the
+     * still-unmarked current/passive gaps: it must not grow a synthetic current,
+     * resistance, diode, or extended "looks like" classifier. Voltage is no
+     * longer allowed to use that fallback because its recovered stock marker is
+     * visible in frame[8]/frame[9]; live frame[8]=00 DCV traces produced
+     * confident nonsense readings when accepted as active voltage.
      */
     static const uint8_t modes[FPGA_METER_LOCAL_SUBMODE_COUNT] = {
         0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10
@@ -1645,13 +1639,40 @@ static int test_unclassified_normal_frames_follow_active_family_only(void)
 
         meter_data_init();
         process_frame(frame, mode);
-        ASSERT(meter_reading.valid);
-        ASSERT(meter_reading.result_class == METER_RESULT_NORMAL);
-        ASSERT(expect_family_debug(
-            (uint8_t)fpga_meter_frame_family_for_submode(mode),
-            (uint8_t)fpga_meter_frame_family_for_submode(mode),
-            METER_REJECT_NONE));
+        if (fpga_meter_frame_family_for_submode(mode) ==
+            FPGA_METER_FRAME_FAMILY_VOLTAGE) {
+            ASSERT(!meter_reading.valid);
+            ASSERT(expect_payload_cleared("---"));
+            ASSERT(expect_family_debug(FPGA_METER_FRAME_FAMILY_VOLTAGE,
+                                       FPGA_METER_FRAME_FAMILY_VOLTAGE,
+                                       METER_REJECT_WRONG_FRAME_FAMILY));
+        } else {
+            ASSERT(meter_reading.valid);
+            ASSERT(meter_reading.result_class == METER_RESULT_NORMAL);
+            ASSERT(expect_family_debug(
+                (uint8_t)fpga_meter_frame_family_for_submode(mode),
+                (uint8_t)fpga_meter_frame_family_for_submode(mode),
+                METER_REJECT_NONE));
+        }
     }
+    return 1;
+}
+
+static int test_dcv_rejects_live_unmarked_frame8_00_regression(void)
+{
+    uint8_t frame[12] = {
+        0x5A, 0xA5, 0xCC, 0x47, 0xFE, 0xEB,
+        0x47, 0x20, 0x00, 0x00, 0x01, 0x3C,
+    };
+
+    meter_data_init();
+    process_frame(frame, 0);
+    ASSERT(!meter_reading.valid);
+    ASSERT(meter_reading.reject_reason == METER_REJECT_WRONG_FRAME_FAMILY);
+    ASSERT(expect_payload_cleared("---"));
+    ASSERT(expect_family_debug(FPGA_METER_FRAME_FAMILY_VOLTAGE,
+                               FPGA_METER_FRAME_FAMILY_VOLTAGE,
+                               METER_REJECT_WRONG_FRAME_FAMILY));
     return 1;
 }
 
@@ -1799,13 +1820,16 @@ static int test_continuity_marker_rejected_outside_continuity_mode(void)
     uint8_t continuity[12];
     uint8_t normal[12];
     uint8_t ac_normal[12];
+    uint8_t ac_current_normal[12];
     static const uint8_t modes[] = { 0, 1, 2, 3, 4, 5, 6, 8, 9, 10 };
 
     build_segment_frame(continuity, 0, 0x12, 0x0A, 5,
                         0x00, 0x00, 0x00, 0x00, 0);
     build_segment_frame(normal, 1, 2, 3, 4,
-                        0x00, 0x00, 0x00, 0x00, 0);
+                        0x00, 0x00, 0x02, 0x00, 0);
     build_segment_frame(ac_normal, 1, 2, 3, 4,
+                        0x00, 0x00, 0x02, 0x00, 0x0031);
+    build_segment_frame(ac_current_normal, 1, 2, 3, 4,
                         0x00, 0x00, 0x00, 0x00, 0x0031);
 
     for (unsigned i = 0; i < sizeof(modes); i++) {
@@ -1815,12 +1839,16 @@ static int test_continuity_marker_rejected_outside_continuity_mode(void)
         if (mode == 6) {
             build_segment_frame(normal, 1, 2, 3, 4,
                                 0x40, 0x00, 0x00, 0x00, 0);
+        } else if (mode == 0) {
+            build_segment_frame(normal, 1, 2, 3, 4,
+                                0x00, 0x00, 0x02, 0x00, 0);
         } else {
             build_segment_frame(normal, 1, 2, 3, 4,
                                 0x00, 0x00, 0x00, 0x00, 0);
         }
-        process_frame((mode == 1 || mode == 4 || mode == 5) ?
-                      ac_normal : normal, mode);
+        process_frame((mode == 1) ? ac_normal :
+                      (mode == 4 || mode == 5) ? ac_current_normal :
+                      normal, mode);
         ASSERT(meter_reading.valid);
         ASSERT(meter_reading.result_class == METER_RESULT_NORMAL);
 
@@ -1880,8 +1908,8 @@ static int test_special_frames_clear_stale_aux_frequency(void)
     uint8_t invalid[12];
     uint8_t continuity[12];
 
-    build_segment_frame(partial_blank, 0x10, 0x11, 0x10, 0x10, 0x00, 0x00, 0x00, 0x00, 0);
-    build_segment_frame(invalid, 0xFF, 0, 0, 0, 0x00, 0x00, 0x00, 0x00, 0);
+    build_segment_frame(partial_blank, 0x10, 0x11, 0x10, 0x10, 0x00, 0x00, 0x02, 0x00, 0);
+    build_segment_frame(invalid, 0xFF, 0, 0, 0, 0x00, 0x00, 0x02, 0x00, 0);
     build_segment_frame(continuity, 0, 0x12, 0x0A, 5, 0x00, 0x00, 0x00, 0x00, 0);
 
     meter_data_init();
@@ -2351,6 +2379,7 @@ int main(void)
     TEST(transition_phase_marker_frames_follow_destination_state);
     TEST(marker_visible_family_mismatch_matrix_clears_stale_payload);
     TEST(unclassified_normal_frames_follow_active_family_only);
+    TEST(dcv_rejects_live_unmarked_frame8_00_regression);
     TEST(frame6_0x40_is_not_a_global_resistance_family_marker);
     TEST(voltage_mode_mains_frame_uses_stock_range_hint);
     TEST(dcv_high_range_frame_stays_voltage_across_current_transition);

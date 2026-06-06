@@ -457,6 +457,23 @@ static uint8_t observed_frame_family(uint8_t expected_family,
     return expected_family;
 }
 
+static bool voltage_frame_missing_required_marker(const meter_reading_t *r,
+                                                  const volatile uint8_t *frame)
+{
+    /*
+     * Live low-DCV failure boundary:
+     * 5A A5 CC 47 FE EB 47 20 00 00 01 3C repeatedly decoded to a confident
+     * 154 V reading even though frame[8]/frame[9] carried no stock-visible
+     * voltage metadata. Stock evidence and fixtures expose voltage payloads as
+     * frame[8]=0x02, 0x80, or 0x82 with frame[9]=0. A voltage-mode frame without
+     * that marker is an upstream producer/apply/calibration problem, not a
+     * decoder default; fail closed so wrong-family frames cannot masquerade as
+     * sane DCV/ACV readings.
+     */
+    return r->expected_frame_family == FPGA_METER_FRAME_FAMILY_VOLTAGE &&
+           !frame_has_voltage_payload_marker(frame);
+}
+
 static bool ui_submode_is_small_current(uint8_t ui_submode)
 {
     return ui_submode == 2 || ui_submode == 4;
@@ -1185,7 +1202,8 @@ void meter_data_process_frame(const volatile uint8_t *frame, uint8_t submode)
         return;
     }
 
-    if (frame_is_voltage_payload(submode, frame) ||
+    if (voltage_frame_missing_required_marker(r, frame) ||
+        frame_is_voltage_payload(submode, frame) ||
         frame_family_mismatch(r)) {
         r->reject_reason = METER_REJECT_WRONG_FRAME_FAMILY;
         METER_REJECT_FRAME();
