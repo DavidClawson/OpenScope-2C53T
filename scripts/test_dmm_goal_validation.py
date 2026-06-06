@@ -199,6 +199,10 @@ class DmmGoalValidationTests(unittest.TestCase):
             result["tests"],
         )
         self.assertIn("meter_auto_score(1, &r) == 0", result["snippet_anchors"])
+        self.assertIn(
+            "r.is_ac = true;\n    ASSERT(meter_auto_score(1, &r) == 0);",
+            result["snippet_anchors"],
+        )
         self.assertIn("meter_auto_score(4, &r) == 0", result["snippet_anchors"])
         self.assertIn("r.bcd_value = 0", result["snippet_anchors"])
 

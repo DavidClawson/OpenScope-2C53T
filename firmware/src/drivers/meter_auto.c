@@ -20,7 +20,14 @@ const uint8_t *meter_auto_candidates(size_t *count)
 
 static bool reading_has_ac_evidence(const meter_reading_t *r)
 {
-    return r->is_ac || r->aux_freq_hz >= 1.0f;
+    /*
+     * Stock evidence currently proves frame[7].0 as an ACV decimal-format
+     * selector, not frame[7].2 as an AC-present bit. `is_ac` mirrors that
+     * status byte for diagnostics only; auto-selection confidence must stay
+     * tied to the independent companion frequency hint so DC input cannot
+     * become a confident ACV/ACA candidate through a status-bit echo.
+     */
+    return r->aux_freq_hz >= 1.0f;
 }
 
 static bool reading_has_clean_frame_family(uint8_t submode,

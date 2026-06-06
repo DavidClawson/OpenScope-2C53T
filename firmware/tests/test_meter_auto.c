@@ -103,14 +103,13 @@ static int test_ac_voltage_requires_frequency_evidence(void)
 
     r.aux_freq_hz = 0.0f;
     ASSERT(meter_auto_score(1, &r) == 0);
+    r.is_ac = true;
+    ASSERT(meter_auto_score(1, &r) == 0);
+    r.is_ac = false;
 
     r.aux_freq_hz = 49.9f;
     ASSERT(meter_auto_score(1, &r) == 90);
     r.bcd_value = 0;
-    ASSERT(meter_auto_score(1, &r) == 90);
-
-    r.aux_freq_hz = 0.0f;
-    r.is_ac = true;
     ASSERT(meter_auto_score(1, &r) == 90);
     return 1;
 }
@@ -132,13 +131,13 @@ static int test_current_auto_scores_respect_ac_evidence(void)
 
     r.is_ac = true;
     r.submode = 2;
-    ASSERT(meter_auto_score(2, &r) == 0);
+    ASSERT(meter_auto_score(2, &r) == 50);
     r.submode = 3;
-    ASSERT(meter_auto_score(3, &r) == 0);
+    ASSERT(meter_auto_score(3, &r) == 50);
     r.submode = 4;
-    ASSERT(meter_auto_score(4, &r) == 50);
+    ASSERT(meter_auto_score(4, &r) == 0);
     r.submode = 5;
-    ASSERT(meter_auto_score(5, &r) == 50);
+    ASSERT(meter_auto_score(5, &r) == 0);
 
     r = normal_reading(4, 2261);
     r.aux_freq_hz = 49.0f;

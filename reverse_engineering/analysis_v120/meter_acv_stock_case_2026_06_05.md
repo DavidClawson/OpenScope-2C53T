@@ -92,7 +92,13 @@ companion frequency field. Stock frequency-unit formatter paths exist elsewhere
 in the DMM FSM, but they do not by themselves prove an ACV companion-Hz field.
 
 The custom firmware may expose `[10..11]` as a narrow auxiliary frequency hint,
-but it must not use it to decide the ACV voltage decimal/range.
+but it must not use it to decide the ACV voltage decimal/range. Auto-selection
+must also ignore the local `is_ac` status-bit mirror as confidence: that field
+comes from `frame[7].2`, and stock-visible evidence does not prove that bit as
+AC-present. In short: the is_ac status-bit mirror is diagnostic state, not AC
+confidence. ACV/ACA auto confidence therefore remains tied to the independent
+companion frequency hint until a stronger stock xref or repeatable live trace
+proves another AC evidence source.
 
 ## Voltage Range-Hint Evidence
 

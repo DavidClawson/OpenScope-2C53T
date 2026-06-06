@@ -259,7 +259,8 @@ def verify_autoscan_property_contract() -> dict[str, Any]:
     required_snippets = [
         "meter_auto_score(1, &r) == 0",
         "r.aux_freq_hz = 49.9f",
-        "r.is_ac = true",
+        "r.is_ac = true;\n    ASSERT(meter_auto_score(1, &r) == 0);",
+        "r.submode = 4;\n    ASSERT(meter_auto_score(4, &r) == 0);",
         "meter_auto_score(4, &r) == 0",
         "meter_auto_score(5, &r) == 0",
         "r.observed_frame_family = (uint8_t)FPGA_METER_FRAME_FAMILY_VOLTAGE",
@@ -360,7 +361,8 @@ def verify_re_coverage() -> dict[str, Any]:
         "scope UI mux-LUT consumer guard", "0x080151B0", "0x080151C2",
         "FUN_08015f50", "scope render/scale consumer",
         "ACV format selector guard", "0x080371C8", "0x08037228",
-        "frame[7] bit 0", "not AC evidence",
+        "frame[7] bit 0", "not AC evidence", "is_ac status-bit mirror",
+        "frame[7].2", "ACV/ACA auto confidence",
         "scope mux-state consumer guard", "0x0801D2EC", "0x0801EFC0",
         "0x0801F6F8", "remaining RAM-map consumers", "not DMM range proof",
     ]

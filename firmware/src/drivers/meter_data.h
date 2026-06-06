@@ -79,7 +79,7 @@ typedef struct {
     meter_result_class_t result_class;
 
     /* Status flags from RX frame byte [7] */
-    bool     is_ac;              /* AC mode active */
+    bool     is_ac;              /* frame[7].2 diagnostic only; not AC confidence */
     bool     is_auto_range;      /* Auto-range enabled */
     bool     is_hold;            /* Hold mode active */
 
