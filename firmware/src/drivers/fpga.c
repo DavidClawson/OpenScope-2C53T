@@ -2263,29 +2263,12 @@ static void fpga_send_meter_poll_sequence(uint8_t submode)
     }
 
     /*
-     * Stock DMM is not a bare 0x0509 "start forever" loop: after each parsed
-     * frame it runs the formatter/update path that queues mode/range/trigger
-     * dispatcher bytes. The exact display queue is not cloned here, but the
-     * recovered raw-word surface already tells us which 0x05xx words represent
-     * the active selector/config/apply/probe/start state for the selected
-     * submode. Reissuing that state on the poll cadence keeps the meter ASIC in
-     * the selected family without inventing a coefficient, magnitude branch, or
-     * low-voltage special case. If future stock xrefs recover a narrower DCV
-     * range writer, it belongs in fpga_meter_plan rather than in BCD decoding.
+     * Poll only the stock start word after the transition sequence has
+     * selected the mode. Re-sending selector/config/probe words every 250 ms
+     * keeps the producer in setup traffic and can hold low-DCV auto/range
+     * settling in status-20 transitional frames. Selector/config/apply words
+     * belong to fpga_send_meter_mode_sequence(), not to the sample cadence.
      */
-    if (plan.has_config_word) {
-        (void)fpga_send_cmd((uint8_t)(plan.config_word >> 8),
-                            (uint8_t)(plan.config_word & 0x00FFU));
-    }
-    (void)fpga_send_cmd((uint8_t)(plan.selector_word >> 8),
-                        (uint8_t)(plan.selector_word & 0x00FFU));
-    if (plan.has_apply_word) {
-        (void)fpga_send_cmd((uint8_t)(plan.apply_word >> 8),
-                            (uint8_t)(plan.apply_word & 0x00FFU));
-    }
-    if (plan.has_probe_detect) {
-        (void)fpga_send_cmd(0x05, fpga_probe_cmd_byte());
-    }
     (void)fpga_send_cmd((uint8_t)(plan.start_word >> 8),
                         (uint8_t)(plan.start_word & 0x00FFU));
 }
