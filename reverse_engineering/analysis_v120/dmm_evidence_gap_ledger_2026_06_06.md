@@ -687,6 +687,27 @@ wiring proof boundary. It is not permission to restore decoder coefficients.
   wrong low-DCV value and keeps the blocker upstream of parser/display math:
   the DMM producer itself emits OL during transition and then emits the wrong
   DCV payload under the local `0x0514`/`0x0BB` state.
+- Post-H2 SPI3 RX trace: commit `0c06520` records raw MISO bytes for the five
+  stock post-H2 SPI3 triggers (`1/2/6/7/8`) instead of treating `post_ok` as an
+  acceptance signal.  Guarded HID flash of image SHA-256
+  `b3b639a4bb21974d158d3f0e6e7b3d0e7ead988a9838f053fc9e3c0bb43fe0af` showed
+  `h2 bytes=115638 done=1 post_enq=5 post_ok=5 post_drop=0 post_mask=1F`, but
+  every recorded post-H2 RX byte was `FF`:
+  trigger `01` -> `FF FF`, trigger `02` -> `FF FF FF FF FF FF`, trigger `06`
+  -> `FF FF`, trigger `07` -> `FF FF`, trigger `08` -> `FF FF FF FF FF`.
+  The same trace still decoded stable wrong low-DCV output as `display=2.228 V`
+  from `producer_frame=5A A5 A4 BD AD ED 4F 20 00 00 01 34` under
+  `selector=0514 apply=0000 probe=0507 start=0509 planned_gpio=actual_gpio=0BB`.
+  This makes post-H2 byte count/`post_ok` a TX/replay diagnostic only, not H2
+  apply proof.
+- Controlled `0x0508` live negative: the stock basic configure word is a real
+  materializer, but adding it to the live DCV raw-word sequence did not repair
+  the low-voltage producer value.  With the same bench setup, `fpga wire words
+  0x0508 0x0514 0x0507 0x0509` produced no change after settle:
+  `display=2.228 V`, `producer_frame=5A A5 A4 BD AD ED 4F 20 00 00 01 2C`, and
+  the same DCV frontend GPIO levels.  Therefore `0x0508` is not sufficient as
+  the missing low-DCV fix; any future use must be justified by broader stock
+  transition evidence, not by this point.
 
 ## Next RE Target
 
