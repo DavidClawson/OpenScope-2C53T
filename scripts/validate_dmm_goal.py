@@ -119,6 +119,44 @@ def verify_no_unrecovered_meter_coefficients() -> dict[str, Any]:
     return {"checked": checked, "forbidden": forbidden}
 
 
+def verify_h2_tx_only_boundary() -> dict[str, Any]:
+    """Ensure H2 diagnostics keep TX-complete separate from FPGA acceptance."""
+    required = {
+        "firmware/src/drivers/fpga.h": [
+            "H2 SPI3 table TX diagnostic",
+            "streamed the stock 115638-byte table",
+            "no recovered ACK",
+            "not proof that the table was accepted or applied",
+        ],
+        "firmware/src/drivers/fpga.c": [
+            "TX-side diagnostic only",
+            "Stock ignores MISO during this loop",
+            "no\n     * FPGA ACK/apply status has been recovered",
+            "never be treated as DMM calibration acceptance proof",
+        ],
+        "firmware/src/ui/scope_ui.c": [
+            "H2 means bytes streamed, not recovered FPGA acceptance",
+            "H2T:%c",
+        ],
+        "firmware/src/drivers/usb_debug.c": [
+            "TX complete: %s (no recovered FPGA ACK)",
+            "Bytes sent: %lu / 115638",
+        ],
+    }
+
+    checked: dict[str, list[str]] = {}
+    missing: list[str] = []
+    for rel, snippets in required.items():
+        text = (REPO / rel).read_text(encoding="utf-8", errors="replace")
+        checked[rel] = snippets
+        for snippet in snippets:
+            if snippet not in text:
+                missing.append(f"{rel}: {snippet}")
+    if missing:
+        raise GateError("H2 TX-only boundary drifted: " + "; ".join(missing))
+    return {"checked": checked}
+
+
 def verify_state_machine_property_contract() -> dict[str, Any]:
     """Anchor the broad DMM software model so the gate cannot pass a thin harness.
 
@@ -623,6 +661,7 @@ def main(argv: list[str] | None = None) -> int:
         report["autoscan_property_contract"] = verify_autoscan_property_contract()
         report["re_comment_coverage"] = verify_re_coverage()
         report["no_unrecovered_meter_coefficients"] = verify_no_unrecovered_meter_coefficients()
+        report["h2_tx_only_boundary"] = verify_h2_tx_only_boundary()
 
         if not args.skip_live:
             if args.observed_source_voltage is None:

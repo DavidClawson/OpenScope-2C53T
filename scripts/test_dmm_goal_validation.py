@@ -99,6 +99,22 @@ class DmmGoalValidationTests(unittest.TestCase):
         self.assertIn("H2 table binary guard", coverage["terms"])
         self.assertIn("no ACK/apply proof", coverage["terms"])
 
+    def test_h2_tx_only_boundary_is_guarded_in_firmware_surfaces(self) -> None:
+        result = validate_dmm_goal.verify_h2_tx_only_boundary()
+
+        self.assertIn("firmware/src/drivers/fpga.h", result["checked"])
+        self.assertIn("firmware/src/drivers/fpga.c", result["checked"])
+        self.assertIn("firmware/src/ui/scope_ui.c", result["checked"])
+        self.assertIn("firmware/src/drivers/usb_debug.c", result["checked"])
+        self.assertIn(
+            "TX complete: %s (no recovered FPGA ACK)",
+            result["checked"]["firmware/src/drivers/usb_debug.c"],
+        )
+        self.assertIn(
+            "H2 means bytes streamed, not recovered FPGA acceptance",
+            result["checked"]["firmware/src/ui/scope_ui.c"],
+        )
+
     def test_stock_h2_table_is_binary_grounded(self) -> None:
         result = stock_h2_table.verify_h2_table()
         self.assertEqual(result["file_offset"], "0x51d19")
