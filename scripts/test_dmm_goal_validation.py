@@ -98,6 +98,9 @@ class DmmGoalValidationTests(unittest.TestCase):
         self.assertIn("unproven", coverage["terms"])
         self.assertIn("H2 table binary guard", coverage["terms"])
         self.assertIn("no ACK/apply proof", coverage["terms"])
+        self.assertIn("watchdog reload state boundary guard", coverage["terms"])
+        self.assertIn("DAT_2000105a", coverage["terms"])
+        self.assertIn("not DMM ms[0x02]/ms[0x03]", coverage["terms"])
 
     def test_h2_tx_only_boundary_is_guarded_in_firmware_surfaces(self) -> None:
         result = validate_dmm_goal.verify_h2_tx_only_boundary()
@@ -1439,6 +1442,27 @@ class DmmGoalValidationTests(unittest.TestCase):
         self.assertIn(
             "4b f6 b8 71 c0 b2 c0 f6 04 01 31 f8 10 00",
             sequences["scope_ui_draw_main_mux_lut_consumer"]["bytes"],
+        )
+
+    def test_stock_watchdog_reload_state_boundary_is_negative_dmm_evidence(self) -> None:
+        result = stock_meter_literals.verify_watchdog_reload_state_boundary_sequences()
+        sequences = result["sequences"]
+
+        self.assertEqual(
+            sequences["init_iwdg_reload_from_DAT_2000105a"]["addr"],
+            "0x08027372",
+        )
+        self.assertEqual(
+            sequences["button_task_watchdog_reload_loop"]["addr"],
+            "0x08039008",
+        )
+        self.assertIn("DAT_2000105a", result["ram_map"])
+        self.assertEqual(result["full_decompile_ref"]["line"], 4733)
+        self.assertIn("watchdog/UI housekeeping", result["classification"])
+        self.assertIn("not DMM", result["classification"])
+        self.assertIn(
+            "97 f8 62 0f 00 28 18 bf c9 f8 00 00 a7 f8 6c 5f",
+            sequences["button_task_watchdog_reload_loop"]["bytes"],
         )
 
     def test_stock_scope_mux_state_consumers_are_binary_grounded(self) -> None:

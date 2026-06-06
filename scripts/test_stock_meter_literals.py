@@ -1107,6 +1107,30 @@ EXPECTED_SCOPE_UI_MUX_LUT_CONSUMER_SEQUENCES = {
         ),
     ),
 }
+EXPECTED_WATCHDOG_RELOAD_STATE_SEQUENCES = {
+    "init_iwdg_reload_from_DAT_2000105a": (
+        0x08027372,
+        bytes.fromhex(
+            "9a f8 62 0f 4e f2 10 07 00 28 1e bf 45 f2 04 41 "
+            "c4 f2 01 01 08 63 42 f6 20 30 c2 f2 00 00"
+        ),
+    ),
+    "button_task_watchdog_reload_loop": (
+        0x08039008,
+        bytes.fromhex(
+            "82 b0 42 f6 70 56 40 f2 f8 07 46 f2 48 58 45 f2 "
+            "34 49 00 25 c2 f2 00 06 0d f1 07 04 c2 f2 00 07 "
+            "c0 f6 04 08 c4 f2 01 09 8d f8 07 50 08 e0 00 bf "
+            "97 f8 62 0f 00 28 18 bf c9 f8 00 00 a7 f8 6c 5f "
+            "30 68 21 46 4f f0 ff 32 02 f0 c2 f8 01 28 f7 d1 "
+            "97 f8 10 0e 00 f0 fe 01 02 29 03 d1 87 f8 10 5e "
+            "04 e0 00 bf 01 28 e3 d0 ff 28 e1 d0 97 f8 2f 00 "
+            "97 f8 30 10 97 f8 33 20 08 43 97 f8 2c 1f 10 43 "
+            "08 43 d5 d1 9d f8 07 00 08 eb 80 00 50 f8 04 0c "
+            "80 47 cd e7"
+        ),
+    ),
+}
 EXPECTED_SCOPE_MUX_STATE_CONSUMER_SEQUENCES = {
     "scope_timebase_ch1_mux_scale_consumer": (
         0x0801D2EC,
@@ -2298,6 +2322,59 @@ def verify_scope_ui_mux_lut_consumer_sequences() -> dict[str, object]:
     return {"sequences": checked}
 
 
+def verify_watchdog_reload_state_boundary_sequences() -> dict[str, object]:
+    """Check `DAT_2000105a` / `meter_state + 0xf62` is watchdog/UI state.
+
+    The FPGA-task disassembly has an easy-to-misread `ldrb.w r0, [r7,#0xf62]`
+    at `0x08039038`, with `r7 = 0x200000f8`.  That address is
+    `DAT_2000105a`, not `DAT_200000fa`/`DAT_200000fb` and not meter
+    `ms[0x02]`/`ms[0x03]`.  The guarded block writes the byte to `IWDG_RLR`
+    (`0x40015434`) and clears `meter_state + 0xf6c`, then runs button-event
+    dispatch/housekeeping checks.  It is negative DMM evidence, not a recovered
+    analog range writer.
+    """
+    checked: dict[str, dict[str, object]] = {}
+    for name, (addr, expected) in EXPECTED_WATCHDOG_RELOAD_STATE_SEQUENCES.items():
+        actual = read(addr, len(expected))
+        if actual != expected:
+            raise AssertionError(
+                f"{name} {addr:#010x}: expected {expected.hex(' ')}, "
+                f"got {actual.hex(' ')}"
+            )
+        checked[name] = {
+            "addr": f"{addr:#010x}",
+            "bytes": actual.hex(" "),
+        }
+
+    ram_map_lines = RAM_MAP.read_text(encoding="utf-8", errors="replace").splitlines()
+    expected_ram_map = (
+        "0x2000105A DAT_2000105a (1 refs): FUN_08015f50@08015f50"
+    )
+    if expected_ram_map not in ram_map_lines:
+        raise AssertionError(f"{RAM_MAP}: DAT_2000105a RAM-map entry drifted")
+
+    lines = FULL_DECOMPILE.read_text(encoding="utf-8", errors="replace").splitlines()
+    expected_full_ref = (4733, "uVar15 = FUN_0803e5da(DAT_2000105a);")
+    actual_full_ref = (expected_full_ref[0], lines[expected_full_ref[0] - 1].strip())
+    if actual_full_ref != expected_full_ref:
+        raise AssertionError(
+            "DAT_2000105a full-decompile consumer drifted: expected "
+            f"{expected_full_ref}, got {actual_full_ref}"
+        )
+
+    return {
+        "sequences": checked,
+        "ram_map": expected_ram_map,
+        "full_decompile_ref": {
+            "line": expected_full_ref[0],
+            "text": expected_full_ref[1],
+        },
+        "classification": (
+            "watchdog/UI housekeeping boundary, not DMM ms[0x02]/ms[0x03]"
+        ),
+    }
+
+
 def verify_scope_mux_state_consumer_sequences() -> dict[str, object]:
     """Check remaining RAM-map consumers of the shared mux-state pair.
 
@@ -2394,6 +2471,7 @@ def main() -> None:
     scope_snapshots = verify_scope_snapshot_consumer_sequences()
     scope_preset_mux_owners = verify_scope_preset_mux_owner_sequences()
     scope_ui_mux_lut_consumers = verify_scope_ui_mux_lut_consumer_sequences()
+    watchdog_reload_boundary = verify_watchdog_reload_state_boundary_sequences()
     scope_mux_state_consumers = verify_scope_mux_state_consumer_sequences()
     for symbol, info in mux_state_ram_map["symbols"].items():
         print(
@@ -2483,6 +2561,8 @@ def main() -> None:
           ", ".join(item["addr"] for item in scope_preset_mux_owners["sequences"].values()))
     print("stock scope UI mux-LUT consumer sites: " +
           ", ".join(item["addr"] for item in scope_ui_mux_lut_consumers["sequences"].values()))
+    print("stock watchdog reload state boundary sites: " +
+          ", ".join(item["addr"] for item in watchdog_reload_boundary["sequences"].values()))
     print("stock scope mux-state consumer sites: " +
           ", ".join(item["addr"] for item in scope_mux_state_consumers["sequences"].values()))
     print("stock meter literal pools: ok")

@@ -1401,3 +1401,42 @@ the shared scope mux-state bytes and scope scale tables, but they do not call
 DMM range proof. The unresolved DMM path is still a runtime writer or trace that
 ties DMM selector/range transitions to `ms[0x02]` and `ms[0x03]`.
 Put tersely for future audits: these scope consumers are not DMM range proof.
+
+### Watchdog Reload State Boundary, 2026-06-06
+
+The `0x08039038` hit in `fpga_task_decompile.txt` is also negative DMM
+evidence. It is easy to confuse the immediate offset with the recovered mux
+state bytes, but the base register is `r7 = 0x200000f8`, so `[r7,#0xf62]` is
+absolute `0x2000105a` (`DAT_2000105a`), not `DAT_200000fa`, `DAT_200000fb`,
+`ms[0x02]`, or `ms[0x03]`.
+In stock terms this is `meter_state + 0xf62`; it is not DMM ms[0x02]/ms[0x03].
+
+```text
+0x08039024: movt r7, #0x2000       ; r7 = 0x200000f8 = meter_state
+0x0803902c: movt sb, #0x4001       ; sb = 0x40015434 = IWDG_RLR
+0x08039038: ldrb.w r0, [r7,#0xf62] ; DAT_2000105a
+0x08039040: strne.w r0, [sb]       ; write watchdog reload register
+0x08039044: strh.w r5, [r7,#0xf6c] ; clear adjacent housekeeping counter
+```
+
+The same byte is used during init:
+
+```text
+0x08027372: ldrb.w r0, [sl,#0xf62]
+0x08027386: strne r0, [0x40015404,#0x30] ; IWDG reload register alias
+```
+
+The RAM map and full decompile agree that `DAT_2000105a` is a display/UI state
+byte, not an analog mux/range byte:
+
+```text
+ram_map.txt: 0x2000105A DAT_2000105a (1 refs): FUN_08015f50@08015f50
+full_decompile.c:4733  uVar15 = FUN_0803e5da(DAT_2000105a);
+```
+
+`scripts/test_stock_meter_literals.py` carries the
+`watchdog reload state boundary guard` for `0x08027372` and `0x08039008`,
+plus the RAM-map and full-decompile anchors above. If a future pass wants to
+use this state area for DMM behavior, it must first recover a different stock
+writer/consumer tied to meter selector/range transitions; this block itself is
+watchdog/UI housekeeping, not DMM `ms[0x02]`/`ms[0x03]` range proof.
