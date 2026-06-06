@@ -699,6 +699,7 @@ class DmmGoalValidationTests(unittest.TestCase):
         result = stock_meter_literals.verify_usart_tx_config_writer_meter_case_sequences()
         sequences = result["sequences"]
         callers = result["callers"]
+        direct_callers = result["direct_callers"]
 
         self.assertEqual(
             sequences["writer_tbb_prologue"]["addr"],
@@ -738,6 +739,7 @@ class DmmGoalValidationTests(unittest.TestCase):
         )
         self.assertIn("12 f0 2e fa", callers["tim5_init_config_writer_call"]["bytes"])
         self.assertIn("12 f0 f6 f9", callers["tim2_init_config_writer_call"]["bytes"])
+        self.assertEqual(direct_callers, ["0x080272d4", "0x08027344"])
 
     def test_stock_boot_mode_init_dmm_sequences_are_binary_grounded(self) -> None:
         result = stock_meter_literals.verify_boot_mode_init_dmm_sequences()

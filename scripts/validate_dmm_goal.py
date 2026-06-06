@@ -561,6 +561,8 @@ def verify_re_coverage() -> dict[str, Any]:
         "USART TX config writer meter-case guard", "0x08039734", "0x080397C8",
         "0x0100 update mask", "separate FPGA config bitfield path",
         "visible direct callers are TIM5/TIM2 init",
+        "complete direct callsite set", "0x080272D4", "0x08027344",
+        "no runtime DMM caller is recovered",
         "boot mode-init DMM sequence guard", "0x0800B908", "0x0800B9D6",
         "0x0800BACE", "0x0800BC32", "0x20002D6C",
         "command-byte banks", "0x1A..0x1E", "0x16..0x19", "0x12/0x13/0x14",

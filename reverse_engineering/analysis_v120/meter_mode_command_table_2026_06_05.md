@@ -662,8 +662,9 @@ master init. Treat this as a separate FPGA config bitfield path, not as a
 recovered normal DMM runtime range source.
 
 The binary guard covers the dispatch prologue, the `0x080397C8` meter-case arm,
-the common epilogue that ORs the `0x0100 update mask`, and the two visible init
-callers:
+the common epilogue that ORs the `0x0100 update mask`, and the complete direct callsite set.
+The only recovered direct `BL` instructions to `FUN_08039734` are the two init
+callers below (`0x080272D4` and `0x08027344`); no runtime DMM caller is recovered:
 
 ```text
 0x08039734 writer_tbb_prologue:

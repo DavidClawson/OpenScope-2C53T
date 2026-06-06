@@ -519,6 +519,7 @@ EXPECTED_USART_TX_CONFIG_WRITER_CALLER_SEQUENCES = {
         bytes.fromhex("02 20 c0 f2 01 00 10 90 4f f0 80 40 12 f0 f6 f9"),
     ),
 }
+EXPECTED_USART_TX_CONFIG_WRITER_DIRECT_CALLS = [0x080272D4, 0x08027344]
 EXPECTED_BOOT_MODE_INIT_DMM_SEQUENCES = {
     "mode_init_dispatcher_tbh": (
         0x0800B908,
@@ -954,6 +955,35 @@ def read(addr: int, size: int) -> bytes:
     data = BIN.read_bytes()
     off = addr - BASE
     return data[off : off + size]
+
+
+def find_direct_thumb_bl_callers(target: int) -> list[int]:
+    data = BIN.read_bytes()
+    callers: list[int] = []
+    for off in range(0, len(data) - 3, 2):
+        h1, h2 = struct.unpack_from("<HH", data, off)
+        if (h1 & 0xF800) != 0xF000 or (h2 & 0xD000) != 0xD000:
+            continue
+        sign = (h1 >> 10) & 1
+        imm10 = h1 & 0x03FF
+        j1 = (h2 >> 13) & 1
+        j2 = (h2 >> 11) & 1
+        imm11 = h2 & 0x07FF
+        i1 = (~(j1 ^ sign)) & 1
+        i2 = (~(j2 ^ sign)) & 1
+        imm = (
+            (sign << 24) |
+            (i1 << 23) |
+            (i2 << 22) |
+            (imm10 << 12) |
+            (imm11 << 1)
+        )
+        if sign:
+            imm -= 1 << 25
+        addr = BASE + off
+        if addr + 4 + imm == target:
+            callers.append(addr)
+    return callers
 
 
 def expect_f64(addr: int, expected: float) -> None:
@@ -1504,7 +1534,19 @@ def verify_usart_tx_config_writer_meter_case_sequences() -> dict[str, object]:
             "bytes": actual.hex(" "),
         }
 
-    return {"sequences": checked, "callers": callers}
+    direct_calls = find_direct_thumb_bl_callers(0x08039734)
+    if direct_calls != EXPECTED_USART_TX_CONFIG_WRITER_DIRECT_CALLS:
+        raise AssertionError(
+            "FUN_08039734 direct BL callers drifted: expected "
+            f"{[f'{addr:#010x}' for addr in EXPECTED_USART_TX_CONFIG_WRITER_DIRECT_CALLS]}, "
+            f"got {[f'{addr:#010x}' for addr in direct_calls]}"
+        )
+
+    return {
+        "sequences": checked,
+        "callers": callers,
+        "direct_callers": [f"{addr:#010x}" for addr in direct_calls],
+    }
 
 
 def verify_boot_mode_init_dmm_sequences() -> dict[str, object]:
