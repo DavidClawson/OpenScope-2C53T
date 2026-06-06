@@ -564,6 +564,17 @@ EXPECTED_METER_SAVED_CONFIG_UNPACK_SEQUENCES = {
         ),
     ),
 }
+EXPECTED_METER_SAVED_CONFIG_LIVE_MUX_STORE_SEQUENCES = {
+    "saved_config_live_mux_store": (
+        0x08025D94,
+        bytes.fromhex(
+            "40 f2 f8 0a c1 b2 55 29 c2 f2 00 0a 05 d0 aa 29 "
+            "40 f0 f8 81 08 21 8a f8 68 1f 01 0a 02 0c 00 0e "
+            "8a f8 00 10 8a f8 01 20 8a f8 02 00 60 68 ca f8 "
+            "03 00"
+        ),
+    ),
+}
 EXPECTED_METER_SAVED_CONFIG_PACK_SEQUENCES = {
     "saved_config_meter_state_pack_reads": (
         0x08022410,
@@ -1815,6 +1826,34 @@ def verify_meter_saved_config_unpack_sequences() -> dict[str, object]:
     return {"sequences": checked}
 
 
+def verify_meter_saved_config_live_mux_store_sequences() -> dict[str, object]:
+    """Check the direct live mux-state stores in stock saved-config unpack.
+
+    The slice materializes base `0x200000f8`, validates the saved-config
+    signature, then stores byte 2 of word 0 to `ms[0x02]` and word 1 to
+    `ms[0x03..0x06]`.  This is a narrow binary guard for the known boot/restore
+    live stores.  It is deliberately not a claim that stock exposes a local
+    runtime DMM range writer at these addresses.
+    """
+    checked: dict[str, dict[str, str]] = {}
+    for name, (addr, expected) in EXPECTED_METER_SAVED_CONFIG_LIVE_MUX_STORE_SEQUENCES.items():
+        actual = read(addr, len(expected))
+        if actual != expected:
+            raise AssertionError(
+                f"{name} {addr:#010x}: expected {expected.hex(' ')}, "
+                f"got {actual.hex(' ')}"
+            )
+        checked[name] = {
+            "addr": f"{addr:#010x}",
+            "bytes": actual.hex(" "),
+            "classification": (
+                "saved-config boot/restore direct live mux stores; "
+                "not a runtime DMM range writer"
+            ),
+        }
+    return {"sequences": checked}
+
+
 def verify_meter_saved_config_pack_sequences() -> dict[str, object]:
     """Check stock saved-config pack/default path for `ms[0x02]`/`ms[0x03]`.
 
@@ -2300,6 +2339,7 @@ def main() -> None:
     mux_restore = verify_meter_mux_restore_sequences()
     aux_afe_pins = verify_meter_aux_afe_pin_sequences()
     saved_config_unpack = verify_meter_saved_config_unpack_sequences()
+    saved_config_live_mux_store = verify_meter_saved_config_live_mux_store_sequences()
     saved_config_pack = verify_meter_saved_config_pack_sequences()
     saved_config_pack_callers = verify_meter_saved_config_pack_caller_sequences()
     usart_tx_config_writer = verify_usart_tx_config_writer_meter_case_sequences()
@@ -2364,6 +2404,8 @@ def main() -> None:
           ", ".join(item["addr"] for item in aux_afe_pins["sequences"].values()))
     print("stock meter saved-config unpack sites: " +
           ", ".join(item["addr"] for item in saved_config_unpack["sequences"].values()))
+    print("stock meter saved-config live mux-store sites: " +
+          ", ".join(item["addr"] for item in saved_config_live_mux_store["sequences"].values()))
     print("stock meter saved-config pack sites: " +
           ", ".join(item["addr"] for item in saved_config_pack["sequences"].values()))
     print("stock meter saved-config pack caller sites: " +

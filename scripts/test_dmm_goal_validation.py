@@ -769,6 +769,31 @@ class DmmGoalValidationTests(unittest.TestCase):
             sequences["saved_config_meter_state_unpack"]["bytes"],
         )
 
+    def test_stock_meter_saved_config_live_mux_store_is_binary_grounded(self) -> None:
+        result = stock_meter_literals.verify_meter_saved_config_live_mux_store_sequences()
+        sequences = result["sequences"]
+
+        self.assertEqual(
+            sequences["saved_config_live_mux_store"]["addr"],
+            "0x08025d94",
+        )
+        self.assertIn(
+            "40 f2 f8 0a",
+            sequences["saved_config_live_mux_store"]["bytes"],
+        )
+        self.assertIn(
+            "c2 f2 00 0a",
+            sequences["saved_config_live_mux_store"]["bytes"],
+        )
+        self.assertIn(
+            "8a f8 02 00 60 68 ca f8 03 00",
+            sequences["saved_config_live_mux_store"]["bytes"],
+        )
+        self.assertIn(
+            "not a runtime DMM range writer",
+            sequences["saved_config_live_mux_store"]["classification"],
+        )
+
     def test_stock_meter_saved_config_pack_is_binary_grounded(self) -> None:
         result = stock_meter_literals.verify_meter_saved_config_pack_sequences()
         sequences = result["sequences"]

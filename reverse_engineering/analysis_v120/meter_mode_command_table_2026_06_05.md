@@ -618,6 +618,23 @@ boot/saved-state apply sequences only. They still do not prove a runtime DMM
 writer that changes `ms[0x02]`/`ms[0x03]` while the user switches local DMM
 ranges.
 
+The narrower `saved-config live mux-store guard` names the direct live RAM
+stores explicitly, so this evidence cannot be blurred into a guessed runtime
+DMM range writer:
+
+```text
+0x08025D94 saved_config_live_mux_store:
+  40 f2 f8 0a c1 b2 55 29 c2 f2 00 0a 05 d0 aa 29
+  40 f0 f8 81 08 21 8a f8 68 1f 01 0a 02 0c 00 0e
+  8a f8 00 10 8a f8 01 20 8a f8 02 00 60 68 ca f8
+  03 00
+```
+
+This slice materializes `sl = 0x200000f8`, checks signatures `0x55`/`0xAA`,
+writes `ms[0x02]` at `0x08025DBC`, then writes `ms[0x03..0x06]` at
+`0x08025DC2`.  It is stock evidence for saved-config unpack and for
+boot/restore direct live mux stores, not a runtime DMM range writer.
+
 The paired persistent pack path is now guarded as well. The
 `saved-config meter-state pack guard` covers `FUN_080223BC` (`0x080223BC`),
 which allocates a 512-byte save buffer and, when called with signature `0x55`,
