@@ -753,6 +753,20 @@ wiring proof boundary. It is not permission to restore decoder coefficients.
   makes future live validation comparable without OCR or ad-hoc text scraping:
   the raw measurement source is the USART2 12-byte DMM producer frame, and the
   next useful trace must move earlier than that frame.
+- USART TX-frame audit + next trace hook: stock `dvom_TX` at
+  `0x0803743A..0x08037442` writes only `tx_buffer[3]=cmd_lo`,
+  `tx_buffer[2]=cmd_hi`, and `tx_buffer[9]=cmd_hi+cmd_lo`; the rest of
+  `0x20000005..0x2000000E` remains the zero-filled BSS/padding surface already
+  documented in `remaining_unknowns.md`.  Current OpenScope TX frames such as
+  `00 00 05 09 00 00 00 00 00 0E` therefore match stock byte construction, so
+  changing TX headers/trailers is not justified evidence.  This slice instead
+  adds diagnostic-only early USART2 RX-sync counters and the last 10-byte echo
+  snapshot to `meter trace`: `rx_sync data_start=...
+  echo_start=... data_hdr=... echo_hdr=... bad_second=... stray=...` and
+  `last_echo_frame=...`.  These fields do not feed decoder/range decisions;
+  they exist to prove, on the next guarded live firmware, whether the
+  `echo_count=0` observation is "no `AA 55` echo stream seen" or a parser/sync
+  rejection before the 12-byte DMM producer frame.
 
 ## Next RE Target
 

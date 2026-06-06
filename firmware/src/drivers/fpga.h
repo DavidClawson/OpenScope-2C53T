@@ -48,6 +48,7 @@
 #define FPGA_RX_DATA_HDR_1    0xA5
 #define FPGA_RX_ECHO_HDR_0    0xAA   /* Echo frame: 0xAA 0x55 */
 #define FPGA_RX_ECHO_HDR_1    0x55
+#define FPGA_RX_ECHO_FRAME_SIZE 10
 
 /* ═══════════════════════════════════════════════════════════════════
  * FPGA Command Codes (USART TX)
@@ -183,6 +184,12 @@ typedef struct {
     volatile uint16_t echo_count;     /* Echo frame counter (0xAA 0x55) */
     volatile uint16_t tx_count;       /* TX commands sent */
     volatile uint16_t rx_byte_count;  /* Raw RX bytes received */
+    volatile uint16_t rx_sync_data_start_count; /* Saw 0x5A as RX frame byte 0 */
+    volatile uint16_t rx_sync_echo_start_count; /* Saw 0xAA as RX frame byte 0 */
+    volatile uint16_t rx_sync_data_header_count; /* Completed 0x5A 0xA5 header */
+    volatile uint16_t rx_sync_echo_header_count; /* Completed 0xAA 0x55 header */
+    volatile uint16_t rx_sync_bad_second_count; /* Header byte 1 rejected */
+    volatile uint16_t rx_sync_stray_count;      /* Byte ignored while unsynced */
     volatile uint16_t last_rx_frame_count; /* Data-frame count when latest frame arrived */
     volatile uint16_t last_rx_tx_count;    /* TX count visible at latest data-frame arrival */
     volatile uint16_t last_rx_echo_count;  /* Echo count visible at latest data-frame arrival */
@@ -200,6 +207,7 @@ typedef struct {
     volatile uint8_t  rx_history_transition_busy[FPGA_RX_FRAME_HISTORY];
     volatile uint8_t  rx_frame_history_head;
     volatile uint8_t  rx_frame_history_count;
+    volatile uint8_t  last_rx_echo_frame[FPGA_RX_ECHO_FRAME_SIZE];
     volatile uint8_t  tx_cmd_hi_history[16]; /* Last sent USART command high bytes */
     volatile uint8_t  tx_cmd_lo_history[16]; /* Last sent USART command low bytes */
     volatile uint8_t  tx_cmd_history_head;   /* Next history slot */

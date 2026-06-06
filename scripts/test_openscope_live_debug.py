@@ -128,6 +128,7 @@ trace v=1 snapshot=1
 context mode=1 startup=Meter ui_sub=0 reading_sub=0 live=1 valid=1 updates=42
 producer counts tx=33 rx_bytes=512 data=12 echo=33 rx_valid=1
 producer_last_rx data=12 tx=33 echo=33 seq=2 seq_sub=0 busy=0 discard=0
+rx_sync data_start=12 echo_start=33 data_hdr=12 echo_hdr=33 bad_second=0 stray=0
 plan stock_mode=0 raw_low=14 family=0 mux=0 portc_porte=0 porta_portb=0 settle_ms=20 discard=2
 wire selector=0514 apply=0000 has_apply=0 probe=0507 start=0509 seq_count=2 seq_sub=0
 last_sequence selector=0514 apply=0000 probe=0507 start=0509
@@ -136,6 +137,7 @@ stock_fsm mode=0 variant=0 format=0 dc_state=1 display_cmd=0 unit_index=0 compos
 transition busy=0 discard_now=0 skip_count=2
 producer_frame=5A A5 44 8E EF E7 07 24 80 00 01 89
 parsed_frame=5A A5 44 8E EF E7 07 24 80 00 01 89
+last_echo_frame=AA 55 00 09 00 00 00 AA 00 09
 transition_history newest_first:
 mth n=0 sub=0 seq=2 selector=0514 apply=0000 probe=0507 start=0509 tx=29..33 data=8..9 planned_gpio=0BB actual_gpio=0BB
 producer_history newest_first:
@@ -159,9 +161,15 @@ h2_post_rx n=0 trigger=01 len=2 bytes=FF FF
         self.assertEqual(parsed["decoded"]["raw"], 4366)
         self.assertEqual(parsed["decoded"]["family_expected"], 0)
         self.assertEqual(parsed["decoded"]["family_observed"], 0)
+        self.assertEqual(parsed["rx_sync"]["echo_hdr"], 33)
+        self.assertEqual(parsed["rx_sync"]["bad_second"], 0)
         self.assertEqual(
             parsed["producer_frame"]["hex"],
             "5A A5 44 8E EF E7 07 24 80 00 01 89",
+        )
+        self.assertEqual(
+            parsed["last_echo_frame"]["hex"],
+            "AA 55 00 09 00 00 00 AA 00 09",
         )
         self.assertEqual(parsed["gpio_frontend"]["PC12"], 1)
         self.assertEqual(parsed["gpio_frontend"]["PB9"], 0)

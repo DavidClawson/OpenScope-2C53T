@@ -1643,17 +1643,30 @@ void USART2_IRQHandler(void)
         if (fpga.rx_index == 0) {
             /* Looking for frame header first byte */
             if (byte == FPGA_RX_DATA_HDR_0 || byte == FPGA_RX_ECHO_HDR_0) {
+                if (byte == FPGA_RX_DATA_HDR_0) {
+                    fpga.rx_sync_data_start_count++;
+                } else {
+                    fpga.rx_sync_echo_start_count++;
+                }
                 fpga.rx_buf[0] = byte;
                 fpga.rx_index = 1;
+            } else {
+                fpga.rx_sync_stray_count++;
             }
         } else if (fpga.rx_index == 1) {
             /* Validate header second byte */
             if ((fpga.rx_buf[0] == FPGA_RX_DATA_HDR_0 && byte == FPGA_RX_DATA_HDR_1) ||
                 (fpga.rx_buf[0] == FPGA_RX_ECHO_HDR_0 && byte == FPGA_RX_ECHO_HDR_1)) {
+                if (fpga.rx_buf[0] == FPGA_RX_DATA_HDR_0) {
+                    fpga.rx_sync_data_header_count++;
+                } else {
+                    fpga.rx_sync_echo_header_count++;
+                }
                 fpga.rx_buf[1] = byte;
                 fpga.rx_index = 2;
             } else {
                 /* Invalid header — restart */
+                fpga.rx_sync_bad_second_count++;
                 fpga.rx_index = 0;
             }
         } else {
@@ -1695,8 +1708,10 @@ void USART2_IRQHandler(void)
                 }
 
             } else if (fpga.rx_buf[0] == FPGA_RX_ECHO_HDR_0 &&
-                       fpga.rx_index >= 10) {
+                       fpga.rx_index >= FPGA_RX_ECHO_FRAME_SIZE) {
                 /* Complete echo frame (10 bytes): just acknowledge */
+                memcpy((void *)fpga.last_rx_echo_frame, (const void *)fpga.rx_buf,
+                       FPGA_RX_ECHO_FRAME_SIZE);
                 fpga.echo_count++;
                 fpga.rx_index = 0;
             }

@@ -383,11 +383,18 @@ static void fpga_diag_clear(void)
     fpga.rx_byte_count = 0;
     fpga.frame_count = 0;
     fpga.echo_count = 0;
+    fpga.rx_sync_data_start_count = 0;
+    fpga.rx_sync_echo_start_count = 0;
+    fpga.rx_sync_data_header_count = 0;
+    fpga.rx_sync_echo_header_count = 0;
+    fpga.rx_sync_bad_second_count = 0;
+    fpga.rx_sync_stray_count = 0;
     fpga.spi3_ok_count = 0;
     fpga.spi3_timeout_count = 0;
     fpga.spi3_total_timeouts = 0;
     fpga.rx_frame_valid = false;
     memset((void *)fpga.rx_frame, 0, sizeof(fpga.rx_frame));
+    memset((void *)fpga.last_rx_echo_frame, 0, sizeof(fpga.last_rx_echo_frame));
     memset((void *)fpga.last_tx_frame, 0, sizeof(fpga.last_tx_frame));
     memset((void *)fpga.tx_frame_history, 0, sizeof(fpga.tx_frame_history));
     fpga.tx_frame_history_head = 0;
@@ -586,6 +593,7 @@ static void cmd_status(void)
         "RX bytes: %u\r\n"
         "Data frames: %u\r\n"
         "Echo frames: %u\r\n"
+        "RX sync: data_start=%u echo_start=%u data_hdr=%u echo_hdr=%u bad2=%u stray=%u\r\n"
         "SPI3 OK: %u\r\n"
         "SPI3 timeouts: %u (total %u)\r\n"
         "SPI3 first byte: 0x%02X\r\n",
@@ -597,6 +605,12 @@ static void cmd_status(void)
         fpga.rx_byte_count,
         fpga.frame_count,
         fpga.echo_count,
+        fpga.rx_sync_data_start_count,
+        fpga.rx_sync_echo_start_count,
+        fpga.rx_sync_data_header_count,
+        fpga.rx_sync_echo_header_count,
+        fpga.rx_sync_bad_second_count,
+        fpga.rx_sync_stray_count,
         fpga.spi3_ok_count,
         fpga.spi3_timeout_count, fpga.spi3_total_timeouts,
         fpga.spi3_first_byte
@@ -2456,12 +2470,27 @@ static void cmd_meter_trace(void)
     uint16_t mth_planned_gpio[FPGA_METER_TRANSITION_HISTORY];
     uint16_t mth_actual_gpio[FPGA_METER_TRANSITION_HISTORY];
     uint8_t producer_frame[FPGA_RX_FRAME_SIZE];
+    uint16_t rx_sync_data_start;
+    uint16_t rx_sync_echo_start;
+    uint16_t rx_sync_data_header;
+    uint16_t rx_sync_echo_header;
+    uint16_t rx_sync_bad_second;
+    uint16_t rx_sync_stray;
+    uint8_t last_echo_frame[FPGA_RX_ECHO_FRAME_SIZE];
     uint8_t post_h2_trigger[FPGA_POST_H2_TRIGGER_HISTORY];
     uint8_t post_h2_rx_len[FPGA_POST_H2_TRIGGER_HISTORY];
     uint8_t post_h2_rx[FPGA_POST_H2_TRIGGER_HISTORY][FPGA_POST_H2_RX_HISTORY];
 
     taskENTER_CRITICAL();
     memcpy(producer_frame, (const void *)fpga.rx_frame, FPGA_RX_FRAME_SIZE);
+    rx_sync_data_start = fpga.rx_sync_data_start_count;
+    rx_sync_echo_start = fpga.rx_sync_echo_start_count;
+    rx_sync_data_header = fpga.rx_sync_data_header_count;
+    rx_sync_echo_header = fpga.rx_sync_echo_header_count;
+    rx_sync_bad_second = fpga.rx_sync_bad_second_count;
+    rx_sync_stray = fpga.rx_sync_stray_count;
+    memcpy(last_echo_frame, (const void *)fpga.last_rx_echo_frame,
+           sizeof(last_echo_frame));
     memcpy(post_h2_trigger, (const void *)fpga.post_h2_spi3_trigger,
            sizeof(post_h2_trigger));
     memcpy(post_h2_rx_len, (const void *)fpga.post_h2_spi3_rx_len,
@@ -2536,6 +2565,14 @@ static void cmd_meter_trace(void)
                      (unsigned)fpga.last_rx_mode_sequence_submode,
                      (unsigned)fpga.last_rx_transition_busy,
                      (unsigned)fpga.last_rx_discard_remaining);
+    usb_debug_printf("rx_sync data_start=%u echo_start=%u data_hdr=%u "
+                     "echo_hdr=%u bad_second=%u stray=%u\r\n",
+                     rx_sync_data_start,
+                     rx_sync_echo_start,
+                     rx_sync_data_header,
+                     rx_sync_echo_header,
+                     rx_sync_bad_second,
+                     rx_sync_stray);
     usb_debug_printf("plan stock_mode=%u raw_low=%02X family=%u mux=%u "
                      "portc_porte=%u porta_portb=%u settle_ms=%u discard=%u\r\n",
                      (unsigned)selectors.function_selector,
@@ -2588,6 +2625,12 @@ static void cmd_meter_trace(void)
                      meter_transition_frame_skip_count);
     print_frame_hex("producer_frame=", producer_frame);
     print_frame_hex("parsed_frame=", snap.dbg_frame);
+    usb_send_str("last_echo_frame=");
+    for (uint8_t i = 0; i < FPGA_RX_ECHO_FRAME_SIZE; i++) {
+        usb_debug_printf("%s%02X", i == 0 ? "" : " ",
+                         (unsigned)last_echo_frame[i]);
+    }
+    usb_send_str("\r\n");
     usb_send_str("transition_history newest_first:\r\n");
     for (uint8_t n = 0; n < mth_count; n++) {
         usb_debug_printf("mth n=%u sub=%u seq=%u selector=%04X apply=%04X "

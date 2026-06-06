@@ -308,6 +308,13 @@ def _parse_frame_bytes(text: str) -> list[int]:
     return [int(item, 16) for item in parts]
 
 
+def _parse_hex_bytes(text: str, expected: int) -> list[int]:
+    parts = [item for item in text.strip().split() if item]
+    if len(parts) != expected:
+        raise ValueError(f"expected {expected} hex bytes, got {len(parts)}: {text!r}")
+    return [int(item, 16) for item in parts]
+
+
 def _frame_record(frame: list[int]) -> dict[str, object]:
     return {
         "hex": " ".join(f"{byte:02X}" for byte in frame),
@@ -350,6 +357,8 @@ def parse_meter_trace_text(text: str) -> dict[str, object]:
             result["producer_counts"] = _parse_kv_line(line)
         elif line.startswith("producer_last_rx "):
             result["producer_last_rx"] = _parse_kv_line(line)
+        elif line.startswith("rx_sync "):
+            result["rx_sync"] = _parse_kv_line(line)
         elif line.startswith("plan "):
             result["plan"] = _parse_kv_line(line)
         elif line.startswith("wire "):
@@ -374,6 +383,9 @@ def parse_meter_trace_text(text: str) -> dict[str, object]:
         elif line.startswith("parsed_frame="):
             frame = _parse_frame_bytes(line.split("=", 1)[1])
             result["parsed_frame"] = _frame_record(frame)
+        elif line.startswith("last_echo_frame="):
+            frame = _parse_hex_bytes(line.split("=", 1)[1], 10)
+            result["last_echo_frame"] = _frame_record(frame)
         elif line.startswith("mth "):
             record = _parse_kv_line(line, WIRE_HEX_KEYS)
             for key in ("tx", "data"):

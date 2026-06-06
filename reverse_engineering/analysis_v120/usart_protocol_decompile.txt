@@ -661,7 +661,10 @@ COMPLETE USART2 PROTOCOL DOCUMENTATION
   TX ISR pumps bytes [0]-[9] sequentially via TDBE interrupt.
   After byte [9] is loaded into DATA register, TDBEIEN is cleared.
   Byte [3] is the 'echo' byte — FPGA must return it in its response.
-  Byte [9] = checksum: (CMD_HIGH + (CMD_HIGH >> 8)) & 0xFF (per docs)
+  Byte [9] = checksum: (CMD_HIGH + CMD_LOW) & 0xFF.  This matches the
+  stock dvom_TX task at 0x0803743A..0x08037442: low byte stored at
+  tx_buffer[3], high byte stored at tx_buffer[2], and byte[9] stores their
+  low-byte sum.  Older "CMD_HIGH + (CMD_HIGH >> 8)" wording was stale.
 
 ─── RX FRAME FORMAT (FPGA → MCU): Variable (2, 10, or 12 bytes) ───
 
