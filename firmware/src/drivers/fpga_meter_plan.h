@@ -10,6 +10,7 @@
 #define FPGA_METER_TRANSITION_SETTLE_MS      20u
 #define FPGA_METER_INVALID_STOCK_MODE        0xFFu
 #define FPGA_METER_INVALID_SELECTOR_WORD     0x0000u
+#define FPGA_METER_START_WORD                0x0509u
 
 typedef enum {
     FPGA_METER_FRAME_FAMILY_VOLTAGE = 0,
@@ -39,6 +40,8 @@ typedef struct {
     uint16_t selector_word;
     bool has_apply_word;
     uint16_t apply_word;
+    bool has_probe_detect;
+    uint16_t start_word;
     bool voltage_function_axis;
 } fpga_meter_transition_plan_t;
 

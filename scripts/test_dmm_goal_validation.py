@@ -260,6 +260,22 @@ class DmmGoalValidationTests(unittest.TestCase):
             result["forbidden_body"],
         )
 
+    def test_meter_sequence_tail_uses_transition_plan(self) -> None:
+        result = validate_dmm_goal.verify_meter_sequence_tail_uses_transition_plan()
+        self.assertEqual(result["checked"], "firmware/src/drivers/fpga.c")
+        self.assertIn(
+            "fpga.meter_mode_start_word = plan.start_word;",
+            result["required_body"],
+        )
+        self.assertIn(
+            "(uint8_t)(plan.start_word & 0x00FFU)",
+            result["required_body"],
+        )
+        self.assertIn(
+            "fpga_timed_send_cmd(0x05, FPGA_CMD_METER_START, plan.settle_ms)",
+            result["forbidden_body"],
+        )
+
     def test_no_ocr_pipeline_guard_is_active(self) -> None:
         result = validate_dmm_goal.verify_no_ocr_pipeline()
 
@@ -401,6 +417,8 @@ class DmmGoalValidationTests(unittest.TestCase):
         self.assertIn("fpga_meter_frame_family_is_acceptable",
                       result["snippet_anchors"])
         self.assertIn("bad submode word", result["snippet_anchors"])
+        self.assertIn("FPGA_METER_START_WORD", result["snippet_anchors"])
+        self.assertIn("bad plan has no start", result["snippet_anchors"])
         self.assertIn("uniform local settle/discard",
                       result["snippet_anchors"])
         self.assertIn("invalid submodes emit no settle/discard",

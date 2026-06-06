@@ -461,6 +461,15 @@ low byte from that same word. Do not rebuild the debug range byte from a second
 selector-table lookup; that would let diagnostics drift from the actual
 transition command.
 
+The runtime tail is also modeled through the same transition plan. Valid local
+submodes carry the stock-family start word `0x0509` plus the probe-detect tail
+(`0x0507` or `0x050A`, selected from live GPIOC bit 7); invalid submodes carry
+no selector, no apply word, no probe-detect tail, and no start word. This keeps
+the production USART2 sequence and debug mirrors tied to one software
+state-machine object. It is still command-sequence evidence only: it does not
+recover exact settle/discard counts, a DMM-specific `ms[0x02]`/`ms[0x03]`
+runtime analog range writer, or the low-DCV frontend/calibration gap.
+
 ## Per-Submode Evidence Matrix
 
 The table below separates stock-disassembly evidence from local policy. `High`

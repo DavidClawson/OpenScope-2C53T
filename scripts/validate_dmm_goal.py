@@ -355,6 +355,47 @@ def verify_meter_expected_selector_uses_plan_word() -> dict[str, Any]:
     }
 
 
+def verify_meter_sequence_tail_uses_transition_plan() -> dict[str, Any]:
+    """Ensure the runtime selector/apply/probe/start tail follows the plan."""
+    rel = "firmware/src/drivers/fpga.c"
+    text = (REPO / rel).read_text(encoding="utf-8", errors="replace")
+
+    match = re.search(
+        r"static void fpga_send_meter_mode_sequence\(uint8_t submode\)"
+        r"(?P<body>[\s\S]*?)\n}\n\nvoid fpga_set_meter_mode",
+        text,
+    )
+    if match is None:
+        raise GateError("could not locate fpga_send_meter_mode_sequence block")
+    body = match.group("body")
+    required_body = [
+        "fpga_meter_transition_plan_t plan =",
+        "fpga.meter_mode_selector_word = plan.selector_word;",
+        "fpga.meter_mode_apply_word = plan.apply_word;",
+        "fpga.meter_mode_probe_word = plan.has_probe_detect ? probe_word : 0;",
+        "fpga.meter_mode_start_word = plan.start_word;",
+        "if (plan.has_probe_detect)",
+        "(uint8_t)(plan.start_word >> 8)",
+        "(uint8_t)(plan.start_word & 0x00FFU)",
+    ]
+    forbidden_body = [
+        "fpga.meter_mode_start_word = (uint16_t)(0x0500U | FPGA_CMD_METER_START)",
+        "fpga_timed_send_cmd(0x05, FPGA_CMD_METER_START, plan.settle_ms)",
+    ]
+    missing_body = [snippet for snippet in required_body if snippet not in body]
+    stale_body = [snippet for snippet in forbidden_body if snippet in body]
+    if missing_body or stale_body:
+        raise GateError(
+            "meter runtime sequence tail drifted from transition plan: "
+            f"missing_body={missing_body} stale_body={stale_body}"
+        )
+    return {
+        "checked": rel,
+        "required_body": required_body,
+        "forbidden_body": forbidden_body,
+    }
+
+
 def verify_no_magnitude_range_feedback() -> dict[str, Any]:
     """Ensure production DMM frontend code does not suggest value-shaped ranging."""
     checked: dict[str, str] = {}
@@ -572,6 +613,7 @@ def verify_transition_plan_property_contract() -> dict[str, Any]:
     required_snippets = [
         "FPGA_METER_TRANSITION_DISCARD_FRAMES",
         "FPGA_METER_TRANSITION_SETTLE_MS",
+        "FPGA_METER_START_WORD",
         "FPGA_METER_FRAME_FAMILY_VOLTAGE",
         "FPGA_METER_FRAME_FAMILY_CURRENT",
         "FPGA_METER_FRAME_FAMILY_RESISTANCE",
@@ -591,6 +633,10 @@ def verify_transition_plan_property_contract() -> dict[str, Any]:
         "bad plan portc/porte mux",
         "bad plan porta/portb mux",
         "bad plan discard",
+        "bad plan has no probe",
+        "bad plan has no start",
+        "plan probe detect",
+        "plan start word",
         "uniform local settle/discard",
         "invalid submodes emit no settle/discard",
     ]
@@ -1124,6 +1170,7 @@ def main(argv: list[str] | None = None) -> int:
         report["h2_tx_only_boundary"] = verify_h2_tx_only_boundary()
         report["meter_aux_afe_pin_policy"] = verify_meter_aux_afe_pin_policy()
         report["meter_expected_selector_plan_word"] = verify_meter_expected_selector_uses_plan_word()
+        report["meter_sequence_tail_transition_plan"] = verify_meter_sequence_tail_uses_transition_plan()
         report["no_magnitude_range_feedback"] = verify_no_magnitude_range_feedback()
 
         if not args.skip_live:

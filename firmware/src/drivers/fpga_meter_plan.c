@@ -216,6 +216,8 @@ fpga_meter_transition_plan_t fpga_meter_transition_plan_for_submode(uint8_t subm
     plan.selector_word = fpga_meter_stock_cmd_word_for_submode(submode);
     plan.has_apply_word =
         fpga_meter_stock_apply_cmd_word_for_submode(submode, &plan.apply_word);
+    plan.has_probe_detect = true;
+    plan.start_word = FPGA_METER_START_WORD;
     if (plan.stock_mode >= FPGA_METER_STOCK_MODE_COUNT) {
         plan.mux_index = FPGA_METER_INVALID_STOCK_MODE;
         plan.portc_porte_mux = FPGA_METER_INVALID_STOCK_MODE;
@@ -225,6 +227,8 @@ fpga_meter_transition_plan_t fpga_meter_transition_plan_for_submode(uint8_t subm
         plan.selector_word = FPGA_METER_INVALID_SELECTOR_WORD;
         plan.has_apply_word = false;
         plan.apply_word = 0;
+        plan.has_probe_detect = false;
+        plan.start_word = 0;
         plan.voltage_function_axis = false;
         return plan;
     }

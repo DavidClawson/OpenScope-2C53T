@@ -184,6 +184,10 @@ static void test_transition_plan_covers_mux_family_and_settle_policy(void)
                      expected_apply[i] != 0 ? 1U : 0U);
         snprintf(name, sizeof(name), "plan apply word %u", (unsigned)i);
         EXPECT_EQ_U16(name, plan.apply_word, expected_apply[i]);
+        snprintf(name, sizeof(name), "plan probe detect %u", (unsigned)i);
+        EXPECT_EQ_U8(name, plan.has_probe_detect ? 1U : 0U, 1U);
+        snprintf(name, sizeof(name), "plan start word %u", (unsigned)i);
+        EXPECT_EQ_U16(name, plan.start_word, FPGA_METER_START_WORD);
         snprintf(name, sizeof(name), "plan voltage axis %u", (unsigned)i);
         EXPECT_EQ_U8(name, plan.voltage_function_axis ? 1U : 0U,
                      expected_family[i] == FPGA_METER_FRAME_FAMILY_VOLTAGE ?
@@ -260,6 +264,10 @@ static void test_transition_settle_discard_policy_is_explicit_for_every_submode(
                       plan.selector_word, FPGA_METER_INVALID_SELECTOR_WORD);
         EXPECT_EQ_U8("invalid submodes emit no settle/discard apply",
                      plan.has_apply_word ? 1U : 0U, 0U);
+        EXPECT_EQ_U8("invalid submodes emit no settle/discard probe",
+                     plan.has_probe_detect ? 1U : 0U, 0U);
+        EXPECT_EQ_U16("invalid submodes emit no settle/discard start",
+                      plan.start_word, 0U);
     }
 }
 
@@ -376,6 +384,11 @@ static void test_local_splits_do_not_invent_extra_stock_selectors(void)
                      b.has_apply_word ? 1U : 0U);
         snprintf(name, sizeof(name), "%s apply word", shared_slots[i].label);
         EXPECT_EQ_U16(name, a.apply_word, b.apply_word);
+        snprintf(name, sizeof(name), "%s probe tail", shared_slots[i].label);
+        EXPECT_EQ_U8(name, a.has_probe_detect ? 1U : 0U,
+                     b.has_probe_detect ? 1U : 0U);
+        snprintf(name, sizeof(name), "%s start word", shared_slots[i].label);
+        EXPECT_EQ_U16(name, a.start_word, b.start_word);
     }
 }
 
@@ -442,6 +455,8 @@ static void test_fallbacks(void)
     EXPECT_EQ_U16("bad plan selector", plan.selector_word,
                   FPGA_METER_INVALID_SELECTOR_WORD);
     EXPECT_EQ_U8("bad plan has no apply", plan.has_apply_word ? 1U : 0U, 0U);
+    EXPECT_EQ_U8("bad plan has no probe", plan.has_probe_detect ? 1U : 0U, 0U);
+    EXPECT_EQ_U16("bad plan has no start", plan.start_word, 0U);
     EXPECT_EQ_U8("bad plan discard", plan.discard_frames, 0U);
     EXPECT_EQ_U16("bad plan settle", plan.settle_ms, 0U);
     EXPECT_EQ_U8("bad plan voltage axis",

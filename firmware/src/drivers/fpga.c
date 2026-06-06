@@ -4111,8 +4111,8 @@ static void fpga_send_meter_mode_sequence(uint8_t submode)
     fpga.meter_mode_sequence_submode = submode;
     fpga.meter_mode_selector_word = plan.selector_word;
     fpga.meter_mode_apply_word = 0;
-    fpga.meter_mode_probe_word = probe_word;
-    fpga.meter_mode_start_word = (uint16_t)(0x0500U | FPGA_CMD_METER_START);
+    fpga.meter_mode_probe_word = plan.has_probe_detect ? probe_word : 0;
+    fpga.meter_mode_start_word = plan.start_word;
     /*
      * USART2 selector sequence.
      * Stock evidence proves raw meter command words in the 0x05xx family and
@@ -4127,8 +4127,12 @@ static void fpga_send_meter_mode_sequence(uint8_t submode)
         fpga.meter_mode_apply_word = plan.apply_word;
         fpga_wire_send_word(plan.apply_word, plan.settle_ms);
     }
-    fpga_timed_send_probe_detect(10);
-    fpga_timed_send_cmd(0x05, FPGA_CMD_METER_START, plan.settle_ms);
+    if (plan.has_probe_detect) {
+        fpga_timed_send_probe_detect(10);
+    }
+    fpga_timed_send_cmd((uint8_t)(plan.start_word >> 8),
+                        (uint8_t)(plan.start_word & 0x00FFU),
+                        plan.settle_ms);
 }
 
 void fpga_set_meter_mode(uint8_t submode)
