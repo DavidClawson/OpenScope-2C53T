@@ -581,28 +581,39 @@ def verify_meter_aux_afe_pin_policy() -> dict[str, Any]:
     required_file = [
         "stock init configures them as outputs",
         "no stock BOP/BCR level write has been recovered",
-        "GPIOB->clr = (1U << 9);",
-        "GPIOA->clr = (1U << 6);",
         "static void fpga_apply_meter_mux_gpio_state",
         "fpga_gpio_write_level(GPIOB, (1U << 9), state->pb9);",
         "fpga_gpio_write_level(GPIOA, (1U << 6), state->pa6);",
+        "fpga_set_meter_frontend_for_submode(0);",
+        "before the meter activation command block",
         "production writes cannot\n     * drift away from the state-machine table",
         "not a recovered stock\n     * runtime DMM mux writer",
         "saved-config default ms[0x02]=5 /\n     * ms[0x03]=5 is persistence evidence only",
         "low-DCV mismatch still\n     * needs a new writer, trace, H2/apply proof, or factory-calibration source",
     ]
     missing_file = [snippet for snippet in required_file if snippet not in text]
-    if missing_body or stale_body or missing_file:
+    init_start = text.find("void fpga_init(void)")
+    init_end = text.find("QueueHandle_t fpga_create_tasks(void)", init_start)
+    if init_start < 0 or init_end < 0:
+        raise GateError("could not locate fpga_init body")
+    init_body = text[init_start:init_end]
+    boot_frontend = init_body.find("fpga_set_meter_frontend_for_submode(0);")
+    boot_activate = init_body.find("usart2_send_cmd(0x05, 0x08);")
+    bad_boot_order = (
+        boot_frontend < 0 or boot_activate < 0 or boot_frontend > boot_activate
+    )
+    if missing_body or stale_body or missing_file or bad_boot_order:
         raise GateError(
             "PB9/PA6 auxiliary AFE pin policy drifted: "
             f"missing_body={missing_body} stale_body={stale_body} "
-            f"missing_file={missing_file}"
+            f"missing_file={missing_file} bad_boot_order={bad_boot_order}"
         )
     return {
         "checked": rel,
         "required_body": required_body,
         "forbidden_body": forbidden_body,
         "required_file": required_file,
+        "boot_frontend_before_activation": True,
     }
 
 
@@ -2038,6 +2049,7 @@ def main(argv: list[str] | None = None) -> int:
         report["h2_tx_only_boundary"] = verify_h2_tx_only_boundary()
         report["spi3_pc6_enable_order"] = verify_spi3_pc6_enable_order()
         report["meter_transition_usart_gate"] = verify_meter_transition_usart_gate()
+        report["meter_aux_afe_pin_policy"] = verify_meter_aux_afe_pin_policy()
         report["live_validation_safety_contract"] = verify_live_validation_safety_contract()
         report["no_magnitude_range_feedback"] = verify_no_magnitude_range_feedback()
         if not args.skip_software:

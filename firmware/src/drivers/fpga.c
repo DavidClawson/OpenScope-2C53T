@@ -12,7 +12,8 @@
  *   5. PC6 HIGH after SPI3 is enabled (FPGA SPI enable)
  *   6. SysTick delays for FPGA timing
  *   7. SPI3 handshake + H2 table upload
- *   8. Queue stock post-H2 SPI3 triggers, then PB11 HIGH (FPGA active mode)
+ *   8. Queue stock post-H2 SPI3 triggers
+ *   9. Apply DCV frontend projection, driving PB11 HIGH before meter activation
  *
  * Runtime architecture (3 FreeRTOS tasks):
  *   - fpga_usart_tx_task: Sends 10-byte command frames via USART2
@@ -3436,7 +3437,8 @@ void fpga_init(void)
      * SPI slave interface on PB11, this would explain MISO stuck at
      * 0xFF and zero USART echo frames.
      *
-     * PB11 gpio_init + set HIGH is deferred to Step 9b below. */
+     * PB11 gpio_init + set HIGH is deferred until the post-H2 meter
+     * frontend projection, before the meter activation command block. */
 
     /*
      * SPI3 register configuration (direct, matching stock firmware):
@@ -3814,66 +3816,45 @@ void fpga_init(void)
      * --------------------------------------------------------------- */
 
     /* ---------------------------------------------------------------
-     * Step 9: Analog frontend relay control
-     * Decoded from stock firmware gpio_mux_portc_porte (FUN_080018A4).
-     * These GPIO pins control physical relays that route the probe
-     * signal to the meter IC's sigma-delta ADC.
+     * Step 9: Analog frontend relay/gain control.
      *
-     * DC Voltage mode: PC12=HIGH, PE4=HIGH, PE5=LOW, PE6=HIGH
-     * Without these, the meter IC has no analog input.
+     * The stock mux writer bodies are recovered as FUN_080018A4
+     * (PC12/PE4/PE5/PE6) and FUN_08001A58 (PA15/PA10/PB10/PB11).
+     * Configure the hardware pins here, then apply the same
+     * fpga_meter_plan table used by runtime mode transitions. This keeps boot
+     * DCV from becoming a second handwritten frontend state.
      * --------------------------------------------------------------- */
-
-    /* Configure relay control pins as push-pull outputs */
     gpio_cfg.gpio_mode = GPIO_MODE_OUTPUT;
     gpio_cfg.gpio_out_type = GPIO_OUTPUT_PUSH_PULL;
     gpio_cfg.gpio_drive_strength = GPIO_DRIVE_STRENGTH_STRONGER;
 
-    /* PC12 — input routing relay */
+    /* Port C/E relay pins and PC11 meter analog MUX enable. */
     gpio_cfg.gpio_pins = GPIO_PINS_12;
     gpio_init(GPIOC, &gpio_cfg);
-
-    /* PE4, PE5, PE6 — range/attenuation select */
     gpio_cfg.gpio_pins = GPIO_PINS_4 | GPIO_PINS_5 | GPIO_PINS_6;
     gpio_init(GPIOE, &gpio_cfg);
-
-    /* Set DC Voltage relay pattern */
-    GPIOC->scr = (1U << 12);  /* PC12 HIGH — route probe to meter IC */
-    GPIOE->scr = (1U << 4);   /* PE4 HIGH  — range select bit 0 */
-    GPIOE->clr = (1U << 5);   /* PE5 LOW   — range select bit 1 */
-    GPIOE->scr = (1U << 6);   /* PE6 HIGH  — attenuation/coupling */
+    gpio_cfg.gpio_pins = GPIO_PINS_11;
+    gpio_init(GPIOC, &gpio_cfg);
 
     /*
      * PB9/PA6 auxiliary AFE pins: stock init configures them as outputs but
      * no stock BOP/BCR level write has been recovered.  Keep them low rather
-     * than applying the old bench-inferred high level.
+     * than applying the old bench-inferred high level. PB11 is configured only
+     * after SPI3/H2, then driven by the same mux projection as runtime DMM
+     * transitions before the meter activation command block.
      */
     gpio_cfg.gpio_pins = GPIO_PINS_9;
     gpio_init(GPIOB, &gpio_cfg);
-    GPIOB->clr = (1U << 9);
-
     gpio_cfg.gpio_pins = GPIO_PINS_6;
     gpio_init(GPIOA, &gpio_cfg);
-    GPIOA->clr = (1U << 6);
 
-    /* Gain resistor configuration — gpio_mux_porta_portb for DCV mode.
-     * PA15, PA10 = gain select, PB10 = gain select, PB11 already set.
-     * Without these, meter IC has wrong input gain → no measurement. */
+    /* Gain resistor / FPGA active-mode pins from gpio_mux_porta_portb. */
     gpio_cfg.gpio_pins = GPIO_PINS_15 | GPIO_PINS_10;
     gpio_init(GPIOA, &gpio_cfg);
-    GPIOA->scr = (1U << 15);  /* PA15 HIGH — gain bit */
-    GPIOA->scr = (1U << 10);  /* PA10 HIGH — gain bit */
-
-    gpio_cfg.gpio_pins = GPIO_PINS_10;
+    gpio_cfg.gpio_pins = GPIO_PINS_10 | GPIO_PINS_11;
     gpio_init(GPIOB, &gpio_cfg);
-    GPIOB->clr = (1U << 10);  /* PB10 LOW — gain bit */
 
-    /* PC11 — meter analog MUX enable.
-     * Compliance audit (2026-04-06): was missing gpio_init() — PC11
-     * defaults to floating input on reset, so the scr write was silently
-     * ignored. The meter MUX was never actually enabled. */
-    gpio_cfg.gpio_pins = GPIO_PINS_11;
-    gpio_init(GPIOC, &gpio_cfg);
-    GPIOC->scr = (1U << 11);
+    fpga_set_meter_frontend_for_submode(0);
 
     systick_delay_ms(50);  /* Let relays settle */
 
@@ -3907,9 +3888,6 @@ void fpga_init(void)
      * DMM range/calibration step.
      */
 #endif  /* !FPGA_USART_SILENT_SCOPE — keep the wire quiet for the config test */
-
-    /* Step 9b removed: PB11 is now armed immediately before the SPI3
-     * handshake (stock-captured order, issue-#18 capture). */
 
     /* ---------------------------------------------------------------
      * Step 10: Post-init SPI3 probe

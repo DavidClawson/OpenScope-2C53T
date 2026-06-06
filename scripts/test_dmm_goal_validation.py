@@ -197,6 +197,8 @@ frame=5A A5 44 8E EF E7 07 24 80 00 01 89
         self.assertIn("state_machine_property_contract", report)
         self.assertIn("transition_plan_property_contract", report)
         self.assertIn("autoscan_property_contract", report)
+        self.assertIn("meter_aux_afe_pin_policy", report)
+        self.assertIn("boot_frontend_before_activation", report)
         self.assertIn("state_machine_property_matrix_covers_all_submodes", report)
         self.assertIn("test_count", report)
         self.assertNotIn("snippet_anchors", report)

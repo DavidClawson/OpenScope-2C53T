@@ -1392,6 +1392,16 @@ BOP/BCR registers. That removes the earlier duplicated switch body in
 `fpga.c`, so the tested state-machine table and hardware-facing writes cannot
 silently diverge.
 
+The boot-time meter path also uses that same projection. `fpga_init()` still
+keeps PB11 as an unconfigured/floating input during SPI3/H2 replay, but after
+the post-H2 delay it configures the DMM relay/gain pins, applies
+`fpga_set_meter_frontend_for_submode(0)`, and only then sends the meter
+activation block beginning with `0x0508`. This keeps PB11 HIGH and the stock
+slot-0 DCV GPIO projection active before the local boot command sequence
+without moving PB11 earlier than the recovered SPI3/H2 safety boundary. It is a
+frontend activation ordering fix candidate, not proof that low-DCV physical
+calibration is solved.
+
 The projection still remains a policy boundary. No currently recovered DMM
 branch proves a separate runtime writer for small/A current,
 capacitance/temperature, or a low-DCV physical range. A future change must
