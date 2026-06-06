@@ -131,6 +131,23 @@ EXPECTED_MUX_STATE_PAIR_WRITE_CONTEXTS = {
         (8753, "FUN_0803acf0(_DAT_20002d6c,&local_6b,0xffffffff);"),
     ],
 }
+EXPECTED_MODE_STATE_RAM_MAP_REF = {
+    "symbol": "DAT_20001060",
+    "addr": "0x20001060",
+    "count": 7,
+    "refs": [
+        "FUN_08009014@08009014",
+        "FUN_08019e98@08019e98",
+        "unknown@0800b914",
+        "unknown@08015848",
+        "FUN_080096e8@080096e8",
+        "FUN_08009a94@08009a94",
+    ],
+    "classification": (
+        "overloaded mode-init/command-bank/transport state byte; not DMM "
+        "ms[0x02]/ms[0x03] analog range state"
+    ),
+}
 EXPECTED_SCOPE_MEASUREMENT_ENGINE_MUX_POINTER_CONSUMER_CONTEXT = {
     "scope_measurement_engine_mux_pointer_consumer_context": {
         "line_range": (11411, 11491),
@@ -1289,6 +1306,49 @@ def verify_mux_state_ram_map_boundary() -> dict[str, object]:
     return {"ram_map": str(RAM_MAP.relative_to(REPO)), "symbols": checked}
 
 
+def verify_mode_state_ram_map_boundary() -> dict[str, object]:
+    """Check the RAM-map boundary for `DAT_20001060` / `ms[0xF68]`.
+
+    This byte gates stock mode-init, command-bank, and transport behavior, and
+    the DMM selector/raw-word helper reads it. It is intentionally a different
+    state layer from the missing DMM analog mux/range bytes at `ms[0x02]` and
+    `ms[0x03]`; do not use an `ms[0xF68]` hit as a physical range writer.
+    """
+    lines = RAM_MAP.read_text(encoding="utf-8", errors="replace").splitlines()
+    expected = EXPECTED_MODE_STATE_RAM_MAP_REF
+    symbol = expected["symbol"]
+
+    for line in lines:
+        if f" {symbol} " not in line:
+            continue
+        before_refs, refs_text = line.split(": ", 1)
+        parts = before_refs.split()
+        actual = {
+            "addr": parts[0],
+            "count": int(parts[2].strip("()")),
+            "refs": [item.strip() for item in refs_text.split(",")],
+            "line": line,
+            "classification": expected["classification"],
+        }
+        break
+    else:
+        raise AssertionError(f"{RAM_MAP}: missing {symbol} entry")
+
+    if actual["addr"] != expected["addr"]:
+        raise AssertionError(
+            f"{symbol}: expected addr {expected['addr']}, got {actual['addr']}"
+        )
+    if actual["count"] != expected["count"]:
+        raise AssertionError(
+            f"{symbol}: expected count {expected['count']}, got {actual['count']}"
+        )
+    if actual["refs"] != expected["refs"]:
+        raise AssertionError(
+            f"{symbol}: expected refs {expected['refs']}, got {actual['refs']}"
+        )
+    return {"ram_map": str(RAM_MAP.relative_to(REPO)), "symbol": actual}
+
+
 def _parse_full_decompile_symbol_refs() -> dict[str, list[tuple[int, str]]]:
     lines = FULL_DECOMPILE.read_text(encoding="utf-8", errors="replace").splitlines()
     parsed: dict[str, list[tuple[int, str]]] = {}
@@ -2445,6 +2505,7 @@ def main() -> None:
 
     expect_bytes(0x08036C8C, "00 bf 00 bf")
     mux_state_ram_map = verify_mux_state_ram_map_boundary()
+    mode_state_ram_map = verify_mode_state_ram_map_boundary()
     mux_state_full_decompile = verify_mux_state_full_decompile_surface()
     mux_state_pair_write_contexts = verify_mux_state_pair_write_contexts()
     scope_measurement_mux_pointer_context = (
@@ -2487,6 +2548,11 @@ def main() -> None:
             f"stock mux-state RAM-map boundary {symbol}: "
             + ", ".join(info["refs"])
         )
+    print(
+        "stock mode-state RAM-map boundary "
+        f"{mode_state_ram_map['symbol']['addr']}: "
+        + ", ".join(mode_state_ram_map["symbol"]["refs"])
+    )
     pair_write_count = len(mux_state_full_decompile["pair_writes"])
     for symbol, info in mux_state_full_decompile["symbols"].items():
         print(

@@ -468,6 +468,36 @@ class DmmGoalValidationTests(unittest.TestCase):
         )
         self.assertIn("not a low-DCV correction", coverage["terms"])
 
+    def test_re_coverage_requires_mode_state_f68_boundary(self) -> None:
+        coverage = validate_dmm_goal.verify_re_coverage()
+        self.assertIn(
+            "reverse_engineering/analysis_v120/dmm_mode_state_f68_boundary_2026_06_06.md",
+            coverage["docs"],
+        )
+        self.assertIn("DMM Mode-State `ms[0xF68]` Boundary", coverage["terms"])
+        self.assertIn(
+            "DAT_20001060` (`0x20001060`, `ms[0xF68]`)",
+            coverage["terms"],
+        )
+        self.assertIn("stock mode-state RAM-map boundary", coverage["terms"])
+        self.assertIn("DAT_20001060` has 7 RAM-map refs", coverage["terms"])
+        self.assertIn(
+            "stock mode-init/command-bank/transport state byte",
+            coverage["terms"],
+        )
+        self.assertIn(
+            "`ms[0xF68]` command-bank state is not a low-DCV correction",
+            coverage["terms"],
+        )
+        self.assertIn(
+            "`ms[0xF68]` state `1`/`2` transition evidence does not recover exact stock",
+            coverage["terms"],
+        )
+        self.assertIn(
+            "`ms[0xF68]` helper gating does not upgrade H2/SPI3 byte-count replay",
+            coverage["terms"],
+        )
+
     def test_stock_roll_buffer_preload_is_binary_grounded(self) -> None:
         result = stock_meter_literals.verify_roll_buffer_preload_sequences()
         self.assertEqual(
@@ -959,6 +989,26 @@ class DmmGoalValidationTests(unittest.TestCase):
             "28 68 40 f0 80 00 28 60",
             sequences["dvom_tx_raw_word_consumer"]["bytes"],
         )
+
+    def test_stock_mode_state_f68_ram_map_boundary_is_grounded(self) -> None:
+        result = stock_meter_literals.verify_mode_state_ram_map_boundary()
+        symbol = result["symbol"]
+
+        self.assertEqual(symbol["addr"], "0x20001060")
+        self.assertEqual(symbol["count"], 7)
+        self.assertEqual(
+            symbol["refs"],
+            [
+                "FUN_08009014@08009014",
+                "FUN_08019e98@08019e98",
+                "unknown@0800b914",
+                "unknown@08015848",
+                "FUN_080096e8@080096e8",
+                "FUN_08009a94@08009a94",
+            ],
+        )
+        self.assertIn("mode-init/command-bank/transport", symbol["classification"])
+        self.assertIn("not DMM ms[0x02]/ms[0x03]", symbol["classification"])
 
     def test_stock_meter_transport_transitions_are_binary_grounded(self) -> None:
         result = stock_meter_literals.verify_meter_transport_transition_sequences()

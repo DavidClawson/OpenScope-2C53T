@@ -53,6 +53,10 @@ one of:
   `0x05xx` raw-word commands and display-unit variants, but they are not the
   missing `ms[0x02]`/`ms[0x03]` analog mux/range writer and not a low-DCV
   correction.
+- Mode-state `ms[0xF68]` boundary: `DAT_20001060` has 7 RAM-map refs and
+  gates stock mode-init, command-bank, dynamic raw-word helper, and transport
+  paths. It is command-bank/transport state, not physical DMM range state, not
+  exact settle/discard proof, and not a low-DCV correction.
 - Dynamic apply helper: `0x08006120`, `0x08006194`, `0x0800626A`, and
   `0x08006288` recover only ACV, DCA, continuity, and diode apply pairs.
 - Command dispatcher: `FUN_0800B908` queues boot/runtime mode-init command
