@@ -1074,6 +1074,7 @@ def verify_state_machine_property_contract() -> dict[str, Any]:
         "invalid_submode_rejects_without_becoming_dcv",
         "invalid_submode_rejects_every_frame_family_corpus",
         "state_machine_property_matrix_covers_all_submodes",
+        "goal_surface_property_enumerates_dmm_state_machine",
         "invalidate_clears_stale_payload_for_every_ordered_mode_transition",
         "transport_gate_blocks_source_frames_during_every_transition",
         "transition_phase_marker_frames_follow_destination_state",

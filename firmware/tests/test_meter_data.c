@@ -139,6 +139,18 @@ static void build_segment_frame(uint8_t frame[12],
     frame[11] = (uint8_t)extra;
 }
 
+static bool test_frame_has_voltage_payload_marker(const uint8_t frame[12])
+{
+    return (((frame[8] & 0x7FU) == 0x02U) || ((frame[8] & 0x80U) != 0)) &&
+           frame[9] == 0x00;
+}
+
+static bool test_raw_digits_are_continuity_marker(const uint8_t raw_digits[4])
+{
+    return raw_digits[1] == 0x12 && raw_digits[2] == 0x0A &&
+           raw_digits[3] == 5;
+}
+
 static int test_segment_frame_builder_exercises_cross_byte_lookup(void)
 {
     uint8_t frame[12];
@@ -1132,6 +1144,247 @@ static void build_valid_frame_for_mode(uint8_t frame[12], uint8_t mode)
     }
 }
 
+static int test_goal_surface_property_enumerates_dmm_state_machine(void)
+{
+    enum {
+        PHASE_INVALIDATE = 1U << 0,
+        PHASE_BUSY_DROP = 1U << 1,
+        PHASE_DISCARD_DROP = 1U << 2,
+        PHASE_STABLE_ACCEPT = 1U << 3,
+    };
+    static const uint16_t all_logical_functions =
+        (uint16_t)((1U << FPGA_METER_LOGICAL_FUNCTION_COUNT) - 1U);
+    static const uint16_t all_local_submodes =
+        (uint16_t)((1U << FPGA_METER_LOCAL_SUBMODE_COUNT) - 1U);
+    static const uint16_t unresolved_ua_functions =
+        (uint16_t)((1U << FPGA_METER_FUNCTION_DC_UA) |
+                   (1U << FPGA_METER_FUNCTION_AC_UA));
+    uint16_t logical_seen = 0;
+    uint16_t unresolved_seen = 0;
+    uint16_t supported_submodes_seen = 0;
+    uint16_t local_submodes_seen = 0;
+    uint16_t stale_transition_sources_seen = 0;
+    uint16_t stale_transition_dests_seen = 0;
+    uint8_t expected_families_seen = 0;
+    uint8_t ac_evidence_seen = 0;
+    uint8_t range_classes_seen = 0;
+    uint8_t transition_phases_seen = 0;
+    uint8_t marker_mismatch_seen = 0;
+    uint8_t unclassified_active_policy_seen = 0;
+    uint8_t invalid_submode_seen = 0;
+    unsigned stale_transition_pairs = 0;
+    uint8_t low_dcv_frame[12] = {
+        0x5A, 0xA5, 0x44, 0x8E, 0xEF, 0xE7,
+        0x07, 0x24, 0x80, 0x00, 0x01, 0x89,
+    };
+    uint8_t continuity_marker[12];
+    uint8_t frame[12];
+
+    build_segment_frame(continuity_marker, 0, 0x12, 0x0A, 5,
+                        0x00, 0x00, 0x00, 0x00, 0);
+
+    for (uint8_t fn = 0; fn < FPGA_METER_LOGICAL_FUNCTION_COUNT; fn++) {
+        uint8_t submode = fpga_meter_submode_for_logical_function(fn);
+
+        logical_seen |= (uint16_t)(1U << fn);
+        if (fpga_meter_logical_function_is_unresolved(fn)) {
+            unresolved_seen |= (uint16_t)(1U << fn);
+            ASSERT(submode == FPGA_METER_INVALID_LOCAL_SUBMODE);
+        } else {
+            ASSERT(fpga_meter_submode_is_valid(submode));
+            supported_submodes_seen |= (uint16_t)(1U << submode);
+        }
+    }
+
+    for (uint8_t source = 0; source < FPGA_METER_LOCAL_SUBMODE_COUNT; source++) {
+        uint8_t source_frame[12];
+
+        build_valid_frame_for_mode(source_frame, source);
+        for (uint8_t dest = 0; dest < FPGA_METER_LOCAL_SUBMODE_COUNT; dest++) {
+            fpga_meter_transition_plan_t plan =
+                fpga_meter_transition_plan_for_submode(dest);
+            uint8_t discard = plan.discard_frames;
+            uint32_t transition_skips = 0;
+
+            stale_transition_sources_seen |= (uint16_t)(1U << source);
+            stale_transition_dests_seen |= (uint16_t)(1U << dest);
+            stale_transition_pairs++;
+
+            meter_data_init();
+            process_frame(source_frame, source);
+            ASSERT(meter_reading.valid);
+
+            meter_data_invalidate(dest);
+            transition_phases_seen |= PHASE_INVALIDATE;
+            ASSERT(!meter_reading.valid);
+            ASSERT(meter_reading.submode == dest);
+            ASSERT(expect_payload_cleared("---"));
+
+            ASSERT(!fpga_meter_rx_frame_should_parse(true, &discard,
+                                                     &transition_skips));
+            transition_phases_seen |= PHASE_BUSY_DROP;
+            ASSERT(discard == plan.discard_frames);
+            ASSERT(transition_skips == 1);
+
+            for (uint8_t i = 0; i < plan.discard_frames; i++) {
+                ASSERT(!fpga_meter_rx_frame_should_parse(false, &discard,
+                                                         &transition_skips));
+                transition_phases_seen |= PHASE_DISCARD_DROP;
+            }
+            ASSERT(discard == 0);
+            ASSERT(fpga_meter_rx_frame_should_parse(false, &discard,
+                                                    &transition_skips));
+            transition_phases_seen |= PHASE_STABLE_ACCEPT;
+        }
+    }
+
+    for (uint8_t mode = 0; mode < FPGA_METER_LOCAL_SUBMODE_COUNT; mode++) {
+        fpga_meter_transition_plan_t plan =
+            fpga_meter_transition_plan_for_submode(mode);
+
+        local_submodes_seen |= (uint16_t)(1U << mode);
+        expected_families_seen |= (uint8_t)(1U << plan.frame_family);
+
+        build_valid_frame_for_mode(frame, mode);
+        meter_data_init();
+        process_frame(frame, mode);
+        ASSERT(meter_reading.valid);
+        ASSERT(meter_reading.expected_frame_family == plan.frame_family);
+        ASSERT(meter_reading.observed_frame_family == plan.frame_family);
+        ASSERT(meter_reading.reject_reason == METER_REJECT_NONE);
+        if (!test_frame_has_voltage_payload_marker(frame) &&
+            !test_raw_digits_are_continuity_marker(meter_reading.dbg_raw_digits)) {
+            unclassified_active_policy_seen |= (uint8_t)(1U << plan.frame_family);
+        }
+
+        process_frame(low_dcv_frame, mode);
+        if (plan.frame_family == FPGA_METER_FRAME_FAMILY_VOLTAGE) {
+            if (mode == 1) {
+                ASSERT(!meter_reading.valid);
+                ASSERT(meter_reading.reject_reason ==
+                       METER_REJECT_MISSING_AC_EVIDENCE);
+                ac_evidence_seen |= 1U << 0;
+            } else {
+                ASSERT(meter_reading.valid);
+                ASSERT(meter_reading.bcd_value == 4366);
+                ASSERT_STR_EQ(meter_reading.display_str, "0.4366");
+            }
+        } else {
+            ASSERT(!meter_reading.valid);
+            ASSERT(meter_reading.reject_reason ==
+                   METER_REJECT_WRONG_FRAME_FAMILY);
+            ASSERT(expect_payload_cleared("---"));
+            marker_mismatch_seen |= (uint8_t)(1U << plan.frame_family);
+        }
+
+        meter_data_init();
+        process_frame(continuity_marker, mode);
+        if (plan.frame_family == FPGA_METER_FRAME_FAMILY_CONTINUITY) {
+            ASSERT(meter_reading.valid);
+            ASSERT(meter_reading.result_class == METER_RESULT_CONTINUITY);
+        } else {
+            ASSERT(!meter_reading.valid);
+            ASSERT(meter_reading.reject_reason ==
+                   METER_REJECT_WRONG_FRAME_FAMILY);
+            marker_mismatch_seen |= (uint8_t)(1U << plan.frame_family);
+        }
+
+        process_frame(frame, FPGA_METER_LOCAL_SUBMODE_COUNT);
+        ASSERT(!meter_reading.valid);
+        ASSERT(meter_reading.reject_reason == METER_REJECT_INVALID_SUBMODE);
+        invalid_submode_seen = 1;
+    }
+
+    for (uint8_t mode = 0; mode < FPGA_METER_LOCAL_SUBMODE_COUNT; mode++) {
+        if (mode == 1 || mode == 4 || mode == 5) {
+            uint8_t missing_ac_frame[12];
+            uint8_t present_ac_frame[12];
+
+            if (mode == 1) {
+                build_segment_frame(missing_ac_frame, 2, 2, 8, 2,
+                                    0x00, 0x24, 0x02, 0x00, 0);
+                build_segment_frame(present_ac_frame, 2, 2, 8, 2,
+                                    0x00, 0x00, 0x02, 0x00, 0x0031);
+            } else {
+                build_segment_frame(missing_ac_frame, 2, 2, 6, 1,
+                                    0x00, 0x24, 0x00, 0x00, 0);
+                build_segment_frame(present_ac_frame, 2, 2, 6, 1,
+                                    0x00, 0x00, 0x00, 0x00, 0x0031);
+            }
+
+            meter_data_init();
+            process_frame(missing_ac_frame, mode);
+            ASSERT(!meter_reading.valid);
+            ASSERT(meter_reading.reject_reason ==
+                   METER_REJECT_MISSING_AC_EVIDENCE);
+            ac_evidence_seen |= 1U << 1;
+
+            process_frame(present_ac_frame, mode);
+            ASSERT(meter_reading.valid);
+            ASSERT(meter_reading.reject_reason == METER_REJECT_NONE);
+            ASSERT(close_to(meter_reading.aux_freq_hz, 49.0f, 0.1f));
+            ac_evidence_seen |= 1U << 2;
+        }
+    }
+
+    for (uint8_t bits = 0; bits < 16; bits++) {
+        uint8_t expected_class =
+            (bits & 0x8U) ? 4U :
+            (bits & 0x4U) ? 3U :
+            (bits & 0x2U) ? 2U :
+            (bits & 0x1U) ? 1U : 0U;
+
+        build_segment_frame(frame, 1, 2, 3, 4,
+                            0x00, 0x00, 0x02, 0x00, 0x0031);
+        if (bits & 0x1U) frame[5] |= 0x10U;
+        if (bits & 0x2U) frame[4] |= 0x10U;
+        if (bits & 0x4U) frame[3] |= 0x10U;
+        if (bits & 0x8U) frame[8] |= 0x80U;
+
+        meter_data_init();
+        process_frame(frame, 0);
+        ASSERT(meter_reading.valid);
+        ASSERT(meter_reading.reject_reason == METER_REJECT_NONE);
+        range_classes_seen |= (uint8_t)(1U << expected_class);
+    }
+
+    ASSERT(logical_seen == all_logical_functions);
+    ASSERT(unresolved_seen == unresolved_ua_functions);
+    ASSERT(supported_submodes_seen == all_local_submodes);
+    ASSERT(local_submodes_seen == all_local_submodes);
+    ASSERT(stale_transition_sources_seen == all_local_submodes);
+    ASSERT(stale_transition_dests_seen == all_local_submodes);
+    ASSERT(stale_transition_pairs ==
+           FPGA_METER_LOCAL_SUBMODE_COUNT * FPGA_METER_LOCAL_SUBMODE_COUNT);
+    ASSERT(expected_families_seen ==
+           ((1U << FPGA_METER_FRAME_FAMILY_VOLTAGE) |
+            (1U << FPGA_METER_FRAME_FAMILY_CURRENT) |
+            (1U << FPGA_METER_FRAME_FAMILY_RESISTANCE) |
+            (1U << FPGA_METER_FRAME_FAMILY_CONTINUITY) |
+            (1U << FPGA_METER_FRAME_FAMILY_DIODE) |
+            (1U << FPGA_METER_FRAME_FAMILY_EXTENDED)));
+    ASSERT(ac_evidence_seen == 0x07U);
+    ASSERT(range_classes_seen == 0x1FU);
+    ASSERT(transition_phases_seen ==
+           (PHASE_INVALIDATE | PHASE_BUSY_DROP |
+            PHASE_DISCARD_DROP | PHASE_STABLE_ACCEPT));
+    ASSERT(marker_mismatch_seen ==
+           ((1U << FPGA_METER_FRAME_FAMILY_VOLTAGE) |
+            (1U << FPGA_METER_FRAME_FAMILY_CURRENT) |
+            (1U << FPGA_METER_FRAME_FAMILY_RESISTANCE) |
+            (1U << FPGA_METER_FRAME_FAMILY_CONTINUITY) |
+            (1U << FPGA_METER_FRAME_FAMILY_DIODE) |
+            (1U << FPGA_METER_FRAME_FAMILY_EXTENDED)));
+    ASSERT(unclassified_active_policy_seen ==
+           ((1U << FPGA_METER_FRAME_FAMILY_VOLTAGE) |
+            (1U << FPGA_METER_FRAME_FAMILY_CURRENT) |
+            (1U << FPGA_METER_FRAME_FAMILY_RESISTANCE) |
+            (1U << FPGA_METER_FRAME_FAMILY_DIODE) |
+            (1U << FPGA_METER_FRAME_FAMILY_EXTENDED)));
+    ASSERT(invalid_submode_seen == 1);
+    return 1;
+}
+
 static int test_invalidate_clears_stale_payload_for_every_ordered_mode_transition(void)
 {
     uint8_t source_frame[12];
@@ -2092,6 +2345,7 @@ int main(void)
     TEST(invalid_submode_rejects_without_becoming_dcv);
     TEST(invalid_submode_rejects_every_frame_family_corpus);
     TEST(state_machine_property_matrix_covers_all_submodes);
+    TEST(goal_surface_property_enumerates_dmm_state_machine);
     TEST(invalidate_clears_stale_payload_for_every_ordered_mode_transition);
     TEST(transport_gate_blocks_source_frames_during_every_transition);
     TEST(transition_phase_marker_frames_follow_destination_state);

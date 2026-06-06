@@ -157,6 +157,17 @@ The software contract proves parser/state safety only:
 - the ordered mode-transition stale matrix now covers every source submode to
   every destination submode, so a valid prior-mode payload cannot survive a
   transition just because it remains numerically plausible
+- `test_goal_surface_property_enumerates_dmm_state_machine` is the compact
+  C-level coverage ledger for the implemented state machine. It walks every
+  logical DMM function, including the explicitly unresolved DC/AC uA functions;
+  every local submode 0..10; all ordered stale source/destination transitions;
+  busy/drop/discard/stable transition phases; marker-visible voltage and
+  continuity mismatch handling; unclassified normal-frame active-family policy;
+  AC-evidence accept/reject; invalid submode rejection; and all five stock DCV
+  range classes selected from the 16 possible class-bit combinations. This is
+  software model proof only. It intentionally preserves the live
+  `0.200 V -> 0.4366 V` frame as stock-consistent parser output and leaves the
+  physical frontend/range/H2/factory-calibration cause unresolved.
 
 The goal gate now has explicit state-machine property anchors in
 `scripts/validate_dmm_goal.py`, so passing the final command is tied to these
