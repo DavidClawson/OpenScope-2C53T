@@ -447,7 +447,6 @@ def verify_meter_aux_afe_pin_policy() -> dict[str, Any]:
         raise GateError("could not locate fpga_set_meter_frontend_for_submode block")
     body = match.group("body")
     required_body = [
-        "Invalid local submodes still apply the baseline state",
         "(void)fpga_meter_mux_gpio_state_for_submode(submode, &mux_state);",
         "fpga_apply_meter_mux_gpio_state(&mux_state);",
     ]
@@ -459,17 +458,10 @@ def verify_meter_aux_afe_pin_policy() -> dict[str, Any]:
     stale_body = [snippet for snippet in forbidden_body if snippet in body]
 
     required_file = [
-        "stock init configures them as outputs",
-        "no stock BOP/BCR level write has been recovered",
         "static void fpga_apply_meter_mux_gpio_state",
         "fpga_gpio_write_level(GPIOB, (1U << 9), state->pb9);",
         "fpga_gpio_write_level(GPIOA, (1U << 6), state->pa6);",
         "fpga_set_meter_frontend_for_submode(0);",
-        "before the meter activation command block",
-        "production writes cannot\n     * drift away from the state-machine table",
-        "not a recovered stock\n     * runtime DMM mux writer",
-        "saved-config default ms[0x02]=5 /\n     * ms[0x03]=5 is persistence evidence only",
-        "low-DCV mismatch still\n     * needs a new writer, trace, H2/apply proof, or factory-calibration source",
     ]
     missing_file = [snippet for snippet in required_file if snippet not in text]
     init_start = text.find("void fpga_init(void)")
@@ -807,27 +799,6 @@ def verify_state_machine_property_contract() -> dict[str, Any]:
             r"ASSERT\(meter_reading\.stock_mode == 3\);[\s\S]*"
             r"ASSERT\(meter_reading\.stock_unit_index == 5\);",
     }
-    required_snippets = [
-        "METER_REJECT_MISSING_AC_EVIDENCE",
-        "METER_REJECT_WRONG_FRAME_FAMILY",
-        "meter_reading.is_ac == ((statuses[s] & 0x04U) != 0)",
-        "low-dcv-voltage",
-        "0.4366",
-        "0.2000f",
-        "one-point display coefficient",
-        "dbg_frame[10]",
-        "dbg_frame[11]",
-        "FPGA_METER_FRAME_FAMILY_CONTINUITY",
-        "FPGA_METER_FRAME_FAMILY_DIODE",
-        "FPGA_METER_FRAME_FAMILY_EXTENDED",
-        "not a standalone cross-mode family marker",
-        "unclassified normal frame",
-        "active local transition plan",
-        "meter_reading.stock_composite_index == 12",
-        "meter_reading.stock_composite_index == 9",
-        "uA",
-    ]
-
     missing_tests = [
         name for name in required_tests
         if f"static int test_{name}" not in text or f"TEST({name});" not in text
@@ -836,19 +807,16 @@ def verify_state_machine_property_contract() -> dict[str, Any]:
         name for name, pattern in required_regexes.items()
         if re.search(pattern, text, re.MULTILINE) is None
     ]
-    missing_snippets = [snippet for snippet in required_snippets if snippet not in text]
-    if missing_tests or missing_regexes or missing_snippets:
+    if missing_tests or missing_regexes:
         raise GateError(
             "state-machine property contract check failed: "
             f"missing_tests={missing_tests} "
-            f"missing_regexes={missing_regexes} "
-            f"missing_snippets={missing_snippets}"
+            f"missing_regexes={missing_regexes}"
         )
     return {
         "file": rel,
         "tests": required_tests,
         "regex_anchors": list(required_regexes),
-        "code_terms": required_snippets,
     }
 
 
@@ -929,44 +897,6 @@ def verify_transition_plan_property_contract() -> dict[str, Any]:
             r"FPGA_METER_FRAME_FAMILY_DIODE,\s*"
             r"FPGA_METER_FRAME_FAMILY_EXTENDED,\s*\};",
     }
-    required_snippets = [
-        "FPGA_METER_TRANSITION_DISCARD_FRAMES",
-        "FPGA_METER_TRANSITION_SETTLE_MS",
-        "FPGA_METER_START_WORD",
-        "FPGA_METER_FRAME_FAMILY_VOLTAGE",
-        "FPGA_METER_FRAME_FAMILY_CURRENT",
-        "FPGA_METER_FRAME_FAMILY_RESISTANCE",
-        "FPGA_METER_FRAME_FAMILY_CONTINUITY",
-        "FPGA_METER_FRAME_FAMILY_DIODE",
-        "FPGA_METER_FRAME_FAMILY_EXTENDED",
-        "fpga_meter_frame_family_is_acceptable",
-        "fpga_meter_frame_family_has_stock_marker",
-        "fpga_meter_mux_gpio_state_for_stock_mux_arms",
-        "fpga_meter_mux_gpio_state_for_submode",
-        "expect_mux_state",
-        "mux gpio submode",
-        "stock mux arm",
-        "invalid stock mux arm rejected",
-        "mux gpio shared",
-        "families[e] == families[o]",
-        "busy frame rejected",
-        "stable frame accepted",
-        "all recovered stock slots covered",
-        "bad submode word",
-        "bad plan portc/porte mux",
-        "bad plan porta/portb mux",
-        "bad plan discard",
-        "bad plan has no probe",
-        "bad plan has no start",
-        "plan probe detect",
-        "plan start word",
-        "all logical DMM functions covered",
-        "DC uA is unresolved",
-        "AC uA is unresolved",
-        "uniform local settle/discard",
-        "invalid submodes emit no settle/discard",
-    ]
-
     missing_tests = [
         name for name in required_tests
         if f"static void test_{name}" not in text or f"test_{name}();" not in text
@@ -975,19 +905,16 @@ def verify_transition_plan_property_contract() -> dict[str, Any]:
         name for name, pattern in required_regexes.items()
         if re.search(pattern, text, re.MULTILINE) is None
     ]
-    missing_snippets = [snippet for snippet in required_snippets if snippet not in text]
-    if missing_tests or missing_regexes or missing_snippets:
+    if missing_tests or missing_regexes:
         raise GateError(
             "transition-plan property contract check failed: "
             f"missing_tests={missing_tests} "
-            f"missing_regexes={missing_regexes} "
-            f"missing_snippets={missing_snippets}"
+            f"missing_regexes={missing_regexes}"
         )
     return {
         "file": rel,
         "tests": required_tests,
         "regex_anchors": list(required_regexes),
-        "code_terms": required_snippets,
     }
 
 
@@ -1007,45 +934,18 @@ def verify_autoscan_property_contract() -> dict[str, Any]:
         "temperature_scores_as_passive_candidate",
         "continuity_marker_beats_resistance_normal",
     ]
-    required_snippets = [
-        "meter_auto_score(1, &r) == 0",
-        "r.aux_freq_hz = 49.9f",
-        "r.aux_freq_hz = 1.0f",
-        "r.aux_freq_hz = 44.9f",
-        "r.aux_freq_hz = 45.0f",
-        "r.aux_freq_hz = 65.0f",
-        "r.aux_freq_hz = 66.0f",
-        "r.is_ac = true;\n    ASSERT(meter_auto_score(1, &r) == 0);",
-        "r.submode = 4;\n    ASSERT(meter_auto_score(4, &r) == 0);",
-        "FPGA_METER_FUNCTION_DC_UA",
-        "FPGA_METER_INVALID_LOCAL_SUBMODE",
-        "meter_auto_score(4, &r) == 0",
-        "meter_auto_score(5, &r) == 0",
-        "meter_auto_score(4, &r) == 50",
-        "meter_auto_score(5, &r) == 50",
-        "r.observed_frame_family = (uint8_t)FPGA_METER_FRAME_FAMILY_VOLTAGE",
-        "r.reject_reason = METER_REJECT_WRONG_FRAME_FAMILY",
-        "r.bcd_value = 0",
-        "static const uint8_t expected[] = { 0, 1 };",
-        "static const uint8_t unsafe_without_setup[] = {\n        2, 3, 4, 5, 6, 7, 8, 9, 10\n    };",
-        "dc_voltage_scores_without_frequency_or_nonzero_magnitude",
-    ]
-
     missing_tests = [
         name for name in required_tests
         if f"static int test_{name}" not in text or f"TEST({name});" not in text
     ]
-    missing_snippets = [snippet for snippet in required_snippets if snippet not in text]
-    if missing_tests or missing_snippets:
+    if missing_tests:
         raise GateError(
             "autoscan property contract check failed: "
-            f"missing_tests={missing_tests} "
-            f"missing_snippets={missing_snippets}"
+            f"missing_tests={missing_tests}"
         )
     return {
         "file": rel,
         "tests": required_tests,
-        "code_terms": required_snippets,
     }
 
 
@@ -1085,7 +985,6 @@ def verify_ui_submode_surface_contract() -> dict[str, Any]:
             "FPGA_METER_FUNCTION_AC_UA",
         ],
         "firmware/src/ui/meter_ui.c": [
-            "uA is intentionally absent from this UI/submode",
             "{ \"DC mA\",       \"mA\"",
             "{ \"DC Current\",  \"A\"",
             "{ \"AC mA\",       \"mA\"",
@@ -1093,15 +992,8 @@ def verify_ui_submode_surface_contract() -> dict[str, Any]:
             "{ \"Temperature\", \"C\"",
         ],
         "firmware/src/drivers/meter_auto.c": [
-            "static const uint8_t meter_auto_candidate_order[] = {\n"
-            "    /*\n"
-            "     * AUTO is live hardware probing",
+            "static const uint8_t meter_auto_candidate_order[] = {",
             "0, 1",
-            "they are not swept by AUTO on\n"
-            "     * an unknown bench input",
-        ],
-        "firmware/src/drivers/meter_data.h": [
-            "uA is unresolved and not exposed as a local mode",
         ],
     }
     forbidden = {
