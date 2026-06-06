@@ -62,6 +62,21 @@ Therefore production firmware must continue to fail closed for unrecovered
 factory-calibration cases rather than using `9999.BIN`, W25Q presence, or the
 low-DCV live mismatch as a coefficient source.
 
+## Saved-Config Default Lead
+
+A separate stock lead now exists in master init, but it is still a boundary, not
+a usable DMM coefficient.  Stock restores a calibration-like saved-config table
+into `0x20000358..0x2000044A`, checks `ms[0x34E]` at `0x080261A8`, and if that
+sentinel is erased (`0xFFFF`) or zero, writes hardcoded defaults at
+`0x080261BE..0x08026506` after the default-path entry at `0x08026198`.
+
+This proves stock has persistent/default calibration-like table data outside
+the empty `9999.BIN` lead. It does not prove those values are recovered DMM
+physical coefficients. The current consumer evidence for the overlapping
+`0x20000358` RAM region still belongs to scope/DAC/measurement paths, so these
+defaults must not be applied to low-DCV, current, or low-Ohm readings without a
+DMM-owned consumer xref or live trace.
+
 ## Production Guard
 
 The open firmware `flash_fs_load_factory_cal()` path is a fail-closed placeholder.

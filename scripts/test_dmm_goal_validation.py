@@ -808,6 +808,23 @@ class DmmGoalValidationTests(unittest.TestCase):
             coverage["terms"],
         )
 
+    def test_re_coverage_requires_saved_config_calibration_default_boundary(self) -> None:
+        coverage = validate_dmm_goal.verify_re_coverage()
+        self.assertIn("Saved-config calibration default boundary", coverage["terms"])
+        self.assertIn("0x08026198", coverage["terms"])
+        self.assertIn("0x080261A8", coverage["terms"])
+        self.assertIn("0x080261BE", coverage["terms"])
+        self.assertIn("0x08026506", coverage["terms"])
+        self.assertIn("`ms[0x34E]`", coverage["terms"])
+        self.assertIn("`0x20000358..0x2000044A`", coverage["terms"])
+        self.assertIn("persistent/default calibration-like table", coverage["terms"])
+        self.assertIn(
+            "not a recovered DMM physical coefficient",
+            coverage["terms"],
+        )
+        self.assertIn("not a low-DCV correction", coverage["terms"])
+        self.assertIn("without a DMM-owned consumer xref", coverage["terms"])
+
     def test_stock_roll_buffer_preload_is_binary_grounded(self) -> None:
         result = stock_meter_literals.verify_roll_buffer_preload_sequences()
         self.assertEqual(
@@ -1611,6 +1628,49 @@ class DmmGoalValidationTests(unittest.TestCase):
         self.assertIn(
             "ca f8 04 60",
             sequences["saved_config_meter_state_pack_writes"]["bytes"],
+        )
+
+    def test_stock_saved_config_calibration_defaults_are_binary_grounded(self) -> None:
+        result = (
+            stock_meter_literals
+            .verify_saved_config_calibration_default_boundary_sequences()
+        )
+        sequences = result["sequences"]
+
+        self.assertEqual(
+            sequences["saved_config_cal_default_sentinel"]["addr"],
+            "0x08026198",
+        )
+        self.assertEqual(
+            sequences["saved_config_cal_default_first_stores"]["addr"],
+            "0x080261be",
+        )
+        self.assertEqual(
+            sequences["saved_config_cal_default_meter_like_values"]["addr"],
+            "0x08026332",
+        )
+        self.assertEqual(
+            sequences["saved_config_cal_default_0x29c_and_tail"]["addr"],
+            "0x0802643a",
+        )
+        self.assertEqual(
+            sequences["saved_config_cal_default_tail_sentinel"]["addr"],
+            "0x080264ee",
+        )
+        self.assertIn(
+            "ba f8 4e 03",
+            sequences["saved_config_cal_default_sentinel"]["bytes"],
+        )
+        self.assertIn("ms[0x34E]", result["sentinel"])
+        self.assertEqual(result["ram_span"], "0x20000358..0x2000044A")
+        self.assertIn(
+            "not a recovered DMM physical coefficient",
+            result["classification"],
+        )
+        self.assertIn("not a low-DCV correction", result["classification"])
+        self.assertIn(
+            "without a DMM-owned consumer xref",
+            result["classification"],
         )
 
     def test_stock_meter_saved_config_pack_caller_is_binary_grounded(self) -> None:

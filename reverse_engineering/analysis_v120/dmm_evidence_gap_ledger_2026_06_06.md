@@ -137,6 +137,13 @@ one of:
   default persistent mux bytes are `ms[0x02]=5` and `ms[0x03]=5`. That is
   persistence/default evidence only; it is not a recovered normal runtime DMM
   mux writer, not a universal frontend setting, and not a low-DCV correction.
+- Saved-config calibration default boundary: stock master init restores a
+  persistent/default calibration-like table at `0x20000358..0x2000044A` and
+  checks `ms[0x34E]` at `0x080261A8`; if that sentinel is `0xFFFF` or `0x0000`,
+  it writes hardcoded defaults at `0x080261BE..0x08026506`. This narrows a real
+  stock data-source lead, but it is not a recovered DMM physical coefficient,
+  not a low-DCV correction, and not a runtime `ms[0x02]`/`ms[0x03]` range writer
+  without a DMM-owned consumer xref or live trace.
 - Button/key debounce false `ms[0x02]` guard: the tempting `[r4,#2]` byte write
   at `0x080393A4` belongs to the key/button task, not DMM meter state. The
   guarded owner sequence at `0x08039374` loads `0x20002D50` button state,

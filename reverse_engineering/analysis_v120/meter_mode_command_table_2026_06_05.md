@@ -937,6 +937,63 @@ defaults `ms[0x02] = 5` and `ms[0x03] = 5` before later default fields are
 filled. This is a saved-config pack/default guard: it proves persistence layout
 and default mux-state bytes, but still not a runtime DMM range writer.
 
+### Saved-Config Calibration Default Boundary, 2026-06-06
+
+Stock master init also restores a larger calibration-like table from persistent
+config. The restore path copies saved words into `ms[0x260..0x352]`
+(`0x20000358..0x2000044A`). The exact stock sentinel check is:
+
+```text
+0x08026198: 08 20 8a f8 68 0f ba f8 4e 03 01 21 8a f8 60 1f
+0x080261A8: 41 f2 18 0b 4f f6 ff 71 c4 f2 02 0b 88 42 02 d0
+```
+
+Decompile reference:
+
+```text
+0x08026198: strb.w r0,[sl,#0xf68]  ; ms[0xF68] = 8 on default path
+0x0802619E: ldrh.w r0,[sl,#0x34e]  ; last calibration-like table entry
+0x080261A8: movw fp,#0x1018
+0x080261AC: movw r1,#0xffff
+0x080261B4: cmp r0,r1
+0x080261B6: beq #0x80261be
+0x080261B8: cmp r0,#0
+0x080261BA: bne.w #0x802650a
+```
+
+If `ms[0x34E]` is `0xFFFF` or `0x0000`, stock writes hardcoded defaults at
+`0x080261BE..0x08026506`. The first store block and later higher-valued
+defaults are binary-guarded:
+
+```text
+0x080261BE:
+  40 f2 5e 6e 40 f2 f8 02 c0 f2 5b 6e c2 f2 00 02
+  40 f2 5a 67 c2 f8 64 e2 40 f2 f8 02 c0 f2 69 67
+  c2 f2 00 02 40 f2 5f 65 c2 f8 68 72
+
+0x08026332:
+  40 f6 c7 40 40 f2 5c 65 40 f2 55 61 c0 f2 39 63
+  c0 f6 b4 40 c0 f2 58 65 c0 f2 54 61 ca e9 c4 30
+
+0x0802643A:
+  ca f8 9c 62 c0 f6 a4 43 c0 f6 b1 47 40 f6 c2 46
+  40 f6 bb 45 8c e8 8c 00 aa f8 3a 13
+
+0x080264EE:
+  ca e9 cb 65 aa f8 3e 13 aa f8 42 33 aa f8 44 23
+  aa f8 48 13 aa f8 4c 33 ca f8 4e 03
+```
+
+This is a real stock data-source boundary: a persistent/default
+calibration-like table exists, and `scripts/test_stock_meter_literals.py` pins
+its sentinel and representative default stores. It is not a recovered DMM
+physical coefficient, not a low-DCV correction, and not a runtime
+`ms[0x02]`/`ms[0x03]` range writer. Known consumer evidence for the overlapping
+`0x20000358` RAM region still points at scope/DAC/measurement paths in the
+current RAM map and `cal_data_myth_busted.md`; using these default values for
+meter voltage/current/resistance requires a DMM-owned consumer xref or live
+trace, not a surprising display mismatch.
+
 The raw direct-BL sweep for this packer is now guarded too. It found four
 BL-shaped stock hits to `FUN_080223BC`: `0x08002F8C`, `0x08002FE2`,
 `0x08005B4A`, and `0x0803972E`. The classification matters more than the raw

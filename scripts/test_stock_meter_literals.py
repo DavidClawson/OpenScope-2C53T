@@ -785,6 +785,57 @@ EXPECTED_METER_SAVED_CONFIG_PACK_SEQUENCES = {
         ),
     ),
 }
+EXPECTED_SAVED_CONFIG_CALIBRATION_DEFAULT_BOUNDARY_SEQUENCES = {
+    "saved_config_cal_default_sentinel": (
+        0x08026198,
+        bytes.fromhex(
+            "08 20 8a f8 68 0f ba f8 4e 03 01 21 8a f8 60 1f "
+            "41 f2 18 0b 4f f6 ff 71 c4 f2 02 0b 88 42 02 d0"
+        ),
+    ),
+    "saved_config_cal_default_first_stores": (
+        0x080261BE,
+        bytes.fromhex(
+            "40 f2 5e 6e 40 f2 f8 02 c0 f2 5b 6e c2 f2 00 02 "
+            "40 f2 5a 67 c2 f8 64 e2 40 f2 f8 02 c0 f2 69 67 "
+            "c2 f2 00 02 40 f2 5f 65 c2 f8 68 72 40 f2 f8 02 "
+            "c0 f2 5a 65 c2 f2 00 02 40 f2 57 61 c2 f8 6c 52 "
+            "40 f2 f8 02 c0 f2 55 61 c2 f2 00 02 40 f2 62 66"
+        ),
+    ),
+    "saved_config_cal_default_meter_like_values": (
+        0x08026332,
+        bytes.fromhex(
+            "40 f6 c7 40 40 f2 5c 65 40 f2 55 61 c0 f2 39 63 "
+            "c0 f6 b4 40 c0 f2 58 65 c0 f2 54 61 ca e9 c4 30 "
+            "40 f6 bc 40 ca e9 a5 51 aa f8 a0 02 40 f6 a7 40 "
+            "40 f6 c5 41 aa f8 18 03 40 f6 ba 40 c0 f6 bb 41 "
+            "c0 f6 b9 40 ca f8 a6 12 ca f8 ba 12 40 f6 b1 41 "
+            "ca f8 a2 02 40 f6 a5 40 c0 f6 a8 41 40 f2 67 6b "
+            "40 f2 f8 0c c0 f6 a3 40 ca f8 34 13 40 f6 b6 41 "
+            "c0 f2 65 6b c2 f2 00 0c ca f8 1a 03 40 f6 c2 40"
+        ),
+    ),
+    "saved_config_cal_default_0x29c_and_tail": (
+        0x0802643A,
+        bytes.fromhex(
+            "ca f8 9c 62 c0 f6 a4 43 c0 f6 b1 47 40 f6 c2 46 "
+            "40 f6 bb 45 8c e8 8c 00 aa f8 3a 13 40 f6 cb 41 "
+            "40 f6 b9 42 aa f8 4a 03 4f f4 4b 60 c0 f6 bb 46 "
+            "c0 f6 b9 45 aa f8 c4 12 4f f4 4c 61 aa f8 c8 22 "
+            "40 f6 a9 42 aa f8 d4 02 40 f6 af 40 41 f2 18 0b "
+            "40 f2 3b 68 40 f2 48 64"
+        ),
+    ),
+    "saved_config_cal_default_tail_sentinel": (
+        0x080264EE,
+        bytes.fromhex(
+            "ca e9 cb 65 aa f8 3e 13 aa f8 42 33 aa f8 44 23 "
+            "aa f8 48 13 aa f8 4c 33 ca f8 4e 03 db f8 04 00 "
+            "08 22 40 f4"
+        ),
+    ),
+}
 EXPECTED_METER_SAVED_CONFIG_PACK_CALLER_SEQUENCES = {
     "housekeeping_threshold_saved_config_pack_caller": (
         0x08002F80,
@@ -2657,6 +2708,42 @@ def verify_meter_saved_config_pack_caller_sequences() -> dict[str, object]:
     }
 
 
+def verify_saved_config_calibration_default_boundary_sequences() -> dict[str, object]:
+    """Guard stock saved-config calibration defaults as unresolved DMM evidence.
+
+    Master init restores a calibration-like table from persistent config into
+    `ms[0x260..0x352]`; if `ms[0x34E]` is erased (`0xFFFF`) or zero, the
+    stock code writes hardcoded defaults at `0x080261BE..0x08026506`.
+    These bytes are a real stock data-source boundary, but current consumer
+    evidence does not make them recovered DMM physical coefficients.
+    """
+    checked: dict[str, dict[str, str]] = {}
+    for name, (addr, expected) in (
+        EXPECTED_SAVED_CONFIG_CALIBRATION_DEFAULT_BOUNDARY_SEQUENCES.items()
+    ):
+        actual = read(addr, len(expected))
+        if actual != expected:
+            raise AssertionError(
+                f"{name} {addr:#010x}: expected {expected.hex(' ')}, "
+                f"got {actual.hex(' ')}"
+            )
+        checked[name] = {
+            "addr": f"{addr:#010x}",
+            "bytes": actual.hex(" "),
+        }
+    return {
+        "sequences": checked,
+        "sentinel": "ms[0x34E] == 0xFFFF or 0x0000",
+        "ram_span": "0x20000358..0x2000044A",
+        "classification": (
+            "saved-config calibration default boundary: persistent/default "
+            "calibration-like table data only; not a recovered DMM physical "
+            "coefficient, not a low-DCV correction, and not a runtime "
+            "ms[0x02]/ms[0x03] range writer without a DMM-owned consumer xref"
+        ),
+    }
+
+
 def verify_usart_tx_config_writer_meter_case_sequences() -> dict[str, object]:
     """Check the stock `FUN_08039734` TBB writer and its meter-case-shaped arm.
 
@@ -3424,6 +3511,7 @@ def main() -> None:
     saved_config_live_mux_store = verify_meter_saved_config_live_mux_store_sequences()
     saved_config_pack = verify_meter_saved_config_pack_sequences()
     saved_config_pack_callers = verify_meter_saved_config_pack_caller_sequences()
+    saved_config_cal_defaults = verify_saved_config_calibration_default_boundary_sequences()
     usart_tx_config_writer = verify_usart_tx_config_writer_meter_case_sequences()
     boot_mode_init = verify_boot_mode_init_dmm_sequences()
     boot_mode_init_tbh = verify_boot_mode_init_dmm_tbh_state_map()
@@ -3521,6 +3609,12 @@ def main() -> None:
           ", ".join(item["addr"] for item in saved_config_pack_callers["sequences"].values()))
     print("stock meter saved-config pack direct BL-shaped hits: " +
           ", ".join(saved_config_pack_callers["direct_callers"]))
+    print(
+        "stock saved-config calibration default boundary sites: "
+        + ", ".join(
+            item["addr"] for item in saved_config_cal_defaults["sequences"].values()
+        )
+    )
     print("stock USART TX config writer meter-case sites: " +
           ", ".join(item["addr"] for item in usart_tx_config_writer["sequences"].values()))
     print("stock USART TX config writer visible callers: " +

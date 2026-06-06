@@ -1595,6 +1595,14 @@ def verify_re_coverage() -> dict[str, Any]:
         "default persistent mux bytes are `ms[0x02]=5` and `ms[0x03]=5`",
         "persistence/default evidence only",
         "not a universal frontend setting",
+        "Saved-config calibration default boundary",
+        "0x08026198", "0x080261A8", "0x080261BE", "0x08026506",
+        "`ms[0x34E]`",
+        "`0x20000358..0x2000044A`",
+        "persistent/default calibration-like table",
+        "not a recovered DMM physical coefficient",
+        "not a low-DCV correction",
+        "without a DMM-owned consumer xref",
         "Next RE Target", "multiple DCV points, including low DCV, 5 V, and 32 V",
     ]
 
