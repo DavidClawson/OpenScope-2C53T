@@ -2037,12 +2037,11 @@ static void fpga_usart_tx_task(void *pv)
  * Wakes on meter_rx_queue when a complete data frame arrives.
  * Parses BCD meter readings and updates the global meter_reading.
  *
- * Stock note: the decompiled FUN_080028e0 path queues display task indices
- * 0x1B/0x1C/0x1E after formatter state changes; the current RE notes classify
- * that as display-side dispatch, not an FPGA range-control feedback loop.
- * Consequently this RX task only gates transition/stale frames and parses the
- * active 12-byte USART2 data frame. It must not infer or send range commands
- * from the decoded number itself.
+ * Stock note: the decompiled FUN_080028e0 path queues dispatcher indices
+ * 0x1B/0x1C/0x1E after formatter state changes. Those are not raw USART2
+ * bytes, so the RX task must not emit value-shaped "range fixes" from the
+ * decoded number. The poll task below keeps the active stock selector/config
+ * words alive through the already recovered raw 0x05xx materializers instead.
  */
 static void fpga_usart_rx_task(void *pv)
 {
@@ -2106,16 +2105,56 @@ static void fpga_usart_rx_task(void *pv)
  *
  * Root-cause analysis: reverse_engineering/analysis_v120/usart2_isr_state_machine.md
  */
+static void fpga_send_meter_poll_sequence(uint8_t submode)
+{
+    fpga_meter_transition_plan_t plan =
+        fpga_meter_transition_plan_for_submode(submode);
+
+    if (!fpga_meter_submode_is_valid(submode) ||
+        plan.selector_word == FPGA_METER_INVALID_SELECTOR_WORD ||
+        plan.start_word == 0) {
+        return;
+    }
+
+    /*
+     * Stock DMM is not a bare 0x0509 "start forever" loop: after each parsed
+     * frame it runs the formatter/update path that queues mode/range/trigger
+     * dispatcher bytes. The exact display queue is not cloned here, but the
+     * recovered raw-word surface already tells us which 0x05xx words represent
+     * the active selector/config/apply/probe/start state for the selected
+     * submode. Reissuing that state on the poll cadence keeps the meter ASIC in
+     * the selected family without inventing a coefficient, magnitude branch, or
+     * low-voltage special case. If future stock xrefs recover a narrower DCV
+     * range writer, it belongs in fpga_meter_plan rather than in BCD decoding.
+     */
+    if (plan.has_config_word) {
+        (void)fpga_send_cmd((uint8_t)(plan.config_word >> 8),
+                            (uint8_t)(plan.config_word & 0x00FFU));
+    }
+    (void)fpga_send_cmd((uint8_t)(plan.selector_word >> 8),
+                        (uint8_t)(plan.selector_word & 0x00FFU));
+    if (plan.has_apply_word) {
+        (void)fpga_send_cmd((uint8_t)(plan.apply_word >> 8),
+                            (uint8_t)(plan.apply_word & 0x00FFU));
+    }
+    if (plan.has_probe_detect) {
+        (void)fpga_send_cmd(0x05, fpga_probe_cmd_byte());
+    }
+    (void)fpga_send_cmd((uint8_t)(plan.start_word >> 8),
+                        (uint8_t)(plan.start_word & 0x00FFU));
+}
+
 static void fpga_meter_poll_task(void *pv)
 {
     (void)pv;
     extern volatile device_mode_t current_mode;  /* from ui.h via main.c */
+    extern volatile uint8_t meter_submode;
 
     for (;;) {
         vTaskDelay(pdMS_TO_TICKS(250));  /* ~4 Hz */
         if (fpga.initialized && current_mode == MODE_MULTIMETER &&
             !meter_transition_busy) {
-            fpga_send_cmd(0x05, 0x09);  /* Meter: start measurement */
+            fpga_send_meter_poll_sequence(meter_submode);
         }
     }
 }

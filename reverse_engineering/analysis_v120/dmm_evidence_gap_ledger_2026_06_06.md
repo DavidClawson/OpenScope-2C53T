@@ -995,6 +995,28 @@ wiring proof boundary. It is not permission to restore decoder coefficients.
   shape. The unresolved fix remains upstream: recover/apply the missing
   frontend/range/state/calibration source that makes sub-1V DCV produce the
   correct stock-visible voltage frame, rather than tuning decoder coefficients.
+- Stock-shaped poll cadence live check: OpenScope app image SHA-256
+  `77885ba416a0db7c6ad2c8d07500670437b285ee65db2c5ecbcbb4d3ec5bb3cc`
+  was flashed through guarded HID IAP after `flash_preflight.py hid-app`
+  classified it as an `openscope-app` image at `0x08004000`. Before this
+  change, live `status` showed the DMM TX history as a bare repeated
+  `00 00 05 09 ...` start command. The firmware now reissues the recovered
+  plan words on each DMM poll: basic config `0508`, DCV selector `0514`, probe
+  `0507`, and start `0509` for DCV, plus the stock-plan apply word for modes
+  that have one. The post-flash live `tx_frames_recent` history confirmed the
+  repeated `0508 0514 0507 0509` sequence, so the recovered selector/config
+  state is now kept alive on real hardware instead of only at transition time.
+
+  This is not yet the low-DCV fix. On the current bench state the first and
+  steady producer frame remained
+  `5A A5 E4 2E 63 25 07 00 00 00 01 47`, decoded as invalid/cleared
+  (`display=---`, `reject=1`) with digit codes `0A 0B 0C 0D`, DCV
+  `planned_gpio=0BB`, `actual_gpio=0BB`, `factory_cal.loaded=0`, and H2 RX
+  bytes still all `FF`. Therefore the old bare-`0509` loop was a real
+  stock-shape gap, but it is not sufficient to make sub-1V DCV produce a
+  marked voltage frame. The remaining blocker is still producer-side state
+  before stock decimal decoding: an unrecovered dispatcher/materializer,
+  range/frontend writer, ASIC/H2 acceptance path, or factory-calibration source.
 
 ## Next RE Target
 
