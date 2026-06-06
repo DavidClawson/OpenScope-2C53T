@@ -725,6 +725,34 @@ wiring proof boundary. It is not permission to restore decoder coefficients.
   `last_preacq_rx=FF`; the USART DMM producer simultaneously remained valid at
   `dmm_display=2.233 V`.  Treat this as "case-5 not armed/valid in local
   firmware" evidence, not as a hidden raw voltage reading.
+- Machine-readable producer trace hook: commit `1abb222` adds host-side
+  `openscope_live_debug.py meter-trace --json`, which parses the existing
+  read-only firmware `meter trace` output into a structured record containing
+  the selected DMM plan, wire words, producer frame, parsed frame, frontend GPIO
+  levels, H2/post-H2 SPI3 state, and decoded stock-visible value.  This is a
+  trace artifact, not a correction path.  A live run on `/dev/ttyACM0` with
+  build `Jun  6 2026 20:25:17` first showed `PB9=1 PA6=1` from old manual
+  runtime state; after `mode meter 0` the production transition reset them to
+  `PB9=0 PA6=0` with `planned_gpio=actual_gpio=0BB`.  After the discard window
+  drained, the structured trace still showed the wrong value before display
+  formatting:
+
+```json
+{
+  "wire": {"selector": "0514", "apply": "0000", "probe": "0507", "start": "0509"},
+  "gpio_frontend": {"PC12": 1, "PE4": 1, "PE5": 0, "PE6": 1, "PA15": 1, "PA10": 1, "PB10": 0, "PB9": 0, "PA6": 0},
+  "producer_frame": "5A A5 A4 BD 8D EF 4F 20 00 00 01 5E",
+  "parsed_frame": "5A A5 A4 BD 8D EF 4F 20 00 00 01 5E",
+  "decoded": {"display": "2.238", "unit": "V", "raw": 2238, "family": "0/0"},
+  "calibration_state": {"bytes": 115638, "done": 1, "post_mask": "1F", "post_rx": "FF-only"}
+}
+```
+
+  This keeps the current blocker upstream of parser/display math and closes the
+  stale-manual-pin explanation for the post-reinit production path.  It also
+  makes future live validation comparable without OCR or ad-hoc text scraping:
+  the raw measurement source is the USART2 12-byte DMM producer frame, and the
+  next useful trace must move earlier than that frame.
 
 ## Next RE Target
 
