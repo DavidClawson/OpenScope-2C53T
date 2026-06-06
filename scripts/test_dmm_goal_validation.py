@@ -48,6 +48,83 @@ frame=5A A5 44 8E EF C7 07 24 80 00 01 8A
 
 
 class DmmGoalValidationTests(unittest.TestCase):
+    def test_software_gate_owns_full_non_live_command_contract(self) -> None:
+        commands = [tuple(cmd) for cmd in validate_dmm_goal.SOFTWARE_GATE_COMMANDS]
+
+        py_compile = commands[0]
+        self.assertEqual(py_compile[:3], ("python3", "-m", "py_compile"))
+        self.assertIn("scripts/test_dmm_goal_validation.py", py_compile)
+        self.assertIn("scripts/test_stock_meter_literals.py", py_compile)
+        self.assertIn("scripts/test_stock_h2_table.py", py_compile)
+        self.assertIn(
+            ("python3", "scripts/test_openscope_live_debug.py"),
+            commands,
+        )
+        self.assertIn(("python3", "scripts/test_flash_preflight.py"), commands)
+        self.assertIn(("python3", "scripts/test_stock_h2_table.py"), commands)
+        self.assertIn(("python3", "scripts/test_stock_meter_literals.py"), commands)
+        self.assertIn(("python3", "scripts/test_dmm_goal_validation.py"), commands)
+        self.assertIn(("make", "-C", "firmware", "test-meter"), commands)
+        self.assertIn(("make", "-C", "firmware", "clean"), commands)
+        self.assertIn(("make", "-C", "firmware"), commands)
+        self.assertIn(("git", "diff", "--check"), commands)
+
+    def test_software_gate_owns_all_forbidden_search_contracts(self) -> None:
+        searches = {
+            str(search["label"]): search
+            for search in validate_dmm_goal.SOFTWARE_GATE_FORBIDDEN_SEARCHES
+        }
+
+        self.assertIn("decoder value-shape hacks", searches)
+        self.assertEqual(
+            searches["decoder value-shape hacks"]["paths"],
+            ("firmware/src/drivers", "firmware/src/ui"),
+        )
+        self.assertIn(
+            "raw_bcd|display_value|magnitude|looks like|1800|2600",
+            str(searches["decoder value-shape hacks"]["pattern"]),
+        )
+
+        self.assertIn("stale AC/DC status-bit claims", searches)
+        self.assertIn(
+            "reverse_engineering",
+            searches["stale AC/DC status-bit claims"]["paths"],
+        )
+        self.assertIn(
+            "scripts",
+            searches["stale AC/DC status-bit claims"]["paths"],
+        )
+        self.assertIn(
+            "AC/DC",
+            str(searches["stale AC/DC status-bit claims"]["pattern"]),
+        )
+
+        self.assertIn("stale H2 dummy-exchange choreography", searches)
+        self.assertEqual(
+            searches["stale H2 dummy-exchange choreography"]["paths"],
+            ("reverse_engineering/analysis_v120/SPI3_INIT_SEQUENCE_DECODED.md",),
+        )
+        self.assertIn(
+            "dummy" + "-exchange",
+            str(searches["stale H2 dummy-exchange choreography"]["pattern"]),
+        )
+
+        self.assertIn("stale magnitude-feedback range TODO", searches)
+        self.assertIn(
+            "Detect BCD " + "overflow",
+            str(searches["stale magnitude-feedback range TODO"]["pattern"]),
+        )
+
+        self.assertIn("stale H2 acceptance wording", searches)
+        self.assertIn(
+            "H2 Upload " + "Verification",
+            str(searches["stale H2 acceptance wording"]["pattern"]),
+        )
+        self.assertIn(
+            "reverse_engineering/analysis_v120",
+            searches["stale H2 acceptance wording"]["paths"],
+        )
+
     def test_parse_meter_dump_extracts_core_fields(self) -> None:
         parsed = validate_dmm_goal.parse_meter_dump_block(GOOD_DCV)
 

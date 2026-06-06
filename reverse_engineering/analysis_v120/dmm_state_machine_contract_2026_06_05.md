@@ -157,6 +157,16 @@ first accepted post-transition frame follows destination state rather than
 prior-mode payload shape. This is not a camera/OCR or multiplier-tuning
 exercise.
 
+`python3 scripts/validate_dmm_goal.py --skip-live --outdir <dir>` is the single
+repo-owned non-live gate. It runs the host py_compile/scripts tests, stock H2
+and DMM literal extraction checks, DMM goal validation tests, firmware meter
+tests, clean firmware build, `git diff --check`, and the forbidden searches for
+decoder value-shape hacks, stale AC/DC status-bit claims, stale H2 choreography,
+stale magnitude-feedback TODOs, and stale H2 acceptance wording. This is still
+software proof only: final goal closure additionally requires a guarded
+preflighted OpenScope app image and image-view live validation on hard physical
+DMM scenarios.
+
 Live validation only switches DCV/ACV on the energized bench input. Passive and
 current modes stay unprobed in that live path: passive voltage-payload rejection
 and current voltage-payload rejection are software/property-test obligations

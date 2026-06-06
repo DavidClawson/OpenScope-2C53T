@@ -23,6 +23,70 @@ from typing import Any
 REPO = Path(__file__).resolve().parents[1]
 FORBIDDEN_RE = r"raw_bcd|display_value|magnitude|looks like|1800|2600"
 DMM_MODE_COUNT = 11
+SOFTWARE_GATE_COMMANDS: tuple[tuple[str, ...], ...] = (
+    (
+        "python3", "-m", "py_compile",
+        "scripts/openscope_live_debug.py",
+        "scripts/flash_preflight.py",
+        "scripts/hid_flash.py",
+        "scripts/validate_dmm_goal.py",
+        "scripts/test_dmm_goal_validation.py",
+        "scripts/test_stock_meter_literals.py",
+        "scripts/test_stock_h2_table.py",
+    ),
+    ("python3", "scripts/test_openscope_live_debug.py"),
+    ("python3", "scripts/test_flash_preflight.py"),
+    ("python3", "scripts/test_stock_h2_table.py"),
+    ("python3", "scripts/test_stock_meter_literals.py"),
+    ("python3", "scripts/test_dmm_goal_validation.py"),
+    ("make", "-C", "firmware", "test-meter"),
+    ("make", "-C", "firmware", "clean"),
+    ("make", "-C", "firmware"),
+    ("git", "diff", "--check"),
+)
+SOFTWARE_GATE_FORBIDDEN_SEARCHES: tuple[dict[str, object], ...] = (
+    {
+        "label": "decoder value-shape hacks",
+        "pattern": FORBIDDEN_RE,
+        "paths": ("firmware/src/drivers", "firmware/src/ui"),
+    },
+    {
+        "label": "stale AC/DC status-bit claims",
+        "pattern": (
+            "frame" + r"\[7\]\.2.*AC/DC|" +
+            "AC/DC" + r".*frame\[7\]\.2"
+        ),
+        "paths": (
+            "reverse_engineering",
+            "scripts",
+            "firmware/src/drivers",
+            "firmware/src/ui",
+        ),
+    },
+    {
+        "label": "stale H2 dummy-exchange choreography",
+        "pattern": "dummy" + "-exchange|" + "test" + "-sequence",
+        "paths": ("reverse_engineering/analysis_v120/SPI3_INIT_SEQUENCE_DECODED.md",),
+    },
+    {
+        "label": "stale magnitude-feedback range TODO",
+        "pattern": "Detect BCD " + "overflow|send higher " + "range params",
+        "paths": ("firmware/src/drivers", "firmware/src/ui"),
+    },
+    {
+        "label": "stale H2 acceptance wording",
+        "pattern": (
+            "H2 Upload " + "Verification|" +
+            "Re-upload H2 " + r"\+ capture FPGA responses|" +
+            "accepting the data, we might see non-FF " + "responses"
+        ),
+        "paths": (
+            "firmware/src/drivers",
+            "reverse_engineering/analysis_v120",
+            "scripts",
+        ),
+    },
+)
 
 
 class GateError(RuntimeError):
@@ -46,24 +110,9 @@ def run(cmd: list[str], *, timeout: float | None = None) -> subprocess.Completed
 
 
 def run_software_gate() -> list[dict[str, Any]]:
-    commands = [
-        ["python3", "-m", "py_compile",
-         "scripts/openscope_live_debug.py",
-         "scripts/flash_preflight.py",
-         "scripts/hid_flash.py",
-         "scripts/validate_dmm_goal.py",
-         "scripts/test_stock_h2_table.py"],
-        ["python3", "scripts/test_openscope_live_debug.py"],
-        ["python3", "scripts/test_flash_preflight.py"],
-        ["python3", "scripts/test_stock_h2_table.py"],
-        ["python3", "scripts/test_dmm_goal_validation.py"],
-        ["make", "-C", "firmware", "test-meter"],
-        ["make", "-C", "firmware", "clean"],
-        ["make", "-C", "firmware"],
-        ["git", "diff", "--check"],
-    ]
     results: list[dict[str, Any]] = []
-    for cmd in commands:
+    for command in SOFTWARE_GATE_COMMANDS:
+        cmd = list(command)
         started = time.monotonic()
         proc = run(cmd)
         results.append({
@@ -72,23 +121,32 @@ def run_software_gate() -> list[dict[str, Any]]:
             "tail": "\n".join(proc.stdout.rstrip().splitlines()[-12:]),
         })
 
-    proc = subprocess.run(
-        ["rg", "-n", FORBIDDEN_RE, "firmware/src/drivers", "firmware/src/ui"],
-        cwd=REPO,
-        text=True,
-        stdout=subprocess.PIPE,
-        stderr=subprocess.STDOUT,
-    )
-    if proc.returncode == 0:
-        raise GateError("forbidden decoder/search terms found:\n" + proc.stdout.rstrip())
-    if proc.returncode not in (1,):
-        raise GateError("forbidden-search command failed:\n" + proc.stdout.rstrip())
-    results.append({
-        "cmd": ["!", "rg", "-n", FORBIDDEN_RE,
-                "firmware/src/drivers", "firmware/src/ui"],
-        "seconds": 0,
-        "tail": "no hits",
-    })
+    for search in SOFTWARE_GATE_FORBIDDEN_SEARCHES:
+        pattern = str(search["pattern"])
+        paths = list(search["paths"])
+        label = str(search["label"])
+        started = time.monotonic()
+        proc = subprocess.run(
+            ["rg", "-n", pattern, *paths],
+            cwd=REPO,
+            text=True,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.STDOUT,
+        )
+        if proc.returncode == 0:
+            raise GateError(
+                f"forbidden search hit ({label}):\n" + proc.stdout.rstrip()
+            )
+        if proc.returncode not in (1,):
+            raise GateError(
+                f"forbidden search failed ({label}):\n" + proc.stdout.rstrip()
+            )
+        results.append({
+            "cmd": ["!", "rg", "-n", pattern, *paths],
+            "label": label,
+            "seconds": round(time.monotonic() - started, 3),
+            "tail": "no hits",
+        })
     return results
 
 
