@@ -142,6 +142,34 @@ class DmmGoalValidationTests(unittest.TestCase):
             result["forbidden"],
         )
 
+    def test_top_level_re_docs_do_not_revive_legacy_dmm_range_cal_claims(self) -> None:
+        result = validate_dmm_goal.verify_legacy_top_level_dmm_protocol_boundaries()
+
+        self.assertIn(
+            "reverse_engineering/FPGA_PROTOCOL_COMPLETE.md",
+            result["checked"],
+        )
+        self.assertIn(
+            "reverse_engineering/ARCHITECTURE.md",
+            result["checked"],
+        )
+        self.assertIn(
+            "reverse_engineering/CALIBRATION.md",
+            result["checked"],
+        )
+        self.assertIn(
+            "Legacy correction (2026-06-06)",
+            result["required"]["reverse_engineering/FPGA_PROTOCOL_COMPLETE.md"],
+        )
+        self.assertIn(
+            "DAT_2000102f",
+            result["required"]["reverse_engineering/FPGA_PROTOCOL_COMPLETE.md"],
+        )
+        self.assertIn("Meter: configure range", result["forbidden"])
+        self.assertIn("Meter range config", result["forbidden"])
+        self.assertIn("`meter_cal_coeff`", result["forbidden"])
+        self.assertIn("rx[7] bit 2 = AC flag", result["forbidden"])
+
     def test_h2_tx_only_boundary_is_guarded_in_firmware_surfaces(self) -> None:
         result = validate_dmm_goal.verify_h2_tx_only_boundary()
 

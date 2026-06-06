@@ -651,6 +651,73 @@ def verify_legacy_meter_fsm_range_command_boundary() -> dict[str, Any]:
     }
 
 
+def verify_legacy_top_level_dmm_protocol_boundaries() -> dict[str, Any]:
+    """Ensure top-level legacy RE docs cannot revive old DMM range/cal claims."""
+    checked = [
+        "reverse_engineering/FPGA_PROTOCOL_COMPLETE.md",
+        "reverse_engineering/ARCHITECTURE.md",
+        "reverse_engineering/CALIBRATION.md",
+    ]
+    required = {
+        "reverse_engineering/FPGA_PROTOCOL_COMPLETE.md": [
+            "Legacy correction (2026-06-06)",
+            "Type-4-shaped arm and command-bank bytes above are not proof of normal DMM runtime range configuration",
+            "DMM-owned runtime analog writer for `ms[0x02]`/`ms[0x03]`",
+            "display_decimal_shift",
+            "DAT_2000102f",
+            "not factory calibration",
+            "status/decimal helper and is not recovered as AC-present confidence",
+        ],
+        "reverse_engineering/ARCHITECTURE.md": [
+            "Legacy correction (2026-06-06)",
+            "`ms[0xF37]` is `DAT_2000102f`",
+            "not a recovered factory calibration coefficient",
+            "rx[7] bit 2` as AC-present confidence",
+            "DMM-owned runtime analog range writer",
+        ],
+        "reverse_engineering/CALIBRATION.md": [
+            "Double-Precision Display Decimal Pipeline",
+            "`ms[0xF37]` to `DAT_2000102f`",
+            "not a recovered factory calibration coefficient source",
+            "rx[7] bit 2 = status/decimal helper",
+            "Do not use `DAT_2000102f`/`ms[0xF37]`, `rx[7] bit 2`, or the `0x1B/0x1C/0x1E` command-bank bytes as a low-DCV/current/range coefficient",
+        ],
+    }
+    forbidden = [
+        "Meter: configure range",
+        "Meter range config",
+        "`meter_cal_coeff`",
+        "Calibration coefficient selector",
+        "rx[7] bit 2 = AC flag",
+        "rx[7] bit 2 = AC,",
+        "range indicator 2 / standby",
+        "hold flag / cal coefficient",
+        "Sets cal_coeff",
+        "sets calibration coefficient",
+        "set/clear cal_coeff",
+        "cal_coeff 0 or 4",
+        "cal_coeff selection",
+    ]
+
+    missing: list[str] = []
+    hits: list[str] = []
+    for rel in checked:
+        text = (REPO / rel).read_text(encoding="utf-8", errors="replace")
+        normalized = " ".join(text.split())
+        for snippet in required[rel]:
+            if " ".join(snippet.split()) not in normalized:
+                missing.append(f"{rel}: {snippet}")
+        for snippet in forbidden:
+            if " ".join(snippet.split()) in normalized:
+                hits.append(f"{rel}: {snippet}")
+    if missing or hits:
+        raise GateError(
+            "legacy top-level DMM protocol/calibration docs drifted: "
+            f"missing={missing} stale={hits}"
+        )
+    return {"checked": checked, "required": required, "forbidden": forbidden}
+
+
 def verify_no_magnitude_range_feedback() -> dict[str, Any]:
     """Ensure production DMM frontend code does not suggest value-shaped ranging."""
     checked: dict[str, str] = {}
@@ -1622,6 +1689,9 @@ def main(argv: list[str] | None = None) -> int:
         )
         report["legacy_meter_fsm_range_command_boundary"] = (
             verify_legacy_meter_fsm_range_command_boundary()
+        )
+        report["legacy_top_level_dmm_protocol_boundaries"] = (
+            verify_legacy_top_level_dmm_protocol_boundaries()
         )
         report["no_magnitude_range_feedback"] = verify_no_magnitude_range_feedback()
 

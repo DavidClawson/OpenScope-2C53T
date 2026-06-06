@@ -459,23 +459,27 @@ void extract_meter_digits(volatile uint8_t *rx, uint8_t digits[4]) {
 | `0x13, 0x14` | `[1],[2]` | Mode change | Re-init meter FSM |
 | `0xFF` | any | Invalid/unrecognized | Skip frame |
 
-### Double-Precision Calibration
+### Double-Precision Display Decimal Pipeline
 
-The meter uses ARM EABI double-precision soft-float calls for calibration math, achieving higher precision than the scope's single-precision VFP pipeline:
+The meter uses ARM EABI double-precision soft-float calls while preparing the
+display value and decimal/formatter state. Older notes described this as a
+meter calibration coefficient path, but current stock V1.2.0 evidence maps
+`ms[0xF37]` to `DAT_2000102f`, the display decimal-shift state. This is not a
+recovered factory calibration coefficient source.
 
 ```c
-// Simplified meter calibration pipeline
-void calibrate_meter_reading(int raw_bcd_value) {
+// Simplified meter display decimal pipeline
+void format_meter_reading(int raw_bcd_value) {
     // 1. Convert BCD integer to double
     double value = (double)raw_bcd_value;
 
-    // 2. Apply calibration coefficient (selected by meter_cal_coeff)
-    //    cal_coeff comes from the 8-state meter_mode_handler
-    double cal = get_calibration_coefficient(ms[0xF37]);
+    // 2. Apply display decimal/formatter state selected by the FSM
+    //    ms[0xF37] is DAT_2000102f, not factory calibration
+    double shift = get_display_decimal_shift(ms[0xF37]);
 
     // 3. Double-precision division by reference
     //    Uses __aeabi_ddiv for precision
-    double normalized = __aeabi_ddiv(d8_reference, cal);
+    double normalized = __aeabi_ddiv(d8_reference, shift);
 
     // 4. Scale by accumulated factor
     double scaled = __aeabi_dmul(normalized, d10_accumulator);
@@ -547,15 +551,20 @@ if (digit1 == 0x12 && digit2 == 0x0A && digit3 == 5) {
 The 8-state FSM at `meter_mode_handler` (504 bytes) processes rx[6] and rx[7] status bits:
 
 ```
-State 0 (IDLE):     Check AC/auto-range/overload bits -> states 1-5
-State 1 (POLARITY): rx[7] bit 0 -> set/clear cal_coeff
+State 0 (IDLE):     Check status/format/overload bits -> states 1-5
+State 1 (POLARITY): rx[7] bit 0 -> formatter/display state
 State 2 (OVERLOAD): Check overload_flag, range change via bit 3
-State 3 (AC/DC):    rx[7] bit 2 = AC, rx[6] bit 6 = hold
-State 4 (RANGE):    rx[6] bits 4-5 = range indicators
-State 5 (AUTO):     ms[0xF39] flag -> cal_coeff 0 or 4
-State 6 (STANDBY):  rx[6] bit 4 -> cal_coeff selection
+State 3 (AC/DC):    rx[7] bit 2 = status/decimal helper, rx[6] bit 6 = hold
+State 4 (RANGE):    rx[6] bits 4-5 = display/FSM status bits
+State 5 (AUTO):     ms[0xF39] flag -> formatter/display state
+State 6 (STANDBY):  rx[6] bit 4 -> formatter/display state
 State 7 (STANDBY):  Same as state 6
 ```
+
+Legacy correction (2026-06-06): this top-level calibration note covers scope
+gain/offset tables and meter display math, but it does not recover DMM factory
+calibration. Do not use `DAT_2000102f`/`ms[0xF37]`, `rx[7] bit 2`, or the
+`0x1B/0x1C/0x1E` command-bank bytes as a low-DCV/current/range coefficient.
 
 ---
 
