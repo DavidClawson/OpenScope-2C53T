@@ -792,6 +792,22 @@ wiring proof boundary. It is not permission to restore decoder coefficients.
   pin-routing choice.  Future work should move earlier than the USART2 DMM
   producer frame through stock command/materialization, H2 apply effect, or
   factory-calibration recovery rather than repeating this GMUX toggle.
+- Normalized command-table width + TX-history trace hook: a Capstone-assisted
+  binary pass over normalized table `0x08044E74` confirms it contains 45 Thumb
+  handler entries (`0x00..0x2C`), not just the first eight entries previously
+  guarded by the stock-literal test.  The DMM-adjacent handlers in that table
+  reference the RAM state base `0x20008350`; the table handlers themselves do
+  not call `xQueueGenericSend` into raw halfword queue `0x20002D74`.  Separate
+  raw materializers still exist, including the stock DCV-like path around
+  `0x08005B7A`, which writes `0x0514` to `0x20002D54`, sends it through
+  `0x20002D74`, then queues byte-dispatch entries `0x1D` and `0x1B` through
+  `0x20002D6C`.  That is command/state sequencing evidence, not permission to
+  transmit `0x1D`/`0x1B` as raw USART words in OpenScope.  The next firmware
+  trace increment therefore exposes the already-recorded TX frame ring in
+  `meter trace` as `txh` rows, so the low-DCV run can compare the exact
+  10-byte USART frames preceding the wrong `0x5A 0xA5` producer frame against
+  stock `dvom_TX` construction before touching decoder math or inventing a
+  calibration factor.
 
 ## Next RE Target
 

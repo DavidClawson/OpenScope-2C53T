@@ -1117,6 +1117,43 @@ EXPECTED_COMMAND_DISPATCH_QUEUE_BOUNDARY = {
             0x08012245,
             0x08012345,
             0x08012479,
+            0x08012779,
+            0x08012845,
+            0x0800FEF1,
+            0x0800FFB9,
+            0x08010015,
+            0x08010159,
+            0x080101AD,
+            0x08010201,
+            0x0801025D,
+            0x080102B9,
+            0x08010315,
+            0x080103F5,
+            0x08010585,
+            0x0801067D,
+            0x080106E9,
+            0x080107C9,
+            0x080108C1,
+            0x08010925,
+            0x08010A1D,
+            0x08010A95,
+            0x08010B81,
+            0x08010C79,
+            0x08010E71,
+            0x08010F69,
+            0x08011049,
+            0x08011141,
+            0x08011239,
+            0x080114C5,
+            0x08011661,
+            0x080116ED,
+            0x080117CD,
+            0x08011829,
+            0x08011C11,
+            0x08011D09,
+            0x08011DFD,
+            0x08011E85,
+            0x0801215D,
         ],
     ),
     "dmm_tempting_display_entries": {
@@ -3064,7 +3101,10 @@ def verify_command_dispatch_queue_boundary() -> dict[str, object]:
         )
 
     normalized_addr, normalized_expected = EXPECTED_COMMAND_DISPATCH_QUEUE_BOUNDARY["normalized_callable_table"]
-    normalized_words = list(struct.unpack("<8I", read(normalized_addr, 32)))
+    normalized_words = list(struct.unpack(
+        f"<{len(normalized_expected)}I",
+        read(normalized_addr, 4 * len(normalized_expected)),
+    ))
     if normalized_words != normalized_expected:
         raise AssertionError(
             f"normalized dispatch table {normalized_addr:#010x}: expected "

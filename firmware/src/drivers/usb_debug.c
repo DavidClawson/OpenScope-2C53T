@@ -2442,6 +2442,14 @@ static void print_volatile_frame_inline(const volatile uint8_t frame[12])
     }
 }
 
+static void print_tx_frame_inline(const uint8_t frame[FPGA_TX_FRAME_SIZE])
+{
+    for (uint8_t i = 0; i < FPGA_TX_FRAME_SIZE; i++) {
+        usb_debug_printf("%s%02X", i == 0 ? "" : " ",
+                         (unsigned)frame[i]);
+    }
+}
+
 static void cmd_meter_trace(void)
 {
     meter_reading_t snap;
@@ -2464,6 +2472,8 @@ static void cmd_meter_trace(void)
     uint8_t rxh_seq_sub[FPGA_RX_FRAME_HISTORY];
     uint8_t rxh_busy[FPGA_RX_FRAME_HISTORY];
     uint8_t rxh_discard[FPGA_RX_FRAME_HISTORY];
+    uint8_t txh_count;
+    uint8_t txh_frames[FPGA_TX_FRAME_HISTORY][FPGA_TX_FRAME_SIZE];
     uint8_t mth_count;
     uint8_t mth_submode[FPGA_METER_TRANSITION_HISTORY];
     uint16_t mth_selector[FPGA_METER_TRANSITION_HISTORY];
@@ -2520,6 +2530,17 @@ static void cmd_meter_trace(void)
         rxh_seq_sub[n] = fpga.rx_history_sequence_submode[idx];
         rxh_busy[n] = fpga.rx_history_transition_busy[idx];
         rxh_discard[n] = fpga.rx_history_discard_remaining[idx];
+    }
+    txh_count = fpga.tx_frame_history_count;
+    if (txh_count > FPGA_TX_FRAME_HISTORY) {
+        txh_count = FPGA_TX_FRAME_HISTORY;
+    }
+    for (uint8_t n = 0; n < txh_count; n++) {
+        uint8_t idx = (uint8_t)((fpga.tx_frame_history_head +
+                                 FPGA_TX_FRAME_HISTORY - 1U - n) %
+                                FPGA_TX_FRAME_HISTORY);
+        memcpy(txh_frames[n], (const void *)fpga.tx_frame_history[idx],
+               FPGA_TX_FRAME_SIZE);
     }
     mth_count = fpga.meter_transition_history_count;
     if (mth_count > FPGA_METER_TRANSITION_HISTORY) {
@@ -2671,6 +2692,12 @@ static void cmd_meter_trace(void)
                          (unsigned)rxh_busy[n],
                          (unsigned)rxh_discard[n]);
         print_volatile_frame_inline(rxh_frames[n]);
+        usb_send_str("\r\n");
+    }
+    usb_send_str("tx_history newest_first:\r\n");
+    for (uint8_t n = 0; n < txh_count; n++) {
+        usb_debug_printf("txh n=%u frame=", (unsigned)n);
+        print_tx_frame_inline(txh_frames[n]);
         usb_send_str("\r\n");
     }
     usb_debug_printf("gpio control PC6=%u PB11=%u PC11=%u PC7=%u PC0=%u\r\n",
