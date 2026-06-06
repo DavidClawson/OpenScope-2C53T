@@ -106,7 +106,7 @@ ifneq ($(findstring FFT,$(FEATURES)),)
     C_SOURCES += $(CMSIS_DSP)/Source/ComplexMathFunctions/arm_cmplx_mag_f32.c
     C_SOURCES += $(CMSIS_DSP)/Source/BasicMathFunctions/arm_scale_f32.c
     FFT_INCLUDES = -I$(CMSIS_DSP)/Include
-    FFT_DEFS += -DUSE_CMSIS_DSP -DARM_MATH_CM4 -D__FPU_PRESENT=1U
+    FFT_DEFS += -DUSE_CMSIS_DSP -DARM_MATH_CM4
   endif
 endif
 
