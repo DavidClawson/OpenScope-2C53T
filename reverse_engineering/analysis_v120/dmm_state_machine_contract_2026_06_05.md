@@ -87,8 +87,11 @@ The software contract proves parser/state safety only:
 - the 32-case range-class matrix covers all stock bit combinations and the
   optional `+10000` extension
 - marker-visible wrong-family frames are now covered as an explicit matrix:
-  stock voltage metadata and continuity segment markers must clear stale
+  stock voltage metadata and the continuity segment marker must clear stale
   payloads in every local submode whose expected frame family differs
+- `frame[6] upper nibble 4` is guarded as a negative classifier boundary, not
+  promoted to a global resistance-family marker: kOhm resistance frames use it,
+  but current-family fixtures can also carry `0x4x` as status/hold metadata
 - special/terminal voltage-family frames such as stock `OL` are also rejected
   across every non-voltage submode `{2..10}` instead of being tested only
   against one current mode and resistance
@@ -125,9 +128,13 @@ up for a safe current-mode run.
 
 Physical correctness for arbitrary DMM inputs still requires deeper stock xrefs
 or repeatable live traces of the analog frontend/range path. The parser still
-does not invent frame-family markers for unmarked current/resistance/diode/
-extended BCD frames, because doing so would require value-shape or mode-guessing
-logic rather than recovered stock metadata. The 2026-06-06 mux
+does not invent frame-family markers for unmarked current, resistance, diode,
+or extended BCD frames, because doing so would require value-shape or
+mode-guessing logic rather than recovered stock metadata. In particular,
+`frame[6] & 0xF0 == 0x40` is not a standalone resistance-family marker: it is
+valid resistance kOhm-band evidence only inside resistance mode, while existing
+current-family fixtures show the same high nibble can carry status/hold state.
+Upper nibble 0 remains unresolved low-Ohm/factory calibration territory. The 2026-06-06 mux
 xref audit in `meter_mode_command_table_2026_06_05.md` classifies the recovered
 `FUN_080018a4`/`FUN_08001a58` runtime callers as scope/siggen paths, not DMM
 runtime selector proof. The known open items are still the DMM-specific writers

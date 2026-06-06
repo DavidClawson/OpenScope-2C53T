@@ -1110,22 +1110,25 @@ static int test_marker_visible_family_mismatch_matrix_clears_stale_payload(void)
     struct marker_case {
         uint8_t family;
         const char *name;
-        uint8_t frame[12];
+        const uint8_t *frame;
     };
-    static const struct marker_case markers[] = {
+    uint8_t low_dcv_frame[12] = {
+        0x5A, 0xA5, 0x44, 0x8E, 0xEF, 0xE7,
+        0x07, 0x24, 0x80, 0x00, 0x01, 0x89,
+    };
+    uint8_t continuity_frame[12];
+    const struct marker_case markers[] = {
         {
             FPGA_METER_FRAME_FAMILY_VOLTAGE,
             "low-dcv-voltage",
-            { 0x5A, 0xA5, 0x44, 0x8E, 0xEF, 0xE7,
-              0x07, 0x24, 0x80, 0x00, 0x01, 0x89 },
+            low_dcv_frame,
         },
         {
             FPGA_METER_FRAME_FAMILY_CONTINUITY,
             "continuity-segment",
-            { 0 },
+            continuity_frame,
         },
     };
-    uint8_t continuity_frame[12];
     uint8_t good[12];
 
     build_segment_frame(continuity_frame, 0, 0x12, 0x0A, 5,
@@ -1136,9 +1139,7 @@ static int test_marker_visible_family_mismatch_matrix_clears_stale_payload(void)
             (uint8_t)fpga_meter_frame_family_for_submode(mode);
 
         for (unsigned m = 0; m < sizeof(markers) / sizeof(markers[0]); m++) {
-            const uint8_t *foreign =
-                (markers[m].family == FPGA_METER_FRAME_FAMILY_CONTINUITY) ?
-                continuity_frame : markers[m].frame;
+            const uint8_t *foreign = markers[m].frame;
             uint32_t display_updates_after_good;
 
             if (expected == markers[m].family) {
@@ -1164,6 +1165,31 @@ static int test_marker_visible_family_mismatch_matrix_clears_stale_payload(void)
                                        METER_REJECT_WRONG_FRAME_FAMILY));
         }
     }
+    return 1;
+}
+
+static int test_frame6_0x40_is_not_a_global_resistance_family_marker(void)
+{
+    /*
+     * Resistance kOhm frames use frame[6] upper nibble 4 in the current RE
+     * notes, but that byte is not a standalone cross-mode family marker:
+     * current-family fixtures also use 0x4x as a status/hold-bearing frame.
+     * Guard this explicitly so future work does not "solve" wrong-family
+     * leakage by turning one frame byte into a magnitude/range classifier.
+     */
+    uint8_t current_frame[12];
+
+    build_segment_frame(current_frame, 1, 8, 6, 3,
+                        0x40, 0x00, 0x00, 0x00, 0);
+
+    meter_data_init();
+    process_frame(current_frame, 2);
+
+    ASSERT(expect_normal_reading("18.63", "mA", 18.63f, 0.001f));
+    ASSERT(meter_reading.is_hold);
+    ASSERT(expect_family_debug((uint8_t)FPGA_METER_FRAME_FAMILY_CURRENT,
+                               (uint8_t)FPGA_METER_FRAME_FAMILY_CURRENT,
+                               METER_REJECT_NONE));
     return 1;
 }
 
@@ -1833,6 +1859,7 @@ int main(void)
     TEST(state_machine_property_matrix_covers_all_submodes);
     TEST(invalidate_clears_stale_payload_for_every_ordered_mode_transition);
     TEST(marker_visible_family_mismatch_matrix_clears_stale_payload);
+    TEST(frame6_0x40_is_not_a_global_resistance_family_marker);
     TEST(voltage_mode_mains_frame_uses_stock_range_hint);
     TEST(dcv_high_range_frame_stays_voltage_across_current_transition);
     TEST(voltage_mode_mains_rotating_frames_stay_high_voltage);

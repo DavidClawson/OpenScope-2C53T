@@ -249,11 +249,17 @@ class DmmGoalValidationTests(unittest.TestCase):
             "marker_visible_family_mismatch_matrix_clears_stale_payload",
             result["tests"],
         )
+        self.assertIn(
+            "frame6_0x40_is_not_a_global_resistance_family_marker",
+            result["tests"],
+        )
         self.assertIn("range class bits cover all 16 combinations",
                       result["regex_anchors"])
         self.assertIn("all non-voltage modes reject voltage frames",
                       result["regex_anchors"])
         self.assertIn("METER_REJECT_MISSING_AC_EVIDENCE",
+                      result["snippet_anchors"])
+        self.assertIn("not a standalone cross-mode family marker",
                       result["snippet_anchors"])
 
     def test_transition_plan_property_contract_is_anchored(self) -> None:
