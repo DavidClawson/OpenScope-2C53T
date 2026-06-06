@@ -273,10 +273,18 @@ class DmmGoalValidationTests(unittest.TestCase):
             "rx_frame_gate_preserves_discard_budget_while_busy",
             result["tests"],
         )
+        self.assertIn(
+            "frame_family_mismatch_policy_matrix_is_exhaustive",
+            result["tests"],
+        )
         self.assertIn("phase matrix iterates every local submode",
+                      result["regex_anchors"])
+        self.assertIn("frame-family policy iterates observed families",
                       result["regex_anchors"])
         self.assertIn("planned discards drain in order",
                       result["regex_anchors"])
+        self.assertIn("fpga_meter_frame_family_is_acceptable",
+                      result["snippet_anchors"])
         self.assertIn("stable frame accepted", result["snippet_anchors"])
 
     def test_autoscan_property_contract_is_anchored(self) -> None:

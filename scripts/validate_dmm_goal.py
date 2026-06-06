@@ -292,6 +292,7 @@ def verify_transition_plan_property_contract() -> dict[str, Any]:
     required_tests = [
         "transition_plan_covers_mux_family_and_settle_policy",
         "state_machine_contract_is_exhaustive",
+        "frame_family_mismatch_policy_matrix_is_exhaustive",
         "local_splits_do_not_invent_extra_stock_selectors",
         "fallbacks",
         "rx_frame_gate_preserves_discard_budget_while_busy",
@@ -304,13 +305,22 @@ def verify_transition_plan_property_contract() -> dict[str, Any]:
             r"for \(uint8_t mode = 0; mode < FPGA_METER_LOCAL_SUBMODE_COUNT; mode\+\+\)",
         "planned discards drain in order":
             r"for \(uint8_t i = 0; i < plan\.discard_frames; i\+\+\)",
+        "frame-family policy iterates expected families":
+            r"for \(unsigned e = 0; e < sizeof\(families\); e\+\+\)",
+        "frame-family policy iterates observed families":
+            r"for \(unsigned o = 0; o < sizeof\(families\); o\+\+\)",
     }
     required_snippets = [
         "FPGA_METER_TRANSITION_DISCARD_FRAMES",
         "FPGA_METER_TRANSITION_SETTLE_MS",
         "FPGA_METER_FRAME_FAMILY_VOLTAGE",
         "FPGA_METER_FRAME_FAMILY_CURRENT",
+        "FPGA_METER_FRAME_FAMILY_RESISTANCE",
         "FPGA_METER_FRAME_FAMILY_CONTINUITY",
+        "FPGA_METER_FRAME_FAMILY_DIODE",
+        "FPGA_METER_FRAME_FAMILY_EXTENDED",
+        "fpga_meter_frame_family_is_acceptable",
+        "families[e] == families[o]",
         "busy frame rejected",
         "stable frame accepted",
         "all recovered stock slots covered",

@@ -194,6 +194,54 @@ static void test_state_machine_contract_is_exhaustive(void)
                   (uint16_t)((1U << FPGA_METER_STOCK_MODE_COUNT) - 1U));
 }
 
+static void test_frame_family_mismatch_policy_matrix_is_exhaustive(void)
+{
+    static const uint8_t families[] = {
+        FPGA_METER_FRAME_FAMILY_VOLTAGE,
+        FPGA_METER_FRAME_FAMILY_CURRENT,
+        FPGA_METER_FRAME_FAMILY_RESISTANCE,
+        FPGA_METER_FRAME_FAMILY_CONTINUITY,
+        FPGA_METER_FRAME_FAMILY_DIODE,
+        FPGA_METER_FRAME_FAMILY_EXTENDED,
+    };
+
+    for (unsigned e = 0; e < sizeof(families); e++) {
+        char name[80];
+
+        snprintf(name, sizeof(name), "family %u recovered",
+                 (unsigned)families[e]);
+        EXPECT_EQ_U8(name,
+                     fpga_meter_frame_family_is_recovered(families[e]) ? 1U : 0U,
+                     1U);
+
+        for (unsigned o = 0; o < sizeof(families); o++) {
+            snprintf(name, sizeof(name), "expected %u observed %u",
+                     (unsigned)families[e], (unsigned)families[o]);
+            EXPECT_EQ_U8(name,
+                         fpga_meter_frame_family_is_acceptable(families[e],
+                                                               families[o]) ? 1U : 0U,
+                         families[e] == families[o] ? 1U : 0U);
+        }
+
+        snprintf(name, sizeof(name), "expected %u observed invalid",
+                 (unsigned)families[e]);
+        EXPECT_EQ_U8(name,
+                     fpga_meter_frame_family_is_acceptable(
+                         families[e], FPGA_METER_FRAME_FAMILY_INVALID) ? 1U : 0U,
+                     0U);
+    }
+
+    EXPECT_EQ_U8("invalid family not recovered",
+                 fpga_meter_frame_family_is_recovered(
+                     FPGA_METER_FRAME_FAMILY_INVALID) ? 1U : 0U,
+                 0U);
+    EXPECT_EQ_U8("invalid expected rejected",
+                 fpga_meter_frame_family_is_acceptable(
+                     FPGA_METER_FRAME_FAMILY_INVALID,
+                     FPGA_METER_FRAME_FAMILY_VOLTAGE) ? 1U : 0U,
+                 0U);
+}
+
 static void test_local_splits_do_not_invent_extra_stock_selectors(void)
 {
     static const struct {
@@ -346,6 +394,7 @@ int main(void)
     test_stock_apply_words_for_runtime_family_switch();
     test_transition_plan_covers_mux_family_and_settle_policy();
     test_state_machine_contract_is_exhaustive();
+    test_frame_family_mismatch_policy_matrix_is_exhaustive();
     test_local_splits_do_not_invent_extra_stock_selectors();
     test_fallbacks();
     test_rx_frame_gate_preserves_discard_budget_while_busy();

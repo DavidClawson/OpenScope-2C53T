@@ -872,7 +872,8 @@ static bool frame_is_voltage_payload(uint8_t submode,
 
 static bool frame_family_mismatch(const meter_reading_t *r)
 {
-    return r->observed_frame_family != r->expected_frame_family;
+    return !fpga_meter_frame_family_is_acceptable(r->expected_frame_family,
+                                                  r->observed_frame_family);
 }
 
 static bool meter_submode_invalid(uint8_t submode)

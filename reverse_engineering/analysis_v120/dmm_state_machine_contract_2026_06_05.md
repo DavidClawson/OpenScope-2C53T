@@ -89,6 +89,11 @@ The software contract proves parser/state safety only:
 - marker-visible wrong-family frames are now covered as an explicit matrix:
   stock voltage metadata and the continuity segment marker must clear stale
   payloads in every local submode whose expected frame family differs
+- the transition-plan model also has a pure frame-family policy matrix over
+  every recovered family enum (`voltage`, `current`, `resistance`,
+  `continuity`, `diode`, `extended`): once a frame family is known, only an
+  exact expected/observed family match is acceptable, and invalid or mismatched
+  families fail closed
 - `frame[6] upper nibble 4` is guarded as a negative classifier boundary, not
   promoted to a global resistance-family marker: kOhm resistance frames use it,
   but current-family fixtures can also carry `0x4x` as status/hold metadata
@@ -117,8 +122,9 @@ The goal gate now has explicit state-machine property anchors in
 C invariants and not just to a thin live harness. The static anchors require
 all local submodes 0..10, the 16 range-class bit combinations with both
 `frame[2].3` extension states, AC-evidence rejection, wrong-family rejection,
-the marker-visible low-DCV/continuity cases, and the all-source/all-destination
-transition stale matrix to remain present and registered in `main()`.
+the marker-visible low-DCV/continuity cases, the pure all-family mismatch
+policy matrix, and the all-source/all-destination transition stale matrix to
+remain present and registered in `main()`.
 
 Live validation only switches DCV/ACV on the energized bench input. Passive and
 current modes stay unprobed in that live path: passive voltage-payload rejection

@@ -116,6 +116,31 @@ fpga_meter_frame_family_t fpga_meter_frame_family_for_submode(uint8_t submode)
     }
 }
 
+bool fpga_meter_frame_family_is_recovered(uint8_t family)
+{
+    return family == FPGA_METER_FRAME_FAMILY_VOLTAGE ||
+           family == FPGA_METER_FRAME_FAMILY_CURRENT ||
+           family == FPGA_METER_FRAME_FAMILY_RESISTANCE ||
+           family == FPGA_METER_FRAME_FAMILY_CONTINUITY ||
+           family == FPGA_METER_FRAME_FAMILY_DIODE ||
+           family == FPGA_METER_FRAME_FAMILY_EXTENDED;
+}
+
+bool fpga_meter_frame_family_is_acceptable(uint8_t expected, uint8_t observed)
+{
+    /*
+     * Pure state-machine policy, not raw-frame recognition.
+     * The parser can only tag observed families when recovered stock metadata
+     * is visible in the frame (currently voltage and continuity markers, plus
+     * explicit unresolved gaps in the RE notes). Once a family is known,
+     * however, there is no cross-family fallback: current, resistance, diode,
+     * and extended payloads must not be relabeled into the active UI mode just
+     * because their BCD digits would format cleanly.
+     */
+    return fpga_meter_frame_family_is_recovered(expected) &&
+           expected == observed;
+}
+
 fpga_meter_transition_plan_t fpga_meter_transition_plan_for_submode(uint8_t submode)
 {
     fpga_meter_transition_plan_t plan;
