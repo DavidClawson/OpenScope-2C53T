@@ -153,6 +153,7 @@ txc n=1 tx=31 frame=00 00 05 14 00 00 00 00 00 19
 gpio control PC6=1 PB11=1 PC11=1 PC7=1 PC0=1
 gpio_frontend PC12=1 PE4=1 PE5=0 PE6=1 PA15=1 PA10=1 PB10=0 PB9=0 PA6=0
 h2 bytes=115638 done=1 post_enq=5 post_ok=5 post_drop=0 post_mask=1F spi_ok=0 spi_to=0 rx00=0 rxff=115638 rxother=0 close_len=6
+factory_cal loaded=0 ch_size=301 channels=2
 h2_close_rx bytes=FF FF FF FF FF FF
 h2_post_rx n=0 trigger=01 len=2 bytes=FF FF
 """
@@ -209,6 +210,9 @@ h2_post_rx n=0 trigger=01 len=2 bytes=FF FF
         self.assertEqual(parsed["calibration_state"]["bytes"], 115638)
         self.assertEqual(parsed["calibration_state"]["rxff"], 115638)
         self.assertEqual(parsed["calibration_state"]["rxother"], 0)
+        self.assertEqual(parsed["factory_cal"]["loaded"], 0)
+        self.assertEqual(parsed["factory_cal"]["ch_size"], 301)
+        self.assertEqual(parsed["factory_cal"]["channels"], 2)
         self.assertEqual(parsed["h2_close_rx"], [0xFF] * 6)
         self.assertEqual(parsed["h2_post_rx"][0]["bytes"], [0xFF, 0xFF])
 

@@ -2561,6 +2561,7 @@ static void cmd_meter_trace(void)
     uint32_t h2_rx_other_count;
     uint8_t h2_close_rx_len;
     uint8_t h2_close_rx[sizeof(fpga.h2_close_rx)];
+    const factory_cal_t *factory_cal = flash_fs_factory_cal();
 
     taskENTER_CRITICAL();
     memcpy(producer_frame, (const void *)fpga.rx_frame, FPGA_RX_FRAME_SIZE);
@@ -2819,6 +2820,10 @@ static void cmd_meter_trace(void)
                      h2_rx_ff_count,
                      h2_rx_other_count,
                      (unsigned)h2_close_rx_len);
+    usb_debug_printf("factory_cal loaded=%u ch_size=%u channels=%u\r\n",
+                     (factory_cal != NULL && factory_cal->loaded) ? 1U : 0U,
+                     (unsigned)FACTORY_CAL_CHANNEL_SIZE,
+                     (unsigned)FACTORY_CAL_NUM_CHANNELS);
     usb_send_str("h2_close_rx bytes=");
     for (uint8_t i = 0; i < h2_close_rx_len && i < sizeof(h2_close_rx); i++) {
         usb_debug_printf("%s%02X", i == 0 ? "" : " ",

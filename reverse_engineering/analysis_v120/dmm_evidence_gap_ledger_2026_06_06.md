@@ -925,6 +925,25 @@ wiring proof boundary. It is not permission to restore decoder coefficients.
   frontend is not enough to correct the producer-frame value, so future work
   should move toward the runtime writer/apply/calibration path rather than
   repeating `0x0508` order experiments.
+- Factory-cal trace boundary: OpenScope app image SHA-256
+  `905d4d6125ac519a8bd781eb04eee3c9def239bb18703222b1d62e8b00543c4d`
+  (`Build: Jun 6 2026 21:53:48`) was flashed through guarded HID IAP after
+  `flash_preflight.py hid-app` classified it as `openscope-app` at
+  `0x08004000`.  `meter trace --json` now carries a machine-readable
+  `factory_cal` object next to the selected plan, GPIO, H2, and producer-frame
+  fields.  The current firmware reports `factory_cal.loaded=0`,
+  `ch_size=301`, `channels=2`; this is the fail-closed placeholder described
+  in `flash_fs.c`, not a recovered physical correction.  A settled live DCV
+  trace on the current bench state showed `producer_frame=
+  5A A5 A4 BD 8D AF 4D 20 00 00 01 36`, decoded `raw=2232`,
+  `display=2.232 V`, with DCV GPIO `planned_gpio=0BB`, `actual_gpio=0BB`, H2
+  body RX `rxff=115638`, and H2 close/post-trigger RX bytes still all `FF`.
+  The local W25Q extraction visible in `tmp/w25q-full-2026-06-06-extract`
+  still has only JPG assets plus a zero-byte `System file/9999.BIN` outside
+  system-volume metadata.  This trace does not fix low DCV; it makes each bad
+  producer-frame capture explicitly show that no host-readable factory-cal
+  mirror is loaded, so future work must recover a real stock/W25Q/H2/runtime
+  source before using calibration state.
 
 ## Next RE Target
 
