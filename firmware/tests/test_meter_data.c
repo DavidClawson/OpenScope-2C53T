@@ -1216,6 +1216,46 @@ static int test_marker_visible_family_mismatch_matrix_clears_stale_payload(void)
     return 1;
 }
 
+static int test_unclassified_normal_frames_follow_active_family_only(void)
+{
+    /*
+     * Stock-visible cross-family markers are currently narrow: voltage payload
+     * metadata in frame[8]/[9] and the continuity segment pattern. A normal
+     * digit frame with neither marker is an unclassified normal frame: it must
+     * not grow a synthetic current, resistance, diode, or extended "looks like"
+     * classifier. It is interpreted only under the active local transition plan,
+     * and any future marker must come from stock frame metadata or a
+     * documented live trace.
+     */
+    static const uint8_t modes[FPGA_METER_LOCAL_SUBMODE_COUNT] = {
+        0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10
+    };
+    uint8_t frame[12];
+
+    for (unsigned i = 0; i < sizeof(modes); i++) {
+        uint8_t mode = modes[i];
+        uint16_t extra = (mode == 1 || mode == 4 || mode == 5) ? 0x0031 : 0;
+
+        if (mode == 6 || mode == 7) {
+            build_segment_frame(frame, 3, 3, 0, 0,
+                                0x40, 0x00, 0x00, 0x00, extra);
+        } else {
+            build_segment_frame(frame, 1, 2, 3, 4,
+                                0x00, 0x00, 0x00, 0x00, extra);
+        }
+
+        meter_data_init();
+        process_frame(frame, mode);
+        ASSERT(meter_reading.valid);
+        ASSERT(meter_reading.result_class == METER_RESULT_NORMAL);
+        ASSERT(expect_family_debug(
+            (uint8_t)fpga_meter_frame_family_for_submode(mode),
+            (uint8_t)fpga_meter_frame_family_for_submode(mode),
+            METER_REJECT_NONE));
+    }
+    return 1;
+}
+
 static int test_frame6_0x40_is_not_a_global_resistance_family_marker(void)
 {
     /*
@@ -1908,6 +1948,7 @@ int main(void)
     TEST(invalidate_clears_stale_payload_for_every_ordered_mode_transition);
     TEST(transport_gate_blocks_source_frames_during_every_transition);
     TEST(marker_visible_family_mismatch_matrix_clears_stale_payload);
+    TEST(unclassified_normal_frames_follow_active_family_only);
     TEST(frame6_0x40_is_not_a_global_resistance_family_marker);
     TEST(voltage_mode_mains_frame_uses_stock_range_hint);
     TEST(dcv_high_range_frame_stays_voltage_across_current_transition);

@@ -510,6 +510,33 @@ rejection unless a later stock xref proves another family owns that bit.
 This is a frame-metadata rule, not a value-recognition rule. The decoder must not
 infer voltage/current/passive family from the BCD count looking plausible.
 
+## Observed Frame-Family Classification Boundary
+
+The stock-visible cross-family markers recovered so far are deliberately narrow:
+
+- voltage-family metadata in `frame[8]`/`frame[9]`, including the low-DCV
+  `0x80`/`0x82` class-4 forms;
+- the continuity segment marker (`raw_digits[1] == 0x12`,
+  `raw_digits[2] == 0x0A`, `raw_digits[3] == 5`).
+
+No inspected stock xref yet proves a current, resistance, diode, capacitance, or
+temperature frame-family marker that can be applied independently of the active
+DMM transition plan. The local parser therefore treats an unclassified normal
+digit frame as belonging to the active local transition plan only after the
+frontend/mode transition has selected that submode. This is not proof that the
+frame physically originated from that family; it is a conservative parser
+boundary until stock metadata or a repeatable live trace recovers more markers.
+
+The C property test
+`unclassified_normal_frames_follow_active_family_only` guards this unresolved
+boundary across all eleven local submodes. It prevents future work from adding
+a synthetic "current-looking", "resistance-looking", diode, or extended-family
+classifier based on BCD magnitude, `frame[6]` folklore, or convenient unit text.
+Wrong-family rejection is currently executable for marker-visible foreign frames
+(voltage and continuity). The current/resistance/diode/extended cross-family
+marker gap remains open and must be solved from stock frame metadata, stock
+xrefs, or safe live traces rather than guessed in the decoder.
+
 ## Extended Slot 5 Evidence Boundary
 
 Stock slot 5 is solidly recovered as selector `0x0512`. The meaning of the

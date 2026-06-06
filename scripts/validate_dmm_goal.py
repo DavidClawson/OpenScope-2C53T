@@ -336,6 +336,7 @@ def verify_state_machine_property_contract() -> dict[str, Any]:
         "invalidate_clears_stale_payload_for_every_ordered_mode_transition",
         "transport_gate_blocks_source_frames_during_every_transition",
         "marker_visible_family_mismatch_matrix_clears_stale_payload",
+        "unclassified_normal_frames_follow_active_family_only",
         "frame6_0x40_is_not_a_global_resistance_family_marker",
         "voltage_payload_clears_stale_reading_in_all_non_voltage_modes",
         "low_dcv_voltage_payload_clears_stale_current_reading",
@@ -367,6 +368,13 @@ def verify_state_machine_property_contract() -> dict[str, Any]:
             r"uint8_t discard = dest_plan\.discard_frames;",
         "transition gate blocks busy source frames":
             r"fpga_meter_rx_frame_should_parse\(true, &discard,\s*&transition_skips\)",
+        "unclassified normal frames iterate every local submode":
+            r"static const uint8_t modes\[FPGA_METER_LOCAL_SUBMODE_COUNT\]\s*=\s*"
+            r"\{\s*0,\s*1,\s*2,\s*3,\s*4,\s*5,\s*6,\s*7,\s*8,\s*9,\s*10\s*\};",
+        "unclassified normal frames are active-plan classified":
+            r"test_unclassified_normal_frames_follow_active_family_only[\s\S]*"
+            r"fpga_meter_frame_family_for_submode\(mode\),[\s\S]*"
+            r"METER_REJECT_NONE",
         "all non-voltage modes reject voltage frames":
             r"static const uint8_t (wrong_family_)?modes\[\]\s*=\s*"
             r"\{\s*2,\s*3,\s*4,\s*5,\s*6,\s*7,\s*8,\s*9,\s*10\s*\};",
@@ -396,6 +404,8 @@ def verify_state_machine_property_contract() -> dict[str, Any]:
         "FPGA_METER_FRAME_FAMILY_DIODE",
         "FPGA_METER_FRAME_FAMILY_EXTENDED",
         "not a standalone cross-mode family marker",
+        "unclassified normal frame",
+        "active local transition plan",
         "meter_reading.stock_composite_index == 12",
         "meter_reading.stock_composite_index == 9",
         "uA",

@@ -300,6 +300,10 @@ class DmmGoalValidationTests(unittest.TestCase):
             result["tests"],
         )
         self.assertIn(
+            "unclassified_normal_frames_follow_active_family_only",
+            result["tests"],
+        )
+        self.assertIn(
             "frame6_0x40_is_not_a_global_resistance_family_marker",
             result["tests"],
         )
@@ -309,6 +313,10 @@ class DmmGoalValidationTests(unittest.TestCase):
                       result["regex_anchors"])
         self.assertIn(
             "local AC A display keeps stock ACA unit index",
+            result["regex_anchors"],
+        )
+        self.assertIn(
+            "unclassified normal frames are active-plan classified",
             result["regex_anchors"],
         )
         self.assertIn("METER_REJECT_MISSING_AC_EVIDENCE",
