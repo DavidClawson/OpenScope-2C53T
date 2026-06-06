@@ -672,6 +672,21 @@ wiring proof boundary. It is not permission to restore decoder coefficients.
   selector sequence, so the next target is stock command materialization,
   missing apply/acceptance, H2 effect, or true factory calibration rather than
   parser/display math.
+- Producer-frame trace race cleanup: commit `b84dcf0` changed `meter trace` to
+  snapshot `fpga.rx_frame` under the same critical section used for RX history
+  and parsed-frame debug state.  Guarded HID flash of image SHA-256
+  `e6d39abdc6dc05e49e2ea8c22fbd59e0e91d4d0713edf1780cc36414a83914f1`
+  confirmed the diagnostic boundary.  After `fpga diag clear`, `mode scope`,
+  then `mode meter 0`, the immediate trace had matching
+  `producer_frame=parsed_frame=5A A5 E4 2E 63 25 07 00 00 00 01 33` (`OL`) and
+  `mth n=0 sub=0 seq=2 selector=0514 apply=0000 probe=0507 start=0509
+  tx=33..36 data=1..1 planned_gpio=0BB actual_gpio=0BB`.  A later trace at the
+  same low-voltage bench setup had matching stable wrong frames,
+  `producer_frame=parsed_frame=5A A5 A4 BD AD CD 47 20 00 00 01 2D`, decoded as
+  `display=2.225 V`.  This rules out a debug-print race as the source of the
+  wrong low-DCV value and keeps the blocker upstream of parser/display math:
+  the DMM producer itself emits OL during transition and then emits the wrong
+  DCV payload under the local `0x0514`/`0x0BB` state.
 
 ## Next RE Target
 
