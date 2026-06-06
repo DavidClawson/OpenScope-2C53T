@@ -404,6 +404,11 @@ typedef struct {
     /* Stock post-H2 SPI3 queue diagnostics. These counters prove only local
      * enqueue/execution of the stock trigger bytes; they are not FPGA ACK or
      * DMM calibration acceptance evidence. */
+    volatile uint32_t h2_rx_00_count;
+    volatile uint32_t h2_rx_ff_count;
+    volatile uint32_t h2_rx_other_count;
+    volatile uint8_t  h2_close_rx_len;
+    volatile uint8_t  h2_close_rx[6];
     volatile uint8_t  post_h2_spi3_boot_enqueued;
     volatile uint8_t  post_h2_spi3_boot_ok;
     volatile uint8_t  post_h2_spi3_boot_dropped;

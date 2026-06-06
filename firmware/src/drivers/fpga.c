@@ -369,6 +369,61 @@ static void spi3_pump(const uint8_t *tx, volatile uint8_t *rx, uint32_t n)
         rx[n - 1] = rlast;
 }
 
+static void fpga_h2_record_body_rx(uint8_t rx_byte)
+{
+    if (rx_byte == 0x00U) {
+        fpga.h2_rx_00_count++;
+    } else if (rx_byte == 0xFFU) {
+        fpga.h2_rx_ff_count++;
+    } else {
+        fpga.h2_rx_other_count++;
+    }
+}
+
+static void fpga_h2_record_close_rx(uint8_t rx_byte)
+{
+    uint8_t len = fpga.h2_close_rx_len;
+    if (len < sizeof(fpga.h2_close_rx)) {
+        fpga.h2_close_rx[len] = rx_byte;
+        fpga.h2_close_rx_len = (uint8_t)(len + 1U);
+    }
+}
+
+static void spi3_pump_h2_record(const uint8_t *tx, uint32_t n)
+{
+    if (n == 0)
+        return;
+
+    volatile uint32_t timeout;
+    uint32_t i = 0;
+
+    timeout = 100000;
+    while (!(FPGA_SPI->sts & SPI_I2S_TDBE_FLAG)) {
+        if (--timeout == 0) break;
+    }
+    FPGA_SPI->dt = tx[0];
+
+    while (++i < n) {
+        timeout = 100000;
+        while (!(FPGA_SPI->sts & SPI_I2S_TDBE_FLAG)) {
+            if (--timeout == 0) break;
+        }
+        FPGA_SPI->dt = tx[i];
+
+        timeout = 100000;
+        while (!(FPGA_SPI->sts & SPI_I2S_RDBF_FLAG)) {
+            if (--timeout == 0) break;
+        }
+        fpga_h2_record_body_rx((timeout == 0) ? 0xFF : (uint8_t)FPGA_SPI->dt);
+    }
+
+    timeout = 100000;
+    while (!(FPGA_SPI->sts & SPI_I2S_RDBF_FLAG)) {
+        if (--timeout == 0) break;
+    }
+    fpga_h2_record_body_rx((timeout == 0) ? 0xFF : (uint8_t)FPGA_SPI->dt);
+}
+
 /* Set the SPI3 baud-rate divider (CTRL1 bits [5:3]) on the fly. Requires
  * toggling SPE off/on. br: 0=/2 (60MHz), 1=/4, 2=/8, 3=/16, 4=/32 ...
  *
@@ -3225,7 +3280,12 @@ uint8_t fpga_spi3_config_sequence(const fpga_cfg_seq_opts_t *opt)
     if (opt->prelude_frame_mode != 2) SPI3_CS_ASSERT();
     fpga.init_hs[10] = spi3_xfer(0x3B);  /* open upload */
     spi3_set_br(opt->upload_br);
-    spi3_pump(fpga_h2_cal_table, NULL, FPGA_H2_CAL_TABLE_SIZE);
+    fpga.h2_rx_00_count = 0;
+    fpga.h2_rx_ff_count = 0;
+    fpga.h2_rx_other_count = 0;
+    fpga.h2_close_rx_len = 0;
+    memset((void *)fpga.h2_close_rx, 0, sizeof(fpga.h2_close_rx));
+    spi3_pump_h2_record(fpga_h2_cal_table, FPGA_H2_CAL_TABLE_SIZE);
     spi3_set_br(opt->cmd_br);            /* back to command clock for close/status */
     /* Trailing clocks: Gowin runs the CRC-check / DONE / wakeup on CCLK cycles
      * AFTER the last config byte. Our sequence sent none; rosenrot00's working
@@ -3240,14 +3300,15 @@ uint8_t fpga_spi3_config_sequence(const fpga_cfg_seq_opts_t *opt)
 
     /* [5] 3A 00 — close/commit in its own CS-LOW frame. Stock → 0xF8. */
     SPI3_CS_ASSERT();
-    spi3_xfer(0x3A);
+    fpga_h2_record_close_rx(spi3_xfer(0x3A));
     fpga.h2_close_status = spi3_xfer(0x00);
+    fpga_h2_record_close_rx(fpga.h2_close_status);
     SPI3_CS_DEASSERT();
     cfg_trace_capture(opt, 5);   /* T5: after CONFIG_DISABLE / close */
 
     /* [6] single 0x00 byte, CS LOW (stock flush frame at t=4.4484). */
     SPI3_CS_ASSERT();
-    spi3_xfer(0x00);
+    fpga_h2_record_close_rx(spi3_xfer(0x00));
     SPI3_CS_DEASSERT();
 
     /* [6b] Gowin STATUS_REGISTER read (opcode 0x41) — the authoritative config

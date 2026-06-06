@@ -873,6 +873,21 @@ wiring proof boundary. It is not permission to restore decoder coefficients.
   mux arms (`5/5`) or one-sided variants is not an immediate explanation for
   the current producer-frame value.  The diagnostic hook must remain explicit
   debug tooling, not production range feedback.
+- H2/SPI3 RX-summary live negative: OpenScope app image SHA-256
+  `2747616247fb2057e94be8d77257c5d391adabc05556232fc52ce71dba501321`
+  (`Build: Jun 6 2026 21:36:18`) was flashed through guarded HID IAP after
+  `flash_preflight.py hid-app` classified it as `openscope-app` at
+  `0x08004000`.  The diagnostic-only `meter trace` output now records RX byte
+  classes while streaming the stock 115,638-byte H2 table and records the six
+  stock-visible close/flush RX bytes without changing the TX sequence.  The
+  live trace showed `rx00=0`, `rxff=115638`, `rxother=0`, `close_len=6`, and
+  `h2_close_rx bytes=FF FF FF FF FF FF`, while the DMM producer frame decoded
+  as `raw=2236`, class `1`, display `2.236 V`
+  (`5A A5 A4 BD 8D EF 47 20 00 00 01 3A`) on the current bench state.  This is
+  an H2 acceptance/apply boundary, not a DMM fix: MISO provides no observable
+  ACK/status during the H2 body or close sequence, so future calibration claims
+  still need stock xrefs, W25Q/system-file evidence, or a runtime effect trace
+  instead of invented coefficients.
 
 ## Next RE Target
 

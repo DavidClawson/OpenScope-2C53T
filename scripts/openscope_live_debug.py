@@ -428,6 +428,10 @@ def parse_meter_trace_text(text: str) -> dict[str, object]:
             result["gpio_frontend"] = _parse_kv_line(line)
         elif line.startswith("h2 bytes="):
             result["calibration_state"] = _parse_kv_line(line)
+        elif line.startswith("h2_close_rx bytes="):
+            result["h2_close_rx"] = [
+                int(item, 16) for item in line.split("=", 1)[1].split()
+            ]
         elif line.startswith("h2_post_rx "):
             prefix, bytes_text = line.split(" bytes=", 1)
             record = _parse_kv_line(prefix)
