@@ -656,6 +656,22 @@ wiring proof boundary. It is not permission to restore decoder coefficients.
   the wrong frame begins at/after a specific selector/apply transition.  It is
   not an inferred factory coefficient, not an image-derived proof path, and not
   a range feedback mechanism.
+- Transition/apply trace live smoke: open firmware commit `6b1f8a4` was built
+  into `firmware/build/firmware.bin` SHA-256
+  `4162b553813143c87e239643e63d2211cf54210db491552fa579ae957042b90a`, accepted
+  by `flash_preflight.py hid-app`, flashed through guarded HID IAP, and booted
+  back to CDC.  Live `meter trace` printed the new `mth` row:
+  `sub=0 seq=1 selector=0514 apply=0000 probe=0507 start=0509 tx=4..7
+  data=0..0 planned_gpio=0BB actual_gpio=0BB`, followed by stable producer
+  history frames such as `5A A5 A4 BD AD 8D 4A 20 00 00 01 31`, decoded as
+  `display=2.227 V`.  The no-OCR webcam/image-view bench still showed the
+  supply display in low-voltage CV state, about `0.100 V`, while the 2C53T LCD
+  showed about `2.227 V`; the visible wiring path was partially obscured and is
+  not by itself a wiring proof.  This moves the blocker forward: the wrong
+  producer bytes follow the local intended DCV mux projection and `0x0514`
+  selector sequence, so the next target is stock command materialization,
+  missing apply/acceptance, H2 effect, or true factory calibration rather than
+  parser/display math.
 
 ## Next RE Target
 

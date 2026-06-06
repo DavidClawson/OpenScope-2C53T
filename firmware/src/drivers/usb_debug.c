@@ -2398,16 +2398,6 @@ static void print_frame_hex(const char *label, const uint8_t frame[12])
     usb_send_str("\r\n");
 }
 
-static void print_volatile_frame_hex(const char *label,
-                                     const volatile uint8_t frame[12])
-{
-    usb_send_str(label);
-    for (int i = 0; i < 12; i++) {
-        usb_debug_printf("%02X%s", (unsigned)frame[i], i == 11 ? "" : " ");
-    }
-    usb_send_str("\r\n");
-}
-
 static void print_volatile_frame_inline(const volatile uint8_t frame[12])
 {
     for (int i = 0; i < 12; i++) {
@@ -2450,8 +2440,10 @@ static void cmd_meter_trace(void)
     uint16_t mth_frame_after[FPGA_METER_TRANSITION_HISTORY];
     uint16_t mth_planned_gpio[FPGA_METER_TRANSITION_HISTORY];
     uint16_t mth_actual_gpio[FPGA_METER_TRANSITION_HISTORY];
+    uint8_t producer_frame[FPGA_RX_FRAME_SIZE];
 
     taskENTER_CRITICAL();
+    memcpy(producer_frame, (const void *)fpga.rx_frame, FPGA_RX_FRAME_SIZE);
     rxh_count = fpga.rx_frame_history_count;
     if (rxh_count > FPGA_RX_FRAME_HISTORY) rxh_count = FPGA_RX_FRAME_HISTORY;
     for (uint8_t n = 0; n < rxh_count; n++) {
@@ -2570,7 +2562,7 @@ static void cmd_meter_trace(void)
                      fpga_meter_transition_busy() ? 1U : 0U,
                      (unsigned)meter_frame_discard_count,
                      meter_transition_frame_skip_count);
-    print_volatile_frame_hex("producer_frame=", fpga.rx_frame);
+    print_frame_hex("producer_frame=", producer_frame);
     print_frame_hex("parsed_frame=", snap.dbg_frame);
     usb_send_str("transition_history newest_first:\r\n");
     for (uint8_t n = 0; n < mth_count; n++) {
