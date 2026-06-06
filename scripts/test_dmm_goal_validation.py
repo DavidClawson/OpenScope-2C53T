@@ -264,6 +264,31 @@ class DmmGoalValidationTests(unittest.TestCase):
         self.assertIn("not a value-shape classifier", coverage["terms"])
         self.assertIn("magnitude-derived relay/range control", coverage["terms"])
 
+    def test_stock_meter_probe_branch_is_binary_grounded(self) -> None:
+        result = stock_meter_literals.verify_meter_probe_branch_sequences()
+        branches = result["branches"]
+
+        self.assertEqual(branches["meter_basic_boot_probe_prefix"]["addr"], "0x0800b9d6")
+        self.assertEqual(branches["meter_extended_boot_probe_prefix"]["addr"], "0x0800bace")
+        self.assertEqual(branches["meter_variant_boot_tail"]["addr"], "0x0800bc32")
+        for branch in branches.values():
+            self.assertEqual(branch["source_register"], "GPIOC_IDR 0x40011008")
+            self.assertIn("PC7 high keeps 0x07", branch["polarity"])
+            self.assertIn("PC7 low selects 0x0A", branch["polarity"])
+            self.assertIn("not DMM runtime range state", branch["classification"])
+
+    def test_re_coverage_requires_meter_probe_branch_guard(self) -> None:
+        coverage = validate_dmm_goal.verify_re_coverage()
+        self.assertIn("Meter Probe Branch Guard", coverage["terms"])
+        self.assertIn("GPIOC bit 7", coverage["terms"])
+        self.assertIn("0x40011008", coverage["terms"])
+        self.assertIn("0x0800B9D6", coverage["terms"])
+        self.assertIn("0x0800BACE", coverage["terms"])
+        self.assertIn("0x0800BC32", coverage["terms"])
+        self.assertIn("0x07/0x0A", coverage["terms"])
+        self.assertIn("probe/tail sequencing only", coverage["terms"])
+        self.assertIn("not DMM runtime range state", coverage["terms"])
+
     def test_ui_submode_surface_contract_is_anchored(self) -> None:
         result = validate_dmm_goal.verify_ui_submode_surface_contract()
         self.assertIn("firmware/src/ui/meter_ui.c", result["checked"])

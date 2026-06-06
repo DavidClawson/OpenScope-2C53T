@@ -923,6 +923,41 @@ EXPECTED_BOOT_MODE_INIT_DMM_COMMAND_BANKS = {
         ],
     },
 }
+EXPECTED_METER_PROBE_BRANCH_GUARDS = {
+    "meter_basic_boot_probe_prefix": {
+        "addr": 0x0800B9D6,
+        "source_register": "GPIOC_IDR 0x40011008",
+        "source_snippet": "41 f2 08 00 c4 f2 01 00 00 68",
+        "branch_snippet": "07 21 00 06 58 bf 0a 21",
+        "polarity": "PC7 high keeps 0x07; PC7 low selects 0x0A via IT PL",
+        "classification": (
+            "probe/tail sequencing only; not DMM runtime range state, "
+            "low-DCV correction, or factory calibration"
+        ),
+    },
+    "meter_extended_boot_probe_prefix": {
+        "addr": 0x0800BACE,
+        "source_register": "GPIOC_IDR 0x40011008",
+        "source_snippet": "41 f2 08 00 c4 f2 01 00 00 68",
+        "branch_snippet": "07 21 00 06 58 bf 0a 21",
+        "polarity": "PC7 high keeps 0x07; PC7 low selects 0x0A via IT PL",
+        "classification": (
+            "probe/tail sequencing only; not DMM runtime range state, "
+            "low-DCV correction, or factory calibration"
+        ),
+    },
+    "meter_variant_boot_tail": {
+        "addr": 0x0800BC32,
+        "source_register": "GPIOC_IDR 0x40011008",
+        "source_snippet": "41 f2 08 00 c4 f2 01 00 00 68",
+        "branch_snippet": "00 06 4f f0 07 00 58 bf 0a 20",
+        "polarity": "PC7 high keeps 0x07; PC7 low selects 0x0A via IT PL",
+        "classification": (
+            "probe/tail sequencing only; not DMM runtime range state, "
+            "low-DCV correction, or factory calibration"
+        ),
+    },
+}
 EXPECTED_RUNTIME_MODE_INIT_DISPATCH_CALLER_SEQUENCES = {
     "runtime_mode_init_forward_dispatcher": (
         0x08006418,
@@ -2362,6 +2397,41 @@ def verify_boot_mode_init_dmm_command_banks() -> dict[str, object]:
     return {"banks": checked}
 
 
+def verify_meter_probe_branch_sequences() -> dict[str, object]:
+    """Check stock GPIOC bit-7 gated `0x07`/`0x0A` probe command branches.
+
+    `FUN_0800B908` has three meter arms that load GPIOC IDR (`0x40011008`),
+    shift bit 7 into the sign position, and conditionally replace command
+    `0x07` with `0x0A` through an `IT PL` instruction.  This guards the local
+    `fpga_probe_cmd_byte()` source and polarity as digital probe/tail sequencing.
+    It is not DMM runtime range state, not a low-DCV correction path, and not a
+    physical calibration source.
+    """
+    checked: dict[str, dict[str, str]] = {}
+    for name, expected in EXPECTED_METER_PROBE_BRANCH_GUARDS.items():
+        addr, data = EXPECTED_BOOT_MODE_INIT_DMM_SEQUENCES[name]
+        actual = read(addr, len(data))
+        if actual != data:
+            raise AssertionError(f"{name}: sequence bytes drifted before probe-branch check")
+        haystack_hex = actual.hex(" ")
+        _require_ordered_hex_snippets(
+            name,
+            haystack_hex,
+            [expected["source_snippet"], expected["branch_snippet"]],
+        )
+        if addr != expected["addr"]:
+            raise AssertionError(f"{name}: expected guard addr {expected['addr']:#010x}, got {addr:#010x}")
+        checked[name] = {
+            "addr": f"{addr:#010x}",
+            "source_register": str(expected["source_register"]),
+            "source_snippet": str(expected["source_snippet"]),
+            "branch_snippet": str(expected["branch_snippet"]),
+            "polarity": str(expected["polarity"]),
+            "classification": str(expected["classification"]),
+        }
+    return {"branches": checked}
+
+
 def verify_runtime_mode_init_dispatch_caller_sequences() -> dict[str, object]:
     """Check runtime helper slices that tail-call the mode-init dispatcher.
 
@@ -2753,6 +2823,7 @@ def main() -> None:
     usart_tx_config_writer = verify_usart_tx_config_writer_meter_case_sequences()
     boot_mode_init = verify_boot_mode_init_dmm_sequences()
     boot_mode_init_banks = verify_boot_mode_init_dmm_command_banks()
+    meter_probe_branches = verify_meter_probe_branch_sequences()
     runtime_mode_init_callers = verify_runtime_mode_init_dispatch_caller_sequences()
     mux_calls = verify_meter_mux_callsite_sequences()
     mux_bodies = verify_meter_mux_writer_body_sequences()
@@ -2846,6 +2917,11 @@ def main() -> None:
           "; ".join(
               f"{name}=" + ",".join(item["commands"])
               for name, item in boot_mode_init_banks["banks"].items()
+          ))
+    print("stock meter probe branch guards: " +
+          "; ".join(
+              f"{name}@{item['addr']}={item['source_register']}->{item['polarity']}"
+              for name, item in meter_probe_branches["branches"].items()
           ))
     print("stock runtime mode-init dispatcher caller sites: " +
           ", ".join(item["addr"] for item in runtime_mode_init_callers["sequences"].values()))

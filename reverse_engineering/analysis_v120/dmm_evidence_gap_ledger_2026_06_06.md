@@ -73,6 +73,12 @@ one of:
   and `0x08` replay bytes out of the low-DCV range-param bucket: old notes such
   as `param=0 -> 10V range`, `Below ~1V`, or `Meter: configure range` are stale
   unless a stock writer/trace ties those bytes to DMM physical range state.
+- Meter probe branch guard: the three `FUN_0800B908` meter arms at `0x0800B9D6`,
+  `0x0800BACE`, and `0x0800BC32` read GPIOC bit 7 from `0x40011008` and select
+  the `0x07/0x0A` command tail (`PC7` high keeps `0x07`; `PC7` low selects
+  `0x0A`). This is probe/tail sequencing only; it is not DMM runtime range state,
+  not a physical range/calibration source, not a low-DCV correction, and not
+  H2/SPI3 apply proof.
 - Meter basic raw-word queue guard: stock materializes `0x0508` at
   `0x080033CA`, `0x0509` at `0x08003BA4`, and `0x0514` at `0x08005B7A` onto
   the raw-word queue path. Those words ground wake/start/variant sequencing;

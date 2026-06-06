@@ -53,14 +53,14 @@
 #define FPGA_CMD_INIT_01      0x01   /* Channel init */
 #define FPGA_CMD_INIT_02      0x02   /* Signal gen setup */
 #define FPGA_CMD_INIT_06      0x06   /* Signal gen setup */
-#define FPGA_CMD_INIT_07      0x07   /* Meter probe detect */
+#define FPGA_CMD_INIT_07      0x07   /* Meter PC7-high command tail */
 #define FPGA_CMD_INIT_08      0x08   /* Meter configure */
 
 /* Runtime commands */
 #define FPGA_CMD_RESET        0x00
 #define FPGA_CMD_SCOPE_CH     0x01   /* Scope channel config */
 #define FPGA_CMD_METER_START  0x09   /* Start meter measurement */
-#define FPGA_CMD_METER_NOPROBE 0x0A  /* No probe detected */
+#define FPGA_CMD_METER_NOPROBE 0x0A  /* Meter PC7-low command tail */
 
 /* Scope configuration commands (case 0 of mode init dispatcher FUN_0800b908).
  * Sent as a sequence when entering oscilloscope mode: 0x0B-0x11.

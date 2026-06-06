@@ -334,8 +334,8 @@ documented command-byte banks in order rather than leaving them as prose:
   and dispatches through the 10-case TBH table.
 
 0x0800B9D6 meter_basic_boot_probe_prefix:
-  queues `0x00`, `0x09`, then reads GPIOC IDR bit 7 and queues `0x07`
-  if probe-detect is high or `0x0A` otherwise.
+  queues `0x00`, `0x09`, then reads GPIOC IDR bit 7 and selects the
+  `0x07`/`0x0A` command tail.
 
 0x0800BA20 meter_basic_boot_range_tail:
   queues `0x1A`, `0x1B`, `0x1C`, `0x1D`, then final command `0x1E`.
@@ -351,6 +351,45 @@ documented command-byte banks in order rather than leaving them as prose:
   queues `0x00`, `0x12`, `0x13`, `0x14`, `0x09`, then the same
   `0x07`/`0x0A` probe-detect command.
 ```
+
+### Meter Probe Branch Guard, 2026-06-06
+
+The `Meter Probe Branch Guard` now separates the PC7 command-tail branch from
+range and calibration evidence. In all three guarded meter arms, stock loads
+GPIOC IDR from `0x40011008` with:
+
+```text
+41 f2 08 00 c4 f2 01 00 00 68
+```
+
+The basic and extended arms at `0x0800B9D6` / `0x0800BACE` then use:
+
+```text
+07 21 00 06 58 bf 0a 21
+```
+
+The variant arm at `0x0800BC32` uses the same logic with `r0` as the command
+register:
+
+```text
+00 06 4f f0 07 00 58 bf 0a 20
+```
+
+Disassembly shape:
+
+```text
+movs   #7
+lsls   GPIOC_IDR, #24
+it     pl
+movpl  #10
+```
+
+Because `lsls #24` moves GPIOC bit 7 into the sign bit, PC7 high keeps `0x07`
+and PC7 low selects `0x0A`. That is stock-visible `GPIOC bit 7` polarity for
+the `0x07/0x0A` command tail. It is probe/tail sequencing only: not DMM runtime
+range state, not a physical range/calibration source, not a low-DCV correction,
+and not H2/SPI3 apply proof. The physical "probe present" label remains an
+interpretation of the hardware line, not a decoder or range coefficient.
 
 The same binary guard checks the complete direct callsite set for this dispatcher.
 The only direct `BL` instructions to `FUN_0800B908` in the stock APP image are:

@@ -1156,6 +1156,18 @@ static void fpga_set_scope_frontend_range(uint8_t range_idx)
 
 static uint8_t fpga_probe_cmd_byte(void)
 {
+    /*
+     * Stock probe-command branch, not DMM range/calibration state.
+     *
+     * In V1.2.0 `FUN_0800B908`, the meter-basic arm at 0x0800B9D6, the extended
+     * arm at 0x0800BACE, and the variant arm at 0x0800BC32 all materialize
+     * GPIOC IDR (`0x40011008`), shift PC7 into the sign bit, and choose command
+     * tail 0x07 when PC7 is high or 0x0A when PC7 is low.  That is digital
+     * probe/tail sequencing for the USART2 command path.  It is not a recovered
+     * analog mux/range writer, low-DCV correction, or factory calibration
+     * coefficient; the physical "probe present" label remains a hardware
+     * interpretation layered on top of the stock branch polarity.
+     */
     return (GPIOC->idt & (1U << 7)) ? 0x07 : FPGA_CMD_METER_NOPROBE;
 }
 
@@ -1238,7 +1250,8 @@ static void fpga_send_meter_wake_preamble(void)
      * V1.2.0 has binary-guarded raw-word materializers for the configure
      * word 0x0508 at 0x080033CA, the start/poll word 0x0509 at 0x08003BA4,
      * and the variant/setup word 0x0514 at 0x08005B7A. The probe word is the
-     * same 0x0507/0x050A GPIOC bit-7 branch guarded in FUN_0800B908.
+     * same 0x0507/0x050A GPIOC bit-7 branch guarded in FUN_0800B908; see
+     * fpga_probe_cmd_byte() for the stock polarity and evidence boundary.
      *
      * That is stock command sequencing evidence only. It is not a recovered
      * analog range writer, low-DCV correction, or factory calibration source.
@@ -3739,11 +3752,11 @@ void fpga_init(void)
     usart2_send_cmd(0x05, 0x09);  /* Meter: start measurement */
     systick_delay_ms(10);
 
-    /* Probe detect: read PC7 */
+    /* Stock PC7 command tail: high -> 0x07, low -> 0x0A. */
     if (GPIOC->idt & (1U << 7)) {
-        usart2_send_cmd(0x05, 0x07);  /* Probe detected */
+        usart2_send_cmd(0x05, 0x07);
     } else {
-        usart2_send_cmd(0x05, 0x0A);  /* No probe */
+        usart2_send_cmd(0x05, 0x0A);
     }
     systick_delay_ms(10);
 
@@ -4062,7 +4075,7 @@ void fpga_enter_siggen_mode(void)
      *        selector or low-DCV correction source
      * 0x14 = meter variant setup
      * 0x09 = meter start measurement
-     * 0x07/0x0A = probe detect */
+     * 0x07/0x0A = stock PC7 command tail, not a DMM range state */
     fpga_send_cmd(0x00, 0x02);  /* Siggen: frequency */
     fpga_send_cmd(0x00, 0x03);  /* Siggen: waveform */
     fpga_send_cmd(0x00, 0x04);  /* Siggen: amplitude */
@@ -4070,13 +4083,13 @@ void fpga_enter_siggen_mode(void)
     fpga_send_cmd(0x00, 0x06);  /* Siggen: duty cycle */
     fpga_send_cmd(0x00, 0x08);  /* Shared meter configure/setup byte */
 
-    /* Case 9 tail: meter variant + probe detect */
+    /* Case 9 tail: meter variant + stock PC7 command tail */
     fpga_send_cmd(0x00, 0x14);
     fpga_send_cmd(0x00, FPGA_CMD_METER_START);
 
-    /* Probe detect: read PC7 */
+    /* Stock PC7 command tail: high -> 0x07, low -> 0x0A. */
     if (GPIOC->idt & (1U << 7)) {
-        fpga_send_cmd(0x00, 0x07);  /* Probe detected */
+        fpga_send_cmd(0x00, 0x07);
     } else {
         fpga_send_cmd(0x00, FPGA_CMD_METER_NOPROBE);
     }
@@ -4092,7 +4105,7 @@ void fpga_enter_siggen_mode(void)
     GPIOE->clr = (1U << 6);   /* PE6 LOW */
 }
 
-/* Helper: send probe detect command (shared by meter modes) */
+/* Helper: send the stock PC7-gated command tail (shared by meter modes). */
 static void fpga_timed_send_probe_detect(uint32_t delay_ms)
 {
     fpga_timed_send_cmd(0x05, fpga_probe_cmd_byte(), delay_ms);

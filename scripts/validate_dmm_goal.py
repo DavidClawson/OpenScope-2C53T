@@ -1266,6 +1266,8 @@ def verify_re_coverage() -> dict[str, Any]:
         "command-dispatch entry evidence only",
         "command-byte banks", "0x1A..0x1E", "0x16..0x19", "0x12/0x13/0x14",
         "boot-time command queue", "not a DMM calibration or range-writer proof",
+        "Meter Probe Branch Guard", "GPIOC bit 7", "0x40011008", "0x07/0x0A",
+        "probe/tail sequencing only", "not a physical range/calibration source",
         "Meter Basic Raw-Word Queue Guard", "0x080033CA", "0x08003BA4",
         "0x08005B7A", "0x0508", "0x0509", "0x0514",
         "wake/start/variant sequencing",
