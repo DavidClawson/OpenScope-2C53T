@@ -933,27 +933,32 @@ unclassified RAM-map line.
 The `mux-state full-decompile surface guard` now pins the text-decompile
 surface too, not only the RAM-map function-level surface. It verifies all 26
 `DAT_200000fa` references and all 10 `DAT_200000fb` references currently
-visible in `full_decompile.c` and classifies the only decompile-visible writes
-to the shared mux-state pair:
+visible in `full_decompile.c` and classifies the only decompile-visible indexed
+writes to the shared mux-state pair:
 
 ```text
 DAT_200000fa full-decompile refs: 26
   full_decompile.c:2566  (&DAT_200000fa)[uVar20] = bVar2 + 1;
+    target: DAT_200000fa/DAT_200000fb selected by uVar20
     classification: scope/siggen autorange increment in FUN_08001c60
   full_decompile.c:8745  (&DAT_200000fa)[uVar70] = bVar37 + 1;
+    target: DAT_200000fa/DAT_200000fb selected by uVar70
     classification: scope_main_fsm autorange increment in FUN_08019e98
 
 DAT_200000fb full-decompile refs: 10
-  no direct decompile-level assignment
+  no literal direct assignment line such as DAT_200000fb = ...
 ```
 
 The rest of the guarded text refs are function calls, scope scale-table
 consumers, or snapshot copies such as `DAT_20000eb9 = DAT_200000fa` and
-`_DAT_20000eba = _DAT_200000fb`. `DAT_200000fb` still has no direct
-decompile-level assignment in the recovered text surface. This narrows the
-DMM gap rather than solving it: if a later decompile or stock trace exposes a
-new write to either byte, that new write must be classified as DMM-owned,
-scope-owned, saved-state, or non-code before local mux/range policy changes.
+`_DAT_20000eba = _DAT_200000fb`. The two indexed writes above can update
+`DAT_200000fb` when the index selects the second byte; they are already kept as
+scope/siggen evidence because the same branches call `FUN_08001a58(DAT_200000fb)`.
+`DAT_200000fb` only lacks a literal direct assignment in the recovered text
+surface. This narrows the DMM gap rather than solving it: if a later decompile
+or stock trace exposes a new literal or aliased write to either byte, that new
+write must be classified as DMM-owned, scope-owned, saved-state, or non-code
+before local mux/range policy changes.
 
 The scope-submode mux call guard now pins the two explicit scope reconfiguration
 sites that were previously only present in the broad direct-BL list. Both sites

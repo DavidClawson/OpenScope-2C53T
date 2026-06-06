@@ -527,17 +527,20 @@ class DmmGoalValidationTests(unittest.TestCase):
         self.assertEqual(symbols["DAT_200000fa"]["count"], 26)
         self.assertEqual(symbols["DAT_200000fb"]["count"], 10)
         self.assertEqual(
-            [item["line"] for item in symbols["DAT_200000fa"]["writes"]],
+            [item["line"] for item in result["pair_writes"]],
             [2566, 8745],
         )
-        self.assertEqual(symbols["DAT_200000fb"]["writes"], [])
+        self.assertEqual(symbols["DAT_200000fa"]["literal_direct_assignments"], [])
+        self.assertEqual(symbols["DAT_200000fb"]["literal_direct_assignments"], [])
+        self.assertIn("DAT_200000fb", result["pair_writes"][0]["target"])
+        self.assertIn("DAT_200000fb", result["pair_writes"][1]["target"])
         self.assertIn(
             "scope/siggen autorange increment",
-            symbols["DAT_200000fa"]["writes"][0]["classification"],
+            result["pair_writes"][0]["classification"],
         )
         self.assertIn(
             "scope_main_fsm autorange increment",
-            symbols["DAT_200000fa"]["writes"][1]["classification"],
+            result["pair_writes"][1]["classification"],
         )
         self.assertIn(
             "FUN_080018a4(DAT_200000fa);",

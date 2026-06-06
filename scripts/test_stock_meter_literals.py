@@ -94,12 +94,17 @@ EXPECTED_MUX_STATE_FULL_DECOMPILE_REFS = {
         (26155, "_DAT_20000eba = _DAT_200000fb;"),
     ],
 }
-EXPECTED_MUX_STATE_FULL_DECOMPILE_WRITES = {
-    "DAT_200000fa": {
-        2566: "scope/siggen autorange increment in FUN_08001c60",
-        8745: "scope_main_fsm autorange increment in FUN_08019e98",
+EXPECTED_MUX_STATE_FULL_DECOMPILE_PAIR_WRITES = {
+    2566: {
+        "text": "(&DAT_200000fa)[uVar20] = bVar2 + 1;",
+        "target": "DAT_200000fa/DAT_200000fb selected by uVar20",
+        "classification": "scope/siggen autorange increment in FUN_08001c60",
     },
-    "DAT_200000fb": {},
+    8745: {
+        "text": "(&DAT_200000fa)[uVar70] = bVar37 + 1;",
+        "target": "DAT_200000fa/DAT_200000fb selected by uVar70",
+        "classification": "scope_main_fsm autorange increment in FUN_08019e98",
+    },
 }
 EXPECTED_METER_SELECTOR_XREF_SEQUENCES = {
     0x080042E2: bytes.fromhex(
@@ -1199,15 +1204,16 @@ def _parse_full_decompile_symbol_refs() -> dict[str, list[tuple[int, str]]]:
 def verify_mux_state_full_decompile_surface() -> dict[str, object]:
     """Check the complete full-decompile surface for `DAT_200000fa/fb`.
 
-    The RAM map gives a function-level boundary.  This text-level guard pins
+    The RAM map gives a function-level boundary. This text-level guard pins
     the exact visible stock decompile lines so a future DMM pass cannot cite a
     newly visible `ms[0x02]`/`ms[0x03]` reference as runtime meter evidence
-    without classifying it.  The only direct writes currently visible are the
-    two `DAT_200000fa` autorange increments already guarded as scope/siggen
-    paths; `DAT_200000fb` has no direct decompile-level assignment.
+    without classifying it. The indexed writes through `&DAT_200000fa` are
+    shared-pair writes: index 0 targets `DAT_200000fa`, and index 1 can target
+    `DAT_200000fb` before applying `FUN_08001a58(DAT_200000fb)`.
     """
     parsed = _parse_full_decompile_symbol_refs()
     checked: dict[str, dict[str, object]] = {}
+    pair_writes: list[dict[str, object]] = []
     for symbol, expected_refs in EXPECTED_MUX_STATE_FULL_DECOMPILE_REFS.items():
         actual_refs = parsed[symbol]
         if actual_refs != expected_refs:
@@ -1216,35 +1222,52 @@ def verify_mux_state_full_decompile_surface() -> dict[str, object]:
                 f"{expected_refs}, got {actual_refs}"
             )
 
-        write_lines = [
-            (line_no, line)
-            for line_no, line in actual_refs
-            if line.startswith(f"(&{symbol})") or line.startswith(f"{symbol} =")
-        ]
-        expected_writes = EXPECTED_MUX_STATE_FULL_DECOMPILE_WRITES[symbol]
-        actual_write_lines = [line_no for line_no, _line in write_lines]
-        if actual_write_lines != sorted(expected_writes):
-            raise AssertionError(
-                f"{symbol} full-decompile writes drifted: expected "
-                f"{sorted(expected_writes)}, got {actual_write_lines}"
-            )
-
         checked[symbol] = {
             "count": len(actual_refs),
             "refs": [
                 {"line": line_no, "text": line}
                 for line_no, line in actual_refs
             ],
-            "writes": [
-                {
-                    "line": line_no,
-                    "text": line,
-                    "classification": expected_writes[line_no],
-                }
-                for line_no, line in write_lines
+            "literal_direct_assignments": [
+                {"line": line_no, "text": line}
+                for line_no, line in actual_refs
+                if line.startswith(f"{symbol} =")
             ],
         }
-    return {"full_decompile": str(FULL_DECOMPILE.relative_to(REPO)), "symbols": checked}
+
+    actual_pair_writes = [
+        (line_no, line)
+        for line_no, line in parsed["DAT_200000fa"]
+        if line.startswith("(&DAT_200000fa)[")
+    ]
+    expected_pair_write_lines = sorted(EXPECTED_MUX_STATE_FULL_DECOMPILE_PAIR_WRITES)
+    actual_pair_write_lines = [line_no for line_no, _line in actual_pair_writes]
+    if actual_pair_write_lines != expected_pair_write_lines:
+        raise AssertionError(
+            "mux-state full-decompile pair writes drifted: expected "
+            f"{expected_pair_write_lines}, got {actual_pair_write_lines}"
+        )
+    for line_no, line in actual_pair_writes:
+        expected = EXPECTED_MUX_STATE_FULL_DECOMPILE_PAIR_WRITES[line_no]
+        if line != expected["text"]:
+            raise AssertionError(
+                f"mux-state pair write text drifted at {line_no}: expected "
+                f"{expected['text']!r}, got {line!r}"
+            )
+        pair_writes.append(
+            {
+                "line": line_no,
+                "text": line,
+                "target": expected["target"],
+                "classification": expected["classification"],
+            }
+        )
+
+    return {
+        "full_decompile": str(FULL_DECOMPILE.relative_to(REPO)),
+        "symbols": checked,
+        "pair_writes": pair_writes,
+    }
 
 
 def verify_meter_selector_table() -> dict[str, object]:
@@ -2171,11 +2194,14 @@ def main() -> None:
             f"stock mux-state RAM-map boundary {symbol}: "
             + ", ".join(info["refs"])
         )
+    pair_write_count = len(mux_state_full_decompile["pair_writes"])
     for symbol, info in mux_state_full_decompile["symbols"].items():
         print(
             f"stock mux-state full-decompile surface {symbol}: "
-            f"{info['count']} refs, {len(info['writes'])} writes"
+            f"{info['count']} refs, "
+            f"{len(info['literal_direct_assignments'])} literal direct assignments"
         )
+    print(f"stock mux-state full-decompile pair writes: {pair_write_count}")
     print(f"stock meter selector table: {selector['bytes']}")
     print("stock meter selector xref sites: " +
           ", ".join(selector_xrefs["sequences"].keys()))
