@@ -1246,6 +1246,20 @@ class DmmGoalValidationTests(unittest.TestCase):
             sequences["scope_measurement_engine_mux_scale_consumer"]["bytes"],
         )
 
+    def test_re_coverage_requires_all_scope_mux_state_consumer_sites(self) -> None:
+        coverage = validate_dmm_goal.verify_re_coverage()
+        for term in (
+            "scope mux-state consumer guard",
+            "0x0801D2EC",
+            "0x0801D8B8",
+            "0x0801F51E",
+            "0x0801F5FC",
+            "0x0801FD66",
+            "remaining RAM-map consumers",
+            "not DMM range proof",
+        ):
+            self.assertIn(term, coverage["terms"])
+
 
 if __name__ == "__main__":
     unittest.main()

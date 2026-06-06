@@ -659,7 +659,8 @@ def verify_re_coverage() -> dict[str, Any]:
         "ACV format selector guard", "0x080371C8", "0x08037228",
         "frame[7] bit 0", "not AC evidence", "is_ac status-bit mirror",
         "frame[7].2", "ACV/ACA auto confidence",
-        "scope mux-state consumer guard", "0x0801D2EC", "0x0801EFC0",
+        "scope mux-state consumer guard", "0x0801D2EC", "0x0801D8B8",
+        "0x0801F51E", "0x0801F5FC", "0x0801FD66", "0x0801EFC0",
         "0x0801F6F8", "remaining RAM-map consumers", "not DMM range proof",
     ]
 
