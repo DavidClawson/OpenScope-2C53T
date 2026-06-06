@@ -204,6 +204,7 @@ def verify_state_machine_property_contract() -> dict[str, Any]:
         "invalid_submode_rejects_without_becoming_dcv",
         "state_machine_property_matrix_covers_all_submodes",
         "invalidate_clears_stale_payload_for_every_ordered_mode_transition",
+        "transport_gate_blocks_source_frames_during_every_transition",
         "marker_visible_family_mismatch_matrix_clears_stale_payload",
         "frame6_0x40_is_not_a_global_resistance_family_marker",
         "voltage_payload_clears_stale_reading_in_all_non_voltage_modes",
@@ -232,6 +233,10 @@ def verify_state_machine_property_contract() -> dict[str, Any]:
             r"for \(uint8_t source = 0; source < FPGA_METER_LOCAL_SUBMODE_COUNT; source\+\+\)",
         "ordered destination submodes are exhaustive":
             r"for \(uint8_t dest = 0; dest < FPGA_METER_LOCAL_SUBMODE_COUNT; dest\+\+\)",
+        "transport gate uses planned destination discard budget":
+            r"uint8_t discard = dest_plan\.discard_frames;",
+        "transition gate blocks busy source frames":
+            r"fpga_meter_rx_frame_should_parse\(true, &discard,\s*&transition_skips\)",
         "all non-voltage modes reject voltage frames":
             r"static const uint8_t (wrong_family_)?modes\[\]\s*=\s*"
             r"\{\s*2,\s*3,\s*4,\s*5,\s*6,\s*7,\s*8,\s*9,\s*10\s*\};",
@@ -452,6 +457,7 @@ def verify_re_coverage() -> dict[str, Any]:
         "0x080373A8", "digital stock DMM FSM",
         "32-case range-class matrix", "all 16 combinations",
         "ordered mode-transition stale matrix", "every source submode",
+        "transport-gate source-frame matrix", "planned destination discard budget",
         "state-machine property anchors", "all local submodes 0..10",
         "live validation only switches DCV/ACV",
         "mux callsite guard", "0x080020B2", "0x0801A53E", "0x0802724A",

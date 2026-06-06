@@ -113,6 +113,11 @@ The software contract proves parser/state safety only:
   `busy transition frame` is rejected without consuming the discard budget,
   then each planned discard frame drains in order, and only the following
   stable frame is accepted
+- the transport-gate source-frame matrix walks every ordered source submode to
+  every destination submode with the planned destination discard budget: while
+  the transition is busy and while the destination discards drain, a valid
+  prior-source frame is not handed to the parser and the invalidated destination
+  payload remains blank
 - the ordered mode-transition stale matrix now covers every source submode to
   every destination submode, so a valid prior-mode payload cannot survive a
   transition just because it remains numerically plausible
@@ -124,7 +129,9 @@ all local submodes 0..10, the 16 range-class bit combinations with both
 `frame[2].3` extension states, AC-evidence rejection, wrong-family rejection,
 the marker-visible low-DCV/continuity cases, the pure all-family mismatch
 policy matrix, and the all-source/all-destination transition stale matrix to
-remain present and registered in `main()`.
+remain present and registered in `main()`. They also require the
+transport-gate source-frame matrix so transition safety stays a software
+state-machine property, not a camera/OCR or multiplier-tuning exercise.
 
 Live validation only switches DCV/ACV on the energized bench input. Passive and
 current modes stay unprobed in that live path: passive voltage-payload rejection

@@ -1105,6 +1105,54 @@ static int test_invalidate_clears_stale_payload_for_every_ordered_mode_transitio
     return 1;
 }
 
+static int test_transport_gate_blocks_source_frames_during_every_transition(void)
+{
+    uint8_t source_frame[12];
+
+    for (uint8_t source = 0; source < FPGA_METER_LOCAL_SUBMODE_COUNT; source++) {
+        for (uint8_t dest = 0; dest < FPGA_METER_LOCAL_SUBMODE_COUNT; dest++) {
+            fpga_meter_transition_plan_t dest_plan =
+                fpga_meter_transition_plan_for_submode(dest);
+            uint8_t discard = dest_plan.discard_frames;
+            uint32_t transition_skips = 0;
+
+            meter_data_init();
+            build_valid_frame_for_mode(source_frame, source);
+            process_frame(source_frame, source);
+            ASSERT(meter_reading.valid);
+            ASSERT(meter_reading.submode == source);
+
+            meter_data_invalidate(dest);
+            ASSERT(!meter_reading.valid);
+            ASSERT(meter_reading.submode == dest);
+            ASSERT(meter_reading.stock_mode == dest_plan.stock_mode);
+            ASSERT(meter_reading.expected_frame_family == dest_plan.frame_family);
+            ASSERT(expect_payload_cleared("---"));
+
+            ASSERT(!fpga_meter_rx_frame_should_parse(true, &discard,
+                                                     &transition_skips));
+            ASSERT(discard == dest_plan.discard_frames);
+            ASSERT(transition_skips == 1);
+            ASSERT(!meter_reading.valid);
+            ASSERT(meter_reading.submode == dest);
+            ASSERT(expect_payload_cleared("---"));
+
+            for (uint8_t i = 0; i < dest_plan.discard_frames; i++) {
+                ASSERT(!fpga_meter_rx_frame_should_parse(false, &discard,
+                                                         &transition_skips));
+                ASSERT(!meter_reading.valid);
+                ASSERT(meter_reading.submode == dest);
+                ASSERT(expect_payload_cleared("---"));
+            }
+            ASSERT(discard == 0);
+            ASSERT(transition_skips == 1);
+            ASSERT(fpga_meter_rx_frame_should_parse(false, &discard,
+                                                    &transition_skips));
+        }
+    }
+    return 1;
+}
+
 static int test_marker_visible_family_mismatch_matrix_clears_stale_payload(void)
 {
     struct marker_case {
@@ -1858,6 +1906,7 @@ int main(void)
     TEST(invalid_submode_rejects_without_becoming_dcv);
     TEST(state_machine_property_matrix_covers_all_submodes);
     TEST(invalidate_clears_stale_payload_for_every_ordered_mode_transition);
+    TEST(transport_gate_blocks_source_frames_during_every_transition);
     TEST(marker_visible_family_mismatch_matrix_clears_stale_payload);
     TEST(frame6_0x40_is_not_a_global_resistance_family_marker);
     TEST(voltage_mode_mains_frame_uses_stock_range_hint);
