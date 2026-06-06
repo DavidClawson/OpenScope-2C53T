@@ -1132,9 +1132,20 @@ channel's mux byte and uses it to index the scope scale table:
 
 ```text
 full_decompile.c:11411  pbVar19 = &DAT_200000fa + uVar22;
+full_decompile.c:11412  bVar3 = *pbVar19;
 full_decompile.c:11418  FUN_0803e5da(*(undefined2 *)(&DAT_0804bfb8 + ...), ...)
+full_decompile.c:11435  uVar31 = *pbVar19 / 3;
 full_decompile.c:11438  uVar6 = *(undefined2 *)(&DAT_0804bfb8 + ...);
+full_decompile.c:11488  bVar3 = *pbVar19;
+full_decompile.c:11491  uVar6 = *(undefined2 *)(&DAT_0804bfb8 + ...);
 ```
+
+The `scope UI mux-pointer consumer context guard` pins
+`full_decompile.c:11411..11491` and forbids local pointer-write forms such as
+`*pbVar19 =` after `pbVar19 = &DAT_200000fa + uVar22`. This matters because the
+later alias reads no longer contain the literal `DAT_200000fa` symbol. The
+guard keeps this block classified as read-only scope LUT/scale math, not as a
+hidden DMM mux writer.
 
 The corresponding stock instruction slice starts at `0x080151B0`:
 

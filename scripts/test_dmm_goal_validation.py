@@ -575,6 +575,22 @@ class DmmGoalValidationTests(unittest.TestCase):
             [item["text"] for item in contexts["scope_main_fsm_autorange_pair_write_context"]],
         )
 
+    def test_scope_ui_mux_pointer_alias_is_read_only_consumer(self) -> None:
+        result = stock_meter_literals.verify_scope_ui_mux_pointer_consumer_context()
+        context = result["contexts"]["scope_ui_mux_pointer_consumer_context"]
+
+        self.assertEqual(context["line_range"], [11411, 11491])
+        texts = [item["text"] for item in context["required_lines"]]
+        self.assertIn("pbVar19 = &DAT_200000fa + uVar22;", texts)
+        self.assertIn("bVar3 = *pbVar19;", texts)
+        self.assertIn("uVar31 = *pbVar19 / 3;", texts)
+        self.assertIn(
+            "uVar6 = *(undefined2 *)(&DAT_0804bfb8 + ((uint)*pbVar19 + uVar31 * -3 & 0xff) * 2);",
+            texts,
+        )
+        self.assertIn("read-only", context["classification"])
+        self.assertIn("not a writer", context["classification"])
+
     def test_stock_dvom_tx_queue_consumer_is_binary_grounded(self) -> None:
         result = stock_meter_literals.verify_dvom_tx_queue_consumer_sequences()
         sequences = result["sequences"]
