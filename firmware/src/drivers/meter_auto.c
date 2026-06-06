@@ -6,7 +6,16 @@
 #include "fpga_meter_plan.h"
 
 static const uint8_t meter_auto_candidate_order[] = {
-    0, 1, 6, 7, 8, 9, 10, 2, 4, 3, 5
+    /*
+     * AUTO is live hardware probing, not just parser scoring.  Keep the
+     * default candidate list to the V/Ohm/C jack voltage functions until a
+     * stock/live safety path proves how to detect the current jack and a
+     * de-energized passive probe condition.  Current and passive submodes are
+     * still supported when the user selects them explicitly, and their frames
+     * remain covered by the state-machine tests; they are not swept by AUTO on
+     * an unknown bench input.
+     */
+    0, 1
 };
 
 const uint8_t *meter_auto_candidates(size_t *count)

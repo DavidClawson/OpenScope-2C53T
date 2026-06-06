@@ -7,12 +7,12 @@
  * Boot sequence follows FPGA_BOOT_SEQUENCE.md (53 steps):
  *   1. AFIO remap to free PB3/4/5 from JTAG
  *   2. USART2 init at 9600 baud
- *   3. Send boot commands (0x01, 0x02, 0x06, 0x07, 0x08)
- *   4. SPI3 init (Mode 3, /2 prescaler = 60MHz)
- *   5. PC6 HIGH (FPGA SPI enable)
+ *   3. USART2 init; stock post-H2 boot bytes are SPI3 queue triggers
+ *   4. SPI3 init and enable (Mode 3, /2 prescaler = 60MHz)
+ *   5. PC6 HIGH after SPI3 is enabled (FPGA SPI enable)
  *   6. SysTick delays for FPGA timing
- *   7. SPI3 handshake (command 0x05)
- *   8. PB11 HIGH (FPGA active mode)
+ *   7. SPI3 handshake + H2 table upload
+ *   8. Queue stock post-H2 SPI3 triggers, then PB11 HIGH (FPGA active mode)
  *
  * Runtime architecture (3 FreeRTOS tasks):
  *   - fpga_usart_tx_task: Sends 10-byte command frames via USART2
@@ -50,6 +50,7 @@
 /* USART ctrl1 bit masks (AT32 HAL uses MAKE_VALUE macros, we need raw bits) */
 #define USART_CTRL1_RDBFIEN   (1 << 5)   /* RX buffer full interrupt enable */
 #define USART_CTRL1_TDBEIEN   (1 << 7)   /* TX buffer empty interrupt enable */
+#define USART_CTRL1_UEN       (1 << 13)  /* USART enable */
 
 /* GPIO bit operations */
 #define PB6_MASK        (1 << 6)   /* SPI3 CS */
@@ -66,6 +67,7 @@
 
 fpga_state_t fpga;
 
+volatile bool     fpga_meter_adc_sampler_enabled;
 volatile bool     fpga_meter_adc_use_preacq;
 volatile int16_t  fpga_meter_adc_selector_override = -1;
 volatile int16_t  fpga_meter_adc_preacq_override = -1;
@@ -151,14 +153,21 @@ static void fpga_meter_reset_transport(void)
      * tracks the stock PC11 meter-MUX gate and the separate Port C/E and
      * Port A/B frontend writers. During a local mode switch we therefore stop
      * RX/TX IRQs, suspend both DVOM transport tasks, reset pending queues and
-     * byte indices, drop PC11, then resume before sending the new stock 0x05xx
-     * selector sequence. The exact 20 ms quiet window and later two-frame
-     * discard are conservative local policy, not recovered stock constants; the
-     * values are exported through `meter frontend`/`meter mux-stream` so future
-     * stock traces can replace them instead of hiding a guess here.
+     * byte indices, drop PC11, then re-enable USART2 before resuming the DVOM
+     * tasks and sending the new stock 0x05xx selector sequence.  Stock runtime
+     * mode switching at 0x0800741A clears CTRL1 bit 0x2000 (UEN) while it
+     * suspends `dvom_TX`/`dvom_RX`, resets 0x20002D7C and 0x20002D74, and
+     * clears PC11; the enable tail at 0x08007360 sets UEN again before task
+     * resume and PC11 assertion.  The exact 20 ms quiet window and later
+     * two-frame discard are conservative local policy, not recovered stock
+     * constants; the values are exported through `meter frontend`/`meter
+     * mux-stream` so future stock traces can replace them instead of hiding a
+     * guess here.
      */
     ctrl1 = USART2->ctrl1;
-    USART2->ctrl1 = ctrl1 & ~(USART_CTRL1_RDBFIEN | USART_CTRL1_TDBEIEN);
+    USART2->ctrl1 = ctrl1 & ~(USART_CTRL1_UEN |
+                              USART_CTRL1_RDBFIEN |
+                              USART_CTRL1_TDBEIEN);
 
     if (tx_task_handle != NULL) vTaskSuspend(tx_task_handle);
     if (rx_task_handle != NULL) vTaskSuspend(rx_task_handle);
@@ -177,10 +186,11 @@ static void fpga_meter_reset_transport(void)
     GPIOC->clr = (1U << 11);
     fpga_scope_delay_ms(20);
 
+    USART2->ctrl1 = (ctrl1 | USART_CTRL1_UEN | USART_CTRL1_RDBFIEN) &
+                    ~USART_CTRL1_TDBEIEN;
+
     if (rx_task_handle != NULL) vTaskResume(rx_task_handle);
     if (tx_task_handle != NULL) vTaskResume(tx_task_handle);
-
-    USART2->ctrl1 = (ctrl1 | USART_CTRL1_RDBFIEN) & ~USART_CTRL1_TDBEIEN;
 }
 
 /* ═══════════════════════════════════════════════════════════════════
@@ -1331,10 +1341,11 @@ static uint8_t fpga_scope_coupling_param(const scope_state_t *ss)
 
 static void fpga_send_scope_range_block(const scope_state_t *ss)
 {
-    /* Stock range/coupling updates dispatch a channel-bank prefix followed by
-     * 0x1A..0x1E. We still do not have the original state-packer that filled
-     * bytes[4..8], so keep this as a best-effort projection of live UI state
-     * into the single-byte hi params our current queue transport supports. */
+    /* Scope-only range/coupling projection. Stock scope paths use the 0x1A..0x1E
+     * command family for channel gain/offset/coupling. DMM boot notes also show
+     * those byte values entering the 0x20002D6C dispatcher, but that is not the
+     * raw 0x20002D74 DVOM wire queue and not DMM range proof. Keep this helper
+     * scoped to scope UI state until a stock DMM materializer is recovered. */
     fpga_timed_send_cmd(0x00, fpga_scope_prefix_cmd(ss), 10);
     fpga_timed_send_cmd(fpga_scope_gain_param(&ss->ch1), FPGA_CMD_CH1_GAIN, 10);
     fpga_timed_send_cmd(fpga_scope_offset_param(&ss->ch1), FPGA_CMD_CH1_OFFSET, 10);
@@ -1411,9 +1422,10 @@ static void fpga_send_scope_sequence(const scope_state_t *ss)
     fpga_timed_send_cmd(0x02, FPGA_CMD_SCOPE_CFG_10, 15);
     fpga_timed_send_cmd(0x01, FPGA_CMD_SCOPE_CFG_11, 20);
 
-    /* Stock scope setup also pushes a channel range/coupling block via
-     * 0x07/0x0A + 0x1A..0x1E when the frontend changes. Re-apply that here
-     * so scope entry does not rely only on local relay writes. */
+    /* Stock scope setup also pushes a channel range/coupling block via the
+     * scope command family. This is deliberately separate from DMM setup: the
+     * DMM-visible 0x1A..0x1E bytes are dispatcher inputs, not recovered raw
+     * range words. */
     fpga_send_scope_range_block(ss);
 
     /* Runtime acquisition and timebase config. */
@@ -1734,6 +1746,102 @@ static uint8_t fpga_preacq_command_byte(void)
     return (uint8_t)(0x80 | voltage_range);
 }
 
+static bool fpga_is_stock_post_h2_spi3_trigger(uint8_t trigger)
+{
+    return trigger == (FPGA_ACQ_FAST_TB + 1) ||
+           trigger == (FPGA_ACQ_ROLL + 1) ||
+           trigger == (FPGA_ACQ_METER_ADC + 1) ||
+           trigger == (FPGA_ACQ_SIGGEN + 1) ||
+           trigger == (FPGA_ACQ_CALIBRATE + 1);
+}
+
+static uint8_t fpga_stock_timebase_byte(void)
+{
+    const scope_state_t *ss = scope_state_get();
+    return ss->timebase_idx;
+}
+
+static uint8_t fpga_stock_trigger_edge_byte(void)
+{
+    const scope_state_t *ss = scope_state_get();
+    return (uint8_t)ss->trigger.edge;
+}
+
+static void fpga_run_stock_post_h2_spi3_trigger(uint8_t trigger_byte)
+{
+    /*
+     * Stock V1.2.0 queues 1,2,6,7,8 to 0x20002D78 after H2 close
+     * (0x08026DCE..0x08026E2A). The consumer at 0x080374B2 first writes the
+     * queued byte itself to SPI3, then dispatches on `trigger_byte - 1`.
+     *
+     * The local state bytes used below are the open-firmware equivalents of
+     * stock scope bytes (`ms[0x2D]`, `ms[0x16]`, `ms[0x18]`). They are not DMM
+     * coefficients and they are not a recovered H2 ACK; live DMM frames still
+     * decide whether this boot choreography is sufficient.
+     */
+    fpga.spi3_probing = true;
+    SPI3_CS_ASSERT();
+    (void)spi3_xfer(trigger_byte);
+
+    switch (trigger_byte) {
+    case FPGA_ACQ_FAST_TB + 1:
+        (void)spi3_xfer(fpga_stock_timebase_byte());
+        break;
+
+    case FPGA_ACQ_ROLL + 1:
+        for (unsigned i = 0; i < 5; i++) {
+            (void)spi3_xfer(0xFF);
+        }
+        break;
+
+    case FPGA_ACQ_METER_ADC + 1:
+        (void)spi3_xfer(fpga_meter_adc_select_byte());
+        break;
+
+    case FPGA_ACQ_SIGGEN + 1:
+        (void)spi3_xfer(fpga_stock_trigger_edge_byte());
+        break;
+
+    case FPGA_ACQ_CALIBRATE + 1:
+        fpga.spi3_first_byte = spi3_xfer(fpga_preacq_command_byte());
+        SPI3_CS_DEASSERT();
+        vTaskDelay(1);
+        SPI3_CS_ASSERT();
+        (void)spi3_xfer(0x0A);
+        (void)spi3_xfer(0xFF);
+        fpga.spi3_first_byte = spi3_xfer(0xFF);
+        break;
+
+    default:
+        break;
+    }
+
+    SPI3_CS_DEASSERT();
+    fpga.spi3_probing = false;
+    fpga.post_h2_spi3_boot_ok++;
+}
+
+static void fpga_enqueue_stock_post_h2_spi3_boot_triggers(void)
+{
+    static const uint8_t stock_triggers[] = {
+        FPGA_ACQ_FAST_TB + 1,
+        FPGA_ACQ_ROLL + 1,
+        FPGA_ACQ_METER_ADC + 1,
+        FPGA_ACQ_SIGGEN + 1,
+        FPGA_ACQ_CALIBRATE + 1,
+    };
+
+    for (unsigned i = 0; i < sizeof(stock_triggers); i++) {
+        uint8_t trigger = stock_triggers[i];
+        fpga.post_h2_spi3_boot_enqueued++;
+        if (xQueueSend(spi3_acq_queue, &trigger, 0) == pdTRUE) {
+            fpga.post_h2_spi3_boot_mask |= (uint8_t)(1u << i);
+        } else {
+            fpga.post_h2_spi3_boot_dropped++;
+        }
+    }
+}
+
 /*
  * Meter ADC Waveform Sampler
  *
@@ -1751,8 +1859,18 @@ static void fpga_meter_adc_sampler_task(void *pv)
     bool was_voltage_mode = false;
 
     for (;;) {
-        uint8_t trigger = FPGA_ACQ_METER_ADC + 1;
+        uint8_t trigger = FPGA_ACQ_DIAG_METER_ADC_TRIGGER;
         bool voltage_mode;
+
+        if (!fpga_meter_adc_sampler_enabled) {
+            if (was_voltage_mode) {
+                meter_voltage_wave_reset();
+                was_voltage_mode = false;
+                last_submode = 0xFF;
+            }
+            vTaskDelay(pdMS_TO_TICKS(100));
+            continue;
+        }
 
         vTaskDelay(pdMS_TO_TICKS(1));  /* ~1 ksample/s with a 1 kHz tick. */
         if (!fpga.initialized) continue;
@@ -1828,7 +1946,7 @@ static void fpga_acquisition_task(void *pv)
          * off SPI3 entirely to avoid contention with the ESP32. */
         if (fpga.bus_released) continue;
 
-        if (trigger_byte == (FPGA_ACQ_METER_ADC + 1)) {
+        if (trigger_byte == FPGA_ACQ_DIAG_METER_ADC_TRIGGER) {
             uint8_t sample;
             uint8_t preacq_rx = 0;
             uint8_t selector = fpga_meter_adc_select_byte();
@@ -1865,6 +1983,11 @@ static void fpga_acquisition_task(void *pv)
             if (sample < fpga_meter_adc_min_sample) fpga_meter_adc_min_sample = sample;
             if (sample > fpga_meter_adc_max_sample) fpga_meter_adc_max_sample = sample;
             fpga.spi3_probing = false;
+            continue;
+        }
+
+        if (fpga_is_stock_post_h2_spi3_trigger(trigger_byte)) {
+            fpga_run_stock_post_h2_spi3_trigger(trigger_byte);
             continue;
         }
 
@@ -3090,7 +3213,7 @@ void fpga_init(void)
 #endif
 
     /* ---------------------------------------------------------------
-     * Step 3: Wait for FPGA to finish booting
+     * Step 3: USART init only, then wait for FPGA to finish booting
      *
      * The stock firmware does ~2-3 seconds of LCD init, boot screen
      * animation (including a power-button-release wait loop), SPI flash
@@ -3104,6 +3227,11 @@ void fpga_init(void)
      *
      * Add an explicit delay to match the stock firmware's implicit
      * boot time. Try 2000ms as a conservative starting point.
+     *
+     * Stock xQueueSend sites at 0x08026DCE..0x08026E2A target the SPI3 trigger
+     * queue at 0x20002D78, not the USART/DVOM wire queue. The local queue does
+     * not exist until fpga_create_tasks(), so those bytes are queued there after
+     * the SPI3 task queue is created.
      * --------------------------------------------------------------- */
 #if FPGA_WARM_HANDOFF_TEST
     /* FPGA is already configured by stock — don't wait 2s (that long float
@@ -3113,28 +3241,6 @@ void fpga_init(void)
 #else
     systick_delay_ms(2000);
 #endif
-
-    /* ---------------------------------------------------------------
-     * Step 3b: USART boot commands — sent BEFORE the SPI3 phase
-     *
-     * Stock-validated order: master init Phase 4 (inline USART cmds at
-     * 0x08025D96) precedes the SPI3 phase (0x08026540). Moved here
-     * 2026-06-10 after the framed-upload-only experiment left PC0
-     * unarmed; the prior after-upload order came from the debunked
-     * FUN_08027a50 reading (see docs/fpga_bitstream_replay_plan.md).
-     * --------------------------------------------------------------- */
-#if !FPGA_WARM_HANDOFF_TEST && !FPGA_USART_SILENT_SCOPE
-    usart2_send_cmd(0x00, FPGA_CMD_INIT_01);  /* 0x01: Channel init */
-    systick_delay_ms(50);
-    usart2_send_cmd(0x00, FPGA_CMD_INIT_02);  /* 0x02: Signal gen setup */
-    systick_delay_ms(50);
-    usart2_send_cmd(0x00, FPGA_CMD_INIT_06);  /* 0x06: Signal gen setup */
-    systick_delay_ms(50);
-    usart2_send_cmd(0x00, FPGA_CMD_INIT_07);  /* 0x07: Meter probe detect */
-    systick_delay_ms(50);
-    usart2_send_cmd(0x00, FPGA_CMD_INIT_08);  /* 0x08: Meter configure */
-    systick_delay_ms(100);
-#endif  /* skip: would disturb stock-loaded config / perturb config-entry */
 
     /* ---------------------------------------------------------------
      * Step 4: SPI3 peripheral init — Mode 3, Master, /2 prescaler
@@ -3193,13 +3299,6 @@ void fpga_init(void)
     SPI3_CS_DEASSERT();
 
     /* PC6 = FPGA SPI enable: output push-pull, set HIGH */
-    gpio_cfg.gpio_pins = GPIO_PINS_6;
-    gpio_cfg.gpio_mode = GPIO_MODE_OUTPUT;
-    gpio_cfg.gpio_out_type = GPIO_OUTPUT_PUSH_PULL;
-    gpio_cfg.gpio_drive_strength = GPIO_DRIVE_STRENGTH_STRONGER;
-    gpio_init(GPIOC, &gpio_cfg);
-    GPIOC->scr = PC6_MASK;  /* PC6 HIGH — FPGA SPI enable (match stock) */
-
 #if FPGA_STOCK_FIDELITY
     /* Experiment F: the two pins stock drives that Exp C never covered.
      * At the CONFIG_ENABLE instant the Exp E dump measured stock as
@@ -3382,6 +3481,24 @@ void fpga_init(void)
      * We use polled transfers, but the stock firmware enables this and the
      * FPGA may expect it. Stub handler below clears any pending flags. */
     NVIC_EnableIRQ(SPI3_I2S3EXT_IRQn);
+
+    /*
+     * PC6 = FPGA SPI enable.
+     *
+     * Stock V1.2.0 enables/configures SPI3 first, then configures GPIOC.6 and
+     * drives it high before the 100 ms pre-handshake delay. The previous open
+     * firmware raised PC6 before SPI3 CTRL1/CTRL2/SPE were programmed, which
+     * could expose an unready SPI master to the FPGA. Keep this ordering close
+     * to the stock boot trace instead of treating PC6 as a harmless early GPIO.
+     * This is still not H2 acceptance proof; live low-DCV validation decides
+     * whether the FPGA actually applied the table.
+     */
+    gpio_cfg.gpio_pins = GPIO_PINS_6;
+    gpio_cfg.gpio_mode = GPIO_MODE_OUTPUT;
+    gpio_cfg.gpio_out_type = GPIO_OUTPUT_PUSH_PULL;
+    gpio_cfg.gpio_drive_strength = GPIO_DRIVE_STRENGTH_STRONGER;
+    gpio_init(GPIOC, &gpio_cfg);
+    GPIOC->scr = PC6_MASK;
 
     /* Capture register state for diagnostics */
     fpga.diag_remap5 = IOMUX->remap;   /* STM32-compatible remap (offset 0x04) */
@@ -3670,13 +3787,15 @@ void fpga_init(void)
     });
 #endif
 
-    /* USART boot commands (0x01,0x02,0x06,0x07,0x08) now sent in
-     * Step 3b, BEFORE the SPI3 phase — stock-validated Phase 4 order. */
+    /* Post-H2 stock boot bytes 1/2/6/7/8 are SPI3 trigger-queue items, not
+     * USART frames. They are queued after spi3_acq_queue exists in
+     * fpga_create_tasks(). */
 
     /*
      * PC4 post-H2 stock boundary, deliberately unresolved in open firmware.
      *
-     * Stock V1.2.0 at 0x08026E2E..0x08026E8A queues USART2 commands 1/2/6/7/8,
+     * Stock V1.2.0 at 0x08026E2E..0x08026E8A has just queued SPI3 triggers
+     * 1/2/6/7/8,
      * enables/configures GPIOC.4, then reads DAT_2000010f / ms[0x17].  The
      * STATE_STRUCTURE note identifies that byte as scope trigger_run_mode.  PC4
      * is set only when the byte equals 2; otherwise stock clears PC4.
@@ -3778,24 +3897,15 @@ void fpga_init(void)
     usart2_send_cmd(0x05, 0x14);  /* Meter variant setup */
     systick_delay_ms(50);
 
-    /* Stock command-bank replay (0x1A..0x1E).
-     * FUN_0800B908 queues these bytes in the meter-basic boot arm, and scope
-     * paths use the same command numbers for channel gain/offset/coupling.
-     * That is command sequencing evidence only. It does not prove DMM range
-     * parameters, a low-DCV correction, or a runtime writer for ms[0x02] /
-     * ms[0x03]. Keep the unresolved 0.200 V -> 0.4366 V case pointed at a
-     * recovered stock writer, H2/apply proof, factory-cal source, or safe
-     * multi-point trace instead of tuning these bytes from one observation. */
-    usart2_send_cmd(0x00, FPGA_CMD_CH1_GAIN);    /* 0x1A: CH1 gain */
-    systick_delay_ms(10);
-    usart2_send_cmd(0x00, FPGA_CMD_CH1_OFFSET);  /* 0x1B: CH1 offset */
-    systick_delay_ms(10);
-    usart2_send_cmd(0x00, FPGA_CMD_CH2_GAIN);    /* 0x1C: CH2 gain */
-    systick_delay_ms(10);
-    usart2_send_cmd(0x00, FPGA_CMD_CH2_OFFSET);  /* 0x1D: CH2 offset */
-    systick_delay_ms(10);
-    usart2_send_cmd(0x00, FPGA_CMD_COUPLING);    /* 0x1E: coupling/BW */
-    systick_delay_ms(50);
+    /*
+     * Do not replay the FUN_0800B908 `0x1A..0x1E` meter-basic bank as raw
+     * USART words here. Stock queues those one-byte selectors through
+     * 0x20002D6C; the recovered raw FPGA/DVOM path is the separate 0x20002D74
+     * halfword queue used by 0x05xx materializers such as 0x0508, 0x0509, and
+     * 0x0514. Sending zero-parameter 0x1A..0x1E UART frames during DMM boot
+     * was a guessed bridge from scope command families, not a stock-proven
+     * DMM range/calibration step.
+     */
 #endif  /* !FPGA_USART_SILENT_SCOPE — keep the wire quiet for the config test */
 
     /* Step 9b removed: PB11 is now armed immediately before the SPI3
@@ -3865,6 +3975,8 @@ QueueHandle_t fpga_create_tasks(void)
     xTaskCreate(fpga_meter_poll_task,  "meter_poll", 64, NULL, 2, NULL);
     xTaskCreate(fpga_meter_adc_sampler_task, "mtr_wave", 64, NULL, 2, NULL);
 #endif
+
+    fpga_enqueue_stock_post_h2_spi3_boot_triggers();
 
     return spi3_acq_queue;
 }

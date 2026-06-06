@@ -49,12 +49,7 @@
  * FPGA Command Codes (USART TX)
  * ═══════════════════════════════════════════════════════════════════ */
 
-/* Boot sequence commands (sent during init, before SPI3 activation) */
-#define FPGA_CMD_INIT_01      0x01   /* Channel init */
-#define FPGA_CMD_INIT_02      0x02   /* Signal gen setup */
-#define FPGA_CMD_INIT_06      0x06   /* Signal gen setup */
-#define FPGA_CMD_INIT_07      0x07   /* Meter PC7-high command tail */
-#define FPGA_CMD_INIT_08      0x08   /* Meter configure */
+/* Bytes 1/2/6/7/8 are stock post-H2 SPI3 trigger bytes, not USART commands. */
 
 /* Runtime commands */
 #define FPGA_CMD_RESET        0x00
@@ -79,11 +74,12 @@
 #define FPGA_CMD_METER_VAR_13 0x13   /* Meter variant config */
 #define FPGA_CMD_METER_VAR_14 0x14   /* Meter variant config */
 
-/* Stock mode-init command bank 0x1A..0x1E. Scope xrefs use these as channel
- * gain/offset/coupling commands, while the DMM boot dispatcher also queues
- * them. That proves command sequencing only; it is not a recovered DMM
- * range-selector, low-DCV calibration source, or runtime ms[0x02]/ms[0x03]
- * mux writer. */
+/* Scope channel command family 0x1A..0x1E. Stock scope xrefs use these as
+ * channel gain/offset/coupling commands. The DMM boot dispatcher also queues
+ * the same byte values through 0x20002D6C, but that is a byte-dispatch surface,
+ * not the raw 0x20002D74 DVOM wire queue. That proves command sequencing only;
+ * it is not a recovered DMM range-selector, low-DCV calibration source, or
+ * runtime ms[0x02]/ms[0x03] mux writer. */
 #define FPGA_CMD_CH1_GAIN     0x1A   /* CH1 gain / stock command-bank byte */
 #define FPGA_CMD_CH1_OFFSET   0x1B   /* CH1 offset / stock command-bank byte */
 #define FPGA_CMD_CH2_GAIN     0x1C   /* CH2 gain / stock command-bank byte */
@@ -113,6 +109,16 @@ typedef enum {
     FPGA_ACQ_CALIBRATE   = 7,  /* Calibration readback */
     FPGA_ACQ_SELF_TEST   = 8,  /* Self test */
 } fpga_acq_mode_t;
+
+/*
+ * Diagnostic-only DMM waveform sampler trigger.
+ *
+ * Stock V1.2.0 uses public trigger byte 6 for SPI3 case 5
+ * (`trigger_byte - 1 == FPGA_ACQ_METER_ADC`) during the post-H2 queue block at
+ * 0x08026DCE..0x08026E2A. Keep the debug sampler on a private byte so it cannot
+ * steal stock trigger semantics.
+ */
+#define FPGA_ACQ_DIAG_METER_ADC_TRIGGER 0xF0u
 
 /* ═══════════════════════════════════════════════════════════════════
  * Stock-State Bench Shadow
@@ -347,6 +353,14 @@ typedef struct {
                                          * snapshot at a fixed +1ms and would have
                                          * missed a transient entirely. */
 
+    /* Stock post-H2 SPI3 queue diagnostics. These counters prove only local
+     * enqueue/execution of the stock trigger bytes; they are not FPGA ACK or
+     * DMM calibration acceptance evidence. */
+    volatile uint8_t  post_h2_spi3_boot_enqueued;
+    volatile uint8_t  post_h2_spi3_boot_ok;
+    volatile uint8_t  post_h2_spi3_boot_dropped;
+    volatile uint8_t  post_h2_spi3_boot_mask;
+
     /* Experimental stock runtime shadow for scope-mode bench work.
      * These are NOT the original firmware RAM locations. They are a small
      * explicit mirror we can inspect and stage from the shell while testing
@@ -507,6 +521,7 @@ bool fpga_data_ready(void);
 const volatile uint8_t *fpga_get_ch1_buf(void);
 const volatile uint8_t *fpga_get_ch2_buf(void);
 
+extern volatile bool     fpga_meter_adc_sampler_enabled;
 extern volatile bool     fpga_meter_adc_use_preacq;
 extern volatile int16_t  fpga_meter_adc_selector_override;
 extern volatile int16_t  fpga_meter_adc_preacq_override;

@@ -72,7 +72,15 @@ UI/submode surface guard treats this as a deliberate fail-closed boundary: no re
 real microamp frontend/range path. Current tests therefore assert that the
 implemented current submodes render only the recovered/local mA and A units,
 not an invented uA unit, and the goal gate statically checks that the UI mode
-table and autoscan candidate list stay at the 11 recovered/local submodes.
+table stays at the 11 recovered/local submodes.
+
+AUTO/autoscan is narrower than the manual mode surface because it physically
+reconfigures the frontend on a live unknown input.  The 2026-06-06 safety guard
+keeps default autoscan candidates voltage-only (`DCV`, `ACV`).  Manual
+current/passive modes still exist and remain covered by parser/state-machine
+tests, but AUTO must not sweep current, resistance, continuity, diode,
+capacitance, or temperature until stock/live evidence proves safe current-jack
+detection and de-energized passive-probe conditions.
 
 `DAT_2000102e` remains a stock digital variant shadow, not a recovered current
 range writer. The selector state writer guard pins the RX/FSM byte writes at
@@ -99,6 +107,10 @@ The software contract proves parser/state safety only:
 - marker-visible wrong-family frames are now covered as an explicit matrix:
   stock voltage metadata and the continuity segment marker must clear stale
   payloads in every local submode whose expected frame family differs
+- invalid/unrecovered local submodes are now guarded with a whole frame-family
+  corpus: voltage, AC-voltage, low-DCV class-4, current, AC-current,
+  resistance, continuity, diode-like, and extended normal frames all reject
+  with `METER_REJECT_INVALID_SUBMODE` after clearing any stale valid payload
 - the transition-plan model also has a pure frame-family policy matrix over
   every recovered family enum (`voltage`, `current`, `resistance`,
   `continuity`, `diode`, `extended`): once a frame family is known, only an
@@ -119,6 +131,9 @@ The software contract proves parser/state safety only:
 - autoscan AC confidence uses the same empirical companion-frequency window as
   the parser (`45..65` Hz); out-of-window nonzero aux frequency remains
   diagnostic only and must not make ACV/ACA candidates confident
+- autoscan candidate selection is voltage-only by default, so the AUTO button
+  and `meter autoscan` do not live-probe current/passive modes on an unknown
+  energized input
 - mode invalidation clears stale payloads before transition
 - the first post-transition frames are discarded before parsing
 - local current and extended splits remain local policy over shared stock slots

@@ -9,6 +9,89 @@ calibration source on this dump, and must not be used to justify coefficients.
 
 ## Dump Evidence
 
+### Current Full Bench Dump, 2026-06-06
+
+- Raw image: `tmp/w25q-full-2026-06-06.bin`
+- Size: `0x1000000` bytes (`16 MiB`, W25Q128 full device)
+- SHA-256:
+  `5706dcd936bdb5d60bfdb5c972fb1db7b1554c6004b57ce36c7544ac8a377d14`
+- Transport: read-only OpenScope USB CDC `FLASHDUMP` binary payload via
+  `scripts/dump_spi_flash.py`
+- Consistency check: first `0x400000` bytes match the earlier
+  `tmp/w25q-first4m.bin` dump byte-for-byte.
+- Extraction command:
+  `python3 scripts/extract_spi_flash_fat.py tmp/w25q-full-2026-06-06.bin --out tmp/w25q-full-2026-06-06-extract`
+
+Extraction summary:
+
+```json
+[
+  {
+    "base": "0x000000",
+    "bytes_per_sector": 4096,
+    "sectors_per_cluster": 1,
+    "total_sectors_16": 512,
+    "volume_size_bytes": 2097152,
+    "root_entries": 2,
+    "manifest_entries": 165
+  },
+  {
+    "base": "0x200000",
+    "bytes_per_sector": 4096,
+    "sectors_per_cluster": 1,
+    "total_sectors_16": 3584,
+    "volume_size_bytes": 14680064,
+    "root_entries": 0,
+    "manifest_entries": 0
+  }
+]
+```
+
+Volume 0 again contains the populated `System file` directory of JPG UI assets
+plus the same empty placeholder:
+
+```json
+{
+  "path": "System file/9999.BIN",
+  "name": "9999.BIN",
+  "attr": 32,
+  "cluster": 0,
+  "size": 0,
+  "is_dir": false
+}
+```
+
+Volume 1 is a valid FAT12-looking volume at `0x200000` (`MSDOS5.0`, 4096-byte
+sectors, 512 root directory entries in the boot sector), but its root directory
+extracts no reachable files. Raw full-image scans do show written orphaned or
+unlinked FAT/data regions after `0x200000`, including BMP-looking framebuffer
+payloads:
+
+- `0x219000`, `0x240000`, `0x284000`, `0x2AB000`, `0x2D2000`, `0x317000`:
+  each starts with a BMP header, `320x-240`, `16` bpp, size `153654` bytes.
+- `0xCB2000..0xCC3000`: sparse FAT directory-like dot entries only in the
+  sampled bytes.
+- No JPEG/JFIF/Exif signatures appear after `0x200000`; the JPG assets are in
+  Volume 0.
+
+These raw leftovers are not a recovered meter calibration source. They are not
+named or xrefed as DMM data, and their observed structure matches screenshots or
+filesystem residue rather than range coefficients.
+
+Machine-check boundary constants:
+
+- `summary.json` Volume 0: `"base": "0x000000"`, `"manifest_entries": 165`
+- `summary.json` Volume 1: `"base": "0x200000"`, `"manifest_entries": 0`
+- `System file/9999.BIN`: `"attr": 32`, `"cluster": 0`, `"size": 0`,
+  `"is_dir": false`
+- Volume 1 reachable-root manifest: empty list (`[]`)
+- raw high-flash residue: only unxrefed FAT/BMP-like leftovers, not a
+  recovered meter calibration file
+- scope of the claim: not proof that all possible factory calibration is
+  absent
+
+### Older Archived Dump
+
 Source note: `w25q128_dump_2026_04_08.md`
 
 - Raw image: `/Users/david/Desktop/osc/archive/w25q128_dump.bin`
@@ -35,10 +118,11 @@ The local first-4MiB extraction manifest for Volume 0 contains the populated
 }
 ```
 
-Volume 1 extraction produced an empty manifest for this bench dump. The
-`w25q128_dump_2026_04_08.md` spot checks at `0x400000`, `0x800000`, and
-`0xF00000` were all erased `0xFF`, so this unit does not show an obvious large
-opaque calibration blob in the later W25Q address space.
+Volume 1 extraction produced an empty manifest for this archived bench dump.
+The `w25q128_dump_2026_04_08.md` spot checks at `0x400000`, `0x800000`, and
+`0xF00000` were all erased `0xFF`. The 2026-06-06 full dump supersedes those
+spot checks for this unit: later address space contains some filesystem
+residue, but not a reachable DMM calibration file or a stock-xrefed meter table.
 
 ## DMM Interpretation
 
@@ -50,7 +134,7 @@ DMM coefficient derived from this lead would be invented.
 This boundary is intentionally narrower than "there is no meter calibration":
 
 - stock V1.2.0 string evidence still contains `3:/System file/9999.bin` at
-  `0x080B9841`, but existing xref notes do not recover a direct DMM consumer
+  `0x080BC841`, but existing xref notes do not recover a direct DMM consumer
 - high-flash descriptor reconstruction remains incomplete
 - the 115,638-byte H2/SPI3 table may still contain frontend setup or
   calibration-like data, but current evidence proves byte-count replay only,

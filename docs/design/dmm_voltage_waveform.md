@@ -32,10 +32,13 @@ and still requires separate AC evidence. Bytes `[10..11]` may be exposed as a
 narrow empirical auxiliary frequency hint, but they are not used to choose the
 voltage range or multiplier.
 
-The waveform shape is based on the stock-documented SPI3 acquisition case 5
-(`METER_ADC_READ`), which is documented as a single-byte meter ADC read. The
-firmware polls this candidate raw-sample path at the FreeRTOS tick rate while
-the multimeter is in AC/DC voltage mode and stores the samples in a small ring
+The waveform shape candidate is based on the stock-documented SPI3 acquisition
+case 5 (`METER_ADC_READ`), which is documented as a single-byte meter ADC read.
+That path is diagnostic opt-in only: the production firmware leaves the
+FreeRTOS sampler disabled by default so normal DMM voltage readings are not
+interleaved with an unrecovered 1 kHz SPI3 probe loop. When explicitly enabled
+from the debug shell, the sampler polls the candidate raw-sample path while the
+multimeter is in AC/DC voltage mode and stores the samples in a small ring
 buffer.
 
 Hardware validation must prove that repeated `METER_ADC_READ` polls while the
@@ -67,6 +70,8 @@ The USB debug shell commands used for validation are:
 - `meter adc-snapshot`: read-only DMM waveform sampler counters and summary.
 - `meter wave`: waveform buffer stats, SPI3 meter-ADC diagnostics, and the
   decoded DMM reading.
+- `meter wave sampler [on|off]`: explicitly enable or disable the experimental
+  SPI3 sampler. It defaults to `off` after boot and after new firmware flashes.
 - `meter wave path [direct|preacq]`, `meter wave selector [auto|0..255]`,
   and `meter wave preacq [auto|0..255]`: explicit diagnostics for the
   candidate DMM waveform SPI path.
@@ -205,6 +210,9 @@ usable DMM-path shape. A later diagnostic build expanded the sweep to
 `pre_rx=FF`, `last=FF`, `min=FF`, and `max=FF` while the USART2 DMM reading
 remained live at about `4.995..4.997 V` on a 5 V DC lab supply. That blocks
 claiming the voltage waveform overlay works on the real COM + V/Ohm/C jacks.
+The sampler is therefore disabled by default; enable it only for explicit
+waveform-source diagnostics, then turn it back off before judging core DMM
+correctness.
 
 The stock DMM command-table evidence is tracked in
 `reverse_engineering/analysis_v120/meter_mode_command_table_2026_06_05.md`.

@@ -960,6 +960,71 @@ static int test_invalid_submode_rejects_without_becoming_dcv(void)
     return 1;
 }
 
+static int test_invalid_submode_rejects_every_frame_family_corpus(void)
+{
+    static const uint8_t low_dcv_frame[12] = {
+        0x5A, 0xA5, 0x44, 0x8E, 0xEF, 0xE7,
+        0x07, 0x24, 0x80, 0x00, 0x01, 0x89,
+    };
+    uint8_t voltage_frame[12];
+    uint8_t ac_voltage_frame[12];
+    uint8_t current_frame[12];
+    uint8_t ac_current_frame[12];
+    uint8_t resistance_frame[12];
+    uint8_t continuity_frame[12];
+    uint8_t diode_frame[12];
+    uint8_t extended_frame[12];
+    const uint8_t *frames[9];
+    uint8_t stale_seed[12];
+
+    build_segment_frame(voltage_frame, 4, 9, 9, 4,
+                        0x00, 0x00, 0x02, 0x00, 0);
+    build_segment_frame(ac_voltage_frame, 4, 9, 9, 4,
+                        0x00, 0x00, 0x02, 0x00, 0x0031);
+    build_segment_frame(current_frame, 2, 2, 6, 1,
+                        0x00, 0x00, 0x00, 0x00, 0);
+    build_segment_frame(ac_current_frame, 2, 2, 6, 1,
+                        0x00, 0x00, 0x00, 0x00, 0x0031);
+    build_segment_frame(resistance_frame, 3, 3, 0, 0,
+                        0x40, 0x00, 0x00, 0x00, 0);
+    build_segment_frame(continuity_frame, 0, 0x12, 0x0A, 5,
+                        0x00, 0x00, 0x00, 0x00, 0);
+    build_segment_frame(diode_frame, 0, 6, 2, 3,
+                        0x00, 0x00, 0x00, 0x00, 0);
+    build_segment_frame(extended_frame, 1, 2, 3, 4,
+                        0x00, 0x00, 0x00, 0x00, 0);
+
+    frames[0] = voltage_frame;
+    frames[1] = ac_voltage_frame;
+    frames[2] = low_dcv_frame;
+    frames[3] = current_frame;
+    frames[4] = ac_current_frame;
+    frames[5] = resistance_frame;
+    frames[6] = continuity_frame;
+    frames[7] = diode_frame;
+    frames[8] = extended_frame;
+
+    for (unsigned i = 0; i < sizeof(frames) / sizeof(frames[0]); i++) {
+        meter_data_init();
+        build_segment_frame(stale_seed, 1, 2, 3, 4,
+                            0x00, 0x00, 0x02, 0x00, 0);
+        process_frame(stale_seed, 0);
+        ASSERT(meter_reading.valid);
+        ASSERT_STR_EQ(meter_reading.display_str, "1234");
+
+        process_frame(frames[i], 99);
+        ASSERT(!meter_reading.valid);
+        ASSERT(meter_reading.submode == 99);
+        ASSERT(meter_reading.result_class == METER_RESULT_NONE);
+        ASSERT(meter_reading.expected_frame_family ==
+               FPGA_METER_FRAME_FAMILY_INVALID);
+        ASSERT(meter_reading.reject_reason == METER_REJECT_INVALID_SUBMODE);
+        ASSERT(expect_payload_cleared("---"));
+    }
+
+    return 1;
+}
+
 static int test_state_machine_property_matrix_covers_all_submodes(void)
 {
     static const uint8_t modes[FPGA_METER_LOCAL_SUBMODE_COUNT] = {
@@ -2025,6 +2090,7 @@ int main(void)
     TEST(invalidate_clears_stale_reading_for_every_submode);
     TEST(parser_stock_mode_tracks_transition_plan_for_every_submode);
     TEST(invalid_submode_rejects_without_becoming_dcv);
+    TEST(invalid_submode_rejects_every_frame_family_corpus);
     TEST(state_machine_property_matrix_covers_all_submodes);
     TEST(invalidate_clears_stale_payload_for_every_ordered_mode_transition);
     TEST(transport_gate_blocks_source_frames_during_every_transition);

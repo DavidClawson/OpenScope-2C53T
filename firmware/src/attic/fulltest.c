@@ -12,7 +12,7 @@
  * FPGA SPI3 (from spi3_acquisition_task analysis):
  *   - Mode 3 (CPOL=1, CPHA=1), /2 = 60MHz, software CS on PB6
  *   - MUST set PB11 HIGH (active mode) and PC6 HIGH (SPI enable)
- *   - MUST send USART boot commands (0x01, 0x02, 0x06, 0x07, 0x08) first
+ *   - Legacy note was wrong: post-H2 bytes 1,2,6,7,8 are SPI3 queue triggers
  *   - MUST use SysTick delays between init phases
  *   - Acquisition triggered by queue, not polling
  *
@@ -481,8 +481,8 @@ int main(void) {
     y += 10;
 
     /* ──────────────────────────────────────────────────────────────
-     * STEP 6: Send USART boot commands (stock firmware sequence)
-     * Commands: 0x01, 0x02, 0x06, 0x07, 0x08
+     * STEP 6: legacy test path, not stock V1.2.0 post-H2 behavior.
+     * Stock queues bytes 1,2,6,7,8 to the SPI3 acquisition queue.
      * With SysTick delays between phases
      * ────────────────────────────────────────────────────────────── */
     usart2_drain();

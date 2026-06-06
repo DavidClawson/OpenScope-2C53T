@@ -571,7 +571,7 @@
  *
  * STARTUP (from system_init):
  *   1. fpga_sem1 given (available), fpga_sem2 taken (blocked)
- *   2. Boot commands 0x01-0x08 sent via usart_tx_queue
+ *   2. Post-H2 trigger bytes 1,2,6,7,8 queued to spi3_data_queue
  *   3. Mode command sent to usart_cmd_queue → dispatches to set_acquisition_mode
  *   4. Trigger byte (1) sent to spi3_data_queue → wakes spi3_acquisition_task
  *

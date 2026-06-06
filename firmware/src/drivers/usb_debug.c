@@ -511,6 +511,7 @@ static void cmd_help(void)
         "ui dump                         Show current UI mode/redraw state\r\n"
         "meter wave                      Show DMM voltage waveform sample stats\r\n"
         "meter wave reset                Reset DMM waveform diagnostics\r\n"
+        "meter wave sampler [on|off]     Enable/disable experimental SPI3 sampler\r\n"
         "meter wave path [direct|preacq] Get/set DMM waveform SPI path\r\n"
         "meter wave selector [auto|N]    DMM wave selector byte\r\n"
         "meter wave preacq [auto|N]      DMM wave pre-acq byte\r\n"
@@ -526,6 +527,7 @@ static void cmd_help(void)
         "spi3 gowin                      Read+decode Gowin ID/USERCODE/STATUS regs\r\n"
         "spi3 scopetest [bank]           Full scope seq: USART cfg->PC0->0x04/05 read\r\n"
         "spi3 acqtest                    Decomposer Phase 20 validation test\r\n"
+        "spi3 stock-readback             Stock case-8 SPI3 readback; not DMM proof\r\n"
         "spi3 h2txdiag                   Replay H2 TX + sample MISO; no ACK/apply proof\r\n"
         "reboot bootloader               Reboot into USB HID updater\r\n"
         "uptime                          Show uptime\r\n"
@@ -614,12 +616,17 @@ static void cmd_status(void)
         "Bytes sent: %lu / 115638\r\n"
         "TX complete: %s (no recovered FPGA ACK)\r\n"
         "0x3A close status: %02X (stock: F8)\r\n"
-        "0x03 scope status: %02X %02X %02X %02X (stock: 00 01 42 2E)\r\n",
+        "0x03 scope status: %02X %02X %02X %02X (stock: 00 01 42 2E)\r\n"
+        "post-H2 SPI3 boot: enq=%u ok=%u drop=%u mask=0x%02X\r\n",
         fpga.h2_bytes_sent,
         fpga.h2_upload_done ? "YES" : "NO",
         fpga.h2_close_status,
         fpga.scope_status[0], fpga.scope_status[1],
-        fpga.scope_status[2], fpga.scope_status[3]
+        fpga.scope_status[2], fpga.scope_status[3],
+        fpga.post_h2_spi3_boot_enqueued,
+        fpga.post_h2_spi3_boot_ok,
+        fpga.post_h2_spi3_boot_dropped,
+        fpga.post_h2_spi3_boot_mask
     );
 
     fpga_stock_diag_print();
@@ -2567,9 +2574,10 @@ static void cmd_meter_adc_snapshot(void)
                      (unsigned)meter_submode,
                      meter_submode_name(meter_submode),
                      meter_voltage_wave_sample_count());
-    usb_debug_printf("spi_path=%s selector_override=%d last_preacq=%02X last_selector=%02X "
+    usb_debug_printf("sampler=%s spi_path=%s selector_override=%d last_preacq=%02X last_selector=%02X "
                      "preacq_override=%d last_preacq_rx=%02X last_sample=%02X min_sample=%02X max_sample=%02X samples=%lu ff_samples=%lu "
                      "zero_samples=%lu enq_attempts=%lu enq_success=%lu enq_drops=%lu\r\n",
+                     fpga_meter_adc_sampler_enabled ? "on" : "off",
                      fpga_meter_adc_use_preacq ? "preacq" : "direct",
                      (int)fpga_meter_adc_selector_override,
                      (unsigned)fpga_meter_adc_last_preacq,
@@ -2678,8 +2686,9 @@ static void cmd_meter_wave(void)
                      meter_submode_name(meter_submode));
     usb_debug_printf("samples_total=%lu delta_250ms=%lu approx_rate=%lu Hz\r\n",
                      after, after - before, (after - before) * 4U);
-    usb_debug_printf("spi_path=%s enq=%lu ok=%lu drop=%lu samples=%lu ff=%lu zero=%lu "
+    usb_debug_printf("sampler=%s spi_path=%s enq=%lu ok=%lu drop=%lu samples=%lu ff=%lu zero=%lu "
                      "selector_mode=%d preacq_mode=%d last_pre=%02X pre_rx=%02X selector=%02X last=%02X min=%02X max=%02X\r\n",
+                     fpga_meter_adc_sampler_enabled ? "on" : "off",
                      fpga_meter_adc_use_preacq ? "preacq" : "direct",
                      fpga_meter_adc_enqueue_attempts,
                      fpga_meter_adc_enqueue_success,
@@ -2737,6 +2746,29 @@ static void cmd_meter_wave_args(const char *args)
         meter_voltage_wave_reset();
         fpga_meter_adc_diag_reset();
         usb_send_str("meter wave diagnostics reset\r\n");
+        return;
+    }
+
+    if (strncmp(args, "sampler", 7) == 0 &&
+        (args[7] == '\0' || args[7] == ' ' || args[7] == '\t')) {
+        const char *value = args + 7;
+        while (*value == ' ' || *value == '\t') value++;
+        if (*value == '\0') {
+            usb_debug_printf("meter wave sampler=%s\r\n",
+                             fpga_meter_adc_sampler_enabled ? "on" : "off");
+        } else if (strcmp(value, "on") == 0) {
+            fpga_meter_adc_sampler_enabled = true;
+            meter_voltage_wave_reset();
+            fpga_meter_adc_diag_reset();
+            usb_send_str("meter wave sampler=on\r\n");
+        } else if (strcmp(value, "off") == 0) {
+            fpga_meter_adc_sampler_enabled = false;
+            meter_voltage_wave_reset();
+            fpga_meter_adc_diag_reset();
+            usb_send_str("meter wave sampler=off\r\n");
+        } else {
+            usb_send_str("Usage: meter wave sampler [on|off]\r\n");
+        }
         return;
     }
 
@@ -2816,7 +2848,7 @@ static void cmd_meter_wave_args(const char *args)
         return;
     }
 
-    usb_send_str("Usage: meter wave [reset|path|selector|preacq]\r\n");
+    usb_send_str("Usage: meter wave [reset|sampler|path|selector|preacq]\r\n");
 }
 
 static void cmd_uptime(void)
@@ -2873,6 +2905,11 @@ static void cmd_spi3_acqtest(void)
     usb_debug_printf("SPI3 STS:   0x%08lX\r\n", *(volatile uint32_t *)0x40003C08);
     usb_debug_printf("H2 tx:   %d  bytes: %lu (no ACK proof)\r\n",
                      fpga.h2_upload_done, fpga.h2_bytes_sent);
+    usb_debug_printf("post-H2 SPI3 boot: enq=%u ok=%u drop=%u mask=0x%02X\r\n",
+                     fpga.post_h2_spi3_boot_enqueued,
+                     fpga.post_h2_spi3_boot_ok,
+                     fpga.post_h2_spi3_boot_dropped,
+                     fpga.post_h2_spi3_boot_mask);
 
     /* --- Test 1: Raw read with CS LOW (16 bytes) --- */
     usb_send_str("\r\n-- T1: Raw SPI3 read (CS low, 16x 0xFF) --\r\n");
@@ -3612,6 +3649,69 @@ static void cmd_spi3_seq(const char *args)
 }
 
 /* ═══════════════════════════════════════════════════════════════════
+ * Stock SPI3 case-8 readback probe — not a DMM correction
+ *
+ * Stock V1.2.0 `spi3_acquisition_task` dispatches queue trigger byte 9
+ * (`trigger_byte - 1 == 8`) to the block at project address 0x0803779C.  That
+ * block performs a small SPI3 readback and stores the assembled halfword at
+ * `ms+0x46` (`DAT_2000013E`).  RAM-map/decompile consumers classify that word
+ * as scope `trigger_position_sample` evidence, not H2 acceptance and not DMM
+ * range/calibration state.
+ *
+ * Keep this command diagnostic-only.  It intentionally does not patch the DMM
+ * reading, change selector words, or use the returned bytes as a coefficient.
+ * ═══════════════════════════════════════════════════════════════════ */
+static void cmd_spi3_stock_readback(void)
+{
+    uint8_t first_discard;
+    uint8_t seed_hi;
+    uint8_t cmd_0a_rx;
+    uint8_t mid_discard;
+    uint8_t low;
+    uint16_t ms46_equiv;
+
+    usb_send_str("=== Stock SPI3 Case-8 Readback Diagnostic ===\r\n");
+    usb_send_str("Stock refs: 0x0803779C..0x080378F4 stores ms+0x46; scope-shaped, not DMM apply/calibration.\r\n\r\n");
+
+    usb_debug_printf("PC0  (data-ready): %d\r\n", (GPIOC->idt & (1 << 0)) ? 1 : 0);
+    usb_debug_printf("PC6  (SPI enable): %d\r\n", (GPIOC->idt & (1 << 6)) ? 1 : 0);
+    usb_debug_printf("PB11 (active):     %d\r\n", (GPIOB->idt & (1 << 11)) ? 1 : 0);
+    usb_debug_printf("PB6  (CS idle):    %d\r\n", (GPIOB->idt & (1 << 6)) ? 1 : 0);
+
+    /*
+     * Mirror the visible stock transaction shape:
+     *   CS low:  0xFF discard, 0xFF -> high byte seed
+     *   CS high: 1 tick delay
+     *   CS low:  0x0A discard, 0xFF discard, 0xFF -> low byte
+     *
+     * The middle 0xFF read is discarded by the stock block before shifting the
+     * earlier seed into the high byte.  Printing it helps catch non-FF activity
+     * without pretending the stock app uses it for DMM state.
+     */
+    GPIOB->clr = (1 << 6);
+    first_discard = spi3_raw_xfer(0xFF);
+    seed_hi = spi3_raw_xfer(0xFF);
+    GPIOB->scr = (1 << 6);
+
+    vTaskDelay(pdMS_TO_TICKS(1));
+
+    GPIOB->clr = (1 << 6);
+    cmd_0a_rx = spi3_raw_xfer(0x0A);
+    mid_discard = spi3_raw_xfer(0xFF);
+    low = spi3_raw_xfer(0xFF);
+    GPIOB->scr = (1 << 6);
+
+    ms46_equiv = ((uint16_t)seed_hi << 8) | (uint16_t)low;
+
+    usb_debug_printf("rx first_ff_discard=%02X seed_hi=%02X cmd_0a=%02X mid_ff_discard=%02X low=%02X\r\n",
+                     first_discard, seed_hi, cmd_0a_rx, mid_discard, low);
+    usb_debug_printf("ms46_equiv=0x%04X\r\n", ms46_equiv);
+    usb_debug_printf("PC0 final: %d\r\n", (GPIOC->idt & 1) ? 1 : 0);
+    usb_send_str("Interpretation: diagnostic scope readback only; not a DMM multiplier, range writer, H2 ACK, or calibration proof.\r\n");
+    usb_send_str("=== Done ===\r\n");
+}
+
+/* ═══════════════════════════════════════════════════════════════════
  * Command Dispatcher
  * ═══════════════════════════════════════════════════════════════════ */
 
@@ -3787,6 +3887,8 @@ static void dispatch_command(char *line)
         cmd_spi3_scopetest(line[14] == ' ' ? line + 15 : "");
     } else if (strcmp(line, "spi3 acqtest") == 0) {
         cmd_spi3_acqtest();
+    } else if (strcmp(line, "spi3 stock-readback") == 0) {
+        cmd_spi3_stock_readback();
     } else if (strcmp(line, "spi3 h2txdiag") == 0 ||
                strcmp(line, "spi3 h2verify") == 0) {
         cmd_spi3_h2txdiag();

@@ -55,7 +55,9 @@ GPIOB_BSRR = 0x40;  // 0x40010C10: PB6 HIGH (CS deassert)
 ### Step 4: SPI3 peripheral init
 
 ```c
-// Init params: 0x100 (prescaler /4?), 0x1010100 (Mode 3 + master + 8bit?)
+// Init params: 0x00000100 and 0x01010100.
+// Byte-grounded at 0x080265CE and 0x080265D4; decoded by the stock SPI
+// helper as full-duplex master, Mode 3, 8-bit, MSB-first, software NSS, /2.
 FUN_0803a848(&SPI3_CTRL1, init_params);  // SPI3 base = 0x40003C00
 
 // Enable DMA request lines
@@ -96,17 +98,34 @@ mysterious clock-only synchronization phase:
 
 ```text
 0x0802676E.. phase-7 handshake:
-  00 05 00 00          ; sync/query group
+  CS_HI 00
+  CS_LO 05 00
+  CS_HI 00             ; sync/query group
   delay
-  12 00 00             ; second command group
+  CS_LO 12 00
+  CS_HI 00             ; second command group
   delay
-  15 00 00 3B          ; third command group plus H2 bulk-start opcode
+  CS_LO 15 00
+  CS_HI 00
+  CS_LO 3B             ; third command group plus H2 bulk-start opcode
 ```
 
 The exact GPIO chip-select edges are still tracked through the stock CS writes,
 not inferred from RX contents. `0x3B` is the SPI3 session opcode that enters H2
 bulk-write mode; it is not a USART2 command and it is not present inside the H2
 table itself.
+
+The stock pre-H2 CS edges are binary-guarded by
+`scripts/test_stock_h2_table.py`: `0x0802676E` deasserts PB6 CS before the
+first `0x00`, `0x080267B0` asserts CS before `0x05`, and `0x08026AE6`
+asserts CS before `0x3B`. The older unframed preamble model was a stale note,
+not stock evidence.
+
+The same guard also pins the immediate pre-delay order:
+`0x080265E8..0x0802660C` sets SPI3 CTRL2 bits and SPE first,
+`0x0802661C..0x0802663C` configures/drives PC6 high second, and only then does
+stock enter the SysTick delay before `0x0802676E`. That ordering is a stock
+boot fact, not an H2 acceptance proof.
 
 ### Step 8: H2 bulk table upload
 
@@ -149,11 +168,11 @@ calibration correctness.
 
 ```c
 // Stock-resolved post-H2 sequence:
+//   CS deassert; TX 0x00
+//   CS assert; TX 0x3A; TX 0x00
+//   CS deassert; TX 0x00
 //   CS assert; TX 0x00; CS deassert
-//   TX 0x3A; TX 0x00
-//   CS assert; TX 0x00; CS deassert
-//   TX 0x00
-//   CS assert; TX 0x00 final flush
+//   TX 0x00 final visible flush
 ```
 
 The resolved stock note pins these offsets:
@@ -162,26 +181,37 @@ The resolved stock note pins these offsets:
 0x08026AE6: PB6 CS assert before H2 start
 0x08026B06..0x08026B08: send 0x3B
 0x08026B7C..0x08026C30: 38,546 x 3-byte H2 records
-0x08026C96..0x08026C98: send 0x3A
-0x08026CD2: send 0x00 flush
+0x08026C32: PB6 CS deassert
+0x08026C54: send 0x00 flush with CS HIGH
+0x08026C76: PB6 CS assert
+0x08026C96..0x08026C98: send 0x3A with CS LOW
+0x08026CD2: send 0x00 flush with CS LOW
 0x08026CF6: PB6 CS deassert
+0x08026D18: send 0x00 flush with CS HIGH
+0x08026D3A: PB6 CS assert
+0x08026D5C: send 0x00 flush with CS LOW
+0x08026D7E: PB6 CS deassert
+0x08026DA8: send 0x00 final visible flush with CS HIGH
 ```
 
-### Step 10: USART2 boot commands
+### Step 10: post-H2 SPI3 queue triggers
 
 ```c
-// Queue USART2 commands via FUN_0803ecf0 (queue send):
-FUN_0803ecf0(queue, 1, ...);  // command 0x01: channel init
-FUN_0803ecf0(queue, 2, ...);  // command 0x02: siggen setup  
-FUN_0803ecf0(queue, 6, ...);  // command 0x06: siggen setup
-FUN_0803ecf0(queue, 7, ...);  // command 0x07: meter probe detect
-FUN_0803ecf0(queue, 8, ...);  // command 0x08: meter configure
+// Queue SPI3 acquisition triggers to 0x20002D78 via xQueueGenericSend:
+trigger = 1; xQueueGenericSend(*(0x20002D78), &trigger, ...);
+trigger = 2; xQueueGenericSend(*(0x20002D78), &trigger, ...);
+trigger = 6; xQueueGenericSend(*(0x20002D78), &trigger, ...);
+trigger = 7; xQueueGenericSend(*(0x20002D78), &trigger, ...);
+trigger = 8; xQueueGenericSend(*(0x20002D78), &trigger, ...);
 ```
+
+The byte/target extraction is guarded by `scripts/test_stock_h2_table.py`.
+These are not USART2/DVOM wire commands and not DMM multiplier coefficients.
 
 ### Step 11: PC4 conditional set
 
 ```c
-// 0x08026E2E..0x08026E8A, after USART2 commands 1,2,6,7,8
+// 0x08026E2E..0x08026E8A, after SPI3 triggers 1,2,6,7,8 are queued
 CRM_APB2EN |= 0x10;  // GPIOC clock enable
 // Configure PC4 as output
 if (DAT_2000010f == 2) {
@@ -213,7 +243,7 @@ proves which PC4 level should be driven and what that level changes.
 | Handshake/start bytes | ✅ `00 05 00 00`, `12 00 00`, `15 00 00 3B` | ✅ same byte groups | ✅ |
 | H2 bulk upload | ✅ 38,546 x 3-byte records | ✅ same table and 3-byte loop | ✅ TX only |
 | Post-upload CS/`3A`/flush sequence | ✅ CS edges plus `3A`/flush | ✅ mirrored in `fpga.c` | ✅ TX only |
-| USART2 commands 1,2,6,7,8 | ✅ After SPI3/H2 complete | ✅ deferred until after H2 cleanup | ✅ |
+| Post-H2 SPI3 queue triggers 1,2,6,7,8 | ✅ queued to `0x20002D78` after SPI3/H2 complete | ✅ queued to `spi3_acq_queue`; not sent as USART | partial |
 | PC4 conditional set | ✅ `0x08026E2E..0x08026E8A`, based on `DAT_2000010f` / `ms[0x17]` (`trigger_run_mode`) | documented unresolved; no open PC4 write yet | gap |
 
 ## Remaining Gap

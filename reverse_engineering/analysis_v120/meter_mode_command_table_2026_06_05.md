@@ -353,6 +353,85 @@ It still does not recover a DMM-specific `ms[0x02]`/
 `ms[0x03]` analog range writer, exact settle/discard counts, or any factory
 calibration acceptance/apply proof.
 
+Open firmware correction, 2026-06-06: the local transition drain now follows
+the stock USART gate more closely.  During `fpga_meter_reset_transport()` it
+clears USART2 `CTRL1` bit `0x2000` (`UEN`) while suspending `dvom_TX`/
+`dvom_RX`, resetting the TX/data queues, and clearing PC11, then restores UEN
+and RX interrupt enable before resuming the DVOM tasks.  This is grounded by
+the `0x0800741A` disable/suspend/drain slice and the `0x08007360` enable/resume
+tail above.  It is a transition-cleanliness fix, not a recovered analog
+`ms[0x02]`/`ms[0x03]` writer and not a decoder multiplier.
+
+### Command-Dispatch Queue Boundary, 2026-06-06
+
+The stock FPGA/display dispatcher at `0x08036A50` consumes one-byte commands from
+queue handle `0x20002D6C`. In the downloaded V1.2.0 APP image the literal table
+surface named in older notes, `0x0804BE74`, is not itself a callable Thumb table:
+
+```text
+0x08036A50 dispatcher loop prefix:
+  82 b0 42 f6 6c 55 4b f6 74 66 42 f6 80 57
+  40 f2 f8 08 c2 f2 00 05 0d f1 07 04 c0 f6
+  04 06 c2 f2 00 07 c2 f2 00 08 04 e0 9d f8
+  07 00 56 f8 20 00 80 47
+
+0x0804BE74 literal/shadow surface:
+  00000000 00400000 00000000 00000400
+  00000000 00008000 00000000 00000000
+
+0x08044E74 normalized callable-looking table prefix:
+  0800fd39 0800fe9d 080104ed 08010d71
+  08011b75 08012245 08012345 08012479
+```
+
+`scripts/test_stock_meter_literals.py` now guards those bytes and the normalized
+table prefix as a queue-boundary check. This keeps `0x20002D6C` classified as a
+one-byte dispatcher/update queue. It is not the final wire queue that formats
+10-byte USART2 TX frames. The final raw USART/DVOM halfword path remains the
+separate queue `0x20002D74`, guarded at `0x080373F4`.
+
+This distinction is not cosmetic. `FUN_0800B908` command-bank bytes such as
+`0x1A..0x1E` are stock-visible byte-dispatch inputs; they are not automatically
+stock-proven raw UART words for DMM boot/range setup unless a recovered
+materializer bridges them to `0x20002D74`.
+
+The obvious next hypothesis, "maybe the normalized `0x1A..0x1E` handlers are
+that materializer," is now a guarded negative. The normalized table entries are
+real:
+
+```text
+0x1A -> 0x08010A1C
+0x1B -> 0x08010A94
+0x1C -> 0x08010B80
+0x1D -> 0x08010C78
+0x1E -> 0x08010E70
+```
+
+But their bodies are display-buffer writers around RAM `0x20008350`, not the
+raw USART/DVOM queue.  Representative guarded snippets:
+
+```text
+0x1B handler body:
+  48 f2 50 35 c2 f2 00 05 03 eb 47 03 a3 f8 3a 11
+  ; materializes 0x20008350 and stores a halfword at display-buffer offset 0x13A
+
+0x1C handler body:
+  48 f2 50 35 c2 f2 00 05 03 eb 47 03 a3 f8 3c 11
+  ; display-buffer offset 0x13C
+
+0x1D handler body:
+  48 f2 50 35 c2 f2 00 05 03 eb 47 03 a3 f8 40 11
+  ; display-buffer offset 0x140
+
+0x1E handler body:
+  48 f2 50 35 c2 f2 00 05 03 eb 47 03 a3 f8 42 11
+  ; display-buffer offset 0x142
+```
+
+Those handlers do not touch queue `0x20002D74`, do not format USART2 command
+frames, and do not write `ms[0x02]`/`ms[0x03]`. They are therefore not the
+missing DMM range/frontend bridge for the live low-DCV failure.
+
 ### Boot Mode-Init DMM Sequence Guard, 2026-06-06
 
 `FUN_0800B908` is the stock mode-init dispatcher. It reads `ms[0xF68]`, loads
@@ -413,6 +492,14 @@ bytes: it ties each command bank to the state byte that selects it. It remains a
 narrow boundary. `ms[0xF68]` selects mode-init command banks; it is not DMM
 `ms[0x02]`/`ms[0x03]` analog mux state, not raw `0x05xx` selector words, not a
 factory coefficient, and not low-DCV calibration.
+
+As of the 2026-06-06 live failure follow-up, the open firmware no longer replays
+the state-1 `0x1A..0x1E` bank as zero-parameter raw USART frames during DMM
+boot. That replay conflated the command-byte queue surface (`0x20002D6C`) with
+the raw halfword USART path (`0x20002D74`). Scope runtime may still project live
+UI state into the `0x1A..0x1E` raw command family, but DMM boot/setup must stay
+limited to stock-proven `0x05xx` raw words until a stock bridge proves
+otherwise.
 
 The non-meter-looking banks in the same `TBH` table are guarded as an overlap
 boundary, not as new DMM ranges:
@@ -1311,6 +1398,14 @@ capacitance/temperature, or a low-DCV physical range. A future change must
 update the stock-offset evidence, this table, and the unit tests together
 instead of reacting to a surprising reading with decoder-side coefficients.
 
+2026-06-06 live negative check on the current diagnostic build: DCV stayed at
+`0.4335..0.4336 V` from raw frames while PB10 was manually toggled from the
+projected DCV low level to high and then restored low. That rules out the
+simple stock-arm-0-versus-arm-1 PB10 gain-bit hypothesis for the observed
+low-DCV mismatch on this setup. It is not proof that `porta_portb_mux == 0` is
+the final DMM runtime truth; it only says the one-bit PB10 variation did not
+change the live meter IC frame.
+
 ### Auxiliary AFE PB9/PA6 Guard, 2026-06-06
 
 The stock master-init sequence leaves PB9 and PA6 configured as outputs only,
@@ -1322,6 +1417,12 @@ either pin. The guarded stock bytes are:
   4f f4 00 70 18 90 28 46 21 46 0c f0 8d f8
   40 20 18 90 40 f6 00 00 c4 f2 01 00 21 46 0c f0 84 f8
 ```
+
+2026-06-06 live negative check on the same low-DCV bench state: setting PB9
+and PA6 high together left the raw DCV frame essentially unchanged
+(`0.4335..0.4336 V`), then both pins were restored low. This keeps PB9/PA6 as
+unresolved auxiliary AFE pins, but it removes the old "assert both high" bench
+folklore as an immediate low-DCV fix.
 
 This starts with the PB9 pin mask `0x0200`, calls `gpio_pin_config`
 (`FUN_080302FC`) on the GPIOB base saved in `r5`, then loads the PA6 pin mask
@@ -1459,6 +1560,42 @@ Both contexts prove the same index-selected pair write is immediately followed
 by the matching Port C/E or Port A/B mux writer and command `4` enqueue. That is
 why these are kept as scope/siggen autorange paths and negative DMM evidence,
 not as hidden DMM range switching.
+
+### Mux-State Absolute Direct Store Guard, 2026-06-06
+
+The raw binary also has direct stores after materializing the absolute
+`0x200000F8` meter/scope state base. These are not all visible as literal
+`DAT_200000fa` assignments in `full_decompile.c`, so the stock-surface guard
+now pins the raw Thumb byte sequences as well:
+
+```text
+0x08005B56..0x08005DA4:
+  state-2 active/scope helper resets `ms[0x02]=0` at `0x08005C52`
+  and later resets `ms[0x03]=0` at `0x08005DA4`;
+  no adjacent `FUN_080018A4` call; not DMM-owned runtime range proof.
+
+0x0800695A..0x08006BC6:
+  scope/active normalizer sets `ms[0x02]=7` at `0x08006ACA`
+  and later sets `ms[0x03]=7` at `0x08006BC6`;
+  writes GPIO-like registers in the same block, but no DMM selector/raw-word
+  owner is recovered.
+
+0x08006F5C..0x080070E8:
+  scope/active normalizer resets `ms[0x02]=0` at `0x08006FF4`
+  and later resets `ms[0x03]=0` at `0x080070E8`;
+  not a low-DCV correction and not a recovered DMM-owned runtime range writer.
+
+0x08025D94..0x08025DC2:
+  saved-config boot/restore stores `ms[0x02]` at `0x08025DBC` and
+  `ms[0x03..0x06]` at `0x08025DC2`; persistence/restore only.
+```
+
+This is raw-binary evidence beyond the text-decompile refs. Direct mux-byte
+writes are not absent; they are classified. The recovered direct stores are
+scope/active-mode mux-state pair seeds or saved-config restore state, not a DMM-owned
+runtime writer for user function/range transitions. Future low-DCV work must
+recover an owner/trace tying a direct store to DMM selector/range state before
+using it as a frontend fix.
 
 The scope-submode mux call guard now pins the two explicit scope reconfiguration
 sites that were previously only present in the broad direct-BL list. Both sites

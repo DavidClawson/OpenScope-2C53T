@@ -35,8 +35,10 @@ only. Low-Ohm and low-DCV correctness still require a recovered ACK/apply condit
 stock runtime trace, or guarded bench evidence across multiple ranges.
 
 **Highest-confidence replay target:** the full 115,638-byte range at file offsets
-`0x51D19`–`0x6E0CF`, sent as 38,546 × 3-byte records via SPI3 between opcode 0x3B and
-opcode 0x3A, with CS (PB6) held LOW for the entire transaction.
+`0x51D19`–`0x6E0CF`, sent as 38,546 × 3-byte records via SPI3 after opcode 0x3B.
+Stock then deasserts PB6 CS for one `0x00` flush, reasserts PB6 CS, sends the
+close opcode `0x3A` with CS LOW, sends a `0x00` flush, and performs the remaining
+CS/zero flushes documented in §6.
 
 **Acceptance/effect boundary, updated 2026-06-06:** byte count and source table
 are proven; FPGA acceptance and DMM calibration effect are not. Stock drains or
@@ -226,9 +228,17 @@ Then, **NOT in the 53-step sequence doc**:
    - **CS ASSERT** (PB6 LOW): `str 0x40, [GPIOB_BCR]` at `0x08026AE6`
    - **Send `0x3B`** (bulk start opcode): `0x08026B06`–`0x08026B08`
    - **Loop** (`0x08026B7C`–`0x08026C30`): 38,546 iterations, 3 bytes each = 115,638 bytes
-   - **Drain RX then send `0x3A`** (bulk end opcode): `0x08026C96`–`0x08026C98`
-   - **Send `0x00`** flush: `0x08026CD2`
+   - **CS DEASSERT** (PB6 HIGH): `str 0x40, [GPIOB_BOP]` at `0x08026C32`
+   - **Send `0x00`** flush with CS HIGH: `0x08026C52`–`0x08026C54`
+   - **CS ASSERT** (PB6 LOW): `str 0x40, [GPIOB_BCR]` at `0x08026C76`
+   - **Send `0x3A`** (bulk end opcode) with CS LOW: `0x08026C96`–`0x08026C98`
+   - **Send `0x00`** flush with CS LOW: `0x08026CD2`–`0x08026CD4`
    - **CS DEASSERT** (PB6 HIGH): `str 0x40, [GPIOB_BOP]` at `0x08026CF6`
+   - **Send `0x00`** flush with CS HIGH: `0x08026D16`–`0x08026D18`
+   - **CS ASSERT** (PB6 LOW): `str 0x40, [GPIOB_BCR]` at `0x08026D3A`
+   - **Send `0x00`** flush with CS LOW: `0x08026D5A`–`0x08026D5C`
+   - **CS DEASSERT** (PB6 HIGH): `str 0x40, [GPIOB_BOP]` at `0x08026D7E`
+   - **Send `0x00`** final visible flush with CS HIGH: `0x08026D9E`–`0x08026DA8`
 
 Then continues to step 46 (DMA configuration for SPI3 bulk transfers).
 
@@ -243,23 +253,26 @@ relative negative offsets.
 
 ## 7. Verdict on the Three Hypotheses
 
-### H(a): FPGA Meter IC Calibration LUT — **MOST LIKELY**
+### H(a): FPGA Meter/Frontend Register Table — **PLAUSIBLE, EFFECT UNPROVEN**
 
-The data programs the FPGA's internal meter ADC pipeline. Evidence:
+The data plausibly programs FPGA/internal frontend state. Evidence:
 
 - **Size is compatible**: the high-entropy tail (offset `0x15000+` in the data) likely
-  contains the dense calibration coefficients. The 65% zero-padded majority provides
+  contains dense register-like material. The 65% zero-padded majority provides
   defaults for unused registers.
 - **The `FF FF FF` sentinels** occur every 160 bytes = plausible block-structured
   register map (e.g., one 160-byte block per measurement range or per ADC channel).
-  A meter ASIC register file structured this way is common.
-- **The 33% gain error** when the transfer is skipped is mechanistically consistent
-  with a missing ADC gain factor. If the FPGA's DSP pipeline has a default gain of 1
-  and the correct gain (for low-Ohm mode) is ~3, the result would be reading 33% of
-  actual — exactly the observed symptom.
-- **PA6 bracket** (analog frontend control pin) drops LOW immediately before `0x3B`
-  and returns HIGH after. This gates the analog signal path for calibration, suggesting
-  the transfer programs something that interacts with the analog frontend.
+  A register file structured this way is plausible.
+- The local firmware now transmits the full byte count, but live low-DCV still reads
+  wrong (`0.200 V` source visible while OpenScope reports about `0.433 V`).  Therefore
+  byte-count replay is not calibration-effect proof.
+- Stock drains SPI3 RX/MISO during the H2 body (`0x08026B26`, `0x08026B76`,
+  `0x08026BB6`, `0x08026BF6`) without a recovered compare/store/branch on those
+  bytes. No ACK/apply status has been recovered from the H2 body.
+- The older PA6-toggle interpretation was a GPIO base arithmetic misread. With
+  `r4 = 0x40011000`, writes through negative offsets land on GPIOB BCR/BOP
+  (`0x40010C14` / `0x40010C10`), controlling PB6 SPI3 CS. There is no separate
+  PA6 analog frontend toggle in this H2 bracket.
 
 ### H(b): FPGA Bitstream / Config — **RULED OUT**
 
@@ -274,13 +287,15 @@ further rules this out.
 
 The transfer does initialize FPGA internal state, and some of that state may affect scope
 mode too (e.g., ADC sampling parameters, trigger threshold DACs). But "generic setup" is
-too broad — the PA6 bracket, the position in the init sequence (after meter-mode
-commands), and the 33% gain error all point specifically at the meter ADC pipeline as the
-primary target.
+too broad: the position in the init sequence and the block/register-like structure still
+make meter/frontend setup plausible. Current evidence does not prove that the table is a
+DMM calibration coefficient source or that replaying it has been accepted/applied by the
+FPGA.
 
-**Verdict: The bulk transfer is FPGA meter-IC calibration and ADC-pipeline
-initialization, stored in flash as a pre-computed register-write sequence. Confidence:
-MEDIUM-HIGH.**
+**Verdict: The bulk transfer is a byte-exact SPI3 register/setup sequence that may
+affect meter/frontend behavior, but stock-visible evidence currently proves TX framing
+only. FPGA acceptance, commit/apply status, and DMM low-DCV/low-Ohm calibration effect
+remain unresolved.**
 
 ---
 
@@ -312,10 +327,21 @@ readings without breaking scope or signal-gen modes.
        spi3_tx_byte(*p++);                        // byte 2
        spi3_drain_rx();                           // discard MISO (3 bytes)
    }
+   gpio_bits_set(GPIOB, GPIO_PINS_6);             // PB6 HIGH = CS DEASSERT
+   spi3_tx_byte(0x00);                            // high-CS flush
+   spi3_drain_rx();                               // drain
+   gpio_bits_reset(GPIOB, GPIO_PINS_6);           // PB6 LOW = CS ASSERT
    spi3_tx_byte(0x3A);                            // opcode: end bulk write
-   spi3_tx_byte(0x00);                            // flush byte
+   spi3_tx_byte(0x00);                            // low-CS flush byte
    spi3_drain_rx();                               // drain
    gpio_bits_set(GPIOB, GPIO_PINS_6);             // PB6 HIGH = CS DEASSERT
+   spi3_tx_byte(0x00);                            // high-CS flush
+   spi3_drain_rx();                               // drain
+   gpio_bits_reset(GPIOB, GPIO_PINS_6);           // PB6 LOW = CS ASSERT
+   spi3_tx_byte(0x00);                            // low-CS flush
+   spi3_drain_rx();                               // drain
+   gpio_bits_set(GPIOB, GPIO_PINS_6);             // PB6 HIGH = CS DEASSERT
+   spi3_tx_byte(0x00);                            // final visible flush
    ```
 
 3. **Bench test sequence:**

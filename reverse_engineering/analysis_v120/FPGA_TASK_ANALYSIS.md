@@ -490,7 +490,7 @@ vTaskDelay(10);
 
 Our test firmware was missing:
 1. The **PB11 HIGH** signal (FPGA active mode — set in mode_switch handler)
-2. The **full USART boot command sequence** (commands 0x01-0x08 sent before SPI3)
+2. The post-H2 SPI3 trigger queue sequence (`1,2,6,7,8` queued to `0x20002D78`, not sent as USART)
 3. The **correct trigger mechanism**: data reads are initiated by queue events from `input_and_housekeeping`, not by polling
 4. The **SysTick delay timing** between boot phases
 

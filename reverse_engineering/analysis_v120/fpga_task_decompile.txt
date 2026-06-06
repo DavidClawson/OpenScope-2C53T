@@ -8,7 +8,7 @@ FUNCTION MAP:
 ------------------------------------------------------------------------------
   0x08036934-0x08036A4E  (  282 bytes)  spi_flash_loader
     SPI flash bulk read (4KB pages, addr << 12)
-  0x08036A50-0x08036ABC  (  108 bytes)  usart_cmd_dispatcher
+  0x08036A50-0x08036ABC  (  108 bytes)  byte_command_dispatcher
     USART command queue dispatch loop
   0x08036AC0-0x080371B0  ( 1776 bytes)  meter_data_processor
     Meter USART RX frame decode + measurement math (VFP heavy)
@@ -89,22 +89,29 @@ check_write:
 
 
 // ============================================================================
-// FUN_08036A50: usart_cmd_dispatcher
+// FUN_08036A50: byte_command_dispatcher
 // 0x08036A50 - 0x08036ABC
-// FreeRTOS task loop: receives USART commands from queue, dispatches via table
+// FreeRTOS task loop: receives one-byte dispatcher/update commands from queue.
+// Boundary note, 2026-06-06: 0x20002D6C is not the raw USART/DVOM wire-word
+// queue. Raw halfwords are consumed separately by dvom_TX at 0x080373F4 from
+// 0x20002D74. The literal surface loaded here is 0x0804BE74; in the downloaded
+// APP image it is not a callable Thumb table, while the callable-looking
+// normalized table starts at 0x08044E74. Do not promote command-bank bytes such
+// as FUN_0800B908's 0x1A..0x1E into raw DMM UART frames without a recovered
+// stock materializer bridge to 0x20002D74.
 // ============================================================================
-void usart_cmd_dispatcher(void) {
-    // r5 = &RAM[0x20002D6C]  (usart_cmd_queue_ptr)
-    // r6 = 0x0804BE74        (usart_cmd_dispatch_table)
+void byte_command_dispatcher(void) {
+    // r5 = &RAM[0x20002D6C]  (byte_command_queue_ptr)
+    // r6 = 0x0804BE74        (literal dispatch surface; normalized at 0x08044E74)
     // r7 = &RAM[0x20002D80]  (spi3_rx_queue_handle)
     // r8 = &meter_state      (0x200000F8)
 
     uint8_t cmd_byte;
     while (1) {
         // Try non-blocking receive
-        if (xQueueReceive(*usart_cmd_queue_ptr, &cmd_byte, 0) == pdTRUE) {
+        if (xQueueReceive(*byte_command_queue_ptr, &cmd_byte, 0) == pdTRUE) {
             // Dispatch: load function pointer from table indexed by cmd_byte
-            void (*handler)(void) = usart_cmd_dispatch_table[cmd_byte];
+            void (*handler)(void) = byte_command_dispatch_table[cmd_byte];
             handler();  // blx r0
             continue;
         }
@@ -118,8 +125,8 @@ void usart_cmd_dispatcher(void) {
         }
 
         // Blocking receive (wait forever)
-        if (xQueueReceive(*usart_cmd_queue_ptr, &cmd_byte, portMAX_DELAY) == pdTRUE) {
-            void (*handler)(void) = usart_cmd_dispatch_table[cmd_byte];
+        if (xQueueReceive(*byte_command_queue_ptr, &cmd_byte, portMAX_DELAY) == pdTRUE) {
+            void (*handler)(void) = byte_command_dispatch_table[cmd_byte];
             handler();
         }
     }
@@ -1045,11 +1052,11 @@ void usart_tx_config_writer(uint8_t *config_base, uint8_t *params) {
     0x08036A56:  movw       r6, #0xbe74                             
     0x08036A5A:  movw       r7, #0x2d80                             
     0x08036A5E:  movw       r8, #0xf8                               
-  // r5 = 0x20002D6C = usart_cmd_queue_ptr
-    0x08036A62:  movt       r5, #0x2000                               // = 0x20002D6C (usart_cmd_queue_ptr)
+  // r5 = 0x20002D6C = byte_command_queue_ptr, not raw 0x20002D74 wire-word queue
+    0x08036A62:  movt       r5, #0x2000                               // = 0x20002D6C (byte_command_queue_ptr)
     0x08036A66:  add.w      r4, sp, #7                              
-  // r6 = 0x0804BE74 = usart_cmd_dispatch_table
-    0x08036A6A:  movt       r6, #0x804                                // = 0x0804BE74 (usart_cmd_dispatch_table)
+  // r6 = 0x0804BE74 = literal dispatch surface; callable-looking normalized table is 0x08044E74
+    0x08036A6A:  movt       r6, #0x804                                // = 0x0804BE74 (literal dispatch surface)
   // r7 = 0x20002D80 = spi3_rx_queue_handle
     0x08036A6E:  movt       r7, #0x2000                               // = 0x20002D80 (spi3_rx_queue_handle)
   // r8 = 0x200000F8 = meter_state
@@ -2989,8 +2996,8 @@ void usart_tx_config_writer(uint8_t *config_base, uint8_t *params) {
     0x08037CC0:  bic        r0, r0, #1                              
     0x08037CC4:  str        r0, [r1]                                
     0x08037CC6:  movw       r0, #0x2d6c                             
-  // r0 = 0x20002D6C = usart_cmd_queue_ptr
-    0x08037CCA:  movt       r0, #0x2000                               // = 0x20002D6C (usart_cmd_queue_ptr)
+  // r0 = 0x20002D6C = byte_command_queue_ptr, not raw 0x20002D74 wire-word queue
+    0x08037CCA:  movt       r0, #0x2000                               // = 0x20002D6C (byte_command_queue_ptr)
     0x08037CCE:  ldr        r0, [r0]                                
     0x08037CD0:  movs       r1, #2                                  
     0x08037CD2:  strb.w     r1, [sp, #0x37]                         

@@ -132,6 +132,92 @@ EXPECTED_MUX_STATE_PAIR_WRITE_CONTEXTS = {
         (8753, "FUN_0803acf0(_DAT_20002d6c,&local_6b,0xffffffff);"),
     ],
 }
+EXPECTED_MUX_STATE_ABSOLUTE_DIRECT_STORE_SEQUENCES = {
+    "dynamic_helper_state2_mux_pair_zero": {
+        "base_setup": (
+            0x08005B56,
+            "40 f2 f8 05 c2 f2 00 05 95 f8 68 0f 02 28 5c d0",
+        ),
+        "store_spans": [
+            (
+                0x08005C40,
+                "29 78 4f f4 80 52 85 f8 31 10 00 21 29 70 c8 f8 00 20 a9 70",
+            ),
+            (
+                0x08005D90,
+                "00 21 4f f4 00 52 69 70 c8 f8 00 20 40 f6 10 02 c4 f2 01 02 e9 70",
+            ),
+        ],
+        "store_instructions": ["0x08005C52", "0x08005DA4"],
+        "writes": "ms[0x02]=0, ms[0x03]=0",
+        "classification": (
+            "mode-state 2 active/scope formatter helper reset; direct mux-state "
+            "pair seed only, no adjacent gpio_mux_portc_porte call, not "
+            "DMM-owned runtime range proof"
+        ),
+    },
+    "scope_active_normalizer_mux_pair_seven": {
+        "base_setup": (
+            0x0800695A,
+            "40 f2 f8 09 c2 f2 00 09 99 f8 68 0f 03 28 3b d0 02 28",
+        ),
+        "store_spans": [
+            (
+                0x08006ABC,
+                "01 20 89 f8 00 00 4f f4 80 50 07 21 20 60 89 f8 02 10",
+            ),
+            (
+                0x08006BB8,
+                "01 20 89 f8 01 00 4f f4 00 50 20 60 07 20 89 f8 03 00",
+            ),
+        ],
+        "store_instructions": ["0x08006ACA", "0x08006BC6"],
+        "writes": "ms[0x02]=7, ms[0x03]=7",
+        "classification": (
+            "scope/active-mode normalizer direct mux-state pair seed; writes "
+            "GPIO-like registers in the same block, but no DMM selector/raw-word "
+            "owner is recovered"
+        ),
+    },
+    "scope_active_normalizer_mux_pair_zero": {
+        "base_setup": (
+            0x08006F5C,
+            "40 f2 f8 06 c2 f2 00 06 96 f8 68 0f 02 28 18 bf bd e8 f0 87",
+        ),
+        "store_spans": [
+            (
+                0x08006FEA,
+                "00 20 4f f4 80 51 30 70 29 60 b0 70 10 20 c9 f8 00 10",
+            ),
+            (
+                0x080070DE,
+                "00 20 4f f4 00 51 70 70 29 60 f0 70",
+            ),
+        ],
+        "store_instructions": ["0x08006FF4", "0x080070E8"],
+        "writes": "ms[0x02]=0, ms[0x03]=0",
+        "classification": (
+            "scope/active-mode normalizer direct mux-state pair seed; not a "
+            "low-DCV correction and not a recovered DMM runtime range writer"
+        ),
+    },
+    "saved_config_live_ms02_ms03_store": {
+        "base_setup": (
+            0x08025D94,
+            "40 f2 f8 0a c1 b2 55 29 c2 f2 00 0a 05 d0 aa 29 40 f0 f8 81",
+        ),
+        "store": (
+            0x08025DA8,
+            "08 21 8a f8 68 1f 01 0a 02 0c 00 0e 8a f8 00 10 8a f8 01 20 8a f8 02 00 60 68 ca f8 03 00",
+        ),
+        "store_instructions": ["0x08025DBC", "0x08025DC2"],
+        "writes": "saved word bytes -> ms[0x02] and ms[0x03..0x06]",
+        "classification": (
+            "saved-config boot/restore direct live mux stores; not normal "
+            "runtime DMM range switching"
+        ),
+    },
+}
 EXPECTED_MODE_STATE_RAM_MAP_REF = {
     "symbol": "DAT_20001060",
     "addr": "0x20001060",
@@ -1003,6 +1089,51 @@ EXPECTED_BOOT_MODE_INIT_DMM_DIRECT_CALLS = [
     0x08005572,
     0x080271F8,
 ]
+EXPECTED_COMMAND_DISPATCH_QUEUE_BOUNDARY = {
+    "dispatcher_loop": (
+        0x08036A50,
+        bytes.fromhex(
+            "82 b0 42 f6 6c 55 4b f6 74 66 42 f6 80 57 "
+            "40 f2 f8 08 c2 f2 00 05 0d f1 07 04 c0 f6 "
+            "04 06 c2 f2 00 07 c2 f2 00 08 04 e0 9d f8 "
+            "07 00 56 f8 20 00 80 47"
+        ),
+    ),
+    "literal_shadow": (
+        0x0804BE74,
+        bytes.fromhex(
+            "00 00 00 00 00 00 40 00 00 00 00 00 00 04 00 00 "
+            "00 00 00 00 00 80 00 00 00 00 00 00 00 00 00 00"
+        ),
+    ),
+    "normalized_callable_table": (
+        0x08044E74,
+        [
+            0x0800FD39,
+            0x0800FE9D,
+            0x080104ED,
+            0x08010D71,
+            0x08011B75,
+            0x08012245,
+            0x08012345,
+            0x08012479,
+        ],
+    ),
+    "dmm_tempting_display_entries": {
+        0x1A: {"word": 0x08010A1D, "target": 0x08010A1C},
+        0x1B: {"word": 0x08010A95, "target": 0x08010A94},
+        0x1C: {"word": 0x08010B81, "target": 0x08010B80},
+        0x1D: {"word": 0x08010C79, "target": 0x08010C78},
+        0x1E: {"word": 0x08010E71, "target": 0x08010E70},
+    },
+    "display_writer_snippets": {
+        0x1A: "48 f2 50 35 c2 f2 00 05 03 eb 47 03 a3 f8 3a 11",
+        0x1B: "48 f2 50 35 c2 f2 00 05 03 eb 47 03 a3 f8 3a 11",
+        0x1C: "48 f2 50 35 c2 f2 00 05 03 eb 47 03 a3 f8 3c 11",
+        0x1D: "48 f2 50 35 c2 f2 00 05 03 eb 47 03 a3 f8 40 11",
+        0x1E: "48 f2 50 35 c2 f2 00 05 03 eb 47 03 a3 f8 42 11",
+    },
+}
 EXPECTED_BOOT_MODE_INIT_DMM_TBH_STATE_MAP = {
     0: {
         "target": 0x0800B93E,
@@ -1033,7 +1164,11 @@ EXPECTED_BOOT_MODE_INIT_DMM_TBH_STATE_MAP = {
             "1d 21 28 68",
             "1e 20",
         ],
-        "classification": "state 1 queues the basic meter probe plus 0x1A..0x1E bank",
+        "classification": (
+            "state 1 queues the basic meter probe plus 0x1A..0x1E bank to "
+            "the 0x20002D6C byte dispatcher only; not raw 0x20002D74 replay "
+            "and not DMM physical range proof"
+        ),
     },
     2: {
         "target": 0x0800BA6C,
@@ -2041,6 +2176,52 @@ def verify_mux_state_pair_write_contexts() -> dict[str, object]:
     return {"full_decompile": str(FULL_DECOMPILE.relative_to(REPO)), "contexts": checked}
 
 
+def verify_mux_state_absolute_direct_store_sequences() -> dict[str, object]:
+    """Check raw-binary direct absolute-base stores into `ms[0x02]/ms[0x03]`.
+
+    The text-decompile surface for `DAT_200000fa/fb` is useful but not enough
+    by itself: raw Thumb slices expose direct stores after materializing
+    `0x200000f8` that do not all show up as literal `DAT_200000fa` assignments
+    in `full_decompile.c`.  Guard the current direct-store surface so future
+    work cannot claim it is exhausted without classifying these stock slices.
+    The recovered direct stores are either scope/active-mode mux-byte seeds or
+    saved-config boot/restore stores; none is a recovered DMM-owned runtime
+    range writer for the low-DCV blocker.
+    """
+    checked: dict[str, dict[str, object]] = {}
+    for name, expected in EXPECTED_MUX_STATE_ABSOLUTE_DIRECT_STORE_SEQUENCES.items():
+        base_addr, base_hex = expected["base_setup"]
+        base_expected = bytes.fromhex(base_hex)
+        base_actual = read(base_addr, len(base_expected))
+        if base_actual != base_expected:
+            raise AssertionError(
+                f"{name} base setup {base_addr:#010x}: expected "
+                f"{base_expected.hex(' ')}, got {base_actual.hex(' ')}"
+            )
+        if "store_spans" in expected:
+            store_spans = expected["store_spans"]
+        else:
+            store_spans = [expected["store"]]
+        store_span_addrs = []
+        for store_addr, store_hex in store_spans:
+            store_expected = bytes.fromhex(store_hex)
+            store_actual = read(store_addr, len(store_expected))
+            if store_actual != store_expected:
+                raise AssertionError(
+                    f"{name} store {store_addr:#010x}: expected "
+                    f"{store_expected.hex(' ')}, got {store_actual.hex(' ')}"
+                )
+            store_span_addrs.append(f"{store_addr:#010x}")
+        checked[name] = {
+            "base_setup_addr": f"{base_addr:#010x}",
+            "store_span_addrs": store_span_addrs,
+            "store_instructions": expected["store_instructions"],
+            "writes": expected["writes"],
+            "classification": expected["classification"],
+        }
+    return {"sequences": checked}
+
+
 def verify_scope_measurement_engine_mux_pointer_consumer_context() -> dict[str, object]:
     """Check the `&DAT_200000fa + idx` pointer alias is read-only scope math.
 
@@ -2844,6 +3025,106 @@ def verify_boot_mode_init_dmm_sequences() -> dict[str, object]:
     }
 
 
+def verify_command_dispatch_queue_boundary() -> dict[str, object]:
+    """Guard the byte-dispatch queue separately from raw USART halfwords.
+
+    Stock `0x08036A50` consumes byte commands from `0x20002D6C` and dispatches
+    them through a table surface loaded as `0x0804BE74`. In the downloaded APP
+    image that literal address is not a callable table; the callable-looking
+    normalized table is at `0x08044E74`. Final raw USART/DVOM wire words are a
+    separate `0x20002D74` halfword queue, so the DMM path must not promote
+    `FUN_0800B908` bytes such as `0x1A..0x1E` into raw UART frames without a
+    recovered stock bridge.
+    """
+    dispatcher_addr, dispatcher_expected = EXPECTED_COMMAND_DISPATCH_QUEUE_BOUNDARY["dispatcher_loop"]
+    dispatcher_actual = read(dispatcher_addr, len(dispatcher_expected))
+    if dispatcher_actual != dispatcher_expected:
+        raise AssertionError(
+            f"command dispatcher loop {dispatcher_addr:#010x}: expected "
+            f"{dispatcher_expected.hex(' ')}, got {dispatcher_actual.hex(' ')}"
+        )
+
+    literal_addr, literal_expected = EXPECTED_COMMAND_DISPATCH_QUEUE_BOUNDARY["literal_shadow"]
+    literal_actual = read(literal_addr, len(literal_expected))
+    if literal_actual != literal_expected:
+        raise AssertionError(
+            f"literal dispatch surface {literal_addr:#010x}: expected "
+            f"{literal_expected.hex(' ')}, got {literal_actual.hex(' ')}"
+        )
+
+    literal_words = struct.unpack("<8I", literal_actual)
+    literal_thumb_pointers = [
+        value for value in literal_words
+        if (value & 1) and BASE <= (value & ~1) < BASE + BIN.stat().st_size
+    ]
+    if literal_thumb_pointers:
+        raise AssertionError(
+            "0x0804BE74 unexpectedly became a callable Thumb table: "
+            + ", ".join(f"{value:#010x}" for value in literal_thumb_pointers)
+        )
+
+    normalized_addr, normalized_expected = EXPECTED_COMMAND_DISPATCH_QUEUE_BOUNDARY["normalized_callable_table"]
+    normalized_words = list(struct.unpack("<8I", read(normalized_addr, 32)))
+    if normalized_words != normalized_expected:
+        raise AssertionError(
+            f"normalized dispatch table {normalized_addr:#010x}: expected "
+            f"{[f'{value:#010x}' for value in normalized_expected]}, got "
+            f"{[f'{value:#010x}' for value in normalized_words]}"
+        )
+
+    dmm_entries: dict[str, dict[str, str]] = {}
+    for cmd, expected in EXPECTED_COMMAND_DISPATCH_QUEUE_BOUNDARY["dmm_tempting_display_entries"].items():
+        table_word = struct.unpack("<I", read(normalized_addr + cmd * 4, 4))[0]
+        if table_word != expected["word"]:
+            raise AssertionError(
+                f"dispatch table cmd 0x{cmd:02X}: expected word "
+                f"0x{expected['word']:08X}, got 0x{table_word:08X}"
+            )
+        target = table_word & ~1
+        if target != expected["target"]:
+            raise AssertionError(
+                f"dispatch table cmd 0x{cmd:02X}: expected target "
+                f"0x{expected['target']:08X}, got 0x{target:08X}"
+            )
+        snippet = bytes.fromhex(
+            EXPECTED_COMMAND_DISPATCH_QUEUE_BOUNDARY["display_writer_snippets"][cmd]
+        )
+        body = read(target, 0x180)
+        if snippet not in body:
+            raise AssertionError(
+                f"dispatch table cmd 0x{cmd:02X}: missing display-writer "
+                f"snippet {snippet.hex(' ')} in handler body"
+            )
+        dmm_entries[f"0x{cmd:02X}"] = {
+            "word": f"0x{table_word:08x}",
+            "target": f"0x{target:08x}",
+        }
+
+    return {
+        "byte_dispatch_queue": "0x20002D6C",
+        "raw_wire_word_queue": "0x20002D74",
+        "dispatcher_loop": {
+            "addr": f"{dispatcher_addr:#010x}",
+            "bytes": dispatcher_actual.hex(" "),
+        },
+        "literal_surface": {
+            "addr": f"{literal_addr:#010x}",
+            "words": [f"{value:#010x}" for value in literal_words],
+            "classification": "not a callable Thumb table in the downloaded APP image",
+        },
+        "normalized_callable_table": {
+            "addr": f"{normalized_addr:#010x}",
+            "words": [f"{value:#010x}" for value in normalized_words],
+        },
+        "dmm_tempting_display_entries": dmm_entries,
+        "classification": (
+            "0x20002D6C is a one-byte dispatcher queue; 0x20002D74 is the "
+            "separate raw USART/DVOM halfword queue; normalized 0x1A..0x1E "
+            "handlers are display-buffer writers, not the missing DMM wire bridge"
+        ),
+    }
+
+
 def verify_boot_mode_init_dmm_tbh_state_map() -> dict[str, object]:
     """Decode the stock `FUN_0800B908` TBH state-to-command-bank map.
 
@@ -3501,6 +3782,7 @@ def main() -> None:
     saved_mode_f64 = verify_saved_mode_f64_boundary()
     mux_state_full_decompile = verify_mux_state_full_decompile_surface()
     mux_state_pair_write_contexts = verify_mux_state_pair_write_contexts()
+    mux_state_absolute_direct_stores = verify_mux_state_absolute_direct_store_sequences()
     scope_measurement_mux_pointer_context = (
         verify_scope_measurement_engine_mux_pointer_consumer_context()
     )
@@ -3527,6 +3809,7 @@ def main() -> None:
     saved_config_pack_callers = verify_meter_saved_config_pack_caller_sequences()
     saved_config_cal_defaults = verify_saved_config_calibration_default_boundary_sequences()
     usart_tx_config_writer = verify_usart_tx_config_writer_meter_case_sequences()
+    command_dispatch_boundary = verify_command_dispatch_queue_boundary()
     boot_mode_init = verify_boot_mode_init_dmm_sequences()
     boot_mode_init_tbh = verify_boot_mode_init_dmm_tbh_state_map()
     boot_mode_init_banks = verify_boot_mode_init_dmm_command_banks()
@@ -3572,6 +3855,14 @@ def main() -> None:
     print(
         "stock mux-state pair-write contexts: "
         + ", ".join(mux_state_pair_write_contexts["contexts"].keys())
+    )
+    print(
+        "stock mux-state absolute direct-store sites: "
+        + ", ".join(
+            addr
+            for item in mux_state_absolute_direct_stores["sequences"].values()
+            for addr in item["store_instructions"]
+        )
     )
     print(
         "stock scope measurement-engine mux-pointer consumer contexts: "
@@ -3633,6 +3924,13 @@ def main() -> None:
           ", ".join(item["addr"] for item in usart_tx_config_writer["sequences"].values()))
     print("stock USART TX config writer visible callers: " +
           ", ".join(item["addr"] for item in usart_tx_config_writer["callers"].values()))
+    print(
+        "stock command-dispatch queue boundary: "
+        f"{command_dispatch_boundary['byte_dispatch_queue']} byte dispatcher, "
+        f"{command_dispatch_boundary['raw_wire_word_queue']} raw wire words, "
+        f"literal {command_dispatch_boundary['literal_surface']['addr']} -> "
+        f"normalized {command_dispatch_boundary['normalized_callable_table']['addr']}"
+    )
     print("stock boot mode-init DMM sequence sites: " +
           ", ".join(item["addr"] for item in boot_mode_init["sequences"].values()))
     print("stock boot mode-init DMM TBH state map: " +

@@ -40,15 +40,33 @@ static meter_reading_t normal_reading(uint8_t submode, int bcd_value)
     return r;
 }
 
-static int test_candidate_order_keeps_voltage_before_passive_and_current(void)
+static int test_candidate_order_is_voltage_only_for_live_autoscan(void)
 {
     size_t count = 0;
     const uint8_t *candidates = meter_auto_candidates(&count);
-    static const uint8_t expected[] = { 0, 1, 6, 7, 8, 9, 10, 2, 4, 3, 5 };
+    static const uint8_t expected[] = { 0, 1 };
 
     ASSERT(count == sizeof(expected) / sizeof(expected[0]));
     for (size_t i = 0; i < count; i++) {
         ASSERT(candidates[i] == expected[i]);
+    }
+    return 1;
+}
+
+static int test_autoscan_does_not_probe_current_or_passive_modes(void)
+{
+    size_t count = 0;
+    const uint8_t *candidates = meter_auto_candidates(&count);
+    static const uint8_t unsafe_without_setup[] = {
+        2, 3, 4, 5, 6, 7, 8, 9, 10
+    };
+
+    for (size_t i = 0; i < count; i++) {
+        for (size_t j = 0;
+             j < sizeof(unsafe_without_setup) / sizeof(unsafe_without_setup[0]);
+             j++) {
+            ASSERT(candidates[i] != unsafe_without_setup[j]);
+        }
     }
     return 1;
 }
@@ -241,7 +259,8 @@ int main(void)
 {
     printf("Meter auto-selection tests\n");
 
-    TEST(candidate_order_keeps_voltage_before_passive_and_current);
+    TEST(candidate_order_is_voltage_only_for_live_autoscan);
+    TEST(autoscan_does_not_probe_current_or_passive_modes);
     TEST(wrong_submode_never_scores);
     TEST(dirty_frame_family_state_never_scores);
     TEST(dc_voltage_scores_without_frequency_or_nonzero_magnitude);

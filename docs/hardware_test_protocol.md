@@ -74,6 +74,10 @@ Simplest real-world measurement — use the built-in DMM to measure a battery.
 ### 2.1 DC Voltage
 - [ ] Switch to Multimeter mode
 - [ ] Plug multimeter leads into COM and V/Ω/C jacks
+- [ ] For live validation screenshots, frame the PSU/source terminals, both
+      leads, and the 2C53T COM + V/Ω/C jacks in the same still image. A source
+      display alone proves only the source setting, not that the DMM voltage
+      terminals are connected.
 - [ ] Measure a fresh AA battery (expect ~1.5V)
 - [ ] Reading displayed on screen (verify it's in the right ballpark)
 - [ ] LEFT/RIGHT cycles through sub-modes (all 11 render without crash)
