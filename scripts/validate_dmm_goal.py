@@ -142,6 +142,25 @@ def verify_h2_tx_only_boundary() -> dict[str, Any]:
             "TX complete: %s (no recovered FPGA ACK)",
             "Bytes sent: %lu / 115638",
         ],
+        "reverse_engineering/analysis_v120/spi3_bulk_cal_resolved.md": [
+            "The open firmware now streams the",
+            "proves byte transmission",
+            "still require a recovered ACK/apply condition",
+        ],
+        "reverse_engineering/analysis_v120/fpga_h2_spi3_bulk.md": [
+            "Current open-firmware boundary",
+            "TX-side diagnostic only",
+            "unresolved acceptance/effect boundary",
+        ],
+    }
+    forbidden = {
+        "reverse_engineering/analysis_v120/spi3_bulk_cal_resolved.md": [
+            "Our custom firmware skips it entirely",
+        ],
+        "reverse_engineering/analysis_v120/fpga_h2_spi3_bulk.md": [
+            "No\nbulk cal upload via SPI3 cmds 0x3B/0x3A",
+            "That's the gap",
+        ],
     }
 
     checked: dict[str, list[str]] = {}
@@ -152,9 +171,18 @@ def verify_h2_tx_only_boundary() -> dict[str, Any]:
         for snippet in snippets:
             if snippet not in text:
                 missing.append(f"{rel}: {snippet}")
-    if missing:
-        raise GateError("H2 TX-only boundary drifted: " + "; ".join(missing))
-    return {"checked": checked}
+    stale: list[str] = []
+    for rel, snippets in forbidden.items():
+        text = (REPO / rel).read_text(encoding="utf-8", errors="replace")
+        for snippet in snippets:
+            if snippet in text:
+                stale.append(f"{rel}: {snippet}")
+    if missing or stale:
+        raise GateError(
+            "H2 TX-only boundary drifted: "
+            f"missing={missing} stale={stale}"
+        )
+    return {"checked": checked, "forbidden": forbidden}
 
 
 def verify_state_machine_property_contract() -> dict[str, Any]:

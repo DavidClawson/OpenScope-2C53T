@@ -23,13 +23,16 @@ was never validated. The disassembly is unambiguous: `r2 = 0x0001C3B6 = 115,638`
 loop increments `r0` by 3 each iteration, `0x1C3B6 % 3 == 0` exactly, and the exit
 condition `beq` fires when `r0 == 0x1C3B6` after 38,546 iterations.
 
-**Purpose: FPGA runtime state / calibration initialization. MEDIUM-HIGH confidence.**
+**Purpose: FPGA runtime state / calibration initialization. MEDIUM confidence.**
 
 The 115,638-byte data block at `0x08051D19` programs the FPGA's internal register/memory
-state. It includes calibration coefficients for the meter ADC pipeline. The stock firmware
-sends this during boot (between the FPGA handshake and active-mode enable), bracketed by
-PB6 CS ASSERT/DEASSERT. Our custom firmware skips it entirely. The 33% low-Ohm error is
-consistent with a missing ADC gain factor that this transfer provides.
+state. Its structure is consistent with register/data tables and possible calibration
+coefficients, but it is not by itself proof of a recovered DMM correction path. The
+stock firmware sends this during boot (between the FPGA handshake and active-mode
+enable), bracketed by PB6 CS ASSERT/DEASSERT. The open firmware now streams the
+same full table and exposes TX-complete diagnostics; that proves byte transmission
+only. Low-Ohm and low-DCV correctness still require a recovered ACK/apply condition,
+stock runtime trace, or guarded bench evidence across multiple ranges.
 
 **Highest-confidence replay target:** the full 115,638-byte range at file offsets
 `0x51D19`–`0x6E0CF`, sent as 38,546 × 3-byte records via SPI3 between opcode 0x3B and

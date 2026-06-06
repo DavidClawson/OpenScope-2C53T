@@ -134,35 +134,31 @@ fixes low-Ω is the correct size.
 other ways (break scope mode, etc.). Keep this behind a test-only
 compile flag.
 
-## What our firmware currently does
+## Current open-firmware boundary
 
-Our `fpga.c` boot sequence (visible in `src/drivers/fpga.c` around
-line 508) sends only these USART2 commands via `usart2_send_cmd`:
+The open firmware now replays the full H2 table from
+`firmware/src/drivers/fpga_cal_table.h` during the SPI3 boot sequence. The
+firmware diagnostics expose `h2_bytes_sent == 115638` and an `H2T:Y` TX flag.
+That is deliberately a TX-side diagnostic only: stock drains/ignores MISO in the
+bulk loop, no FPGA ACK/apply status has been recovered, and live DMM correctness
+is still not proven by the byte count.
 
-```c
-usart2_send_cmd(0x00, FPGA_CMD_INIT_01);
-usart2_send_cmd(0x00, FPGA_CMD_INIT_02);
-usart2_send_cmd(0x00, FPGA_CMD_INIT_06);
-usart2_send_cmd(0x00, FPGA_CMD_INIT_07);
-usart2_send_cmd(0x00, FPGA_CMD_INIT_08);
-```
-
-Then the SPI3 init + handshake, then active mode (PB11 HIGH). **No
-bulk cal upload via SPI3 cmds 0x3B/0x3A.** That's the gap.
+Treat the H2 replay as stock boot-state evidence plus an unresolved acceptance
+gap. It must not be used as a one-point low-DCV/current/low-Ohm coefficient or
+as proof that arbitrary DMM ranges are calibrated.
 
 ## Recommended next move
 
-**If we have hardware access**: bench-capture the exchange on a
-stock unit (Option A). That gives us the truth in one session.
+**If we have hardware access**: bench-capture stock or open-firmware MISO during
+the `0x3B`/table/`0x3A` exchange and look for an acknowledgment/apply condition,
+then validate multiple DMM ranges. A single corrected-looking point is not enough.
 
-**If we don't**: extract candidate byte ranges from the stock binary
-(Option B) and add a test-only boot path in our firmware. Bench
-each candidate and observe whether low-Ω improves. This is slower
-but purely software-driven.
+**If we don't**: keep H2 as an unresolved acceptance/effect boundary and move to
+other stock-xref work. Software tests should continue to fail closed instead of
+inventing calibration coefficients from observed displays.
 
-**If neither is feasible this session**: leave H2 as the documented
-leading hypothesis, and move to a different area (e.g., frame[11]
-rolling counter, echo frame payload, or another meter gap).
+**If neither is feasible this session**: leave H2 documented as transmitted but
+unproven, and move to a different DMM state-machine gap.
 
 ## Binary fingerprint of the table
 

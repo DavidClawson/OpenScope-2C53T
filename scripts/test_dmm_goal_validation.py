@@ -107,12 +107,32 @@ class DmmGoalValidationTests(unittest.TestCase):
         self.assertIn("firmware/src/ui/scope_ui.c", result["checked"])
         self.assertIn("firmware/src/drivers/usb_debug.c", result["checked"])
         self.assertIn(
+            "reverse_engineering/analysis_v120/spi3_bulk_cal_resolved.md",
+            result["checked"],
+        )
+        self.assertIn(
+            "reverse_engineering/analysis_v120/fpga_h2_spi3_bulk.md",
+            result["checked"],
+        )
+        self.assertIn(
             "TX complete: %s (no recovered FPGA ACK)",
             result["checked"]["firmware/src/drivers/usb_debug.c"],
         )
         self.assertIn(
             "H2 means bytes streamed, not recovered FPGA acceptance",
             result["checked"]["firmware/src/ui/scope_ui.c"],
+        )
+        self.assertIn(
+            "Our custom firmware skips it entirely",
+            result["forbidden"][
+                "reverse_engineering/analysis_v120/spi3_bulk_cal_resolved.md"
+            ],
+        )
+        self.assertIn(
+            "That's the gap",
+            result["forbidden"][
+                "reverse_engineering/analysis_v120/fpga_h2_spi3_bulk.md"
+            ],
         )
 
     def test_stock_h2_table_is_binary_grounded(self) -> None:
