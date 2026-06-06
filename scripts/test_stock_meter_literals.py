@@ -13,6 +13,7 @@ from pathlib import Path
 REPO = Path(__file__).resolve().parents[1]
 BIN = REPO / "archive/2C53T Firmware V1.2.0/APP_2C53T_V1.2.0_251015.bin"
 RAM_MAP = REPO / "reverse_engineering/analysis_v120/ram_map.txt"
+FULL_DECOMPILE = REPO / "reverse_engineering/analysis_v120/full_decompile.c"
 BASE = 0x08000000
 EXPECTED_SHA256 = "a17c5c35c97bb898f15672a1747bc1041d8ed507c16999ddba0d1e4e2ec0c760"
 EXPECTED_METER_SELECTOR_TABLE = bytes.fromhex("14 0c 17 0b 0a 12 11 10")
@@ -430,6 +431,21 @@ EXPECTED_MUX_RESTORE_SEQUENCES = {
         "9a f8 02 00 da f7 2f fb 9a f8 03 00 da f7 05 fc"
     ),
 }
+EXPECTED_METER_AUX_AFE_PIN_INIT_SEQUENCES = {
+    "pb9_pa6_output_config_only": (
+        0x080241D4,
+        bytes.fromhex(
+            "4f f4 00 70 18 90 28 46 21 46 0c f0 8d f8 "
+            "40 20 18 90 40 f6 00 00 c4 f2 01 00 21 46 0c f0 84 f8"
+        ),
+    ),
+}
+FORBIDDEN_METER_AUX_AFE_DIRECT_LEVEL_WRITES = [
+    "_DAT_40010c10 = 0x200",
+    "_DAT_40010c14 = 0x200",
+    "_DAT_40010810 = 0x40",
+    "_DAT_40010814 = 0x40",
+]
 EXPECTED_METER_SAVED_CONFIG_UNPACK_SEQUENCES = {
     "saved_config_meter_state_unpack": (
         0x08025D92,
@@ -1471,6 +1487,44 @@ def verify_meter_mux_restore_sequences() -> dict[str, object]:
     return {"sequences": checked}
 
 
+def verify_meter_aux_afe_pin_sequences() -> dict[str, object]:
+    """Check stock PB9/PA6 auxiliary AFE pin evidence.
+
+    Stock master init configures PB9 and PA6 as GPIO outputs near
+    `0x080241D4..0x080241F0`, but the current stock decompile does not expose
+    a direct BOP/BCR level write for PB9 (`GPIOB` bit 9) or PA6 (`GPIOA` bit
+    6).  Guard that boundary so the open firmware does not treat an invented
+    high level as recovered DMM frontend truth.
+    """
+    checked: dict[str, dict[str, str]] = {}
+    for name, (addr, expected) in EXPECTED_METER_AUX_AFE_PIN_INIT_SEQUENCES.items():
+        actual = read(addr, len(expected))
+        if actual != expected:
+            raise AssertionError(
+                f"{name} {addr:#010x}: expected {expected.hex(' ')}, "
+                f"got {actual.hex(' ')}"
+            )
+        checked[name] = {
+            "addr": f"{addr:#010x}",
+            "bytes": actual.hex(" "),
+        }
+
+    decompile = FULL_DECOMPILE.read_text(encoding="utf-8", errors="replace")
+    hits = [
+        needle for needle in FORBIDDEN_METER_AUX_AFE_DIRECT_LEVEL_WRITES
+        if needle in decompile
+    ]
+    if hits:
+        raise AssertionError(
+            "stock PB9/PA6 level writes are now visible and need classification: "
+            + ", ".join(hits)
+        )
+    return {
+        "sequences": checked,
+        "forbidden_direct_level_writes": FORBIDDEN_METER_AUX_AFE_DIRECT_LEVEL_WRITES,
+    }
+
+
 def verify_meter_saved_config_unpack_sequences() -> dict[str, object]:
     """Check stock saved-config unpack into `ms[0x02]`/`ms[0x03]`.
 
@@ -1974,6 +2028,7 @@ def main() -> None:
     display_formatter = verify_display_formatter_dispatch_sequences()
     unit_lookup_boundary = verify_unit_lookup_boundary_sequences()
     mux_restore = verify_meter_mux_restore_sequences()
+    aux_afe_pins = verify_meter_aux_afe_pin_sequences()
     saved_config_unpack = verify_meter_saved_config_unpack_sequences()
     saved_config_pack = verify_meter_saved_config_pack_sequences()
     saved_config_pack_callers = verify_meter_saved_config_pack_caller_sequences()
@@ -2019,6 +2074,8 @@ def main() -> None:
           ", ".join(item["addr"] for item in unit_lookup_boundary["sequences"].values()))
     print("stock meter mux restore sites: " +
           ", ".join(mux_restore["sequences"].keys()))
+    print("stock meter auxiliary AFE pin config sites: " +
+          ", ".join(item["addr"] for item in aux_afe_pins["sequences"].values()))
     print("stock meter saved-config unpack sites: " +
           ", ".join(item["addr"] for item in saved_config_unpack["sequences"].values()))
     print("stock meter saved-config pack sites: " +

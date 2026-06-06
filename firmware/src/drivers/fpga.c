@@ -1320,8 +1320,16 @@ static void fpga_set_meter_frontend_for_submode(uint8_t submode)
     GPIOC->scr = PC6_MASK;
     GPIOC->scr = (1U << 11);
 
-    GPIOB->scr = (1U << 9);
-    GPIOA->scr = (1U << 6);
+    /*
+     * PB9/PA6 auxiliary AFE controls are stock-configured as outputs during
+     * master init (`0x080241D4` PB9, `0x080241E2` PA6), but current stock
+     * xrefs do not recover a BOP/BCR level write for either pin. Match the
+     * reset/output-low state in DMM frontend setup instead of asserting an
+     * invented "analog enable" high level; if a later stock trace proves a
+     * mode-specific level, put it in the table-driven transition plan.
+     */
+    GPIOB->clr = (1U << 9);
+    GPIOA->clr = (1U << 6);
 
     GPIOC->scr = (1U << 12);
     GPIOE->scr = (1U << 4);
@@ -3800,14 +3808,18 @@ void fpga_init(void)
     GPIOE->clr = (1U << 5);   /* PE5 LOW   — range select bit 1 */
     GPIOE->scr = (1U << 6);   /* PE6 HIGH  — attenuation/coupling */
 
-    /* PB9, PA6 — additional analog frontend pins (from Phase 1 RE) */
+    /*
+     * PB9/PA6 auxiliary AFE pins: stock init configures them as outputs but
+     * no stock BOP/BCR level write has been recovered.  Keep them low rather
+     * than applying the old bench-inferred high level.
+     */
     gpio_cfg.gpio_pins = GPIO_PINS_9;
     gpio_init(GPIOB, &gpio_cfg);
-    GPIOB->scr = (1U << 9);
+    GPIOB->clr = (1U << 9);
 
     gpio_cfg.gpio_pins = GPIO_PINS_6;
     gpio_init(GPIOA, &gpio_cfg);
-    GPIOA->scr = (1U << 6);
+    GPIOA->clr = (1U << 6);
 
     /* Gain resistor configuration — gpio_mux_porta_portb for DCV mode.
      * PA15, PA10 = gain select, PB10 = gain select, PB11 already set.

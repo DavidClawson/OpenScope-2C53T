@@ -624,6 +624,31 @@ class DmmGoalValidationTests(unittest.TestCase):
             "9a f8 02 00 da f7 2f fb 9a f8 03 00 da f7 05 fc",
         )
 
+    def test_stock_meter_aux_afe_pins_are_config_only(self) -> None:
+        result = stock_meter_literals.verify_meter_aux_afe_pin_sequences()
+        sequences = result["sequences"]
+
+        self.assertEqual(
+            sequences["pb9_pa6_output_config_only"]["addr"],
+            "0x080241d4",
+        )
+        self.assertIn(
+            "4f f4 00 70 18 90 28 46 21 46",
+            sequences["pb9_pa6_output_config_only"]["bytes"],
+        )
+        self.assertIn(
+            "40 20 18 90 40 f6 00 00 c4 f2 01 00",
+            sequences["pb9_pa6_output_config_only"]["bytes"],
+        )
+        self.assertIn(
+            "_DAT_40010c10 = 0x200",
+            result["forbidden_direct_level_writes"],
+        )
+        self.assertIn(
+            "_DAT_40010814 = 0x40",
+            result["forbidden_direct_level_writes"],
+        )
+
     def test_stock_meter_saved_config_unpack_is_binary_grounded(self) -> None:
         result = stock_meter_literals.verify_meter_saved_config_unpack_sequences()
         sequences = result["sequences"]

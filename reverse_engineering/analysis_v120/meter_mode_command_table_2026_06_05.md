@@ -838,6 +838,37 @@ tails. It deliberately does not prove that any inspected DMM runtime branch
 writes those bytes during local range switching, and it does not turn the DAC1
 tail into a DMM calibration coefficient.
 
+### Auxiliary AFE PB9/PA6 Guard, 2026-06-06
+
+The stock master-init sequence leaves PB9 and PA6 configured as outputs only,
+but the current stock xrefs show no recovered stock BOP/BCR level write for
+either pin. The guarded stock bytes are:
+
+```text
+0x080241D4 auxiliary AFE PB9/PA6 output config:
+  4f f4 00 70 18 90 28 46 21 46 0c f0 8d f8
+  40 20 18 90 40 f6 00 00 c4 f2 01 00 21 46 0c f0 84 f8
+```
+
+This starts with the PB9 pin mask `0x0200`, calls `gpio_pin_config`
+(`FUN_080302FC`) on the GPIOB base saved in `r5`, then loads the PA6 pin mask
+`0x0040`, materializes GPIOA base `0x40010800`, and calls the same GPIO
+configuration helper. In `full_decompile.c`, the currently recovered direct
+level-write forms are absent:
+
+```text
+_DAT_40010c10 = 0x200  ; PB9 set high
+_DAT_40010c14 = 0x200  ; PB9 set low
+_DAT_40010810 = 0x40   ; PA6 set high
+_DAT_40010814 = 0x40   ; PA6 set low
+```
+
+So this is configuration evidence only. The open firmware now keeps PB9/PA6 in
+the stock-reset/output-low state in DMM frontend setup instead of asserting the
+old bench-inferred high level. If a later stock trace proves mode-specific
+PB9/PA6 levels, that evidence must update the table-driven transition plan and
+this guard together.
+
 ### Runtime Mux-State Writer Guard, 2026-06-06
 
 The text decompile currently exposes only two runtime writes to the

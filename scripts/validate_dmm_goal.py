@@ -252,6 +252,53 @@ def verify_h2_tx_only_boundary() -> dict[str, Any]:
     return {"checked": checked, "forbidden": forbidden}
 
 
+def verify_meter_aux_afe_pin_policy() -> dict[str, Any]:
+    """Ensure PB9/PA6 DMM setup follows recovered stock evidence."""
+    rel = "firmware/src/drivers/fpga.c"
+    text = (REPO / rel).read_text(encoding="utf-8", errors="replace")
+
+    match = re.search(
+        r"static void fpga_set_meter_frontend_for_submode\(uint8_t submode\)"
+        r"(?P<body>[\s\S]*?)\n}\n\nstatic void fpga_send_meter_wake_preamble",
+        text,
+    )
+    if match is None:
+        raise GateError("could not locate fpga_set_meter_frontend_for_submode block")
+    body = match.group("body")
+    required_body = [
+        "PB9/PA6 auxiliary AFE controls are stock-configured as outputs",
+        "current stock\n     * xrefs do not recover a BOP/BCR level write",
+        "GPIOB->clr = (1U << 9);",
+        "GPIOA->clr = (1U << 6);",
+    ]
+    missing_body = [snippet for snippet in required_body if snippet not in body]
+    forbidden_body = [
+        "GPIOB->scr = (1U << 9);",
+        "GPIOA->scr = (1U << 6);",
+    ]
+    stale_body = [snippet for snippet in forbidden_body if snippet in body]
+
+    required_file = [
+        "stock init configures them as outputs",
+        "no stock BOP/BCR level write has been recovered",
+        "GPIOB->clr = (1U << 9);",
+        "GPIOA->clr = (1U << 6);",
+    ]
+    missing_file = [snippet for snippet in required_file if snippet not in text]
+    if missing_body or stale_body or missing_file:
+        raise GateError(
+            "PB9/PA6 auxiliary AFE pin policy drifted: "
+            f"missing_body={missing_body} stale_body={stale_body} "
+            f"missing_file={missing_file}"
+        )
+    return {
+        "checked": rel,
+        "required_body": required_body,
+        "forbidden_body": forbidden_body,
+        "required_file": required_file,
+    }
+
+
 def verify_state_machine_property_contract() -> dict[str, Any]:
     """Anchor the broad DMM software model so the gate cannot pass a thin harness.
 
@@ -552,6 +599,9 @@ def verify_re_coverage() -> dict[str, Any]:
         "state-machine property anchors", "all local submodes 0..10",
         "live validation only switches DCV/ACV",
         "mux callsite guard", "0x080020B2", "0x0801A53E", "0x0802724A",
+        "auxiliary AFE PB9/PA6 guard", "0x080241D4", "0x080241E2",
+        "configured as outputs only", "no recovered stock BOP/BCR level write",
+        "stock-reset/output-low state",
         "saved-config meter-state unpack guard", "0x08025D92", "0x08006000",
         "persistent saved-config writer",
         "saved-config meter-state pack guard", "0x080223BC", "0x080224A0",
@@ -836,6 +886,7 @@ def main(argv: list[str] | None = None) -> int:
         report["no_ocr_pipeline"] = verify_no_ocr_pipeline()
         report["ac_status_boundary"] = verify_ac_status_boundary()
         report["h2_tx_only_boundary"] = verify_h2_tx_only_boundary()
+        report["meter_aux_afe_pin_policy"] = verify_meter_aux_afe_pin_policy()
 
         if not args.skip_live:
             if args.observed_source_voltage is None:

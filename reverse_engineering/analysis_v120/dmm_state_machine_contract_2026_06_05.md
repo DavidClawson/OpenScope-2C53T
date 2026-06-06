@@ -150,10 +150,15 @@ current-family fixtures show the same high nibble can carry status/hold state.
 Upper nibble 0 remains unresolved low-Ohm/factory calibration territory. The 2026-06-06 mux
 xref audit in `meter_mode_command_table_2026_06_05.md` classifies the recovered
 `FUN_080018a4`/`FUN_08001a58` runtime callers as scope/siggen paths, not DMM
-runtime selector proof. The known open items are still the DMM-specific writers
-for stock `ms[0x02]` and `ms[0x03]`, the exact effect and commit semantics of
-the H2 SPI3 bulk replay, and any real factory calibration source in
-W25Q/system files/SPI bulk tables.
+runtime selector proof. The same note now guards the auxiliary AFE PB9/PA6
+boundary: stock configures those pins as outputs at `0x080241D4..0x080241F0`,
+but no recovered direct BOP/BCR stock write sets their level. The open firmware
+therefore keeps PB9/PA6 in the stock-reset/output-low state for DMM setup
+instead of asserting an invented high level. The known open items are still the
+DMM-specific writers for stock `ms[0x02]` and `ms[0x03]`, any later trace that
+proves mode-specific PB9/PA6 levels, the exact effect and commit semantics of
+the H2 SPI3 bulk replay, and any real factory calibration source in W25Q/system
+files/SPI bulk tables.
 
 The W25Q/System-file boundary is now narrowed in
 `meter_w25q_calibration_boundary_2026_06_06.md`: the bench-unit
