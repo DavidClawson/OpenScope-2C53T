@@ -1268,6 +1268,16 @@ def verify_re_coverage() -> dict[str, Any]:
         "DMM-owned runtime writer or trace for `DAT_200000fa`/`DAT_200000fb`",
         "no recovered FPGA ACK/apply",
         "status or DMM calibration effect",
+        "Mux-state xref closure",
+        "25 RAM-map refs / 26 full-decompile refs",
+        "11 RAM-map refs",
+        "10 full-decompile refs",
+        "full_decompile.c:2566",
+        "full_decompile.c:8745",
+        "classified and guarded as scope/siggen autorange",
+        "current static mux-state surface is already",
+        "classified as negative DMM evidence",
+        "not progress unless a new writer, xref owner, or trace is recovered",
         "Next RE Target", "multiple DCV points, including low DCV, 5 V, and 32 V",
     ]
 

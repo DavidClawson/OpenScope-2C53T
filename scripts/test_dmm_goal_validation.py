@@ -421,6 +421,12 @@ class DmmGoalValidationTests(unittest.TestCase):
         self.assertIn("stock-visible decode: digits=4366", coverage["terms"])
         self.assertIn("Do not promote", coverage["terms"])
         self.assertIn("this visual mismatch into a decoder coefficient", coverage["terms"])
+        self.assertIn("Mux-state xref closure", coverage["terms"])
+        self.assertIn("classified as negative DMM evidence", coverage["terms"])
+        self.assertIn(
+            "not progress unless a new writer, xref owner, or trace is recovered",
+            coverage["terms"],
+        )
         self.assertIn("Next RE Target", coverage["terms"])
 
     def test_stock_roll_buffer_preload_is_binary_grounded(self) -> None:

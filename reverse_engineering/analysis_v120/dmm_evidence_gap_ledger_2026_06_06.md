@@ -57,6 +57,13 @@ one of:
 - Mux writers: `FUN_080018a4` and `FUN_08001a58` are 10-way GPIO hardware
   writers. Current direct runtime mux-state writers are classified as
   scope/siggen paths, not DMM range proof.
+- Mux-state xref closure: the current V1.2.0 RAM-map and text-decompile
+  surface has been exhausted as negative DMM evidence. `DAT_200000fa` has
+  25 RAM-map refs / 26 full-decompile refs; `DAT_200000fb` has 11 RAM-map refs
+  / 10 full-decompile refs. The only decompile-visible indexed writes are
+  `full_decompile.c:2566` in `FUN_08001c60` and `full_decompile.c:8745` in
+  `FUN_08019e98`; both are classified and guarded as scope/siggen autorange
+  paths, not DMM runtime mux/range writers.
 - H2/SPI3: stock proves a byte-exact `0x3B`/table/`0x3A` transfer of
   115,638 bytes from `0x08051D19`. Open firmware `h2_upload_done` and USB
   `H2T` diagnostics mean bytes transmitted only; no recovered FPGA ACK/apply
@@ -68,9 +75,13 @@ one of:
 
 The highest-value next target is a stock-runtime path or trace tying DMM
 function/range selection to `DAT_200000fa`/`DAT_200000fb` before the low-DCV
-frame is emitted. If that path cannot be recovered statically, the next live
-experiment should capture stock or stock-equivalent command/mux state across
-multiple DCV points, including low DCV, 5 V, and 32 V. The physical run should
-come after the software state-machine guard remains green; it should not expand
-webcam/OCR tooling, and it should not probe current modes without correct jack,
-series wiring, and load limiting.
+frame is emitted. Because the current static mux-state surface is already
+classified as negative DMM evidence, repeating those `DAT_200000fa/fb` refs is
+not progress unless a new writer, xref owner, or trace is recovered. If that
+path cannot be recovered statically, the next live experiment should capture
+stock or stock-equivalent command/mux state across multiple DCV points. Those
+multiple DCV points, including low DCV, 5 V, and 32 V, are hard-case inputs, not
+new multiplier fit points. The physical run should come after the software
+state-machine guard remains green; it should not expand webcam/OCR tooling, and
+it should not probe current modes without correct jack, series wiring, and load
+limiting.
