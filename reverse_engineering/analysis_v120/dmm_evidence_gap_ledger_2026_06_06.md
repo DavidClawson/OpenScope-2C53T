@@ -98,6 +98,12 @@ one of:
   the raw-word queue path. Those words ground wake/start/variant sequencing;
   they are not DMM runtime range state, low-DCV correction words, or factory
   calibration coefficients.
+- Dvom TX command pacing guard: stock `FUN_080373F4` consumes raw halfwords
+  from queue `0x20002D74`, writes the USART2 TX frame, sets CTRL1 bit `0x80`,
+  then executes `0x0803744C: movs r0,#0x0A` and
+  `0x0803744E: BL 0x0803A390`. This is 10-tick command-channel pacing after
+  each raw-word frame. It is not a recovered DMM settle/discard rule, not an
+  analog range writer, and not calibration.
 - Mux writers: `FUN_080018a4` and `FUN_08001a58` are 10-way GPIO hardware
   writers. Current direct runtime mux-state writers are classified as
   scope/siggen paths, not DMM range proof.

@@ -163,6 +163,8 @@ formats the received halfword into the USART2 TX buffer:
 0x08037444: ldr r0, [r5, #0]
 0x08037446: orr.w r0, r0, #0x80        ; USART2 CTRL1 TDBEIEN
 0x0803744A: str r0, [r5, #0]
+0x0803744C: movs r0, #0x0A             ; 10 ticks
+0x0803744E: bl 0x0803A390              ; freertos_task_delay
 ```
 
 The guarded bytes are:
@@ -179,8 +181,11 @@ The guarded bytes are:
 
 This proves that the guarded selector-table producers feed a real stock
 USART2 command path, not the display queue. It is still digital command-path
-evidence only: it does not recover the DMM-specific `ms[0x02]`/`ms[0x03]`
-analog mux writers, relay/range timing, or calibration.
+evidence only. The `10-tick stock dvom_TX command pacing guard` pins
+`0x0803744C` (`movs r0,#0x0A`) and `0x0803744E` (`BL 0x0803A390`) as command
+queue pacing after a raw-word frame, not a DMM settle/discard rule. It does not
+recover the DMM-specific `ms[0x02]`/`ms[0x03]` analog mux writers, relay/range
+timing, exact local settle/discard count, or calibration.
 
 The stock transport transition is now binary-guarded too. The
 saved mode-init restore path is stock-visible at `0x08026F50`: it copies the
@@ -783,8 +788,9 @@ firmware's eleven UI submodes.
 
 Stock evidence supports command pacing and frame filtering:
 
-- `fpga_task_annotated.c` shows the TX interrupt enabled, followed by a 10-tick
-  delay before accepting the next command.
+- `fpga_task_annotated.c` and the binary guard at `0x0803744C..0x08037452`
+  show the TX interrupt enabled, followed by a 10-tick stock `dvom_TX`
+  command-pacing delay before accepting the next raw-word queue item.
 - `full_decompile.c` and `usart2_isr_state_machine.md` show USART2 framing that
   accepts `0x5A/0xA5` data frames, validates `0xAA/0x55` echo frames, and drops
   invalid echo/data sequences.

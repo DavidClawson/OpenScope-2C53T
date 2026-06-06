@@ -368,6 +368,19 @@ EXPECTED_DVOM_TX_QUEUE_CONSUMER_SEQUENCES = {
         ),
     ),
 }
+EXPECTED_DVOM_TX_QUEUE_CONSUMER_SEMANTICS = {
+    "queue_handle": "0x20002D74",
+    "tx_index": "0x2000000F",
+    "tx_buffer": "0x20000005",
+    "start_tx_snippet": "28 68 40 f0 80 00 28 60",
+    "delay_snippet": "0a 20 02 f0 9f ff",
+    "delay_ticks": 10,
+    "delay_call": "0x0803A390",
+    "classification": (
+        "10-tick stock dvom_TX command pacing after each raw-word frame; "
+        "not a DMM settle/discard rule, range writer, or calibration source"
+    ),
+}
 EXPECTED_METER_BASIC_RAW_WORD_SEQUENCES = {
     "meter_basic_configure_0508": {
         "addr": 0x080033CA,
@@ -2098,8 +2111,10 @@ def verify_dvom_tx_queue_consumer_sequences() -> dict[str, object]:
     halfword, clears the USART2 TX index at `0x2000000F`, splits the word into
     the TX frame buffer at `0x20000005 + 2/3`, writes the byte-sum at `+9`,
     and sets USART2 CTRL1 bit 7 (`0x80`) to start the TX interrupt pump.
-    This proves that selector-table producers feeding `0x20002D74` reach the
-    stock USART2 command channel; it still does not prove analog mux bytes or
+    Stock then executes `movs r0,#10; bl 0x0803A390`, i.e. a 10-tick delay,
+    before accepting the next raw-word queue item. This proves selector-table
+    producers reach the stock USART2 command channel with command pacing; it
+    still does not prove analog mux bytes, exact DMM settle/discard counts, or
     meter calibration.
     """
     checked: dict[str, dict[str, str]] = {}
@@ -2114,7 +2129,15 @@ def verify_dvom_tx_queue_consumer_sequences() -> dict[str, object]:
             "addr": f"{addr:#010x}",
             "bytes": actual.hex(" "),
         }
-    return {"sequences": checked}
+    bytes_text = checked["dvom_tx_raw_word_consumer"]["bytes"]
+    for snippet_name in ("start_tx_snippet", "delay_snippet"):
+        snippet = EXPECTED_DVOM_TX_QUEUE_CONSUMER_SEMANTICS[snippet_name]
+        if str(snippet) not in bytes_text:
+            raise AssertionError(f"dvom_TX {snippet_name} missing: {snippet}")
+    return {
+        "sequences": checked,
+        "pacing": EXPECTED_DVOM_TX_QUEUE_CONSUMER_SEMANTICS,
+    }
 
 
 def verify_meter_basic_raw_word_sequences() -> dict[str, object]:

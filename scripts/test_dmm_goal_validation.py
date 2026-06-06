@@ -522,6 +522,15 @@ class DmmGoalValidationTests(unittest.TestCase):
         )
         self.assertIn("Next RE Target", coverage["terms"])
 
+    def test_re_coverage_requires_dvom_tx_pacing_boundary(self) -> None:
+        coverage = validate_dmm_goal.verify_re_coverage()
+        self.assertIn("dvom_TX raw-word consumer guard", coverage["terms"])
+        self.assertIn("10-tick stock dvom_TX command pacing guard", coverage["terms"])
+        self.assertIn("0x0803744C", coverage["terms"])
+        self.assertIn("0x0803744E", coverage["terms"])
+        self.assertIn("BL 0x0803A390", coverage["terms"])
+        self.assertIn("not a DMM settle/discard rule", coverage["terms"])
+
     def test_re_coverage_requires_live_pb9_pa6_snapshot_boundary(self) -> None:
         coverage = validate_dmm_goal.verify_re_coverage()
         self.assertIn(
@@ -1148,6 +1157,7 @@ class DmmGoalValidationTests(unittest.TestCase):
     def test_stock_dvom_tx_queue_consumer_is_binary_grounded(self) -> None:
         result = stock_meter_literals.verify_dvom_tx_queue_consumer_sequences()
         sequences = result["sequences"]
+        pacing = result["pacing"]
 
         self.assertEqual(
             sequences["dvom_tx_raw_word_consumer"]["addr"],
@@ -1169,6 +1179,11 @@ class DmmGoalValidationTests(unittest.TestCase):
             "28 68 40 f0 80 00 28 60",
             sequences["dvom_tx_raw_word_consumer"]["bytes"],
         )
+        self.assertEqual(pacing["delay_ticks"], 10)
+        self.assertEqual(pacing["delay_call"], "0x0803A390")
+        self.assertIn("0a 20 02 f0 9f ff", pacing["delay_snippet"])
+        self.assertIn("10-tick stock dvom_TX command pacing", pacing["classification"])
+        self.assertIn("not a DMM settle/discard rule", pacing["classification"])
 
     def test_stock_mode_state_f68_ram_map_boundary_is_grounded(self) -> None:
         result = stock_meter_literals.verify_mode_state_ram_map_boundary()
