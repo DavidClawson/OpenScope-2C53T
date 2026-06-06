@@ -808,6 +808,21 @@ wiring proof boundary. It is not permission to restore decoder coefficients.
   10-byte USART frames preceding the wrong `0x5A 0xA5` producer frame against
   stock `dvom_TX` construction before touching decoder math or inventing a
   calibration factor.
+- TX-history live smoke: OpenScope app image SHA-256
+  `ccc62439460f9b5434f985ce02e20d8c15ca9f65ae9bb6eca084b96a6203e8cf`
+  (`Build: Jun 6 2026 21:09:30`) passed guarded `flash_preflight.py hid-app`,
+  was flashed through HID IAP, and booted back to CDC.  A live `meter trace
+  --json` run showed the new `tx_history` ring immediately before a stable
+  DCV producer frame.  The producer history stayed identical across eight
+  frames (`5A A5 A4 BD 4D 4E 4E 20 00 00 01 46`, decoded `display=2.244 V`)
+  while the TX history showed repeated stock-shaped start frames
+  `00 00 05 09 00 00 00 00 00 0E`, preceded by probe
+  `00 00 05 07 00 00 00 00 00 0C` and selector
+  `00 00 05 14 00 00 00 00 00 19`.  `last_echo_frame` remained all zero and
+  `rx_sync` still showed data-frame starts/headers increasing with no
+  `0xAA 0x55` echo starts.  This live run was not image-viewed as the hard
+  `0.200 V` setup, so it is only a TX/producers trace-surface validation; it
+  does not prove the low-DCV blocker fixed.
 
 ## Next RE Target
 
