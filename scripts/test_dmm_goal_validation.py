@@ -411,6 +411,18 @@ class DmmGoalValidationTests(unittest.TestCase):
         self.assertIn("roll-buffer state", coverage["terms"])
         self.assertIn("roll-buffer preload guard", coverage["terms"])
 
+    def test_re_coverage_requires_dmm_evidence_gap_ledger(self) -> None:
+        coverage = validate_dmm_goal.verify_re_coverage()
+        self.assertIn(
+            "reverse_engineering/analysis_v120/dmm_evidence_gap_ledger_2026_06_06.md",
+            coverage["docs"],
+        )
+        self.assertIn("Current Low-DCV Blocker", coverage["terms"])
+        self.assertIn("stock-visible decode: digits=4366", coverage["terms"])
+        self.assertIn("Do not promote", coverage["terms"])
+        self.assertIn("this visual mismatch into a decoder coefficient", coverage["terms"])
+        self.assertIn("Next RE Target", coverage["terms"])
+
     def test_stock_roll_buffer_preload_is_binary_grounded(self) -> None:
         result = stock_meter_literals.verify_roll_buffer_preload_sequences()
         self.assertEqual(

@@ -1113,6 +1113,7 @@ def verify_re_coverage() -> dict[str, Any]:
         "reverse_engineering/analysis_v120/spi3_bulk_cal_resolved.md",
         "reverse_engineering/analysis_v120/SPI3_INIT_SEQUENCE_DECODED.md",
         "reverse_engineering/analysis_v120/h2_extracted/FINDINGS.md",
+        "reverse_engineering/analysis_v120/dmm_evidence_gap_ledger_2026_06_06.md",
     ]
     required_code = [
         "firmware/src/drivers/meter_data.c",
@@ -1260,6 +1261,14 @@ def verify_re_coverage() -> dict[str, Any]:
         "metadata-driven", "frame[8].7", "frame[3].4", "frame[4].4",
         "frame[5].4", "not a value-shape classifier",
         "magnitude-derived relay/range control",
+        "DMM Evidence / Gap Ledger", "Current Low-DCV Blocker",
+        "Per-Path Evidence Status", "stock-visible decode: digits=4366",
+        "Do not promote",
+        "this visual mismatch into a decoder coefficient",
+        "DMM-owned runtime writer or trace for `DAT_200000fa`/`DAT_200000fb`",
+        "no recovered FPGA ACK/apply",
+        "status or DMM calibration effect",
+        "Next RE Target", "multiple DCV points, including low DCV, 5 V, and 32 V",
     ]
 
     haystack = ""

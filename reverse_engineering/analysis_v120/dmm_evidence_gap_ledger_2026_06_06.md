@@ -1,0 +1,76 @@
+# DMM Evidence / Gap Ledger
+
+Date: 2026-06-06
+
+This ledger is the current stock-grounded boundary for the OpenScope DMM work.
+It exists to keep the next fix pointed at reverse engineering and state-machine
+evidence, not at harness expansion, observed-value multipliers, or OCR.
+
+## Current Low-DCV Blocker
+
+The live visual check still has an unresolved physical mismatch:
+
+```text
+visual source/load display: 0.200 V
+CDC frame: 5A A5 44 8E EF E7 07 24 80 00 01 89
+stock-visible decode: digits=4366, frame[2].3=0, class=4, value=0.4366 V
+```
+
+The decoder is doing the stock-visible math for that frame.  Do not promote
+this visual mismatch into a decoder coefficient.  The next useful evidence is
+one of:
+
+- a DMM-owned runtime writer or trace for `DAT_200000fa`/`DAT_200000fb`
+  (`ms[0x02]`/`ms[0x03]`) while stock switches DMM ranges or functions
+- a stock H2/SPI3 acceptance/apply condition plus multi-point DMM effect
+- a real W25Q/system-file/factory-calibration source, not an invented filename
+- a repeatable safe live trace showing which stock selector/mux/range state
+  changes before the low-DCV frame is produced
+
+## Per-Path Evidence Status
+
+| Path | Stock evidence recovered | Local policy in open firmware | Missing evidence |
+| --- | --- | --- | --- |
+| DCV | Selector slot 0, `0x0514`; formatter case 0 in `FUN_080028E0`; BCD `+10000` extension via `frame[2].3`; decimal class priority `frame[8].7`, `frame[3].4`, `frame[4].4`, `frame[5].4`; mux writer bodies `FUN_080018a4` and `FUN_08001a58` are stock GPIO writers. | Use slot 0 for selector and mux projection; parse only stock-visible class bits; preserve the `0.200 V -> 0.4366 V` mismatch as unresolved frontend/range/calibration. | Runtime DMM-owned `ms[0x02]`/`ms[0x03]` writer, H2/apply effect, or factory calibration source that explains low DCV. |
+| ACV | Selector slot 1, `0x050C`; dynamic apply pair `0x050C/0x050D`; formatter case 1; stock status/decimal helper paths around `0x080371C8`, `0x08037228`, `0x080372BC`; no stock proof that `frame[7].2` alone is AC-present confidence. | Require companion line-frequency evidence for AC validity; DC input in ACV fails closed. | Stronger AC-present source if stock has one beyond current frequency evidence. |
+| DC mA / DC A | Selector slot 2, `0x0517`; dynamic apply pair `0x0517/0x050E`; DCA formatter variant evidence at `0x08002AFE`/`0x08002B54`; stock `DAT_2000102e` is formatter/variant shadow only. | Local mA and A share stock slot 2 and mux projection; uA is unresolved/unexposed; current modes reject voltage-family payloads. | Safe current-jack series live traces and a physical current range writer/calibration source. |
+| AC mA / AC A | Selector slot 3, `0x050B`; ACA formatter unit index 5; local AC A display override stays separate from stock unit-index evidence. | Local AC mA and AC A share stock slot 3 and mux projection; AC current requires frequency evidence. | Safe current-jack series live traces and stock evidence for any split between mA and A. |
+| Resistance | Selector slot 4, `0x050A`; formatter case 4; kOhm band is unit-normalized. | Low-Ohm normal frames fail closed with `METER_REJECT_UNRESOLVED_CALIBRATION`; no one-unit bench coefficient. | Factory coefficient source for low-Ohm band. |
+| Continuity | Selector slot 6, `0x0511`; dynamic apply pair `0x0511/0x0516`; distinctive continuity segment marker. | Continuity marker is marker-visible and rejected outside continuity mode. | Exact physical beep/current behavior across probes if needed for final live proof. |
+| Diode | Selector slot 7, `0x0510`; dynamic apply pair `0x0510/0x0515`; formatter/debug family pinned. | Diode has its own active-plan family but no independent normal-frame marker; wrong marker-visible families clear stale diode payloads. | Physical diode validation and any stock frame marker stronger than active-plan classification. |
+| Capacitance / temperature | Selector slot 5, `0x0512`; formatter cases 5/6/7 prove display-unit families and format offsets, not separate physical frontend slots. | Local capacitance and temperature share slot 5 and mux projection; suffix/display split is local policy over stock formatter evidence. | Separate stock selector/range writer or live traces proving a physical split. |
+| DC uA / AC uA | No selector-table entry, formatter path, mux writer, or safe live current trace recovered. | `FPGA_METER_INVALID_LOCAL_SUBMODE`; autoscan cannot select uA. | Real stock/live evidence for a microamp frontend/range path. |
+
+## Cross-Cutting Evidence
+
+- Selector table: stock table at runtime `0x080BB3FC` / app image
+  `0x080B43FC` contains low bytes `14 0c 17 0b 0a 12 11 10`.
+- Selector consumers: stock xrefs at `0x080042E2` and `0x080048BA` index
+  `DAT_20001025`, build `0x0500 | low`, and store through the raw-word path.
+- Dynamic apply helper: `0x08006120`, `0x08006194`, `0x0800626A`, and
+  `0x08006288` recover only ACV, DCA, continuity, and diode apply pairs.
+- Command dispatcher: `FUN_0800B908` queues boot/runtime mode-init command
+  banks (`0x00/0x09/(0x07|0x0A)`, `0x1A..0x1E`,
+  `0x00/0x08/0x09/(0x07|0x0A)`, `0x16..0x19`,
+  `0x00/0x12/0x13/0x14/0x09/(0x07|0x0A)`). This is command-byte sequencing,
+  not analog mux/range writing.
+- Mux writers: `FUN_080018a4` and `FUN_08001a58` are 10-way GPIO hardware
+  writers. Current direct runtime mux-state writers are classified as
+  scope/siggen paths, not DMM range proof.
+- H2/SPI3: stock proves a byte-exact `0x3B`/table/`0x3A` transfer of
+  115,638 bytes from `0x08051D19`. Open firmware `h2_upload_done` and USB
+  `H2T` diagnostics mean bytes transmitted only; no recovered FPGA ACK/apply
+  status or DMM calibration effect exists yet.
+- W25Q/system file: bench-unit `System file/9999.BIN` is cluster 0 and size 0,
+  so it is not a recovered meter calibration source.
+
+## Next RE Target
+
+The highest-value next target is a stock-runtime path or trace tying DMM
+function/range selection to `DAT_200000fa`/`DAT_200000fb` before the low-DCV
+frame is emitted. If that path cannot be recovered statically, the next live
+experiment should capture stock or stock-equivalent command/mux state across
+multiple DCV points, including low DCV, 5 V, and 32 V. The physical run should
+come after the software state-machine guard remains green; it should not expand
+webcam/OCR tooling, and it should not probe current modes without correct jack,
+series wiring, and load limiting.
