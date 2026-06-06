@@ -26,8 +26,11 @@ static bool reading_has_ac_evidence(const meter_reading_t *r)
      * status byte for diagnostics only; auto-selection confidence must stay
      * tied to the independent companion frequency hint so DC input cannot
      * become a confident ACV/ACA candidate through a status-bit echo.
+     * Keep this window aligned with meter_data.c's parser evidence boundary:
+     * values outside the observed mains-like companion range are diagnostic
+     * only, not AC confidence for autoscan.
      */
-    return r->aux_freq_hz >= 1.0f;
+    return r->aux_freq_hz >= 45.0f && r->aux_freq_hz <= 65.0f;
 }
 
 static bool reading_has_clean_frame_family(uint8_t submode,

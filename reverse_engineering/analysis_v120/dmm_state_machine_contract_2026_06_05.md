@@ -116,6 +116,9 @@ The software contract proves parser/state safety only:
   these tests pin stock formatter indices and local suffix overrides without
   claiming physical diode/capacitance/temperature calibration is solved
 - AC modes fail closed without line-frequency evidence
+- autoscan AC confidence uses the same empirical companion-frequency window as
+  the parser (`45..65` Hz); out-of-window nonzero aux frequency remains
+  diagnostic only and must not make ACV/ACA candidates confident
 - mode invalidation clears stale payloads before transition
 - the first post-transition frames are discarded before parsing
 - local current and extended splits remain local policy over shared stock slots
