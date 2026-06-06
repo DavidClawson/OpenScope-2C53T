@@ -49,6 +49,83 @@ class FakeSerial:
         return self.trailer
 
 
+def make_trace_text(submode: int, *, reject: int = 0, valid: int = 1,
+                    display: str = "ERR", value_i10000: int = 0,
+                    family: int = 0, selector: str = "0514",
+                    apply: str = "0000") -> str:
+    return f"""=== DMM Trace ===
+trace v=1 snapshot=1
+context mode=1 startup=Meter ui_sub={submode} reading_sub={submode} live={valid} valid={valid} updates=42
+producer counts tx=33 rx_bytes=512 data=12 echo=0 rx_valid=1
+producer_last_rx data=12 tx=33 echo=0 seq=2 seq_sub={submode} busy=0 discard=0
+rx_sync data_start=12 echo_start=0 data_hdr=12 echo_hdr=0 bad_second=0 stray=0
+plan stock_mode={submode} raw_low=14 family={family} mux=0 portc_porte=0 porta_portb=0 settle_ms=20 discard=2
+wire config=0000 has_config=0 selector={selector} apply={apply} has_apply=0 probe=0507 start=0509 seq_count=2 seq_sub={submode}
+last_sequence config=0000 selector={selector} apply={apply} probe=0507 start=0509
+decoded display={display} unit=V value_i10000={value_i10000} raw=0 dp=0 class=1 reject={reject} family={family}/{family} extra=014B
+stock_fsm mode={submode} variant=0 format=0 dc_state=0 display_cmd=0 unit_index=0 composite=0
+transition busy=0 discard_now=0 skip_count=0
+producer_frame=5A A5 04 E0 9B EF 07 28 00 00 01 4B
+parsed_frame=5A A5 04 E0 9B EF 07 28 00 00 01 4B
+first_transition_rx valid=1 armed=0 sub={submode} seq=2 config=0000 selector={selector} apply={apply} probe=0507 start=0509 planned_gpio=0BB actual_gpio=0BB data=9 tx=33 echo=0 busy=0 discard=2 h2_bytes=115638 h2_done=1 h2_post_ok=5 h2_post_mask=1F frame=5A A5 04 E0 9B EF 07 28 00 00 01 4B
+last_echo_frame=00 00 00 00 00 00 00 00 00 00
+transition_history newest_first:
+mth n=0 sub={submode} seq=2 config=0000 selector={selector} apply={apply} probe=0507 start=0509 tx=29..33 data=8..9 planned_gpio=0BB actual_gpio=0BB
+producer_history newest_first:
+rxh n=0 data=12 tx=33 echo=0 seq=2 seq_sub={submode} busy=0 discard=0 frame=5A A5 04 E0 9B EF 07 28 00 00 01 4B
+tx_history newest_first:
+txh n=0 tx=33 frame=00 00 05 09 00 00 00 00 00 0E
+tx_control_history newest_first:
+txc n=0 tx=32 frame=00 00 05 07 00 00 00 00 00 0C
+gpio control PC6=1 PB11=1 PC11=1 PC7=1 PC0=1
+gpio_frontend PC12=1 PE4=1 PE5=0 PE6=1 PA15=1 PA10=1 PB10=0 PB9=0 PA6=0
+h2 bytes=115638 done=1 post_enq=5 post_ok=5 post_drop=0 post_mask=1F spi_ok=0 spi_to=0 rx00=0 rxff=115638 rxother=0 close_len=6
+factory_cal loaded=0 ch_size=301 channels=2
+"""
+
+
+def make_dump_text(submode: int, *, valid: int = 1, result_class: int = 1,
+                   display: str = "ERR", unit: str = "V", beep: int = 0,
+                   reject: int = 0, family: int = 0) -> str:
+    return f"""=== DMM State ===
+mode=1 startup=Meter meter_submode={submode} layout=0
+valid={valid} reading_submode={submode} class={result_class} updates=42 display={display} unit={unit}
+bcd_value=0 decimal_pos=0 negative=0 unit_variant=0 bar_i100=0 aux_freq_i10=0
+flags ac=0 auto=0 hold=0 probe=0 range_ind=0 range_cmd=0 beep={beep}
+stock_fsm mode={submode} variant=0 format=0 dc_state=0 display_cmd=0 unit_index=0 composite=0
+frame_family expected={family} observed={family} reject={reject}
+frame=5A A5 04 E0 9B EF 07 28 00 00 01 4B
+nibbles=0E 0B 0E 07 raw_digits=00 00 00 00
+"""
+
+
+class SequenceSerial:
+    responses: list[str] = []
+    instances: list["SequenceSerial"] = []
+
+    def __init__(self, port: str, baud: int, read_timeout: float) -> None:
+        self.written: list[str] = []
+        self._responses = list(self.responses)
+        self.instances.append(self)
+
+    def __enter__(self) -> "SequenceSerial":
+        return self
+
+    def __exit__(self, *_exc: object) -> None:
+        return None
+
+    def drain(self, *_args: object, **_kwargs: object) -> bytes:
+        return b""
+
+    def write_line(self, text: str) -> None:
+        self.written.append(text)
+
+    def read_until_prompt(self, timeout: float) -> bytes:
+        if not self._responses:
+            raise TimeoutError("fake response queue exhausted")
+        return (self._responses.pop(0) + "\r\n> ").encode("ascii")
+
+
 class ScreenDumpBinTests(unittest.TestCase):
     def setUp(self) -> None:
         self.original_serial = openscope_live_debug.PosixSerial
@@ -334,6 +411,108 @@ h2_post_rx n=0 trigger=01 len=2 bytes=FF FF
 
         self.assertEqual(rc, 4)
         self.assertIn("Port C/E mux arm", err.getvalue())
+
+    def test_parse_meter_dump_text_extracts_beep_and_frame_family(self) -> None:
+        parsed = openscope_live_debug.parse_meter_dump_text(
+            make_dump_text(7, result_class=7, display="CONT", unit="Ohm",
+                           beep=1, family=3)
+        )
+
+        self.assertEqual(parsed["context"]["meter_submode"], 7)
+        self.assertEqual(parsed["reading"]["class"], 7)
+        self.assertEqual(parsed["reading"]["unit"], "Ohm")
+        self.assertEqual(parsed["flags"]["beep"], 1)
+        self.assertEqual(parsed["frame_family"]["expected"], 3)
+        self.assertEqual(parsed["frame"]["hex"], "5A A5 04 E0 9B EF 07 28 00 00 01 4B")
+
+    def test_shorted_probes_sweep_uses_real_mode_trace_dump_sequence(self) -> None:
+        original_serial = openscope_live_debug.PosixSerial
+        original_sleep = openscope_live_debug.time.sleep
+        try:
+            responses: list[str] = []
+            for submode in range(11):
+                responses.append(f"mode=meter submode={submode}")
+                if submode == 0:
+                    responses.append(make_trace_text(0, display="0.0000", value_i10000=0, family=0))
+                    responses.append(make_dump_text(0, valid=1, result_class=1, display="0.0000", unit="V", family=0))
+                elif submode == 1:
+                    responses.append(make_trace_text(1, reject=3, valid=0, display="---", family=0))
+                    responses.append(make_dump_text(1, valid=0, result_class=0, display="---", unit="V", reject=3, family=0))
+                elif submode in (2, 3):
+                    responses.append(make_trace_text(submode, family=1))
+                    responses.append(make_dump_text(submode, family=1))
+                elif submode in (4, 5):
+                    responses.append(make_trace_text(submode, reject=3, valid=0, display="---", family=1))
+                    responses.append(make_dump_text(submode, valid=0, result_class=0, display="---", unit="A", reject=3, family=1))
+                elif submode == 6:
+                    responses.append(make_trace_text(6, reject=4, valid=0, display="---", family=2))
+                    responses.append(make_dump_text(6, valid=0, result_class=0, display="---", unit="Ohm", reject=4, family=2))
+                elif submode == 7:
+                    responses.append(make_trace_text(7, display="CONT", family=3, selector="0511", apply="0516"))
+                    responses.append(make_dump_text(7, valid=1, result_class=7, display="CONT", unit="Ohm", beep=1, family=3))
+                elif submode == 8:
+                    responses.append(make_trace_text(8, family=4, selector="0510", apply="0515"))
+                    responses.append(make_dump_text(8, family=4))
+                else:
+                    responses.append(make_trace_text(submode, family=5, selector="0512"))
+                    responses.append(make_dump_text(submode, family=5))
+
+            SequenceSerial.responses = responses
+            SequenceSerial.instances = []
+            openscope_live_debug.PosixSerial = SequenceSerial
+            openscope_live_debug.time.sleep = lambda _seconds: None
+
+            out = io.StringIO()
+            with contextlib.redirect_stdout(out):
+                rc = openscope_live_debug.main([
+                    "shorted-probes-sweep",
+                    "--port", "/dev/fake",
+                    "--settle-ms", "700",
+                    "--samples", "1",
+                    "--timeout", "7",
+                ])
+        finally:
+            openscope_live_debug.PosixSerial = original_serial
+            openscope_live_debug.time.sleep = original_sleep
+
+        self.assertEqual(rc, 0)
+        written = SequenceSerial.instances[0].written
+        self.assertEqual(written[0:3], ["mode meter 0 0", "meter trace", "meter dump"])
+        self.assertEqual(written[-3:], ["mode meter 10 0", "meter trace", "meter dump"])
+        self.assertEqual([cmd for cmd in written if cmd.startswith("mode meter")],
+                         [f"mode meter {submode} 0" for submode in range(11)])
+        self.assertIn("PASS sub=7 Continuity: continuity beep on", out.getvalue())
+
+    def test_shorted_probes_sweep_fails_on_nonzero_dcv(self) -> None:
+        original_serial = openscope_live_debug.PosixSerial
+        original_sleep = openscope_live_debug.time.sleep
+        try:
+            responses: list[str] = []
+            for submode in range(11):
+                responses.append(f"mode=meter submode={submode}")
+                responses.append(make_trace_text(submode, display="0.4300", value_i10000=4300,
+                                                 family=0 if submode < 2 else min(submode, 5)))
+                responses.append(make_dump_text(submode, valid=1, result_class=1, display="0.4300",
+                                                unit="V", family=0 if submode < 2 else min(submode, 5)))
+            SequenceSerial.responses = responses
+            SequenceSerial.instances = []
+            openscope_live_debug.PosixSerial = SequenceSerial
+            openscope_live_debug.time.sleep = lambda _seconds: None
+
+            out = io.StringIO()
+            with contextlib.redirect_stdout(out):
+                rc = openscope_live_debug.main([
+                    "shorted-probes-sweep",
+                    "--port", "/dev/fake",
+                    "--samples", "1",
+                    "--zero-limit-v", "0.02",
+                ])
+        finally:
+            openscope_live_debug.PosixSerial = original_serial
+            openscope_live_debug.time.sleep = original_sleep
+
+        self.assertEqual(rc, 5)
+        self.assertIn("FAIL sub=0 DC Voltage", out.getvalue())
 
 
 if __name__ == "__main__":

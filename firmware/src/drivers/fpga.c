@@ -870,6 +870,12 @@ static void fpga_record_meter_transition_snapshot(
     fpga.meter_transition_history_selector[idx] = plan->selector_word;
     fpga.meter_transition_history_apply[idx] =
         plan->has_apply_word ? plan->apply_word : 0;
+    fpga.meter_transition_history_bank[idx] =
+        plan->has_command_bank_prefix ? 1U : 0U;
+    fpga.meter_transition_history_bank_first[idx] =
+        plan->has_command_bank_prefix ? plan->command_bank_first : 0U;
+    fpga.meter_transition_history_bank_second[idx] =
+        plan->has_command_bank_prefix ? plan->command_bank_second : 0U;
     fpga.meter_transition_history_probe[idx] =
         plan->has_probe_detect ?
         (uint16_t)((GPIOC->idt & (1U << 7)) ? 0x0507U : 0x050AU) : 0;
@@ -4739,6 +4745,10 @@ static void fpga_send_meter_mode_sequence(uint8_t submode)
      * local policy and are reported in debug output instead of being hidden as
      * stock fact.
      */
+    if (plan.has_command_bank_prefix) {
+        fpga_timed_send_cmd(0x00, plan.command_bank_first, plan.settle_ms);
+        fpga_timed_send_cmd(0x00, plan.command_bank_second, plan.settle_ms);
+    }
     if (plan.has_config_word) {
         fpga.meter_mode_config_word = plan.config_word;
         fpga_wire_send_word(plan.config_word, plan.settle_ms);

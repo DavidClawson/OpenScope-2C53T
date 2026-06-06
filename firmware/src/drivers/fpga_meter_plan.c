@@ -298,6 +298,18 @@ fpga_meter_transition_plan_t fpga_meter_transition_plan_for_submode(uint8_t subm
     plan.discard_frames = FPGA_METER_TRANSITION_DISCARD_FRAMES;
     plan.settle_ms = FPGA_METER_TRANSITION_SETTLE_MS;
     /*
+     * Stock command-bank prefix for continuity/diode.
+     *
+     * scripts/test_stock_meter_literals.py pins FUN_0800B908 state 8 at
+     * 0x0800BCA6 as queuing byte commands 0x00 then 0x2C before the common
+     * send tail. That is not a raw 0x052C selector and not a numeric range
+     * correction; it is the recovered byte-dispatch state that arms the
+     * continuity/diode family before the raw selector/apply pair below.
+     */
+    plan.has_command_bank_prefix = (submode == 7 || submode == 8);
+    plan.command_bank_first = plan.has_command_bank_prefix ? 0x00u : 0x00u;
+    plan.command_bank_second = plan.has_command_bank_prefix ? 0x2Cu : 0x00u;
+    /*
      * DCV runtime configure step.
      *
      * Stock V1.2.0 has separate evidence for the basic configure word 0x0508
@@ -321,6 +333,9 @@ fpga_meter_transition_plan_t fpga_meter_transition_plan_for_submode(uint8_t subm
         plan.porta_portb_mux = FPGA_METER_INVALID_STOCK_MODE;
         plan.discard_frames = 0;
         plan.settle_ms = 0;
+        plan.has_command_bank_prefix = false;
+        plan.command_bank_first = 0;
+        plan.command_bank_second = 0;
         plan.has_config_word = false;
         plan.config_word = 0;
         plan.selector_word = FPGA_METER_INVALID_SELECTOR_WORD;

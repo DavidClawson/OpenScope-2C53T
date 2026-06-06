@@ -56,6 +56,9 @@ typedef struct {
     uint8_t frame_family;
     uint8_t discard_frames;
     uint16_t settle_ms;
+    bool has_command_bank_prefix;
+    uint8_t command_bank_first;
+    uint8_t command_bank_second;
     bool has_config_word;
     uint16_t config_word;
     uint16_t selector_word;

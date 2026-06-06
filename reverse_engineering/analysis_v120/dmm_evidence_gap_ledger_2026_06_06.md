@@ -1071,3 +1071,38 @@ an unknown live input. Current, resistance, continuity, diode, capacitance, and
 temperature remain explicit manual submodes with parser/state-machine coverage,
 but default autoscan must not sweep them until stock/live evidence proves safe
 current-jack detection and de-energized passive-probe conditions.
+
+## 2026-06-06 Shorted-Probes Live Sweep
+
+Bench fixture: user shorted the DMM probes. During the host-driven
+`shorted-probes-sweep` the user heard the relay click twice, like a fast
+enable/disable transition. That sound is useful live context only; the firmware
+evidence below remains the CDC state/trace output.
+
+OpenScope app image SHA-256
+`a146d420fe1a924011e3b357e2c9f21dfba4789f20ca233d27ec27ee011425d7`
+was flashed through guarded HID IAP after `flash_preflight.py hid-app`
+classified it as an `openscope-app` image at `0x08004000`. This image included
+the recovered stock state-8 command-bank prefix for continuity/diode:
+`0x00, 0x2C` before the local raw selector/apply path. A live sweep with shorted
+probes still failed:
+
+- DCV selected `0x0514` but reported `---` from the unmarked/special producer
+  frame family instead of a near-zero voltage.
+- ACV selected `0x050C`/apply `0x050D` but rejected as wrong-family, not the
+  expected missing-AC-evidence case.
+- Resistance selected `0x050A` but did not produce near-zero ohms or the
+  unresolved-calibration reject.
+- Continuity selected `0x0511`/apply `0x0516` with planned bank
+  `1/00/2C`, but the dump remained `beep=0` and did not produce the recovered
+  continuity marker.
+
+Interpretation: the stock state-8 byte-bank prefix is a real missing command
+surface, but applying it in the local transition path is not sufficient to fix
+the shorted-probes case. The double relay click plus repeated `---`/OL-shaped
+frames point at an upstream apply/hold/frontend state issue before stock
+decimal decoding and before continuity marker parsing. The next live trace must
+capture the exact transition history, including whether the byte-bank prefix was
+actually sent for the switch that produced the first post-transition frame, and
+pair that with GPIO/mux state and producer frames. Do not replace this with
+OCR, prose validators, one-point coefficients, or magnitude-based mode guesses.

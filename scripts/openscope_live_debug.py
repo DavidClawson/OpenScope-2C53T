@@ -272,8 +272,12 @@ def clean_response(command: str, data: bytes) -> str:
 def run_command(port: str, baud: int, command: str, timeout: float) -> str:
     with PosixSerial(port, baud, timeout) as serial:
         serial.drain()
-        serial.write_line(command)
-        return clean_response(command, serial.read_until_prompt(timeout))
+        return run_command_on_serial(serial, command, timeout)
+
+
+def run_command_on_serial(serial: PosixSerial, command: str, timeout: float) -> str:
+    serial.write_line(command)
+    return clean_response(command, serial.read_until_prompt(timeout))
 
 
 def _parse_int_token(value: str) -> int | str:
@@ -321,6 +325,53 @@ def _frame_record(frame: list[int]) -> dict[str, object]:
         "hex": " ".join(f"{byte:02X}" for byte in frame),
         "bytes": frame,
     }
+
+
+def parse_meter_dump_text(text: str) -> dict[str, object]:
+    """Parse the firmware `meter dump` debug surface mechanically.
+
+    This is deliberately a state readback parser. It records the firmware's
+    current mode, decoded result, flags, and frame bytes; it does not infer a
+    measurement from LCD pixels, magnitude shape, or a guessed coefficient.
+    """
+    if "=== DMM State ===" not in text:
+        raise ValueError("meter dump response has no DMM State header")
+
+    result: dict[str, object] = {
+        "raw_text": text,
+        "history": [],
+    }
+    for raw_line in text.splitlines():
+        line = raw_line.strip()
+        if not line or line == "=== DMM State ===":
+            continue
+        if line.startswith("mode="):
+            result["context"] = _parse_kv_line(line)
+        elif line.startswith("valid="):
+            result["reading"] = _parse_kv_line(line)
+        elif line.startswith("bcd_value="):
+            result["bcd"] = _parse_kv_line(line)
+        elif line.startswith("flags "):
+            result["flags"] = _parse_kv_line(line)
+        elif line.startswith("stock_fsm "):
+            result["stock_fsm"] = _parse_kv_line(line)
+        elif line.startswith("frame_family "):
+            result["frame_family"] = _parse_kv_line(line)
+        elif line.startswith("frame="):
+            result["frame"] = _frame_record(_parse_frame_bytes(line.split("=", 1)[1]))
+        elif line.startswith("nibbles="):
+            nibble_text, raw_text = line.split(" raw_digits=", 1)
+            result["nibbles"] = [
+                int(item, 16) for item in nibble_text.split("=", 1)[1].split()
+            ]
+            result["raw_digits"] = [int(item, 16) for item in raw_text.split()]
+        elif line.startswith("#"):
+            result["history"].append(_parse_kv_line(line))
+
+    for key in ("context", "reading", "flags", "frame_family", "frame"):
+        if key not in result:
+            raise ValueError(f"meter dump missing {key}")
+    return result
 
 
 def parse_meter_trace_text(text: str) -> dict[str, object]:
@@ -454,6 +505,179 @@ def parse_meter_trace_text(text: str) -> dict[str, object]:
         if key not in result:
             raise ValueError(f"meter trace missing {key}")
     return result
+
+
+SHORTED_PROBE_SUBMODES = tuple(range(11))
+METER_SUBMODE_NAMES = {
+    0: "DC Voltage",
+    1: "AC Voltage",
+    2: "DC mA",
+    3: "DC A",
+    4: "AC mA",
+    5: "AC A",
+    6: "Resistance",
+    7: "Continuity",
+    8: "Diode",
+    9: "Capacitance",
+    10: "Temperature",
+}
+
+
+def _number_from_trace(trace: dict[str, object]) -> float | None:
+    decoded = trace.get("decoded")
+    if not isinstance(decoded, dict):
+        return None
+    value = decoded.get("value_i10000")
+    if isinstance(value, int):
+        return value / 10000.0
+    return None
+
+
+def evaluate_shorted_probe_record(record: dict[str, object], zero_limit: float) -> tuple[bool, str]:
+    submode = int(record["submode"])
+    trace = record["trace"]
+    dump = record["dump"]
+    assert isinstance(trace, dict)
+    assert isinstance(dump, dict)
+    context = trace.get("context", {})
+    decoded = trace.get("decoded", {})
+    dump_reading = dump.get("reading", {})
+    dump_flags = dump.get("flags", {})
+    dump_frame_family = dump.get("frame_family", {})
+    if not isinstance(context, dict) or not isinstance(decoded, dict):
+        return False, "trace missing decoded context"
+    if not isinstance(dump_reading, dict) or not isinstance(dump_flags, dict):
+        return False, "dump missing reading/flags"
+    if not isinstance(dump_frame_family, dict):
+        return False, "dump missing frame-family state"
+
+    ui_sub = context.get("ui_sub")
+    reading_sub = context.get("reading_sub")
+    if ui_sub != submode or reading_sub != submode:
+        return False, f"stale submode ui={ui_sub} reading={reading_sub}"
+
+    display = str(decoded.get("display", ""))
+    reject = decoded.get("reject")
+    family_expected = decoded.get("family_expected")
+    family_observed = decoded.get("family_observed")
+    result_class = dump_reading.get("class")
+    dump_valid = dump_reading.get("valid")
+    unit = str(dump_reading.get("unit", ""))
+
+    if submode == 0:
+        value = _number_from_trace(trace)
+        if dump_valid != 1 or unit != "V" or value is None:
+            return False, "DCV short did not produce a live voltage reading"
+        if abs(value) > zero_limit:
+            return False, f"DCV short is {value:.5g} V, outside +/-{zero_limit:g} V"
+        return True, "DCV near zero"
+
+    if submode == 1:
+        if reject == 3:
+            return True, "ACV rejected missing AC evidence"
+        return False, "ACV short rendered without missing-AC-evidence reject"
+
+    if submode in (2, 3, 4, 5):
+        return True, "current-mode numeric assertion skipped: no current-jack fixture"
+
+    if submode == 6:
+        if reject == 4:
+            return True, "low-ohm resistance failed closed on unresolved calibration"
+        value = _number_from_trace(trace)
+        if dump_valid == 1 and unit in ("Ohm", "kOhm") and value is not None and abs(value) <= 1.0:
+            return True, "resistance near short"
+        return False, "resistance short was neither near zero nor unresolved-calibration reject"
+
+    if submode == 7:
+        if result_class == 7 and dump_flags.get("beep") == 1:
+            return True, "continuity beep on"
+        return False, "continuity short did not produce continuity/beep"
+
+    if submode == 8:
+        if family_expected == family_observed and dump_frame_family.get("reject") == 0:
+            return True, "diode stayed in active diode family"
+        return False, "diode short produced stale or foreign frame family"
+
+    if submode in (9, 10):
+        if family_expected == family_observed and dump_frame_family.get("reject") == 0:
+            return True, "extended mode stayed in active family"
+        return False, "extended mode produced stale or foreign frame family"
+
+    return False, "unknown submode"
+
+
+def run_shorted_probes_sweep(
+    port: str,
+    baud: int,
+    timeout: float,
+    settle_ms: int,
+    samples: int,
+    zero_limit: float,
+) -> dict[str, object]:
+    results = []
+    with PosixSerial(port, baud, timeout) as serial:
+        serial.drain()
+        for submode in SHORTED_PROBE_SUBMODES:
+            mode_command = f"mode meter {submode} 0"
+            mode_response = run_command_on_serial(serial, mode_command, timeout)
+            serial.drain()
+            time.sleep(settle_ms / 1000.0)
+            trace_samples = []
+            dump_samples = []
+            for _sample in range(samples):
+                trace_text = run_command_on_serial(serial, "meter trace", timeout)
+                dump_text = run_command_on_serial(serial, "meter dump", timeout)
+                trace_samples.append(parse_meter_trace_text(trace_text))
+                dump_samples.append(parse_meter_dump_text(dump_text))
+                serial.drain()
+                time.sleep(0.05)
+            record = {
+                "submode": submode,
+                "name": METER_SUBMODE_NAMES.get(submode, f"submode {submode}"),
+                "mode_command": mode_command,
+                "mode_response": mode_response,
+                "trace": trace_samples[-1],
+                "dump": dump_samples[-1],
+                "trace_samples": trace_samples,
+                "dump_samples": dump_samples,
+            }
+            passed, reason = evaluate_shorted_probe_record(record, zero_limit)
+            record["passed"] = passed
+            record["reason"] = reason
+            results.append(record)
+    return {
+        "fixture": "shorted-probes",
+        "settle_ms": settle_ms,
+        "samples": samples,
+        "zero_limit_v": zero_limit,
+        "passed": all(bool(item["passed"]) for item in results),
+        "results": results,
+    }
+
+
+def print_shorted_probes_summary(sweep: dict[str, object]) -> None:
+    print(
+        f"shorted-probes sweep settle_ms={sweep['settle_ms']} "
+        f"samples={sweep['samples']} passed={1 if sweep['passed'] else 0}"
+    )
+    for item in sweep["results"]:
+        assert isinstance(item, dict)
+        trace = item["trace"]
+        assert isinstance(trace, dict)
+        decoded = trace.get("decoded", {})
+        wire = trace.get("wire", {})
+        frame = trace.get("producer_frame", {})
+        assert isinstance(decoded, dict)
+        assert isinstance(wire, dict)
+        assert isinstance(frame, dict)
+        verdict = "PASS" if item["passed"] else "FAIL"
+        print(
+            f"{verdict} sub={item['submode']} {item['name']}: {item['reason']} "
+            f"display={decoded.get('display')} reject={decoded.get('reject')} "
+            f"family={decoded.get('family_expected')}/{decoded.get('family_observed')} "
+            f"selector={wire.get('selector')} apply={wire.get('apply')} "
+            f"frame={frame.get('hex')}"
+        )
 
 
 def rgb565_to_rgb888(pixel: int) -> tuple[int, int, int]:
@@ -794,6 +1018,17 @@ def build_parser() -> argparse.ArgumentParser:
     trace_parser.add_argument("--log", type=Path, help="optional log file for the single trace response")
     trace_parser.add_argument("--json", action="store_true", help="emit parsed trace JSON instead of raw trace text")
 
+    shorted_parser = subparsers.add_parser(
+        "shorted-probes-sweep",
+        help="switch through DMM modes and validate a physical shorted-probes fixture",
+    )
+    add_common_serial_args(shorted_parser)
+    shorted_parser.add_argument("--settle-ms", type=int, default=700, help="settle delay per mode, default 700")
+    shorted_parser.add_argument("--samples", type=int, default=3, help="trace/dump samples per mode, default 3")
+    shorted_parser.add_argument("--zero-limit-v", type=float, default=0.02, help="DCV zero tolerance, default 0.02 V")
+    shorted_parser.add_argument("--json", action="store_true", help="emit full machine-readable sweep JSON")
+    shorted_parser.add_argument("--log", type=Path, help="optional log file for the full sweep JSON")
+
     stream_parser = subparsers.add_parser("meter-stream", help='run firmware-side compact stream, default "meter stream"')
     add_common_serial_args(stream_parser)
     stream_parser.add_argument("--count", type=int, default=32, help="firmware stream count, default 32")
@@ -891,6 +1126,15 @@ def validate_mux_arm_args(portc_porte: int, porta_portb: int, settle_ms: int) ->
         raise ValueError("mux-arm settle delay must be between 0 and 5000 ms")
 
 
+def validate_shorted_sweep_args(settle_ms: int, samples: int, zero_limit: float) -> None:
+    if not 0 <= settle_ms <= 5000:
+        raise ValueError("shorted-probes settle delay must be between 0 and 5000 ms")
+    if not 1 <= samples <= 10:
+        raise ValueError("shorted-probes samples must be between 1 and 10")
+    if not 0.0 < zero_limit <= 1.0:
+        raise ValueError("shorted-probes zero limit must be between 0 and 1 V")
+
+
 def main(argv: list[str] | None = None) -> int:
     args = build_parser().parse_args(argv)
 
@@ -902,6 +1146,8 @@ def main(argv: list[str] | None = None) -> int:
             validate_stream_args(args.count, args.delay_ms)
         if args.mode == "meter-mux-arms":
             validate_mux_arm_args(args.portc_porte, args.porta_portb, args.settle_ms)
+        if args.mode == "shorted-probes-sweep":
+            validate_shorted_sweep_args(args.settle_ms, args.samples, args.zero_limit_v)
         port = choose_port(args.port)
         with serial_device_lock(port):
             if args.mode == "command":
@@ -950,6 +1196,25 @@ def main(argv: list[str] | None = None) -> int:
                 with log_context(args.log) as log_file:
                     write_log_line(log_file, response)
                 return 0
+
+            if args.mode == "shorted-probes-sweep":
+                timeout = max(args.timeout, (args.settle_ms / 1000.0) + 3.0)
+                sweep = run_shorted_probes_sweep(
+                    port,
+                    args.baud,
+                    timeout,
+                    args.settle_ms,
+                    args.samples,
+                    args.zero_limit_v,
+                )
+                sweep_text = json.dumps(sweep, indent=2, sort_keys=True)
+                if args.json:
+                    print(sweep_text)
+                else:
+                    print_shorted_probes_summary(sweep)
+                with log_context(args.log) as log_file:
+                    write_log_line(log_file, sweep_text)
+                return 0 if sweep["passed"] else 5
 
             if args.mode == "meter-stream":
                 command = f"meter stream {args.count} {args.delay_ms}"

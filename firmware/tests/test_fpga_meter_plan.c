@@ -245,6 +245,9 @@ static void test_transition_plan_covers_mux_family_and_settle_policy(void)
         0x0000, 0x0000, 0x0000, 0x0000, 0x0000,
         0x0000
     };
+    static const uint8_t expected_bank[FPGA_METER_LOCAL_SUBMODE_COUNT] = {
+        0, 0, 0, 0, 0, 0, 0, 1, 1, 0, 0
+    };
 
     for (uint8_t i = 0; i < FPGA_METER_LOCAL_SUBMODE_COUNT; i++) {
         char name[48];
@@ -270,6 +273,14 @@ static void test_transition_plan_covers_mux_family_and_settle_policy(void)
         EXPECT_EQ_U16(name, plan.settle_ms, FPGA_METER_TRANSITION_SETTLE_MS);
         snprintf(name, sizeof(name), "plan selector %u", (unsigned)i);
         EXPECT_EQ_U16(name, plan.selector_word, expected_selector[i]);
+        snprintf(name, sizeof(name), "plan command bank exists %u", (unsigned)i);
+        EXPECT_EQ_U8(name, plan.has_command_bank_prefix ? 1U : 0U,
+                     expected_bank[i]);
+        snprintf(name, sizeof(name), "plan command bank first %u", (unsigned)i);
+        EXPECT_EQ_U8(name, plan.command_bank_first, 0x00U);
+        snprintf(name, sizeof(name), "plan command bank second %u", (unsigned)i);
+        EXPECT_EQ_U8(name, plan.command_bank_second,
+                     expected_bank[i] ? 0x2CU : 0x00U);
         snprintf(name, sizeof(name), "plan config exists %u", (unsigned)i);
         EXPECT_EQ_U8(name, plan.has_config_word ? 1U : 0U,
                      expected_config[i] != 0 ? 1U : 0U);
@@ -409,6 +420,12 @@ static void test_transition_settle_discard_policy_is_explicit_for_every_submode(
                       plan.settle_ms, 0U);
         EXPECT_EQ_U16("invalid submodes emit no settle/discard selector",
                       plan.selector_word, FPGA_METER_INVALID_SELECTOR_WORD);
+        EXPECT_EQ_U8("invalid submodes emit no command bank",
+                     plan.has_command_bank_prefix ? 1U : 0U, 0U);
+        EXPECT_EQ_U8("invalid submodes emit no command bank first",
+                     plan.command_bank_first, 0U);
+        EXPECT_EQ_U8("invalid submodes emit no command bank second",
+                     plan.command_bank_second, 0U);
         EXPECT_EQ_U8("invalid submodes emit no configure",
                      plan.has_config_word ? 1U : 0U, 0U);
         EXPECT_EQ_U16("invalid submodes emit no configure word",

@@ -426,6 +426,9 @@ static void fpga_diag_clear(void)
     memset((void *)fpga.meter_transition_history_config, 0, sizeof(fpga.meter_transition_history_config));
     memset((void *)fpga.meter_transition_history_selector, 0, sizeof(fpga.meter_transition_history_selector));
     memset((void *)fpga.meter_transition_history_apply, 0, sizeof(fpga.meter_transition_history_apply));
+    memset((void *)fpga.meter_transition_history_bank, 0, sizeof(fpga.meter_transition_history_bank));
+    memset((void *)fpga.meter_transition_history_bank_first, 0, sizeof(fpga.meter_transition_history_bank_first));
+    memset((void *)fpga.meter_transition_history_bank_second, 0, sizeof(fpga.meter_transition_history_bank_second));
     memset((void *)fpga.meter_transition_history_probe, 0, sizeof(fpga.meter_transition_history_probe));
     memset((void *)fpga.meter_transition_history_start, 0, sizeof(fpga.meter_transition_history_start));
     memset((void *)fpga.meter_transition_history_sequence_count, 0, sizeof(fpga.meter_transition_history_sequence_count));
@@ -2538,6 +2541,9 @@ static void cmd_meter_trace(void)
     uint16_t mth_config[FPGA_METER_TRANSITION_HISTORY];
     uint16_t mth_selector[FPGA_METER_TRANSITION_HISTORY];
     uint16_t mth_apply[FPGA_METER_TRANSITION_HISTORY];
+    uint8_t mth_bank[FPGA_METER_TRANSITION_HISTORY];
+    uint8_t mth_bank_first[FPGA_METER_TRANSITION_HISTORY];
+    uint8_t mth_bank_second[FPGA_METER_TRANSITION_HISTORY];
     uint16_t mth_probe[FPGA_METER_TRANSITION_HISTORY];
     uint16_t mth_start[FPGA_METER_TRANSITION_HISTORY];
     uint16_t mth_seq[FPGA_METER_TRANSITION_HISTORY];
@@ -2683,6 +2689,9 @@ static void cmd_meter_trace(void)
         mth_config[n] = fpga.meter_transition_history_config[idx];
         mth_selector[n] = fpga.meter_transition_history_selector[idx];
         mth_apply[n] = fpga.meter_transition_history_apply[idx];
+        mth_bank[n] = fpga.meter_transition_history_bank[idx];
+        mth_bank_first[n] = fpga.meter_transition_history_bank_first[idx];
+        mth_bank_second[n] = fpga.meter_transition_history_bank_second[idx];
         mth_probe[n] = fpga.meter_transition_history_probe[idx];
         mth_start[n] = fpga.meter_transition_history_start[idx];
         mth_seq[n] = fpga.meter_transition_history_sequence_count[idx];
@@ -2733,7 +2742,8 @@ static void cmd_meter_trace(void)
                      rx_sync_bad_second,
                      rx_sync_stray);
     usb_debug_printf("plan stock_mode=%u raw_low=%02X family=%u mux=%u "
-                     "portc_porte=%u porta_portb=%u settle_ms=%u discard=%u\r\n",
+                     "portc_porte=%u porta_portb=%u settle_ms=%u discard=%u "
+                     "bank=%u/%02X/%02X\r\n",
                      (unsigned)selectors.function_selector,
                      (unsigned)selectors.range_selector,
                      (unsigned)plan.frame_family,
@@ -2741,7 +2751,10 @@ static void cmd_meter_trace(void)
                      (unsigned)plan.portc_porte_mux,
                      (unsigned)plan.porta_portb_mux,
                      (unsigned)plan.settle_ms,
-                     (unsigned)plan.discard_frames);
+                     (unsigned)plan.discard_frames,
+                     plan.has_command_bank_prefix ? 1U : 0U,
+                     (unsigned)plan.command_bank_first,
+                     (unsigned)plan.command_bank_second);
     usb_debug_printf("wire config=%04X has_config=%u selector=%04X "
                      "apply=%04X has_apply=%u probe=%04X start=%04X "
                      "seq_count=%u seq_sub=%u\r\n",
@@ -2825,14 +2838,18 @@ static void cmd_meter_trace(void)
     usb_send_str("transition_history newest_first:\r\n");
     for (uint8_t n = 0; n < mth_count; n++) {
         usb_debug_printf("mth n=%u sub=%u seq=%u config=%04X selector=%04X "
-                         "apply=%04X probe=%04X start=%04X tx=%u..%u data=%u..%u "
-                         "planned_gpio=%03X actual_gpio=%03X\r\n",
+                         "apply=%04X bank=%u/%02X/%02X probe=%04X "
+                         "start=%04X tx=%u..%u data=%u..%u planned_gpio=%03X "
+                         "actual_gpio=%03X\r\n",
                          (unsigned)n,
                          (unsigned)mth_submode[n],
                          mth_seq[n],
                          mth_config[n],
                          mth_selector[n],
                          mth_apply[n],
+                         (unsigned)mth_bank[n],
+                         (unsigned)mth_bank_first[n],
+                         (unsigned)mth_bank_second[n],
                          mth_probe[n],
                          mth_start[n],
                          mth_tx_before[n],

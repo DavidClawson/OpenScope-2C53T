@@ -235,6 +235,9 @@ typedef struct {
     volatile uint16_t meter_transition_history_config[FPGA_METER_TRANSITION_HISTORY];
     volatile uint16_t meter_transition_history_selector[FPGA_METER_TRANSITION_HISTORY];
     volatile uint16_t meter_transition_history_apply[FPGA_METER_TRANSITION_HISTORY];
+    volatile uint8_t  meter_transition_history_bank[FPGA_METER_TRANSITION_HISTORY];
+    volatile uint8_t  meter_transition_history_bank_first[FPGA_METER_TRANSITION_HISTORY];
+    volatile uint8_t  meter_transition_history_bank_second[FPGA_METER_TRANSITION_HISTORY];
     volatile uint16_t meter_transition_history_probe[FPGA_METER_TRANSITION_HISTORY];
     volatile uint16_t meter_transition_history_start[FPGA_METER_TRANSITION_HISTORY];
     volatile uint16_t meter_transition_history_sequence_count[FPGA_METER_TRANSITION_HISTORY];
