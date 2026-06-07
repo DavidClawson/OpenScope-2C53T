@@ -10,6 +10,7 @@ AS      = $(PREFIX)gcc -x assembler-with-cpp
 CP      = $(PREFIX)objcopy
 SZ      = $(PREFIX)size
 OBJDUMP = $(PREFIX)objdump
+NANO_SPECS := $(shell f="$(shell $(CC) -print-file-name=nano.specs 2>/dev/null)"; test "$$f" != "nano.specs" -a -f "$$f" && printf '%s' '-specs=nano.specs')
 
 ######################################################################
 # Project paths
@@ -98,7 +99,7 @@ ifneq ($(findstring FFT,$(FEATURES)),)
     C_SOURCES += $(CMSIS_DSP)/Source/ComplexMathFunctions/arm_cmplx_mag_f32.c
     C_SOURCES += $(CMSIS_DSP)/Source/BasicMathFunctions/arm_scale_f32.c
     FFT_INCLUDES = -I$(CMSIS_DSP)/Include
-    FFT_DEFS += -DUSE_CMSIS_DSP -DARM_MATH_CM4 -D__FPU_PRESENT=1
+    FFT_DEFS += -DUSE_CMSIS_DSP -DARM_MATH_CM4
   endif
 endif
 
@@ -197,7 +198,7 @@ ASFLAGS = $(MCU) $(C_DEFS) $(C_INCLUDES)
 LDSCRIPT = ld/at32f403a_app.ld
 
 LDFLAGS  = $(MCU)
-LDFLAGS += -specs=nano.specs
+LDFLAGS += $(NANO_SPECS)
 LDFLAGS += -T$(LDSCRIPT)
 LDFLAGS += -Wl,--gc-sections
 LDFLAGS += -Wl,-Map=$(BUILD_DIR)/firmware.map,--cref
@@ -262,7 +263,7 @@ $(BUILD_DIR)/$(TARGET).bin: $(BUILD_DIR)/$(TARGET).elf $(BUILD_DIR)/option_bytes
 #
 # Flashed via: dfu-util -a 1 -d 2e3c:df11 -s 0x1FFFF800 -D build/option_bytes48.bin
 $(BUILD_DIR)/option_bytes48.bin: Makefile | $(BUILD_DIR)
-	@printf '\xA5\x5A\xFF\x00\xFF\x00\xFF\x00\xFF\x00\xFF\x00\xFF\x00\xFF\x00\xFE\x01\xFF\x00\xFF\x00\xFF\x00\xFF\x00\xFF\x00\xFF\x00\xFF\x00\xFF\xFF\xFF\xFF\xFF\xFF\xFF\xFF\xFF\xFF\xFF\xFF\xFF\xFF\xFF\xFF' > $@
+	@printf '\245\132\377\000\377\000\377\000\377\000\377\000\377\000\377\000\376\001\377\000\377\000\377\000\377\000\377\000\377\000\377\000\377\377\377\377\377\377\377\377\377\377\377\377\377\377\377\377' > $@
 	@echo "Built: $@ ($$(wc -c < $@ | tr -d ' ') bytes) — EOPB0=0xFE, 224KB SRAM"
 
 $(BUILD_DIR)/$(TARGET).hex: $(BUILD_DIR)/$(TARGET).elf
@@ -321,10 +322,12 @@ guest-usart-silent: clean all
 
 # Flash app via USB HID bootloader (bootloader must be running)
 flash: $(BUILD_DIR)/$(TARGET).bin
+	python3 ../scripts/flash_preflight.py hid-app --image $< --address 0x08004000
 	uv run ../scripts/hid_flash.py $<
 
 # Flash app via DFU (device must be in ROM DFU mode — BOOT0 + reset)
 flash-dfu: $(BUILD_DIR)/$(TARGET).bin
+	python3 ../scripts/flash_preflight.py rom-dfu-app --image $<
 	dfu-util -a 0 -d 2e3c:df11 -s 0x08004000:leave -D $<
 
 # Build and flash the bootloader (one-time, via DFU)
@@ -333,10 +336,12 @@ bootloader:
 
 flash-bootloader:
 	$(MAKE) -C bootloader
+	python3 ../scripts/flash_preflight.py rom-dfu-bootloader --bootloader bootloader/build/bootloader.bin
 	dfu-util -a 0 -d 2e3c:df11 -s 0x08000000 -D bootloader/build/bootloader.bin
 
 # Flash both bootloader + app in one go (via ROM DFU, for initial setup)
 flash-all: $(BUILD_DIR)/$(TARGET).bin bootloader
+	python3 ../scripts/flash_preflight.py rom-dfu-all --bootloader bootloader/build/bootloader.bin --image $(BUILD_DIR)/$(TARGET).bin --option-bytes $(BUILD_DIR)/option_bytes48.bin
 	dfu-util -a 0 -d 2e3c:df11 -s 0x08000000 -D bootloader/build/bootloader.bin
 	dfu-util -a 0 -d 2e3c:df11 -s 0x08004000:leave -D $(BUILD_DIR)/$(TARGET).bin
 

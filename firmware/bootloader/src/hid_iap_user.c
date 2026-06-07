@@ -12,6 +12,18 @@
 #include "hid_iap_class.h"
 #include "string.h"
 
+#define AT32_ROM_DFU_ADDRESS 0x1FFFB000u
+#ifndef IAP_CMD_DFU
+#define IAP_CMD_DFU 0x5AA8u
+#endif
+#define IAP_CMD_LOW_FLASH 0x5AA9u
+#define IAP_CMD_RUN_ADDR  0x5AAAu
+#define IAP_CMD_READ_MEM  0x5AABu
+#define IAP_LOW_FLASH_MAGIC 0x4C4F5746u
+#define IAP_READ_MEM_MAX  59u
+#define SRAM_BASE_ADDRESS 0x20000000u
+#define SRAM_END_ADDRESS  0x20038000u
+
 void (*pftarget)(void);
 void iap_clear_upgrade_flag(void);
 void iap_set_upgrade_flag(void);
@@ -23,22 +35,38 @@ iap_result_type iap_address(uint8_t *pdata, uint32_t len);
 void iap_finish(void);
 iap_result_type iap_data_write(uint8_t *pdata, uint32_t len);
 void iap_jump(void);
+void iap_dfu(void);
+void iap_low_flash(uint8_t *pdata, uint32_t len);
+void iap_run_addr(uint8_t *pdata, uint32_t len);
+void iap_read_mem(uint8_t *pdata, uint32_t len);
 void iap_respond(uint8_t *res_buf, uint16_t iap_cmd, uint16_t result);
 uint32_t stkptr, jumpaddr;
+static volatile uint8_t rom_dfu_wait;
+static volatile uint8_t rom_dfu_enter;
+static uint32_t iap_write_start;
+static uint32_t iap_write_end;
+static uint8_t iap_native_write;
+static volatile uint8_t run_addr_wait;
+static volatile uint8_t run_addr_enter;
+static uint32_t run_addr_target;
 
-#if defined (__GNUC__)
-  __attribute__((optimize("O0")))
-#endif
+/* Defined in main.c — draw transfer state on bootloader LCD */
+extern void lcd_draw_iap_status(const char *status);
+
+void jump_to_app(uint32_t address) __attribute__((noreturn));
+
 void jump_to_app(uint32_t address)
 {
   uint32_t sp = *(uint32_t *)address;
   uint32_t rv = *(uint32_t *)(address + sizeof(uint32_t));
 
   /* Validate: SP should be in SRAM, reset vector in flash */
-  if ((sp & 0xFFF00000) != 0x20000000)
-    return;
-  if (rv < 0x08002000 || rv > 0x08100000)
-    return;
+  if ((sp & 0xFFF00000) != 0x20000000) {
+    while (1) { __NOP(); }
+  }
+  if (rv < 0x08002000 || rv > 0x08100000) {
+    while (1) { __NOP(); }
+  }
 
   stkptr = sp;
   jumpaddr = rv;
@@ -63,9 +91,49 @@ void jump_to_app(uint32_t address)
     NVIC->ICPR[i] = 0xFFFFFFFF;
   }
 
-  __set_MSP(stkptr);
-  pftarget = (void (*)(void))jumpaddr;
+  SCB->VTOR = address;
+  pftarget = (void (*)(void))rv;
+  __set_MSP(sp);
   pftarget();
+
+  while (1) { __NOP(); }
+}
+
+static void jump_to_rom_dfu(void) __attribute__((noreturn));
+
+static void jump_to_rom_dfu(void)
+{
+  uint32_t sp = *(uint32_t *)AT32_ROM_DFU_ADDRESS;
+  uint32_t rv = *(uint32_t *)(AT32_ROM_DFU_ADDRESS + sizeof(uint32_t));
+
+  /* Keep PC9 power hold asserted while handing control to the silicon ROM. */
+  crm_periph_clock_enable(CRM_GPIOC_PERIPH_CLOCK, TRUE);
+  GPIOC->cfghr = (GPIOC->cfghr & ~(0xFU << 4)) | (0x3U << 4);
+  GPIOC->scr = (1U << 9);
+
+  __disable_irq();
+  nvic_irq_disable(USBFS_L_CAN1_RX0_IRQn);
+  __NVIC_ClearPendingIRQ(USBFS_L_CAN1_RX0_IRQn);
+
+  SysTick->CTRL = 0;
+  SysTick->LOAD = 0;
+  SysTick->VAL  = 0;
+
+  crm_periph_clock_enable(CRM_USB_PERIPH_CLOCK, FALSE);
+  crm_periph_reset(CRM_USB_PERIPH_RESET, TRUE);
+  crm_periph_reset(CRM_USB_PERIPH_RESET, FALSE);
+
+  for (int i = 0; i < 8; i++) {
+    NVIC->ICER[i] = 0xFFFFFFFF;
+    NVIC->ICPR[i] = 0xFFFFFFFF;
+  }
+
+  SCB->VTOR = AT32_ROM_DFU_ADDRESS;
+  __enable_irq();
+  __set_MSP(sp);
+  ((void (*)(void))rv)();
+
+  while (1) { __NOP(); }
 }
 
 void iap_clear_upgrade_flag(void)
@@ -139,6 +207,9 @@ void iap_init(void)
 
   iap_info.app_address = FLASH_APP_ADDRESS;
   iap_info.flag_address = iap_info.app_address - iap_info.sector_size;
+  iap_write_start = FLASH_APP_ADDRESS;
+  iap_write_end = FLASH_APP_END_ADDRESS;
+  iap_native_write = 0;
 
   iap_info.fifo_length = 0;
   iap_info.iap_address = 0;
@@ -148,6 +219,7 @@ void iap_idle(void)
 {
   iap_info.state = IAP_STS_START;
   iap_init();
+  lcd_draw_iap_status("Ready for flash");
   iap_respond(iap_info.iap_tx, IAP_CMD_IDLE, IAP_ACK);
 }
 
@@ -155,6 +227,7 @@ void iap_start(void)
 {
   iap_info.state = IAP_STS_START;
   iap_init();
+  lcd_draw_iap_status("Flashing...");
   iap_respond(iap_info.iap_tx, IAP_CMD_START, IAP_ACK);
 }
 
@@ -167,7 +240,7 @@ iap_result_type iap_address(uint8_t *pdata, uint32_t len)
 
   address = (paddr[0] << 24) | (paddr[1] << 16) | (paddr[2] << 8) | paddr[3];
 
-  if (address < iap_info.app_address || address > iap_info.flash_end_address)
+  if (address < iap_write_start || address >= iap_write_end)
   {
     status = IAP_FAILED;
     result = IAP_NACK;
@@ -175,7 +248,8 @@ iap_result_type iap_address(uint8_t *pdata, uint32_t len)
   else
   {
     iap_info.iap_address = address;
-    if (iap_info.state == IAP_STS_START)
+    lcd_draw_iap_status("Flashing...");
+    if (iap_info.state == IAP_STS_START && !iap_native_write)
       iap_clear_upgrade_flag();
     iap_erase_sector(iap_info.iap_address);
   }
@@ -241,7 +315,8 @@ void iap_finish(void)
   }
 
   iap_info.state = IAP_STS_FINISH;
-  iap_set_upgrade_flag();
+  if (!iap_native_write)
+    iap_set_upgrade_flag();
   iap_respond(iap_info.iap_tx, IAP_CMD_FINISH, IAP_ACK);
 }
 
@@ -252,7 +327,8 @@ void iap_crc(uint8_t *pdata, uint32_t len)
   uint32_t crc_value;
   uint32_t address = (paddr[0] << 24) | (paddr[1] << 16) | (paddr[2] << 8) | paddr[3];
   paddr = pdata + 6;
-  crc_nk = (paddr[0] << 16) | paddr[1];
+  crc_nk = (paddr[0] << 8) | paddr[1];
+  lcd_draw_iap_status("Verifying...");
   crc_value = crc_cal(address, crc_nk);
 
   iap_respond(iap_info.iap_tx, IAP_CMD_CRC, IAP_ACK);
@@ -275,6 +351,101 @@ void iap_get(void)
   iap_info.iap_tx[5] = (uint8_t)((iap_info.app_address >> 16) & 0xFF);
   iap_info.iap_tx[6] = (uint8_t)((iap_info.app_address >> 8) & 0xFF);
   iap_info.iap_tx[7] = (uint8_t)((iap_info.app_address) & 0xFF);
+}
+
+void iap_dfu(void)
+{
+  rom_dfu_wait = 1;
+  iap_respond(iap_info.iap_tx, IAP_CMD_DFU, IAP_ACK);
+}
+
+void iap_low_flash(uint8_t *pdata, uint32_t len)
+{
+  uint16_t result = IAP_NACK;
+  uint8_t *paddr = pdata + 2;
+  uint32_t magic = 0;
+
+  if (len >= 6)
+    magic = (paddr[0] << 24) | (paddr[1] << 16) | (paddr[2] << 8) | paddr[3];
+
+#ifdef HIGH_IAP_ALLOW_LOW_FLASH
+  if (magic == IAP_LOW_FLASH_MAGIC && BOOTLOADER_BASE_ADDRESS >= FLASH_APP_END_ADDRESS)
+  {
+    iap_write_start = FLASH_BASE_ADDRESS;
+    iap_write_end = BOOTLOADER_BASE_ADDRESS;
+    iap_native_write = 1;
+    lcd_draw_iap_status("Low flash...");
+    result = IAP_ACK;
+  }
+#else
+  (void)magic;
+#endif
+
+  iap_respond(iap_info.iap_tx, IAP_CMD_LOW_FLASH, result);
+}
+
+void iap_run_addr(uint8_t *pdata, uint32_t len)
+{
+  uint16_t result = IAP_NACK;
+  uint8_t *paddr = pdata + 2;
+  uint32_t address = 0;
+
+  if (len >= 6)
+    address = (paddr[0] << 24) | (paddr[1] << 16) | (paddr[2] << 8) | paddr[3];
+
+#ifdef HIGH_IAP_ALLOW_LOW_FLASH
+  if (address >= FLASH_BASE_ADDRESS && address < iap_info.flash_end_address)
+  {
+    run_addr_target = address;
+    run_addr_wait = 1;
+    lcd_draw_iap_status("Booting target...");
+    result = IAP_ACK;
+  }
+#else
+  (void)address;
+#endif
+
+  iap_respond(iap_info.iap_tx, IAP_CMD_RUN_ADDR, result);
+}
+
+void iap_read_mem(uint8_t *pdata, uint32_t len)
+{
+  uint16_t result = IAP_NACK;
+  uint8_t *paddr = pdata + 2;
+  uint32_t address = 0;
+  uint16_t read_len = 0;
+
+  if (len >= 8)
+  {
+    address = (paddr[0] << 24) | (paddr[1] << 16) | (paddr[2] << 8) | paddr[3];
+    paddr = pdata + 6;
+    read_len = (paddr[0] << 8) | paddr[1];
+  }
+
+#ifdef HIGH_IAP_ALLOW_LOW_FLASH
+  if (read_len > 0 && read_len <= IAP_READ_MEM_MAX)
+  {
+    uint32_t end = address + read_len;
+    uint8_t in_flash = (address >= FLASH_BASE_ADDRESS && end >= address && end <= iap_info.flash_end_address);
+    uint8_t in_sram = (address >= SRAM_BASE_ADDRESS && end >= address && end <= SRAM_END_ADDRESS);
+
+    if (in_flash || in_sram)
+    {
+      uint8_t *source = (uint8_t *)address;
+      iap_respond(iap_info.iap_tx, IAP_CMD_READ_MEM, IAP_ACK);
+      iap_info.iap_tx[4] = (uint8_t)read_len;
+      for (uint16_t i = 0; i < read_len; i++)
+        iap_info.iap_tx[5 + i] = source[i];
+      result = IAP_ACK;
+    }
+  }
+#else
+  (void)address;
+  (void)read_len;
+#endif
+
+  if (result != IAP_ACK)
+    iap_respond(iap_info.iap_tx, IAP_CMD_READ_MEM, IAP_NACK);
 }
 
 void iap_respond(uint8_t *res_buf, uint16_t iap_cmd, uint16_t result)
@@ -307,6 +478,10 @@ iap_result_type usbd_hid_iap_process(void *udev, uint8_t *pdata, uint16_t len)
     case IAP_CMD_CRC:    iap_crc(pdata, len); break;
     case IAP_CMD_JMP:    iap_jump(); break;
     case IAP_CMD_GET:    iap_get(); break;
+    case IAP_CMD_DFU:    iap_dfu(); break;
+    case IAP_CMD_LOW_FLASH: iap_low_flash(pdata, len); break;
+    case IAP_CMD_RUN_ADDR:  iap_run_addr(pdata, len); break;
+    case IAP_CMD_READ_MEM:  iap_read_mem(pdata, len); break;
     default:             status = IAP_FAILED; break;
   }
 
@@ -320,19 +495,42 @@ void usbd_hid_iap_in_complete(void *udev)
 {
   if (iap_info.state == IAP_STS_JMP_WAIT)
     iap_info.state = IAP_STS_JMP;
+  if (rom_dfu_wait) {
+    rom_dfu_wait = 0;
+    rom_dfu_enter = 1;
+  }
+  if (run_addr_wait) {
+    run_addr_wait = 0;
+    run_addr_enter = 1;
+  }
 }
-
-/* Defined in main.c — draw message on bootloader LCD */
-extern void lcd_draw_reboot_message(void);
 
 void iap_loop(void)
 {
   if (iap_info.state == IAP_STS_JMP)
   {
     usb_delay_ms(100);
-    lcd_draw_reboot_message();
+    lcd_draw_iap_status("Rebooting...");
     usb_delay_ms(200);
     /* Clean reset — bootloader will find upgrade flag and jump to app */
     NVIC_SystemReset();
+  }
+
+  if (rom_dfu_enter)
+  {
+    rom_dfu_enter = 0;
+    usb_delay_ms(100);
+    lcd_draw_iap_status("DFU Flashing...");
+    usb_delay_ms(200);
+    jump_to_rom_dfu();
+  }
+
+  if (run_addr_enter)
+  {
+    run_addr_enter = 0;
+    usb_delay_ms(100);
+    lcd_draw_iap_status("Booting...");
+    usb_delay_ms(200);
+    jump_to_app(run_addr_target);
   }
 }

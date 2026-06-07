@@ -33,7 +33,7 @@ void dfu_check_boot_button(void) {
 }
 
 /* Must match bootloader's definition */
-#define BOOT_COUNTER_MAGIC   0xB007F000
+#define BOOT_COUNTER_MAGIC   0xB0070000
 
 void boot_validate(void) {
     /* Reset the boot attempt counter to zero while preserving the magic

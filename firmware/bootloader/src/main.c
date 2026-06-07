@@ -1,7 +1,9 @@
 /*
  * OpenScope 2C53T - USB HID In-Application Bootloader
  *
- * Permanent bootloader at 0x08000000. Never overwritten by user firmware.
+ * Permanent/recovery bootloader. In the default ROM-DFU install it can live at
+ * 0x08000000; for the stock-switcher layout a tiny stage0 remains there and
+ * this full HID recovery image is linked at 0x080F0000.
  * Application lives at 0x08004000.
  *
  * Boot flow:
@@ -36,7 +38,7 @@
  * After BOOT_FAIL_MAX consecutive failures, enter bootloader.
  * Power cycle resets RAM (counter = garbage), so we validate range. */
 #define BOOT_COUNTER_ADDR    ((volatile uint32_t *)0x20037FDC)
-#define BOOT_COUNTER_MAGIC   0xB007F000  /* Upper 16 bits = magic, lower 16 = count */
+#define BOOT_COUNTER_MAGIC   0xB0070000  /* Upper 16 bits = magic, lower 16 = count */
 #define BOOT_COUNTER_MASK    0xFFFF0000
 #define BOOT_FAIL_MAX        3
 
@@ -255,12 +257,11 @@ static void lcd_draw_bootloader_screen(void)
     lcd_draw_string_center(160, 210, "Hold POWER here   = boot to app", 0xBDF7, 0x0008, 1);
 }
 
-/* Called from iap_loop before NVIC_SystemReset after successful flash */
-void lcd_draw_reboot_message(void)
+void lcd_draw_iap_status(const char *status)
 {
     lcd_fill(0, 0, 320, 240, 0x0008);
     lcd_draw_string_center(160, 80, "OPENSCOPE 2C53T", 0x07FF, 0x0008, 3);
-    lcd_draw_string_center(160, 130, "Rebooting...", 0x07E0, 0x0008, 2);
+    lcd_draw_string_center(160, 130, status, 0x07E0, 0x0008, 2);
 }
 
 #undef _GPIO_CFG
@@ -360,6 +361,7 @@ static void busy_delay_ms(uint32_t ms)
 
 int main(void)
 {
+    SCB->VTOR = BOOTLOADER_BASE_ADDRESS;
     int enter_bootloader = 0;
 
     /* ── Power hold: PC9 HIGH (MUST be first!) ── */
