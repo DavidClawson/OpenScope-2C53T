@@ -150,20 +150,17 @@ int main(void)
     GPIOC->cfghr = (GPIOC->cfghr & ~(0xFu << 4)) | (0x3u << 4);
     GPIOC->scr = (1u << 9);
 
-    if (*DFU_RAM_MAGIC_ADDR == DFU_RAM_MAGIC_VALUE) {
-        *DFU_RAM_MAGIC_ADDR = 0u;
-        enter_recovery = 1;
-    }
-
-    if (!enter_recovery && recovery_combo_pressed()) {
+    if (recovery_combo_pressed()) {
         enter_recovery = 1;
     }
 
     if (!enter_recovery && stock_tail_valid()) {
-        /* Stock does not call OpenScope boot_validate(), and the stock power
-         * key path can preserve SRAM across a warm restart.  Do not let an old
-         * OpenScope app-slot failure count trap a valid stock image in HID
-         * recovery after the user turns stock off and back on. */
+        /* Stock does not call OpenScope boot_validate(), and stock warm
+         * power-key paths can preserve SRAM.  Do not let old OpenScope
+         * recovery/failure words trap a valid stock image in HID recovery after
+         * the user turns stock off and back on; POWER+PRM remains the explicit
+         * recovery override. */
+        *DFU_RAM_MAGIC_ADDR = 0u;
         *BOOT_COUNTER_ADDR = 0u;
         seed_stock_allocator_descriptor();
         jump_to_entry(STOCK_APP_ADDRESS,
@@ -171,6 +168,11 @@ int main(void)
                       *(const uint32_t *)(STOCK_APP_ADDRESS + 4u),
                       1,
                       4u);
+    }
+
+    if (!enter_recovery && *DFU_RAM_MAGIC_ADDR == DFU_RAM_MAGIC_VALUE) {
+        *DFU_RAM_MAGIC_ADDR = 0u;
+        enter_recovery = 1;
     }
 
     if (!enter_recovery) {
