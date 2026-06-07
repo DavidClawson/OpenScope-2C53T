@@ -34,6 +34,7 @@ STOCK_BUILDER = ROOT / "scripts" / "build_stock_hybrid_image.py"
 
 EXPECTED_STOCK_SHA256 = "a17c5c35c97bb898f15672a1747bc1041d8ed507c16999ddba0d1e4e2ec0c760"
 INTERNAL_FLASH_BYTES = 1024 * 1024
+STOCK_APP_ADDRESS = 0x08007000
 
 
 def run(cmd: list[str], *, cwd: Path = ROOT, dry_run: bool = False) -> int:
@@ -182,6 +183,7 @@ def cmd_stock(args: argparse.Namespace) -> int:
     if not args.flash:
         return 0
 
+    stock_settings_start = STOCK_APP_ADDRESS + padded_len(args.image.stat().st_size)
     flash_cmd = [
         sys.executable,
         str(HID_FLASH),
@@ -190,6 +192,9 @@ def cmd_stock(args: argparse.Namespace) -> int:
         "0x08000000",
         "--allow-low-flash",
         "--allow-unknown-app",
+        "--preserve-blank-blocks",
+        "--preserve-blank-blocks-from",
+        f"0x{stock_settings_start:08X}",
     ]
     if args.no_jump:
         flash_cmd.append("--no-jump")

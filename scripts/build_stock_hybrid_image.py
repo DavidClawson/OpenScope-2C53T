@@ -17,7 +17,7 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent
 DEFAULT_STOCK = ROOT / "archive" / "2C53T Firmware V1.2.0" / "APP_2C53T_V1.2.0_251015.bin"
-DEFAULT_STOCK_DISPATCHER = ROOT / "firmware" / "stock_dispatcher" / "build_user" / "stock_dispatcher.bin"
+DEFAULT_STOCK_DISPATCHER = ROOT / "firmware" / "stock_dispatcher" / "build" / "stock_dispatcher.bin"
 DEFAULT_OUT = ROOT / "firmware" / "build" / "stock_user_dispatcher.bin"
 
 FLASH_BASE = 0x08000000

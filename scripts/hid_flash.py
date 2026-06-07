@@ -251,6 +251,34 @@ def read_memory(dev, address, size):
     return bytes(data)
 
 
+def _written_ranges(blocks):
+    if not blocks:
+        return []
+
+    ranges = []
+    start_address, data = blocks[0]
+    cursor = start_address + len(data)
+    chunks = [data]
+
+    for address, block in blocks[1:]:
+        if address == cursor:
+            chunks.append(block)
+            cursor += len(block)
+            continue
+        ranges.append((start_address, b"".join(chunks)))
+        start_address = address
+        cursor = address + len(block)
+        chunks = [block]
+
+    ranges.append((start_address, b"".join(chunks)))
+    return ranges
+
+
+def verify_written_ranges(dev, blocks):
+    for address, expected in _written_ranges(blocks):
+        verify_flash_crc(dev, address, expected)
+
+
 def validate_hid_app_image(binpath, firmware, app_address, allow_unknown_app=False, allow_low_flash=False):
     """Validate an image before opening HID IAP or erasing any app sector."""
     path = Path(binpath)
@@ -289,6 +317,8 @@ def flash_firmware(
     allow_unknown_app=False,
     allow_low_flash=False,
     run_address=None,
+    preserve_blank_blocks=False,
+    preserve_blank_blocks_from=None,
 ):
     """Flash a firmware binary to the device."""
     with open(binpath, "rb") as f:
@@ -343,20 +373,39 @@ def flash_firmware(
             send_recv(dev, CMD_LOW_FLASH, struct.pack(">I", LOW_FLASH_MAGIC), expect_cmd=CMD_LOW_FLASH)
             print("Low-flash write window unlocked by high recovery")
 
-        # Flash in 1KB blocks
+        # Flash in 1KB blocks.  In stock-switcher low-flash mode the generated
+        # image intentionally contains 0xFF holes.  The low padding should still
+        # be erased clean, while the post-stock hole can contain stock settings;
+        # callers can preserve only that settings range.
         offset = 0
         total_blocks = len(firmware) // BLOCK_SIZE
         block_num = 0
+        written_blocks = []
 
         while offset < len(firmware):
             addr = app_address + offset
+            block_end = offset + BLOCK_SIZE
+            block = firmware[offset:block_end]
+
+            preserve_this_block = (
+                preserve_blank_blocks
+                and block == b"\xFF" * BLOCK_SIZE
+                and (preserve_blank_blocks_from is None or addr >= preserve_blank_blocks_from)
+            )
+
+            if preserve_this_block:
+                offset = block_end
+                block_num += 1
+                pct = block_num * 100 // total_blocks
+                bar = "#" * (pct // 2) + "-" * (50 - pct // 2)
+                print(f"\r  [{bar}] {pct:3d}% ({block_num}/{total_blocks})", end="", flush=True)
+                continue
 
             # ADDR - set write address (triggers sector erase)
             addr_payload = struct.pack(">I", addr)
             send_recv(dev, CMD_ADDR, addr_payload, expect_cmd=CMD_ADDR)
 
             # DATA - send 1KB in CHUNK_SIZE-byte pieces, then wait for ACK
-            block_end = offset + BLOCK_SIZE
             pos = offset
             while pos < block_end:
                 chunk = firmware[pos:min(pos + CHUNK_SIZE, block_end)]
@@ -375,6 +424,7 @@ def flash_firmware(
 
             offset = block_end
             block_num += 1
+            written_blocks.append((addr, block))
 
             # Progress bar
             pct = block_num * 100 // total_blocks
@@ -387,7 +437,10 @@ def flash_firmware(
         send_recv(dev, CMD_FINISH, expect_cmd=CMD_FINISH)
         print("Upgrade flag set")
 
-        verify_flash_crc(dev, app_address, firmware)
+        if preserve_blank_blocks:
+            verify_written_ranges(dev, written_blocks)
+        else:
+            verify_flash_crc(dev, app_address, firmware)
         print("Flash verified")
 
         if do_jump:
@@ -426,6 +479,16 @@ def main():
         help="unlock high-recovery low-flash writes; ordinary bootloaders NACK this command",
     )
     parser.add_argument(
+        "--preserve-blank-blocks",
+        action="store_true",
+        help="do not erase/program all-0xFF 1KB blocks; preserves stock settings holes",
+    )
+    parser.add_argument(
+        "--preserve-blank-blocks-from",
+        type=lambda x: int(x, 0),
+        help="only preserve all-0xFF blocks at or above this address",
+    )
+    parser.add_argument(
         "--run-address",
         type=lambda x: int(x, 0),
         help="after flashing, ask the bootloader to jump directly to this vector table",
@@ -439,6 +502,8 @@ def main():
         allow_unknown_app=args.allow_unknown_app,
         allow_low_flash=args.allow_low_flash,
         run_address=args.run_address,
+        preserve_blank_blocks=args.preserve_blank_blocks,
+        preserve_blank_blocks_from=args.preserve_blank_blocks_from,
     )
 
 

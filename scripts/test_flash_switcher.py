@@ -113,6 +113,8 @@ class FlashSafetyTests(unittest.TestCase):
         self.assertIn("--address 0x08000000", text)
         self.assertIn("--allow-low-flash", text)
         self.assertIn("--allow-unknown-app", text)
+        self.assertIn("--preserve-blank-blocks", text)
+        self.assertIn("--preserve-blank-blocks-from 0x080BE800", text)
         self.assertIn("--run-address 0x08000000", text)
 
     def test_inspect_reports_stock_and_openscope_do_not_fit_together(self) -> None:
