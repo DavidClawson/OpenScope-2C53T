@@ -42,6 +42,16 @@
 #define BOOT_COUNTER_MASK    0xFFFF0000
 #define BOOT_FAIL_MAX        3
 
+/* In the stock-switcher layout this bootloader lives at 0x080F0000, while the
+ * reset vector at 0x08000000 points to the high-flash stock launcher and the
+ * archived stock APP itself remains at its linked 0x08007000 address. */
+#define STOCK_USER_LAUNCH_ADDRESS        0x08000000U
+#define STOCK_APP_ADDRESS                0x08007000U
+#define STOCK_LAUNCHER_ADDRESS           0x080E0000U
+#define STOCK_TAIL_CHECK_ADDRESS         (STOCK_APP_ADDRESS + 0x00000800U)
+#define STOCK_RUNTIME_TABLE_CHECK_ADDRESS (STOCK_APP_ADDRESS + 0x00033F7CU)
+#define STOCK_END_CHECK_ADDRESS          (STOCK_APP_ADDRESS + 0x000B7670U)
+
 /* LCD registers via EXMC */
 #define LCD_CMD   (*(volatile uint16_t *)0x6001FFFE)
 #define LCD_DATA  (*(volatile uint16_t *)0x60020000)
@@ -355,6 +365,53 @@ static void busy_delay_ms(uint32_t ms)
     for (volatile uint32_t i = 0; i < ms * 2000; i++) {}
 }
 
+static int stock_user_image_valid(void)
+{
+#ifdef HIGH_IAP_ALLOW_LOW_FLASH
+    uint32_t sp = *(const uint32_t *)STOCK_USER_LAUNCH_ADDRESS;
+    uint32_t rv = *(const uint32_t *)(STOCK_USER_LAUNCH_ADDRESS + 4U);
+
+    if ((sp & 0xFFF00000U) != 0x20000000U)
+        return 0;
+    if (rv < STOCK_LAUNCHER_ADDRESS || rv >= BOOTLOADER_BASE_ADDRESS)
+        return 0;
+    return (*(const uint32_t *)STOCK_TAIL_CHECK_ADDRESS == 0xF04FB430U) &&
+           (*(const uint32_t *)STOCK_RUNTIME_TABLE_CHECK_ADDRESS == 0x008F008FU) &&
+           (*(const uint32_t *)STOCK_END_CHECK_ADDRESS == 0x3F027302U);
+#else
+    return 0;
+#endif
+}
+
+static uint32_t boot_target_address(void)
+{
+    if (stock_user_image_valid())
+        return STOCK_USER_LAUNCH_ADDRESS;
+    return FLASH_APP_ADDRESS;
+}
+
+static void boot_target_now(void) __attribute__((noreturn));
+
+static void boot_target_now(void)
+{
+    uint32_t target = boot_target_address();
+
+    if (target == STOCK_USER_LAUNCH_ADDRESS) {
+        *BOOT_COUNTER_ADDR = 0U;
+    } else {
+        uint32_t boot_val = *BOOT_COUNTER_ADDR;
+        uint16_t fail_count = 0;
+        if ((boot_val & BOOT_COUNTER_MASK) == BOOT_COUNTER_MAGIC) {
+            fail_count = boot_val & 0xFFFF;
+        }
+        *BOOT_COUNTER_ADDR = BOOT_COUNTER_MAGIC | (fail_count + 1);
+    }
+    jump_to_app(target);
+    while (1) {
+        __NOP();
+    }
+}
+
 /* ═══════════════════════════════════════════════════════════════════
  * Main
  * ═══════════════════════════════════════════════════════════════════ */
@@ -425,15 +482,8 @@ int main(void)
     /* 3. Flash upgrade flag (valid app installed?) */
     if (!enter_bootloader) {
         iap_init();
-        if (iap_get_upgrade_flag() == IAP_SUCCESS) {
-            /* Increment boot attempt counter before jumping */
-            uint32_t boot_val = *BOOT_COUNTER_ADDR;
-            uint16_t fail_count = 0;
-            if ((boot_val & BOOT_COUNTER_MASK) == BOOT_COUNTER_MAGIC) {
-                fail_count = boot_val & 0xFFFF;
-            }
-            *BOOT_COUNTER_ADDR = BOOT_COUNTER_MAGIC | (fail_count + 1);
-            jump_to_app(FLASH_APP_ADDRESS);
+        if (stock_user_image_valid() || iap_get_upgrade_flag() == IAP_SUCCESS) {
+            boot_target_now();
         }
         enter_bootloader = 1;
     }
@@ -476,7 +526,7 @@ int main(void)
                 lcd_fill(0, 130, 320, 14, 0x0008);
                 lcd_draw_string_center(160, 130, "Booting...", 0xFFE0, 0x0008, 2);
                 delay_ms(300);
-                NVIC_SystemReset();
+                boot_target_now();
             }
         } else {
             hold_count = 0;

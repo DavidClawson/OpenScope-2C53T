@@ -155,6 +155,24 @@ int main(void)
         enter_recovery = 1;
     }
 
+    if (!enter_recovery && recovery_combo_pressed()) {
+        enter_recovery = 1;
+    }
+
+    if (!enter_recovery && stock_tail_valid()) {
+        /* Stock does not call OpenScope boot_validate(), and the stock power
+         * key path can preserve SRAM across a warm restart.  Do not let an old
+         * OpenScope app-slot failure count trap a valid stock image in HID
+         * recovery after the user turns stock off and back on. */
+        *BOOT_COUNTER_ADDR = 0u;
+        seed_stock_allocator_descriptor();
+        jump_to_entry(STOCK_APP_ADDRESS,
+                      *(const uint32_t *)STOCK_APP_ADDRESS,
+                      *(const uint32_t *)(STOCK_APP_ADDRESS + 4u),
+                      1,
+                      4u);
+    }
+
     if (!enter_recovery) {
         uint32_t boot_val = *BOOT_COUNTER_ADDR;
         if ((boot_val & BOOT_COUNTER_MASK) == BOOT_COUNTER_MAGIC &&
@@ -162,19 +180,6 @@ int main(void)
             *BOOT_COUNTER_ADDR = 0u;
             enter_recovery = 1;
         }
-    }
-
-    if (!enter_recovery && recovery_combo_pressed()) {
-        enter_recovery = 1;
-    }
-
-    if (!enter_recovery && stock_tail_valid()) {
-        seed_stock_allocator_descriptor();
-        jump_to_entry(STOCK_APP_ADDRESS,
-                      *(const uint32_t *)STOCK_APP_ADDRESS,
-                      *(const uint32_t *)(STOCK_APP_ADDRESS + 4u),
-                      1,
-                      4u);
     }
 
     if (!enter_recovery &&
