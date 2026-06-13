@@ -10,7 +10,7 @@ addr,name,klass,D,R,V,resolved,note
 0800073c,memcmp,libc,D1,RNA,VNA,yes,resolved
 08000794,memchr,libc,D1,RNA,VNA,yes,resolved
 080007a8,strncpy,libc,D1,RNA,VNA,yes,resolved
-0800039c,FUN_0800039c,hardware,D0,R1,V0,no,hardware: partial understanding (R1) - confirm semantics/data
+0800039c,FUN_0800039c,hardware,D3,NA,NA,yes,"NA_OUR_OWN 2026-06-13: MISCLASSIFIED as hardware. Full disasm (file off 0x39c, base 0x08000000): `push {r0-r3}` (variadic args) / `ldr r1,[pc] -> 0x20002ac8` (dest buffer ptr) / `add r2,sp,#12` (va_list) / `ldr r0,[sp,#8]` "
 08000800,strcmp,libc,D2,RNA,VNA,no,"libc: library/runtime, no RE leverage (R=NA)"
 0800088e,set_errno,libc,D1,RNA,VNA,no,"libc: library/runtime, no RE leverage (R=NA)"
 0800089a,printf_sign_extend_int,libc,D1,RNA,VNA,no,"libc: library/runtime, no RE leverage (R=NA)"
@@ -33,25 +33,25 @@ addr,name,klass,D,R,V,resolved,note
 08001732,sdiv64,libc,D1,RNA,VNA,yes,resolved
 080017a6,memcpy,libc,D1,RNA,VNA,yes,resolved
 08001830,FUN_08001830,protocol,D2,R0,V0,no,protocol: behavior not yet recovered (R0) - needs decode
-080018a4,gpio_mux_portc_porte,hardware,D3,R1,V0,no,hardware: partial understanding (R1) - confirm semantics/data
-08001a58,gpio_mux_porta_portb,hardware,D3,R1,V0,no,hardware: partial understanding (R1) - confirm semantics/data
-08001c60,siggen_configure,hardware,D1,R1,V0,no,hardware: partial understanding (R1) - confirm semantics/data
+080018a4,gpio_mux_portc_porte,hardware,D3,R1,V0,no,FPGA_BLOCKED 2026-06-13: Stock FUN_080018a4 is a per-range (param 0-9) two-part routine. Part 1: switch writes GPIO BSRR/CRH-class registers in the 0x4001101x/0x4001181x (GPIOD/E) block — relay/range routing (matches PE4/PE5/
+08001a58,gpio_mux_porta_portb,hardware,D3,R1,V0,no,"FPGA_BLOCKED 2026-06-13: Sibling of FUN_080018a4 for the GPIOA/GPIOB (0x40010810 BSRR / 0x40010c10 BSRR+0x40010c14) bank: per-range switch sets the gain-select pins (matches PA15/PA10 gain, PB10 gain). Part 2 (always runs): s"
+08001c60,scope_autoset_trigger_track,hardware,D3,R1,V0,no,"FPGA_BLOCKED 2026-06-13: MISLABELED in function_names.md. FUN_08001c60 is NOT signal-generator setup. It loops over (DAT_2000010d&0xf) scope channels, scans a 300-byte sample buffer at 0x2000044e computing per-channel min(uVa"
 080022dc,FUN_080022dc,render,D0,R1,V0,no,render: partial understanding (R1) - confirm semantics/data
 080027e8,lcd_read_image_data,hardware,D1,R0,V0,no,hardware: behavior not yet recovered (R0) - needs decode
-080028e0,meter_data_process,protocol,D3,R1,V0,no,protocol: partial understanding (R1) - confirm semantics/data
-08002c78,FUN_08002c78,hardware,D0,R1,V0,no,hardware: partial understanding (R1) - confirm semantics/data
+080028e0,meter_data_process,protocol,D3,R1,V0,no,"DIVERGENT 2026-06-13: Stock FUN_080028e0 (fpga_state_update): when DAT_20001035 set, runs softfloat (FUN_0803ed70/e5da/c8e0/e77c/eb94/ee0c/e124/df48 = AT32 soft-float lib) to scale the raw meter accumulator by per-range co"
+08002c78,FUN_08002c78,hardware,D3,NA,NA,yes,"NA_OUR_OWN 2026-06-13: Stock FUN_08002c78 (disasm fpga_helpers_disasm.txt:1082-1259) is the periodic battery-percent + probe-presence housekeeping FSM, NOT 'analog input init' as gap_functions.md guessed. Register-level: in"
 08008154,display_render_engine,render,D3,NA,NA,yes,"RESOLVED 2026-06-13 (harvest,NA(our own impl)): Stock FUN_08008154 (draw_ui_element, decompiled_2C53T_v2.c:2974+) is a text/UI-element layout+blit engine: allocates per-glyph scratch buffers (memory_alloc), does word-wrap measurement, then blits each glyph via FUN_080"
 08008b90,glyph_render_single,render,D3,NA,NA,yes,"RESOLVED 2026-06-13 (harvest,NA(our own impl)): Stock FUN_08008b90 (decompiled_2C53T_v2.c:3533) is a single-glyph anti-aliased bitmap blitter: unpacks N-bit-per-pixel coverage, alpha-blends fg color against the existing `_framebuffer_ptr` pixel (RGB565 blend math at l"
-08009014,meter_mode_init_ac_voltage,protocol,D1,R1,V0,no,protocol: partial understanding (R1) - confirm semantics/data
-080096e8,meter_mode_init_dc_voltage,protocol,D1,R1,V0,no,protocol: partial understanding (R1) - confirm semantics/data
-08009a94,meter_mode_init_resistance,protocol,D1,R1,V0,no,protocol: partial understanding (R1) - confirm semantics/data
+08009014,meter_mode_init_ac_voltage,protocol,D3,NA,NA,no,"DECODE_ONLY 2026-06-13: MISNAMED in function_names.md. FUN_08009014 (full_decompile.c:3671-3737) is a DISPLAY-RENDER routine, not AC-voltage meter init. Register/decode level: guarded by UI sub-mode byte DAT_20001060=='\0'; "
+080096e8,meter_mode_init_dc_voltage,protocol,D3,NA,NA,no,"DECODE_ONLY 2026-06-13: MISNAMED. FUN_080096e8 (full_decompile.c:3748-3784) is a sibling DISPLAY-RENDER routine, gated on UI sub-mode DAT_20001060=='\x03'. Decode: bbox RAM 0x20008350=0x34(x), 0=y, 0xd8=w, 0x14=h; mallocs FU"
+08009a94,meter_mode_init_resistance,protocol,D3,NA,NA,no,"DECODE_ONLY 2026-06-13: MISNAMED. FUN_08009a94 (full_decompile.c:3796-3833) is the third sibling DISPLAY-RENDER routine, gated on DAT_20001060=='\x01'. Decode: bbox 0x20008350=0x34,0,0xd8,0x1d; mallocs FUN_08033cfc(0x30f0); "
 0800b900,jump_table_dispatch,logic,D1,RNA,VNA,yes,resolved
-0800b908,FUN_0800b908,protocol,D0,R1,V0,no,protocol: partial understanding (R1) - confirm semantics/data
-0800ba06,probe_detect_handler_1,protocol,D1,R1,V0,no,protocol: partial understanding (R1) - confirm semantics/data
-0800bb10,probe_detect_handler_2,protocol,D1,R1,V0,no,protocol: partial understanding (R1) - confirm semantics/data
-0800bba6,probe_continuity_test,protocol,D1,R1,V0,no,protocol: partial understanding (R1) - confirm semantics/data
-0800bc00,probe_component_test,protocol,D1,R1,V0,no,protocol: partial understanding (R1) - confirm semantics/data
-0800bc98,probe_detect_handler_3,protocol,D1,R1,V0,no,protocol: partial understanding (R1) - confirm semantics/data
+0800b908,FUN_0800b908,protocol,D3,R2,V1,no,"VERIFY_FAITHFUL 2026-06-13: FUN_0800b908 is the boot-time FPGA MODE-INIT DISPATCHER (fpga_comms_deep_dive.c:31-145): a single 10-case TBH switch on current-mode byte state[0xF68], called ONCE from system_init (FUN_08023A50 @ 0x0"
+0800ba06,probe_detect_handler_1,protocol,D3,R1,V0,no,"FPGA_BLOCKED 2026-06-13: Stock reads *param_1 (GPIOC IDR snapshot); test `-1 < *param_1<<0x18` is PC7 bit-7: bit7==0 -> cmd=0x0A (no-probe), bit7 set -> cmd=0x07 (probe). It then pushes the channel-bank prefix (0x07/0x0A) plu"
+0800bb10,probe_detect_handler_2,protocol,D3,R1,V0,no,"FPGA_BLOCKED 2026-06-13: Identical structure to handler_1 (same PC7 bit-7 -> 0x07/0x0A decode), but queues the SCOPE TRIGGER BLOCK codes 0x16,0x17,0x18,0x19 instead of the range block. 0x16=trigger level LSB, 0x18=trigger mod"
+0800bba6,probe_continuity_test,protocol,D3,R1,V0,no,FPGA_BLOCKED 2026-06-13: Smallest of the set (24B): NO register read. Pushes exactly two constant command bytes 0x20 then 0x21 onto the usart_cmd queue via xQueueGenericSend. Per our command map (fpga.h:89-90) 0x20/0x21 are F
+0800bc00,probe_component_test,protocol,D3,R1,V0,no,"FPGA_BLOCKED 2026-06-13: 42B, NO register read. Pushes three constant command bytes 0x26, 0x27, 0x28 onto the usart_cmd queue. These are the SCOPE TIMEBASE BLOCK (prescaler/period/mode) — our firmware emits the identical trip"
+0800bc98,probe_detect_handler_3,protocol,D3,R1,V0,no,"FPGA_BLOCKED 2026-06-13: Minimal (36B): reads *param_1 (GPIOC IDR), applies the same PC7 bit-7 test (`-1 < *param_1<<0x18`) -> cmd=0x07 if probe present else 0x0A, then queues that single byte via xQueueGenericSend and return"
 0800bcd4,mode_dispatch_indirect,logic,D1,R1,V0,no,logic: partial understanding (R1) - confirm semantics/data
 0800bd84,meter_ui_draw_header,render,D1,R1,V0,no,render: partial understanding (R1) - confirm semantics/data
 0800bde0,meter_ui_draw_value,render,D1,R1,V0,no,render: partial understanding (R1) - confirm semantics/data
@@ -79,22 +79,22 @@ addr,name,klass,D,R,V,resolved,note
 08019e18,scope_set_ch_offset,logic,D1,R1,V0,no,logic: partial understanding (R1) - confirm semantics/data
 08019e6c,scope_get_ch_offset,logic,D1,R1,V0,no,logic: partial understanding (R1) - confirm semantics/data
 08019e78,scope_set_ch_coupling,logic,D1,R1,V0,no,logic: partial understanding (R1) - confirm semantics/data
-08019e98,scope_main_fsm,protocol,D3,R1,V0,no,protocol: partial understanding (R1) - confirm semantics/data
-0801d2ec,scope_mode_timebase,protocol,D3,R1,V0,no,protocol: partial understanding (R1) - confirm semantics/data
-0801e1e4,scope_mode_trigger,protocol,D1,R1,V0,no,protocol: partial understanding (R1) - confirm semantics/data
-0801eaac,scope_mode_measure,protocol,D1,R1,V0,no,protocol: partial understanding (R1) - confirm semantics/data
-0801efc0,scope_mode_math,protocol,D1,R1,V0,no,protocol: partial understanding (R1) - confirm semantics/data
-0801f6f8,scope_measurement_engine,protocol,D3,R1,V0,no,protocol: partial understanding (R1) - confirm semantics/data
+08019e98,scope_main_fsm,protocol,D3,R1,V0,no,"FPGA_BLOCKED 2026-06-13: Stock 08019e98 (13.3KB) is the oscilloscope acquisition spine, gated on DAT_20001060==2 (scope mode). Register-level decode: it (1) dispatches to the four sub-handlers (FUN_0801d2ec timebase/resample,"
+0801d2ec,scope_mode_timebase,protocol,D3,R1,V0,no,"FPGA_BLOCKED 2026-06-13: Stock 0801d2ec (3.7KB, 1 caller=scope_main_fsm) is NOT a 'timebase config sub-handler' as named — it is the sample-buffer decimation/resampling engine. Register-level decode: it reads the two raw SPI3"
+0801e1e4,scope_mode_trigger,protocol,D3,R1,V0,no,"DIVERGENT 2026-06-13: Stock 0801e1e4 (2.2KB, 1 caller=scope_main_fsm) is MISNAMED 'scope_mode_trigger' — it is the FFT/spectrum engine. Register-level decode: per enabled channel (DAT_2000010d nibbles) it (1) loads 256 sam"
+0801eaac,scope_mode_measure,protocol,D3,NA,NA,yes,"NA_OUR_OWN 2026-06-13: Stock 0801eaac (1.3KB, 1 caller=scope_main_fsm) is MISNAMED 'scope_mode_measure' — it is the waveform PERSISTENCE / display-trace rasterizer, dispatched on DAT_20000134 (persistence mode: 0=free all, "
+0801efc0,scope_mode_math,protocol,D3,NA,NA,yes,"NA_OUR_OWN 2026-06-13: Stock 0801efc0 (1.8KB, 1 caller=scope_main_fsm) is MISNAMED 'scope_mode_math' — it is the CURSOR MEASUREMENT + engineering-unit formatting engine, gated on DAT_20000332 (bit0=voltage cursors, bit1=tim"
+0801f6f8,scope_measurement_engine,protocol,D3,R1,V0,no,"FPGA_BLOCKED 2026-06-13: Stock 0x0801f6f8 (4616B) is the scope auto-measurement engine, NOT a cursor drawer. Decoded to register/algorithm level: it scans the per-channel ADC sample buffers (state[0x12d]-stride source ~300-sa"
 08020930,scope_mode_display_settings,render,D1,R1,V0,no,render: partial understanding (R1) - confirm semantics/data
 08021b40,scope_draw_trigger_overlay,render,D1,R1,V0,no,render: partial understanding (R1) - confirm semantics/data
 08021de4,scope_draw_channel_info,render,D1,R1,V0,no,render: partial understanding (R1) - confirm semantics/data
 08022d40,FUN_08022d40,unknown,D0,R0,V0,no,unknown: behavior not yet recovered (R0) - needs decode
 08022e14,lcd_draw_bitmap_from_flash,render,D1,R0,V0,no,render: behavior not yet recovered (R0) - needs decode
 08023a50,master_init,hardware,D2,R0,V0,no,DECODED 2026-06-13 (14-region workflow): 13/14 regions D3 but dma region D2 (USART2-RX DMA channel + 0x40005C00 USB mislabel unresolved) so overall D2. Reimpl R0 floor: flash_cfg_cal cal-table restore ABSENT (no saved-config read/magic-validate/40-entry gain-offset table); analog_frontend DAC1 trigger path absent + relay bits inverted; spi3_handshake default build sends non-stock USART pre-0x3B (top config-entry suspect). R2 only adc1/usart2_fpga/iwdg. Full: analysis_v120/master_init_decode_diff_2026-06-13.md
-0802771c,tmr3_isr,hardware,D2,R1,V0,no,hardware: partial understanding (R1) - confirm semantics/data
+0802771c,tmr3_isr,hardware,D3,NA,NA,yes,"NA_OUR_OWN 2026-06-13: Stock 0x0802771c (110B) fully decoded: TMR3 update ISR. Reads TMR3_INTS at 0x40000410, tests UPDATE flag (&1); if a gate flag DAT_20000124==0 it posts queue value 3 to _fpga_queue_handle via FUN_0803a"
 080277b4,usart2_isr,protocol,D3,R2,V1,yes,resolved
 080278e4,usb_endpoint_handler,hardware,D1,R0,V0,no,hardware: behavior not yet recovered (R0) - needs decode
-08028314,gpio_port_d_set_pin,hardware,D2,R1,V0,no,hardware: partial understanding (R1) - confirm semantics/data
+08028314,gpio_port_d_set_pin,hardware,D2,R0,V0,no,"DECODE_ONLY 2026-06-13: function_names.md labels 0x08028314 'gpio_port_d_set_pin (writes GPIOD_BOP 0x40011410)', but the V1.2.0 decompile body does NOT show that — Ghidra renders it as two DataSynchronizationBarrier(0xf) cal"
 08028b80,usb_class_request_handler,protocol,D1,RNA,VNA,no,"protocol: library/runtime, no RE leverage (R=NA)"
 0802912c,fs_format_filename,logic,D1,R0,V0,no,logic: behavior not yet recovered (R0) - needs decode
 0802920c,fs_read_file_data,logic,D1,R0,V0,no,logic: behavior not yet recovered (R0) - needs decode
@@ -107,18 +107,18 @@ addr,name,klass,D,R,V,resolved,note
 08029e0c,fs_open_file,logic,D1,R0,V0,no,logic: behavior not yet recovered (R0) - needs decode
 0802a078,fs_create_file,logic,D1,R0,V0,no,logic: behavior not yet recovered (R0) - needs decode
 0802a2d4,fs_extend_cluster,logic,D1,R0,V0,no,logic: behavior not yet recovered (R0) - needs decode
-0802a514,gpio_port_b_configure_pin,hardware,D1,R1,V0,no,hardware: partial understanding (R1) - confirm semantics/data
-0802a534,scope_state_handler,protocol,D1,R1,V0,no,protocol: partial understanding (R1) - confirm semantics/data
+0802a514,gpio_port_b_configure_pin,hardware,D3,R2,V1,yes,VERIFY_FAITHFUL 2026-06-13: Mislabeled: 0x0802a514 is NOT a GPIOB pin-config function — it's a generic RCC/CRM peripheral clock/reset enable helper. Body (line 15794): *(uint*)((param>>16)+0x40021000) |= 1<<(param&0x1f). 0x40021
+0802a534,scope_state_handler,protocol,D3,NA,NA,yes,NA_OUR_OWN 2026-06-13: Mislabeled: 0x0802a534 (304B) is NOT a scope state handler — it's a full-screen LCD image renderer that streams a stored bitmap from the FAT filesystem. Decoded completely: allocs 0x102c (memory_alloc
 0802a664,fs_fat_traverse,logic,D1,R0,V0,no,logic: behavior not yet recovered (R0) - needs decode
 0802bde4,fs_write_data,logic,D1,R0,V0,no,logic: behavior not yet recovered (R0) - needs decode
 0802c250,fs_directory_operations,logic,D1,R0,V0,no,logic: behavior not yet recovered (R0) - needs decode
-0802ce94,spi_flash_read_status,hardware,D1,R1,V0,no,hardware: partial understanding (R1) - confirm semantics/data
-0802cf38,spi_flash_write_disable,hardware,D1,R1,V0,no,hardware: partial understanding (R1) - confirm semantics/data
-0802cf7c,spi_flash_init_controller,hardware,D1,R1,V0,no,hardware: partial understanding (R1) - confirm semantics/data
-0802cfbc,spi_flash_chip_detect,hardware,D1,R1,V0,no,hardware: partial understanding (R1) - confirm semantics/data
-0802d014,spi_flash_read_with_cache,hardware,D2,R1,V0,no,hardware: partial understanding (R1) - confirm semantics/data
-0802d1c4,spi_flash_status_check,hardware,D1,R1,V0,no,hardware: partial understanding (R1) - confirm semantics/data
-0802d1e8,spi_flash_write_sectors,hardware,D2,R1,V0,no,hardware: partial understanding (R1) - confirm semantics/data
+0802ce94,spi_flash_read_status,hardware,D3,R0,NA,no,"ABSENT_R0 2026-06-13: MISNAMED — this is NOT a W25Q status-register read. Stock @0802ce94 is the FTL/FatFS cluster-chain seek/CLMT resolver: given an FTL file handle (param_1) and a byte offset (param_2, masked with 0xffe0"
+0802cf38,spi_flash_write_disable,hardware,D3,R0,NA,no,"ABSENT_R0 2026-06-13: MISNAMED — not a 0x04 WRITE-DISABLE command. Stock @0802cf38 is the FTL logical-to-physical write dispatcher: param_1 is a cluster TYPE (must be 2 or 3, else returns 4=invalid; <2 returns 1). type==3 "
+0802cf7c,spi_flash_init_controller,hardware,D3,R0,NA,no,ABSENT_R0 2026-06-13: MISNAMED — not a SPI-flash controller init. This is the boot-time internal-flash-unlock + external-FatFS mount/sync routine. Guard: if EOPB0 (_DAT_1ffff810) already == 0xFE it returns (224KB-SRAM mode
+0802cfbc,spi_flash_chip_detect,hardware,D3,R0,NA,no,ABSENT_R0 2026-06-13: MISNAMED — not a JEDEC chip-detect (0x9F). In the decompile this is already labeled fatfs_operation. It is the body of FUN_0802cf7c WITHOUT the FMC-unlock/option-byte prologue: open file handle consta
+0802d014,spi_flash_read_with_cache,hardware,D3,R0,NA,no,"ABSENT_R0 2026-06-13: MISNAMED — not a cached SPI read. Stock @0802d014 is the FTL/FatFS sector-cache flush + directory-entry sync (f_sync/f_close machinery). Validates the handle (param_1, file object, vs block header at "
+0802d1c4,spi_flash_status_check,hardware,D3,R0,NA,no,DECODE_ONLY 2026-06-13: MISNAMED in the batch — this is NOT an SPI-flash status check. Full register decode: 36-byte FatFs internal `validate_object`/`abort_if_invalid` helper. Takes a FATFS-object pointer param_1; dereferen
+0802d1e8,spi_flash_write_sectors,hardware,D3,R0,NA,no,"DECODE_ONLY 2026-06-13: MISNAMED — this is FatFs `f_write` (842 bytes), not a raw SPI-flash sector writer. Register-level: operates entirely on the FatFs file object struct (param_1[2]=current cluster, [3]=fsize, [5]=fptr, ["
 0802d534,spi_flash_fs_sync,logic,D2,R1,V0,no,logic: partial understanding (R1) - confirm semantics/data
 0802d774,spi_flash_cache_invalidate,logic,D1,R1,V0,no,logic: partial understanding (R1) - confirm semantics/data
 0802d80c,spi_flash_format_check,logic,D1,R1,V0,no,logic: partial understanding (R1) - confirm semantics/data
@@ -132,8 +132,8 @@ addr,name,klass,D,R,V,resolved,note
 0802e908,spi_flash_error_handler,logic,D1,R1,V0,no,logic: partial understanding (R1) - confirm semantics/data
 0802ea08,spi_flash_init_fs,logic,D2,R1,V0,no,logic: partial understanding (R1) - confirm semantics/data
 0802ee9c,spi2_sector_erase,hardware,D2,R0,V0,no,hardware: behavior not yet recovered (R0) - needs decode
-0802eee8,spi2_read_jedec_id,hardware,D3,R1,V0,no,DECODED 2026-06-13: stock uses opcode 0x90 (Read Mfr/Device ID + 3 dummy addr - 2 bytes) NOT 0x9F. Our flash_fs_raw_read_jedec uses 0x9F (3 bytes) - DIVERGENT command - R stays 1 (we read ID a different way). To resolve: add a 0x90 reader or justify the 0x9F divergence as NA.
-0802ef48,spi2_init,hardware,D2,R1,V0,no,partial: stock configs GPIOB PB12-15 (CS/SCK/MISO/MOSI - matches ours) via gpio_configure_pins + FUN_0802a514/FUN_08036820 SPI setup. Our flash_fs_raw_spi_init_once writes ctrl1 directly (master /16 mode0). Prescaler/mode not yet matched to stock - needs FUN_0802a514 decode before V.
+0802eee8,spi2_read_jedec_id,hardware,D3,R1,NA,no,"DIVERGENT 2026-06-13: Stock = SPI2 software-CS ID read, 96 bytes. Register exact: `_DAT_40010c14=0x1000` (GPIOB_BRR, PB12 CS LOW), then FUN_0802f0c4(0x90) sends command 0x90, three FUN_0802f0c4(0) dummy/address bytes, two "
+0802ef48,spi2_init,hardware,D3,R2,V1,yes,"VERIFY_FAITHFUL 2026-06-13: Stock = SPI2 master bring-up, 256 bytes. Register exact decode: (1) RCC clock enables via FUN_0802a514 (base 0x40021000): 0x1c000e -> RCC_APB1ENR(+0x1C) bit14 = SPI2EN; 0x180000 -> RCC_APB2ENR(+0x18) "
 0802f048,spi2_block_read,hardware,D3,R2,V1,yes,RESOLVED 2026-06-13: static-equiv to flash_fs_raw_read (flash_fs.c) - CS=PB12 BCR/BSRR / cmd 0x03 / 24-bit addr / N reads / CS high - byte-identical protocol
 0802f0b8,spi2_receive_byte,hardware,D3,R2,V1,yes,RESOLVED 2026-06-13: static-equiv to flash_fs_raw_spi_xfer(0xFF) in flash_fs.c
 0802f0c4,spi2_transceive_byte,hardware,D3,R2,V1,yes,RESOLVED 2026-06-13: static-equiv to flash_fs_raw_spi_xfer (poll TXE sts.1 / write dt / poll RXNE sts.0 / read dt) - ghidra i2c_transfer is mislabel of SPI2 SR poll
@@ -146,8 +146,8 @@ addr,name,klass,D,R,V,resolved,note
 0802f5ec,option_bytes_erase,hardware,D2,RNA,VNA,no,"hardware: library/runtime, no RE leverage (R=NA)"
 0802f6d8,spi_flash_fat_update,logic,D1,R0,V0,no,logic: behavior not yet recovered (R0) - needs decode
 0802ff18,spi_flash_cluster_io,logic,D1,R0,V0,no,logic: behavior not yet recovered (R0) - needs decode
-080302fc,gpio_pin_config,hardware,D2,R1,V0,no,hardware: partial understanding (R1) - confirm semantics/data
-080304e0,gpio_read_input,hardware,D2,R1,V0,no,hardware: partial understanding (R1) - confirm semantics/data
+080302fc,gpio_pin_config,hardware,D3,R2,V1,yes,"VERIFY_FAITHFUL 2026-06-13: Stock = STM32F1-style GPIO_Init, 482 bytes. Full decode: param_1=GPIO base (param_1[0]=CRL@+0x00, param_1[1]=CRH@+0x04), param_2=GPIO_InitTypeDef (param_2[0]=pin bitmask, byte[5]=mode, byte[6]/byte[7]"
+080304e0,gpio_read_input,hardware,D3,R2,V1,yes,VERIFY_FAITHFUL 2026-06-13: Stock FUN_080304e0 = `return (*(uint*)(base+8) & mask) == mask` — reads GPIO IDR (offset +8) and returns true only when ALL masked bits are set (GPIO_ReadInputDataBit-style helper). Sole caller (full_
 080304f0,fs_close_file,logic,D1,R0,V0,no,logic: behavior not yet recovered (R0) - needs decode
 08030524,jpeg_huffman_decode_1,asset,D3,RNA,VNA,yes,resolved
 08031f20,jpeg_huffman_decode_2,asset,D3,RNA,VNA,yes,resolved
@@ -163,33 +163,33 @@ addr,name,klass,D,R,V,resolved,note
 080342f8,scope_display_full_redraw,render,D2,R1,V0,no,render: partial understanding (R1) - confirm semantics/data
 08034828,freertos_task_idle_hook,logic,D3,NA,NA,yes,"RESOLVED 2026-06-13 (harvest,NA(our own impl)): MISLABEL: FUN_08034828 (v2.c:8268) is NOT a FreeRTOS idle hook. It calls a registered draw callback (*_DAT_20036b80)(originX + bbox[0], originY + bbox[2], bbox[1]-bbox[0]+1, bbox[3]-bbox[2]+1, color) — a blit-dispatch ov"
 08034878,fs_init_sequence,logic,D1,R1,V0,no,logic: partial understanding (R1) - confirm semantics/data
-080349b8,freertos_list_insert_sorted,logic,D3,NA,NA,yes,"RESOLVED 2026-06-13 (harvest,NA(same FreeRTOS/libc source)): FUN_080349b8 (v2.c:8345) IS the FreeRTOS kernel primitive prvAddCurrentTaskToDelayedList (firmware/FreeRTOS/tasks.c:8590). Match: top uxListRemove of xStateListItem (FUN_0803a024(_DAT_200061e0+4); clears ready-priority b"
-08034ab0,freertos_timer_command,logic,D3,NA,NA,yes,"RESOLVED 2026-06-13 (harvest,NA(same FreeRTOS/libc source)): Stock decompile (decompiled_2C53T_v2.c:28384) matches prvAddNewTaskToReadyList (single-core) in firmware/FreeRTOS/tasks.c:2130-2181: taskENTER_CRITICAL, ++uxCurrentNumberOfTasks (_DAT_20006254), if pxCurrentTCB==NULL(_DA"
-08034bc0,freertos_timer_pend_call,logic,D3,NA,NA,yes,"RESOLVED 2026-06-13 (harvest,NA(same FreeRTOS/libc source)): decompiled_2C53T_v2.c:28418 matches prvCheckForValidListAndQueue in firmware/FreeRTOS/timers.c:1114-1141: under critical section, if xTimerQueue(_DAT_200062e4)==NULL, vListInitialise x2 (FUN_0803a06c on 0x200062f8/0x2000"
-08034c24,freertos_timer_process_expired,logic,D3,NA,NA,yes,"RESOLVED 2026-06-13 (harvest,NA(same FreeRTOS/libc source)): decompiled_2C53T_v2.c:28441 matches prvCheckTasksWaitingTermination (single-core) in firmware/FreeRTOS/tasks.c:6110-6139: while(uxDeletedTasksWaitingCleanUp(_DAT_200062cc)!=0){ critical; pxTCB=head of xTasksWaitingTermin"
-08034c80,freertos_task_set_timeout,logic,D3,NA,NA,yes,"RESOLVED 2026-06-13 (harvest,NA(same FreeRTOS/libc source)): decompiled_2C53T_v2.c:28464 matches prvCopyDataFromQueue in firmware/FreeRTOS/queue.c:2476-2494: if uxItemSize(param_1[0x10])!=0, advance pcReadFrom(param_1[3]) by uxItemSize, wrap at pcTail(param_1[2]) back to pcHead(*p"
-08034cc4,freertos_queue_copy_item,logic,D3,NA,NA,yes,"RESOLVED 2026-06-13 (harvest,NA(same FreeRTOS/libc source)): decompiled_2C53T_v2.c:28483 matches prvCopyDataToQueue in firmware/FreeRTOS/queue.c:2393-2472: uxItemSize(param_1[0x10])==0 -> mutex disinherit on xMutexHolder(param_1[2]) via xTaskPriorityDisinherit(FUN_0803b934); xPosi"
-08034d90,freertos_timer_reload,logic,D3,NA,NA,yes,"RESOLVED 2026-06-13 (harvest,NA(same FreeRTOS/libc source)): decompiled_2C53T_v2.c:28524 matches prvDeleteTCB in firmware/FreeRTOS/tasks.c: vPortFree(*(param_1+0x30)) frees the stack (pxStack at TCB+0x30), then vPortFree(param_1) frees the TCB. Called only from prvCheckTasksWaitin"
-08034da8,freertos_task_increment_tick,logic,D3,NA,NA,yes,"RESOLVED 2026-06-13 (harvest,NA(same FreeRTOS/libc source)): full_decompile.c:26753 matches prvGetHighestPriorityOfWaitToReceiveList in firmware/FreeRTOS/queue.c:2368-2388: if listCURRENT_LIST_LENGTH(&xTasksWaitingToReceive)(count at Queue_t+0x24) > 0 return configMAX_PRIORITIES(="
-08034dd0,freertos_port_yield_from_isr,hardware,D3,NA,NA,yes,"RESOLVED 2026-06-13 (harvest,NA(same FreeRTOS/libc source)): full_decompile.c:26776 matches prvGetNextExpireTime in firmware/FreeRTOS/timers.c:840-864: *pxListWasEmpty(*param_1) = listLIST_IS_EMPTY(pxCurrentTimerList) (*_DAT_200062f0==0; _DAT_200062f0 set to pxCurrentTimerList in "
-08034e10,freertos_timer_create_static,logic,D2,NA,NA,yes,"RESOLVED 2026-06-13 (harvest,NA(same FreeRTOS/libc source)): Stock body sets two free-list head pointers to &DAT_20008330, block size 0x1ff0, and xFreeBytesRemaining/xMinimumEverFreeBytesRemaining (DAT_20006324=1) — byte-for-byte the prvHeapInit logic in /Users/david/Projects/RESE"
-08034f04,freertos_timer_start_from_isr,logic,D2,NA,NA,yes,"RESOLVED 2026-06-13 (harvest,NA(same FreeRTOS/libc source)): Stock: if(uxItemSize==0) pcHead=pxQueue else pcHead=pucQueueStorage; writes uxLength([0xf]) and uxItemSize([0x10]); then xQueueReset(q,pdTRUE). Exact match to prvInitialiseNewQueue in /Users/david/Projects/RESEARCH/osc/f"
-08034f44,freertos_timer_daemon_init,logic,D2,NA,NA,yes,"RESOLVED 2026-06-13 (harvest,NA(same FreeRTOS/libc source)): Stock copies up to 16 chars of a name into TCB+0x34 (pcTaskName), clamps priority to 4 (configMAX_PRIORITIES-1) writing uxPriority/uxBasePriority, calls FUN_0803a09c (vListInitialiseItem) twice for xStateListItem/xEventL"
-08035058,freertos_timer_pend_callback,logic,D2,NA,NA,yes,"RESOLVED 2026-06-13 (harvest,NA(same FreeRTOS/libc source)): Two-path kernel routine: setup branch initialises a control block (writes [0],[6],[7],[8], FUN_0803a09c=vListInitialiseItem, sets bit 0x4 flag) and the alternate path is prvTaskExitError — raises BASEPRI to configMAX_SYS"
-080350d0,freertos_timer_execute_callback,logic,D2,NA,NA,yes,"RESOLVED 2026-06-13 (harvest,NA(same FreeRTOS/libc source)): Stock loops local_14=0..4 calling FUN_0803a06c (vListInitialise) on 5 lists at 0x200061f0 stride 0x14 (pxReadyTasksLists[0..4], configMAX_PRIORITIES=5), then 5 more vListInitialise on the delayed/overflow/pending-ready/s"
-0803515c,freertos_timer_switch_lists,logic,D2,NA,NA,yes,"RESOLVED 2026-06-13 (harvest,NA(same FreeRTOS/libc source)): Stock walks the free-block list from &DAT_2000632c (xStart) to find insertion point, then coalesces with the preceding block (puc+xBlockSize==insert) and following block, with a pxEnd special-case (_DAT_20006320). Byte-f"
-08035224,freertos_queue_item_init,logic,D2,NA,NA,yes,"RESOLVED 2026-06-13 (harvest,NA(same FreeRTOS/libc source)): Stock sets list-item value *(p+4)=value and owner *(p+0x10)=p, then performs overflow-aware wake-time insertion: when value wraps it inserts into the overflow list (FUN_0803a0ac on _DAT_200062f0) else the delayed list (_"
-080352ac,freertos_list_remove_head,logic,D2,NA,NA,yes,"RESOLVED 2026-06-13 (harvest,NA(same FreeRTOS/libc source)): Stock: taskENTER_CRITICAL; read *(queue+0x38) (uxMessagesWaiting); taskEXIT_CRITICAL; return ==0. Called from xQueueGenericReceive context (decompile 34204-34221 shows prvLockQueue cRxLock/cTxLock at +0x44/+0x45, vTaskSu"
-080352d4,freertos_queue_check_space,logic,D3,NA,NA,yes,"RESOLVED 2026-06-13 (harvest,NA(same FreeRTOS/libc source)): Stock FUN_080352d4 (decompiled_2C53T_v2.c:28830): taskENTER_CRITICAL(); reads two struct fields at +0x38/+0x3c, returns equality, taskEXIT_CRITICAL(). This is a timers.c list/active helper (Timer_t status compare under c"
-08035304,freertos_port_disable_interrupts,hardware,D3,NA,NA,yes,"RESOLVED 2026-06-13 (harvest,NA(same FreeRTOS/libc source)): Stock FUN_08035304 (v2.c:28851) is an MPU-wrapped prvProcessExpiredTimer/prvInsertTimerInActiveList helper: privilege/MSP/MPU setup (isCurrentModePrivileged/setBasePriority/DSB/ISB) then FUN_08035224=prvInsertTimerInActi"
-0803532c,freertos_task_create_static,logic,D3,NA,NA,yes,"RESOLVED 2026-06-13 (harvest,NA(same FreeRTOS/libc source)): Stock FUN_0803532c (v2.c:28911) mirrors FUN_08035304 with an offset param: FUN_0803a024 list helper, FUN_08035224=prvInsertTimerInActiveList(iVar+0x18+param), FUN_0803be38 list op, privilege/setBasePriority(0x10) tail. T"
-080353b4,freertos_scheduler_start,logic,D3,NA,NA,yes,"RESOLVED 2026-06-13 (harvest,NA(same FreeRTOS/libc source)): Stock FUN_080353b4 (v2.c:28949) = prvProcessReceivedCommands: xQueueReceive loop on the timer command queue with switch cases 0..9 matching timers.h tmrCOMMAND_START_DONT_TRACE(0)..CHANGE_PERIOD_FROM_ISR(9); case 5 does "
-08035504,freertos_task_create,logic,D3,NA,NA,yes,"RESOLVED 2026-06-13 (harvest,NA(same FreeRTOS/libc source)): Stock FUN_08035504 (v2.c:29035) = prvProcessTimerOrBlockTask: vTaskSuspendAll(); FUN_080355dc=prvSampleTimeNow(&listWasSwitched); if not switched, either process expired (FUN_0803532c) or block the daemon (FUN_0803a32c=v"
-080355a0,freertos_critical_nesting_inc,logic,D3,NA,NA,yes,"RESOLVED 2026-06-13 (harvest,NA(same FreeRTOS/libc source)): Stock FUN_080355a0 (v2.c:29080) = prvGetNextExpireTime: if pxCurrentTimerList empty (*_DAT_200062c4==0) set result _DAT_200062d0=0xffffffff (portMAX_DELAY/listWasEmpty path), else result = value of head list item (*_DAT_"
-080355dc,freertos_scheduler_suspend,logic,D3,NA,NA,yes,"RESOLVED 2026-06-13 (harvest,NA(same FreeRTOS/libc source)): Stock FUN_080355dc (v2.c:29100) = prvSampleTimeNow: uVar1=FUN_0803b768=xTaskGetTickCount(); if(uVar1 < xLastTime _DAT_200062f4){ FUN_08035620=prvSwitchTimerLists(); *pxSwitched=1 } else *pxSwitched=0; _DAT_200062f4=uVar1"
-08035620,freertos_scheduler_resume,logic,D3,NA,NA,yes,"RESOLVED 2026-06-13 (harvest,NA(same FreeRTOS/libc source)): Stock FUN_08035620 (v2.c:29125) = prvSwitchTimerLists: while current timer list non-empty, process head (prvProcessExpiredTimer via the +0x20 callback + reinsert FUN_0803a0ac), then swap the two list pointers _DAT_200062"
-08035730,freertos_task_get_current,logic,D3,NA,NA,yes,"RESOLVED 2026-06-13 (harvest,NA(same FreeRTOS/libc source)): Stock FUN_08035730 = FreeRTOS prvTaskIsTaskSuspended (tasks.c:3323). param_1==0 + ISB/DSB + infinite spin = configASSERT(xTask) failure handler. *(p+0x14)==&DAT_200062b0 = listIS_CONTAINED_WITHIN(&xSuspendedTaskList, xSt"
-080357b8,freertos_ready_list_add,logic,D3,NA,NA,yes,"RESOLVED 2026-06-13 (harvest,NA(same FreeRTOS/libc source)): Stock FUN_080357b8 = FreeRTOS prvUnlockQueue (queue.c:183, static; called at queue.c:1133+). taskENTER_CRITICAL, walks cTxLock count at byte 0x45 over xTasksWaitingToReceive list (p+0x24) calling xTaskRemoveFromEventList"
+080349b8,prvAddCurrentTaskToDelayedList,logic,D3,NA,NA,yes,name fixed 2026-06-13: prvAddCurrentTaskToDelayedList in tasks.c
+08034ab0,prvAddNewTaskToReadyList,logic,D3,NA,NA,yes,name fixed 2026-06-13: prvAddNewTaskToReadyList in tasks.c
+08034bc0,prvCheckForValidListAndQueue,logic,D3,NA,NA,yes,name fixed 2026-06-13: prvCheckForValidListAndQueue in timers.c
+08034c24,prvCheckTasksWaitingTermination,logic,D3,NA,NA,yes,name fixed 2026-06-13: prvCheckTasksWaitingTermination in tasks.c
+08034c80,prvCopyDataFromQueue,logic,D3,NA,NA,yes,name fixed 2026-06-13: prvCopyDataFromQueue in queue.c
+08034cc4,prvCopyDataToQueue,logic,D3,NA,NA,yes,name fixed 2026-06-13: prvCopyDataToQueue in queue.c
+08034d90,prvDeleteTCB,logic,D3,NA,NA,yes,name fixed 2026-06-13: prvDeleteTCB in tasks.c
+08034da8,prvGetHighestPriorityOfWaitToReceiveList,logic,D3,NA,NA,yes,name fixed 2026-06-13: prvGetHighestPriorityOfWaitToReceiveList in queue.c
+08034dd0,prvGetNextExpireTime,hardware,D3,NA,NA,yes,name fixed 2026-06-13: prvGetNextExpireTime in timers.c
+08034e10,prvHeapInit,logic,D2,NA,NA,yes,name fixed 2026-06-13: prvHeapInit in portable/MemMang/heap_4.c
+08034f04,prvInitialiseNewQueue,logic,D2,NA,NA,yes,name fixed 2026-06-13: prvInitialiseNewQueue in queue.c
+08034f44,prvInitialiseNewTask,logic,D2,NA,NA,yes,name fixed 2026-06-13: prvInitialiseNewTask in tasks.c
+08035058,prvInitialiseNewTimer,logic,D2,NA,NA,yes,name fixed 2026-06-13: prvInitialiseNewTimer in timers.c
+080350d0,prvInitialiseTaskLists,logic,D2,NA,NA,yes,name fixed 2026-06-13: prvInitialiseTaskLists in tasks.c
+0803515c,prvInsertBlockIntoFreeList,logic,D2,NA,NA,yes,name fixed 2026-06-13: prvInsertBlockIntoFreeList in portable/MemMang/heap_4.c
+08035224,prvInsertTimerInActiveList,logic,D2,NA,NA,yes,name fixed 2026-06-13: prvInsertTimerInActiveList in timers.c
+080352ac,prvIsQueueEmpty,logic,D2,NA,NA,yes,name fixed 2026-06-13: prvIsQueueEmpty in queue.c
+080352d4,prvIsQueueFull,logic,D3,NA,NA,yes,name fixed 2026-06-13: prvIsQueueFull in queue.c
+08035304,vPortStartFirstTask,hardware,D3,NA,NA,yes,name fixed 2026-06-13: vPortStartFirstTask in portable/GCC/ARM_CM4F/port.c (dominant; fused with prvProcessExpiredTimer tail)
+0803532c,prvProcessExpiredTimer,logic,D3,NA,NA,yes,name fixed 2026-06-13: prvProcessExpiredTimer in timers.c (tail-inlines prvReloadTimer)
+080353b4,prvProcessReceivedCommands,logic,D3,NA,NA,yes,name fixed 2026-06-13: prvProcessReceivedCommands in timers.c
+08035504,prvProcessTimerOrBlockTask,logic,D3,NA,NA,yes,name fixed 2026-06-13: prvProcessTimerOrBlockTask in timers.c
+080355a0,prvResetNextTaskUnblockTime,logic,D3,NA,NA,yes,name fixed 2026-06-13: prvResetNextTaskUnblockTime in tasks.c
+080355dc,prvSampleTimeNow,logic,D3,NA,NA,yes,name fixed 2026-06-13: prvSampleTimeNow in timers.c
+08035620,prvSwitchTimerLists,logic,D3,NA,NA,yes,name fixed 2026-06-13: prvSwitchTimerLists in timers.c
+08035730,prvTaskIsTaskSuspended,logic,D3,NA,NA,yes,name fixed 2026-06-13: prvTaskIsTaskSuspended in tasks.c
+080357b8,prvUnlockQueue,logic,D3,NA,NA,yes,name fixed 2026-06-13: prvUnlockQueue in queue.c
 0803586c,spi_flash_cluster_chain_read,logic,D1,R1,V0,no,logic: partial understanding (R1) - confirm semantics/data
 08035c64,freertos_timer_daemon_task,logic,D1,RNA,VNA,yes,resolved
 08035e80,freertos_task_notify_check,logic,D1,RNA,VNA,yes,resolved
@@ -197,24 +197,24 @@ addr,name,klass,D,R,V,resolved,note
 08035ed4,spi_flash_fs_mount,logic,D1,R0,V0,no,logic: behavior not yet recovered (R0) - needs decode
 08036084,spi_flash_fs_format,logic,D1,R0,V0,no,logic: behavior not yet recovered (R0) - needs decode
 080365d4,scope_draw_xy_mode,render,D1,R1,V0,no,render: partial understanding (R1) - confirm semantics/data
-08036820,spi_peripheral_reset,hardware,D1,R1,V0,no,hardware: partial understanding (R1) - confirm semantics/data
-08036830,spi_peripheral_enable,hardware,D1,R1,V0,no,hardware: partial understanding (R1) - confirm semantics/data
-0803683c,spi_check_flag,hardware,D1,R1,V0,no,hardware: partial understanding (R1) - confirm semantics/data
-08036848,spi_peripheral_init,hardware,D1,R1,V0,no,hardware: partial understanding (R1) - confirm semantics/data
+08036820,spi_peripheral_reset,hardware,D3,NA,NA,yes,NA_OUR_OWN 2026-06-13: Misnamed in batch: FUN_08036820 is NOT a peripheral reset. Register-level it is `*(p+3)=0; *p=0; *(p+7)=1` over a 12-byte SPI_InitTypeDef on the stack (full_decompile.c:28368-28375) — i.e. SPI_StructI
+08036830,spi_peripheral_enable,hardware,D3,R2,V1,yes,"VERIFY_FAITHFUL 2026-06-13: Stock FUN_08036830 = `*param_1 |= 0x40` (full_decompile.c:28387) — sets bit6 (SPE) of SPI_CR1. Called as FUN_08036830(0x40003800) = SPI2 CR1, immediately after spi_init (caller @21247). Our flash_fs.c"
+0803683c,spi_check_flag,hardware,D3,R2,V1,yes,"VERIFY_FAITHFUL 2026-06-13: Stock FUN_0803683c = `return (*(uint*)(base+8) & flag) != 0` — reads SPI_SR (offset +8) and tests any masked bit (full_decompile.c:28401). Sole consumer FUN_0802f0c4 (the SPI2 byte-xfer primitive, @21"
+08036848,spi_peripheral_init,hardware,D3,R1,V0,no,"DIVERGENT 2026-06-13: Stock FUN_08036848 (full_decompile.c:28411-28463) builds SPI_CR1/CR2 bit-by-bit from an 8-byte config struct. Decoding the struct the caller fills (@21238-21245: dir=0,mode=1,presc=0,firstbit=0,datasi"
 08036934,fs_flush_and_sync,logic,D1,R0,V0,no,logic: behavior not yet recovered (R0) - needs decode
 08037400,fpga_usart_tx_task,protocol,D2,NA,NA,yes,"RESOLVED 2026-06-13 (harvest,NA(our own impl)): Stock FUN_08037400 (full_decompile.c:28542): infinite loop, xQueueReceive (FUN_0803b1d8, portMAX_DELAY) of a cmd word, writes word bytes into a frame, computes checksum (byte2+byte3 stored at frame+9), kicks USART2 (uRam"
 08037800,fpga_spi3_transfer,hardware,D3,R2,V0,no,"UNRESOLVED 2026-06-13 (harvest): Per the prompt's explicit flag and verified here: corrupt disasm context blocks faithful decode, and equivalence depends on un-completed bench bring-up. Next ac"
-08039734,usart_tx_config_writer,protocol,D3,R1,V0,no,protocol: partial understanding (R1) - confirm semantics/data
+08039734,usart_tx_config_writer,protocol,D2,R1,V0,no,"FPGA_BLOCKED 2026-06-13: Stock 0x08039734 is the upstream encoder that reads scope/meter state (per SCOPE_CMD_PARAMETERS.md it pulls voltage range, coupling, trigger level, timebase from the state struct) and produces a 16-bi"
 08039874,usb_endpoint_configure,hardware,D1,RNA,VNA,yes,resolved
 08039990,usb_endpoint_init_all,hardware,D1,RNA,VNA,yes,resolved
 08039b24,usb_descriptor_handler,logic,D1,RNA,VNA,yes,resolved
 08039eb4,fpga_frame_builder,protocol,D1,RNA,VNA,yes,resolved
-0803a024,freertos_list_remove,libc,D3,NA,NA,yes,"RESOLVED 2026-06-13 (harvest,NA(same FreeRTOS/libc source)): Stock FUN_0803a024 = FreeRTOS uxListRemove (list.c:217). pxContainer at p+0x10; relinks pxNext->pxPrevious (p+4->+8) and pxPrevious->pxNext (p+8->+4); if pxList->pxIndex(piVar1[1])==item set pxIndex=pxPrevious; clears px"
-0803a06c,freertos_port_enter_critical,libc,D3,NA,NA,yes,"RESOLVED 2026-06-13 (harvest,NA(same FreeRTOS/libc source)): Stock FUN_0803a06c = FreeRTOS vListInitialise (list.c:49), NOT a critical-section primitive. param_1[1]=param_1+2 (pxIndex=&xListEnd); param_1[2]=0xffffffff (xListEnd.xItemValue=portMAX_DELAY); param_1[3]=param_1[4]=para"
-0803a09c,freertos_port_exit_critical,libc,D3,NA,NA,yes,"RESOLVED 2026-06-13 (harvest,NA(same FreeRTOS/libc source)): Stock FUN_0803a09c = FreeRTOS vListInitialiseItem (list.c:89), NOT exit-critical. Single statement: *(param_1+0x10)=0 → pxItem->pxContainer=NULL. Matches list.c:94."
-0803a0ac,freertos_list_insert_end,libc,D3,NA,NA,yes,"RESOLVED 2026-06-13 (harvest,NA(same FreeRTOS/libc source)): Stock FUN_0803a0ac = FreeRTOS vListInsert (SORTED insert, list.c:139), NOT vListInsertEnd. If *param_2(xItemValue)==0xffffffff use xListEnd.pxPrevious; else walk `for(it=&xListEnd; it->pxNext->xItemValue <= xValue; it=it"
-0803a118,freertos_list_init,libc,D3,NA,NA,yes,"RESOLVED 2026-06-13 (harvest,NA(same FreeRTOS/libc source)): Stock body (decompiled_2C53T_v2.c:32949-32962) inserts param_2 before pxIndex's predecessor and does `*param_1 = *param_1 + 1`. This is byte-for-byte vListInsertEnd, matching FreeRTOS/list.c:105-130 (pxNewListItem->pxNex"
-0803a154,freertos_port_save_context,libc,D2,NA,NA,yes,"RESOLVED 2026-06-13 (harvest,NA(same FreeRTOS/libc source)): Stock (decompiled_2C53T_v2.c:32970-32975) is a one-liner `*DAT_0803a164 |= 0xf00000`, called ONLY from xPortStartScheduler (FUN_0803a9d4 @0803a9d4) just after SysTick/SHPR setup and before CPACR VFP enable (e000ef34 |= 0"
+0803a024,uxListRemove,libc,D3,NA,NA,yes,name fixed 2026-06-13: uxListRemove in list.c
+0803a06c,vListInitialise,libc,D3,NA,NA,yes,name fixed 2026-06-13: vListInitialise in list.c
+0803a09c,vListInitialiseItem,libc,D3,NA,NA,yes,name fixed 2026-06-13: vListInitialiseItem in list.c
+0803a0ac,vListInsert,libc,D3,NA,NA,yes,name fixed 2026-06-13: vListInsert in list.c
+0803a118,vListInsertEnd,libc,D3,NA,NA,yes,name fixed 2026-06-13: vListInsertEnd in list.c
+0803a154,vPortEnableVFP,libc,D2,NA,NA,yes,name fixed 2026-06-13: vPortEnableVFP in portable/GCC/ARM_CM4F/port.c
 0803a168,freertos_enter_critical_from_isr,libc,D1,RNA,VNA,no,"libc: library/runtime, no RE leverage (R=NA)"
 0803a1b0,freertos_exit_critical_from_isr,libc,D1,RNA,VNA,no,"libc: library/runtime, no RE leverage (R=NA)"
 0803a1e0,freertos_timer_process_commands,libc,D1,RNA,VNA,no,"libc: library/runtime, no RE leverage (R=NA)"
@@ -227,18 +227,18 @@ addr,name,klass,D,R,V,resolved,note
 0803a478,freertos_list_insert_sorted_wrap,libc,D1,RNA,VNA,no,"libc: library/runtime, no RE leverage (R=NA)"
 0803a4cc,freertos_task_unblock_all,libc,D1,RNA,VNA,no,"libc: library/runtime, no RE leverage (R=NA)"
 0803a610,freertos_task_check_timeouts,libc,D1,RNA,VNA,no,"libc: library/runtime, no RE leverage (R=NA)"
-0803a6d8,freertos_timer_start,logic,D3,NA,NA,yes,"RESOLVED 2026-06-13 (harvest,NA(same FreeRTOS/libc source)): Ghidra labels this vTaskStartScheduler; stock (decompiled_2C53T_v2.c:33430-33464) does xTaskCreate(idle task), creates the timer task (FUN_0803bdd4), sets uxSchedulerSuspended/xSchedulerRunning globals, then calls xPortS"
-0803a78c,freertos_systick_handler,hardware,D3,NA,NA,yes,"RESOLVED 2026-06-13 (harvest,NA(same FreeRTOS/libc source)): Ghidra labels this vTaskSuspend; stock (decompiled_2C53T_v2.c:33474-33531) takes critical section, removes TCB from ready/event lists, clears the ready-priority bit (uxTopReadyPriority &= ~(1<<uxPriority)), inserts onto "
-0803a904,freertos_port_yield,hardware,D3,NA,NA,yes,"RESOLVED 2026-06-13 (harvest,NA(same FreeRTOS/libc source)): Stock (decompiled_2C53T_v2.c:33541-33545) is just `_DAT_200061e4 = _DAT_200061e4 + 1;` - i.e. ++uxSchedulerSuspended. Exactly FreeRTOS/tasks.c vTaskSuspendAll. Port yield is instead a write to ICSR (e000ed04 = 0x10000000"
-0803a914,freertos_port_pendsv_handler,hardware,D3,NA,NA,yes,"RESOLVED 2026-06-13 (harvest,NA(same FreeRTOS/libc source)): Stock (decompiled_2C53T_v2.c:33556-33586) uses `0x1f - LZCOUNT(uxTopReadyPriority)` to index the ready-task array and advance pxIndex to the next ready TCB, setting pxCurrentTCB (_DAT_200061e0). This is vTaskSwitchContex"
-0803a9d4,freertos_timer_delete,logic,D3,NA,NA,yes,"RESOLVED 2026-06-13 (harvest,NA(same FreeRTOS/libc source)): Ghidra labels this xPortStartScheduler. Stock (decompiled_2C53T_v2.c:33597-33681) checks CPUID e000ed00 against 0x410fc270/0x410fc271 (CM4 r0p0/r0p1 errata asserts), sets SHPR3 e000ed20 |= 0xf0f00000 (PendSV+SysTick lowe"
-0803ab74,freertos_timer_reset,logic,D3,NA,NA,yes,"RESOLVED 2026-06-13 (harvest,NA(same FreeRTOS/libc source)): Ghidra labels this xQueueGenericCreate (decompiled_2C53T_v2.c:33689+). Signature xQueueGenericCreate(uxQueueLength, uxItemSize, ucQueueType) with the length!=0 assert and pvPortMalloc of (length*itemSize + queue struct)."
-0803ac38,freertos_timer_stop,logic,D3,NA,NA,yes,"RESOLVED 2026-06-13 (harvest,NA(same FreeRTOS/libc source)): full_decompile.c:31767 FUN_0803ac38 is NOT timer_stop; it is FreeRTOS xQueueGenericReset (queue.c): recomputes pcTail=pcHead+uxLength*uxItemSize (p1[2]), uxMessagesWaiting=0 (p1[0xe]), pcWriteTo=pcHead (p1[1]), pcReadFro"
-0803acf0,xQueueGenericSend,logic,D3,NA,NA,yes,"RESOLVED 2026-06-13 (harvest,NA(same FreeRTOS/libc source)): decompiled_2C53T_v2.c:33799 matches FreeRTOS queue.c xQueueGenericSend exactly: copy-to-queue FUN_08034cc4(prvCopyDataToQueue), uxMessagesWaiting<uxLength gate or xCopyPosition==2(overwrite), notify waiting receivers lis"
-0803af08,xQueueGenericSendFromISR,logic,D3,NA,NA,yes,"RESOLVED 2026-06-13 (harvest,NA(same FreeRTOS/libc source)): decompiled_2C53T_v2.c:33933 is FreeRTOS queue.c xQueueGenericSendFromISR: masks ISR via setBasePriority(0x10)=configMAX_SYSCALL_INTERRUPT_PRIORITY (portSET_INTERRUPT_MASK_FROM_ISR), gate uxMessagesWaiting<uxLength, prvCo"
-0803b06c,freertos_queue_notify_from_isr,logic,D3,NA,NA,yes,"RESOLVED 2026-06-13 (harvest,NA(same FreeRTOS/libc source)): decompiled_2C53T_v2.c:34022 FUN_0803b06c is NOT a notify; it is FreeRTOS uxQueueMessagesWaiting (queue.c): taskENTER_CRITICAL, returns p1[2]=uxMessagesWaiting when *p1==0 else 0, taskEXIT_CRITICAL. Caller at v2.c:30334 u"
-0803b09c,xQueueReceiveFromISR,logic,D3,NA,NA,yes,"RESOLVED 2026-06-13 (harvest,NA(same FreeRTOS/libc source)): decompiled_2C53T_v2.c:34044 is FreeRTOS queue.c xQueueReceiveFromISR: ISR mask via setBasePriority(0x10), checks uxMessagesWaiting (p1[0xe]<p1[0xf]), prvCopyDataFromQueue, increments cRxLock at +0x45 when locked, else un"
-0803b1d8,xQueueReceive,logic,D3,NA,NA,yes,"RESOLVED 2026-06-13 (harvest,NA(same FreeRTOS/libc source)): decompiled_2C53T_v2.c:34140 is FreeRTOS queue.c xQueueReceive: uxMessagesWaiting!=0 path does prvCopyDataFromQueue(FUN_08034c80), decrement (p1[0x38]-1), unblock senders list +0x10 and PendSV; else block-with-timeout via"
+0803a6d8,vTaskStartScheduler,logic,D3,NA,NA,yes,name fixed 2026-06-13: vTaskStartScheduler in tasks.c
+0803a78c,vTaskSuspend,hardware,D3,NA,NA,yes,name fixed 2026-06-13: vTaskSuspend in tasks.c
+0803a904,vTaskSuspendAll,hardware,D3,NA,NA,yes,name fixed 2026-06-13: vTaskSuspendAll in tasks.c
+0803a914,vTaskSwitchContext,hardware,D3,NA,NA,yes,name fixed 2026-06-13: vTaskSwitchContext in tasks.c
+0803a9d4,xPortStartScheduler,logic,D3,NA,NA,yes,name fixed 2026-06-13: xPortStartScheduler in portable/GCC/ARM_CM4F/port.c
+0803ab74,xQueueGenericCreate,logic,D3,NA,NA,yes,name fixed 2026-06-13: xQueueGenericCreate in queue.c
+0803ac38,xQueueGenericReset,logic,D3,NA,NA,yes,name fixed 2026-06-13: xQueueGenericReset in queue.c
+0803acf0,xQueueGenericSend,logic,D3,NA,NA,yes,name fixed 2026-06-13: xQueueGenericSend in queue.c
+0803af08,xQueueGenericSendFromISR,logic,D3,NA,NA,yes,name fixed 2026-06-13: xQueueGenericSendFromISR in queue.c
+0803b06c,xQueueGetMutexHolder,logic,D3,NA,NA,yes,name fixed 2026-06-13: xQueueGetMutexHolder in queue.c
+0803b09c,xQueueGiveFromISR,logic,D3,NA,NA,yes,name fixed 2026-06-13: xQueueGiveFromISR in queue.c
+0803b1d8,xQueueReceive,logic,D3,NA,NA,yes,name fixed 2026-06-13: xQueueReceive in queue.c
 0803b3a8,xQueueSemaphoreTake,libc,D1,RNA,VNA,no,"libc: library/runtime, no RE leverage (R=NA)"
 0803b5cc,freertos_task_remove_from_event,libc,D1,RNA,VNA,no,"libc: library/runtime, no RE leverage (R=NA)"
 0803b6a0,xTaskCreate,libc,D1,RNA,VNA,no,"libc: library/runtime, no RE leverage (R=NA)"
@@ -251,7 +251,7 @@ addr,name,klass,D,R,V,resolved,note
 0803bc10,freertos_task_switch_context,libc,D1,RNA,VNA,no,"libc: library/runtime, no RE leverage (R=NA)"
 0803bd88,freertos_timer_expire_check,libc,D1,RNA,VNA,no,"libc: library/runtime, no RE leverage (R=NA)"
 0803bdd4,freertos_timer_startup,libc,D1,RNA,VNA,no,"libc: library/runtime, no RE leverage (R=NA)"
-0803be38,freertos_tick_handler,logic,D3,NA,NA,yes,"RESOLVED 2026-06-13 (harvest,NA(same FreeRTOS/libc source)): decompiled_2C53T_v2.c:34869 FUN_0803be38 is NOT a tick handler; it is FreeRTOS timers.c xTimerGenericCommand: guards on timer-service queue _DAT_200062e4 (xTimerQueue), builds a DaemonTaskMessage struct (local_30=cmd, lo"
+0803be38,xTimerGenericCommand,logic,D3,NA,NA,yes,name fixed 2026-06-13: xTimerGenericCommand in timers.c (older single-function form; modern kernel splits it into xTimerGenericCommandFromTask/FromISR)
 0803bee0,dma1_configure,hardware,D2,R0,V0,no,hardware: behavior not yet recovered (R0) - needs decode
 0803c046,fp_double_from_float,libc,D1,RNA,VNA,yes,resolved
 0803c12c,fp_double_multiply,libc,D1,RNA,VNA,yes,resolved
@@ -301,7 +301,7 @@ addr,name,klass,D,R,V,resolved,note
 0803edfe,fp_double_subtract_wrapper_1,libc,D1,RNA,VNA,no,"libc: library/runtime, no RE leverage (R=NA)"
 0803ee0c,fp_double_subtract_wrapper_2,libc,D1,RNA,VNA,yes,resolved
 0803ee1a,nop_stub,unknown,D3,RNA,VNA,yes,resolved
-0803ee20,scope_read_adc_sample,protocol,D1,R1,V0,no,protocol: partial understanding (R1) - confirm semantics/data
+0803ee20,scope_read_adc_sample,protocol,D3,NA,NA,yes,"NA_OUR_OWN 2026-06-13: MISNAMED in function_names.md:348 ('scope_read_adc_sample', LOW confidence). FUN_0803ee20 (decompiled_2C53T_v2.c:38455) is NOT an ADC reader — it is a Keil/ARM compiler runtime soft-float helper, spec"
 0803ee7a,fp_float_to_double_norm,libc,D1,RNA,VNA,yes,resolved
 0803ef06,libc_init_atexit,libc,D1,RNA,VNA,yes,resolved
 0803ef20,fp_float_format_special,libc,D1,RNA,VNA,yes,resolved

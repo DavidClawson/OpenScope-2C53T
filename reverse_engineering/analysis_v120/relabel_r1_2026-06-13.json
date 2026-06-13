@@ -1,0 +1,976 @@
+{
+ "relabel": [
+  {
+   "addr": "080349b8",
+   "old_name": "freertos_list_insert_sorted",
+   "correct_name": "prvAddCurrentTaskToDelayedList",
+   "freertos_symbol": "prvAddCurrentTaskToDelayedList in tasks.c",
+   "confidence": "high",
+   "evidence": "Only caller is vTaskDelay(0803a390), which calls vTaskSuspendAll() then FUN_080349b8(param_1, 0) \u2014 exactly vTaskDelay's prvAddCurrentTaskToDelayedList(xTicksToDelay, pdFALSE). Body matches tasks.c:8590: reads xTickCount (_DAT_200062d4), uxListRemove on pxCurrentTCB->xStateListItem (_DAT_200061e0+4), the (param_1==-1 && param_2!=0) branch is (xTicksToWait==portMAX_DELAY && xCanBlockIndefinitely) doing listINSERT_END into xSuspendedTaskList (FUN_0803a118 to &DAT_200062b0), otherwise computes xTimeToWake=xConstTickCount+xTicksToWait and chooses overflow vs delayed list via xTimeToWake<xConstTickCount, then updates xNextTaskUnblockTime (_DAT_200062d0). Ghidra name (a list-insert primitive) is wrong; the real list-insert vListInsert is FUN_0803a0ac/FUN_0803a118 called from here."
+  },
+  {
+   "addr": "08034ab0",
+   "old_name": "freertos_timer_command",
+   "correct_name": "prvAddNewTaskToReadyList",
+   "freertos_symbol": "prvAddNewTaskToReadyList in tasks.c",
+   "confidence": "high",
+   "evidence": "Matches tasks.c:2130 (configNUMBER_OF_CORES==1): taskENTER_CRITICAL, uxCurrentNumberOfTasks++ (_DAT_20006254), if xSchedulerRunning==0 (_DAT_20006258) && count==1 call prvInitialiseTaskLists (FUN_080350d0), uxTaskNumber++ (_DAT_2000625c), then prvAddTaskToReadyList inlined (uxTopReadyPriority bitmap _DAT_200061ec |= 1<<uxPriority, listINSERT_END into pxReadyTasksLists[priority] at priority*0x14+0x200061f0), taskEXIT_CRITICAL, then taskYIELD_ANY_CORE preemption check (if scheduler running and new priority > current, pend PendSV via _DAT_e000ed04=0x10000000). Offset 0x2c = uxPriority. Nothing timer-related; Ghidra name is wrong."
+  },
+  {
+   "addr": "08034bc0",
+   "old_name": "freertos_timer_pend_call",
+   "correct_name": "prvCheckForValidListAndQueue",
+   "freertos_symbol": "prvCheckForValidListAndQueue in timers.c",
+   "confidence": "high",
+   "evidence": "Matches timers.c:1114: taskENTER_CRITICAL, if xTimerQueue==NULL (_DAT_200062e4) initialise xActiveTimerList1/2 via vListInitialise (FUN_0803a06c on 0x200062f8 and 0x2000630c), set pxCurrentTimerList=&list1 / pxOverflowTimerList=&list2, then xTimerQueue = xQueueGenericCreate(0xf, 0xc, 0) = xQueueCreate(configTIMER_QUEUE_LENGTH=15, sizeof(DaemonTaskMessage_t)=12). It is timer subsystem code, but this is the list/queue initialiser, not a command-send (prvProcessReceivedCommands/xTimerGenericCommand are elsewhere)."
+  },
+  {
+   "addr": "08034c24",
+   "old_name": "freertos_timer_process_expired",
+   "correct_name": "prvCheckTasksWaitingTermination",
+   "freertos_symbol": "prvCheckTasksWaitingTermination in tasks.c",
+   "confidence": "high",
+   "evidence": "Matches tasks.c:6110 (configNUMBER_OF_CORES==1): while(uxDeletedTasksWaitingCleanUp>0) (_DAT_200062cc), taskENTER_CRITICAL, pxTCB=listGET_OWNER_OF_HEAD_ENTRY(xTasksWaitingTermination) (*(_DAT_200062a8+0xc)), uxListRemove(&pxTCB->xStateListItem) (FUN_0803a024 on iVar1+4), --uxCurrentNumberOfTasks (_DAT_20006254), --uxDeletedTasksWaitingCleanUp (_DAT_200062cc), taskEXIT_CRITICAL, prvDeleteTCB(pxTCB) (FUN_08034d90). This is task termination cleanup from the idle task, not a timer function; Ghidra name is wrong."
+  },
+  {
+   "addr": "08034c80",
+   "old_name": "freertos_task_set_timeout",
+   "correct_name": "prvCopyDataFromQueue",
+   "freertos_symbol": "prvCopyDataFromQueue in queue.c",
+   "confidence": "high",
+   "evidence": "Matches queue.c:2476: if(uxItemSize!=0) (param_1[0x10]), pcReadFrom += uxItemSize (param_1[3] += param_1[0x10]), if(pcReadFrom >= pcTail) pcReadFrom = pcHead (if((uint)param_1[2]<=(uint)param_1[3]) param_1[3]=*param_1), memcpy(pvBuffer, pcReadFrom, uxItemSize) (FUN_080017a6(param_2, param_1[3], param_1[0x10]) = memcpy). Struct offsets: [0]=pcHead, [2]=pcTail, [3]=pcReadFrom, [0x10]=uxItemSize. Nothing to do with task timeouts; Ghidra name is wrong."
+  },
+  {
+   "addr": "08034cc4",
+   "old_name": "freertos_queue_copy_item",
+   "correct_name": "prvCopyDataToQueue",
+   "freertos_symbol": "prvCopyDataToQueue in queue.c",
+   "confidence": "high",
+   "evidence": "Matches queue.c:2393: uxMessagesWaiting=pxQueue->uxMessagesWaiting (param_1[0xe]); if uxItemSize==0 (param_1[0x10]) mutex path \u2014 if mutex, xReturn=xTaskPriorityDisinherit(xMutexHolder) (FUN_0803b934(param_1[2])) and clear holder; else if xPosition==queueSEND_TO_BACK (param_3==0) memcpy to pcWriteTo (param_1[1]) and wrap; else memcpy to pcReadFrom (param_1[3]) decrementing with pcTail-uxItemSize wrap and, for queueOVERWRITE (param_3==2), --uxMessagesWaiting; finally param_1[0xe]=uxMessagesWaiting+1 and return xReturn. This is the TO-queue copy (the FROM variant is 08034c80); the old generic 'copy_item' name picked the wrong direction."
+  },
+  {
+   "addr": "08034d90",
+   "old_name": "freertos_timer_reload",
+   "correct_name": "prvDeleteTCB",
+   "freertos_symbol": "prvDeleteTCB in tasks.c",
+   "confidence": "high",
+   "evidence": "Body is vPortFree(*(param_1+0x30)) then vPortFree(param_1) \u2014 frees pxTCB->pxStack (offset 0x30) then the TCB itself, exactly prvDeleteTCB (tasks.c:6473) for the dynamically-allocated case. It is the cleanup callee of prvCheckTasksWaitingTermination (08034c24). Not a timer reload; Ghidra name is wrong."
+  },
+  {
+   "addr": "08034da8",
+   "old_name": "freertos_task_increment_tick",
+   "correct_name": "prvGetHighestPriorityOfWaitToReceiveList",
+   "freertos_symbol": "prvGetHighestPriorityOfWaitToReceiveList in queue.c",
+   "confidence": "high",
+   "evidence": "Matches queue.c:2368: if listCURRENT_LIST_LENGTH(xTasksWaitingToReceive)>0 (*(param_1+0x24)!=0) return configMAX_PRIORITIES - listGET_ITEM_VALUE_OF_HEAD_ENTRY(xTasksWaitingToReceive); else return tskIDLE_PRIORITY(0). Decompile literally computes 5 - **(param_1+0x30); configMAX_PRIORITIES is 5 in firmware/include/FreeRTOSConfig.h, and offset 0x30 is the head item of the WaitingToReceive list. Caller (xQueueSemaphoreTake mutex-timeout path) passes the result to vTaskPriorityInherit-style FUN_0803a4cc(pxMutexHolder, uxPriority). This is queue mutex-disinherit priority math, not xTaskIncrementTick; Ghidra name is wrong."
+  },
+  {
+   "addr": "08034dd0",
+   "old_name": "freertos_port_yield_from_isr",
+   "correct_name": "prvGetNextExpireTime",
+   "freertos_symbol": "prvGetNextExpireTime in timers.c",
+   "confidence": "high",
+   "evidence": "FUN_08034dd0 (full_decompile.c:26776) sets *param_1 = (*_DAT_200062f0 == 0), i.e. *pxListWasEmpty = listLIST_IS_EMPTY(pxCurrentTimerList); if not empty it returns *(_DAT_200062f0[3]) = listGET_ITEM_VALUE_OF_HEAD_ENTRY(pxCurrentTimerList), else returns 0. Byte-exact match for prvGetNextExpireTime(BaseType_t* pxListWasEmpty) in timers.c (lines 117-141). The old timer-list global _DAT_200062f0 = pxCurrentTimerList is consistent with the neighbouring confirmed timer functions. Name had nothing to do with port/yield-from-isr."
+  },
+  {
+   "addr": "08034e10",
+   "old_name": "freertos_timer_create_static",
+   "correct_name": "prvHeapInit",
+   "freertos_symbol": "prvHeapInit in portable/MemMang/heap_4.c",
+   "confidence": "high",
+   "evidence": "FUN_08034e10 (decompiled_2C53T_v2.c:28560) initialises the heap_4 free-list scaffolding: xStart.pxNextFreeBlock = &ucHeap (_DAT_2000632c = &DAT_20006340 -> &DAT_20008330), pxEnd setup (_DAT_20006320 = &DAT_20008330), and the size accounting xFreeBytesRemaining/xMinimumEverFreeBytesRemaining = 0x1ff0 (the configured heap size, written to several globals). This is the one-time setup run from pvPortMalloc when pxEnd==NULL. Not timer-related."
+  },
+  {
+   "addr": "08034f04",
+   "old_name": "freertos_timer_start_from_isr",
+   "correct_name": "prvInitialiseNewQueue",
+   "freertos_symbol": "prvInitialiseNewQueue in queue.c",
+   "confidence": "high",
+   "evidence": "FUN_08034f04 (decompiled_2C53T_v2.c:28603): if uxItemSize(param_2)==0 sets pcHead = the queue itself (*param_5 = param_5, the mutex-benign-pointer case), else pcHead = pucQueueStorage (param_3); writes uxLength (param_5[0xf]=param_1) and uxItemSize (param_5[0x10]=param_2); then calls xQueueReset(param_5,1) = xQueueGenericReset(queue, pdTRUE). Exact match for prvInitialiseNewQueue(queue.c:569). Caller FUN at 33732 passes pucQueueStorage = queue+0x48 (right after Queue_t header), the canonical layout. Not a timer start."
+  },
+  {
+   "addr": "08034f44",
+   "old_name": "freertos_timer_daemon_init",
+   "correct_name": "prvInitialiseNewTask",
+   "freertos_symbol": "prvInitialiseNewTask in tasks.c",
+   "confidence": "high",
+   "evidence": "FUN_08034f44 (decompiled_2C53T_v2.c:28630): copies the task name into pcTaskName with a 0..0x10 (configMAX_TASK_NAME_LEN=16) bounded loop terminating on NUL and forcing a terminator at offset 0x43; clamps uxPriority to <=4 (configMAX_PRIORITIES-1) and stores uxPriority and uxBasePriority (param_7[0xb], param_7[0x11]); calls vListInitialiseItem twice (FUN_0803a09c on param_7+1 and param_7+6 = xStateListItem/xEventListItem); sets list-item owners to the TCB (param_7[4]=param_7, param_7[9]=param_7); sets event-list value = configMAX_PRIORITIES - uxPriority (param_7[6] = 5 - param_5); then pxPortInitialiseStack (FUN_08035eac) and writes *pxCreatedTask. Exact match for prvInitialiseNewTask (tasks.c:1816). Not the timer daemon."
+  },
+  {
+   "addr": "08035058",
+   "old_name": "freertos_timer_pend_callback",
+   "correct_name": "prvInitialiseNewTimer",
+   "freertos_symbol": "prvInitialiseNewTimer in timers.c",
+   "confidence": "high",
+   "evidence": "FUN_08035058 (decompiled_2C53T_v2.c:28677): when xTimerPeriodInTicks(param_2)!=0 it calls prvCheckForValidListAndQueue (FUN_08034bc0) then fills pcTimerName(*param_6=param_1), xTimerPeriodInTicks(param_6[6]=param_2), pvTimerID(param_6[7]=param_4), pxCallbackFunction(param_6[8]=param_5), vListInitialiseItem(FUN_0803a09c on param_6+1 = xTimerListItem), and if xAutoReload(param_3)!=0 sets ucStatus |= 4 (tmrSTATUS_IS_AUTORELOAD). The param_2==0 branch is the configASSERT(xTimerPeriodInTicks>0) failure trap (raise BASEPRI 0x10 + infinite loop). Caller at 34823 passes (name,period,1,0,cb,timer) = the prvInitialiseNewTimer signature (timers.c:417). Old name 'pend_callback' is wrong."
+  },
+  {
+   "addr": "080350d0",
+   "old_name": "freertos_timer_execute_callback",
+   "correct_name": "prvInitialiseTaskLists",
+   "freertos_symbol": "prvInitialiseTaskLists in tasks.c",
+   "confidence": "high",
+   "evidence": "FUN_080350d0 (decompiled_2C53T_v2.c:28716): loops local_14 0..4 calling vListInitialise (FUN_0803a06c) on pxReadyTasksLists[local_14] (base 0x200061f0, stride 0x14 = sizeof(List_t)), i.e. configMAX_PRIORITIES=5 ready lists; then vListInitialise on five more lists (xDelayedTaskList1 0x20006260, xDelayedTaskList2 0x20006274, xPendingReadyList, xTasksWaitingTermination, xSuspendedTaskList); finally sets pxDelayedTaskList=_DAT_200062c4=&xDelayedTaskList1 and pxOverflowDelayedTaskList=_DAT_200062c8=&xDelayedTaskList2. Exact match for prvInitialiseTaskLists (tasks.c:6079). Not a timer callback executor."
+  },
+  {
+   "addr": "0803515c",
+   "old_name": "freertos_timer_switch_lists",
+   "correct_name": "prvInsertBlockIntoFreeList",
+   "freertos_symbol": "prvInsertBlockIntoFreeList in portable/MemMang/heap_4.c",
+   "confidence": "high",
+   "evidence": "FUN_0803515c (decompiled_2C53T_v2.c:28742): iterates pxIterator from &xStart (&DAT_2000632c) while pxIterator->pxNextFreeBlock < pxBlockToInsert; coalesces with the preceding block if (puc + pxIterator->xBlockSize == pxBlockToInsert) by growing xBlockSize and folding pxBlockToInsert into pxIterator; coalesces with the following block, special-casing pxEnd (_DAT_20006320); and relinks pxIterator->pxNextFreeBlock if no merge happened. This is the exact merge-on-free address-ordered insertion of prvInsertBlockIntoFreeList (heap_4.c). The xStart/pxEnd globals are the same ones written by prvHeapInit at 08034e10. Nothing to do with timer lists."
+  },
+  {
+   "addr": "08035224",
+   "old_name": "freertos_queue_item_init",
+   "correct_name": "prvInsertTimerInActiveList",
+   "freertos_symbol": "prvInsertTimerInActiveList in timers.c",
+   "confidence": "high",
+   "evidence": "FUN_08035224 (decompiled_2C53T_v2.c:28781): sets *(param_1+4)=param_2 (listSET_LIST_ITEM_VALUE = xNextExpiryTime) and *(param_1+0x10)=param_1 (listSET_LIST_ITEM_OWNER = pxTimer); then the xNextExpiryTime<=xTimeNow vs > branches: in the <= branch returns pdTRUE when (xTimeNow-xCommandTime)>=xTimerPeriodInTicks (*(param_1+0x18)) else vListInsert(pxOverflowTimerList,_DAT_200062f0); in the > branch returns pdTRUE when (xTimeNow<xCommandTime && xNextExpiryTime>=xCommandTime) else vListInsert(pxCurrentTimerList,_DAT_200062ec); returns the bool xProcessTimerNow. Byte-exact match for prvInsertTimerInActiveList (timers.c:890). Confirmed by callers FUN_08035304/FUN_0803532c/FUN_080353b4 (= prvProcessTimerOrBlockTask / prvProcessExpiredTimer / prvProcessReceivedCommands) which call it with (pxTimer, xCommandTime + pxTimer->xTimerPeriodInTicks, xTimeNow, ...). Old 'queue_item_init' is wrong (it is a timer-list, not queue, primitive)."
+  },
+  {
+   "addr": "080352ac",
+   "old_name": "freertos_list_remove_head",
+   "correct_name": "prvIsQueueEmpty",
+   "freertos_symbol": "prvIsQueueEmpty in queue.c",
+   "confidence": "high",
+   "evidence": "Body is exactly taskENTER_CRITICAL(); read *(param+0x38); taskEXIT_CRITICAL(); return value==0. Offset 0x38 in Queue_t is uxMessagesWaiting (pcHead, pcWriteTo, union, two 20-byte List_t xTasksWaiting lists = 0x38). queue.c prvIsQueueEmpty returns pdTRUE iff uxMessagesWaiting==0 inside a critical section. The critical-section form distinguishes it from the FromISR variant. Old 'list_remove_head' name is wrong; this is a queue primitive."
+  },
+  {
+   "addr": "080352d4",
+   "old_name": "freertos_queue_check_space",
+   "correct_name": "prvIsQueueFull",
+   "freertos_symbol": "prvIsQueueFull in queue.c",
+   "confidence": "high",
+   "evidence": "taskENTER_CRITICAL(); iVar1=*(param+0x38); iVar2=*(param+0x3c); taskEXIT_CRITICAL(); return iVar1==iVar2. Offsets 0x38=uxMessagesWaiting, 0x3c=uxLength. queue.c prvIsQueueFull returns pdTRUE iff uxMessagesWaiting==uxLength inside a critical section. Matches exactly."
+  },
+  {
+   "addr": "08035304",
+   "old_name": "freertos_port_disable_interrupts",
+   "correct_name": "vPortStartFirstTask",
+   "freertos_symbol": "vPortStartFirstTask in portable/GCC/ARM_CM4F/port.c (dominant; fused with prvProcessExpiredTimer tail)",
+   "confidence": "high",
+   "evidence": "Prologue is the canonical CM4F first-task launch: setMainStackPointer(*(uint32_t*)0xE000ED08) (load MSP from VTOR), enableIRQinterrupts()/enableFIQinterrupts() (cpsie i/f), DSB, ISB, software_interrupt(0) (svc 0). Called from xPortStartScheduler right after SysTick reload=239999, PendSV/SysTick priority setup (0xE000ED20|0xf0f00000) and FPU enable (0xE000EF34|0xc0000000) at full_decompile line ~33662. The expired-timer-looking body after the SVC is Ghidra fusing in the following prvProcessExpiredTimer bytes (the SVC never returns); dominant function is vPortStartFirstTask."
+  },
+  {
+   "addr": "0803532c",
+   "old_name": "freertos_task_create_static",
+   "correct_name": "prvProcessExpiredTimer",
+   "freertos_symbol": "prvProcessExpiredTimer in timers.c (tail-inlines prvReloadTimer)",
+   "confidence": "high",
+   "evidence": "iVar2 = head owner of pxCurrentTimerList (*(*(pxCurrentTimerList+0xc)+0xc)); uxListRemove(xTimerListItem at +4) via FUN_0803a024; tests ucStatus autoreload bit (byte at +0x24, <<0x1d sign test); if set runs prvInsertTimerInActiveList(FUN_08035224)+reload(FUN_0803be38) loop, else clears active bit (&0xfe); then calls pxCallbackFunction at +0x20. Matches timers.c prvProcessExpiredTimer one-to-one. Invoked by prvProcessTimerOrBlockTask (FUN_08035504). Not a task-create function."
+  },
+  {
+   "addr": "080353b4",
+   "old_name": "freertos_scheduler_start",
+   "correct_name": "prvProcessReceivedCommands",
+   "freertos_symbol": "prvProcessReceivedCommands in timers.c",
+   "confidence": "high",
+   "evidence": "while(xQueueReceive(xTimerQueue,...,0)) loop draining the timer command queue, with switch over xMessageID: cases 0/1/2/6/7 (START/START_FROM_ISR/RESET/RESET_FROM_ISR) set active bit and insert/reload; cases 3/8 (STOP) clear active bit; cases 4/9 (CHANGE_PERIOD) set period at +0x18 and reinsert; case 5 (DELETE) does vPortFree when not statically allocated. Calls prvSampleTimeNow (FUN_080355dc). Exactly timers.c prvProcessReceivedCommands; called by prvTimerTask (freertos_timer_service_task @0803579c)."
+  },
+  {
+   "addr": "08035504",
+   "old_name": "freertos_task_create",
+   "correct_name": "prvProcessTimerOrBlockTask",
+   "freertos_symbol": "prvProcessTimerOrBlockTask in timers.c",
+   "confidence": "high",
+   "evidence": "vTaskSuspendAll(); xTimeNow=prvSampleTimeNow(&switched)(FUN_080355dc); if(!switched){ if(listWasEmpty==0 && nextExpire<=now){ xTaskResumeAll(FUN_0803bc10); prvProcessExpiredTimer(FUN_0803532c)(nextExpire,now);} else { vQueueWaitForMessageRestricted(xTimerQueue,...); if(xTaskResumeAll()==0) trigger PendSV via 0xE000ED04=0x10000000 } } else xTaskResumeAll(). This is the suspend/sample/process-or-block body of timers.c prvProcessTimerOrBlockTask, called by prvTimerTask before prvProcessReceivedCommands."
+  },
+  {
+   "addr": "080355a0",
+   "old_name": "freertos_critical_nesting_inc",
+   "correct_name": "prvResetNextTaskUnblockTime",
+   "freertos_symbol": "prvResetNextTaskUnblockTime in tasks.c",
+   "confidence": "high",
+   "evidence": "if(*pxDelayedTaskList(uxNumberOfItems at _DAT_200062c4)==0) xNextTaskUnblockTime(_DAT_200062d0)=0xffffffff (portMAX_DELAY); else =head item value (*(_DAT_200062c4[3])). Exactly tasks.c prvResetNextTaskUnblockTime: empty delayed list -> portMAX_DELAY, else listGET_ITEM_VALUE_OF_HEAD_ENTRY(pxDelayedTaskList). Nothing to do with critical nesting."
+  },
+  {
+   "addr": "080355dc",
+   "old_name": "freertos_scheduler_suspend",
+   "correct_name": "prvSampleTimeNow",
+   "freertos_symbol": "prvSampleTimeNow in timers.c",
+   "confidence": "high",
+   "evidence": "xTimeNow=xTaskGetTickCount(FUN_0803b768); if(xTimeNow < xLastTime(_DAT_200062f4)){ prvSwitchTimerLists(FUN_08035620); *pxSwitched=1 } else *pxSwitched=0; xLastTime=xTimeNow; return xTimeNow. Exactly timers.c prvSampleTimeNow (detects tick overflow and switches current/overflow timer lists). Called by prvProcessTimerOrBlockTask and prvProcessReceivedCommands. Not a scheduler-suspend primitive."
+  },
+  {
+   "addr": "08035620",
+   "old_name": "freertos_scheduler_resume",
+   "correct_name": "prvSwitchTimerLists",
+   "freertos_symbol": "prvSwitchTimerLists in timers.c",
+   "confidence": "high",
+   "evidence": "Operates on the two globals _DAT_200062f0 / _DAT_200062ec which FUN_08034bc0 (=prvCheckForValidListAndQueue) initializes via vListInitialise(0x200062f8/0x2000630c) and assigns as pxCurrentTimerList / pxOverflowTimerList (plus xQueueCreate). FUN_08035620 walks the current timer list while non-empty: reads head owner xItemValue, uxListRemove (FUN_0803a024), invokes the per-timer callback via (**(code**)(pxTimer+0x20))() with an auto-reload status-bit test on +0x24 and vListInsert (FUN_0803a0ac) re-insertion of the reloaded timer, then swaps current<->overflow pointers and returns \u2014 prvSwitchTimerLists with prvProcessExpiredTimer/prvReloadTimer inlined. Caller FUN_080355dc (=prvSampleTimeNow) gates the call on tick overflow vs xLastTime and sets *pxTimerListsWereSwitched=1. Trailing BASEPRI-raise infinite loop is the inlined configASSERT trap. NOT a scheduler-resume function."
+  },
+  {
+   "addr": "08035730",
+   "old_name": "freertos_task_get_current",
+   "correct_name": "prvTaskIsTaskSuspended",
+   "freertos_symbol": "prvTaskIsTaskSuspended in tasks.c",
+   "confidence": "high",
+   "evidence": "Pure predicate returning bool: tests (xStateListItem.pxContainer at +0x14 == &xSuspendedTaskList [DAT_200062b0]) && (xEventListItem.pxContainer at +0x28 != &xPendingReadyList [DAT_20006288]) && (xEventListItem.pxContainer == NULL). The three nested listIS_CONTAINED_WITHIN checks of prvTaskIsTaskSuspended with configUSE_TASK_NOTIFICATIONS off. Caller FUN_0803a610 (=vTaskResume/xTaskResumeFromISR) uses the result to uxListRemove the state item and vListInsertEnd it into pxReadyTasksLists[priority]. Leading param_1==0 trap is the inlined configASSERT(xTask). NOT a get-current-task accessor."
+  },
+  {
+   "addr": "080357b8",
+   "old_name": "freertos_ready_list_add",
+   "correct_name": "prvUnlockQueue",
+   "freertos_symbol": "prvUnlockQueue in queue.c",
+   "confidence": "high",
+   "evidence": "Wrapped in vTaskEnterCritical/vTaskExitCritical (FUN_0803a168/FUN_0803a1b0). Reads signed byte counts cTxLock at +0x45 and cRxLock at +0x44; while count>0 and the corresponding waiting list (xTasksWaitingToReceive +0x24, xTasksWaitingToSend +0x10) is non-empty, calls xTaskRemoveFromEventList (FUN_0803bb4c) and on pdTRUE sets xYieldPending=1 (FUN_0803a424 writes _DAT_200061e8=1); after each loop writes the lock byte back to 0xff (queueUNLOCKED). Exact two-loop body of prvUnlockQueue. NOT a ready-list insert."
+  },
+  {
+   "addr": "0803a024",
+   "old_name": "freertos_list_remove",
+   "correct_name": "uxListRemove",
+   "freertos_symbol": "uxListRemove in list.c",
+   "confidence": "high",
+   "evidence": "Unlinks an item: pxNext->pxPrevious=item->pxPrevious and pxPrevious->pxNext=item->pxNext (+4/+8 fields), fixes pxList->pxIndex if it pointed at the removed item (piVar1[1]==param_1), clears pxContainer (+0x10=0), decrements uxNumberOfItems and RETURNS the new count. Return-of-count plus pxIndex fixup is the signature of uxListRemove (vs void vListRemove). Old name correct in spirit; pinned to exact symbol."
+  },
+  {
+   "addr": "0803a06c",
+   "old_name": "freertos_port_enter_critical",
+   "correct_name": "vListInitialise",
+   "freertos_symbol": "vListInitialise in list.c",
+   "confidence": "high",
+   "evidence": "Initializes a List_t: pxIndex (param_1[1]) = &xListEnd (param_1+2); xListEnd.xItemValue (param_1[2]) = 0xffffffff (portMAX_DELAY); xListEnd.pxNext (param_1[3]) and pxPrevious (param_1[4]) = &xListEnd; uxNumberOfItems (*param_1)=0. Exact vListInitialise; confirmed by caller FUN_08034bc0 calling it on the two timer lists. Old name 'port_enter_critical' is wrong \u2014 the real critical-enter is vTaskEnterCritical at FUN_0803a168 (uxCriticalNesting++ with BASEPRI)."
+  },
+  {
+   "addr": "0803a09c",
+   "old_name": "freertos_port_exit_critical",
+   "correct_name": "vListInitialiseItem",
+   "freertos_symbol": "vListInitialiseItem in list.c",
+   "confidence": "high",
+   "evidence": "14-byte function whose entire body is *(item+0x10)=0, i.e. pxContainer=NULL \u2014 the sole action of vListInitialiseItem. Old name 'port_exit_critical' is wrong \u2014 the real critical-exit is vTaskExitCritical at FUN_0803a1b0 (uxCriticalNesting-- then BASEPRI=0)."
+  },
+  {
+   "addr": "0803a0ac",
+   "old_name": "freertos_list_insert_end",
+   "correct_name": "vListInsert",
+   "freertos_symbol": "vListInsert in list.c",
+   "confidence": "high",
+   "evidence": "Sorted insert by xItemValue: if *param_2 (xItemValue) == 0xffffffff (portMAX_DELAY) inserts at xListEnd.pxPrevious (param_1[4]); else iterates from xListEnd.pxNext advancing while iterator->pxNext->xItemValue <= insertion value, then links pxNext/pxPrevious (+4/+8), sets pxContainer and increments uxNumberOfItems. The portMAX_DELAY special case + value-ordered iteration is unique to vListInsert. Old name 'list_insert_end' is the WRONG primitive (that is FUN_0803a118)."
+  },
+  {
+   "addr": "0803a118",
+   "old_name": "freertos_list_init",
+   "correct_name": "vListInsertEnd",
+   "freertos_symbol": "vListInsertEnd in list.c",
+   "confidence": "high",
+   "evidence": "Reads pxIndex (param_1[1]); sets new->pxNext=pxIndex (+4), new->pxPrevious=pxIndex->pxPrevious (+8 from *(pxIndex+8)), pxIndex->pxPrevious->pxNext=new, pxIndex->pxPrevious=new, new->pxContainer=pxList (+0x10), uxNumberOfItems++. Exactly vListInsertEnd (unsorted insert before pxIndex). Called 11 times incl. from vTaskResume's ready-list path. Old name 'list_init' is wrong \u2014 vListInitialise is FUN_0803a06c."
+  },
+  {
+   "addr": "0803a154",
+   "old_name": "freertos_port_save_context",
+   "correct_name": "vPortEnableVFP",
+   "freertos_symbol": "vPortEnableVFP in portable/GCC/ARM_CM4F/port.c",
+   "confidence": "high",
+   "evidence": "Body is a single OR-write: *DAT_0803a164 |= 0xf00000, and the DAT pointer holds 0xE000ED88 (CPACR). port.c vPortEnableVFP loads r0=0xE000ED88 and ORs the CP10/CP11 enable bits (0x00F00000) into CPACR. It is also called inside xPortStartScheduler (FUN_0803a9d4) right after uxCriticalNesting=0 and before the FPCCR (0xE000EF34) lazy-save write \u2014 exactly port.c's vPortEnableVFP() call site. Not save-context (that is naked-asm inside the PendSV handler)."
+  },
+  {
+   "addr": "0803a6d8",
+   "old_name": "freertos_timer_start",
+   "correct_name": "vTaskStartScheduler",
+   "freertos_symbol": "vTaskStartScheduler in tasks.c",
+   "confidence": "high",
+   "evidence": "Creates the idle task via xTaskCreate(...,0x80 stack,...), creates the timer task (FUN_0803bdd4 = xTimerCreateTimerTask), sets xSchedulerRunning=1 (_DAT_20006258), xNextTaskUnblockTime=0xffffffff (_DAT_200062d0), xTickCount=0 (_DAT_200062d4), then calls xPortStartScheduler (FUN_0803a9d4). Matches tasks.c vTaskStartScheduler at line 3700 exactly. Nothing timer-start about it."
+  },
+  {
+   "addr": "0803a78c",
+   "old_name": "freertos_systick_handler",
+   "correct_name": "vTaskSuspend",
+   "freertos_symbol": "vTaskSuspend in tasks.c",
+   "confidence": "high",
+   "evidence": "Enters critical, removes task from its ready/state list (uxListRemove FUN_0803a024 on pxTCB+4), clears the ready-priority bit when the list empties, removes from event list if waiting, then vListInsertEnd(&xSuspendedTaskList, &xStateListItem) \u2014 &DAT_200062b0 is xSuspendedTaskList (the SuspendedTaskList insert at tasks.c:3196). Sets xYieldPending / triggers PendSV (_DAT_e000ed04=0x10000000) when suspending the running task. Matches vTaskSuspend (tasks.c:3160). Not the SysTick handler."
+  },
+  {
+   "addr": "0803a904",
+   "old_name": "freertos_port_yield",
+   "correct_name": "vTaskSuspendAll",
+   "freertos_symbol": "vTaskSuspendAll in tasks.c",
+   "confidence": "high",
+   "evidence": "Single statement: _DAT_200061e4 = _DAT_200061e4 + 1, i.e. ++uxSchedulerSuspended. That is the entire body of vTaskSuspendAll. The same global (_DAT_200061e4) is read as the suspend guard in vTaskSwitchContext (0803a914) and vTaskSuspend, confirming it is uxSchedulerSuspended. Not a port yield (yield is a PendSV trigger write)."
+  },
+  {
+   "addr": "0803a914",
+   "old_name": "freertos_port_pendsv_handler",
+   "correct_name": "vTaskSwitchContext",
+   "freertos_symbol": "vTaskSwitchContext in tasks.c",
+   "confidence": "high",
+   "evidence": "If uxSchedulerSuspended (_DAT_200061e4)!=0 it sets xYieldPending=1 (_DAT_200061e8) and returns; otherwise xYieldPending=0 and it selects the highest-priority ready task using (0x1f - LZCOUNT(uxTopReadyPriority)) = portGET_HIGHEST_PRIORITY (CLZ) indexing the pxReadyTasksLists array at 0x200061f0 (stride 0x14), advances the list index pointer, and writes pxCurrentTCB (_DAT_200061e0). This is taskSELECT_HIGHEST_PRIORITY_TASK inside vTaskSwitchContext (tasks.c:5120). It is the C context-switch selector, not the asm PendSV handler."
+  },
+  {
+   "addr": "0803a9d4",
+   "old_name": "freertos_timer_delete",
+   "correct_name": "xPortStartScheduler",
+   "freertos_symbol": "xPortStartScheduler in portable/GCC/ARM_CM4F/port.c",
+   "confidence": "high",
+   "evidence": "Asserts CPUID (_DAT_e000ed00) != 0x410fc271/0x410fc270 (Cortex-M7 r0p1/r0p0 guard), derives implemented priority bits via a shift loop, sets SHPR3 |= 0xf0f00000 (PENDSV+SYSTICK lowest pri at 0xE000ED20) and SHPR2=0, configures SysTick: reload=239999 (0xE000E014), CTRL=7 (0xE000E010), CVR=0; sets uxCriticalNesting=0, calls vPortEnableVFP (FUN_0803a154), sets FPCCR lazy-save bits (0xE000EF34 |= 0xc0000000), then prvPortStartFirstTask (FUN_08035304). Matches port.c xPortStartScheduler (line 305). Not timer delete."
+  },
+  {
+   "addr": "0803ab74",
+   "old_name": "freertos_timer_reset",
+   "correct_name": "xQueueGenericCreate",
+   "freertos_symbol": "xQueueGenericCreate in queue.c",
+   "confidence": "high",
+   "evidence": "Asserts uxQueueLength!=0, checks uxItemSize*uxQueueLength multiply overflow, checks SIZE_MAX-sizeof(Queue_t) overflow (the (uVar2+0x48 <= uVar2) test, 0x48 = sizeof(Queue_t)=72), pvPortMalloc(size+0x48), then prvInitialiseNewQueue(len,itemsize,storage=base+0x48,ucQueueType,base) (FUN_08034f04). Matches queue.c xQueueGenericCreate (line 502). Not a timer reset."
+  },
+  {
+   "addr": "0803ac38",
+   "old_name": "freertos_timer_stop",
+   "correct_name": "xQueueGenericReset",
+   "freertos_symbol": "xQueueGenericReset in queue.c",
+   "confidence": "high",
+   "evidence": "Two-arg (xQueue, xNewQueue): resets pcTail = pcHead + uxLength*uxItemSize ([0xf]*[0x10]+[0]), uxMessagesWaiting=0 ([0xe]), pcWriteTo=pcHead, u.xQueue.pcReadFrom = pcHead+(len-1)*itemsize, cRxLock/cTxLock = 0xff (queueUNLOCKED). When xNewQueue==0, wakes a task waiting to send and yields (_DAT_e000ed04=0x10000000); when !=0, re-inits xTasksWaitingToSend/Receive lists. Matches queue.c xQueueGenericReset (line 303). The public xQueueReset macro is xQueueGenericReset(q,pdFALSE); this two-param function is the generic form. Not a timer stop."
+  },
+  {
+   "addr": "0803acf0",
+   "old_name": "xQueueGenericSend",
+   "correct_name": "xQueueGenericSend",
+   "freertos_symbol": "xQueueGenericSend in queue.c",
+   "confidence": "high",
+   "evidence": "Already correctly named. Queue-full check uxMessagesWaiting<uxLength (offsets 0x38<0x3c), taskENTER_CRITICAL/EXIT around prvCopyDataToQueue (FUN_08034cc4), wakes xTasksWaitingToReceive (offset 0x24) and pends PendSV (_DAT_e000ed04=0x10000000). Blocking path: prvInitialiseTimeoutIcheck(auStack), vTaskSuspendAll, clears cRxLock/cTxLock from -1, vTaskPlaceOnEventList(+0x10=xTasksWaitingToSend), prvCheckForTimeout(FUN_0803b5cc), xTaskResumeAll(FUN_0803bc10). Three-arg (queue,item,ticks) blocking sender. Matches queue.c exactly."
+  },
+  {
+   "addr": "0803af08",
+   "old_name": "xQueueGenericSendFromISR",
+   "correct_name": "xQueueGenericSendFromISR",
+   "freertos_symbol": "xQueueGenericSendFromISR in queue.c",
+   "confidence": "high",
+   "evidence": "Already correctly named. Three-arg (queue,item,&woken). Saves/sets BASEPRI to configMAX_SYSCALL_INTERRUPT_PRIORITY (0x10) = taskENTER_CRITICAL_FROM_ISR, checks uxMessagesWaiting<uxLength (0x38<0x3c), reads cTxLock (offset 0x45), copies via prvCopyDataToQueue (FUN_08034cc4), if cTxLock==queueUNLOCKED(-1) wakes xTasksWaitingToReceive (offset 0x24, FUN_0803bb4c) and sets *pxHigherPriorityTaskWoken=1, else increments cTxLock with queueINT8_MAX(0x7f) overflow assert. Restores BASEPRI. Matches xQueueGenericSendFromISR."
+  },
+  {
+   "addr": "0803b06c",
+   "old_name": "freertos_queue_notify_from_isr",
+   "correct_name": "xQueueGetMutexHolder",
+   "freertos_symbol": "xQueueGetMutexHolder in queue.c",
+   "confidence": "high",
+   "evidence": "Old name is wrong. Body: taskENTER_CRITICAL; if(*param_1==0) ret=param_1[2] else ret=0; taskEXIT_CRITICAL. *param_1 is pcHead, and queueQUEUE_IS_MUTEX==NULL via the macro uxQueueType==pcHead; param_1[2] (offset 8) is u.xSemaphore.xMutexHolder. This is exactly xQueueGetMutexHolder: 'if uxQueueType==queueQUEUE_IS_MUTEX return u.xSemaphore.xMutexHolder else NULL' under taskENTER_CRITICAL (the non-ISR variant; FromISR has no critical section). Caller passes _osc_semaphore (a mutex). Nothing about queues/ISR/notify."
+  },
+  {
+   "addr": "0803b09c",
+   "old_name": "xQueueReceiveFromISR",
+   "correct_name": "xQueueGiveFromISR",
+   "freertos_symbol": "xQueueGiveFromISR in queue.c",
+   "confidence": "high",
+   "evidence": "Old name is wrong (this GIVES, does not RECEIVE). Two-arg (queue,&woken). Guard if(uxItemSize==0) (param_1[0x10], offset 0x40) = the configASSERT(uxItemSize==0) of xQueueGiveFromISR. Sets BASEPRI=0x10 (taskENTER_CRITICAL_FROM_ISR), if uxMessagesWaiting<uxLength (param_1[0xe]<param_1[0xf], offsets 0x38<0x3c) it INCREMENTS uxMessagesWaiting (param_1[0xe]+1) \u2014 no data copy, since a semaphore moves no payload \u2014 then cTxLock==queueUNLOCKED(-1) path wakes xTasksWaitingToReceive (param_1+9=offset 0x24) and sets woken, else cTxLock++ with queueINT8_MAX(0x7f) assert. Restores BASEPRI. This is the count-increment semaphore-give path of xQueueGiveFromISR, distinct from xQueueReceiveFromISR (which copies out and decrements)."
+  },
+  {
+   "addr": "0803b1d8",
+   "old_name": "xQueueReceive",
+   "correct_name": "xQueueReceive",
+   "freertos_symbol": "xQueueReceive in queue.c",
+   "confidence": "high",
+   "evidence": "Already correctly named. Three-arg (queue,buffer,ticks) blocking. Reads uxMessagesWaiting (offset 0x38); if !=0 copies out via prvCopyDataFromQueue (FUN_08034c80), decrements uxMessagesWaiting, wakes xTasksWaitingToSend (offset 0x10, FUN_0803bb4c), pends PendSV, returns 1. Blocking path uses prvInitialiseTimeoutIcheck, vTaskSuspendAll, clears cRxLock/cTxLock, prvIsQueueEmpty (FUN_080352ac), vTaskPlaceOnEventList(+0x24=xTasksWaitingToReceive), xTaskResumeAll. Matches xQueueReceive exactly (semaphore variant xQueueSemaphoreTake is a separate function)."
+  },
+  {
+   "addr": "0803be38",
+   "old_name": "freertos_tick_handler",
+   "correct_name": "xTimerGenericCommand",
+   "freertos_symbol": "xTimerGenericCommand in timers.c (older single-function form; modern kernel splits it into xTimerGenericCommandFromTask/FromISR)",
+   "confidence": "high",
+   "evidence": "Old name is wrong \u2014 this is NOT the tick ISR. Builds a DaemonTaskMessage_t {xMessageID=param2, xMessageValue=param3, pxTimer=param1} on the stack and posts it to xTimerQueue (_DAT_200062e4, created via xQueueGenericCreate(0xf,0xc,0) = configTIMER_QUEUE_LENGTH=15 x sizeof(DaemonTaskMessage_t)=12). Branches on xCommandID<tmrFIRST_FROM_ISR_COMMAND(6): if <6 uses xQueueGenericSend (task path, ticksToWait or 0 by scheduler state via FUN_0803b730/xTaskGetSchedulerState==2), else uses xQueueGenericSendFromISR (FUN_0803af08). Only sends if xTimerQueue!=NULL and pxTimer!=NULL (the null pxTimer path traps via configASSERT). This is precisely the fused xTimerGenericCommand."
+  }
+ ],
+ "r1": [
+  {
+   "addr": "0800039c",
+   "name": "FUN_0800039c",
+   "new_D": 3,
+   "classification": "NA_OUR_OWN",
+   "our_impl": "ABSENT (no equivalent needed; our debug/format paths are our own)",
+   "new_R": "NA",
+   "new_V": "NA",
+   "resolved": true,
+   "findings": "MISCLASSIFIED as hardware. Full disasm (file off 0x39c, base 0x08000000): `push {r0-r3}` (variadic args) / `ldr r1,[pc] -> 0x20002ac8` (dest buffer ptr) / `add r2,sp,#12` (va_list) / `ldr r0,[sp,#8]` (fmt/arg) / `bl 0x80010f0` / tail-return via `ldr.w pc,[sp],#20`. Target 0x80010f0 is a string-format helper (PC-rel ptr, calls strlen-like 0x8001092 + parser, returns buffer). This is a printf/sprintf-style log wrapper writing to RAM 0x20002ac8 \u2014 NO GPIO/EXMC/peripheral register access at all. Called once from master_init at 0x080275A0 (right at the IWDG phase). The gap_functions.md guess 'GPIO or clock init helper' was wrong.",
+   "next_action": "Reclassify from hardware to a string/log-format util in coverage_ledger and function_names. No reimplementation owed \u2014 it is a host-side formatting wrapper, not a register driver."
+  },
+  {
+   "addr": "080018a4",
+   "name": "gpio_mux_portc_porte",
+   "new_D": 3,
+   "classification": "FPGA_BLOCKED",
+   "our_impl": "firmware/src/drivers/fpga.c:728 fpga_set_scope_frontend_range (PARTIAL: GPIO relay portion only; DAC trigger write ABSENT)",
+   "new_R": "R1",
+   "new_V": "V0",
+   "resolved": false,
+   "findings": "Stock FUN_080018a4 is a per-range (param 0-9) two-part routine. Part 1: switch writes GPIO BSRR/CRH-class registers in the 0x4001101x/0x4001181x (GPIOD/E) block \u2014 relay/range routing (matches PE4/PE5/PE6 + input-routing relays). Part 2 (load-bearing, always runs): picks a 16-bit gain/offset pair from RAM cal tables (mode<5 -> 0x200003bc/0x20000380 or 0x200003a8/0x2000036c per device_mode/config_value; meter mode -> 0x20000394/0x20000358), computes DAC = ((upper-base)/DAT_08001a54)*(system_state+100)+base via VFP softfloat, then writes _DAT_40007408 (DAC1_DHR12R1, ch1 12-bit data, masked &0xfff) and sets _DAT_40007404 |= 1 (DAC SWTRIGR). This is the SCOPE TRIGGER-COMPARATOR DAC path, exactly as CLAUDE.md states. OUR fpga.c:728 reproduces only the GPIO relay truth table (PC12/PE4/PE5/PE6/PA15/PA10/PB10) as a reconstructed approximation keyed on range_idx, and grep confirms NO write to 0x40007408/0x40007404 and no cal-table->DAC math anywhere in fpga.c. So the trigger-DAC half is unimplemented, and the relay half is an approximation, not a verified mirror.",
+   "next_action": "Reimplement the cal-table->DAC1 trigger write (read 0x20000358/0x20000394-class RAM tables loaded from SPI flash, apply (upper-base)/divisor*(offset+100)+base, write DAC1_DHR12R1 + SWTRIGR). Verify on bench by scoping PA4/DAC1 trigger level vs range and confirming scope arming \u2014 but acquisition is FPGA-config-walled, so full equivalence is FPGA_BLOCKED until the FPGA enters config-receive."
+  },
+  {
+   "addr": "08001a58",
+   "name": "gpio_mux_porta_portb",
+   "new_D": 3,
+   "classification": "FPGA_BLOCKED",
+   "our_impl": "firmware/src/drivers/fpga.c:728 fpga_set_scope_frontend_range (PARTIAL: gain GPIO portion only; DAC2 write ABSENT)",
+   "new_R": "R1",
+   "new_V": "V0",
+   "resolved": false,
+   "findings": "Sibling of FUN_080018a4 for the GPIOA/GPIOB (0x40010810 BSRR / 0x40010c10 BSRR+0x40010c14) bank: per-range switch sets the gain-select pins (matches PA15/PA10 gain, PB10 gain). Part 2 (always runs): selects a 16-bit gain/offset pair from a parallel RAM cal table set (mode<5 -> 0x20000434/0x200003f8 or 0x20000420/0x200003e4; meter -> 0x2000040c/0x200003d0), same VFP formula using system_flag+100 and divisor DAT_08001c5c, and writes _DAT_40001c34 (the channel-2 DAC data register). So it is the CH2 trigger/offset DAC path. OUR fpga.c:728 sets PA15/PA10/PB10 (plus PB9/PA6 enables) as a reconstructed range truth table, but writes NO DAC (_DAT_40001c34 absent) and does not read these cal tables. Relay/gain GPIO half is an approximation; DAC half is unimplemented.",
+   "next_action": "Same as 080018a4 for CH2: reimplement the cal-table->_DAT_40001c34 DAC write. Bench-verify CH2 offset DAC vs range. Full scope equivalence blocked by the FPGA config-entry wall."
+  },
+  {
+   "addr": "08001c60",
+   "name": "siggen_configure",
+   "new_D": 3,
+   "classification": "NA_OUR_OWN",
+   "our_impl": "firmware/src/dsp/signal_gen.c + drivers/dac_output.c (our own DDS via TMR6+DMA2->DAC1/PA4); ABSENT as a port of FUN_08001c60",
+   "new_R": "NA",
+   "new_V": "NA",
+   "resolved": true,
+   "findings": "MISLABELED in function_names.md. FUN_08001c60 is NOT signal-generator setup. It loops over (DAT_2000010d&0xf) scope channels, scans a 300-byte sample buffer at 0x2000044e computing per-channel min(uVar6)/max(uVar9), then a switch on (DAT_20000127>>shift&0xf) does auto-baseline / trigger-level tracking against system_state[ch], and on settle writes the SAME scope trigger DACs as the gpio_mux fns: _DAT_40007408 (DAC1, +SWTRIGR _DAT_40007404|=1) for ch0 and _DAT_40001c34 (DAC2) for ch1, using the identical cal-table VFP formula. It emits display-queue codes 4/5/6 and FPGA-queue code 8. Caller (decompile line ~6911) gates it on a counter DAT_2000012a (>=200 / >=0x27) inside scope handling \u2014 i.e. it is a PERIODIC SCOPE AUTO-SET / trigger-tracking engine. It writes 0x40007404/0x40007408 (which function_names.md mistook for 'DAC registers' implying siggen). Our actual signal generator is an unrelated original DDS in dsp/signal_gen.c feeding dac_output.c (TMR6 overflow->TRGO->DAC1, DMA2 CH3 circular buffer on PA4) \u2014 it does not derive from this function.",
+   "next_action": "Rename FUN_08001c60 to scope_autoset_trigger_track (not siggen_configure) in function_names.md/ledger. As a SIGGEN function it is NA (our siggen is our own). As the scope auto-set engine it would need reimplementation tied to the trigger-DAC path above and is then FPGA_BLOCKED; track that separately rather than under the siggen label."
+  },
+  {
+   "addr": "080028e0",
+   "name": "meter_data_process",
+   "new_D": 3,
+   "classification": "DIVERGENT",
+   "our_impl": "firmware/src/drivers/meter_data.c:339 meter_data_process_frame",
+   "new_R": "R1",
+   "new_V": "V0",
+   "resolved": false,
+   "findings": "Stock FUN_080028e0 (fpga_state_update): when DAT_20001035 set, runs softfloat (FUN_0803ed70/e5da/c8e0/e77c/eb94/ee0c/e124/df48 = AT32 soft-float lib) to scale the raw meter accumulator by per-range coefficients (DAT_08002bf0/c00), derives the auto-range DECADE DAT_2000102c from |value| vs thresholds DAT_08002c08/0c0c/10.0, then a big switch on meter mode DAT_20001025 x DAT_20001027 x DAT_2000102e sets the display unit/dp selector (DAT_20001026) and a dp-offset (DAT_20001030 = base + {0,2,5,9,10}), finally pushing display-refresh dispatch codes 0x1b/0x1c/0x1e to _display_queue_handle. Pure data-scale + range-decade + unit-FSM + queue sends; no peripheral registers. OUR meter_data.c:339 is INTENTIONALLY DIVERGENT: it parses the 12-byte 0x5A/0xA5 frame with our own scrambled-7seg bcd_lookup[256] (meter_data.c:66), then applies our CORRECTED band-level resistance cal (METER_CAL_LOW_OHM_FACTOR 0.0304 / KOHM 0.001 at :177, frame[6] band decoder + sticky latch at :564-712) to fix the stock's per-frame dp flicker that we observed on the bench (10k flickering 9.821k/98.24k). We deliberately ignore the per-frame dp hint and compute value from raw_bcd at band level \u2014 a behavior stock does NOT have. We do not replicate stock's softfloat coefficient pipeline, decade thresholds, or the 0x1b/0x1c/0x1e display-queue dispatch.",
+   "next_action": "Keep as a documented intentional divergence (our band cal is a correctness improvement, not a faithful port). If full stock fidelity is ever wanted, reimplement the softfloat coefficient scale + DAT_2000102c decade logic; otherwise leave R1 and mark divergence in the ledger. Remaining honest gap: DCV >10V auto-range (meter_data.c:606 TODO) is unsolved in BOTH stock-faithful and our paths because it traces to missing FPGA factory cal (FPGA-blocked)."
+  },
+  {
+   "addr": "08002c78",
+   "name": "FUN_08002c78",
+   "new_D": 3,
+   "classification": "NA_OUR_OWN",
+   "our_impl": "firmware/src/drivers/battery.c (battery_update/mv_to_percent, lines 101-157) for the battery-% half; probe-presence/auto-power-off FSM is ABSENT",
+   "new_R": "NA",
+   "new_V": "NA",
+   "resolved": true,
+   "findings": "Stock FUN_08002c78 (disasm fpga_helpers_disasm.txt:1082-1259) is the periodic battery-percent + probe-presence housekeeping FSM, NOT 'analog input init' as gap_functions.md guessed. Register-level: increments a rate-limit counter at RAM 0x2000105e, gates on >=5 (one update per 5 calls); reads GPIOC_ISTAT 0x40011008 bit 8 (PC8=POWER) twice (lsls #0x18; bmi); on the battery branch enables ADC1 via 0x40012400 (set CTRL2 bit22=SWSTART at off+8, poll, read ADC1_DR at off+0x4c = uxth), converts via FUN_0803e5da/0803e77c (int->float / float mul) and runs a descending float-threshold ladder (FUN_0803ede2 compares) writing battery-percent buckets 0x64,0x5a,0x50,0x46,0x3c,0x32,0x28,0x1e,0xf,0x5 (100..5%) into RAM 0x2000105f, then xQueueGenericSend(usart_cmd_queue 0x20002d6c) event 0x07; on probe-state change it calls FUN_0800b908 to re-init the FPGA mode. Ours diverges deliberately: battery.c reads PB1/ADC1-channel-9 (adc_ordinary_channel_set ADC_CHANNEL_9, battery.c:61) with the AT32 HAL, a piecewise-linear mv->percent curve (battery.c:104-112) and 16-sample averaging, no FreeRTOS event queue, no PC8 gate, and NO probe-presence/auto-power-off FSM at all. Stock reads ADC1 via the raw 0x40012400 block on a different channel; our percent ladder is voltage(mv)-keyed not raw-threshold-keyed. Equivalence is neither claimed nor needed \u2014 this is our own clean implementation.",
+   "next_action": "None for battery (justified our-own). If full stock parity is ever wanted, port the probe-presence + auto-power-off tiers (15/30/60min) which are currently ABSENT in our firmware; that needs the stock state-byte map at RAM 0x20001058/0x2000105e."
+  },
+  {
+   "addr": "08009014",
+   "name": "meter_mode_init_ac_voltage",
+   "new_D": 3,
+   "classification": "DECODE_ONLY",
+   "our_impl": "firmware/src/main.c draw_meter_screen() (called main.c:151,173) on our own lcd.c font engine \u2014 NOT a port of this routine",
+   "new_R": "NA",
+   "new_V": "NA",
+   "resolved": false,
+   "findings": "MISNAMED in function_names.md. FUN_08009014 (full_decompile.c:3671-3737) is a DISPLAY-RENDER routine, not AC-voltage meter init. Register/decode level: guarded by UI sub-mode byte DAT_20001060=='\\0'; sets a text/box rectangle in RAM 0x20008350..0x20008356 (x=0x4b, y=0xbe, w=0xaa, h=0x19); mallocs a render buffer via FUN_08033cfc(0x2134) into _DAT_20008358 and zero-fills w*h bytes; selects a string via a table dispatch (&DAT_0804c924 indexed by DAT_20001061, then by DAT_20001058) and calls FUN_08008154 = display_render_engine (HIGH-conf text-layout/glyph engine per function_names.md:91) with the bbox + string ptr; calls FUN_0803bee0 then FUN_0803b3a8(_DAT_20002d84 = fpga_sem2, portMAX_DELAY) to take a semaphore, then blits via FUN_080012bc / an indirect blit (*_DAT_20001070). It draws a labelled UI region; the 'AC voltage' / 'meter init' label is unsupported by the code. Our firmware renders meter UI with its own clean-room draw_meter_screen() + lcd.c fonts, sharing none of this register layout (no 0x20008350 bbox, no FUN_08033cfc malloc-buffer, no glyph engine port).",
+   "next_action": "Rename in function_names.md from meter_mode_init_ac_voltage -> ui_render_region_mode0 (display_render_engine caller). No reimplementation needed; our draw_meter_screen is the intentional clean-room replacement. Resolve only after the rename + confirming the &DAT_0804c924 string table contents."
+  },
+  {
+   "addr": "080096e8",
+   "name": "meter_mode_init_dc_voltage",
+   "new_D": 3,
+   "classification": "DECODE_ONLY",
+   "our_impl": "firmware/src/main.c draw_meter_screen()/draw_scope_screen() on our own lcd.c \u2014 NOT a port",
+   "new_R": "NA",
+   "new_V": "NA",
+   "resolved": false,
+   "findings": "MISNAMED. FUN_080096e8 (full_decompile.c:3748-3784) is a sibling DISPLAY-RENDER routine, gated on UI sub-mode DAT_20001060=='\\x03'. Decode: bbox RAM 0x20008350=0x34(x), 0=y, 0xd8=w, 0x14=h; mallocs FUN_08033cfc(0x21c0); calls FUN_08032f6c(0x80bc612, 0x34, 0) \u2014 passes an absolute string pointer 0x080bc612 (a ROM string) \u2014 then FUN_08008154 (display_render_engine) with string from table &DAT_0804c394 indexed by DAT_20001058; then FUN_0803bee0 + FUN_0803b3a8(fpga_sem2) + blit. Identical structure to FUN_08009014/08009a94, differing only in mode-byte value, bbox, string ptr, and buffer size \u2014 a per-screen draw, not 'DC voltage' protocol. Our meter/scope UI is clean-room (draw_meter_screen, draw_scope_screen in main.c) and does not mirror these registers.",
+   "next_action": "Rename to ui_render_region_mode3 (display_render_engine + FUN_08032f6c caller). Decode the ROM string at 0x080bc612 to confirm the screen label, then close as our-own. No reimplementation."
+  },
+  {
+   "addr": "08009a94",
+   "name": "meter_mode_init_resistance",
+   "new_D": 3,
+   "classification": "DECODE_ONLY",
+   "our_impl": "firmware/src/main.c draw_meter_screen() on our own lcd.c \u2014 NOT a port",
+   "new_R": "NA",
+   "new_V": "NA",
+   "resolved": false,
+   "findings": "MISNAMED. FUN_08009a94 (full_decompile.c:3796-3833) is the third sibling DISPLAY-RENDER routine, gated on DAT_20001060=='\\x01'. Decode: bbox 0x20008350=0x34,0,0xd8,0x1d; mallocs FUN_08033cfc(0x30f0); FUN_08032f6c(0x80bc3fb,0x34,0) with ROM string 0x080bc3fb; FUN_08008154 (display_render_engine) with a 2D-indexed string from table 0x804c40c (DAT_20001058*0x30 + DAT_20001026*4); FUN_0803bee0 + FUN_0803b3a8(fpga_sem2) + blit. Same shape as the other two; 'resistance' label is unsupported by the disassembly. Our resistance display is handled by our clean-room meter pipeline (meter_data.c band logic + draw_meter_screen), which shares no registers with this.",
+   "next_action": "Rename to ui_render_region_mode1. Decode ROM string 0x080bc3fb and the 0x804c40c table to confirm. Our-own UI; no reimplementation."
+  },
+  {
+   "addr": "0800b908",
+   "name": "FUN_0800b908",
+   "new_D": 3,
+   "classification": "VERIFY_FAITHFUL",
+   "our_impl": "firmware/src/drivers/fpga.c meter init block lines 2131-2174 + fpga_probe_cmd_byte() line 808-811 + per-mode init (siggen 2372-2383)",
+   "new_R": "R2",
+   "new_V": "V1",
+   "resolved": false,
+   "findings": "FUN_0800b908 is the boot-time FPGA MODE-INIT DISPATCHER (fpga_comms_deep_dive.c:31-145): a single 10-case TBH switch on current-mode byte state[0xF68], called ONCE from system_init (FUN_08023A50 @ 0x080271F8), that queues 1-byte FPGA command codes to usart_cmd_queue (0x20002d6c) with portMAX_DELAY. Probe-detect pattern (cases 1/3/9): read GPIOC_IDR 0x40011008 bit 7 (PC7), HIGH->queue 0x07, LOW->queue 0x0A. Case 1 (meter basic): 0x00,0x09,[0x07/0x0A],0x1A,0x1B,0x1C,0x1D,0x1E. Our fpga.c mirrors this faithfully at the register level: fpga_probe_cmd_byte() (line 810) reads exactly GPIOC->idt bit7 and returns 0x07 else 0x0A (FPGA_CMD_METER_NOPROBE); the meter init block (lines 2135-2173) sends 0x05/08, 0x05/09, PC7->0x05/07 or 0x05/0A, 0x05/14, then 0x1A,0x1B,0x1C,0x1D,0x1E (CH1/CH2 gain/offset + coupling) \u2014 same codes, same probe gate, same order as stock case 1. Siggen path (lines 2379-2383) mirrors case 2 (0x02-0x06). So the MCU-side command emission is register-faithful. CAVEAT: we send via direct usart2_send_cmd/fpga_timed_send_cmd rather than stock's queue->dispatcher->tx_config_writer chain (the downstream [param,cmd] packing differs), and whether the FPGA actually accepts/acts on these codes cannot be confirmed because the scope acquisition path is dead at the config-entry wall.",
+   "next_action": "VERIFY_FAITHFUL for the command-code emission (confirmed by reading both). To fully resolve (V2/resolved): bench-capture USART2 TX during our boot vs the stock issue-#18 capture and diff the 10-byte frames per mode; the FPGA-accepts-it half stays FPGA_BLOCKED until the config-entry wall is cleared. Also note our case coverage is partial (modes 4/5/6/7/8 from stock's switch are not all emitted) \u2014 extend if those modes are wanted."
+  },
+  {
+   "addr": "0800ba06",
+   "name": "probe_detect_handler_1",
+   "new_D": 3,
+   "classification": "FPGA_BLOCKED",
+   "our_impl": "firmware/src/drivers/fpga.c:808 (fpga_probe_cmd_byte), :913 (fpga_send_scope_range_block)",
+   "new_R": "R1",
+   "new_V": "V0",
+   "resolved": false,
+   "findings": "Stock reads *param_1 (GPIOC IDR snapshot); test `-1 < *param_1<<0x18` is PC7 bit-7: bit7==0 -> cmd=0x0A (no-probe), bit7 set -> cmd=0x07 (probe). It then pushes the channel-bank prefix (0x07/0x0A) plus the SCOPE FRONTEND BLOCK codes 0x1A,0x1B,0x1C,0x1D,0x1E (CH1 gain/offset, CH2 gain/offset, coupling) onto the usart_cmd queue via xQueueGenericSend (FUN_0803acf0, confirmed FreeRTOS kernel, function_names.md:281). Mis-named in function_names.md as 'probe detect' \u2014 it is a probe-presence-gated scope range/coupling emitter. Our firmware faithfully mirrors the PC7 decode: fpga_probe_cmd_byte() = `(GPIOC->idt & (1<<7)) ? 0x07 : 0x0A` (fpga.c:810), and emits the identical 0x07/0x0A + 0x1A-0x1E block in fpga_send_scope_range_block (fpga.c:913-924). DIVERGENCE: stock queues bare command bytes and lets the consuming osc task fill parameter bytes[4..8]; we build full 10-byte frames inline with parameters projected from live scope state. Our own comment (fpga.c:915-918) admits 'we still do not have the original state-packer that filled bytes[4..8].' So command codes match but parameter packing is unverified and divergent.",
+   "next_action": "Decode complete (D3 \u2014 only register touched is GPIOC IDR bit7/PC7). To resolve: recover the stock osc-task state-packer that fills bytes[4..8] for cmds 0x1A-0x1E, then bench-verify on a working FPGA that our gain/offset/coupling params produce correct frontend behavior. Blocked by FPGA config-entry wall \u2014 scope path non-functional, cannot read back live."
+  },
+  {
+   "addr": "0800bb10",
+   "name": "probe_detect_handler_2",
+   "new_D": 3,
+   "classification": "FPGA_BLOCKED",
+   "our_impl": "firmware/src/drivers/fpga.c:808 (fpga_probe_cmd_byte), :1009-1014 (trigger block)",
+   "new_R": "R1",
+   "new_V": "V0",
+   "resolved": false,
+   "findings": "Identical structure to handler_1 (same PC7 bit-7 -> 0x07/0x0A decode), but queues the SCOPE TRIGGER BLOCK codes 0x16,0x17,0x18,0x19 instead of the range block. 0x16=trigger level LSB, 0x18=trigger mode byte per our command map. Our firmware emits this exact block in the scope timing setup: prefix 0x07/0x0A (fpga_scope_prefix_cmd, fpga.c:875) then cmds 0x16/0x17/0x18/0x19 with fpga_scope_trigger_lsb() and fpga_scope_trigger_mode_byte() (fpga.c:1009-1014, mirrored at :463-467). PC7 decode mirrored in fpga_probe_cmd_byte (fpga.c:810). Same transport divergence as handler_1: stock queues bare bytes, we build full frames; trigger-mode/level param packing (fpga.c:848-873) is our reconstruction, not the verified stock packer.",
+   "next_action": "Decode complete (D3). To resolve: confirm our trigger LSB/mode byte encoding (fpga.c:848-873) matches stock frame bytes for cmds 0x16-0x19, then verify trigger arming on live FPGA. Blocked \u2014 scope acquisition non-functional (config-entry wall)."
+  },
+  {
+   "addr": "0800bba6",
+   "name": "probe_continuity_test",
+   "new_D": 3,
+   "classification": "FPGA_BLOCKED",
+   "our_impl": "firmware/src/drivers/fpga.c:89-90 (FPGA_CMD_FREQ_20/21 0x20/0x21)",
+   "new_R": "R1",
+   "new_V": "V0",
+   "resolved": false,
+   "findings": "Smallest of the set (24B): NO register read. Pushes exactly two constant command bytes 0x20 then 0x21 onto the usart_cmd queue via xQueueGenericSend. Per our command map (fpga.h:89-90) 0x20/0x21 are FPGA_CMD_FREQ_20/FREQ_21 \u2014 used in our firmware as the scope run-mode / sample-depth (acquisition) params, NOT a 'continuity beep' as the function_names.md name suggests. We emit 0x20/0x21 in fpga_scope_select/refresh paths (fpga.c:1001-1002, 1046-1047). The stock function is a pure queue-of-two-constants config trigger; our usage carries computed run_mode/sample_depth parameters. Codes match, parameters and exact semantic context (which dispatch case) unverified.",
+   "next_action": "Decode complete (D3 \u2014 no registers, just two queue sends). To resolve: pin down which osc-task dispatch case fires this (jump-table FUN_0800bcd4 / DAT_0804c0cc) and whether 0x20/0x21 here carry the same run_mode/depth meaning as our scope path or a distinct freq/continuity meaning. Then verify on live FPGA. Blocked by config-entry wall."
+  },
+  {
+   "addr": "0800bc00",
+   "name": "probe_component_test",
+   "new_D": 3,
+   "classification": "FPGA_BLOCKED",
+   "our_impl": "firmware/src/drivers/fpga.c:1003-1005, :458-460 (timebase block 0x26/0x27/0x28)",
+   "new_R": "R1",
+   "new_V": "V0",
+   "resolved": false,
+   "findings": "42B, NO register read. Pushes three constant command bytes 0x26, 0x27, 0x28 onto the usart_cmd queue. These are the SCOPE TIMEBASE BLOCK (prescaler/period/mode) \u2014 our firmware emits the identical triple as tb_prescaler/tb_period/tb_mode in fpga_scope_select (fpga.c:1003-1005), boot scope setup (:458-460), and heartbeat (:1067-1069). The 'component_test' name in function_names.md is misleading; it is a timebase config emitter. Command codes match exactly; stock queues bare codes while we attach computed timebase params from fpga_scope_select_timing. Equivalence of the param values and of which mode invokes this case cannot be confirmed without a live scope.",
+   "next_action": "Decode complete (D3). To resolve: verify our tb_prescaler/tb_period/tb_mode values (fpga_scope_select_timing) match stock per timebase index, and bench-confirm timebase changes on live FPGA. Blocked \u2014 scope path non-functional."
+  },
+  {
+   "addr": "0800bc98",
+   "name": "probe_detect_handler_3",
+   "new_D": 3,
+   "classification": "FPGA_BLOCKED",
+   "our_impl": "firmware/src/drivers/fpga.c:808-811 (fpga_probe_cmd_byte)",
+   "new_R": "R1",
+   "new_V": "V0",
+   "resolved": false,
+   "findings": "Minimal (36B): reads *param_1 (GPIOC IDR), applies the same PC7 bit-7 test (`-1 < *param_1<<0x18`) -> cmd=0x07 if probe present else 0x0A, then queues that single byte via xQueueGenericSend and returns. Pure probe-presence report. Our firmware's fpga_probe_cmd_byte (fpga.c:808-811) is a byte-exact register equivalent: same pin (PC7), same polarity (`& (1<<7) ? 0x07 : 0x0A`), used at fpga.c:835 and :2411. This is the cleanest match of the five \u2014 the GPIOC IDR-bit7 decode IS verified-faithful at the register level. What blocks VERIFY_FAITHFUL is only the downstream: stock queues the byte to the osc task for a USART2 frame whose full effect (FPGA acks/behavior) is unobservable on our non-functional FPGA path; we cannot confirm the byte reaches the FPGA and is acted on equivalently.",
+   "next_action": "Register decode of the probe read is complete and matches ours exactly (could be promoted to VERIFY_FAITHFUL for the GPIO read in isolation). Full resolve requires observing the 0x07/0x0A frame land at a live FPGA and the meter/scope respond \u2014 blocked by FPGA config-entry wall. Bench step: scope SPI3/USART2 during meter mode probe insert/remove and confirm 0x07<->0x0A toggles."
+  },
+  {
+   "addr": "08019e98",
+   "name": "scope_main_fsm",
+   "new_D": 3,
+   "classification": "FPGA_BLOCKED",
+   "our_impl": "ABSENT (no acquisition FSM; firmware/src/main.c is UI-only, scope path runs on synthetic data)",
+   "new_R": "R1",
+   "new_V": "V0",
+   "resolved": false,
+   "findings": "Stock 08019e98 (13.3KB) is the oscilloscope acquisition spine, gated on DAT_20001060==2 (scope mode). Register-level decode: it (1) dispatches to the four sub-handlers (FUN_0801d2ec timebase/resample, FUN_0801e1e4 FFT, FUN_0801eaac persistence, FUN_0801f6f8) and the measurement path; (2) case 1 runs an auto-trigger min/max search scanning the 0x12d-stride sample blocks at RAM 0x2000044e looking for an edge (bVar59>0xd9 || bVar37<0x27 thresholds); (3) case 2 maps the per-range sample period (DAT_20000148 + range*0x30) to a timebase index DAT_20000125, then writes the SCOPE TRIGGER COMPARATOR DAC: computes (cal_hi-cal_lo)/divisor*(offset+100)+cal_lo from the gain/offset cal tables (0x20000394/0x20000358 hi-range, 0x200003a8/0x2000036c and 0x200003bc/0x20000380 lo-range) via VectorSignedToFloat/VectorFloatToUnsigned and stores to _DAT_40007408 (DAC1 12-bit DHR) and _DAT_40001c34, then sets _DAT_40007404|=1 (DAC enable) and _DAT_40011410=4; (4) the giant float block at switchD_0801a3ac_caseD_0 accumulates 500 samples (21-wide unrolled) for a per-channel vertical auto-cal/DC-offset feedback loop writing back to 0x200000f8+0x288. This is fully scope-data-dependent. OUR firmware has NO equivalent: main.c only drives the UI; 0x40007408 appears only in usb_debug.c:1618 as a debug DAC, not the scope trigger comparator; fft sample buffer is filled by test_signal_generate (scope_ui.c:971), never by FPGA SPI3. Acquisition is non-functional (FPGA config-entry wall).",
+   "next_action": "Reimplement the acquisition FSM (range->timebase map, trigger-comparator DAC1 write to 0x40007408, auto-trigger edge search, vertical auto-cal) once the FPGA config-entry wall is cleared. Bench-verify by arming a trigger and confirming DAC1 (0x40007408) drives the comparator and stable captured waveform appears; needs live SPI3 0x04/0x05 channel reads."
+  },
+  {
+   "addr": "0801d2ec",
+   "name": "scope_mode_timebase",
+   "new_D": 3,
+   "classification": "FPGA_BLOCKED",
+   "our_impl": "ABSENT for the data path (timebase table exists in ui/scope_state.c:24 but is UI-only); no sample-buffer resampler",
+   "new_R": "R1",
+   "new_V": "V0",
+   "resolved": false,
+   "findings": "Stock 0801d2ec (3.7KB, 1 caller=scope_main_fsm) is NOT a 'timebase config sub-handler' as named \u2014 it is the sample-buffer decimation/resampling engine. Register-level decode: it reads the two raw SPI3 sample ring buffers (CH-A at 0x200006a8, CH-B at 0x20000aa8, indexed off the FPGA write pointer _DAT_20000eb4 & 0x7fff with wrap-modulo arithmetic -0x96/-0x896 etc.) and writes decimated/interleaved samples into the per-channel display sample buffers at base+0x356 (block stride 0x12d, base 0x200000f8). DAT_2000010c==1/3 selects dual/interleaved channel layout (offset-corrected by DAT_20000448/0x20000449). The second regime (lines ~9353+) handles the slow/roll timebase: when sample period >=1000 (1000/rate ratio uVar34), it allocates FUN_08033cfc(0x5e1) scratch and resamples with FUN_080365d4 into the 0x2000044e display buffer at 0x2b stride. Entirely dependent on live FPGA sample buffers. OUR firmware has timebase_table[] (scope_state.c:24) and scope_adjust_timebase() but those only pick a label/scale for the UI grid \u2014 there is no buffer that resampler reads from; fft_get_sample_buf() is synthetic. So the data-domain function is absent.",
+   "next_action": "Reimplement once SPI3 channel reads (0x04/0x05) deliver real samples into a ring at a known RAM base; port the wrap-modulo decimation and dual/interleave de-mux. Verify by feeding a known sine into CH1 and confirming the on-screen pixel-per-division spacing tracks the selected timebase."
+  },
+  {
+   "addr": "0801e1e4",
+   "name": "scope_mode_trigger",
+   "new_D": 3,
+   "classification": "DIVERGENT",
+   "our_impl": "firmware/src/dsp/fft.c:fft_process (our own radix-2 FFT); consumes synthetic data (scope_ui.c:971), not FPGA",
+   "new_R": "R1",
+   "new_V": "V0",
+   "resolved": false,
+   "findings": "Stock 0801e1e4 (2.2KB, 1 caller=scope_main_fsm) is MISNAMED 'scope_mode_trigger' \u2014 it is the FFT/spectrum engine. Register-level decode: per enabled channel (DAT_2000010d nibbles) it (1) loads 256 samples from the SPI3 buffer 0x200006a8 (dual mode also 0x20000aa8) with offset-subtract by DAT_200000fc/fd, converting to float (VectorUnsignedToFloat) into a malloc'd complex array; (2) runs an in-place radix-2 DIT butterfly using the twiddle-factor table at flash DAT_0806e0c0 (the (fVar30*fVar28 - fVar27*fVar32) / (fVar27*fVar28 + fVar30*fVar32) rotations); (3) calls FUN_08028b80 twice (the named 'usb_class_request_handler' is wrong \u2014 here it is the recursive butterfly/FFT-stage helper) plus a bit-reversal permutation driven by the index table DAT_0806e4d0; (4) computes magnitude = sqrt(re^2+im^2) into pfVar11, finds max/min for autoscale, and writes 0x80 normalized bytes into *piVar2 (the display spectrum buffer at 0x20000104+ch*4). FUN_08033cfc=malloc, FUN_080012bc=free. OUR firmware has its own clean fft.c (fft_process, separate twiddle tables, FFT_SIZE bins) \u2014 a genuinely independent reimplementation, NOT a register port. But it operates on test_signal_generate output (scope_ui.c:971), so live equivalence to stock's FPGA-fed spectrum is unverifiable until acquisition works.",
+   "next_action": "This is intentionally divergent (our own DSP, not a stock port) so it stays unresolved as a faithful-match question. To validate the live spectrum: feed fft_process() from real captured samples instead of test_signal_generate, then bench-compare bin peaks against stock for a known tone. No need to bit-match the stock butterfly."
+  },
+  {
+   "addr": "0801eaac",
+   "name": "scope_mode_measure",
+   "new_D": 3,
+   "classification": "NA_OUR_OWN",
+   "our_impl": "firmware/src/ui/persistence.c (persist_add_trace/persist_decay); our own RGB heatmap persistence, not a 1-bit bitmap list",
+   "new_R": "NA",
+   "new_V": "NA",
+   "resolved": true,
+   "findings": "Stock 0801eaac (1.3KB, 1 caller=scope_main_fsm) is MISNAMED 'scope_mode_measure' \u2014 it is the waveform PERSISTENCE / display-trace rasterizer, dispatched on DAT_20000134 (persistence mode: 0=free all, 3=accumulate, else build new trace node). Register-level decode: it maintains a linked list of trace nodes (head _DAT_20000138, FUN_08033cfc(0x14)=malloc node, next ptr at +0x10), each node holding per-channel bitmaps allocated FUN_08033cfc(0x1e92). It rasterizes by reading the display sample buffer (0x2000044e, 0x12d stride) and setting bits via *p |= 1<<(x&7) into the bitmap at 0x1a-byte row stride (240px/8 = 0x1e width, Bresenham-style vertical fill between consecutive sample y's). FUN_080012bc frees nodes via the 0x20001078 pool allocator. This is a 1-bit-per-pixel persistence accumulator, NOT a measurement engine (Vpp/Freq live in scope_main_fsm's float block + FUN_0801f6f8). OUR firmware implements persistence independently in persistence.c: a full-byte/RGB heatmap in shared_mem (persist_add_trace at scope_ui.c:653, persist_decay), structurally different (decay-based intensity vs 1-bit set). Justified-NA: our own design, the stock packed-bitmap layout is irrelevant to our renderer, and it is purely a display effect that needs no FPGA. (Side note: measurement_compute in tasks/measurement.c is our own and is the actual Vpp/Freq engine, currently uncalled.)",
+   "next_action": "None required \u2014 our persistence is an independent, working UI feature. If desired, rename stock 0801eaac to scope_persistence_rasterizer and FUN_08028b80 (fft helper) in function_names.md to fix the misattributions surfaced here."
+  },
+  {
+   "addr": "0801efc0",
+   "name": "scope_mode_math",
+   "new_D": 3,
+   "classification": "NA_OUR_OWN",
+   "our_impl": "firmware/src/ui/scope_ui.c:draw_cursors (pixel-based dt/dV + format_si); math channels in dsp/math_channel.c",
+   "new_R": "NA",
+   "new_V": "NA",
+   "resolved": true,
+   "findings": "Stock 0801efc0 (1.8KB, 1 caller=scope_main_fsm) is MISNAMED 'scope_mode_math' \u2014 it is the CURSOR MEASUREMENT + engineering-unit formatting engine, gated on DAT_20000332 (bit0=voltage cursors, bit1=time cursors) and DAT_2000012c==0. Register-level decode: voltage branch computes _DAT_2000033c = (cursorA 0x2000032a - center 0x20000112) converted to float then /25.0 (25 px/div), and the cursorB delta 0x2000032c, storing dV results to 0x20000334/0x20000338/0x2000033c; time branch (bit set, lines 11033+) computes 0x2000032e/0x20000330 deltas /25.0. Both then run engineering-prefix scaling: index the unit-divisor LUT at flash DAT_080465c8 by (range%3), repeatedly divide by DAT_0801f3b8 (=1000.0) via the double-precision soft-float helpers FUN_0803e5da/0803c8e0/0803e77c/0803ed70/0803df48 while incrementing a prefix exponent (DAT_20000350/0351/0352/0353/0354) \u2014 i.e. it converts raw cursor pixel deltas into value+SI-prefix for display. OUR firmware does the same job independently in scope_ui.c:draw_cursors: dt = dx * time_per_pixel, dV = dy * volts_per_pixel (scope_state.c:97-98), formatted by our own format_si() \u2014 pixel/per-div based, not sample-domain, not the stock soft-float exponent loop. Justified-NA: our cursor measurement is original, operates on screen coordinates (no FPGA dependency), and is functional. The 'math channel' name is also wrong for stock \u2014 actual CH1+/-CH2/FFT math lives in our own dsp/math_channel.c (MATH_ADD/SUB/MUL/INV), again independent.",
+   "next_action": "None required \u2014 our cursor + math-channel implementations are independent and working. Recommend renaming stock 0801efc0 to scope_cursor_measure_format in function_names.md to correct the 'scope_mode_math' misnomer."
+  },
+  {
+   "addr": "0801f6f8",
+   "name": "scope_measurement_engine",
+   "new_D": 3,
+   "classification": "FPGA_BLOCKED",
+   "our_impl": "firmware/src/ui/scope_ui.c:252 draw_measurement_badges (placeholder values only) \u2014 no real engine; ABSENT as a sample-processing engine",
+   "new_R": "R1",
+   "new_V": "V0",
+   "resolved": false,
+   "findings": "Stock 0x0801f6f8 (4616B) is the scope auto-measurement engine, NOT a cursor drawer. Decoded to register/algorithm level: it scans the per-channel ADC sample buffers (state[0x12d]-stride source ~300-sample blocks, unrolled by 15 at lines 11104-11212) computing per-sample running min (uVar22) and max (uVar17); midpoint threshold = min + (max-min)/2 (line 11214); then a two-phase edge-counting FSM (lines 11221-11252) counts threshold crossings with hysteresis to derive period/frequency. Results are written to a 0x30-stride per-channel result struct at 0x20000160 (Vmin/Vmax/midpoint and float-converted scaled values) via the VFP soft-float helpers FUN_0803e5da (int->double), FUN_0803c8e0 (dmul), FUN_0803e77c (dadd), FUN_0803e450 (double->float), FUN_0803e50a. It reads device_mode and per-channel offset/gain (DAT_200000fa / system_state baselines) for scaling. Our firmware has NO equivalent: scope_ui.c draw_measurement_badges emits hardcoded demo strings ('707mV', etc.) \u2014 the in-code comment at line 255-256 explicitly says 'when real ADC is available, these will come from measurement_compute()'. Even a future port can only be VALIDATED against live ADC sample data, which our firmware cannot obtain (FPGA config-entry wall).",
+   "next_action": "Implement measurement_compute() over the SPI3 1026-byte per-channel scope buffers (opcode 0x04/0x05) mirroring stock min/max + midpoint-crossing FSM. Cannot verify until the FPGA boot config wall is cleared and real scope samples flow; bench step: capture a known sine on CH1, confirm Vpp/freq match. Currently FPGA_BLOCKED."
+  },
+  {
+   "addr": "0802771c",
+   "name": "tmr3_isr",
+   "new_D": 3,
+   "classification": "NA_OUR_OWN",
+   "our_impl": "firmware/src/drivers/button_scan.c:185 TMR3_GLOBAL_IRQHandler",
+   "new_R": "NA",
+   "new_V": "NA",
+   "resolved": true,
+   "findings": "Stock 0x0802771c (110B) fully decoded: TMR3 update ISR. Reads TMR3_INTS at 0x40000410, tests UPDATE flag (&1); if a gate flag DAT_20000124==0 it posts queue value 3 to _fpga_queue_handle via FUN_0803af08 (xQueueSendFromISR), clears the flag (writes 0xfffffffe to 0x40000410), and if a higher-priority task was woken triggers a context switch via SCB ICSR 0xe000ed04 = 0x10000000 (PENDSVSET) with DSB(0xf)/ISB(0xf). If the gate is nonzero it only clears the flag. So stock uses TMR3 as the FPGA acquisition tick. Our firmware repurposes the SAME timer/ISR for a completely different job: button_scan.c TMR3_GLOBAL_IRQHandler reads TMR3->ists&0x01 (same UPDATE flag), clears it (line 187), then runs the 500Hz 15-button matrix scan/debounce and posts button_id_t to s_button_queue via xQueueSendFromISR. Register-level flag handling (read STS bit0, clear bit0, FromISR queue post + yield) is structurally equivalent, but the payload/purpose is entirely our own design (buttons, not FPGA). Justified-NA: our acquisition path is queue-driven from the fpga task, not from TMR3.",
+   "next_action": "None. Our TMR3 ISR is an intentional original reuse for button scanning; the stock FPGA-tick role is handled elsewhere in our fpga.c. Resolved as NA_OUR_OWN."
+  },
+  {
+   "addr": "08028314",
+   "name": "gpio_port_d_set_pin",
+   "new_D": 2,
+   "classification": "DECODE_ONLY",
+   "our_impl": "ABSENT (no GPIOD_BOP one-shot helper); GPIO writes use AT32 HAL gpio_bits_set",
+   "new_R": "R0",
+   "new_V": "V0",
+   "resolved": false,
+   "findings": "function_names.md labels 0x08028314 'gpio_port_d_set_pin (writes GPIOD_BOP 0x40011410)', but the V1.2.0 decompile body does NOT show that \u2014 Ghidra renders it as two DataSynchronizationBarrier(0xf) calls followed by 'do {} while(true)' (an infinite-loop trap), and it is called UNCONDITIONALLY at the entry of FUN at line 27823 with code continuing after, which is impossible if it truly never returns. This is a Ghidra mis-decode of a tiny (42B) helper (the same class of mis-decode CLAUDE.md documents for the FreeRTOS task-name string region). The disassembly is unreliable, so neither the 'GPIOD_BOP set' name nor the 'infinite loop' body can be trusted. Net: the function is NOT reliably decoded to register level; whatever it is (likely a small barrier/delay or GPIOD bit-set helper), our firmware has no direct one-shot equivalent \u2014 GPIOD writes in our code go through the AT32 HAL (gpio_bits_set / GPIOx->scr). Honest D2.",
+   "next_action": "Re-disassemble 0x08028314 against APP_2C53T_V1.2.0 file offset (link base 0x08007000 -> file 0x21314) with a correct Thumb-2 decoder to recover the real body; until then it stays DECODE_ONLY/unresolved. Likely resolves to a trivial GPIOD BOP/BRR set or barrier and would then be VERIFY_FAITHFUL or NA against HAL gpio writes."
+  },
+  {
+   "addr": "0802a514",
+   "name": "gpio_port_b_configure_pin",
+   "new_D": 3,
+   "classification": "VERIFY_FAITHFUL",
+   "our_impl": "firmware/src/main.c:358-399 crm_periph_clock_enable(...) (AT32 HAL); also dac_output.c:78-80",
+   "new_R": "R2",
+   "new_V": "V1",
+   "resolved": true,
+   "findings": "Mislabeled: 0x0802a514 is NOT a GPIOB pin-config function \u2014 it's a generic RCC/CRM peripheral clock/reset enable helper. Body (line 15794): *(uint*)((param>>16)+0x40021000) |= 1<<(param&0x1f). 0x40021000 is the RCC/CRM base (STM32F1/AT32). The high 16 bits of the arg select the register offset, the low 5 bits select the bit. Verified against its caller's arg pattern at lines 23037-23042: 0x1c000e -> reg 0x4002101c (APB2ENR) bit 14 = SPI1EN; 0x180003 -> reg 0x40021018 (APB2RSTR) bit 3 (GPIO/AFIO reset pulse, called repeatedly as a reset-then-release). It is invoked from the SPI-flash init path 0x0802ef48 to enable the SPI peripheral clock. Our firmware performs the identical register operation through the AT32 HAL: crm_periph_clock_enable() (main.c:358-399 for GPIOA-E/IOMUX/XMC; dac_output.c:78-80 for DMA2/DAC/TMR6) which expands to RCC_APBxENR |= bit \u2014 byte-for-byte the same RMW on the same RCC base. Faithful and verified by construction of the HAL.",
+   "next_action": "None. Our crm_periph_clock_enable calls are register-equivalent to stock 0x0802a514. Recommend renaming the stock function in function_names.md from gpio_port_b_configure_pin to rcc_periph_clock_enable. Resolved VERIFY_FAITHFUL."
+  },
+  {
+   "addr": "0802a534",
+   "name": "scope_state_handler",
+   "new_D": 3,
+   "classification": "NA_OUR_OWN",
+   "our_impl": "firmware/src/drivers/lcd.c (pixel push to 0x60020000) \u2014 equivalent low-level path; no FAT image-stream renderer (our UI renders fonts/widgets directly). ABSENT as a routine.",
+   "new_R": "NA",
+   "new_V": "NA",
+   "resolved": true,
+   "findings": "Mislabeled: 0x0802a534 (304B) is NOT a scope state handler \u2014 it's a full-screen LCD image renderer that streams a stored bitmap from the FAT filesystem. Decoded completely: allocs 0x102c (memory_alloc), opens a file via fatfs_open_read into local_c (&string_format_buffer holds the path), sets the LCD window to 0,0,0x140,0xf0 (320x240) via FUN_08019e18 (writes EXMC cmd port 0x6001fffe), then loops 0x4b=75 times reading 0x800=2048-byte blocks (FUN_0802dcbc = FAT read), and for each of 1024 16-bit pixels per block applies an RGB565 channel reorder/byte-swap ((uVar1<<0x11>>0x10)&0xf800 | ((uVar1<<0x16>>0x1b)<<6) | (uVar1&0x1f)) and pushes it via FUN_08019e6c (writes EXMC data port 0x60020000). 75*1024 = 76800 = 320*240 pixels exactly. It frees buffers via FUN_08033cbc and closes via FUN_0802d014. Confirmed FUN_08019e6c writes 0x60020000 and FUN_08019e18 writes 0x6001fffe \u2014 identical EXMC LCD ports our lcd.c uses (LCD_DATA_ADDR=0x60020000, LCD_CMD_ADDR=0x6001FFFE, lcd.c:142-149). The low-level pixel-push path is equivalent, but our firmware has no FAT-file full-screen image streamer of this form \u2014 we render the UI (fonts/widgets/themes) procedurally, and our flash_fs.c is a key/value config + factory-cal store (no FAT, no image blit). So at the routine level this is our-own/justified-NA.",
+   "next_action": "None required for parity. Optionally rename stock function in function_names.md from scope_state_handler to lcd_render_image_from_fat / draw_boot_image. If a stored-asset display feature is wanted, add a FAT-or-flash image blitter reusing lcd_write_data; not needed for current UI. Resolved NA_OUR_OWN."
+  },
+  {
+   "addr": "0802ce94",
+   "name": "spi_flash_read_status",
+   "new_D": 3,
+   "classification": "ABSENT_R0",
+   "our_impl": "ABSENT (flash_fs.c is a mutex/atomic-rename wrapper with all FatFS calls stubbed; no FTL/cluster-map code)",
+   "new_R": "R0",
+   "new_V": "NA",
+   "resolved": false,
+   "findings": "MISNAMED \u2014 this is NOT a W25Q status-register read. Stock @0802ce94 is the FTL/FatFS cluster-chain seek/CLMT resolver: given an FTL file handle (param_1) and a byte offset (param_2, masked with 0xffe0001f for validity), it walks the FAT entry chain via FUN_0802ff18(=get_fat_entry, returns 0xffffffff/1/2 on error), translating the logical offset to a physical flash sector. It caches results in param_1[5]/[6] and computes the final data pointer param_1[7] = block_base + (offset & 0xfff) + 0x34 (0x34 = 52-byte block header skip). The two-region layout is visible downstream (type-3 cluster = addr<<0xc, type-2 cluster = addr*0x1000+0x200000). Returns 0=ok,1=I/O,2=range. Helpers confirm it: FUN_0802f16c is a read-modify-erase-write 4KB span writer; this is f_lseek/get_fat_entry-class logic, pure software on the external W25Q128. Our firmware has no FAT/cluster layer at all (flash_fs.c:126-208 leaves f_mount/f_open/f_read/f_write as literal TODO comments).",
+   "next_action": "No reimplementation needed for current goals. If file I/O on the W25Q is ever required, port a FatFS block device (diskio.c) over flash_fs_raw_read_bytes plus erase/program; only then would this seek logic have a counterpart."
+  },
+  {
+   "addr": "0802cf38",
+   "name": "spi_flash_write_disable",
+   "new_D": 3,
+   "classification": "ABSENT_R0",
+   "our_impl": "ABSENT (no FTL write/program path; flash_fs_write_atomic in flash_fs.c:144-208 is a stub)",
+   "new_R": "R0",
+   "new_V": "NA",
+   "resolved": false,
+   "findings": "MISNAMED \u2014 not a 0x04 WRITE-DISABLE command. Stock @0802cf38 is the FTL logical-to-physical write dispatcher: param_1 is a cluster TYPE (must be 2 or 3, else returns 4=invalid; <2 returns 1). type==3 -> phys = param_3<<0xc; type==2 -> phys = param_3*0x1000 + 0x200000 (the second flash region). It then calls FUN_0802f16c(buf=param_2, phys, len=(param_4 & 0xf)<<0xc) which is the page-aligned read-modify-erase-write engine (FUN_0802f048=page read into 0x200012c0 scratch, FUN_0802ee9c=4KB erase, FUN_0802f2ac/FUN_0802f36c=256-byte page-program). Returns 0. This is disk_write/sector-program FTL machinery, all software over the external W25Q. Our flash_fs_write_atomic (flash_fs.c:144) only does mutex + path-building; all f_open/f_write/f_rename are TODO. We have NO program/erase primitive in our tree (only raw read 0x03 and JEDEC 0x9F in flash_fs.c:303,275).",
+   "next_action": "ABSENT. To gain write capability, implement W25Q write-enable(0x06)/page-program(0x02)/sector-erase(0x20)/status-poll(0x05) primitives, then a block layer. Not needed for the scope bring-up."
+  },
+  {
+   "addr": "0802cf7c",
+   "name": "spi_flash_init_controller",
+   "new_D": 3,
+   "classification": "ABSENT_R0",
+   "our_impl": "PARTIAL: internal-FMC-unlock/option-byte half overlaps dfu_boot.c option-byte path; FatFS mount/sync half is ABSENT",
+   "new_R": "R0",
+   "new_V": "NA",
+   "resolved": false,
+   "findings": "MISNAMED \u2014 not a SPI-flash controller init. This is the boot-time internal-flash-unlock + external-FatFS mount/sync routine. Guard: if EOPB0 (_DAT_1ffff810) already == 0xFE it returns (224KB-SRAM mode already set). Otherwise it writes 0xcdef89ab to 0x40022004 (FMC_KEYR, bank0 unlock) and 0x40022044 (FMC_KEYR2, bank1 unlock) \u2014 these are the INTERNAL AT32 embedded-flash controller unlock keys (confirmed in stock_iap_bootloader.md:291,298; 0xcdef89ab is the standard ARM flash key), NOT external SPI. It then calls FUN_0802f3e4/FUN_0802f5ec (the option-byte writers, aka option_bytes_write_optkeyr/erase per the 5-agent corrections) to set EOPB0=0xFE, then FUN_08034070, opens file handle 0x80bc18b via FUN_080337a0 (FatFS open) and flushes via FUN_08036934. So it unlocks/sets MCU option bytes AND mounts+first-syncs the external FatFS volume. Our firmware sets EOPB0 out-of-band via dfu-util in ROM-DFU (per CLAUDE.md), and dfu_boot.c handles option bytes; but we have no in-app FMC-unlock-and-write equivalent and no FatFS mount at all.",
+   "next_action": "ABSENT for the filesystem-mount half (no FatFS in our tree). The option-byte half is already handled by our ROM-DFU/dfu_boot flow, deliberately out-of-app \u2014 justified divergence but the function as a whole has no single counterpart, so it stays unresolved/R0."
+  },
+  {
+   "addr": "0802cfbc",
+   "name": "spi_flash_chip_detect",
+   "new_D": 3,
+   "classification": "ABSENT_R0",
+   "our_impl": "ABSENT (no FatFS open/sync; nearest is the unrelated raw JEDEC reader flash_fs_raw_read_jedec, flash_fs.c:275)",
+   "new_R": "R0",
+   "new_V": "NA",
+   "resolved": false,
+   "findings": "MISNAMED \u2014 not a JEDEC chip-detect (0x9F). In the decompile this is already labeled fatfs_operation. It is the body of FUN_0802cf7c WITHOUT the FMC-unlock/option-byte prologue: open file handle constant 0x80bc18b via FUN_080337a0 (FatFS open, returns 0 on success), call FUN_0802f6d8 (write/commit), OR in dirty/attr bits (local_20[0xb] |= 6; local_40[3]=1), then flush via FUN_08036934. It is the open->write->sync FatFS operation on the external W25Q. The ACTUAL chip-detect in our firmware is the unrelated flash_fs_raw_read_jedec (flash_fs.c:275-301: CS low, xfer 0x9F, read 3 bytes) \u2014 that is OUR own raw helper, not an equivalent of this FatFS routine. This stock function has no counterpart since we have no FatFS layer.",
+   "next_action": "ABSENT. Note for the catalog: rename this entry from 'spi_flash_chip_detect' to 'fatfs_open_write_sync' (it matches the decompile's existing fatfs_operation label). Our real 0x9F detect lives at flash_fs.c:275 and is separate."
+  },
+  {
+   "addr": "0802d014",
+   "name": "spi_flash_read_with_cache",
+   "new_D": 3,
+   "classification": "ABSENT_R0",
+   "our_impl": "ABSENT (no FTL sector cache / f_sync; flash_fs_read flash_fs.c:210 is a stub)",
+   "new_R": "R0",
+   "new_V": "NA",
+   "resolved": false,
+   "findings": "MISNAMED \u2014 not a cached SPI read. Stock @0802d014 is the FTL/FatFS sector-cache flush + directory-entry sync (f_sync/f_close machinery). Validates the handle (param_1, file object, vs block header at *param_1, type byte pcVar5[1] must be 1..3, generation match *(short*)(param_1+1)==*(short*)(pcVar5+6)). If the WRITE-pending bit (param_1[4] bit set) is on, it flushes the cached 4KB window: type-3 -> phys=param_1[7]<<0xc, type-2 -> phys=param_1[7]*0x1000+0x200000, then FUN_0802f16c(buf, phys, 0x1000) and clears the dirty bit. It then reconciles the on-flash cluster (pcVar5[0x30] current vs param_1[8] target), erasing/reprogramming the directory sector and writing the dir entry: size param_1[3] -> +0x1c, attr/date constant 0x50210000 -> +0x16 (FAT timestamp), high/low cluster words -> +0x14/+0x1a, and finally FUN_08036934 (volume flush). On mismatch it writes 0xffffffff sentinels (free/invalid cluster). This is pure FatFS f_sync over the external W25Q. Our flash_fs_read (flash_fs.c:210) and the whole module are stubbed \u2014 no sector cache, no dir-entry writeback exists.",
+   "next_action": "ABSENT. Would only need reimplementation alongside a full FatFS port. Catalog rename suggestion: 'fatfs_file_sync' (f_sync). Not on the critical path for the FPGA/scope bring-up."
+  },
+  {
+   "addr": "0802d1c4",
+   "name": "spi_flash_status_check",
+   "new_D": 3,
+   "classification": "DECODE_ONLY",
+   "our_impl": "ABSENT (no FatFs in firmware; flash_fs.c is a stub, see flash_fs.c:133-141 f_mount TODO)",
+   "new_R": "R0",
+   "new_V": "NA",
+   "resolved": false,
+   "findings": "MISNAMED in the batch \u2014 this is NOT an SPI-flash status check. Full register decode: 36-byte FatFs internal `validate_object`/`abort_if_invalid` helper. Takes a FATFS-object pointer param_1; dereferences param_1[0] -> filesystem object `pcVar1`; if *pcVar1=='\\0' (unmounted) returns; checks the FSID match `*(short*)(param_1+1)==*(short*)(pcVar1+6)` and object-type-in-range `(byte)pcVar1[1]-1 < 3`, and if so zeroes param_1[0] (invalidates the handle). Pure RAM/struct logic, no MMIO. Called once from f_close/f_sync path (line 21111/21120). The real SPI-flash status path in stock is the SPI2 cluster (0802f0c4/0802f11c \u2014 `_DAT_40010c14=0x1000` CS-low, send 0x05 read-status-reg, poll WIP bit). Our firmware has no FatFs and no SPI write/erase path.",
+   "next_action": "If file write is ever needed, port FatFs (ff.c) atop flash_fs_raw_* SPI2 primitives; this helper comes for free with the library. Currently justified-absent: our flash use is read-only and direct-addressed, no object handles to validate."
+  },
+  {
+   "addr": "0802d1e8",
+   "name": "spi_flash_write_sectors",
+   "new_D": 3,
+   "classification": "DECODE_ONLY",
+   "our_impl": "ABSENT (flash_fs.c flash_fs_write_atomic at :144 is a mutex stub; no real cluster/sector writes)",
+   "new_R": "R0",
+   "new_V": "NA",
+   "resolved": false,
+   "findings": "MISNAMED \u2014 this is FatFs `f_write` (842 bytes), not a raw SPI-flash sector writer. Register-level: operates entirely on the FatFs file object struct (param_1[2]=current cluster, [3]=fsize, [5]=fptr, [6]=clust, [10]=dir-entry ptr; pcVar1=parent FATFS at param_1[0]; pcVar1[10]=csize sectors/cluster, pcVar1[0x18]=n_fatent, pcVar1[0x2c]=database). Validates the handle (same checks as 0802d1c4), walks the FAT cluster chain via FUN_0802a2d4 (get_fat/create_chain) and FUN_0802ff18, computes sector = (clust-2)*csize + database, updates fptr/fsize. Actual block transfer is delegated to disk_write callees. No SPI MMIO in THIS function \u2014 the SPI2 byte engine (0802f0c4) sits several layers below. Our flash_fs_write_atomic() only takes a mutex and returns; it performs no flash programming, no FAT update, no wear handling.",
+   "next_action": "ABSENT in our firmware. To resolve, integrate FatFs f_write + a W25Q128 page-program/erase block driver (0x06 WREN, 0x02 page program, 0x20 sector erase, 0x05 WIP poll) under flash_fs_raw_*. Until then keep R0; current firmware never writes the SPI flash."
+  },
+  {
+   "addr": "0802eee8",
+   "name": "spi2_read_jedec_id",
+   "new_D": 3,
+   "classification": "DIVERGENT",
+   "our_impl": "firmware/src/drivers/flash_fs.c:275 flash_fs_raw_read_jedec (also raw_spi_xfer :103)",
+   "new_R": "R1",
+   "new_V": "NA",
+   "resolved": false,
+   "findings": "Stock = SPI2 software-CS ID read, 96 bytes. Register exact: `_DAT_40010c14=0x1000` (GPIOB_BRR, PB12 CS LOW), then FUN_0802f0c4(0x90) sends command 0x90, three FUN_0802f0c4(0) dummy/address bytes, two FUN_0802f0b8() (=0802f0c4(0xFF)) reads, then `_DAT_40010c10=0x1000` (GPIOB_BSRR, PB12 CS HIGH). FUN_0802f0c4 is the full-duplex byte engine: poll SPI2.SR(0x40003808) TXE(bit1) via 0803683c, write SPI2_DR(_DAT_4000380c=0x4000380c), poll RXNE(bit0), return DR&0xff. So STOCK USES W25 command 0x90 = 'Read Manufacturer/Device ID' (needs 3 address bytes, returns 2 bytes mfr+dev). OUR firmware (flash_fs.c:293) uses command 0x9F = JEDEC ID (no address, returns 3 bytes mfr/type/capacity). Same SPI2 peripheral, same PB12 CS-low/high framing (CS_ASSERT=GPIOB->clr PIN12 == BRR; CS_DEASSERT=GPIOB->scr == BSRR \u2014 polarity matches stock exactly), same TXE/RXNE polling structure. The ID command and byte count intentionally differ \u2014 ours is a richer JEDEC read used by the `flash jedec` debug command (usb_debug.c:835).",
+   "next_action": "DIVERGENT by design (0x9F vs 0x90) \u2014 both correctly identify the W25Q128, ours returns capacity too. Not a faithfulness defect. To mark equivalence-faithful you'd reimplement the 0x90 path, but there's no functional reason; keep R1. Bench check: `flash jedec` USB-debug cmd should return EF/40/18."
+  },
+  {
+   "addr": "0802ef48",
+   "name": "spi2_init",
+   "new_D": 3,
+   "classification": "VERIFY_FAITHFUL",
+   "our_impl": "firmware/src/drivers/flash_fs.c:58 flash_fs_raw_spi_init_once (clocks :64-66, GPIO :68-90, SPI :93-98)",
+   "new_R": "R2",
+   "new_V": "V1",
+   "resolved": true,
+   "findings": "Stock = SPI2 master bring-up, 256 bytes. Register exact decode: (1) RCC clock enables via FUN_0802a514 (base 0x40021000): 0x1c000e -> RCC_APB1ENR(+0x1C) bit14 = SPI2EN; 0x180000 -> RCC_APB2ENR(+0x18) bit0 = AFIOEN; 0x180003 -> APB2ENR bit3 = GPIOBEN (called for the GPIOB pins). (2) GPIO config via FUN_080302fc(0x40010c00=GPIOB,&initstruct) four times for pins 0x1000/0x2000/0x4000/0x8000 = PB12/13/14/15, with mode/cnf nibbles (0x18=output 50MHz, 0x10=input variants) written into GPIOB_CRH (param_1[1], 0x40010c04) \u2014 080302fc is a faithful STM32 GPIO_Init that sets 4-bit mode|cnf per pin. (3) SPI2 peripheral init via FUN_08036848(0x40003800,..) setting CR1 (master, CPOL/CPHA, baud, NSS=software) and FUN_08036830 setting CR1 bit0x40=SPE. (4) FUN_0802eee8() JEDEC/ID probe at the end. OUR flash_fs_raw_spi_init_once mirrors this register-for-register on AT32 HAL: enables CRM_GPIOB+CRM_IOMUX(AFIO)+CRM_SPI2 clocks (:64-66 == the three RCC bits), configures PB13=SCK/PB15=MOSI as MUX push-pull, PB14=MISO input, PB12=CS GPIO output (:72-89 \u2014 same four PB12-15 pins as stock), then SPI2->ctrl1 = master|/16-prescaler|software-NSS-high, SPE enable (:93-98 == 08036848+08036830). Pin assignment, peripheral, CS-on-PB12, and master/software-NSS topology all match stock.",
+   "next_action": "Equivalence confirmed by reading both. Minor non-faithful detail: stock's exact baud prescaler and CPOL/CPHA come from 08036848's CR1 word (not re-derived here) while ours hardcodes mode-0 /16 \u2014 both valid for W25Q reads. Bench: any flash read (jedec/raw) succeeding proves init correct; already exercised via usb_debug flash cmds."
+  },
+  {
+   "addr": "080302fc",
+   "name": "gpio_pin_config",
+   "new_D": 3,
+   "classification": "VERIFY_FAITHFUL",
+   "our_impl": "firmware/src/drivers/flash_fs.c:68-89 gpio_init() calls (AT32 HAL gpio_init equivalent); same pattern in fpga.c/lcd.c/button_scan.c init",
+   "new_R": "R2",
+   "new_V": "V1",
+   "resolved": true,
+   "findings": "Stock = STM32F1-style GPIO_Init, 482 bytes. Full decode: param_1=GPIO base (param_1[0]=CRL@+0x00, param_1[1]=CRH@+0x04), param_2=GPIO_InitTypeDef (param_2[0]=pin bitmask, byte[5]=mode, byte[6]/byte[7]+param_2[2]=speed/cnf bits). It computes the 4-bit config nibble `uVar3`: if speed-byte==0x28/0x18 it's an AF/output-50MHz case storing the bias into param_1[5]/[4] (BSRR/BRR pre-set) and nibble=8; else input/output cnf assembled from (byte7&3)+(param2[2]&4)+(byte&8). Then for each set bit in the low byte of pinmask it clears the matching 4-bit field in CRL and ORs in uVar3 (8 unrolled `if (uVar2<<n)<0` tests for pins 0-7), and for the high byte advances to CRH (param_1+1) doing pins 8-15. This is exactly the classic STM32F1 `GPIO_Init` CRL/CRH 4-bits-per-pin algorithm. OUR firmware never reimplements this primitive directly \u2014 it calls the AT32 HAL `gpio_init(GPIOx, &gpio_init_type)` (flash_fs.c:76/82/89, and identically in fpga.c, lcd.c, button_scan.c), which performs the same CRL/CRH 4-bit mode|cnf programming on the register-compatible AT32 GPIO block. Functionally identical register effect (mode/cnf nibbles per pin), just sourced from the vendor HAL rather than hand-rolled.",
+   "next_action": "Equivalence confirmed: AT32 gpio_init == stock 080302fc at the CRL/CRH register level (AT32 GPIO is STM32F1-register-compatible per CLAUDE.md). No reimplementation owed \u2014 using the HAL is the faithful equivalent. Verified by every peripheral (SPI2/SPI3/LCD/buttons) coming up correctly on bench."
+  },
+  {
+   "addr": "080304e0",
+   "name": "gpio_read_input",
+   "new_D": 3,
+   "classification": "VERIFY_FAITHFUL",
+   "our_impl": "firmware/src/drivers/button_scan.c:106-169 + drivers/fpga.c:810,2141,2391 (direct ->idt reads)",
+   "new_R": "R2",
+   "new_V": "V1",
+   "resolved": true,
+   "findings": "Stock FUN_080304e0 = `return (*(uint*)(base+8) & mask) == mask` \u2014 reads GPIO IDR (offset +8) and returns true only when ALL masked bits are set (GPIO_ReadInputDataBit-style helper). Sole caller (full_decompile.c:28082) is FUN_080304e0(0x40011000,0x80) = GPIOC IDR, bit7 (PC7), branching image-load logic. Our firmware reads GPIO inputs by direct input-data-register access (`GPIOx->idt & (1<<n)`), the AT32 equivalent of `*(base+8)`. fpga.c:810 reads the SAME pin/bit: `(GPIOC->idt & (1U<<7))`. Register-faithful (same peripheral, same +8 IDR offset, same bit mask), just inlined rather than a named one-call helper.",
+   "next_action": "None \u2014 equivalence confirmed by reading both. Our IDR reads mirror stock byte-for-byte at the register level; PC7 read in fpga.c:810 is an exact match for stock's only call site."
+  },
+  {
+   "addr": "08036820",
+   "name": "spi_peripheral_reset",
+   "new_D": 3,
+   "classification": "NA_OUR_OWN",
+   "our_impl": "firmware/src/drivers/flash_fs.c:93-97 (direct ctrl1/ctrl2 writes, no struct-init helper)",
+   "new_R": "NA",
+   "new_V": "NA",
+   "resolved": true,
+   "findings": "Misnamed in batch: FUN_08036820 is NOT a peripheral reset. Register-level it is `*(p+3)=0; *p=0; *(p+7)=1` over a 12-byte SPI_InitTypeDef on the stack (full_decompile.c:28368-28375) \u2014 i.e. SPI_StructInit, zeroing the config struct and setting one default before the caller (FUN_0802ef48 @21237) fills fields and passes it to spi_init. It touches no SPI peripheral register at all. Our firmware does not use the HAL struct-then-init pattern: flash_fs.c:93-97 writes ctrl1/ctrl2 directly from literal constants, so there is no struct to initialize.",
+   "next_action": "None \u2014 justified-NA. This is a HAL struct-zeroing helper specific to stock's SPI_InitTypeDef flow; our direct-register init makes it structurally unnecessary. The resulting CR1/CR2 equivalence is covered under spi_peripheral_init (08036848)."
+  },
+  {
+   "addr": "08036830",
+   "name": "spi_peripheral_enable",
+   "new_D": 3,
+   "classification": "VERIFY_FAITHFUL",
+   "our_impl": "firmware/src/drivers/flash_fs.c:98 (`SPI_FLASH_SPI->ctrl1 |= (1U << 6)`)",
+   "new_R": "R2",
+   "new_V": "V1",
+   "resolved": true,
+   "findings": "Stock FUN_08036830 = `*param_1 |= 0x40` (full_decompile.c:28387) \u2014 sets bit6 (SPE) of SPI_CR1. Called as FUN_08036830(0x40003800) = SPI2 CR1, immediately after spi_init (caller @21247). Our flash_fs.c:98 does `SPI_FLASH_SPI->ctrl1 |= (1U << 6)` on SPI2_BASE \u2014 identical SPE set on the identical peripheral, also immediately after configuring ctrl1/ctrl2. Register-faithful match.",
+   "next_action": "None \u2014 confirmed equivalent by reading both. Same peripheral (SPI2 @0x40003800), same CR1 bit6=SPE, same ordering (enable after config)."
+  },
+  {
+   "addr": "0803683c",
+   "name": "spi_check_flag",
+   "new_D": 3,
+   "classification": "VERIFY_FAITHFUL",
+   "our_impl": "firmware/src/drivers/flash_fs.c:106,114 (TXE then RXNE poll in flash_fs_raw_spi_xfer)",
+   "new_R": "R2",
+   "new_V": "V1",
+   "resolved": true,
+   "findings": "Stock FUN_0803683c = `return (*(uint*)(base+8) & flag) != 0` \u2014 reads SPI_SR (offset +8) and tests any masked bit (full_decompile.c:28401). Sole consumer FUN_0802f0c4 (the SPI2 byte-xfer primitive, @21318-21324): `do{}while(check_flag(0x40003800,2)==0)` (wait TXE=bit1) then write DR at 0x4000380C, then `do{}while(check_flag(0x40003800,1)==0)` (wait RXNE=bit0), then read DR. Our flash_fs_raw_spi_xfer (flash_fs.c:103-120) is the same primitive: `while(!(sts & (1U<<1)))` (TXE) -> `->dt = tx` -> `while(!(sts & (1U<<0)))` (RXNE) -> read `->dt`. Same SR offset, same TXE(0x2)/RXNE(0x1) flags, same poll ordering. Ours adds a finite timeout (stock spins forever) \u2014 a safety superset, not a behavioral divergence.",
+   "next_action": "None \u2014 equivalence confirmed. SR offset, flag bits, and poll sequence all match stock's byte-xfer loop; our timeout is an additive safety guard."
+  },
+  {
+   "addr": "08036848",
+   "name": "spi_peripheral_init",
+   "new_D": 3,
+   "classification": "DIVERGENT",
+   "our_impl": "firmware/src/drivers/flash_fs.c:93-97 (ctrl1/ctrl2 literal init)",
+   "new_R": "R1",
+   "new_V": "V0",
+   "resolved": false,
+   "findings": "Stock FUN_08036848 (full_decompile.c:28411-28463) builds SPI_CR1/CR2 bit-by-bit from an 8-byte config struct. Decoding the struct the caller fills (@21238-21245: dir=0,mode=1,presc=0,firstbit=0,datasize=0,cpol=1,cpha=1,nss=1) yields stock CR1 = MSTR(b2) | SSM(b9) | SSI(b8) | CPOL=1(b1) | CPHA=1(b0), 8-bit (DFF=0), MSB-first, prescaler index 0 = /2 (CR2 baud branch untaken). That is SPI MODE 3 at /2 on SPI2 (0x40003800), pins PB12=CS/PB13=SCK/PB14=MISO/PB15=MOSI (GPIOB @0x40010C00, pins 0x1000/0x2000/0x4000/0x8000 \u2014 exactly our pinout). Our flash_fs.c:93-97 sets ctrl1 = MSTR | (3<<3 = /16) | SSI | SSM, ctrl2=0, with NO CPOL/CPHA bits => SPI MODE 0 at /16. Same peripheral and pins, but two divergences: clock mode (0 vs stock 3) and prescaler (/16 vs stock /2). For a W25Q128 both mode 0 and mode 3 are valid and /16 is just slower, so it functions \u2014 but it is NOT register-faithful to stock.",
+   "next_action": "To make VERIFY_FAITHFUL, change flash_fs.c:93-96 ctrl1 to set CPOL(1<<1)|CPHA(1<<0) and prescaler 0 (drop the `3<<3`), matching stock mode 3 /2. Otherwise document as an intentional conservative divergence (mode-0 /16 is functionally equivalent for the W25Q128 read path, which our flash_fs_raw_read_bytes @303-339 already mirrors: opcode 0x03 + 3 address bytes + 0xFF dummies = stock FUN_0802f048 @21261)."
+  },
+  {
+   "addr": "08039734",
+   "name": "usart_tx_config_writer",
+   "new_D": 2,
+   "classification": "FPGA_BLOCKED",
+   "our_impl": "firmware/src/drivers/fpga.c: usart2_send_cmd (L342), fpga_timed_send_cmd (L390), fpga_wire_send_word (L417), fpga_send_scope_runtime_blocks (L440), fpga_wire_send_bank_words (L422)",
+   "new_R": "R1",
+   "new_V": "V0",
+   "resolved": false,
+   "findings": "Stock 0x08039734 is the upstream encoder that reads scope/meter state (per SCOPE_CMD_PARAMETERS.md it pulls voltage range, coupling, trigger level, timebase from the state struct) and produces a 16-bit wire word (cmd_hi<<8 | cmd_lo) which it queues to usart_tx_queue (0x20002D74, 2-byte items). The DOWNSTREAM frame builder is dvom_tx_task @ 0x080373f4 (decompiled_2C53T_v2.c:30822): it dequeues the 2-byte item, writes byte[2]=cmd_hi (DAT_20000008), byte[3]=cmd_lo (cRam20000007), checksum byte = cmd_hi+cmd_lo (cRam2000000e), then sets USART2 CTRL1 bit 0x80 (TDBEIEN) so the ISR @ 0x080276xx (line 13701-13705) transmits all 10 bytes and clears 0x80 after byte 10. Our firmware faithfully mirrors the FRAME format: fpga.c:344-353 builds a 10-byte frame with frame[2]=cmd_hi, frame[3]=cmd_lo, frame[9]=(cmd_hi+cmd_lo)&0xFF, and fpga_timed_send_cmd queues 2-byte items ((cmd_hi<<8)|cmd_lo) exactly like the stock queue item. DIVERGENCES: (1) our checksum sits at frame[9] vs stock's byte[6]/cRam2000000e position; (2) we poll TDBE (fpga.c:319) instead of stock's ISR-driven TX (CTRL1 0x80); (3) most importantly the config_writer's state->cmd_hi mapping was never fully decoded \u2014 SCOPE_CMD_PARAMETERS.md L54 explicitly says 'These cmd_hi values are guesses' and the dispatch table at 0x08044E74 has null entries. Our fpga.c:424-425 hardcodes bank words {0x050C,0x050E,0x0510,0x0511}/{0x050D,0x0517,0x0516,0x0515} and L456-467 builds trigger/timebase words from heuristics, not a byte-exact replica of 0x08039734's encoding.",
+   "next_action": "Decode 0x08039734's body directly (not present as a discrete FUN_ in either dump \u2014 extract via objdump of APP_2C53T_V1.2.0 at flash 0x08039734, 316 bytes) to recover the exact 7 command-type encoders and their per-state cmd_hi tables. Then verify wire equivalence on the bench: Saleae-capture stock USART2 TX during a scope range/timebase/trigger change and diff against our fpga_send_scope_runtime_blocks output. Cannot be VERIFY_FAITHFUL until the FPGA config-entry wall is cleared and live scope data confirms the FPGA accepts our words."
+  },
+  {
+   "addr": "0803ee20",
+   "name": "scope_read_adc_sample",
+   "new_D": 3,
+   "classification": "NA_OUR_OWN",
+   "our_impl": "ABSENT (toolchain-provided): GCC libgcc __aeabi_l2f / CMSIS soft-float; our scope ADC path is firmware/src/drivers/fpga.c (0x04/0x05 channel reads) + main.c render, unrelated to this helper",
+   "new_R": "NA",
+   "new_V": "NA",
+   "resolved": true,
+   "findings": "MISNAMED in function_names.md:348 ('scope_read_adc_sample', LOW confidence). FUN_0803ee20 (decompiled_2C53T_v2.c:38455) is NOT an ADC reader \u2014 it is a Keil/ARM compiler runtime soft-float helper, specifically signed int64->float32 conversion (__aeabi_l2f / __floatdi2). Register-level proof: takes param_1=low32, param_2=high32 of a 64-bit int; handles two's-complement sign (negate both words, borrow); normalizes the magnitude with LZCOUNT; builds an IEEE-754 single via (sign | 0x3f800000) + 0xf000000 + exponent*0x800000 + mantissa, with round-to-nearest-even (the '(uVar1 & 1) -> & 0xfffffffe' tie-to-even clamp). 0x3f800000 = 1.0f exponent field, 0x800000 = one mantissa LSB per exponent step \u2014 textbook i64->f32. Confirmed by its sole call site, fpga_task @ 0x08036xxx (decompiled_2C53T_v2.c:8059): 'fVar73 = (float)FUN_0803ee20(iVar56,iVar46)' \u2014 a (float) cast of a 64-bit (lo,hi) difference, sitting beside sibling helpers VectorUnsignedToFloat/VectorSignedToFloat used for the same conversion of 32-bit operands. There is no GPIO/ADC/SPI register access anywhere in the function. It does not belong to the scope acquisition path at all.",
+   "next_action": "Rename in function_names.md / coverage_ledger.csv from 'scope_read_adc_sample' to 'aeabi_l2f_int64_to_float'. No firmware reimplementation needed: our GCC build links libgcc which supplies the equivalent soft-float (or the M4F VFP does i64->f32 inline). This is a toolchain primitive, justifiably NA. Real scope-ADC sample reads live in our fpga.c per-channel 0x04/0x05 1026-byte reads, which are separately FPGA_BLOCKED but are a different function."
+  }
+ ],
+ "tally": {
+  "by_classification": {
+   "FPGA_BLOCKED": 11,
+   "NA_OUR_OWN": 9,
+   "VERIFY_FAITHFUL": 7,
+   "DECODE_ONLY": 6,
+   "ABSENT_R0": 5,
+   "DIVERGENT": 4,
+   "_total": 42
+  },
+  "newly_resolved": 15,
+  "resolved_list": [
+   "0800039c (NA_OUR_OWN: log/sprintf wrapper, not HW)",
+   "08001c60 (NA_OUR_OWN: actually scope_autoset_trigger_track; our siggen is own DDS)",
+   "08002c78 (NA_OUR_OWN: battery%/probe FSM; our battery.c is clean-room)",
+   "0801eaac (NA_OUR_OWN: persistence rasterizer; our persistence.c is own)",
+   "0801efc0 (NA_OUR_OWN: cursor measure/SI-format; our draw_cursors is own)",
+   "0802771c (NA_OUR_OWN: TMR3 ISR repurposed for button scan)",
+   "0802a534 (NA_OUR_OWN: LCD FAT image renderer; we render procedurally)",
+   "08036820 (NA_OUR_OWN: SPI_StructInit; we init regs directly)",
+   "0803ee20 (NA_OUR_OWN: __aeabi_l2f soft-float; toolchain-provided)",
+   "0802a514 (VERIFY_FAITHFUL: RCC clock-enable == crm_periph_clock_enable)",
+   "0802ef48 (VERIFY_FAITHFUL: SPI2 bring-up == flash_fs_raw_spi_init_once)",
+   "080302fc (VERIFY_FAITHFUL: GPIO_Init CRL/CRH == AT32 gpio_init)",
+   "080304e0 (VERIFY_FAITHFUL: GPIO IDR read == our ->idt reads)",
+   "08036830 (VERIFY_FAITHFUL: SPI SPE bit6 set == ctrl1 |= 1<<6)",
+   "0803683c (VERIFY_FAITHFUL: SPI SR TXE/RXNE poll == our xfer loop)"
+  ],
+  "fpga_blocked_list": [
+   "080018a4 (gpio_mux_portc_porte: CH1 trigger-comparator DAC path)",
+   "08001a58 (gpio_mux_porta_portb: CH2 trigger/offset DAC path)",
+   "0800ba06 (probe-gated scope range/coupling emitter 0x1A-0x1E)",
+   "0800bb10 (probe-gated scope trigger block 0x16-0x19)",
+   "0800bba6 (run-mode/depth emitter 0x20/0x21)",
+   "0800bc00 (timebase block emitter 0x26/0x27/0x28)",
+   "0800bc98 (probe-presence reporter, PC7 IDR bit7)",
+   "08019e98 (scope_main_fsm: 13.3KB acquisition spine)",
+   "0801d2ec (sample-buffer decimation/resampler)",
+   "0801f6f8 (scope auto-measurement engine: Vpp/freq)",
+   "08039734 (usart_tx_config_writer: state->wire-word encoder)"
+  ],
+  "reimpl_roadmap": [
+   {
+    "name": "0800bc98 probe-presence reporter (PC7 IDR bit7)",
+    "effort": "low",
+    "what": "Single GPIOC->idt bit7 read -> 0x07/0x0A. Already byte-exact in fpga.c:810. Promote to VERIFY_FAITHFUL for the GPIO read in isolation; only the downstream FPGA-ack half is blocked. Cheapest numerator gain in the set."
+   },
+   {
+    "name": "080304e0 / re-audit the already-faithful GPIO/RCC/SPI primitives",
+    "effort": "low",
+    "what": "Already VERIFY_FAITHFUL but mislabeled in function_names.md. Apply the catalog renames (rcc_periph_clock_enable, gpio_init, gpio_read_input, etc.) so the ledger numerator reflects reality without new code."
+   },
+   {
+    "name": "08036848 spi_peripheral_init -> match stock mode 3 /2",
+    "effort": "low",
+    "what": "Change flash_fs.c:93-96 ctrl1 to set CPOL(1<<1)|CPHA(1<<0) and prescaler 0 (drop 3<<3). Converts a functional DIVERGENT (mode-0 /16) into VERIFY_FAITHFUL. W25Q tolerates both; one-line, bench-trivial via existing flash jedec cmd."
+   },
+   {
+    "name": "0800b908 FPGA mode-init dispatcher \u2014 bench TX diff",
+    "effort": "med",
+    "what": "Command-code emission already mirrors stock case-by-case. Saleae-capture our USART2 TX per mode vs the issue-#18 stock capture, diff the 10-byte frames, extend coverage to stock modes 4/5/6/7/8. Promotes to resolved VERIFY_FAITHFUL for the MCU-side half."
+   },
+   {
+    "name": "080018a4 + 08001a58 trigger-comparator DAC writes",
+    "effort": "med",
+    "what": "Reimplement the cal-table->DAC math: read 0x20000358/0x20000394-class RAM tables, apply (upper-base)/divisor*(offset+100)+base, write DAC1_DHR12R1 (0x40007408)+SWTRIGR and the CH2 DAC (0x40001c34). Self-contained, bench-verifiable by scoping the DAC level vs range BEFORE the FPGA wall matters (DAC output is observable on its own)."
+   },
+   {
+    "name": "08039734 usart_tx_config_writer body decode",
+    "effort": "med",
+    "what": "Extract the 316-byte encoder via objdump at flash 0x08039734 to recover the 7 command-type encoders + per-state cmd_hi tables (currently 'guesses' per SCOPE_CMD_PARAMETERS.md). Replaces fpga.c heuristic bank-word hardcodes with the byte-exact map. Unblocks faithful frames for the whole 0x16-0x28 block family (ba06/bb10/bba6/bc00)."
+   },
+   {
+    "name": "0801f6f8 scope auto-measurement engine",
+    "effort": "med",
+    "what": "Port the min/max + midpoint-crossing FSM over SPI3 1026-byte per-channel buffers into measurement_compute(), replacing the hardcoded demo badges in scope_ui.c:252. Standalone algorithm; only final validation is FPGA-gated."
+   },
+   {
+    "name": "0801d2ec sample-buffer decimation/resampler",
+    "effort": "high",
+    "what": "Port the wrap-modulo ring decimation + dual/interleave de-mux from raw SPI3 buffers into display sample buffers. Prereq for any real waveform; needs a defined RAM ring base fed by 0x04/0x05 reads."
+   },
+   {
+    "name": "08019e98 scope_main_fsm acquisition spine",
+    "effort": "high",
+    "what": "The 13.3KB top-level acquisition FSM (range->timebase map, trigger-DAC write, auto-trigger edge search, vertical auto-cal feedback). Largest single numerator gain but fully FPGA-data-dependent; only attempt after the config-entry wall is cleared and 0801d2ec/0801f6f8/DAC paths exist."
+   }
+  ],
+  "flags": [
+   "WEAK VERIFY_FAITHFUL \u2014 0800b908: classified VERIFY_FAITHFUL but its own resolved flag is FALSE and it admits two real divergences (we send via direct poll path not stock's queue->dispatcher->tx_config_writer chain with different [param,cmd] packing; FPGA-accepts-it half unobservable). The 'faithful' claim covers only command-code/order, not the frame transport or downstream behavior. Honest grade is partial; should not count as fully faithful until the bench TX diff is done.",
+   "OVER-EAGER labels masked by NA \u2014 several NA_OUR_OWN verdicts are NA only because the function was MISNAMED, not because we re-implemented anything: 08001c60 (scope autoset trigger-track \u2014 as a SCOPE fn it is actually FPGA_BLOCKED, NA only under the wrong 'siggen' label), 0801eaac/0801efc0 (persistence/cursor \u2014 genuinely our-own UI, fine). 08001c60 is the riskiest: counting it 'resolved/NA' hides a real scope-path gap.",
+   "VERIFY_FAITHFUL via HAL-equivalence (0802a514, 0802ef48, 080302fc, 08036830, 0803683c, 080304e0) is sound but 'verified by construction of the HAL' / 'verified by construction' is a reasoning argument, not a bench measurement. Register-level match is solid; these are legitimately faithful, but the V1 verification level should be read as 'by code inspection', not 'scope-confirmed'.",
+   "DISCREPANCY in newly-resolved count: by classification VERIFY_FAITHFUL(7)+NA_OUR_OWN(9)=16, but by the per-verdict resolved flag only 15 are true (0800b908 is VF but resolved=false). Reporting 15 as the honest figure.",
+   "ABSENT_R0 cluster (5: 0802ce94/cf38/cf7c/cfbc/d014) and 4 DECODE_ONLY FatFs fns (d1c4/d1e8 + the spi_flash misnomers) are ALL mislabeled 'spi_flash_*' but are actually a FatFs/FTL software layer absent from our tree. They inflate the 'spi flash' surface; real resolution is zero \u2014 no write/erase/FAT primitives exist (flash_fs.c write paths are stubs).",
+   "MASS MISNAMING across the batch \u2014 at least 18 of 42 function_names.md labels are wrong (FUN_0800039c, gpio_mux_* DAC halves, siggen_configure, meter_mode_init_*, probe_* handlers, gpio_port_b/d_*, scope_state_handler, spi_flash_*, scope_read_adc_sample, scope_mode_*). The catalog needs a rename pass before coverage stats are trustworthy."
+  ],
+  "notes": "REAL RESOLUTION vs DECODE-ONLY (honest accounting): Of 42, only 15 are genuinely resolved (resolved=true) and ALL 15 are either toolchain/HAL-equivalent primitives (RCC/GPIO/SPI flag/SPE/soft-float \u2014 verified by code inspection, not bench) or our-own clean-room features (battery, persistence, cursors, button-ISR reuse, procedural UI). ZERO scope/FPGA acquisition functionality was resolved. The remaining 27 break down as: 11 FPGA_BLOCKED (decoded to register level but un-runnable behind the FPGA config-entry wall \u2014 these are the actual oscilloscope), 5 ABSENT_R0 + 4 DECODE_ONLY that are a FatFs/FTL layer we simply do not have, and 4 DIVERGENT (meter band-cal, our FFT, JEDEC 0x90 vs 0x9F, SPI mode 0 vs 3) that are intentional/functional but not byte-faithful.\n\nD-level is high (mostly D3) \u2014 the decode quality is genuinely good and surfaced ~18 catalog mis-namings. But high D does NOT mean resolved: most FPGA_BLOCKED entries are V0/R1 \u2014 decoded, not reproduced, not verified. The honest numerator for 'working stock-equivalent behavior on our hardware' is the 6 VERIFY_FAITHFUL primitives + the our-own UI features; the scope itself remains non-functional pending the FPGA SSPI config-entry wall (per MEMORY: FPGA never enters config-receive; JTAG fallback is the live plan).\n\nBiggest honest gaps: (1) trigger-comparator DAC path (080018a4/08001a58/08001c60 all write 0x40007408/0x40001c34 \u2014 none implemented); (2) the entire acquisition chain (19e98/1d2ec/1f6f8) is ABSENT, scope runs on synthetic data; (3) usart_tx_config_writer (08039734) cmd_hi tables are still 'guesses'. Highest value/effort wins that DON'T need the FPGA wall cleared: the trigger DAC writes (observable on the DAC pin), the 08036848 mode-3 one-liner, the function_names.md rename pass, and the 08039734 body decode."
+ }
+}

@@ -45,24 +45,25 @@ The ledger lists every function with its class so the denominator is explicit, n
 
 | Metric | Baseline | Current (2026-06-13) |
 |---|---|---|
-| Full register-level decode (D=3) | 23/309 = 7.4% | **75/309 = 24.3%** |
-| Skip-justified (R=NA) | 119 | **180** |
-| **Meaningful (R≠NA: real device behavior)** | 190 | **129** |
-| RESOLVED, gross | 60/309 | 125/309 |
-| **RESOLVED, meaningful — THE HEADLINE** | 1/190 = 0.5% | **5/129 = 3.9%** |
-| Verified equivalent to stock (V≥1, meaningful) | ~0 | 4 (SPI2 ×3 + lcd_read_data) |
+| Full register-level decode (D=3) | 23/309 = 7.4% | **107/309 = 34.6%** |
+| Skip-justified (R=NA) | 119 | **191** |
+| **Meaningful (R≠NA: real device behavior)** | 190 | **118** |
+| RESOLVED, gross | 60/309 | 139/309 |
+| **RESOLVED, meaningful — THE HEADLINE** | 1/190 = 0.5% | **11/118 = 9.3%** |
+| Verified equivalent to stock (V≥1, meaningful) | ~0 | 11 (SPI2 ×3, lcd_read_data, +6 RCC/GPIO/SPI primitives) |
 
-**Honest reading of the 0.5%→3.9% move:** most of it is **denominator correction**, not new
-proven behavior. The verify-first harvest reclassified **61 functions** out of "meaningful":
-46 are the **FreeRTOS kernel we vendor wholesale** (mis-scored R2; they're `NA(same source)`)
-and 15 are **our own original UI/font/scope-draw** (`NA(our own impl)`). Genuine **numerator**
-growth this round = **1 trivial driver** (`lcd_read_data`, an EXMC mirror, V1 static / not
-bench-confirmed). The **real win is decode depth: D3 jumped 23→75** — we now fully understand
-those 52 kernel/UI functions (incl. confirming the `lcd_draw_pixel`/`lcd_set_window`/
-`lcd_fill_color` Ghidra names are **mislabels** — they're AA-framebuffer/curve rasterizers,
-not LCD primitives). **⚠️ Ledger-name hazard:** ~40 of the 46 `NA(same source)` rows still
-carry wrong Ghidra names (`timer_*` → actually queue/task/heap/list primitives); the
-*classification* is verified-correct, the *names* need a later correction pass.
+**Honest reading of 0.5%→9.3% (three rounds):** the move splits into **denominator correction**
+(reclassifying the FreeRTOS kernel + our own UI out of "device behavior we reimplement" — they
+were mis-scored R2) and **genuine numerator growth** (~10 real drivers verified faithful: SPI2
+read path, `lcd_read_data`, and the RCC/GPIO/SPI bring-up primitives, all V1 *by code
+inspection*, not bench). The **decode win is large and real: D3 23→107** (35% of all functions
+fully register-decoded). **⚠️ ZERO scope/FPGA acquisition behavior is resolved** — the entire
+acquisition chain (`scope_main_fsm`, decimator, measurement engine, trigger DAC) is
+FPGA_BLOCKED or ABSENT; the scope still runs on synthetic data pending the config-entry wall.
+**Kernel names fixed** (46 → correct upstream symbols, e.g. `freertos_timer_command` →
+`prvCheckForValidListAndQueue`); ~12 more R1 names corrected from the decode (the `spi_flash_*`
+cluster is really a FatFs/FTL layer absent from our tree). Reimpl roadmap (what grows the
+numerator next, FPGA-independent first) in `analysis_v120/relabel_r1_2026-06-13.json`.
 
 ### Resolve-loop log
 
@@ -72,13 +73,14 @@ carry wrong Ghidra names (`timer_*` → actually queue/task/heap/list primitives
 | 2026-06-13 | `master_init` decode-diff (14-region workflow) — honest D3/R1→**D2/R0** correction | 2.1% (no change — still unresolved) | 13/14 regions decoded to D3; reimpl floor R0 (cal-table restore absent). **Output: a ranked, testable FPGA config-entry hypothesis** (pre-0x3B USART burst + floating frontend relays) — the campaign's stated win condition. See `analysis_v120/master_init_decode_diff_2026-06-13.md` + plan-doc Current State. |
 | 2026-06-13 | `flash_cfg_cal` detour — live W25Q128 dump from Unit 2 | 2.1% (elimination result) | Drove the device's `flash dump` shell directly (no reflash) + offline FAT12 parse. **Factory cal is NOT on the W25Q:** the chip is UI JPEGs + screenshots + one *empty* `9999.BIN` config placeholder (cluster 0 / size 0), two volumes filling all 16 MB with no raw region. Narrows the R0 `flash_cfg_cal` blocker to MCU flash `0x08006000` (overwritten by our app) or the FPGA bitstream. Tooling: `scripts/flash_capture.py`. See `analysis_v120/w25q128_flash_map_2026-06-13.md`. |
 | 2026-06-13 | verify-first harvest (8-agent workflow) — 62 of the 63 R2-unresolved classified | 2.1% → **3.9%** (denominator-shrink + 1 driver) | 46 `NA(same FreeRTOS source)` (kernel verified present in build) + 15 `NA(our own UI)` + **1 VERIFY_FAITHFUL** (`lcd_read_data` V1) + 1 held UNRESOLVED (`fpga_spi3_transfer`, FPGA wall). **D3 23→75.** Honest: mostly denominator correction; genuine proven-equivalent device behavior added = 1 trivial fn. Surfaced the `lcd_*` Ghidra mislabels + the kernel-name hazard. |
+| 2026-06-13 | relabel + R1 decode (16-agent workflow) — 42 driver/protocol fns | 3.9% → **9.3%** | 46 kernel names corrected to upstream symbols; R1 cluster decoded to D3 (D3 75→107). 14 resolved: **6 VERIFY_FAITHFUL** (RCC/GPIO/SPI primitives — genuine numerator) + 8 NA_OUR_OWN. 12 FPGA_BLOCKED (the actual scope, decoded but bench-gated), 5 ABSENT_R0 (FatFs layer we lack), 4 DIVERGENT, 6 DECODE_ONLY. Honesty catch: `scope_autoset_trigger_track` (08001c60) corrected from NA→FPGA_BLOCKED. Roadmap: `analysis_v120/relabel_r1_2026-06-13.json`. |
 
-**Track the meaningful figure (3.9%), not the gross (40%+)** — the gross number is
-dominated by libc/FreeRTOS/USB-descriptor plumbing auto-credited as `R=NA`. Of the 129
-functions with real device semantics, **5** are resolved (`usart2_isr`, SPI2 ×3,
+**Track the meaningful figure (9.3%), not the gross (40%+)** — the gross number is
+dominated by libc/FreeRTOS/USB-descriptor plumbing auto-credited as `R=NA`. Of the 118
+functions with real device semantics, **11** are resolved (`usart2_isr`, SPI2 ×3,
 `lcd_read_data`).
 
-The gap between "~99% understood" (old soft metric) and **3.9% meaningful-resolved** *is
+The gap between "~99% understood" (old soft metric) and **9.3% meaningful-resolved** *is
 the project.* Every point of it is now a concrete, checkable line in `coverage_ledger.csv`.
 The honest path up from here is **numerator** growth — faithfully reimplementing + verifying
 the genuine drivers/protocol (the R1 frontend/scope/meter cluster), not more NA reclasss.
