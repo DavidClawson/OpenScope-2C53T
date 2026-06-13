@@ -264,7 +264,12 @@ static void spi3_pump(const uint8_t *tx, volatile uint8_t *rx, uint32_t n)
  * the marginal link. Reverted to /2 (stock-faithful); helper kept for future
  * sweeps. The config-completion gap is elsewhere (prelude/config-enter or a
  * runtime command we haven't replayed). */
-#define SPI3_UPLOAD_BR  0u   /* /2 = 60MHz, matches stock */
+/* 2026-06-12: pinned to /64 (~1.9MHz) — the ONLY rate at which an F8
+ * close ack has ever been observed (maksidze's #18 capture ran stock
+ * patched to /64). The earlier /16-negative ran in the broken pre-
+ * USART-removal regime and proves nothing. Sweep back toward /2 once
+ * config acceptance works at all. */
+#define SPI3_UPLOAD_BR  5u   /* /64 ≈ 1.9MHz (capture-proven regime) */
 static void spi3_set_br(uint32_t br)
 {
     FPGA_SPI->ctrl1 &= ~(1u << 6);              /* SPE = 0 */
@@ -299,19 +304,22 @@ static void usart2_send_frame(const uint8_t *frame)
 
 /*
  * Build and send a USART command frame (10 bytes).
- * Format: [0][1] [cmd_hi][cmd_lo] [0..0] [checksum]
+ * Format: AA 55 [cmd_hi][cmd_lo] 00 00 00 00 00 [checksum]
  * Checksum = (cmd_hi + cmd_lo) & 0xFF
+ *
+ * 2026-06-12: the AA 55 header bytes come from stock's Keil-compressed
+ * .data image (scatter entry, decompressed bytes 0x20000005..0x0E =
+ * AA 55 05 00...) — never written at runtime, which is why every
+ * decompile pass missed them. Our frames sent 00 00 there for months
+ * (FPGA tolerated it). See analysis_v120/usart_boot_frames_exact.md.
  */
 static void usart2_send_cmd(uint8_t cmd_hi, uint8_t cmd_lo)
 {
     uint8_t frame[FPGA_TX_FRAME_SIZE] = {0};
+    frame[0] = 0xAA;
+    frame[1] = 0x55;
     frame[2] = cmd_hi;
     frame[3] = cmd_lo;
-    /* NOTE: byte[8] was previously 0xAA based on protocol doc, but the
-     * stock frame builder does NOT set bytes[4-8] — they carry over from
-     * command dispatchers (0 for simple commands). The 0xAA may have been
-     * causing checksum validation failures on the FPGA side, explaining
-     * zero echo frames. Now matches stock: bytes[4-8] = 0 for basic cmds. */
     frame[9] = (cmd_lo + cmd_hi) & 0xFF;
     usart2_send_frame(frame);
 }
@@ -1142,14 +1150,14 @@ static void fpga_usart_tx_task(void *pv)
         uint8_t cmd_lo = cmd_item & 0xFF;
         uint8_t cmd_hi = (cmd_item >> 8) & 0xFF;
 
-        /* Build TX frame.
-         * Stock firmware TX buffer retains bytes [4]-[8] from dispatch
-         * handlers — for simple commands they're all 0 (BSS init).
-         * We previously hardcoded byte[8]=0xAA based on protocol doc,
-         * but this likely caused checksum failures (zero echo frames). */
+        /* Build TX frame: AA 55 header from stock's .data image (see
+         * usart2_send_cmd comment + usart_boot_frames_exact.md), bytes
+         * [4]-[8] zero for simple commands, ck = (cmd+param) & 0xFF. */
         fpga.tx_count++;
         fpga.tx_index = 0;
         memset((void *)fpga.tx_frame, 0, FPGA_TX_FRAME_SIZE);
+        fpga.tx_frame[0] = 0xAA;
+        fpga.tx_frame[1] = 0x55;
         fpga.tx_frame[2] = cmd_hi;
         fpga.tx_frame[3] = cmd_lo;
         fpga.tx_frame[9] = (cmd_lo + cmd_hi) & 0xFF;
@@ -1662,17 +1670,98 @@ void fpga_init(void)
     gpio_cfg.gpio_pull = GPIO_PULL_NONE;
     gpio_init(GPIOA, &gpio_cfg);
 
-    /* USART2 config: 9600 baud, 8N1 */
+    /* USART2 config: 9600 baud, 8N1.
+     *
+     * UEN deliberately NOT set here. Stock explicitly clears UE during
+     * its whole boot window and only enables it AFTER the bitstream
+     * upload (and then only in meter mode) — see
+     * analysis_v120/usart_boot_frames_exact.md. We enable it in Step 7d
+     * post-upload so the FPGA sees the same dead UART during its NV
+     * autoboot and the config phase as it does under stock. */
     USART2->baudr = system_core_clock / 2 / FPGA_USART_BAUD;  /* APB1 = HCLK/2 */
     USART2->ctrl1 = 0;
     USART2->ctrl1 |= (1 << 2);   /* RE: Receiver enable */
     USART2->ctrl1 |= (1 << 3);   /* TE: Transmitter enable */
     USART2->ctrl1 |= (1 << 5);   /* RDBFIEN: RX interrupt enable */
-    USART2->ctrl1 |= (1 << 13);  /* UEN: USART enable */
 
     /* Enable USART2 interrupt in NVIC */
     NVIC_EnableIRQ(USART2_IRQn);
     NVIC_SetPriority(USART2_IRQn, 5);  /* Below FreeRTOS max syscall priority */
+
+    /* ---------------------------------------------------------------
+     * Step 2b: PC6 (FPGA enable) HIGH — EARLY, before the boot wait.
+     *
+     * 2026-06-12: in the #18 stock capture PC6 is HIGH from before
+     * capture start, and the FPGA's whole autoboot timeline (UART
+     * alive 1.38s, announce frames 2.8-3.6s, upload 3.9s) unfolds
+     * AFTER it. We were raising PC6 ~100ms before the upload (Step 4),
+     * so every upload so far hit the FPGA mid-autoboot — matching the
+     * bench signature (UART never comes alive, config wedges, close
+     * status FF). PC6 plausibly gates the FPGA enable/boot, not just
+     * its SPI port. Raise it first; the Step 3 wait below then gives
+     * the FPGA its full autoboot window, reproducing stock's timeline.
+     * --------------------------------------------------------------- */
+    crm_periph_clock_enable(CRM_GPIOC_PERIPH_CLOCK, TRUE);
+    gpio_cfg.gpio_pins = GPIO_PINS_6;
+    gpio_cfg.gpio_mode = GPIO_MODE_OUTPUT;
+    gpio_cfg.gpio_out_type = GPIO_OUTPUT_PUSH_PULL;
+    gpio_cfg.gpio_drive_strength = GPIO_DRIVE_STRENGTH_STRONGER;
+    gpio_init(GPIOC, &gpio_cfg);
+    GPIOC->scr = PC6_MASK;
+
+    /* PC11 (meter MUX enable) driven LOW — stock's scope-mode boot path
+     * actively clears it (file 0x2700A); ours previously left it
+     * floating, which the FPGA may read HIGH. Drive the stock level. */
+    gpio_cfg.gpio_pins = GPIO_PINS_11;
+    gpio_init(GPIOC, &gpio_cfg);
+    GPIOC->clr = (1u << 11);
+
+    /* PB11 (FPGA active mode) driven LOW — the #18 capture shows PB11
+     * solidly LOW from t=0 until stock raises it at t=3.607s, 1ms
+     * before the handshake. We previously left it FLOATING until the
+     * arm (old guess: "stock doesn't configure it early"), so if the
+     * FPGA pulls it up internally it read HIGH the whole time and the
+     * arming LOW→HIGH edge never existed. Drive LOW now; the config
+     * sequence's arm_pb11 then produces a true rising edge like stock. */
+    crm_periph_clock_enable(CRM_GPIOB_PERIPH_CLOCK, TRUE);
+    gpio_cfg.gpio_pins = GPIO_PINS_11;
+    gpio_init(GPIOB, &gpio_cfg);
+    GPIOB->clr = PB11_MASK;
+
+    /* ---------------------------------------------------------------
+     * Step 2c: analog-frontend relay/gain bank — range-5 posture,
+     * driven BEFORE the autoboot wait and the 0x3B upload.
+     *
+     * 2026-06-12 (stock_pre_fpga_gpio_state.md): stock calls
+     * gpio_mux_portc_porte(5) + gpio_mux_porta_portb(5) during master
+     * init, BEFORE the SPI3 handshake — range index 5 from .data
+     * defaults meter_state[0xFA]=[0xFB]=0x05. It drives the WHOLE
+     * frontend bank; our upload path left all of it floating. If the
+     * Gowin samples any of these as config-time straps, that's the
+     * prime suspect for the FF-not-F8 close. Range-5 levels:
+     *   PC12=L  PE4=H  PE5=H  PE6=L   PA15=H  PA10=H  PB10=H
+     * PB11 is also range-5-HIGH in the static decode, but the #18
+     * capture shows it LOW until the 1ms pre-handshake arm — capture
+     * wins, so PB11 keeps its arm timing (set LOW above) and is NOT
+     * forced here. PB9/PA6 (shared analog enables) driven HIGH too,
+     * matching the scope-mode tail of fpga_set_meter_frontend_baseline. */
+    crm_periph_clock_enable(CRM_GPIOA_PERIPH_CLOCK, TRUE);
+    crm_periph_clock_enable(CRM_GPIOE_PERIPH_CLOCK, TRUE);
+    gpio_cfg.gpio_out_type = GPIO_OUTPUT_PUSH_PULL;
+    gpio_cfg.gpio_drive_strength = GPIO_DRIVE_STRENGTH_STRONGER;
+    gpio_cfg.gpio_mode = GPIO_MODE_OUTPUT;
+
+    gpio_cfg.gpio_pins = GPIO_PINS_12; gpio_init(GPIOC, &gpio_cfg);
+    gpio_cfg.gpio_pins = GPIO_PINS_4 | GPIO_PINS_5 | GPIO_PINS_6; gpio_init(GPIOE, &gpio_cfg);
+    gpio_cfg.gpio_pins = GPIO_PINS_15 | GPIO_PINS_10 | GPIO_PINS_6; gpio_init(GPIOA, &gpio_cfg);
+    gpio_cfg.gpio_pins = GPIO_PINS_10 | GPIO_PINS_9; gpio_init(GPIOB, &gpio_cfg);
+
+    GPIOC->clr = (1u << 12);                          /* PC12 LOW */
+    GPIOE->scr = (1u << 4);                           /* PE4 HIGH */
+    GPIOE->scr = (1u << 5);                           /* PE5 HIGH (stock; ours had this LOW) */
+    GPIOE->clr = (1u << 6);                           /* PE6 LOW */
+    GPIOA->scr = (1u << 15) | (1u << 10) | (1u << 6); /* PA15/PA10/PA6 HIGH */
+    GPIOB->scr = (1u << 10) | (1u << 9);              /* PB10/PB9 HIGH */
 
     /* ---------------------------------------------------------------
      * Step 3: Wait for FPGA to finish booting
@@ -1688,29 +1777,44 @@ void fpga_init(void)
      * the SPI slave won't be active yet → MISO stuck at 0xFF.
      *
      * Add an explicit delay to match the stock firmware's implicit
-     * boot time. Try 2000ms as a conservative starting point.
+     * boot time.
+     *
+     * 2026-06-12 bump 2000→4000ms: with the pre-upload USART removed,
+     * the cold-boot litmus PASSED (prelude MISO float 0xFF, config-wait
+     * entered) but the upload was still rejected (close FF, UART dead
+     * after) — and our upload lands at ~2.4s after power-on, mid NV
+     * autoboot. Stock uploads at t=3.9s, AFTER the NV design has booted
+     * (UART alive 1.38s) and emitted its six announcement frames
+     * (2.8–3.6s). Interrupting autoboot plausibly wedges the config
+     * controller. Match stock's timeline.
+     *
+     * 2026-06-12 (later): the wait MOVED to after Step 4 — a true cold
+     * boot with early PC6 + 4s wait still showed the FPGA never booting
+     * its NV design (UART dead). Stock's capture has MOSI/CS/MISO/SCK
+     * idle HIGH from t=0; our SPI3 pins floated unconfigured through
+     * the whole wait (CS indeterminate at the FPGA through autoboot).
+     * Pins must be configured BEFORE the boot window, like stock.
      * --------------------------------------------------------------- */
-    systick_delay_ms(2000);
 
     /* ---------------------------------------------------------------
-     * Step 3b: USART boot commands — sent BEFORE the SPI3 phase
+     * Step 3b: NO USART commands before the SPI3 upload.
      *
-     * Stock-validated order: master init Phase 4 (inline USART cmds at
-     * 0x08025D96) precedes the SPI3 phase (0x08026540). Moved here
-     * 2026-06-10 after the framed-upload-only experiment left PC0
-     * unarmed; the prior after-upload order came from the debunked
-     * FUN_08027a50 reading (see docs/fpga_bitstream_replay_plan.md).
+     * DISPROVEN ON THE WIRE 2026-06-12: bit-level decode of the
+     * issue-#18 stock-boot capture (PA3, t=0-3.9s) shows ZERO 0xAA 0x55
+     * echo frames before the 0x3B upload — the FPGA echoes every
+     * command it receives, so stock sent NOTHING on USART pre-upload
+     * (only six unsolicited 5A A5 / 5A 69 frames from the NV design,
+     * ~163ms cadence, from t=1.38s). The earlier "Phase 4 inline cmds
+     * precede SPI3" decompile reading was wrong; its motivation (PC0
+     * unarmed) was obsoleted by Experiment 6 (NV design holds PC0 low
+     * regardless).
+     *
+     * Hypothesis under test: commanding the NV design over USART here
+     * is what flips its user-design SPI slave onto the SSPI pins
+     * (our prelude MISO=0x80 driven vs stock's 0xFF float), so the
+     * config controller never sees the 0x3B stream. Boot commands now
+     * sent AFTER the SPI3 config sequence (Step 7d).
      * --------------------------------------------------------------- */
-    usart2_send_cmd(0x00, FPGA_CMD_INIT_01);  /* 0x01: Channel init */
-    systick_delay_ms(50);
-    usart2_send_cmd(0x00, FPGA_CMD_INIT_02);  /* 0x02: Signal gen setup */
-    systick_delay_ms(50);
-    usart2_send_cmd(0x00, FPGA_CMD_INIT_06);  /* 0x06: Signal gen setup */
-    systick_delay_ms(50);
-    usart2_send_cmd(0x00, FPGA_CMD_INIT_07);  /* 0x07: Meter probe detect */
-    systick_delay_ms(50);
-    usart2_send_cmd(0x00, FPGA_CMD_INIT_08);  /* 0x08: Meter configure */
-    systick_delay_ms(100);
 
     /* ---------------------------------------------------------------
      * Step 4: SPI3 peripheral init — Mode 3, Master, /2 prescaler
@@ -1755,28 +1859,14 @@ void fpga_init(void)
     /* CS deassert (idle HIGH) */
     SPI3_CS_DEASSERT();
 
-    /* PC6 = FPGA SPI enable: output push-pull, set HIGH */
-    gpio_cfg.gpio_pins = GPIO_PINS_6;
-    gpio_cfg.gpio_mode = GPIO_MODE_OUTPUT;
-    gpio_cfg.gpio_out_type = GPIO_OUTPUT_PUSH_PULL;
-    gpio_cfg.gpio_drive_strength = GPIO_DRIVE_STRENGTH_STRONGER;
-    gpio_init(GPIOC, &gpio_cfg);
-    GPIOC->scr = PC6_MASK;  /* PC6 HIGH — FPGA SPI enable (match stock) */
+    /* PC6 (FPGA enable) now raised in Step 2b, BEFORE the boot wait —
+     * stock has it HIGH from the first instants of boot (#18 capture). */
 
-    /* PB11 = FPGA active mode — DO NOT configure as output yet!
-     *
-     * Stock firmware sets PB11 HIGH in "step 52" (just before
-     * vTaskStartScheduler), but critically does NOT configure PB11
-     * as a GPIO output before SPI3 init. On reset, PB11 defaults
-     * to floating input. If the FPGA has an internal pull-up on its
-     * PB11-connected pin, floating = HIGH = active mode.
-     *
-     * Previously we configured PB11 as output push-pull here, which
-     * drives it LOW (GPIO output default). If the FPGA gates its
-     * SPI slave interface on PB11, this would explain MISO stuck at
-     * 0xFF and zero USART echo frames.
-     *
-     * PB11 gpio_init + set HIGH is deferred to Step 9b below. */
+    /* PB11 = FPGA active mode: now driven LOW from Step 2b (capture
+     * ground truth: LOW from t=0). The config sequence's arm_pb11
+     * raises it 1ms before the handshake — stock's exact edge. The
+     * old "leave it floating" reasoning here was a pre-capture guess
+     * and inverted the failure mode. */
 
     /*
      * SPI3 register configuration (direct, matching stock firmware):
@@ -1829,11 +1919,44 @@ void fpga_init(void)
     fpga.diag_spi_sts = FPGA_SPI->sts;
 
     /* ---------------------------------------------------------------
-     * Step 5: SysTick delay
-     * Stock firmware has ~100ms delay after SPI3 enable before
-     * handshake. Previous value was 20ms total — too short.
+     * Step 5: FPGA autoboot window — AFTER all pins are configured.
+     *
+     * All FPGA-facing pins now hold stock's idle levels (PC6 HIGH,
+     * CS/SCK/MOSI idle HIGH via the enabled SPI3 peripheral, PA2 idle
+     * HIGH). Give the FPGA its full NV autoboot window before the
+     * upload, matching stock's timeline (upload at t=3.9s, ~2.5s after
+     * the NV design's UART comes alive at 1.38s). If the FPGA boots
+     * normally we should see its six announcement frames land on
+     * USART2 RX during this wait (rx_byte_count ≈ 60+).
+     *
+     * 2026-06-12: the wait doubles as a passive PA3 edge counter.
+     * Stock's FPGA emits six UART announce frames at t=2.8-3.6s; under
+     * our firmware (verified with RX live) it stays silent. With UE
+     * now stock-faithfully off we can't use the USART to listen, so
+     * sample PA3 as a plain GPIO input (~1MHz, electrically invisible)
+     * and count transitions. Result packed into init_hs[0] (low 8 bits,
+     * capped) and init_hs[3] (bits 15:8) — visible as the 1st and 4th
+     * bytes of "G1" in the status dump. Six 10-11 byte frames ≈
+     * several hundred edges; the bare line-alive blip ≈ 1-3.
      * --------------------------------------------------------------- */
-    systick_delay_ms(100);
+    {
+        uint32_t edges = 0;
+        uint8_t last = (GPIOA->idt >> 3) & 1u;
+        for (uint32_t ms = 0; ms < 4000; ms++) {
+            /* 1ms time slice via SysTick, polling PA3 throughout */
+            uint32_t ticks = (system_core_clock / 1000u);
+            SysTick->LOAD = ticks - 1;
+            SysTick->VAL = 0;
+            SysTick->CTRL = SysTick_CTRL_CLKSOURCE_Msk | SysTick_CTRL_ENABLE_Msk;
+            while (!(SysTick->CTRL & SysTick_CTRL_COUNTFLAG_Msk)) {
+                uint8_t v = (GPIOA->idt >> 3) & 1u;
+                if (v != last) { edges++; last = v; }
+            }
+            SysTick->CTRL = 0;
+        }
+        fpga.init_hs[0] = (edges > 0xFF) ? 0xFF : (uint8_t)edges;
+        fpga.init_hs[3] = (edges > 0xFFFF) ? 0xFF : (uint8_t)(edges >> 8);
+    }
 
     /* ---------------------------------------------------------------
      * Step 6: SPI3 FPGA handshake — CS-framed commands (stock-faithful)
@@ -1873,15 +1996,31 @@ void fpga_init(void)
      * handshake now lives in fpga_spi3_config_sequence() so the debug shell
      * (`fpga reinit`) can replay it on demand for fast iteration without a
      * reflash. Parameters let us sweep the variables under investigation. */
+#define FPGA_BOOT_UPLOAD 1  /* 1 = run the boot upload. (Control round
+    * 2026-06-12 with 0 confirmed the FPGA is mute even untouched, so the
+    * environment — not our SPI activity — is the gate; back to 1 to test
+    * the range-5 frontend-bank fix added in Step 2c.) */
+#if FPGA_BOOT_UPLOAD
     fpga_spi3_config_sequence(&(fpga_cfg_seq_opts_t){
         .upload_br      = SPI3_UPLOAD_BR,
         .prelude_gap_ms = 100,
         .post_close_ms  = 600,
         .arm_pb11       = 1,
     });
+#endif /* FPGA_BOOT_UPLOAD */
 
-    /* USART boot commands (0x01,0x02,0x06,0x07,0x08) now sent in
-     * Step 3b, BEFORE the SPI3 phase — stock-validated Phase 4 order. */
+    /* ---------------------------------------------------------------
+     * Step 7d: USART2 enable — AFTER the upload, like stock.
+     *
+     * The "USART boot commands 0x01..0x08" turned out to be folklore
+     * from a Ghidra base-address bug: stock posts those bytes to the
+     * fpga_task SPI3 trigger queue and they become the five SPI3
+     * config writes already sent in Step 7c. Stock sends ZERO USART
+     * frames at boot and enables UE only here (meter mode only; we
+     * enable unconditionally because our shell + meter poll expect a
+     * live UART). See analysis_v120/usart_boot_frames_exact.md.
+     * --------------------------------------------------------------- */
+    USART2->ctrl1 |= (1 << 13);  /* UEN: USART enable */
 
     /* ---------------------------------------------------------------
      * Step 8: Analog frontend + Meter IC activation

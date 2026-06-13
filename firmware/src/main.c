@@ -359,6 +359,25 @@ int main(void)
     GPIOC->cfghr = (GPIOC->cfghr & ~(0xF << 4)) | (0x3 << 4); /* PC9 push-pull 50MHz */
     GPIOC->scr = (1 << 9);  /* PC9 HIGH */
 
+    /* PC6 (FPGA enable) HIGH immediately — stock has it HIGH within ms of
+     * power-on (#18 capture: already HIGH before capture start). The Gowin
+     * likely samples it as a power-up strap; raising it ~1s later in
+     * fpga_init (after LCD init) leaves the FPGA's SSPI slave dead for the
+     * whole power cycle. Must be HIGH before the FPGA finishes its own
+     * power-on, i.e. effectively first thing after the power hold. */
+    GPIOC->cfglr = (GPIOC->cfglr & ~(0xFu << 24)) | (0x3u << 24); /* PC6 push-pull 50MHz */
+    GPIOC->scr = (1 << 6);  /* PC6 HIGH */
+
+    /* Remaining FPGA-visible straps at their stock t=0 levels (#18
+     * capture / stock scope-boot path), driven before the FPGA finishes
+     * its own power-up: PB11 (active mode) LOW — the config sequence
+     * later gives it stock's arming LOW→HIGH edge; PC11 (meter MUX) LOW. */
+    crm_periph_clock_enable(CRM_GPIOB_PERIPH_CLOCK, TRUE);
+    GPIOB->cfghr = (GPIOB->cfghr & ~(0xFu << 12)) | (0x3u << 12); /* PB11 push-pull */
+    GPIOB->clr = (1 << 11);  /* PB11 LOW */
+    GPIOC->cfghr = (GPIOC->cfghr & ~(0xFu << 12)) | (0x3u << 12); /* PC11 push-pull */
+    GPIOC->clr = (1 << 11);  /* PC11 LOW */
+
     /* Set VTOR. Normal build runs at 0x08004000 under our HID bootloader;
      * GUEST_BUILD runs at 0x08007000 under the FNIRSI stock bootloader (unit #2). */
 #ifdef GUEST_BUILD
