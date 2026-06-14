@@ -43,14 +43,30 @@ The ledger lists every function with its class so the denominator is explicit, n
 
 ## Baseline scoreboard (MEASURED 2026-06-13 — `coverage_ledger.csv`, 309 functions)
 
-| Metric | Baseline | Current (2026-06-13) |
+| Metric | Baseline | Current (2026-06-13, after wf4) |
 |---|---|---|
-| Full register-level decode (D=3) | 23/309 = 7.4% | **107/309 = 34.6%** |
-| Skip-justified (R=NA) | 119 | **191** |
-| **Meaningful (R≠NA: real device behavior)** | 190 | **118** |
-| RESOLVED, gross | 60/309 | 139/309 |
-| **RESOLVED, meaningful — THE HEADLINE** | 1/190 = 0.5% | **11/118 = 9.3%** |
-| Verified equivalent to stock (V≥1, meaningful) | ~0 | 11 (SPI2 ×3, lcd_read_data, +6 RCC/GPIO/SPI primitives) |
+| Full register-level decode (D=3) | 23/309 = 7.4% | **180/309 = 58.3%** |
+| Skip-justified (R=NA) | 119 | **239** |
+| **Meaningful (R≠NA: real device behavior)** | 190 | **70** |
+| RESOLVED, gross | 60/309 | 188/309 |
+| **RESOLVED, meaningful — THE HEADLINE** | 1/190 = 0.5% | **13/70 = 18.6%** |
+| Verified equivalent to stock (V≥1, meaningful) | ~0 | 13 (SPI2 ×3, 2 EXMC-LCD primitives, lcd_read_data, +6 RCC/GPIO/SPI primitives) |
+
+**wf4 (2026-06-13, 96 agents) headline finding — a whole subsystem is ABSENT, not "understood":**
+the decode/verify pass on the 80 generic-note functions found **~24 functions forming one
+coherent subsystem our firmware entirely LACKS** — FatFs LFN directory ops, file read/write,
+screenshot-BMP save, and **all SPI-flash write primitives** (`spi2_write_enable/wait_busy/
+sector_erase/page_program`, `spi_flash_write_block`). Our `flash_fs.c` is *stubbed* (every
+`f_*` is a TODO; vendor `ff.c` isn't in the Makefile). The adversarial verifier **overturned
+19 of 52** decode claims — 17× `NA_OURS→ABSENT` (the decoders wrongly assumed we "replace
+FatFs with a library"; we don't) — which is the entire reason the headline is trustworthy:
+without it, 17 stubbed functions would have falsely scored as resolved. Genuine numerator: **+2**
+(`scope_get_ch_offset` 0x08019e6c, `scope_set_ch_coupling` 0x08019e78 — both *mislabeled*
+EXMC-LCD command/data-port writes that match `lcd.c` byte-for-byte → R2/V1). The big move is
+**denominator correction done honestly** (46 NA_OURS: USB-device stack = Artery lib, 28 UI/font
+draws = our own render) **plus a large real decode win (D3 107→180, 58%)**. ⚠️ Still **zero
+scope/FPGA acquisition resolved**, and we now know the screenshot/file/settings-persistence
+features are genuinely missing — masked entirely by the old "99% understood" metric.
 
 **Honest reading of 0.5%→9.3% (three rounds):** the move splits into **denominator correction**
 (reclassifying the FreeRTOS kernel + our own UI out of "device behavior we reimplement" — they
@@ -74,6 +90,8 @@ numerator next, FPGA-independent first) in `analysis_v120/relabel_r1_2026-06-13.
 | 2026-06-13 | `flash_cfg_cal` detour — live W25Q128 dump from Unit 2 | 2.1% (elimination result) | Drove the device's `flash dump` shell directly (no reflash) + offline FAT12 parse. **Factory cal is NOT on the W25Q:** the chip is UI JPEGs + screenshots + one *empty* `9999.BIN` config placeholder (cluster 0 / size 0), two volumes filling all 16 MB with no raw region. Narrows the R0 `flash_cfg_cal` blocker to MCU flash `0x08006000` (overwritten by our app) or the FPGA bitstream. Tooling: `scripts/flash_capture.py`. See `analysis_v120/w25q128_flash_map_2026-06-13.md`. |
 | 2026-06-13 | verify-first harvest (8-agent workflow) — 62 of the 63 R2-unresolved classified | 2.1% → **3.9%** (denominator-shrink + 1 driver) | 46 `NA(same FreeRTOS source)` (kernel verified present in build) + 15 `NA(our own UI)` + **1 VERIFY_FAITHFUL** (`lcd_read_data` V1) + 1 held UNRESOLVED (`fpga_spi3_transfer`, FPGA wall). **D3 23→75.** Honest: mostly denominator correction; genuine proven-equivalent device behavior added = 1 trivial fn. Surfaced the `lcd_*` Ghidra mislabels + the kernel-name hazard. |
 | 2026-06-13 | relabel + R1 decode (16-agent workflow) — 42 driver/protocol fns | 3.9% → **9.3%** | 46 kernel names corrected to upstream symbols; R1 cluster decoded to D3 (D3 75→107). 14 resolved: **6 VERIFY_FAITHFUL** (RCC/GPIO/SPI primitives — genuine numerator) + 8 NA_OUR_OWN. 12 FPGA_BLOCKED (the actual scope, decoded but bench-gated), 5 ABSENT_R0 (FatFs layer we lack), 4 DIVERGENT, 6 DECODE_ONLY. Honesty catch: `scope_autoset_trigger_track` (08001c60) corrected from NA→FPGA_BLOCKED. Roadmap: `analysis_v120/relabel_r1_2026-06-13.json`. |
+| 2026-06-13 | wf4: decode+verify of 80 generic-note fns (96-agent pipeline) — FatFs/SPI2/scope/render | 9.3% → **18.6%** | Per-fn full decode → **adversarial verify of every REIMPL/NA claim**. D3 107→**180** (58%). +2 genuine numerator (EXMC-LCD primitives mislabeled as `scope_get/set_ch_*`, R2/V1 vs `lcd.c`). 46 NA_OURS (USB lib + our UI/font) shrink the denominator 118→70 honestly. **Verifier overturned 19/52** (17× NA_OURS→ABSENT): exposed that the **entire FatFs/screenshot/flash-write subsystem (~24 fns) is ABSENT** — `flash_fs.c` is stubbed, not a library port. SPI2 *write* trio also ABSENT (only the read trio is real). Artifacts: `analysis_v120/resolve_fs_drivers_wf4_2026-06-13.md`, `scripts/wf_resolve_fs_drivers.js`. |
+| 2026-06-13 | wf5: resolve-squeeze of the 12 non-blocked unresolved-meaningful D3 fns | 18.6% → **18.6% (no change — hard floor)** | Static-equivalence + adversarial-verify. **0 new resolves.** All 12 are genuinely DIVERGENT (deliberate: omitted meter autorange, BITFIELDS screenshot vs stock BI_RGB, 4096-pt vs stock 256-pt FFT), ABSENT (FatFs/flash-write), or FPGA_BLOCKED. Verifier demoted `0800b908` (stale R2/V1→R1/V0) + 3× NA→ABSENT. **Conclusion: decode is exhausted; 18.6% is the pure-RE ceiling — every further meaningful gain requires building (reconcile DIVERGENT / write the ABSENT subsystem) or bench (FPGA_BLOCKED, needs microscope/JTAG).** Per-fn path-to-faithful roadmap: `analysis_v120/resolve_squeeze_wf5_2026-06-13.md`, `scripts/wf_resolve_squeeze.js`. |
 
 **Track the meaningful figure (9.3%), not the gross (40%+)** — the gross number is
 dominated by libc/FreeRTOS/USB-descriptor plumbing auto-credited as `R=NA`. Of the 118
