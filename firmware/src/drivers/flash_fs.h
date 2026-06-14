@@ -43,6 +43,27 @@ flash_fs_error_t flash_fs_raw_read_jedec(uint8_t *manufacturer,
                                          uint8_t *capacity);
 flash_fs_error_t flash_fs_raw_read_bytes(uint32_t addr, void *buf, uint32_t len);
 
+/* ── Raw WRITE primitives (faithful reimpl of the stock W25Q128 driver) ──
+ * Byte-exact from stock: WREN/RDSR-wait/sector-erase/page-program/page-loop/
+ * smart-block-write (FUN_0802f344/f11c/ee9c/f36c/f2ac/f16c). THESE MODIFY FLASH.
+ * The W25Q128 holds UI assets + screenshots in two FAT volumes — writing outside
+ * a known-erased/free region corrupts them. Mutex-protected; same SPI2 bus as reads. */
+
+/* Erase one 4KB sector (addr masked down to the sector boundary). */
+flash_fs_error_t flash_fs_raw_sector_erase(uint32_t addr);
+
+/* Program `len` bytes at `addr`, splitting across 256B pages. The target range
+ * MUST already be erased (0xFF) — use flash_fs_raw_write_block to erase-as-needed. */
+flash_fs_error_t flash_fs_raw_program(uint32_t addr, const void *data, uint32_t len);
+
+/* Smart write: read-modify-write at 4KB granularity, erasing a sector only when a
+ * target byte isn't already 0xFF (stock FUN_0802f16c). Safe for arbitrary addr/len. */
+flash_fs_error_t flash_fs_raw_write_block(uint32_t addr, const void *data, uint32_t len);
+
+/* Diagnostic: out[0..2] = status registers SR1/SR2/SR3; out[3] = SR1 after a WREN
+ * (bit1 = WEL should read 1). Reveals block-protect bits + whether write-enable latches. */
+flash_fs_error_t flash_fs_raw_status_diag(uint8_t out[4]);
+
 /* ═══════════════════════════════════════════════════════════════════
  * Factory calibration
  *

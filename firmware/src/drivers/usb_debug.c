@@ -17,6 +17,7 @@
 #include "cdc_desc.h"
 #include "dfu_boot.h"
 #include "flash_fs.h"
+#include "scope_trigger.h"
 #include "fpga.h"
 #include "ui.h"
 #include "../ui/scope_state.h"
@@ -391,6 +392,9 @@ static void cmd_help(void)
         "flash jedec                     Read external W25Q128 JEDEC ID\r\n"
         "flash read <addr> <len>         Read external flash bytes (max 256)\r\n"
         "flash dump <addr> <len>         Stream external flash bytes (max 4096)\r\n"
+        "flash wtest <addr> CONFIRM      Non-destructive write-primitive self-test (blank 4KB sector)\r\n"
+        "trig raw <0-4095>               Write DAC1 (PA4) directly + sw trigger\r\n"
+        "trig <range> <level>            Scope trigger DAC: range 0-9, level -100..100\r\n"
         "fpga cmd <hi> <lo>              Send FPGA command bytes\r\n"
         "  e.g.: fpga cmd 0 9   (sends 0x00 0x09)\r\n"
         "        fpga cmd 0x0509 (sends 0x05 0x09)\r\n"
@@ -936,6 +940,148 @@ static void cmd_flash_dump(const char *args)
         addr += this_len;
         len -= this_len;
     }
+}
+
+/*
+ * Self-protecting write-primitive bench test (V2 confirmation for the faithful
+ * reimpl of the stock W25Q write driver — flash_fs_raw_program/sector_erase/
+ * write_block). NON-DESTRUCTIVE by contract:
+ *   - addr MUST be 4KB-sector-aligned;
+ *   - the ENTIRE 4KB sector must already be erased (all 0xFF) — refuses otherwise,
+ *     so it can only ever touch blank flash;
+ *   - exercises both write paths (in-place page-program + erase/read-modify-write)
+ *     then erases the sector back to 0xFF, restoring the pre-test state exactly.
+ * Requires an explicit CONFIRM token: `flash wtest <addr> CONFIRM`.
+ */
+static void cmd_flash_diag(void)
+{
+    uint8_t sr[4] = {0};
+    if (flash_fs_raw_status_diag(sr) != FLASH_FS_OK) { usb_send_str("ERR: status diag\r\n"); return; }
+    usb_debug_printf("SR1=0x%02X SR2=0x%02X SR3=0x%02X | SR1-after-WREN=0x%02X\r\n",
+                     sr[0], sr[1], sr[2], sr[3]);
+    usb_debug_printf("  BP/protect bits (SR1&0x7C)=0x%02X  WEL-after-WREN=%d  BUSY=%d\r\n",
+                     sr[0] & 0x7C, (sr[3] >> 1) & 1, sr[0] & 1);
+}
+
+static void cmd_flash_wtest(const char *args)
+{
+    /* Lean stack footprint: the usb_dbg task has only 2KB of stack, so this uses a
+     * single 64-byte work buffer (NOT 256-byte arrays — that overflowed the task). */
+    char abuf[40];
+    char *saveptr = NULL;
+    uint32_t addr;
+    uint8_t b[64];
+    const uint32_t TLEN = sizeof(b);   /* 64-byte test window within the sector */
+
+    if (strlen(args) >= sizeof(abuf)) { usb_send_str("Usage: flash wtest <addr> CONFIRM\r\n"); return; }
+    strcpy(abuf, args);
+
+    char *t_addr = strtok_r(abuf, " \t", &saveptr);
+    char *t_conf = strtok_r(NULL, " \t", &saveptr);
+    if (t_addr == NULL || parse_int(t_addr, &addr) != 0) {
+        usb_send_str("Usage: flash wtest <addr> CONFIRM\r\n"); return;
+    }
+    if (t_conf == NULL || strcmp(t_conf, "CONFIRM") != 0) {
+        usb_send_str("Refused: append CONFIRM. This writes external flash.\r\n"); return;
+    }
+    if (addr & 0xFFFu) {
+        usb_send_str("Refused: addr must be 4KB-sector-aligned (mask 0xFFF).\r\n"); return;
+    }
+
+    /* Safety: the whole 4KB sector must be blank (0xFF) so the restoring erase is
+     * guaranteed non-destructive. */
+    for (uint32_t off = 0; off < 4096; off += sizeof(b)) {
+        if (flash_fs_raw_read_bytes(addr + off, b, sizeof(b)) != FLASH_FS_OK) {
+            usb_send_str("ERR: pre-read failed\r\n"); return;
+        }
+        for (uint32_t i = 0; i < sizeof(b); i++) {
+            if (b[i] != 0xFF) {
+                usb_debug_printf("Refused: sector not blank (byte 0x%lX = 0x%02X). Pick an erased sector.\r\n",
+                                 (unsigned long)(addr + off + i), b[i]);
+                return;
+            }
+        }
+    }
+    usb_debug_printf("wtest @0x%lX: sector blank, OK to proceed\r\n", (unsigned long)addr);
+
+    /* Path 1: program-in-place (target erased) — ascending pattern. */
+    for (uint32_t i = 0; i < TLEN; i++) b[i] = (uint8_t)i;
+    if (flash_fs_raw_write_block(addr, b, TLEN) != FLASH_FS_OK) { usb_send_str("ERR: write_block#1\r\n"); goto restore; }
+    if (flash_fs_raw_read_bytes(addr, b, TLEN) != FLASH_FS_OK) { usb_send_str("ERR: readback#1\r\n"); goto restore; }
+    {
+        int bad = -1;
+        for (uint32_t i = 0; i < TLEN; i++) if (b[i] != (uint8_t)i) { bad = (int)i; break; }
+        if (bad >= 0) {
+            usb_debug_printf("FAIL: in-place mismatch @+%d; readback[0..7]=%02X %02X %02X %02X %02X %02X %02X %02X\r\n",
+                             bad, b[0], b[1], b[2], b[3], b[4], b[5], b[6], b[7]);
+            goto restore;
+        }
+    }
+    usb_send_str("PASS: page-program (in-place)\r\n");
+
+    /* Path 2: erase + read-modify-write (target now non-0xFF) — inverse pattern. */
+    for (uint32_t i = 0; i < TLEN; i++) b[i] = (uint8_t)(0xFF - i);
+    if (flash_fs_raw_write_block(addr, b, TLEN) != FLASH_FS_OK) { usb_send_str("ERR: write_block#2\r\n"); goto restore; }
+    if (flash_fs_raw_read_bytes(addr, b, TLEN) != FLASH_FS_OK) { usb_send_str("ERR: readback#2\r\n"); goto restore; }
+    for (uint32_t i = 0; i < TLEN; i++) if (b[i] != (uint8_t)(0xFF - i)) { usb_send_str("FAIL: erase+RMW mismatch\r\n"); goto restore; }
+    usb_send_str("PASS: erase + read-modify-write\r\n");
+
+restore:
+    /* Restore: erase the sector back to all-0xFF (its pre-test state). */
+    if (flash_fs_raw_sector_erase(addr) != FLASH_FS_OK) { usb_send_str("ERR: restore erase\r\n"); return; }
+    {
+        bool blank = true;
+        for (uint32_t off = 0; off < 4096 && blank; off += sizeof(b)) {
+            if (flash_fs_raw_read_bytes(addr + off, b, sizeof(b)) != FLASH_FS_OK) { blank = false; break; }
+            for (uint32_t i = 0; i < sizeof(b); i++) if (b[i] != 0xFF) { blank = false; break; }
+        }
+        usb_debug_printf("%s: sector restored to 0xFF\r\n", blank ? "PASS" : "FAIL");
+    }
+}
+
+/*
+ * Scope trigger-comparator DAC (faithful reimpl of stock FUN_080018a4 CH1 path).
+ *   trig raw <0-4095>     direct 12-bit DAC1 write + software trigger
+ *   trig <range> <level>  full cal-formula path; range 0-9, level -100..+100
+ * Output appears on PA4 (DAC1). Scope PA4 to verify: V = code/4095 * Vref(~3.3V).
+ */
+static void cmd_scope_trig(const char *args)
+{
+    char buf[48];
+    if (strlen(args) >= sizeof(buf)) { usb_send_str("Usage: trig raw <code> | trig <range> <level>\r\n"); return; }
+    strcpy(buf, args);
+
+    char *saveptr = NULL;
+    char *t1 = strtok_r(buf, " \t", &saveptr);
+    char *t2 = strtok_r(NULL, " \t", &saveptr);
+
+    scope_trigger_dac_init();
+
+    if (t1 != NULL && strcmp(t1, "raw") == 0 && t2 != NULL) {
+        uint32_t code = 0;
+        if (parse_int(t2, &code) != 0) { usb_send_str("Usage: trig raw <0-4095>\r\n"); return; }
+        if (code > 4095) code = 4095;
+        scope_trigger_dac_raw((uint16_t)code);
+    } else if (t1 != NULL && t2 != NULL) {
+        uint32_t r = 0, lv = 0; int level;
+        const char *ls = t2;
+        int neg = 0;
+        if (*ls == '-') { neg = 1; ls++; }
+        if (parse_int(t1, &r) != 0 || parse_int(ls, &lv) != 0) {
+            usb_send_str("Usage: trig <range 0-9> <level -100..100>\r\n"); return;
+        }
+        level = neg ? -(int)lv : (int)lv;
+        scope_trigger_dac_set((int)r, level);
+    } else {
+        usb_send_str("Usage: trig raw <code> | trig <range> <level>\r\n");
+        return;
+    }
+
+    uint16_t code = scope_trigger_dac_last();
+    /* Vref assumed 3.3V; mV = code * 3300 / 4095. */
+    uint32_t mv = ((uint32_t)code * 3300u) / 4095u;
+    usb_debug_printf("DAC1(PA4) = code %u (0x%03X)  ~%lu.%03lu V expected\r\n",
+                     code, code, (unsigned long)(mv / 1000), (unsigned long)(mv % 1000));
 }
 
 static void cmd_fpga_cmd(const char *args)
@@ -2218,12 +2364,18 @@ static void dispatch_command(char *line)
         cmd_mem_read(line + 9);
     } else if (strncmp(line, "mem write ", 10) == 0) {
         cmd_mem_write(line + 10);
+    } else if (strncmp(line, "trig ", 5) == 0) {
+        cmd_scope_trig(line + 5);
     } else if (strcmp(line, "flash jedec") == 0) {
         cmd_flash_jedec();
     } else if (strncmp(line, "flash read ", 11) == 0) {
         cmd_flash_read(line + 11);
     } else if (strncmp(line, "flash dump ", 11) == 0) {
         cmd_flash_dump(line + 11);
+    } else if (strncmp(line, "flash wtest ", 12) == 0) {
+        cmd_flash_wtest(line + 12);
+    } else if (strcmp(line, "flash diag") == 0) {
+        cmd_flash_diag();
     } else if (strncmp(line, "fpga cmd ", 9) == 0) {
         cmd_fpga_cmd(line + 9);
     } else if (strncmp(line, "fpga frame ", 11) == 0) {
