@@ -143,3 +143,47 @@ JTAG provides exactly what the warm-handoff can't: a **fresh** config
 the read path now validated, JTAG should yield **continuous** live traces. The
 `fpga_acquisition_task` rewrite to `0x04`/`0x05` is the firmware follow-up,
 validated and ready for that bench session.
+
+---
+
+## RESULTS (2026-06-13, Round 4) — `spi3 armtest`: MCU-pin re-arm falsified
+
+Tested the netlist-derived runtime-arm hypothesis from
+`reverse_engineering/analysis_v120/mcu_fpga_boundary_reconcile_2026-06-13.md` §5:
+the apicula trace says MISO (`SO.OEN`) is gated by a read-window counter that only
+advances while the FPGA run/re-arm pad (`IOR1B`) is driven, and that re-arm runs
+through an async-preset (`8× DFF.SET`) *pulse* path — so a held-HIGH level may
+never restart capture after the first window. `IOR1B` was mapped (semantically,
+not by board trace) to PB11 (#1) or PC6 (#2). New shell command `spi3 armtest
+[pb11|pc6]` (in `usb_debug.c`): baseline acqread → pulse the run pin
+HIGH→LOW→HIGH ×3 → re-issue the post-config control register
+(`01 08 / 02 03 / 06 00 / 07 00 / 08 AD`) → acqread again.
+
+Procedure was a **clean** warm handoff (stock → live scope trace → MENU+Power →
+flash `guest-warmtest`, booted straight through, no POWER press).
+
+- **Handoff confirmed good:** the PB11-run baseline read returned the stale
+  one-shot buffer — CH1 `AE`(174) / CH2 `53`(83), matching Round 1's DC levels.
+  Read path + `0x04`/`0x05` framing re-validated.
+- **PB11 pulse + control-reg → no re-arm.** After-pulse read empty (span 0) on
+  both channels; the single buffer was consumed and none regenerated.
+- **PC6 pulse + control-reg → no re-arm.** After-pulse read empty on both
+  channels (independent of the already-consumed baseline buffer).
+- The read *window* still fires throughout (CH1 status `80 00 00`, PC0 1→0) —
+  the readback path is alive; there is simply no fresh capture behind it.
+
+**Conclusion:** continuous capture is **not re-armable from either MCU-reachable
+dedicated control pin** (PB11, PC6) via an edge pulse + control-register
+re-issue. Combined with the earlier PB11/PC11-toggle failures, MCU-side re-arm
+after a soft reset does not restart capture. Per the boundary doc's decision
+tree this points to `IOR1B` being an **unbonded top-edge IOT pad** (needs a board
+trace) and/or the run-state being fundamentally non-re-establishable from the MCU
+post-reset — i.e. **JTAG remains the unlock** (fresh config + no MCU reset).
+`spi3 armtest` stays in the tree as a ready probe for the JTAG session (where a
+fresh config means the baseline should free-run, not one-shot).
+
+> Note (`spi3 gowin` in this state): once the scope **user design** is running it
+> owns the SSPI port, so config-register reads (`0x11`/`0x41`) no longer reach the
+> config engine — they returned all-`00` here, *unlike* the all-`FF`/valid-IDCODE
+> seen when only the NV meter design is loaded. All-`00` on gowin is therefore a
+> rough *positive* indicator that a user design has the port, not a failure.

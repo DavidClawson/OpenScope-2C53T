@@ -436,6 +436,7 @@ static void cmd_help(void)
         "    f=prelude frame: 0 split(stock) 1 combined 2 merge15+3B; u=pre-upload gap; k<br>=cmd-phase clk div; tc<n>=trailing clocks\r\n"
         "    pe=probe SYSTEM_EDIT_MODE after 0x15 (STATUS@/256); rl=send 0x3C RELOAD before prelude; reports 0x41 STATUS\r\n"
         "spi3 acqread                    Read CH1/CH2 via real 0x04/0x05 protocol\r\n"
+        "spi3 armtest [pb11|pc6]         Pulse FPGA run/re-arm pin, re-cfg, acqread\r\n"
         "spi3 gowin                      Read+decode Gowin ID/USERCODE/STATUS regs\r\n"
         "spi3 scopetest [bank]           Full scope seq: USART cfg->PC0->0x04/05 read\r\n"
         "spi3 acqtest                    Decomposer Phase 20 validation test\r\n"
@@ -1177,6 +1178,18 @@ static void cmd_fpga_diag_clear(void)
 {
     fpga_diag_clear();
     usb_send_str("FPGA diagnostics cleared\r\n");
+}
+
+/* EXPERIMENTAL (experimental/esp32-bringup) — UNTESTED. Hand the SPI3 bus to
+ * an external SSPI master (ESP32) on the back-side test pads. Re-flash to undo. */
+static void cmd_fpga_bus_release(void)
+{
+    fpga_bus_release();
+    usb_send_str("SPI3 bus RELEASED to external master.\r\n");
+    usb_send_str("  PB3(SCK)/PB5(MOSI)/PB6(CS) -> Hi-Z, MCU off the bus.\r\n");
+    usb_send_str("  PB4(MISO) input (FPGA-driven, shared read).\r\n");
+    usb_send_str("  PC6=HIGH (SPI en), PB11=HIGH (active), PC9 power-hold kept.\r\n");
+    usb_send_str("  ESP32 may now drive SSPI. Re-flash/power-cycle to reclaim.\r\n");
 }
 
 static void cmd_fpga_stock_diag(void)
@@ -2139,6 +2152,79 @@ static void cmd_spi3_scopetest(const char *args)
     usb_send_str("(span>0 on either channel = the NV bitstream CAN do scope!)\r\n");
 }
 
+/* spi3 armtest [pb11|pc6] — the runtime-arm bench recipe from
+ * mcu_fpga_boundary_reconcile_2026-06-13.md (§5). The apicula netlist trace
+ * shows MISO (the sole IOBUF's SO.OEN) is gated by a free-running read-window
+ * counter that only advances while the FPGA's run/re-arm pad (IOR1B) is driven,
+ * and that re-arm runs through an async-preset (DFF.SET) *pulse* path — a held-
+ * HIGH level satisfies "active mode" but may never re-pulse the SET nets that
+ * restart capture after the first window (the "one buffer then stop" symptom).
+ * IOR1B maps to PB11 (ranked #1) or PC6 (#2) MCU-side. This command:
+ *   1. baseline acqread (static level — the failure we already see);
+ *   2. PULSE the run pin HIGH->LOW->HIGH (rising edge into the re-arm input);
+ *   3. re-issue the stock post-config control-register write
+ *      (01 08 / 02 03 / 06 00 / 07 00 / 08 AD; one bit feeds capture-enable);
+ *   4. acqread again.
+ * Predicted: span>0 after but not at baseline -> IOR1B<-this pin, runtime arm
+ * cracked. Still all-FF with pb11 -> rerun `spi3 armtest pc6`. Neither arms it
+ * -> the run line is an unbonded top-edge IOT pad and needs a board trace.
+ * Run on the FPGA_WARM_HANDOFF_TEST build (stock design alive in SRAM = gate 1
+ * satisfied) so only this runtime read path is under test. Polarity (HIGH=run)
+ * is a bench hypothesis — the netlist read is static-structural. */
+static void cmd_spi3_armtest(const char *args)
+{
+    gpio_type *port = GPIOB;
+    uint32_t   mask = (1u << 11);
+    const char *name = "PB11";
+    if (args && (args[0] == 'p' || args[0] == 'P') &&
+                (args[1] == 'c' || args[1] == 'C')) {
+        port = GPIOC; mask = (1u << 6); name = "PC6";
+    }
+
+    usb_send_str("=== armtest: pulse run pin -> control-reg -> acqread ===\r\n");
+    usb_debug_printf("run pin = %s   PB11=%d PC6=%d PC0(rdy)=%d\r\n", name,
+                     (GPIOB->idt & (1 << 11)) ? 1 : 0,
+                     (GPIOC->idt & (1 << 6)) ? 1 : 0,
+                     (GPIOC->idt & (1 << 0)) ? 1 : 0);
+
+    /* 1. Baseline: static level as-is (the held-HIGH "one buffer then stop"). */
+    usb_send_str("--- baseline (static level) ---\r\n");
+    cmd_spi3_acqread_one(0x04);
+    cmd_spi3_acqread_one(0x05);
+
+    /* 2. Pulse: idle-HIGH -> LOW -> HIGH. The LOW->HIGH rising edge is the
+     * candidate async-preset re-arm trigger (needs >25ns; we use ms). Ends in
+     * the run (HIGH) state. Repeat a few times. */
+    usb_send_str("--- pulsing run pin (HIGH->LOW->HIGH x3) ---\r\n");
+    for (int i = 0; i < 3; i++) {
+        port->clr = mask;                 /* LOW  */
+        vTaskDelay(pdMS_TO_TICKS(2));
+        port->scr = mask;                 /* HIGH (run) */
+        vTaskDelay(pdMS_TO_TICKS(2));
+    }
+
+    /* 3. Re-issue the stock post-config control-register write, CS-framed
+     * exactly as fpga.c step 7c (one bit of this feeds the capture-enable). */
+    static const uint8_t scope_cfg[][2] = {
+        { 0x01, 0x08 }, { 0x02, 0x03 }, { 0x06, 0x00 },
+        { 0x07, 0x00 }, { 0x08, 0xAD },
+    };
+    for (unsigned i = 0; i < sizeof(scope_cfg) / sizeof(scope_cfg[0]); i++) {
+        GPIOB->clr = (1 << 6);            /* CS LOW (PB6) */
+        (void)spi3_raw_xfer(scope_cfg[i][0]);
+        (void)spi3_raw_xfer(scope_cfg[i][1]);
+        GPIOB->scr = (1 << 6);            /* CS HIGH */
+    }
+    vTaskDelay(pdMS_TO_TICKS(5));
+
+    /* 4. Re-read. span>0 now (vs flat baseline) = the run-pin pulse armed it. */
+    usb_send_str("--- after pulse + control-reg ---\r\n");
+    cmd_spi3_acqread_one(0x04);
+    cmd_spi3_acqread_one(0x05);
+    usb_send_str("(span>0 here but not at baseline = IOR1B is this pin; arm cracked.\r\n"
+                 " all-FF with pb11 -> rerun `spi3 armtest pc6`.)\r\n");
+}
+
 /* fpga reinit [br] [prelude_gap_ms] [post_close_ms] — replay the full SPI3
  * config handshake on demand (prelude → 0x3B bitstream → 0x3A close → scope
  * config) and report the result. Lets us sweep the handshake parameters in
@@ -2382,6 +2468,8 @@ static void dispatch_command(char *line)
         cmd_fpga_frame(line + 11);
     } else if (strcmp(line, "fpga diag clear") == 0) {
         cmd_fpga_diag_clear();
+    } else if (strcmp(line, "fpga busrelease") == 0) {
+        cmd_fpga_bus_release();
     } else if (strcmp(line, "fpga stock diag") == 0) {
         cmd_fpga_stock_diag();
     } else if (strcmp(line, "fpga stock clear") == 0) {
@@ -2450,6 +2538,8 @@ static void dispatch_command(char *line)
         cmd_reboot_bootloader();
     } else if (strcmp(line, "spi3 acqread") == 0) {
         cmd_spi3_acqread();
+    } else if (strncmp(line, "spi3 armtest", 12) == 0) {
+        cmd_spi3_armtest(line[12] == ' ' ? line + 13 : "");
     } else if (strcmp(line, "spi3 gowin") == 0) {
         cmd_spi3_gowin();
     } else if (strncmp(line, "spi3 scopetest", 14) == 0) {

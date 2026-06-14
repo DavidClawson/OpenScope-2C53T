@@ -1311,6 +1311,10 @@ static void fpga_acquisition_task(void *pv)
 
         if (!fpga.initialized) continue;
 
+        /* Bus handed to an external SSPI master (fpga_bus_release) — stay
+         * off SPI3 entirely to avoid contention with the ESP32. */
+        if (fpga.bus_released) continue;
+
         /* Backoff: if we've timed out too many times, pause */
         if (fpga.spi3_timeout_count >= SPI3_BACKOFF_THRESHOLD) {
             fpga.spi3_timeout_count = 0;  /* Reset for next round */
@@ -2304,6 +2308,71 @@ void fpga_set_active(bool active)
         GPIOB->clr = PB11_MASK;   /* PB11 LOW */
     }
     fpga.spi3_active = active;
+}
+
+/* ═══════════════════════════════════════════════════════════════════
+ * SPI3 bus release — hand the bus to an external SSPI master (ESP32)
+ * ═══════════════════════════════════════════════════════════════════
+ *
+ * EXPERIMENTAL — UNTESTED ON HARDWARE (2026-06-14). See the experimental/
+ * esp32-bringup branch README (tools/esp32_sspi_bringup/).
+ *
+ * Purpose: make the MCU let go of the SPI3 lines (PB3 SCK, PB5 MOSI, PB6 CS)
+ * so an external 3.3 V SPI master soldered to the back-side SPI3 test pads
+ * (maksidze's #18 pad map) can drive the Gowin SSPI config interface itself —
+ * at a controlled slow clock — WITHOUT bus contention, and without the
+ * build → flash → pinhole-reset loop. The MCU keeps the board alive (PC9
+ * power hold is untouched) and stages the FPGA enables, then yields the bus.
+ *
+ * Why this lets the ESP32 win the bus:
+ *   - SPI3 is point-to-point (one master). Two masters driving SCK/MOSI/CS at
+ *     once = contention = garbage. So we MUST tri-state our driven lines.
+ *   - PB4 (MISO) is FPGA→MCU; it's already an input — the ESP32 also only
+ *     reads it, so no contention there. Left as-is.
+ *   - PB3 (SCK) and PB5 (MOSI) were AF push-pull outputs; PB6 (CS) was a GPIO
+ *     output. All three become floating inputs (true Hi-Z) here.
+ *
+ * Staging held for the FPGA (not on the ESP32's 4 pads, so the MCU owns them):
+ *   - PC6 = HIGH  (FPGA SPI enable)
+ *   - PB11 = HIGH (FPGA active mode)
+ *
+ * The acquisition task checks fpga.bus_released and stays off the bus while
+ * this is set (see fpga_acquisition_task). Re-flash to undo (no un-release
+ * command on purpose — the bench operator power-cycles or reflashes). */
+void fpga_bus_release(void)
+{
+    gpio_init_type gpio_cfg;
+
+    /* Latch the flag first so the acq task bails before re-touching SPI3. */
+    fpga.bus_released = true;
+    fpga.spi3_active = false;
+
+    /* Disable the SPI3 peripheral so it stops driving SCK/MOSI. */
+    FPGA_SPI->ctrl1 &= ~(1u << 6);   /* SPE = 0 */
+
+    /* Tri-state the MCU-driven SPI3 lines: PB3 (SCK), PB5 (MOSI), PB6 (CS).
+     * Floating input = Hi-Z, so the ESP32 owns these nets. */
+    gpio_default_para_init(&gpio_cfg);
+    gpio_cfg.gpio_mode = GPIO_MODE_INPUT;
+    gpio_cfg.gpio_pull = GPIO_PULL_NONE;
+    gpio_cfg.gpio_pins = GPIO_PINS_3 | GPIO_PINS_5 | GPIO_PINS_6;
+    gpio_init(GPIOB, &gpio_cfg);
+
+    /* PB4 (MISO) is already a floating input — leave it; both we and the
+     * ESP32 only ever read it, the FPGA drives it. */
+
+    /* Stage the FPGA enables the MCU still owns (not on the ESP32 pads). */
+    gpio_default_para_init(&gpio_cfg);
+    gpio_cfg.gpio_mode = GPIO_MODE_OUTPUT;
+    gpio_cfg.gpio_out_type = GPIO_OUTPUT_PUSH_PULL;
+    gpio_cfg.gpio_drive_strength = GPIO_DRIVE_STRENGTH_STRONGER;
+    gpio_cfg.gpio_pins = GPIO_PINS_11;          /* PB11 = active mode */
+    gpio_init(GPIOB, &gpio_cfg);
+    GPIOB->scr = PB11_MASK;                      /* PB11 HIGH */
+
+    gpio_cfg.gpio_pins = GPIO_PINS_6;            /* PC6 = SPI enable */
+    gpio_init(GPIOC, &gpio_cfg);
+    GPIOC->scr = PC6_MASK;                       /* PC6 HIGH */
 }
 
 void fpga_scope_reinit(void)

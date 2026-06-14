@@ -160,6 +160,9 @@ typedef struct {
     /* Status */
     volatile bool    initialized;      /* Boot sequence complete */
     volatile bool    spi3_active;      /* SPI3 acquisition running */
+    volatile bool    bus_released;     /* SPI3 bus handed to external SSPI
+                                        * master (ESP32) via fpga_bus_release();
+                                        * acq task stays off the bus while set */
     volatile uint16_t frame_count;     /* Data frame counter (0x5A 0xA5) */
     volatile uint16_t echo_count;     /* Echo frame counter (0xAA 0x55) */
     volatile uint16_t tx_count;       /* TX commands sent */
@@ -359,6 +362,14 @@ const volatile uint8_t *fpga_get_ch2_buf(void);
  * Must be HIGH during oscilloscope/meter operation.
  */
 void fpga_set_active(bool active);
+
+/*
+ * Release the SPI3 bus to an external SSPI master (ESP32) soldered to the
+ * back-side SPI3 test pads. Tri-states PB3/PB5/PB6, keeps PC6/PB11 staged,
+ * leaves PC9 power hold untouched. EXPERIMENTAL — see experimental/
+ * esp32-bringup branch (tools/esp32_sspi_bringup/). Re-flash to undo.
+ */
+void fpga_bus_release(void);
 
 /*
  * Enter oscilloscope mode: send FPGA scope configuration commands
