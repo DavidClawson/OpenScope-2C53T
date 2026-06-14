@@ -319,6 +319,17 @@ guest-usart-silent: CFLAGS += -DGUEST_BUILD -DFPGA_USART_SILENT_SCOPE=1
 guest-usart-silent: LDSCRIPT = ld/at32f403a_guest.ld
 guest-usart-silent: clean all
 
+# External-master bring-up build (guest image). fpga_init() brings up the
+# peripherals then calls fpga_bus_release() instead of its own SSPI upload:
+# tri-states PB3/PB5/PB6 (Hi-Z), stages PC6/PB11 HIGH, keeps PC9 power-hold,
+# creates no auto-tasks. Pairs FPGA_USART_SILENT_SCOPE to keep the wire fully
+# quiet, so the FPGA's config port is pristine for an external ESP32 (SSPI pads)
+# or FT232H (JTAG TAP pads, issue #18). UNTESTED. See fpga.c FPGA_BUS_RELEASED_BOOT
+# and tools/esp32_sspi_bringup/README.md.
+guest-bringup: CFLAGS += -DGUEST_BUILD -DFPGA_BUS_RELEASED_BOOT=1 -DFPGA_USART_SILENT_SCOPE=1
+guest-bringup: LDSCRIPT = ld/at32f403a_guest.ld
+guest-bringup: clean all
+
 # Flash app via USB HID bootloader (bootloader must be running)
 flash: $(BUILD_DIR)/$(TARGET).bin
 	uv run ../scripts/hid_flash.py $<

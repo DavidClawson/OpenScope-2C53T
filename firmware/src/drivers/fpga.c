@@ -302,6 +302,19 @@ static void spi3_pump(const uint8_t *tx, volatile uint8_t *rx, uint32_t n)
 #define FPGA_USART_SILENT_SCOPE  0
 #endif
 
+/* Boot-into-bus-released experiment (2026-06-14, experimental/esp32-bringup).
+ * For the external-master bench rig: the MCU brings up SPI3/USART/control pins,
+ * then — instead of running its own SSPI config upload — immediately hands the
+ * bus to an external master (ESP32 on the SPI3 pads, or an FT232H on the JTAG
+ * TAP pads @maksidze traced in #18). fpga_init() calls fpga_bus_release()
+ * (tri-states PB3/PB5/PB6, stages PC6/PB11 HIGH, PC9 power-hold kept) and bails
+ * before the meter frontend + meter USART traffic, so the FPGA's config port is
+ * pristine for JTAG/SSPI with ZERO MCU interference. No auto-tasks created.
+ * UNTESTED. See tools/esp32_sspi_bringup/README.md. Revert to 0 for normal builds. */
+#ifndef FPGA_BUS_RELEASED_BOOT
+#define FPGA_BUS_RELEASED_BOOT  0
+#endif
+
 static void spi3_set_br(uint32_t br)
 {
     FPGA_SPI->ctrl1 &= ~(1u << 6);              /* SPE = 0 */
@@ -2036,7 +2049,17 @@ void fpga_init(void)
      * handshake now lives in fpga_spi3_config_sequence() so the debug shell
      * (`fpga reinit`) can replay it on demand for fast iteration without a
      * reflash. Parameters let us sweep the variables under investigation. */
-#if FPGA_WARM_HANDOFF_TEST
+#if FPGA_BUS_RELEASED_BOOT
+    /* Boot-into-bus-released: hand SPI3 to an external master and stay off it.
+     * Do NOT run the MCU's SSPI config upload — leave the FPGA's config port
+     * pristine for an FT232H (JTAG TAP) or ESP32 (SSPI pads). fpga_bus_release()
+     * tri-states PB3/PB5/PB6, stages PC6/PB11 HIGH, keeps PC9 power-hold, and the
+     * acq task is gated off via fpga.bus_released. Mark init done and bail before
+     * the meter-frontend routing + meter USART traffic (keep the wire quiet). */
+    fpga.initialized = true;
+    fpga_bus_release();
+    return;
+#elif FPGA_WARM_HANDOFF_TEST
     /* Warm-handoff test: the FPGA was already configured (scope) by stock
      * before the no-power-loss handoff. Do NOT run the SSPI config sequence —
      * it would attempt a reconfig the running design ignores anyway, and we
@@ -2219,7 +2242,11 @@ QueueHandle_t fpga_create_tasks(void)
     spi3_acq_queue = xQueueCreate(15, sizeof(uint8_t));
     meter_sem      = xSemaphoreCreateBinary();
 
-#if FPGA_WARM_HANDOFF_TEST
+#if FPGA_BUS_RELEASED_BOOT
+    /* Bus-released boot: create NO auto-tasks — the MCU has handed SPI3 to an
+     * external master and must not drive the bus or send USART traffic. */
+    (void)tx_task_handle; (void)rx_task_handle; (void)acq_task_handle;
+#elif FPGA_WARM_HANDOFF_TEST
     /* Warm-handoff test: create NO auto-tasks. The acquisition task uses the
      * old 0x80|range read and would both disturb the FPGA and compete with the
      * manual `spi3 acqread` probe; the meter poll/USART tasks could switch the
