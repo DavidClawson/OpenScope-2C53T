@@ -96,7 +96,9 @@ git clone https://github.com/FreeRTOS/FreeRTOS-Kernel.git FreeRTOS
 cd firmware && make
 ```
 
-This populates `firmware/build/` with `firmware.bin`, `bootloader.bin`, and `option_bytes48.bin` (a 48-byte blob used by the one-time option-byte DFU write below).
+This populates `firmware/build/` with `firmware.bin` (the application) and `option_bytes48.bin` (a 48-byte blob used by the one-time option-byte DFU write below).
+
+> **`bootloader.bin` is built separately.** Plain `make` only builds the application. The USB HID bootloader is a separate target — run `make bootloader` to build it (output lands in `bootloader/build/bootloader.bin`). The first-time `make flash-all` step below builds it for you automatically, so you normally don't need to run `make bootloader` by hand.
 
 ### First-Time Hardware Setup
 
@@ -105,6 +107,8 @@ The first flash requires opening the case to enter the AT32's **ROM DFU mode** �
 > **Two bootloaders — don't confuse them.** *ROM DFU* (entered via BOOT0 + pinhole reset, LCD dark, `2e3c:df11`) is required for the one-time EOPB0 setup. The *USB HID bootloader* (Settings → Firmware Update, "BOOTLOADER MODE" on the LCD) handles every update after that but cannot write option bytes.
 
 **See the full walkthrough with photos: [DFU Mode Guide](docs/dfu_mode_guide.md)**
+
+> **Windows users:** community member [@baraa1936](https://github.com/baraa1936) wrote a screenshot-by-screenshot walkthrough for flashing from Windows using the Artery ISP GUI tool (including the EOPB0 / 224KB SRAM option-byte step) — see [issue #20](https://github.com/DavidClawson/OpenScope-2C53T/issues/20).
 
 The short version:
 
