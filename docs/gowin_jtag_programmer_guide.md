@@ -6,6 +6,43 @@ Goal: load the known-good scope bitstream into the FPGA's **volatile SRAM only**
 
 ---
 
+## Bench-day quick start — read this first
+
+Two questions that come up every time you set this up:
+
+**Q: "The FT232H programmer has several headers — do I need pins from all of them?"**
+**No. You need exactly 5 pins, all on the MPSSE / `AD` bank:** `AD0`, `AD1`, `AD2`, `AD3`, and `GND`. Leave everything else unconnected — the other I/O bank (`AC0–AC9`), `AD4–AD7`, and **especially the power pins (`5V` / `3V3` / `VBUS`)**. Do **not** wire FT232H power into the scope; the device powers its own FPGA and you only share **GND** as a signal reference. (This guide targets the **CJMCU-FT232H**; if your programmer is something else — a real Gowin dongle, an ESP32, etc. — tell me, the wiring differs.)
+
+**Q: "There are copper pads I have to solder onto — which ones?"**
+The **diagonal row of 5 gold/copper test pads right next to the FPGA.** Those are TMS/TCK/TDI/TDO + GND broken out from the leadless QFN (you can't solder the chip's own pads). Solder thin **magnet wire, 30–34 AWG**, scrape/tin the enamel first, and strain-relieve each joint (Kapton/hot-glue) — these pads lift if the wire flexes.
+**Ignore the 7-pin `M0..M3 / GND / VDD / VPP` header** for now — its labels are non-standard and unverified (§2). The 5 gold pads are the route.
+
+**The 5 wires** (confirm pad identity with the continuity trace in §4 before trusting this — it's 5 minutes and saves a TDI/TDO swap):
+
+| FPGA JTAG pad (QN48 pin) | → FT232H pin |
+|--------------------------|--------------|
+| **TCK** (pin 9)  | **AD0** |
+| **TDI** (pin 10) | **AD1** |
+| **TDO** (pin 11) | **AD2** |
+| **TMS** (pin 8)  | **AD3** |
+| **GND** (pin 2, or any board GND) | **GND** |
+
+**Then — device powered ON, FT232H plugged into USB:**
+```bash
+brew install openfpgaloader                       # once
+openFPGALoader -c ft232 --detect                  # GREEN LIGHT = IDCODE 0x0120681B
+openFPGALoader -c ft232 --freq 1000000 --detect   # if flaky, slow the clock to 1 MHz
+```
+Only after `--detect` succeeds, load the bitstream to **SRAM** (volatile, safe, reversible by power-cycle):
+```bash
+openFPGALoader -c ft232 -m --file-type bin fpga_bitstream/scope_bitstream_2c53t_v120.bin
+```
+🚫 **Never use `-f` or any flag containing `flash`** — it overwrites the FPGA's only copy of the meter design. The only safe load is `-m` (SRAM); `--detect` and `--read-register` are read-only.
+
+The rest of this document is the full reference: safety detail (§0), package/pinout proof (§1), the M0-M3 header analysis (§2), exact MPSSE wiring (§3), the continuity-trace procedure (§4), and every openFPGALoader command incl. status readback (§5).
+
+---
+
 ## 0. SAFETY CHECKLIST — read before connecting anything
 
 - [ ] **SRAM ONLY. NEVER flash.** Do not use `-f` / `--write-flash` / `--external-flash` / `--user-flash`. Those write the internal NV flash = the only copy of the stock meter design. There is no undo.
