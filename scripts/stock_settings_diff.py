@@ -12,6 +12,8 @@ import argparse
 import json
 from pathlib import Path
 
+import stock_settings
+
 
 def changed_ranges(before: bytes, after: bytes, *, max_gap: int = 0) -> list[tuple[int, int]]:
     if len(before) != len(after):
@@ -68,6 +70,10 @@ def _hex_window(data: bytes, start: int, end: int, context: int) -> str:
     return data[window_start:window_end].hex(" ")
 
 
+def field_labels(start: int, end: int) -> list[dict[str, object]]:
+    return stock_settings.fields_overlapping(start, end)
+
+
 def build_report(
     before: bytes,
     after: bytes,
@@ -96,6 +102,8 @@ def build_report(
                 "changed_bytes": end - start,
                 "before": _hex_window(before, start, end, context),
                 "after": _hex_window(after, start, end, context),
+                "known_fields": field_labels(start, end),
+                "contains_unknown_stock_settings_bytes": not field_labels(start, end),
             }
             for start, end in shown
         ],
@@ -119,6 +127,13 @@ def print_text_report(report: dict[str, object]) -> None:
         )
         print(f"    before: {item['before']}")
         print(f"    after:  {item['after']}")
+        if item["known_fields"]:
+            labels = ", ".join(
+                f"{field['name']}:{field['confidence']}" for field in item["known_fields"]
+            )
+            print(f"    known fields: {labels}")
+        else:
+            print("    known fields: none")
     if report["range_output_truncated"]:
         print("  ... range output truncated")
 

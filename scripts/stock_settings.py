@@ -32,6 +32,93 @@ OFFSET_SAVED_MODE = 0x30
 SIGNATURE_NORMAL_RESTORE = 0x55
 SIGNATURE_METER_RESTORE = 0xAA
 
+RECOVERED_FIELDS = [
+    {
+        "name": "signature",
+        "offset": OFFSET_SIGNATURE,
+        "size": 1,
+        "confidence": "high",
+        "description": "0x55 normal restore, 0xAA meter restore, other invalid/defaults",
+    },
+    {
+        "name": "meter_mode",
+        "offset": OFFSET_METER_MODE,
+        "size": 1,
+        "confidence": "medium",
+        "description": "restored to ms[0x02], then passed to stock meter-mode select",
+    },
+    {
+        "name": "meter_range_word",
+        "offset": OFFSET_METER_RANGE,
+        "size": 4,
+        "confidence": "medium",
+        "description": "restored to ms[0x03..0x06]",
+    },
+    {
+        "name": "timebase_range",
+        "offset": OFFSET_TIMEBASE_RANGE,
+        "size": 1,
+        "confidence": "medium",
+        "description": "restored to ms[0x16]",
+    },
+    {
+        "name": "timebase_mode",
+        "offset": OFFSET_TIMEBASE_MODE,
+        "size": 1,
+        "confidence": "medium",
+        "description": "restored to ms[0x17]",
+    },
+    {
+        "name": "coupling",
+        "offset": OFFSET_COUPLING,
+        "size": 1,
+        "confidence": "medium",
+        "description": "restored to ms[0x2D]",
+    },
+    {
+        "name": "trigger_mode",
+        "offset": OFFSET_TRIGGER_MODE,
+        "size": 1,
+        "confidence": "medium",
+        "description": "restored to ms[0x35]",
+    },
+    {
+        "name": "saved_operational_mode",
+        "offset": OFFSET_SAVED_OPERATIONAL_MODE,
+        "size": 1,
+        "confidence": "partial",
+        "description": "restored to ms[0xF39]; older notes disagree on exact runtime meaning",
+    },
+    {
+        "name": "mode_data_word",
+        "offset": OFFSET_MODE_DATA,
+        "size": 4,
+        "confidence": "partial",
+        "description": "restored to ms[0xF60..0xF63]",
+    },
+    {
+        "name": "saved_mode_word",
+        "offset": OFFSET_SAVED_MODE,
+        "size": 2,
+        "confidence": "partial",
+        "description": "restored to ms[0xF64..0xF65]; nonzero low byte enables stock meter USART boot tail",
+    },
+]
+
+
+def recovered_fields() -> list[dict[str, object]]:
+    return [dict(field) for field in RECOVERED_FIELDS]
+
+
+def fields_overlapping(start: int, end: int) -> list[dict[str, object]]:
+    matches = []
+    for field in RECOVERED_FIELDS:
+        field_start = int(field["offset"])
+        field_end = field_start + int(field["size"])
+        if start < field_end and end > field_start:
+            matches.append(dict(field))
+    return matches
+
 
 def _require_size(data: bytes, size: int = STOCK_SAVED_CONFIG_SIZE) -> None:
     if len(data) < size:
@@ -139,6 +226,7 @@ def patch_startup_multimeter(data: bytes) -> tuple[bytes, list[dict[str, int]]]:
     updates = {
         OFFSET_SIGNATURE: SIGNATURE_METER_RESTORE,
         OFFSET_SAVED_MODE: 0x01,
+        OFFSET_SAVED_MODE + 1: 0x00,
     }
     for offset, new_value in updates.items():
         old_value = patched[offset]
@@ -232,6 +320,10 @@ def build_parser() -> argparse.ArgumentParser:
     inspect.add_argument("--json", action="store_true")
     inspect.set_defaults(func=cmd_inspect)
 
+    fields = sub.add_parser("fields", help="list recovered stock saved-settings fields")
+    fields.add_argument("--json", action="store_true")
+    fields.set_defaults(func=cmd_fields)
+
     patch = sub.add_parser(
         "patch-startup-multimeter",
         help="write an offline copy that asks stock to start in multimeter mode",
@@ -242,6 +334,22 @@ def build_parser() -> argparse.ArgumentParser:
     patch.set_defaults(func=cmd_patch_startup_multimeter)
 
     return parser
+
+
+def cmd_fields(args: argparse.Namespace) -> int:
+    fields = recovered_fields()
+    if args.json:
+        print(json.dumps(fields, indent=2, sort_keys=True))
+    else:
+        for field in fields:
+            start = int(field["offset"])
+            end = start + int(field["size"])
+            print(
+                f"0x{STOCK_SAVED_CONFIG_ADDRESS + start:08X}.."
+                f"0x{STOCK_SAVED_CONFIG_ADDRESS + end:08X} "
+                f"{field['name']} ({field['confidence']}): {field['description']}"
+            )
+    return 0
 
 
 def main() -> int:

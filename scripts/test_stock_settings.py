@@ -56,13 +56,17 @@ def main() -> int:
     if meter["startup_mode"]["mode"] != "multimeter":
         raise SystemExit(f"unexpected meter startup inference: {meter['startup_mode']}")
 
-    patched, changes = stock.patch_startup_multimeter(sample_blob())
-    if patched[0] != 0xAA or patched[0x30] != 1:
+    patched, changes = stock.patch_startup_multimeter(sample_blob(saved_mode=0x2200))
+    if patched[0] != 0xAA or patched[0x30:0x32] != b"\x01\x00":
         raise SystemExit("startup multimeter patch missed required bytes")
-    if [(item["offset"], item["new"]) for item in changes] != [(0x00, 0xAA), (0x30, 0x01)]:
+    if [(item["offset"], item["new"]) for item in changes] != [(0x00, 0xAA), (0x30, 0x01), (0x31, 0x00)]:
         raise SystemExit(f"unexpected changes: {changes}")
-    if patched[0x31] != sample_blob()[0x31] or patched[0x32:] != sample_blob()[0x32:]:
+    if patched[0x32:] != sample_blob(saved_mode=0x2200)[0x32:]:
         raise SystemExit("patch touched bytes outside the guarded offsets")
+
+    fields = stock.recovered_fields()
+    if not any(field["name"] == "saved_mode_word" and field["offset"] == 0x30 for field in fields):
+        raise SystemExit("recovered field inventory lost saved_mode_word")
 
     try:
         stock.patch_startup_multimeter(bytes([0xFF]) * 0x1000)
@@ -84,7 +88,7 @@ def main() -> int:
         )
         if proc.returncode != 0:
             raise SystemExit(proc.stderr)
-        if out.read_bytes()[0] != 0xAA or out.read_bytes()[0x30] != 1:
+        if out.read_bytes()[0] != 0xAA or out.read_bytes()[0x30:0x32] != b"\x01\x00":
             raise SystemExit("CLI patch output is wrong")
 
     print("1 test OK")

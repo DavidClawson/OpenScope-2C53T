@@ -22,13 +22,16 @@ def main() -> int:
     diff = load_module()
     before = bytearray(b"\xFF" * 0x3000)
     after = bytearray(before)
+    after[0x0000] = 0x55
+    after[0x0030] = 0x01
+    after[0x0031] = 0x00
     after[0x1002] = 0x55
     after[0x1003] = 0xAA
     after[0x1FFC] = 0x10
     after[0x2000] = 0x20
 
     ranges = diff.changed_ranges(bytes(before), bytes(after))
-    if ranges != [(0x1002, 0x1004), (0x1FFC, 0x1FFD), (0x2000, 0x2001)]:
+    if ranges != [(0x0000, 0x0001), (0x0030, 0x0032), (0x1002, 0x1004), (0x1FFC, 0x1FFD), (0x2000, 0x2001)]:
         raise SystemExit(f"unexpected ranges: {ranges}")
 
     report = diff.build_report(
@@ -40,12 +43,16 @@ def main() -> int:
         context=1,
         max_ranges=8,
     )
-    if report["changed_bytes"] != 4:
+    if report["changed_bytes"] != 7:
         raise SystemExit("wrong changed byte count")
-    if report["ranges"][0]["address_start"] != 0x08007002:
+    if report["ranges"][0]["known_fields"][0]["name"] != "signature":
+        raise SystemExit(f"signature range not labelled: {report['ranges'][0]}")
+    if report["ranges"][1]["known_fields"][0]["name"] != "saved_mode_word":
+        raise SystemExit(f"saved-mode range not labelled: {report['ranges'][1]}")
+    if report["ranges"][2]["address_start"] != 0x08007002:
         raise SystemExit("wrong address mapping")
     sectors = report["sectors"]
-    if [item["changed_bytes"] for item in sectors] != [3, 1]:
+    if [item["changed_bytes"] for item in sectors] != [3, 3, 1]:
         raise SystemExit(f"wrong sector summary: {sectors}")
 
     print("1 test OK")
