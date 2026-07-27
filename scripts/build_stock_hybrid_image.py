@@ -122,13 +122,14 @@ def patch_stock_fast_splash(stock: bytes) -> bytes:
     return bytes(patched)
 
 
-def patch_stock_runtime(stock: bytes) -> bytes:
+def patch_stock_runtime(stock: bytes, *, fast_splash: bool = True) -> bytes:
     stock = patch_stock_power_hold(stock)
-    stock = patch_stock_fast_splash(stock)
+    if fast_splash:
+        stock = patch_stock_fast_splash(stock)
     return stock
 
 
-def build(stock: bytes, dispatcher: bytes) -> tuple[bytes, list[str]]:
+def build(stock: bytes, dispatcher: bytes, *, fast_splash: bool = True) -> tuple[bytes, list[str]]:
     errors = validate_stock(stock) + validate_dispatcher(dispatcher)
     worst_len = max(STOCK_APP_OFFSET + len(stock), HIGH_DISPATCHER_OFFSET + len(dispatcher))
     if FLASH_BASE + worst_len > HIGH_RECOVERY_ADDRESS:
@@ -138,16 +139,22 @@ def build(stock: bytes, dispatcher: bytes) -> tuple[bytes, list[str]]:
     if errors:
         raise SystemExit("stock user image rejected:\n  - " + "\n  - ".join(errors))
 
-    stock = patch_stock_runtime(stock)
+    stock = patch_stock_runtime(stock, fast_splash=fast_splash)
     dispatcher_rv = word(dispatcher, 4)
     image = bytearray(b"\xFF" * worst_len)
     image[0:4] = stock[0:4]
     image[4:8] = dispatcher_rv.to_bytes(4, "little")
     image[STOCK_APP_OFFSET:STOCK_APP_OFFSET + len(stock)] = stock
     image[HIGH_DISPATCHER_OFFSET:HIGH_DISPATCHER_OFFSET + len(dispatcher)] = dispatcher
+    stock_patch_note = "PC9 clear NOP patched"
+    if fast_splash:
+        stock_patch_note += ", fast splash patched"
+    else:
+        stock_patch_note += ", stock splash kept"
+
     return bytes(image), [
         f"0x08000004: low vector -> 0x{dispatcher_rv:08X}",
-        f"0x{STOCK_APP_ADDRESS:08X}: stock APP bytes ({len(stock)} bytes, PC9 clear NOP patched, fast splash patched)",
+        f"0x{STOCK_APP_ADDRESS:08X}: stock APP bytes ({len(stock)} bytes, {stock_patch_note})",
         f"0x{HIGH_DISPATCHER_ADDRESS:08X}: stock launcher ({len(dispatcher)} bytes)",
     ]
 
@@ -157,11 +164,16 @@ def main() -> int:
     parser.add_argument("--stock", type=Path, default=DEFAULT_STOCK)
     parser.add_argument("--stock-dispatcher", type=Path, default=DEFAULT_STOCK_DISPATCHER)
     parser.add_argument("--out", type=Path, default=DEFAULT_OUT)
+    parser.add_argument(
+        "--keep-splash",
+        action="store_true",
+        help="leave the stock FNIRSI splash animation untouched for A/B boot timing tests",
+    )
     args = parser.parse_args()
 
     stock = args.stock.read_bytes()
     dispatcher = args.stock_dispatcher.read_bytes()
-    image, layout = build(stock, dispatcher)
+    image, layout = build(stock, dispatcher, fast_splash=not args.keep_splash)
     args.out.parent.mkdir(parents=True, exist_ok=True)
     args.out.write_bytes(image)
 

@@ -75,6 +75,14 @@ def main() -> int:
     if not any("fast splash patched" in item for item in layout):
         raise SystemExit("layout output does not mention the fast splash patch")
 
+    slow_image, slow_layout = builder.build(stock, dispatcher, fast_splash=False)
+    if slow_image[image_clear] != builder.STOCK_PC9_CLEAR_PATCH:
+        raise SystemExit("keep-splash image lost the PC9 clear patch")
+    if slow_image[image_splash] != builder.STOCK_SPLASH_INITIAL_STEP_ORIGINAL:
+        raise SystemExit("keep-splash image still changed the stock splash step")
+    if not any("stock splash kept" in item for item in slow_layout):
+        raise SystemExit("layout output does not mention the kept stock splash")
+
     print("1 test OK")
     return 0
 

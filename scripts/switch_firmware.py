@@ -179,6 +179,8 @@ def build_stock_user_image(args: argparse.Namespace) -> int:
         "--out",
         str(args.out),
     ]
+    if args.keep_splash:
+        builder_cmd.append("--keep-splash")
     return run(builder_cmd, dry_run=args.dry_run)
 
 
@@ -239,6 +241,7 @@ def build_parser() -> argparse.ArgumentParser:
     stock.add_argument("--out", type=Path, default=DEFAULT_STOCK_USER)
     stock.add_argument("--flash", action="store_true", help="flash and run stock through high HID recovery")
     stock.add_argument("--no-jump", action="store_true", help="flash but leave the bootloader running")
+    stock.add_argument("--keep-splash", action="store_true", help="do not fast-forward the stock FNIRSI splash")
     stock.add_argument("--dry-run", action="store_true", help="print commands but do not execute them")
     stock.set_defaults(func=cmd_stock)
 

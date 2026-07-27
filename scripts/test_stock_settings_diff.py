@@ -55,6 +55,25 @@ def main() -> int:
     if [item["changed_bytes"] for item in sectors] != [3, 3, 1]:
         raise SystemExit(f"wrong sector summary: {sectors}")
 
+    language_before = bytearray(b"\xFF" * 0x100)
+    language_after = bytearray(language_before)
+    language_after[0x80] = 0x02
+    language_report = diff.build_report(
+        bytes(language_before),
+        bytes(language_after),
+        base_address=0x08006000,
+        sector_size=0x1000,
+        max_gap=0,
+        context=1,
+        max_ranges=8,
+        focus="language",
+    )
+    focus = language_report["focus"]
+    if focus["confidence"] != "candidate":
+        raise SystemExit(f"single unknown language change not ranked as candidate: {focus}")
+    if focus["candidate_ranges"][0]["address_start"] != 0x08006080:
+        raise SystemExit(f"wrong language candidate address: {focus}")
+
     print("1 test OK")
     return 0
 

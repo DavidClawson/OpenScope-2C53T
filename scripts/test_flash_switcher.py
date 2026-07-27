@@ -81,6 +81,7 @@ class FlashSafetyTests(unittest.TestCase):
             "out": switch_firmware.DEFAULT_STOCK_USER,
             "flash": False,
             "no_jump": False,
+            "keep_splash": False,
             "dry_run": True,
         })()
         with contextlib.redirect_stdout(out):
@@ -102,6 +103,7 @@ class FlashSafetyTests(unittest.TestCase):
             "out": switch_firmware.DEFAULT_STOCK_USER,
             "flash": True,
             "no_jump": False,
+            "keep_splash": False,
             "dry_run": True,
         })()
         with contextlib.redirect_stdout(out):
@@ -117,6 +119,26 @@ class FlashSafetyTests(unittest.TestCase):
         self.assertIn("--preserve-blank-blocks-range 0x08006000:0x08007000", text)
         self.assertIn("--preserve-blank-blocks-from 0x080BE800", text)
         self.assertIn("--run-address 0x08000000", text)
+
+    def test_stock_keep_splash_dry_run_passes_builder_flag(self) -> None:
+        path = switch_firmware.DEFAULT_STOCK
+        if not path.exists():
+            self.skipTest("stock archive image is not present")
+        out = io.StringIO()
+        args = type("Args", (), {
+            "image": path,
+            "out": switch_firmware.DEFAULT_STOCK_USER,
+            "flash": False,
+            "no_jump": False,
+            "keep_splash": True,
+            "dry_run": True,
+        })()
+        with contextlib.redirect_stdout(out):
+            rc = switch_firmware.cmd_stock(args)
+        text = out.getvalue()
+        self.assertEqual(rc, 0)
+        self.assertIn(str(switch_firmware.STOCK_BUILDER), text)
+        self.assertIn("--keep-splash", text)
 
     def test_inspect_reports_stock_and_openscope_do_not_fit_together(self) -> None:
         stock = switch_firmware.DEFAULT_STOCK

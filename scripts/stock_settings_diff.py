@@ -83,17 +83,16 @@ def build_report(
     max_gap: int,
     context: int,
     max_ranges: int,
+    focus: str | None = None,
 ) -> dict[str, object]:
     ranges = changed_ranges(before, after, max_gap=max_gap)
     changed = sum(end - start for start, end in ranges)
     shown = ranges[:max_ranges]
+    range_reports = []
 
-    return {
-        "base_address": base_address,
-        "size": len(before),
-        "changed_bytes": changed,
-        "range_count": len(ranges),
-        "ranges": [
+    for start, end in shown:
+        labels = field_labels(start, end)
+        range_reports.append(
             {
                 "offset_start": start,
                 "offset_end": end,
@@ -102,13 +101,56 @@ def build_report(
                 "changed_bytes": end - start,
                 "before": _hex_window(before, start, end, context),
                 "after": _hex_window(after, start, end, context),
-                "known_fields": field_labels(start, end),
-                "contains_unknown_stock_settings_bytes": not field_labels(start, end),
+                "known_fields": labels,
+                "contains_unknown_stock_settings_bytes": not labels,
             }
-            for start, end in shown
-        ],
+        )
+
+    report: dict[str, object] = {
+        "base_address": base_address,
+        "size": len(before),
+        "changed_bytes": changed,
+        "range_count": len(ranges),
+        "ranges": range_reports,
         "range_output_truncated": len(ranges) > len(shown),
         "sectors": sector_summary(ranges, sector_size),
+    }
+    if focus:
+        report["focus"] = build_focus_report(focus, range_reports)
+    return report
+
+
+def build_focus_report(focus: str, ranges: list[dict[str, object]]) -> dict[str, object]:
+    if focus != "language":
+        raise ValueError(f"unsupported focus: {focus}")
+
+    known = [item for item in ranges if item["known_fields"]]
+    candidates = [
+        item for item in ranges
+        if not item["known_fields"] and int(item["changed_bytes"]) <= 4
+    ]
+
+    if len(candidates) == 1 and not known:
+        confidence = "candidate"
+        reason = "exactly one small changed range outside the recovered stock fields"
+    elif not candidates:
+        confidence = "missing"
+        reason = "no small unknown changed range was visible in the displayed diff ranges"
+    else:
+        confidence = "ambiguous"
+        reason = "multiple unknown ranges or recovered stock fields changed too"
+
+    return {
+        "setting": "language",
+        "confidence": confidence,
+        "reason": reason,
+        "known_field_changes": known,
+        "candidate_ranges": candidates,
+        "note": (
+            "The stock language field is not recovered yet. Treat these as "
+            "paired-dump candidates only; do not patch a candidate without a "
+            "second confirmation dump."
+        ),
     }
 
 
@@ -146,6 +188,18 @@ def print_text_report(report: dict[str, object]) -> None:
             f"{item['changed_bytes']} changed bytes"
         )
 
+    focus = report.get("focus")
+    if focus:
+        print(f"Focus: {focus['setting']}")
+        print(f"  confidence: {focus['confidence']}")
+        print(f"  reason: {focus['reason']}")
+        for item in focus["candidate_ranges"]:
+            print(
+                "  candidate: "
+                f"0x{item['address_start']:08X}..0x{item['address_end']:08X} "
+                f"({item['changed_bytes']} bytes)"
+            )
+
 
 def main() -> int:
     parser = argparse.ArgumentParser(description="Diff two read-only stock settings / flash dumps")
@@ -156,6 +210,11 @@ def main() -> int:
     parser.add_argument("--max-gap", type=lambda x: int(x, 0), default=0)
     parser.add_argument("--context", type=lambda x: int(x, 0), default=8)
     parser.add_argument("--max-ranges", type=int, default=64)
+    parser.add_argument(
+        "--focus",
+        choices=["language"],
+        help="rank candidates for a specific unrecovered setting from paired dumps",
+    )
     parser.add_argument("--json", action="store_true", help="emit machine-readable JSON")
     args = parser.parse_args()
 
@@ -167,6 +226,7 @@ def main() -> int:
         max_gap=args.max_gap,
         context=args.context,
         max_ranges=args.max_ranges,
+        focus=args.focus,
     )
     if args.json:
         print(json.dumps(report, indent=2, sort_keys=True))
