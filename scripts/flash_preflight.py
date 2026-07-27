@@ -20,6 +20,7 @@ APP_ADDRESS = 0x08004000
 APP_SETTINGS_ADDRESS = 0x080FF800
 APP_SLOT_END_ADDRESS = 0x080F0000
 HIGH_BOOTLOADER_ADDRESS = APP_SLOT_END_ADDRESS
+HIGH_DISPATCHER_ADDRESS = 0x080E0000
 FLASH_MAX = 0x08100000
 RAM_MASK = 0xFFF00000
 RAM_BASE = 0x20000000
@@ -111,11 +112,20 @@ def validate_bootloader_payload(data: bytes) -> list[str]:
 
 
 def validate_stage0_payload(data: bytes) -> list[str]:
-    _sp, rv, errors = validate_vectors(data, FLASH_BASE, app_slot=False)
+    sp, rv = read_vectors(data)
+    errors: list[str] = []
+    if (sp & RAM_MASK) != RAM_BASE:
+        errors.append(f"stack pointer 0x{sp:08X} is not in SRAM")
     if len(data) > 0x800:
         errors.append("stage0 payload exceeds the 2KB low-flash sector")
-    if not (FLASH_BASE <= rv < FLASH_BASE + 0x800):
-        errors.append(f"stage0 reset vector 0x{rv:08X} is not inside the stage0 sector")
+    if not (
+        FLASH_BASE <= rv < FLASH_BASE + 0x800
+        or HIGH_DISPATCHER_ADDRESS <= rv < HIGH_BOOTLOADER_ADDRESS
+    ):
+        errors.append(
+            f"stage0 reset vector 0x{rv:08X} is neither inside the stage0 sector "
+            "nor the stock-switcher high dispatcher window"
+        )
     return errors
 
 
@@ -476,7 +486,7 @@ def preflight_rom_dfu_high_layout(args: argparse.Namespace) -> int:
         if len(option) != 48:
             errors.append("option-bytes blob must be exactly 48 bytes for this ROM DFU descriptor")
 
-    _stage0_kind, stage0_report_errors = print_image_report(
+    _stage0_kind, _stage0_report_errors = print_image_report(
         "ROM DFU stage0 image", args.stage0, stage0, FLASH_BASE, False
     )
     _high_kind, high_report_errors = print_image_report(
@@ -487,7 +497,6 @@ def preflight_rom_dfu_high_layout(args: argparse.Namespace) -> int:
         True,
     )
     _app_kind, app_report_errors = print_image_report("ROM DFU app image", args.image, app, APP_ADDRESS, True)
-    errors.extend(stage0_report_errors)
     errors.extend(high_report_errors)
     errors.extend(app_report_errors)
     if _app_kind == "stock-app":

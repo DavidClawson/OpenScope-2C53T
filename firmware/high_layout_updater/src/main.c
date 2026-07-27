@@ -14,6 +14,7 @@
 
 #define FLASH_BASE_ADDRESS             0x08000000u
 #define FLASH_APP_ADDRESS              0x08004000u
+#define HIGH_DISPATCHER_ADDRESS        0x080E0000u
 #define HIGH_BOOTLOADER_ADDRESS        0x080F0000u
 #define FLASH_MAX_ADDRESS              0x08100000u
 #define STAGE0_REGION_SIZE             0x800u
@@ -59,7 +60,8 @@ static int valid_stage0_payload(void)
     if ((sp & RAM_MASK) != RAM_BASE) {
         return 0;
     }
-    if (rv < FLASH_BASE_ADDRESS || rv >= FLASH_BASE_ADDRESS + STAGE0_REGION_SIZE) {
+    if (!((rv >= FLASH_BASE_ADDRESS && rv < FLASH_BASE_ADDRESS + STAGE0_REGION_SIZE) ||
+          (rv >= HIGH_DISPATCHER_ADDRESS && rv < HIGH_BOOTLOADER_ADDRESS))) {
         return 0;
     }
     if (((uintptr_t)stage0_payload & 3u) != 0u) {

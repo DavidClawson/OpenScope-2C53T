@@ -64,11 +64,23 @@ class BootloaderUpdaterPreflightTests(unittest.TestCase):
         )
         self.assertEqual(errors, [])
 
+    def test_valid_stock_switcher_low_vector_payload(self) -> None:
+        errors = flash_preflight.validate_stage0_payload(
+            image(0x20036F90, flash_preflight.HIGH_DISPATCHER_ADDRESS + 0x415, 2048)
+        )
+        self.assertEqual(errors, [])
+
     def test_stage0_payload_must_fit_one_sector(self) -> None:
         errors = flash_preflight.validate_stage0_payload(
             image(0x20037FE0, flash_preflight.FLASH_BASE + 0x101, 4096)
         )
         self.assertTrue(any("2KB" in err for err in errors))
+
+    def test_stage0_payload_rejects_high_recovery_vector(self) -> None:
+        errors = flash_preflight.validate_stage0_payload(
+            image(0x20037FE0, flash_preflight.HIGH_BOOTLOADER_ADDRESS + 0x101, 1024)
+        )
+        self.assertTrue(any("stock-switcher high dispatcher" in err for err in errors))
 
     def test_valid_high_bootloader_payload(self) -> None:
         errors = flash_preflight.validate_high_bootloader_payload(
