@@ -10,7 +10,7 @@
  *   1. PC9 HIGH (power hold) — must be first or device shuts off
  *   2. Check RAM magic at 0x20037FE0 → enter USB HID IAP
  *   2.5 Check boot counter ≥ 3 → safe mode entry
- *   3. Delayed POWER button check (800ms) → hold POWER at boot = force bootloader
+ *   3. POWER+PRM check → explicit recovery entry
  *   4. Check flash upgrade flag → jump to app at 0x08004000
  *   5. Otherwise → enter USB HID IAP (no valid app)
  *
@@ -264,7 +264,7 @@ static void lcd_draw_bootloader_screen(void)
     /* Instructions */
     lcd_draw_string_center(160, 180, "Run: make flash", 0xBDF7, 0x0008, 1);
     lcd_draw_string_center(160, 195, "POWER+PRM at boot = bootloader", 0xBDF7, 0x0008, 1);
-    lcd_draw_string_center(160, 210, "Hold POWER here   = boot to app", 0xBDF7, 0x0008, 1);
+    lcd_draw_string_center(160, 210, "Hold POWER here   = boot target", 0xBDF7, 0x0008, 1);
 }
 
 void lcd_draw_iap_status(const char *status)
@@ -452,11 +452,10 @@ int main(void)
 
     /* 2.5: Button-based bootloader entry.
      *
-     * Two methods:
-     *   A) POWER + PRM held simultaneously — immediate entry, no timing dance.
-     *      Checked early (200ms) so it's hard to miss. This is the recommended
-     *      recovery method when the app is crashing.
-     *   B) POWER held alone for 800ms — original method, still works.
+     * POWER alone is the normal battery-power-on gesture and reads LOW while
+     * the user is turning the device on.  Treating it as recovery makes
+     * battery-only stock boots land in HID recovery; requiring PRM keeps normal
+     * power-on and explicit recovery separate.
      *
      * PRM (PB7) was chosen because it's a passive button (not in the scan
      * matrix), easy to reach, and unlikely to be held accidentally. */
@@ -464,18 +463,10 @@ int main(void)
         power_button_init();
         prm_button_init();
 
-        /* Quick check: POWER + PRM combo (200ms debounce) */
+        /* POWER + PRM combo (200ms debounce) */
         busy_delay_ms(200);
         if (power_button_pressed() && prm_button_pressed()) {
             enter_bootloader = 1;
-        }
-
-        /* Longer check: POWER alone (800ms total from boot) */
-        if (!enter_bootloader) {
-            busy_delay_ms(600);  /* 200 + 600 = 800ms total */
-            if (power_button_pressed()) {
-                enter_bootloader = 1;
-            }
         }
     }
 
