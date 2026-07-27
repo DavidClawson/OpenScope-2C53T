@@ -83,6 +83,19 @@ def main() -> int:
     if not any("stock splash kept" in item for item in slow_layout):
         raise SystemExit("layout output does not mention the kept stock splash")
 
+    report = builder.runtime_patch_report()
+    if report["estimated_fast_splash_saved_ms"] != 768:
+        raise SystemExit(f"wrong splash delay estimate: {report}")
+    if report["hardware_init_skipped_by_fast_splash"] is not False:
+        raise SystemExit(f"fast splash report overclaims hardware init changes: {report}")
+    if not any(item["name"] == "pc9_power_hold" and item["enabled"] for item in report["patches"]):
+        raise SystemExit(f"patch report lost mandatory PC9 power-hold patch: {report}")
+    slow_report = builder.runtime_patch_report(fast_splash=False)
+    if slow_report["estimated_fast_splash_saved_ms"] != 0:
+        raise SystemExit(f"keep-splash report still claims boot-time savings: {slow_report}")
+    if any(item["name"] == "fnirsi_fast_splash" and item["enabled"] for item in slow_report["patches"]):
+        raise SystemExit(f"keep-splash report still enables the splash patch: {slow_report}")
+
     print("1 test OK")
     return 0
 

@@ -12,6 +12,7 @@ from __future__ import annotations
 
 import argparse
 import hashlib
+import json
 from pathlib import Path
 
 
@@ -41,6 +42,7 @@ STOCK_PC9_REASSERT_ORIGINAL = b"\x10\x61"  # str r0, [r2, #0x10]; GPIOC_BOP
 STOCK_SPLASH_INITIAL_STEP_OFFSET = 0x00024506
 STOCK_SPLASH_INITIAL_STEP_ORIGINAL = b"\x00\x20"  # movs r0, #0
 STOCK_SPLASH_INITIAL_STEP_PATCH = b"\xff\x20"  # movs r0, #255
+STOCK_SPLASH_DELAY_MS = 256 * 3
 
 
 def sha256(data: bytes) -> str:
@@ -129,6 +131,48 @@ def patch_stock_runtime(stock: bytes, *, fast_splash: bool = True) -> bytes:
     return stock
 
 
+def runtime_patch_report(*, fast_splash: bool = True) -> dict[str, object]:
+    patches = [
+        {
+            "name": "pc9_power_hold",
+            "kind": "safety",
+            "file_offset": STOCK_PC9_CLEAR_OFFSET,
+            "stock_app_address": STOCK_APP_ADDRESS + STOCK_PC9_CLEAR_OFFSET,
+            "original": STOCK_PC9_CLEAR_ORIGINAL.hex(),
+            "patched": STOCK_PC9_CLEAR_PATCH.hex(),
+            "enabled": True,
+            "reason": "Keep PC9 power-hold latched during battery-only stock handoff.",
+        },
+        {
+            "name": "fnirsi_fast_splash",
+            "kind": "cosmetic_boot_delay",
+            "file_offset": STOCK_SPLASH_INITIAL_STEP_OFFSET,
+            "stock_app_address": STOCK_APP_ADDRESS + STOCK_SPLASH_INITIAL_STEP_OFFSET,
+            "original": STOCK_SPLASH_INITIAL_STEP_ORIGINAL.hex(),
+            "patched": STOCK_SPLASH_INITIAL_STEP_PATCH.hex(),
+            "enabled": fast_splash,
+            "estimated_saved_ms": STOCK_SPLASH_DELAY_MS if fast_splash else 0,
+            "reason": (
+                "Start the 256-step boot logo gradient at its final step; "
+                "reverse_engineering/TIMING_AND_STATE_MACHINES.md maps this "
+                "as 256 iterations at 3 ms each."
+            ),
+        },
+    ]
+    return {
+        "format": "stock-runtime-patch-report-v1",
+        "stock_app_base": STOCK_APP_ADDRESS,
+        "fast_splash": fast_splash,
+        "estimated_fast_splash_saved_ms": STOCK_SPLASH_DELAY_MS if fast_splash else 0,
+        "hardware_init_skipped_by_fast_splash": False,
+        "hardware_init_note": (
+            "The fast-splash patch changes only the boot-logo initial step. "
+            "LCD, SPI3/FPGA, and post-config waits remain in the stock init path."
+        ),
+        "patches": patches,
+    }
+
+
 def build(stock: bytes, dispatcher: bytes, *, fast_splash: bool = True) -> tuple[bytes, list[str]]:
     errors = validate_stock(stock) + validate_dispatcher(dispatcher)
     worst_len = max(STOCK_APP_OFFSET + len(stock), HIGH_DISPATCHER_OFFSET + len(dispatcher))
@@ -169,6 +213,7 @@ def main() -> int:
         action="store_true",
         help="leave the stock FNIRSI splash animation untouched for A/B boot timing tests",
     )
+    parser.add_argument("--json-report", action="store_true", help="emit structured stock patch evidence")
     args = parser.parse_args()
 
     stock = args.stock.read_bytes()
@@ -185,6 +230,9 @@ def main() -> int:
     print("layout: low vector at 0x08000000, stock APP at 0x08007000, high launcher at 0x080E0000")
     for item in layout:
         print(f"stock_layout: {item}")
+    if args.json_report:
+        print("patch_report:")
+        print(json.dumps(runtime_patch_report(fast_splash=not args.keep_splash), indent=2, sort_keys=True))
     return 0
 
 
