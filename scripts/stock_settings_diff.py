@@ -136,22 +136,38 @@ def build_focus_report(
         raise ValueError(f"unsupported focus: {focus}")
 
     known = [item for item in ranges if item["known_fields"]]
+    known_language = [
+        item for item in known
+        if any(field["name"] == "language" for field in item["known_fields"])
+    ]
     candidates = [
         item for item in ranges
         if not item["known_fields"] and int(item["changed_bytes"]) <= 4
     ]
 
     roundtrip_candidates = []
+    roundtrip_known_language = []
     if reverted is not None:
         for item in candidates:
             start = int(item["offset_start"])
             end = int(item["offset_end"])
             if before[start:end] != after[start:end] and reverted[start:end] == before[start:end]:
                 roundtrip_candidates.append(item)
+        for item in known_language:
+            start = int(item["offset_start"])
+            end = int(item["offset_end"])
+            if before[start:end] != after[start:end] and reverted[start:end] == before[start:end]:
+                roundtrip_known_language.append(item)
 
-    if reverted is not None and len(roundtrip_candidates) == 1 and not known:
+    if reverted is not None and len(roundtrip_known_language) == 1:
+        confidence = "confirmed-known-field"
+        reason = "recovered language field changed and reverted to its original value"
+    elif reverted is not None and len(roundtrip_candidates) == 1 and not known:
         confidence = "confirmed-candidate"
         reason = "one small unknown range changed and reverted to its original value"
+    elif len(known_language) == 1:
+        confidence = "known-field"
+        reason = "the recovered language field changed"
     elif len(candidates) == 1 and not known:
         confidence = "candidate"
         reason = "exactly one small changed range outside the recovered stock fields"
@@ -169,10 +185,11 @@ def build_focus_report(
         "known_field_changes": known,
         "candidate_ranges": candidates,
         "roundtrip_candidate_ranges": roundtrip_candidates,
+        "roundtrip_known_field_ranges": roundtrip_known_language,
         "roundtrip_checked": reverted is not None,
         "note": (
-            "The stock language field is not recovered yet. Treat these as "
-            "candidates only; do not patch a candidate without live confirmation."
+            "Recovered language values are English=0x02 and Chinese=0x01. "
+            "Treat other values as unknown until live-confirmed."
         ),
     }
 
@@ -225,6 +242,12 @@ def print_text_report(report: dict[str, object]) -> None:
         for item in focus["roundtrip_candidate_ranges"]:
             print(
                 "  roundtrip candidate: "
+                f"0x{item['address_start']:08X}..0x{item['address_end']:08X} "
+                f"({item['changed_bytes']} bytes)"
+            )
+        for item in focus.get("roundtrip_known_field_ranges", []):
+            print(
+                "  roundtrip known field: "
                 f"0x{item['address_start']:08X}..0x{item['address_end']:08X} "
                 f"({item['changed_bytes']} bytes)"
             )

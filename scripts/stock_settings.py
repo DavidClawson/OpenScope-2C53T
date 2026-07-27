@@ -27,6 +27,7 @@ OFFSET_COUPLING = 0x0D
 OFFSET_TRIGGER_MODE = 0x0F
 OFFSET_SAVED_OPERATIONAL_MODE = 0x17
 OFFSET_MODE_DATA = 0x2C
+OFFSET_LANGUAGE = OFFSET_MODE_DATA
 OFFSET_SAVED_MODE = 0x30
 
 SIGNATURE_NORMAL_RESTORE = 0x55
@@ -37,6 +38,16 @@ OPENSCOPE_CONFIG_MODES = {
     "multimeter": 1,
     "signal_gen": 2,
     "settings": 3,
+}
+
+STOCK_LANGUAGE_VALUES = {
+    0x01: "chinese",
+    0x02: "english",
+}
+
+OPENSCOPE_CONFIG_LANGUAGES = {
+    "english": 0,
+    "chinese": 1,
 }
 
 RECOVERED_FIELDS = [
@@ -97,11 +108,18 @@ RECOVERED_FIELDS = [
         "description": "restored to ms[0xF39]; older notes disagree on exact runtime meaning",
     },
     {
+        "name": "language",
+        "offset": OFFSET_LANGUAGE,
+        "size": 1,
+        "confidence": "high",
+        "description": "live A/B roundtrip: English=0x02, Chinese=0x01",
+    },
+    {
         "name": "mode_data_word",
         "offset": OFFSET_MODE_DATA,
         "size": 4,
         "confidence": "partial",
-        "description": "restored to ms[0xF60..0xF63]",
+        "description": "restored to ms[0xF60..0xF63]; low byte is the recovered language selector",
     },
     {
         "name": "saved_mode_word",
@@ -182,10 +200,32 @@ def infer_startup_mode(signature: int, saved_mode: int) -> dict[str, object]:
     }
 
 
+def decode_language(value: int) -> dict[str, object]:
+    language = STOCK_LANGUAGE_VALUES.get(value)
+    if language is None:
+        return {
+            "value": None,
+            "raw": value,
+            "confidence": "unknown",
+            "reason": "Stock language byte did not match the recovered English/Chinese values.",
+        }
+
+    return {
+        "value": language,
+        "raw": value,
+        "confidence": "confirmed",
+        "reason": (
+            "Live stock settings roundtrip on 2026-07-27 changed only language "
+            "English->Chinese->English and toggled this byte 0x02->0x01->0x02."
+        ),
+    }
+
+
 def parse_stock_settings(data: bytes, *, base_address: int = STOCK_SAVED_CONFIG_ADDRESS) -> dict[str, object]:
     _require_size(data)
     signature = _u8(data, OFFSET_SIGNATURE)
     saved_mode = _u16(data, OFFSET_SAVED_MODE)
+    language_raw = _u8(data, OFFSET_LANGUAGE)
 
     return {
         "base_address": base_address,
@@ -203,19 +243,17 @@ def parse_stock_settings(data: bytes, *, base_address: int = STOCK_SAVED_CONFIG_
             "coupling": _u8(data, OFFSET_COUPLING),
             "trigger_mode": _u8(data, OFFSET_TRIGGER_MODE),
             "saved_operational_mode": _u8(data, OFFSET_SAVED_OPERATIONAL_MODE),
+            "language": language_raw,
             "mode_data_word": _u32(data, OFFSET_MODE_DATA),
             "saved_mode_word": saved_mode,
         },
         "startup_mode": infer_startup_mode(signature, saved_mode),
-        "language": {
-            "value": None,
-            "confidence": "unknown",
-            "reason": "No stock language field has been recovered from the saved-config blob yet.",
-        },
+        "language": decode_language(language_raw),
         "evidence": [
             "reverse_engineering/analysis_v120/master_init_phase4.c maps the 0x08006000 restore layout",
             "reverse_engineering/analysis_v120/master_init_phase2.c maps the nonzero saved-mode meter boot tail",
             "reverse_engineering/analysis_v120/mode_selector_writer_map_2026_04_08.md records the 0xF64 restore conflict and best current interpretation",
+            "Live dumps on 2026-07-27 confirm stock language byte 0x0800602C: English=0x02, Chinese=0x01, English-back=0x02",
         ],
     }
 
@@ -256,6 +294,20 @@ def openscope_config_overlay(summary: dict[str, object]) -> dict[str, object]:
     startup = summary["startup_mode"]
     stock_mode = startup["mode"]
     mapped_startup: dict[str, object]
+    language = summary["language"]
+    language_value = language["value"]
+    mapped_language = {
+        "value": language_value,
+        "raw": language["raw"],
+        "config_value": (
+            OPENSCOPE_CONFIG_LANGUAGES[language_value]
+            if language_value in OPENSCOPE_CONFIG_LANGUAGES
+            else None
+        ),
+        "confidence": language["confidence"],
+        "source": "stock language byte 0x0800602C",
+        "reason": language["reason"],
+    }
 
     if stock_mode == "multimeter":
         mapped_startup = {
@@ -297,17 +349,12 @@ def openscope_config_overlay(summary: dict[str, object]) -> dict[str, object]:
         },
         "fields": {
             "startup_mode": mapped_startup,
-            "language": {
-                "value": None,
-                "config_value": None,
-                "confidence": "unknown",
-                "source": "stock language offset is unrecovered",
-                "reason": summary["language"]["reason"],
-            },
+            "language": mapped_language,
         },
         "apply_safe": bool(
             summary["valid_signature"]
             and mapped_startup["config_value"] is not None
+            and mapped_language["config_value"] is not None
         ),
         "evidence": summary["evidence"],
     }
@@ -343,7 +390,13 @@ def print_summary(summary: dict[str, object]) -> None:
         "  inferred startup: "
         f"{startup['mode']} ({startup['confidence']})"
     )
-    print(f"  language: {summary['language']['confidence']}")
+    language = summary["language"]
+    print(
+        "  language: "
+        f"{language['value'] or 'unknown'} "
+        f"raw=0x{language['raw']:02X} "
+        f"({language['confidence']})"
+    )
 
 
 def cmd_inspect(args: argparse.Namespace) -> int:

@@ -92,6 +92,29 @@ def main() -> int:
     if roundtrip["roundtrip_candidate_ranges"][0]["address_start"] != 0x08006080:
         raise SystemExit(f"wrong roundtrip language candidate address: {roundtrip}")
 
+    known_before = bytearray(b"\xFF" * 0x100)
+    known_after = bytearray(known_before)
+    known_reverted = bytearray(known_before)
+    known_before[0x2C] = 0x02
+    known_after[0x2C] = 0x01
+    known_reverted[0x2C] = 0x02
+    known_roundtrip_report = diff.build_report(
+        bytes(known_before),
+        bytes(known_after),
+        base_address=0x08006000,
+        sector_size=0x1000,
+        max_gap=0,
+        context=1,
+        max_ranges=8,
+        focus="language",
+        reverted=bytes(known_reverted),
+    )
+    known_roundtrip = known_roundtrip_report["focus"]
+    if known_roundtrip["confidence"] != "confirmed-known-field":
+        raise SystemExit(f"known language roundtrip not confirmed: {known_roundtrip}")
+    if known_roundtrip["roundtrip_known_field_ranges"][0]["address_start"] != 0x0800602C:
+        raise SystemExit(f"wrong known roundtrip language address: {known_roundtrip}")
+
     print("1 test OK")
     return 0
 
