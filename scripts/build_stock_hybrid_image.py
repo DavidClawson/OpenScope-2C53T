@@ -3,9 +3,9 @@
 
 The archived APP_2C53T V1.2.0 image is linked for 0x08007000: its reset
 vector is 0x08007311 and stock later writes VTOR=0x08007000.  The switcher
-therefore keeps only a low reset vector at 0x08000000, places the untouched
-stock APP bytes at 0x08007000, and jumps through a tiny high-flash dispatcher at
-0x080E0000.  The high recovery HID bootloader remains at 0x080F0000.
+therefore keeps only a low reset vector at 0x08000000, places the stock APP at
+0x08007000, and jumps through a tiny high-flash dispatcher at 0x080E0000.  The
+high recovery HID bootloader remains at 0x080F0000.
 """
 
 from __future__ import annotations
@@ -33,6 +33,11 @@ EXPECTED_STOCK_SP = 0x20036F90
 EXPECTED_STOCK_RV = 0x08007311
 STOCK_RUNTIME_TABLE_CHECK_OFFSET = 0x00033F7C
 STOCK_END_CHECK_OFFSET = 0x000B7670
+STOCK_PC9_CLEAR_OFFSET = 0x00023AB6
+STOCK_PC9_CLEAR_ORIGINAL = b"\x3c\x60"  # str r4, [r7]; r7 = GPIOC_BC, r4 = PC9
+STOCK_PC9_CLEAR_PATCH = b"\x00\xbf"  # nop
+STOCK_PC9_REASSERT_OFFSET = 0x00024412
+STOCK_PC9_REASSERT_ORIGINAL = b"\x10\x61"  # str r0, [r2, #0x10]; GPIOC_BOP
 
 
 def sha256(data: bytes) -> str:
@@ -60,6 +65,10 @@ def validate_stock(stock: bytes) -> list[str]:
         errors.append("stock runtime table anchor drifted")
     if word(stock, STOCK_END_CHECK_OFFSET) != 0x3F027302:
         errors.append("stock tail anchor drifted")
+    if stock[STOCK_PC9_CLEAR_OFFSET:STOCK_PC9_CLEAR_OFFSET + 2] != STOCK_PC9_CLEAR_ORIGINAL:
+        errors.append("stock PC9 clear instruction drifted")
+    if stock[STOCK_PC9_REASSERT_OFFSET:STOCK_PC9_REASSERT_OFFSET + 2] != STOCK_PC9_REASSERT_ORIGINAL:
+        errors.append("stock PC9 reassert instruction drifted")
     return errors
 
 
@@ -78,6 +87,18 @@ def validate_dispatcher(dispatcher: bytes) -> list[str]:
     return errors
 
 
+def patch_stock_power_hold(stock: bytes) -> bytes:
+    patched = bytearray(stock)
+    actual = bytes(patched[STOCK_PC9_CLEAR_OFFSET:STOCK_PC9_CLEAR_OFFSET + 2])
+    if actual != STOCK_PC9_CLEAR_ORIGINAL:
+        raise ValueError(
+            "stock PC9 clear instruction drifted: "
+            f"offset 0x{STOCK_PC9_CLEAR_OFFSET:X} has {actual.hex()}"
+        )
+    patched[STOCK_PC9_CLEAR_OFFSET:STOCK_PC9_CLEAR_OFFSET + 2] = STOCK_PC9_CLEAR_PATCH
+    return bytes(patched)
+
+
 def build(stock: bytes, dispatcher: bytes) -> tuple[bytes, list[str]]:
     errors = validate_stock(stock) + validate_dispatcher(dispatcher)
     worst_len = max(STOCK_APP_OFFSET + len(stock), HIGH_DISPATCHER_OFFSET + len(dispatcher))
@@ -88,6 +109,7 @@ def build(stock: bytes, dispatcher: bytes) -> tuple[bytes, list[str]]:
     if errors:
         raise SystemExit("stock user image rejected:\n  - " + "\n  - ".join(errors))
 
+    stock = patch_stock_power_hold(stock)
     dispatcher_rv = word(dispatcher, 4)
     image = bytearray(b"\xFF" * worst_len)
     image[0:4] = stock[0:4]
@@ -96,7 +118,7 @@ def build(stock: bytes, dispatcher: bytes) -> tuple[bytes, list[str]]:
     image[HIGH_DISPATCHER_OFFSET:HIGH_DISPATCHER_OFFSET + len(dispatcher)] = dispatcher
     return bytes(image), [
         f"0x08000004: low vector -> 0x{dispatcher_rv:08X}",
-        f"0x{STOCK_APP_ADDRESS:08X}: stock APP bytes ({len(stock)} bytes)",
+        f"0x{STOCK_APP_ADDRESS:08X}: stock APP bytes ({len(stock)} bytes, PC9 clear NOP patched)",
         f"0x{HIGH_DISPATCHER_ADDRESS:08X}: stock launcher ({len(dispatcher)} bytes)",
     ]
 
