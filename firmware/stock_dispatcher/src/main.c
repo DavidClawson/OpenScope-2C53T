@@ -79,6 +79,25 @@ static int recovery_combo_pressed(void)
     return ((GPIOC->idt & (1u << 8)) == 0u) && ((GPIOB->idt & (1u << 7)) == 0u);
 }
 
+static int power_button_pressed(void)
+{
+    return (GPIOC->idt & (1u << 8)) == 0u;
+}
+
+static void wait_for_power_release(void)
+{
+    uint32_t released_samples = 0u;
+
+    while (released_samples < 8u) {
+        if (power_button_pressed()) {
+            released_samples = 0u;
+        } else {
+            released_samples++;
+        }
+        busy_delay(120000u);
+    }
+}
+
 static void seed_stock_allocator_descriptor(void)
 {
     /* Shifted stock reaches master init without the original launch context
@@ -162,6 +181,7 @@ int main(void)
          * recovery override. */
         *DFU_RAM_MAGIC_ADDR = 0u;
         *BOOT_COUNTER_ADDR = 0u;
+        wait_for_power_release();
         seed_stock_allocator_descriptor();
         jump_to_entry(STOCK_APP_ADDRESS,
                       *(const uint32_t *)STOCK_APP_ADDRESS,
