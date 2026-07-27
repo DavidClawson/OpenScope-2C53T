@@ -274,6 +274,28 @@ def _written_ranges(blocks):
     return ranges
 
 
+def parse_preserve_range(text):
+    """Parse START:END or START+LEN into a half-open address range."""
+    if ":" in text:
+        start_text, end_text = text.split(":", 1)
+        start = int(start_text, 0)
+        end = int(end_text, 0)
+    elif "+" in text:
+        start_text, length_text = text.split("+", 1)
+        start = int(start_text, 0)
+        end = start + int(length_text, 0)
+    else:
+        raise ValueError("expected START:END or START+LEN")
+    if end <= start:
+        raise ValueError("preserve range end must be greater than start")
+    return start, end
+
+
+def _block_in_preserve_ranges(addr, block_size, ranges):
+    block_end = addr + block_size
+    return any(start <= addr and block_end <= end for start, end in ranges)
+
+
 def verify_written_ranges(dev, blocks):
     for address, expected in _written_ranges(blocks):
         verify_flash_crc(dev, address, expected)
@@ -319,6 +341,7 @@ def flash_firmware(
     run_address=None,
     preserve_blank_blocks=False,
     preserve_blank_blocks_from=None,
+    preserve_blank_block_ranges=None,
 ):
     """Flash a firmware binary to the device."""
     with open(binpath, "rb") as f:
@@ -346,6 +369,7 @@ def flash_firmware(
             f"refusing to flash {len(firmware)} padded bytes at 0x{app_address:08X}: "
             f"maximum app payload before high recovery bootloader region is {max_size} bytes"
         )
+    preserve_blank_block_ranges = preserve_blank_block_ranges or []
 
     print(f"Padded to {len(firmware)} bytes ({len(firmware) // BLOCK_SIZE} blocks)")
 
@@ -374,9 +398,8 @@ def flash_firmware(
             print("Low-flash write window unlocked by high recovery")
 
         # Flash in 1KB blocks.  In stock-switcher low-flash mode the generated
-        # image intentionally contains 0xFF holes.  The low padding should still
-        # be erased clean, while the post-stock hole can contain stock settings;
-        # callers can preserve only that settings range.
+        # image intentionally contains 0xFF holes.  Preserve only caller-named
+        # holes that may contain stock settings or app-adjacent user data.
         offset = 0
         total_blocks = len(firmware) // BLOCK_SIZE
         block_num = 0
@@ -390,7 +413,10 @@ def flash_firmware(
             preserve_this_block = (
                 preserve_blank_blocks
                 and block == b"\xFF" * BLOCK_SIZE
-                and (preserve_blank_blocks_from is None or addr >= preserve_blank_blocks_from)
+                and (
+                    (preserve_blank_blocks_from is not None and addr >= preserve_blank_blocks_from)
+                    or _block_in_preserve_ranges(addr, BLOCK_SIZE, preserve_blank_block_ranges)
+                )
             )
 
             if preserve_this_block:
@@ -489,6 +515,14 @@ def main():
         help="only preserve all-0xFF blocks at or above this address",
     )
     parser.add_argument(
+        "--preserve-blank-blocks-range",
+        action="append",
+        type=parse_preserve_range,
+        default=[],
+        metavar="START:END",
+        help="preserve all-0xFF blocks wholly inside this half-open address range; may be repeated",
+    )
+    parser.add_argument(
         "--run-address",
         type=lambda x: int(x, 0),
         help="after flashing, ask the bootloader to jump directly to this vector table",
@@ -504,6 +538,7 @@ def main():
         run_address=args.run_address,
         preserve_blank_blocks=args.preserve_blank_blocks,
         preserve_blank_blocks_from=args.preserve_blank_blocks_from,
+        preserve_blank_block_ranges=args.preserve_blank_blocks_range,
     )
 
 

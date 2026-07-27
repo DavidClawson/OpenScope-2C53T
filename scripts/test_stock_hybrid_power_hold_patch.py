@@ -31,11 +31,17 @@ def main() -> int:
         builder.STOCK_PC9_REASSERT_OFFSET,
         builder.STOCK_PC9_REASSERT_OFFSET + len(builder.STOCK_PC9_REASSERT_ORIGINAL),
     )
+    splash = slice(
+        builder.STOCK_SPLASH_INITIAL_STEP_OFFSET,
+        builder.STOCK_SPLASH_INITIAL_STEP_OFFSET + len(builder.STOCK_SPLASH_INITIAL_STEP_ORIGINAL),
+    )
 
     if stock[clear] != builder.STOCK_PC9_CLEAR_ORIGINAL:
         raise SystemExit("stock fixture no longer has the guarded PC9 clear")
     if stock[reassert] != builder.STOCK_PC9_REASSERT_ORIGINAL:
         raise SystemExit("stock fixture no longer has the guarded PC9 reassert")
+    if stock[splash] != builder.STOCK_SPLASH_INITIAL_STEP_ORIGINAL:
+        raise SystemExit("stock fixture no longer has the guarded splash initial step")
 
     patched = builder.patch_stock_power_hold(stock)
     if stock[clear] != builder.STOCK_PC9_CLEAR_ORIGINAL:
@@ -45,15 +51,29 @@ def main() -> int:
     if patched[reassert] != builder.STOCK_PC9_REASSERT_ORIGINAL:
         raise SystemExit("patch changed the later PC9 reassert")
 
+    fast = builder.patch_stock_fast_splash(stock)
+    if stock[splash] != builder.STOCK_SPLASH_INITIAL_STEP_ORIGINAL:
+        raise SystemExit("splash patch mutated the source stock bytes")
+    if fast[splash] != builder.STOCK_SPLASH_INITIAL_STEP_PATCH:
+        raise SystemExit("splash patch did not jump to the final logo step")
+
     image, layout = builder.build(stock, dispatcher)
     image_clear = slice(
         builder.STOCK_APP_OFFSET + builder.STOCK_PC9_CLEAR_OFFSET,
         builder.STOCK_APP_OFFSET + builder.STOCK_PC9_CLEAR_OFFSET + 2,
     )
+    image_splash = slice(
+        builder.STOCK_APP_OFFSET + builder.STOCK_SPLASH_INITIAL_STEP_OFFSET,
+        builder.STOCK_APP_OFFSET + builder.STOCK_SPLASH_INITIAL_STEP_OFFSET + 2,
+    )
     if image[image_clear] != builder.STOCK_PC9_CLEAR_PATCH:
         raise SystemExit("built stock-user image lacks the PC9 clear patch")
+    if image[image_splash] != builder.STOCK_SPLASH_INITIAL_STEP_PATCH:
+        raise SystemExit("built stock-user image lacks the fast splash patch")
     if not any("PC9 clear NOP patched" in item for item in layout):
         raise SystemExit("layout output does not mention the PC9 patch")
+    if not any("fast splash patched" in item for item in layout):
+        raise SystemExit("layout output does not mention the fast splash patch")
 
     print("1 test OK")
     return 0

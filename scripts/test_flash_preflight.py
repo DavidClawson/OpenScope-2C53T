@@ -303,6 +303,76 @@ class FlashPreflightTests(unittest.TestCase):
         self.assertIn(flash_preflight.FLASH_BASE + hid_flash.BLOCK_SIZE, addr_writes)
         self.assertNotIn(flash_preflight.FLASH_BASE + 2 * hid_flash.BLOCK_SIZE, addr_writes)
 
+    def test_hid_flash_preserves_named_blank_ranges_below_floor(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "stock_user_image.bin"
+            block0 = image(rv=0x080E07B1, marker=b"launcher").ljust(hid_flash.BLOCK_SIZE, b"\x00")
+            block1 = b"\xFF" * hid_flash.BLOCK_SIZE
+            block2 = b"\xFF" * hid_flash.BLOCK_SIZE
+            block3 = b"launcher".ljust(hid_flash.BLOCK_SIZE, b"\x33")
+            path.write_bytes(block0 + block1 + block2 + block3)
+
+            class FakeDevice:
+                def __init__(self) -> None:
+                    self.writes: list[bytes] = []
+
+                def write(self, data: bytes) -> int:
+                    self.writes.append(data)
+                    return len(data)
+
+                def read(self, length: int, timeout_ms: int = 5000) -> bytes:
+                    last = self.writes[-1]
+                    cmd = struct.unpack(">H", last[1:3])[0]
+                    if cmd == hid_flash.CMD_CRC:
+                        address, block_count = struct.unpack(">IH", last[3:9])
+                        if address == flash_preflight.FLASH_BASE:
+                            if block_count != 1:
+                                raise AssertionError(f"unexpected block count {block_count}")
+                            crc = hid_flash.at32_crc32_words(block0)
+                        elif address == flash_preflight.FLASH_BASE + 2 * hid_flash.BLOCK_SIZE:
+                            if block_count != 2:
+                                raise AssertionError(f"unexpected block count {block_count}")
+                            crc = hid_flash.at32_crc32_words(block2 + block3)
+                        else:
+                            raise AssertionError(f"unexpected CRC address 0x{address:08X}")
+                        return struct.pack(">HHI", cmd, hid_flash.ACK, crc).ljust(length, b"\x00")
+                    return struct.pack(">HH", cmd, hid_flash.ACK).ljust(length, b"\x00")
+
+                def get_manufacturer_string(self) -> str:
+                    return "test"
+
+                def get_product_string(self) -> str:
+                    return "HID IAP"
+
+                def close(self) -> None:
+                    pass
+
+            dev = FakeDevice()
+            with mock.patch.object(hid_flash, "open_bootloader_device", return_value=dev), redirect_stdout(io.StringIO()):
+                hid_flash.flash_firmware(
+                    path,
+                    app_address=flash_preflight.FLASH_BASE,
+                    allow_unknown_app=True,
+                    allow_low_flash=True,
+                    run_address=flash_preflight.FLASH_BASE,
+                    preserve_blank_blocks=True,
+                    preserve_blank_blocks_from=flash_preflight.FLASH_BASE + 10 * hid_flash.BLOCK_SIZE,
+                    preserve_blank_block_ranges=[
+                        (
+                            flash_preflight.FLASH_BASE + hid_flash.BLOCK_SIZE,
+                            flash_preflight.FLASH_BASE + 2 * hid_flash.BLOCK_SIZE,
+                        )
+                    ],
+                )
+
+        addr_writes = [
+            struct.unpack(">I", write[3:7])[0]
+            for write in dev.writes
+            if struct.unpack(">H", write[1:3])[0] == hid_flash.CMD_ADDR
+        ]
+        self.assertNotIn(flash_preflight.FLASH_BASE + hid_flash.BLOCK_SIZE, addr_writes)
+        self.assertIn(flash_preflight.FLASH_BASE + 2 * hid_flash.BLOCK_SIZE, addr_writes)
+
     def test_hid_memory_read_chunks_by_report_payload(self) -> None:
         class FakeDevice:
             def __init__(self) -> None:

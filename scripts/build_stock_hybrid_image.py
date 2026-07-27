@@ -38,6 +38,9 @@ STOCK_PC9_CLEAR_ORIGINAL = b"\x3c\x60"  # str r4, [r7]; r7 = GPIOC_BC, r4 = PC9
 STOCK_PC9_CLEAR_PATCH = b"\x00\xbf"  # nop
 STOCK_PC9_REASSERT_OFFSET = 0x00024412
 STOCK_PC9_REASSERT_ORIGINAL = b"\x10\x61"  # str r0, [r2, #0x10]; GPIOC_BOP
+STOCK_SPLASH_INITIAL_STEP_OFFSET = 0x00024506
+STOCK_SPLASH_INITIAL_STEP_ORIGINAL = b"\x00\x20"  # movs r0, #0
+STOCK_SPLASH_INITIAL_STEP_PATCH = b"\xff\x20"  # movs r0, #255
 
 
 def sha256(data: bytes) -> str:
@@ -69,6 +72,10 @@ def validate_stock(stock: bytes) -> list[str]:
         errors.append("stock PC9 clear instruction drifted")
     if stock[STOCK_PC9_REASSERT_OFFSET:STOCK_PC9_REASSERT_OFFSET + 2] != STOCK_PC9_REASSERT_ORIGINAL:
         errors.append("stock PC9 reassert instruction drifted")
+    if stock[
+        STOCK_SPLASH_INITIAL_STEP_OFFSET:STOCK_SPLASH_INITIAL_STEP_OFFSET + 2
+    ] != STOCK_SPLASH_INITIAL_STEP_ORIGINAL:
+        errors.append("stock splash initial-step instruction drifted")
     return errors
 
 
@@ -99,6 +106,28 @@ def patch_stock_power_hold(stock: bytes) -> bytes:
     return bytes(patched)
 
 
+def patch_stock_fast_splash(stock: bytes) -> bytes:
+    patched = bytearray(stock)
+    actual = bytes(
+        patched[STOCK_SPLASH_INITIAL_STEP_OFFSET:STOCK_SPLASH_INITIAL_STEP_OFFSET + 2]
+    )
+    if actual != STOCK_SPLASH_INITIAL_STEP_ORIGINAL:
+        raise ValueError(
+            "stock splash initial-step instruction drifted: "
+            f"offset 0x{STOCK_SPLASH_INITIAL_STEP_OFFSET:X} has {actual.hex()}"
+        )
+    patched[
+        STOCK_SPLASH_INITIAL_STEP_OFFSET:STOCK_SPLASH_INITIAL_STEP_OFFSET + 2
+    ] = STOCK_SPLASH_INITIAL_STEP_PATCH
+    return bytes(patched)
+
+
+def patch_stock_runtime(stock: bytes) -> bytes:
+    stock = patch_stock_power_hold(stock)
+    stock = patch_stock_fast_splash(stock)
+    return stock
+
+
 def build(stock: bytes, dispatcher: bytes) -> tuple[bytes, list[str]]:
     errors = validate_stock(stock) + validate_dispatcher(dispatcher)
     worst_len = max(STOCK_APP_OFFSET + len(stock), HIGH_DISPATCHER_OFFSET + len(dispatcher))
@@ -109,7 +138,7 @@ def build(stock: bytes, dispatcher: bytes) -> tuple[bytes, list[str]]:
     if errors:
         raise SystemExit("stock user image rejected:\n  - " + "\n  - ".join(errors))
 
-    stock = patch_stock_power_hold(stock)
+    stock = patch_stock_runtime(stock)
     dispatcher_rv = word(dispatcher, 4)
     image = bytearray(b"\xFF" * worst_len)
     image[0:4] = stock[0:4]
@@ -118,7 +147,7 @@ def build(stock: bytes, dispatcher: bytes) -> tuple[bytes, list[str]]:
     image[HIGH_DISPATCHER_OFFSET:HIGH_DISPATCHER_OFFSET + len(dispatcher)] = dispatcher
     return bytes(image), [
         f"0x08000004: low vector -> 0x{dispatcher_rv:08X}",
-        f"0x{STOCK_APP_ADDRESS:08X}: stock APP bytes ({len(stock)} bytes, PC9 clear NOP patched)",
+        f"0x{STOCK_APP_ADDRESS:08X}: stock APP bytes ({len(stock)} bytes, PC9 clear NOP patched, fast splash patched)",
         f"0x{HIGH_DISPATCHER_ADDRESS:08X}: stock launcher ({len(dispatcher)} bytes)",
     ]
 

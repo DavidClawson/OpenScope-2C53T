@@ -35,6 +35,8 @@ STOCK_BUILDER = ROOT / "scripts" / "build_stock_hybrid_image.py"
 EXPECTED_STOCK_SHA256 = "a17c5c35c97bb898f15672a1747bc1041d8ed507c16999ddba0d1e4e2ec0c760"
 INTERNAL_FLASH_BYTES = 1024 * 1024
 STOCK_APP_ADDRESS = 0x08007000
+STOCK_SAVED_CONFIG_ADDRESS = 0x08006000
+STOCK_SAVED_CONFIG_END_ADDRESS = STOCK_APP_ADDRESS
 
 
 def run(cmd: list[str], *, cwd: Path = ROOT, dry_run: bool = False) -> int:
@@ -193,6 +195,8 @@ def cmd_stock(args: argparse.Namespace) -> int:
         "--allow-low-flash",
         "--allow-unknown-app",
         "--preserve-blank-blocks",
+        "--preserve-blank-blocks-range",
+        f"0x{STOCK_SAVED_CONFIG_ADDRESS:08X}:0x{STOCK_SAVED_CONFIG_END_ADDRESS:08X}",
         "--preserve-blank-blocks-from",
         f"0x{stock_settings_start:08X}",
     ]

@@ -59,6 +59,7 @@ void config_init_defaults(device_config_t *cfg)
     cfg->display_brightness  = 80;
     cfg->display_persist_mode = 0;
     cfg->language = 0;              /* English */
+    cfg->startup_mode = CONFIG_MODE_MULTIMETER;
 
     /* System defaults */
     cfg->auto_shutdown_mins = 30;

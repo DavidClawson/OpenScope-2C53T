@@ -41,7 +41,7 @@ extern void system_clock_config(void);
  * Global State (extern'd via ui.h for UI modules)
  * ═══════════════════════════════════════════════════════════════════ */
 
-volatile device_mode_t current_mode = MODE_OSCILLOSCOPE;
+volatile device_mode_t current_mode = MODE_MULTIMETER;
 volatile uint32_t      uptime_seconds = 0;
 volatile int8_t        settings_selected = 0;
 volatile int8_t        settings_depth = 0;
