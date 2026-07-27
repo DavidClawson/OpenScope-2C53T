@@ -152,6 +152,55 @@ class FlashSafetyTests(unittest.TestCase):
         self.assertEqual(rc, 0)
         self.assertIn("+ make -C firmware", out.getvalue())
 
+    def test_openscope_flash_preserves_stock_settings_hole(self) -> None:
+        with tempfile.TemporaryDirectory() as td:
+            path = Path(td) / "firmware.bin"
+            payload = bytearray(b"\xFF" * 0x5000)
+            payload[0:8] = struct.pack("<II", 0x20037FE0, 0x08007199)
+            payload[0x3000:0x3011] = b"OpenScope 2C53T"
+            path.write_bytes(bytes(payload))
+
+            out = io.StringIO()
+            args = type("Args", (), {
+                "image": path,
+                "build": False,
+                "image_only": False,
+                "preflight_only": False,
+                "dry_run": True,
+                "no_jump": False,
+            })()
+            with contextlib.redirect_stdout(out):
+                rc = switch_firmware.cmd_openscope(args)
+
+        text = out.getvalue()
+        self.assertEqual(rc, 0)
+        self.assertIn("--preserve-blank-blocks", text)
+        self.assertIn("--preserve-blank-blocks-range 0x08006000:0x08007000", text)
+
+    def test_openscope_dry_run_rejects_image_that_programs_stock_settings_hole(self) -> None:
+        with tempfile.TemporaryDirectory() as td:
+            path = Path(td) / "firmware.bin"
+            payload = bytearray(b"\xFF" * 0x5000)
+            payload[0:8] = struct.pack("<II", 0x20037FE0, 0x08007199)
+            payload[0x2000] = 0x00
+            payload[0x3000:0x3011] = b"OpenScope 2C53T"
+            path.write_bytes(bytes(payload))
+
+            out = io.StringIO()
+            args = type("Args", (), {
+                "image": path,
+                "build": False,
+                "image_only": False,
+                "preflight_only": False,
+                "dry_run": True,
+                "no_jump": False,
+            })()
+            with contextlib.redirect_stdout(out):
+                rc = switch_firmware.cmd_openscope(args)
+
+        self.assertEqual(rc, 2)
+        self.assertIn("stock saved-settings preserve page", out.getvalue())
+
 
 if __name__ == "__main__":
     unittest.main()

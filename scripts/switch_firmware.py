@@ -11,6 +11,8 @@ from pathlib import Path
 from flash_preflight import (
     APP_ADDRESS,
     APP_SLOT_END_ADDRESS,
+    STOCK_SAVED_CONFIG_ADDRESS,
+    STOCK_SAVED_CONFIG_END_ADDRESS,
     STOCK_RUNTIME_BASE,
     classify_image,
     padded_len,
@@ -19,6 +21,7 @@ from flash_preflight import (
     sha256,
     stock_false_scatter_candidates,
     validate_stock_boot_chain,
+    validate_stock_saved_config_hole,
     validate_vectors,
 )
 
@@ -35,8 +38,6 @@ STOCK_BUILDER = ROOT / "scripts" / "build_stock_hybrid_image.py"
 EXPECTED_STOCK_SHA256 = "a17c5c35c97bb898f15672a1747bc1041d8ed507c16999ddba0d1e4e2ec0c760"
 INTERNAL_FLASH_BYTES = 1024 * 1024
 STOCK_APP_ADDRESS = 0x08007000
-STOCK_SAVED_CONFIG_ADDRESS = 0x08006000
-STOCK_SAVED_CONFIG_END_ADDRESS = STOCK_APP_ADDRESS
 
 
 def run(cmd: list[str], *, cwd: Path = ROOT, dry_run: bool = False) -> int:
@@ -69,6 +70,7 @@ def require_valid_openscope(path: Path) -> int:
         errors.append(f"expected an OpenScope app image, got {kind}")
     if APP_ADDRESS + padded_len(len(data)) > APP_SLOT_END_ADDRESS:
         errors.append("padded app image would overlap the high recovery bootloader region")
+    errors.extend(validate_stock_saved_config_hole(data, APP_ADDRESS))
     if errors:
         print("OpenScope image rejected:")
         for error in errors:
@@ -150,7 +152,14 @@ def cmd_openscope(args: argparse.Namespace) -> int:
     rc = run(preflight_cmd, dry_run=args.dry_run)
     if rc or args.preflight_only:
         return rc
-    flash_cmd = [sys.executable, str(HID_FLASH), str(args.image)]
+    flash_cmd = [
+        sys.executable,
+        str(HID_FLASH),
+        str(args.image),
+        "--preserve-blank-blocks",
+        "--preserve-blank-blocks-range",
+        f"0x{STOCK_SAVED_CONFIG_ADDRESS:08X}:0x{STOCK_SAVED_CONFIG_END_ADDRESS:08X}",
+    ]
     if args.no_jump:
         flash_cmd.append("--no-jump")
     return run(flash_cmd, dry_run=args.dry_run)

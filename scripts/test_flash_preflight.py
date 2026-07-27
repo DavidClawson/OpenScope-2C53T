@@ -105,6 +105,51 @@ class FlashPreflightTests(unittest.TestCase):
         self.assertIn("Preflight: OK", stdout.getvalue())
         self.assertEqual(stderr.getvalue(), "")
 
+    def test_hid_preflight_rejects_openscope_image_that_programs_stock_settings_hole(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "firmware.bin"
+            data = bytearray(b"\xFF" * 0x5000)
+            data[0:8] = struct.pack("<II", 0x20037FE0, 0x08007199)
+            data[0x2000] = 0x00
+            data[0x3000:0x3011] = b"OpenScope 2C53T"
+            path.write_bytes(bytes(data))
+            args = argparse.Namespace(
+                image=path,
+                address=flash_preflight.APP_ADDRESS,
+                allow_missing_device=False,
+                image_only=True,
+                allow_unknown_app=False,
+            )
+
+            stderr = io.StringIO()
+            with redirect_stdout(io.StringIO()), redirect_stderr(stderr):
+                rc = flash_preflight.preflight_hid_app(args)
+
+        self.assertEqual(rc, 2)
+        self.assertIn("stock saved-settings preserve page", stderr.getvalue())
+
+    def test_hid_preflight_accepts_blank_stock_settings_hole_and_prints_preserve_command(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "firmware.bin"
+            data = bytearray(b"\xFF" * 0x5000)
+            data[0:8] = struct.pack("<II", 0x20037FE0, 0x08007199)
+            data[0x3000:0x3011] = b"OpenScope 2C53T"
+            path.write_bytes(bytes(data))
+            args = argparse.Namespace(
+                image=path,
+                address=flash_preflight.APP_ADDRESS,
+                allow_missing_device=False,
+                image_only=True,
+                allow_unknown_app=False,
+            )
+
+            stdout = io.StringIO()
+            with redirect_stdout(stdout):
+                rc = flash_preflight.preflight_hid_app(args)
+
+        self.assertEqual(rc, 0)
+        self.assertIn("--preserve-blank-blocks-range 0x08006000:0x08007000", stdout.getvalue())
+
     def test_hid_flash_repeats_stock_image_guard(self) -> None:
         stdout = io.StringIO()
         with redirect_stdout(stdout):
@@ -126,6 +171,19 @@ class FlashPreflightTests(unittest.TestCase):
                     flash_preflight.APP_ADDRESS + 0x400,
                 )
         self.assertIn("address: 0x08004400", stdout.getvalue())
+
+    def test_hid_flash_rejects_openscope_image_that_programs_stock_settings_hole(self) -> None:
+        firmware = bytearray(b"\xFF" * 0x5000)
+        firmware[0:8] = struct.pack("<II", 0x20037FE0, 0x08007199)
+        firmware[0x2000] = 0x00
+        firmware[0x3000:0x3011] = b"OpenScope 2C53T"
+
+        with self.assertRaisesRegex(RuntimeError, "stock saved-settings preserve page"):
+            hid_flash.validate_hid_app_image(
+                "firmware.bin",
+                bytes(firmware),
+                flash_preflight.APP_ADDRESS,
+            )
 
     def test_hid_flash_allows_low_flash_only_with_explicit_flag(self) -> None:
         stdout = io.StringIO()

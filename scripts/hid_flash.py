@@ -31,6 +31,7 @@ from flash_preflight import (
     classify_image,
     padded_len,
     sha256,
+    validate_stock_saved_config_hole,
     validate_vectors,
 )
 
@@ -320,6 +321,7 @@ def validate_hid_app_image(binpath, firmware, app_address, allow_unknown_app=Fal
         errors.append("HID IAP app flashing is only allowed at 0x08004000")
     if app_address + padded_len(len(firmware)) > APP_SLOT_END_ADDRESS:
         errors.append("padded app image would overlap the high recovery bootloader region")
+    errors.extend(validate_stock_saved_config_hole(firmware, app_address))
     if kind == "stock-app":
         errors.append("refusing stock/vendor APP_2C53T image through custom HID IAP")
     elif kind != "openscope-app" and not allow_unknown_app:

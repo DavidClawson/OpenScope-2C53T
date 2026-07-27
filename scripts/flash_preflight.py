@@ -19,6 +19,8 @@ FLASH_BASE = 0x08000000
 APP_ADDRESS = 0x08004000
 APP_SETTINGS_ADDRESS = 0x080FF800
 APP_SLOT_END_ADDRESS = 0x080F0000
+STOCK_SAVED_CONFIG_ADDRESS = 0x08006000
+STOCK_SAVED_CONFIG_END_ADDRESS = 0x08007000
 HIGH_BOOTLOADER_ADDRESS = APP_SLOT_END_ADDRESS
 HIGH_DISPATCHER_ADDRESS = 0x080E0000
 FLASH_MAX = 0x08100000
@@ -151,6 +153,31 @@ def validate_bootloader_updater_image(data: bytes) -> list[str]:
     if BOOTLOADER_UPDATER_MARKER not in data:
         errors.append("updater image is missing the OpenScope bootloader updater marker")
     return errors
+
+
+def validate_stock_saved_config_hole(data: bytes, address: int) -> list[str]:
+    """Ensure an app-slot image leaves the stock settings page unprogrammed.
+
+    The PC switcher can preserve only all-0xFF blocks.  If the OpenScope image
+    puts code or data in 0x08006000..0x08007000, switching back to OpenScope
+    destroys stock's saved settings before a later stock reflash can preserve
+    them.
+    """
+    image_end = address + padded_len(len(data))
+    overlap_start = max(address, STOCK_SAVED_CONFIG_ADDRESS)
+    overlap_end = min(image_end, STOCK_SAVED_CONFIG_END_ADDRESS)
+    if overlap_start >= overlap_end:
+        return []
+
+    start = overlap_start - address
+    end = overlap_end - address
+    if all(byte == 0xFF for byte in data[start:end]):
+        return []
+
+    return [
+        "app image programs bytes inside the stock saved-settings preserve page "
+        f"0x{STOCK_SAVED_CONFIG_ADDRESS:08X}..0x{STOCK_SAVED_CONFIG_END_ADDRESS:08X}"
+    ]
 
 
 def stock_false_scatter_candidates(data: bytes) -> list[tuple[int, int, int, int]]:
@@ -419,6 +446,7 @@ def preflight_hid_app(args: argparse.Namespace) -> int:
         errors.append("HID IAP app flashing is only allowed at 0x08004000")
     if args.address + padded_len(len(data)) > APP_SLOT_END_ADDRESS:
         errors.append("padded app image would overlap the high recovery bootloader region")
+    errors.extend(validate_stock_saved_config_hole(data, args.address))
     if kind == "stock-app":
         errors.extend(validate_stock_boot_chain(data))
     if kind != "openscope-app" and not args.allow_unknown_app:
@@ -427,7 +455,11 @@ def preflight_hid_app(args: argparse.Namespace) -> int:
             "Do not flash stock/vendor APP_2C53T images through HID IAP."
         )
 
-    return finish(errors, "uv run ../scripts/hid_flash.py <image>")
+    return finish(
+        errors,
+        "uv run ../scripts/hid_flash.py <image> --preserve-blank-blocks "
+        "--preserve-blank-blocks-range 0x08006000:0x08007000",
+    )
 
 
 def preflight_rom_dfu_app(args: argparse.Namespace) -> int:
@@ -440,6 +472,7 @@ def preflight_rom_dfu_app(args: argparse.Namespace) -> int:
         errors.extend(validate_stock_boot_chain(data))
     if APP_ADDRESS + len(data) > APP_SLOT_END_ADDRESS:
         errors.append("app image would overlap the high recovery bootloader region")
+    errors.extend(validate_stock_saved_config_hole(data, APP_ADDRESS))
     return finish(errors, "dfu-util -a 0 -d 2e3c:df11 -s 0x08004000:leave -D <image>")
 
 
@@ -472,6 +505,7 @@ def preflight_rom_dfu_all(args: argparse.Namespace) -> int:
         errors.append("bootloader image exceeds the 16KB bootloader region")
     if APP_ADDRESS + len(app) > APP_SLOT_END_ADDRESS:
         errors.append("app image would overlap the high recovery bootloader region")
+    errors.extend(validate_stock_saved_config_hole(app, APP_ADDRESS))
     return finish(errors, "dfu-util bootloader at 0x08000000, then app at 0x08004000:leave")
 
 
@@ -506,6 +540,7 @@ def preflight_rom_dfu_high_layout(args: argparse.Namespace) -> int:
     errors.extend(require_usb_mode(PID_ROM_DFU, args.allow_missing_device, args.image_only))
     if APP_ADDRESS + len(app) > APP_SLOT_END_ADDRESS:
         errors.append("app image would overlap the high recovery bootloader region")
+    errors.extend(validate_stock_saved_config_hole(app, APP_ADDRESS))
 
     return finish(
         errors,

@@ -235,7 +235,7 @@ $(BUILD_DIR)/$(TARGET).elf: $(OBJECTS) Makefile $(LDSCRIPT)
 	$(SZ) $@
 
 $(BUILD_DIR)/$(TARGET).bin: $(BUILD_DIR)/$(TARGET).elf $(BUILD_DIR)/option_bytes48.bin
-	$(CP) -O binary $< $@
+	$(CP) -O binary --gap-fill 0xFF $< $@
 	@echo "Built: $@ ($$(wc -c < $@ | tr -d ' ') bytes)"
 
 # One-shot option-byte blob for first-time DFU setup.
@@ -323,7 +323,7 @@ guest-usart-silent: clean all
 # Flash app via USB HID bootloader (bootloader must be running)
 flash: $(BUILD_DIR)/$(TARGET).bin
 	python3 ../scripts/flash_preflight.py hid-app --image $< --address 0x08004000
-	uv run ../scripts/hid_flash.py $<
+	uv run ../scripts/hid_flash.py $< --preserve-blank-blocks --preserve-blank-blocks-range 0x08006000:0x08007000
 
 # Flash app via DFU (device must be in ROM DFU mode — BOOT0 + reset)
 flash-dfu: $(BUILD_DIR)/$(TARGET).bin
