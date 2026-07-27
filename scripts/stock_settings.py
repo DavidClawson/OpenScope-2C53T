@@ -32,6 +32,13 @@ OFFSET_SAVED_MODE = 0x30
 SIGNATURE_NORMAL_RESTORE = 0x55
 SIGNATURE_METER_RESTORE = 0xAA
 
+OPENSCOPE_CONFIG_MODES = {
+    "oscilloscope": 0,
+    "multimeter": 1,
+    "signal_gen": 2,
+    "settings": 3,
+}
+
 RECOVERED_FIELDS = [
     {
         "name": "signature",
@@ -245,6 +252,67 @@ def patch_startup_multimeter(data: bytes) -> tuple[bytes, list[dict[str, int]]]:
     return bytes(patched), changes
 
 
+def openscope_config_overlay(summary: dict[str, object]) -> dict[str, object]:
+    startup = summary["startup_mode"]
+    stock_mode = startup["mode"]
+    mapped_startup: dict[str, object]
+
+    if stock_mode == "multimeter":
+        mapped_startup = {
+            "value": "multimeter",
+            "config_value": OPENSCOPE_CONFIG_MODES["multimeter"],
+            "confidence": startup["confidence"],
+            "source": "stock startup_mode inference",
+            "reasons": startup["reasons"],
+        }
+    elif stock_mode == "scope-or-startup-default":
+        mapped_startup = {
+            "value": "oscilloscope",
+            "config_value": OPENSCOPE_CONFIG_MODES["oscilloscope"],
+            "confidence": startup["confidence"],
+            "source": "stock startup default inference",
+            "reasons": startup["reasons"],
+        }
+    else:
+        mapped_startup = {
+            "value": None,
+            "config_value": None,
+            "confidence": "unknown",
+            "source": "stock startup_mode inference",
+            "reasons": startup["reasons"],
+        }
+
+    return {
+        "format": "openscope-config-overlay-v1",
+        "source": {
+            "kind": "stock-settings-dump",
+            "base_address": summary["base_address"],
+            "parsed_size": summary["parsed_size"],
+            "valid_signature": summary["valid_signature"],
+        },
+        "target": {
+            "config_magic": "OSC2",
+            "config_version": 2,
+            "path_hint": "firmware/src/util/config.h",
+        },
+        "fields": {
+            "startup_mode": mapped_startup,
+            "language": {
+                "value": None,
+                "config_value": None,
+                "confidence": "unknown",
+                "source": "stock language offset is unrecovered",
+                "reason": summary["language"]["reason"],
+            },
+        },
+        "apply_safe": bool(
+            summary["valid_signature"]
+            and mapped_startup["config_value"] is not None
+        ),
+        "evidence": summary["evidence"],
+    }
+
+
 def print_summary(summary: dict[str, object]) -> None:
     fields = summary["fields"]
     startup = summary["startup_mode"]
@@ -310,6 +378,14 @@ def cmd_patch_startup_multimeter(args: argparse.Namespace) -> int:
     return 0
 
 
+def cmd_export_openscope_overlay(args: argparse.Namespace) -> int:
+    data = args.dump.read_bytes()
+    summary = parse_stock_settings(data, base_address=args.base_address)
+    overlay = openscope_config_overlay(summary)
+    print(json.dumps(overlay, indent=2, sort_keys=True))
+    return 0
+
+
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description=__doc__)
     sub = parser.add_subparsers(dest="cmd", required=True)
@@ -332,6 +408,14 @@ def build_parser() -> argparse.ArgumentParser:
     patch.add_argument("--out", type=Path, required=True)
     patch.add_argument("--json", action="store_true")
     patch.set_defaults(func=cmd_patch_startup_multimeter)
+
+    export = sub.add_parser(
+        "export-openscope-overlay",
+        help="emit read-only JSON for stock fields that can map into OpenScope config",
+    )
+    export.add_argument("dump", type=Path)
+    export.add_argument("--base-address", type=lambda text: int(text, 0), default=STOCK_SAVED_CONFIG_ADDRESS)
+    export.set_defaults(func=cmd_export_openscope_overlay)
 
     return parser
 

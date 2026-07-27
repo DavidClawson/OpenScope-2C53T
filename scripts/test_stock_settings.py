@@ -55,6 +55,17 @@ def main() -> int:
     meter = stock.parse_stock_settings(sample_blob(0xAA, 1))
     if meter["startup_mode"]["mode"] != "multimeter":
         raise SystemExit(f"unexpected meter startup inference: {meter['startup_mode']}")
+    meter_overlay = stock.openscope_config_overlay(meter)
+    if meter_overlay["fields"]["startup_mode"]["config_value"] != stock.OPENSCOPE_CONFIG_MODES["multimeter"]:
+        raise SystemExit(f"multimeter overlay did not map to OpenScope config: {meter_overlay}")
+    if meter_overlay["fields"]["language"]["confidence"] != "unknown":
+        raise SystemExit("stock language must remain unknown in OpenScope overlay")
+    if not meter_overlay["apply_safe"]:
+        raise SystemExit("valid multimeter overlay should be apply-safe")
+
+    normal_overlay = stock.openscope_config_overlay(normal)
+    if normal_overlay["fields"]["startup_mode"]["config_value"] != stock.OPENSCOPE_CONFIG_MODES["oscilloscope"]:
+        raise SystemExit(f"normal overlay did not map to OpenScope scope mode: {normal_overlay}")
 
     patched, changes = stock.patch_startup_multimeter(sample_blob(saved_mode=0x2200))
     if patched[0] != 0xAA or patched[0x30:0x32] != b"\x01\x00":
@@ -74,6 +85,9 @@ def main() -> int:
         pass
     else:
         raise SystemExit("erased stock settings must not be patchable")
+    erased = stock.parse_stock_settings(bytes([0xFF]) * 0x1000)
+    if stock.openscope_config_overlay(erased)["apply_safe"]:
+        raise SystemExit("erased stock settings must not produce an apply-safe overlay")
 
     with tempfile.TemporaryDirectory() as tmp:
         path = Path(tmp) / "settings.bin"
@@ -90,6 +104,18 @@ def main() -> int:
             raise SystemExit(proc.stderr)
         if out.read_bytes()[0] != 0xAA or out.read_bytes()[0x30:0x32] != b"\x01\x00":
             raise SystemExit("CLI patch output is wrong")
+        overlay_proc = subprocess.run(
+            [sys.executable, str(SCRIPT_PATH), "export-openscope-overlay", str(out)],
+            check=False,
+            text=True,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+        )
+        if overlay_proc.returncode != 0:
+            raise SystemExit(overlay_proc.stderr)
+        overlay = __import__("json").loads(overlay_proc.stdout)
+        if overlay["fields"]["startup_mode"]["value"] != "multimeter":
+            raise SystemExit(f"CLI overlay did not export multimeter startup: {overlay}")
 
     print("1 test OK")
     return 0
