@@ -84,7 +84,11 @@ def build_report(
     context: int,
     max_ranges: int,
     focus: str | None = None,
+    reverted: bytes | None = None,
 ) -> dict[str, object]:
+    if reverted is not None and len(reverted) != len(before):
+        raise ValueError(f"dump sizes differ: before={len(before)} reverted={len(reverted)}")
+
     ranges = changed_ranges(before, after, max_gap=max_gap)
     changed = sum(end - start for start, end in ranges)
     shown = ranges[:max_ranges]
@@ -116,11 +120,18 @@ def build_report(
         "sectors": sector_summary(ranges, sector_size),
     }
     if focus:
-        report["focus"] = build_focus_report(focus, range_reports)
+        report["focus"] = build_focus_report(focus, before, after, range_reports, reverted=reverted)
     return report
 
 
-def build_focus_report(focus: str, ranges: list[dict[str, object]]) -> dict[str, object]:
+def build_focus_report(
+    focus: str,
+    before: bytes,
+    after: bytes,
+    ranges: list[dict[str, object]],
+    *,
+    reverted: bytes | None = None,
+) -> dict[str, object]:
     if focus != "language":
         raise ValueError(f"unsupported focus: {focus}")
 
@@ -130,7 +141,18 @@ def build_focus_report(focus: str, ranges: list[dict[str, object]]) -> dict[str,
         if not item["known_fields"] and int(item["changed_bytes"]) <= 4
     ]
 
-    if len(candidates) == 1 and not known:
+    roundtrip_candidates = []
+    if reverted is not None:
+        for item in candidates:
+            start = int(item["offset_start"])
+            end = int(item["offset_end"])
+            if before[start:end] != after[start:end] and reverted[start:end] == before[start:end]:
+                roundtrip_candidates.append(item)
+
+    if reverted is not None and len(roundtrip_candidates) == 1 and not known:
+        confidence = "confirmed-candidate"
+        reason = "one small unknown range changed and reverted to its original value"
+    elif len(candidates) == 1 and not known:
         confidence = "candidate"
         reason = "exactly one small changed range outside the recovered stock fields"
     elif not candidates:
@@ -146,10 +168,11 @@ def build_focus_report(focus: str, ranges: list[dict[str, object]]) -> dict[str,
         "reason": reason,
         "known_field_changes": known,
         "candidate_ranges": candidates,
+        "roundtrip_candidate_ranges": roundtrip_candidates,
+        "roundtrip_checked": reverted is not None,
         "note": (
             "The stock language field is not recovered yet. Treat these as "
-            "paired-dump candidates only; do not patch a candidate without a "
-            "second confirmation dump."
+            "candidates only; do not patch a candidate without live confirmation."
         ),
     }
 
@@ -199,12 +222,24 @@ def print_text_report(report: dict[str, object]) -> None:
                 f"0x{item['address_start']:08X}..0x{item['address_end']:08X} "
                 f"({item['changed_bytes']} bytes)"
             )
+        for item in focus["roundtrip_candidate_ranges"]:
+            print(
+                "  roundtrip candidate: "
+                f"0x{item['address_start']:08X}..0x{item['address_end']:08X} "
+                f"({item['changed_bytes']} bytes)"
+            )
 
 
 def main() -> int:
     parser = argparse.ArgumentParser(description="Diff two read-only stock settings / flash dumps")
     parser.add_argument("before", type=Path)
     parser.add_argument("after", type=Path)
+    parser.add_argument(
+        "reverted",
+        nargs="?",
+        type=Path,
+        help="optional third dump after reverting the focused setting to its original value",
+    )
     parser.add_argument("--base-address", type=lambda x: int(x, 0), default=0)
     parser.add_argument("--sector-size", type=lambda x: int(x, 0), default=0x1000)
     parser.add_argument("--max-gap", type=lambda x: int(x, 0), default=0)
@@ -227,6 +262,7 @@ def main() -> int:
         context=args.context,
         max_ranges=args.max_ranges,
         focus=args.focus,
+        reverted=args.reverted.read_bytes() if args.reverted else None,
     )
     if args.json:
         print(json.dumps(report, indent=2, sort_keys=True))

@@ -74,6 +74,24 @@ def main() -> int:
     if focus["candidate_ranges"][0]["address_start"] != 0x08006080:
         raise SystemExit(f"wrong language candidate address: {focus}")
 
+    reverted = bytearray(language_before)
+    roundtrip_report = diff.build_report(
+        bytes(language_before),
+        bytes(language_after),
+        base_address=0x08006000,
+        sector_size=0x1000,
+        max_gap=0,
+        context=1,
+        max_ranges=8,
+        focus="language",
+        reverted=bytes(reverted),
+    )
+    roundtrip = roundtrip_report["focus"]
+    if roundtrip["confidence"] != "confirmed-candidate":
+        raise SystemExit(f"roundtrip language change not confirmed: {roundtrip}")
+    if roundtrip["roundtrip_candidate_ranges"][0]["address_start"] != 0x08006080:
+        raise SystemExit(f"wrong roundtrip language candidate address: {roundtrip}")
+
     print("1 test OK")
     return 0
 
