@@ -12,7 +12,12 @@ import time
 
 import serial
 
-PORT_GLOBS = ["/dev/cu.usbmodem*", "/dev/tty.usbmodem*"]
+PORT_GLOBS = [
+    # macOS
+    "/dev/cu.usbmodem*", "/dev/tty.usbmodem*",
+    # Linux (mars): AT32 CDC enumerates as ttyACM
+    "/dev/ttyACM*", "/dev/ttyUSB*",
+]
 
 
 def find_port():

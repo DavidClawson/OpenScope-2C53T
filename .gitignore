@@ -67,6 +67,9 @@ reverse_engineering/decompiled_*.c
 # Community directory (private, never committed)
 community.md
 
+# Local per-machine agent notes (dev-box specific, never committed)
+CLAUDE.local.md
+
 # Environment files (API keys, secrets)
 .env
 scripts/.env
