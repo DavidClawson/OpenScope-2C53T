@@ -30,6 +30,18 @@ def high_bootloader_marker() -> bytes:
 
 
 class BootloaderUpdaterPreflightTests(unittest.TestCase):
+    def test_stage0_directory_is_tracked_for_high_layout_builds(self) -> None:
+        root = Path(__file__).resolve().parents[1]
+        self.assertTrue((root / "firmware/stage0/Makefile").exists())
+        self.assertTrue((root / "firmware/stage0/src/main.c").exists())
+        self.assertTrue((root / "firmware/stage0/stage0.ld").exists())
+
+    def test_hid_bootloader_update_entrypoint_is_present(self) -> None:
+        root = Path(__file__).resolve().parents[1]
+        script = root / "scripts/update_bootloader_via_hid.py"
+        self.assertTrue(script.exists())
+        self.assertIn("UPDATE BOOTLOADER", script.read_text())
+
     def test_valid_bootloader_payload(self) -> None:
         with tempfile.TemporaryDirectory() as td:
             path = Path(td) / "bootloader.bin"

@@ -390,8 +390,6 @@ static uint32_t boot_target_address(void)
     return FLASH_APP_ADDRESS;
 }
 
-static void boot_target_now(void) __attribute__((noreturn));
-
 static void boot_target_now(void)
 {
     uint32_t target = boot_target_address();
@@ -407,9 +405,6 @@ static void boot_target_now(void)
         *BOOT_COUNTER_ADDR = BOOT_COUNTER_MAGIC | (fail_count + 1);
     }
     jump_to_app(target);
-    while (1) {
-        __NOP();
-    }
 }
 
 /* ═══════════════════════════════════════════════════════════════════

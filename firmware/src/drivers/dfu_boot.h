@@ -8,9 +8,8 @@
  *      Writes a magic word to RAM, resets, early boot code detects it
  *      and jumps to the ROM bootloader.
  *
- *   2. dfu_check_boot_button() — called very early in main(), before LCD init.
- *      If POWER button (PC8) is held LOW during power-on, jumps to bootloader.
- *      This is the failsafe for bricked firmware.
+ *   2. The HID bootloader checks POWER+PRM during reset. POWER alone is the
+ *      normal battery power-on gesture and must not force recovery.
  *
  * After entering DFU mode, flash with:
  *   dfu-util -a 0 -d 2e3c:df11 -s 0x08000000:leave -D firmware.bin
@@ -26,9 +25,8 @@
 void dfu_request_reboot(void);
 
 /*
- * Check if POWER button is held during boot. If so, enter DFU mode.
- * Call this very early in main(), after power hold but before LCD init.
- * Only enters DFU if button is held; returns normally otherwise.
+ * Retained for old app-side call sites. POWER-alone recovery is intentionally
+ * disabled; recovery entry is owned by the bootloader POWER+PRM check.
  */
 void dfu_check_boot_button(void);
 

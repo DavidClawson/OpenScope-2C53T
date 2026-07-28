@@ -53,8 +53,6 @@ static uint32_t run_addr_target;
 /* Defined in main.c — draw transfer state on bootloader LCD */
 extern void lcd_draw_iap_status(const char *status);
 
-void jump_to_app(uint32_t address) __attribute__((noreturn));
-
 void jump_to_app(uint32_t address)
 {
   uint32_t sp = *(uint32_t *)address;
@@ -62,10 +60,10 @@ void jump_to_app(uint32_t address)
 
   /* Validate: SP should be in SRAM, reset vector in flash */
   if ((sp & 0xFFF00000) != 0x20000000) {
-    while (1) { __NOP(); }
+    return;
   }
   if (rv < 0x08002000 || rv > 0x08100000) {
-    while (1) { __NOP(); }
+    return;
   }
 
   stkptr = sp;

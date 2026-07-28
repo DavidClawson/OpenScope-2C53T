@@ -18,6 +18,20 @@ def image(sp: int, rv: int, payload: bytes, size: int = 256) -> bytes:
 
 
 class FlashSafetyTests(unittest.TestCase):
+    def test_dfu_make_targets_preserve_stock_settings_page(self) -> None:
+        makefile = (Path(__file__).resolve().parents[1] / "firmware/Makefile").read_text()
+        self.assertIn("at32_dfuse_write.py 0x08004000 $< --preserve-blank-pages-range 0x08006000:0x08007000", makefile)
+        self.assertIn(
+            "at32_dfuse_write.py 0x08004000 $(BUILD_DIR)/$(TARGET).bin --preserve-blank-pages-range 0x08006000:0x08007000",
+            makefile,
+        )
+
+    def test_preserve_ranges_are_sector_aligned_before_hid_flash(self) -> None:
+        hid_flash = (Path(__file__).resolve().parents[1] / "scripts/hid_flash.py").read_text()
+        self.assertIn("SECTOR_SIZE = 2048", hid_flash)
+        self.assertIn("validate_preserve_ranges", hid_flash)
+        self.assertIn("not {SECTOR_SIZE}-byte sector-aligned", hid_flash)
+
     def test_stock_named_image_is_classified_and_hid_rejected(self) -> None:
         with tempfile.TemporaryDirectory() as td:
             path = Path(td) / "APP_2C53T_V1.2.0.bin"

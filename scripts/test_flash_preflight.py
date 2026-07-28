@@ -303,7 +303,7 @@ class FlashPreflightTests(unittest.TestCase):
             block0 = image(rv=0x080E07B1, marker=b"launcher").ljust(hid_flash.BLOCK_SIZE, b"\x00")
             block1 = b"\xFF" * hid_flash.BLOCK_SIZE
             block2 = b"\xFF" * hid_flash.BLOCK_SIZE
-            block3 = b"launcher".ljust(hid_flash.BLOCK_SIZE, b"\x33")
+            block3 = b"\xFF" * hid_flash.BLOCK_SIZE
             path.write_bytes(block0 + block1 + block2 + block3)
 
             class FakeDevice:
@@ -323,10 +323,6 @@ class FlashPreflightTests(unittest.TestCase):
                             if block_count != 2:
                                 raise AssertionError(f"unexpected block count {block_count}")
                             crc = hid_flash.at32_crc32_words(block0 + block1)
-                        elif address == flash_preflight.FLASH_BASE + 3 * hid_flash.BLOCK_SIZE:
-                            if block_count != 1:
-                                raise AssertionError(f"unexpected block count {block_count}")
-                            crc = hid_flash.at32_crc32_words(block3)
                         else:
                             raise AssertionError(f"unexpected CRC address 0x{address:08X}")
                         return struct.pack(">HHI", cmd, hid_flash.ACK, crc).ljust(length, b"\x00")
@@ -365,9 +361,9 @@ class FlashPreflightTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmp:
             path = Path(tmp) / "stock_user_image.bin"
             block0 = image(rv=0x080E07B1, marker=b"launcher").ljust(hid_flash.BLOCK_SIZE, b"\x00")
-            block1 = b"\xFF" * hid_flash.BLOCK_SIZE
+            block1 = b"launcher".ljust(hid_flash.BLOCK_SIZE, b"\x33")
             block2 = b"\xFF" * hid_flash.BLOCK_SIZE
-            block3 = b"launcher".ljust(hid_flash.BLOCK_SIZE, b"\x33")
+            block3 = b"\xFF" * hid_flash.BLOCK_SIZE
             path.write_bytes(block0 + block1 + block2 + block3)
 
             class FakeDevice:
@@ -384,13 +380,9 @@ class FlashPreflightTests(unittest.TestCase):
                     if cmd == hid_flash.CMD_CRC:
                         address, block_count = struct.unpack(">IH", last[3:9])
                         if address == flash_preflight.FLASH_BASE:
-                            if block_count != 1:
-                                raise AssertionError(f"unexpected block count {block_count}")
-                            crc = hid_flash.at32_crc32_words(block0)
-                        elif address == flash_preflight.FLASH_BASE + 2 * hid_flash.BLOCK_SIZE:
                             if block_count != 2:
                                 raise AssertionError(f"unexpected block count {block_count}")
-                            crc = hid_flash.at32_crc32_words(block2 + block3)
+                            crc = hid_flash.at32_crc32_words(block0 + block1)
                         else:
                             raise AssertionError(f"unexpected CRC address 0x{address:08X}")
                         return struct.pack(">HHI", cmd, hid_flash.ACK, crc).ljust(length, b"\x00")
@@ -417,8 +409,8 @@ class FlashPreflightTests(unittest.TestCase):
                     preserve_blank_blocks_from=flash_preflight.FLASH_BASE + 10 * hid_flash.BLOCK_SIZE,
                     preserve_blank_block_ranges=[
                         (
-                            flash_preflight.FLASH_BASE + hid_flash.BLOCK_SIZE,
                             flash_preflight.FLASH_BASE + 2 * hid_flash.BLOCK_SIZE,
+                            flash_preflight.FLASH_BASE + 4 * hid_flash.BLOCK_SIZE,
                         )
                     ],
                 )
@@ -428,8 +420,26 @@ class FlashPreflightTests(unittest.TestCase):
             for write in dev.writes
             if struct.unpack(">H", write[1:3])[0] == hid_flash.CMD_ADDR
         ]
-        self.assertNotIn(flash_preflight.FLASH_BASE + hid_flash.BLOCK_SIZE, addr_writes)
-        self.assertIn(flash_preflight.FLASH_BASE + 2 * hid_flash.BLOCK_SIZE, addr_writes)
+        self.assertIn(flash_preflight.FLASH_BASE + hid_flash.BLOCK_SIZE, addr_writes)
+        self.assertNotIn(flash_preflight.FLASH_BASE + 2 * hid_flash.BLOCK_SIZE, addr_writes)
+
+    def test_hid_flash_rejects_partial_sector_preserve_selection(self) -> None:
+        firmware = (
+            image(rv=0x080E07B1, marker=b"launcher").ljust(hid_flash.BLOCK_SIZE, b"\x00")
+            + b"\xFF" * hid_flash.BLOCK_SIZE
+        )
+        with self.assertRaisesRegex(RuntimeError, "part of erase sector"):
+            hid_flash.validate_preserved_sectors(
+                firmware,
+                flash_preflight.FLASH_BASE,
+                preserve_from=None,
+                ranges=[
+                    (
+                        flash_preflight.FLASH_BASE + hid_flash.BLOCK_SIZE,
+                        flash_preflight.FLASH_BASE + hid_flash.SECTOR_SIZE,
+                    )
+                ],
+            )
 
     def test_hid_memory_read_chunks_by_report_payload(self) -> None:
         class FakeDevice:

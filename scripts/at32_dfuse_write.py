@@ -16,6 +16,7 @@ PID = 0xDF11
 INTF = 0
 ALT_INTERNAL_FLASH = 0
 TRANSFER = 2048
+SECTOR_SIZE = 2048
 
 DFU_DNLOAD = 1
 DFU_UPLOAD = 2
@@ -102,6 +103,29 @@ def write_block(dev, data: bytes):
     time.sleep(0.08)
 
 
+def parse_preserve_range(text: str) -> tuple[int, int]:
+    if ":" in text:
+        start_text, end_text = text.split(":", 1)
+        start = int(start_text, 0)
+        end = int(end_text, 0)
+    elif "+" in text:
+        start_text, length_text = text.split("+", 1)
+        start = int(start_text, 0)
+        end = start + int(length_text, 0)
+    else:
+        raise argparse.ArgumentTypeError("expected START:END or START+LEN")
+    if end <= start:
+        raise argparse.ArgumentTypeError("preserve range end must be greater than start")
+    if start % SECTOR_SIZE != 0 or end % SECTOR_SIZE != 0:
+        raise argparse.ArgumentTypeError(f"preserve range must be {SECTOR_SIZE}-byte sector-aligned")
+    return start, end
+
+
+def preserve_page(page_addr: int, chunk: bytes, ranges: list[tuple[int, int]]) -> bool:
+    page_end = page_addr + len(chunk)
+    return chunk == b"\xFF" * len(chunk) and any(start <= page_addr and page_end <= end for start, end in ranges)
+
+
 def upload(dev, address: int, size: int) -> bytes:
     set_address(dev, address)
     out = bytearray()
@@ -113,13 +137,26 @@ def upload(dev, address: int, size: int) -> bytes:
     return bytes(out)
 
 
-def write_image(dev, address: int, data: bytes, *, verify: bool, skip_blank_pages: bool = False):
+def write_image(
+    dev,
+    address: int,
+    data: bytes,
+    *,
+    verify: bool,
+    skip_blank_pages: bool = False,
+    preserve_blank_page_ranges: list[tuple[int, int]] | None = None,
+):
+    preserve_blank_page_ranges = preserve_blank_page_ranges or []
     offset = 0
     while offset < len(data):
         chunk = data[offset:offset + TRANSFER]
         if len(chunk) < TRANSFER:
             chunk += b"\xFF" * (TRANSFER - len(chunk))
         page_addr = address + offset
+        if preserve_page(page_addr, chunk, preserve_blank_page_ranges):
+            print(f"preserve blank 0x{page_addr:08X}", flush=True)
+            offset += TRANSFER
+            continue
         if skip_blank_pages and chunk == b"\xFF" * len(chunk):
             print(f"erase blank 0x{page_addr:08X}", flush=True)
             clear_to_idle(dev)
@@ -150,6 +187,14 @@ def main() -> int:
         action="store_true",
         help="for all-0xFF pages, erase-to-blank instead of programming them",
     )
+    parser.add_argument(
+        "--preserve-blank-pages-range",
+        action="append",
+        type=parse_preserve_range,
+        default=[],
+        metavar="START:END",
+        help="for all-0xFF pages wholly inside this sector-aligned range, do not erase/program",
+    )
     args = parser.parse_args()
     dev = open_dev()
     clear_to_idle(dev)
@@ -159,6 +204,7 @@ def main() -> int:
         args.image.read_bytes(),
         verify=not args.no_inline_verify,
         skip_blank_pages=args.skip_blank_pages,
+        preserve_blank_page_ranges=args.preserve_blank_pages_range,
     )
     clear_to_idle(dev)
     return 0

@@ -45,6 +45,7 @@ VID = 0x2E3C
 PID = 0xAF01
 CHUNK_SIZE = 60       # data bytes per HID report (64 - 4 header)
 BLOCK_SIZE = 1024     # bootloader buffers this much before programming
+SECTOR_SIZE = 2048    # AT32F403A sectors on this 1MB part
 REPORT_SIZE = 64
 
 # IAP commands
@@ -297,6 +298,55 @@ def _block_in_preserve_ranges(addr, block_size, ranges):
     return any(start <= addr and block_end <= end for start, end in ranges)
 
 
+def validate_preserve_ranges(*, preserve_from, ranges):
+    errors = []
+    if preserve_from is not None and preserve_from % SECTOR_SIZE != 0:
+        errors.append(f"--preserve-blank-blocks-from 0x{preserve_from:08X} is not {SECTOR_SIZE}-byte sector-aligned")
+    for start, end in ranges:
+        if start % SECTOR_SIZE != 0 or end % SECTOR_SIZE != 0:
+            errors.append(
+                f"--preserve-blank-blocks-range 0x{start:08X}:0x{end:08X} is not {SECTOR_SIZE}-byte sector-aligned"
+            )
+    if errors:
+        raise RuntimeError("preserve-range preflight failed:\n  - " + "\n  - ".join(errors))
+
+
+def _preserve_qualified(addr, block, preserve_from, ranges):
+    return (
+        block == b"\xFF" * BLOCK_SIZE
+        and (
+            (preserve_from is not None and addr >= preserve_from)
+            or _block_in_preserve_ranges(addr, BLOCK_SIZE, ranges)
+        )
+    )
+
+
+def validate_preserved_sectors(firmware, app_address, *, preserve_from, ranges):
+    errors = []
+    for sector_offset in range(0, len(firmware), SECTOR_SIZE):
+        sector = firmware[sector_offset:sector_offset + SECTOR_SIZE]
+        if len(sector) < SECTOR_SIZE:
+            sector = sector.ljust(SECTOR_SIZE, b"\xFF")
+        sector_addr = app_address + sector_offset
+        blocks = [
+            (
+                sector_addr + block_offset,
+                sector[block_offset:block_offset + BLOCK_SIZE],
+            )
+            for block_offset in range(0, SECTOR_SIZE, BLOCK_SIZE)
+        ]
+        preserved = [
+            _preserve_qualified(addr, block, preserve_from, ranges)
+            for addr, block in blocks
+        ]
+        if any(preserved) and not all(preserved):
+            errors.append(
+                f"preserve selection covers only part of erase sector 0x{sector_addr:08X}:0x{sector_addr + SECTOR_SIZE:08X}"
+            )
+    if errors:
+        raise RuntimeError("preserve-sector preflight failed:\n  - " + "\n  - ".join(errors))
+
+
 def verify_written_ranges(dev, blocks):
     for address, expected in _written_ranges(blocks):
         verify_flash_crc(dev, address, expected)
@@ -372,6 +422,17 @@ def flash_firmware(
             f"maximum app payload before high recovery bootloader region is {max_size} bytes"
         )
     preserve_blank_block_ranges = preserve_blank_block_ranges or []
+    if preserve_blank_blocks:
+        validate_preserve_ranges(
+            preserve_from=preserve_blank_blocks_from,
+            ranges=preserve_blank_block_ranges,
+        )
+        validate_preserved_sectors(
+            firmware,
+            app_address,
+            preserve_from=preserve_blank_blocks_from,
+            ranges=preserve_blank_block_ranges,
+        )
 
     print(f"Padded to {len(firmware)} bytes ({len(firmware) // BLOCK_SIZE} blocks)")
 
@@ -412,13 +473,11 @@ def flash_firmware(
             block_end = offset + BLOCK_SIZE
             block = firmware[offset:block_end]
 
-            preserve_this_block = (
-                preserve_blank_blocks
-                and block == b"\xFF" * BLOCK_SIZE
-                and (
-                    (preserve_blank_blocks_from is not None and addr >= preserve_blank_blocks_from)
-                    or _block_in_preserve_ranges(addr, BLOCK_SIZE, preserve_blank_block_ranges)
-                )
+            preserve_this_block = preserve_blank_blocks and _preserve_qualified(
+                addr,
+                block,
+                preserve_blank_blocks_from,
+                preserve_blank_block_ranges,
             )
 
             if preserve_this_block:
