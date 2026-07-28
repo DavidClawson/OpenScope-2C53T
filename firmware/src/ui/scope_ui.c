@@ -802,11 +802,16 @@ static void draw_scope_debug(const theme_t *th)
     char buf[64];
 
     /* Line 1 (green): transport counters from the real FPGA path */
-    snprintf(buf, sizeof(buf), "TX:%u RX:%u DF:%u EF:%u",
-             (unsigned)fpga.tx_count,
-             (unsigned)fpga.rx_byte_count,
-             (unsigned)fpga.frame_count,
-             (unsigned)fpga.echo_count);
+    /* Line 1 (green): post-upload scope-engine config readback.
+     * SS = fpga.scope_status[] from the 0x03 status read — stock capture
+     * returns 00 01 42 2E. CL = 0x3A close status — stock returns F8.
+     * R  = first 4 raw CH1 bytes (pre-cal), to see if samples vary at all. */
+    snprintf(buf, sizeof(buf), "SS:%02X%02X%02X%02X CL:%02X R:%02X%02X%02X%02X",
+             fpga.scope_status[0], fpga.scope_status[1],
+             fpga.scope_status[2], fpga.scope_status[3],
+             fpga.h2_close_status,
+             fpga.diag_ch1_raw[0], fpga.diag_ch1_raw[1],
+             fpga.diag_ch1_raw[2], fpga.diag_ch1_raw[3]);
     font_draw_string(2, SCOPE_DBG_Y + 2, buf,
                      0x07E0, 0x0000, &font_small);  /* green */
 
@@ -824,11 +829,27 @@ static void draw_scope_debug(const theme_t *th)
     /* Line 3 (yellow): Init handshake responses + raw PB4 state
      * G1[0-3] = sync+0x05+pad, G2[4-6] = 0x12+pad, G3[7-10] = 0x15+pad+0x3B
      * PB4: raw GPIO read of the MISO pin (1=HIGH/floating, 0=driven LOW) */
-    snprintf(buf, sizeof(buf), "G1:%02X%02X G2:%02X G3:%02X%02X PB4:%d",
-             fpga.init_hs[1], fpga.init_hs[3],
-             fpga.init_hs[4],
-             fpga.init_hs[7], fpga.init_hs[10],
-             (GPIOB->idt & (1 << 4)) ? 1 : 0);
+    /* L/H = min/max across the whole CH1 acquisition buffer. If L==H the
+     * samples are a stuck constant (analog/trigger problem); if they spread,
+     * real signal is arriving and the fault is downstream in rendering. */
+    {
+        const volatile uint8_t *cb = fpga_get_ch1_buf();
+        uint8_t lo = 0xFF, hi = 0x00;
+        for (uint32_t i = 0; i < FPGA_ADC_BUF_SIZE; i++) {
+            uint8_t v = cb[i];
+            if (v < lo) lo = v;
+            if (v > hi) hi = v;
+        }
+        /* CFG = Gowin STATUS_REGISTER (opcode 0x41) read right after the 0x3A
+         * close — the authoritative config verdict, captured at fpga.c:1692 but
+         * never surfaced until now. All-FF = FPGA never entered config-receive
+         * (config-entry wall). Non-FF = bytes reached the config engine; decode
+         * CRC_ERROR / ID_VERIFY_FAILED / DONE bits. */
+        snprintf(buf, sizeof(buf), "CFG:%02X%02X%02X%02X L%u H%u",
+                 fpga.cfg_status_reg[0], fpga.cfg_status_reg[1],
+                 fpga.cfg_status_reg[2], fpga.cfg_status_reg[3],
+                 (unsigned)lo, (unsigned)hi);
+    }
     font_draw_string(2, SCOPE_DBG_Y + 28, buf,
                      0xFFE0, 0x0000, &font_small);  /* yellow */
 

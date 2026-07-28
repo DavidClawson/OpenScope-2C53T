@@ -376,3 +376,11 @@ soak-quick: emu
 	python3 ../scripts/soak_test.py --no-build --duration 30 --seed $(SOAK_SEED) --verbose
 
 .PHONY: all clean disasm size renode soak-test soak-quick flash flash-dfu bootloader flash-bootloader flash-all guest guest-warmtest guest-usart-silent emu
+
+# Experiment E (2026-07-27): park in fpga_init at the exact config-enable instant
+# (prelude 05/12 sent, CS LOW, 0x15 not yet clocked) so SWD can dump peripheral
+# state for a diff vs the stock spin image (/tmp/APP_2C53T_expE_spin_stock.bin).
+# The device intentionally never reaches the scheduler — reflash to recover.
+guest-spin: CFLAGS += -DGUEST_BUILD -DFPGA_SPIN_AT_CONFIG_ENABLE=1
+guest-spin: LDSCRIPT = ld/at32f403a_guest.ld
+guest-spin: clean all

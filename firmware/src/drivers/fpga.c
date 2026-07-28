@@ -298,6 +298,13 @@ static void spi3_pump(const uint8_t *tx, volatile uint8_t *rx, uint32_t n)
  * USART traffic skipped, and NO auto-tasks created — the SPI3 wire stays quiet so
  * `fpga reinit` / `spi3 xfer` run unperturbed. Watch first 0x05 prelude MISO for
  * 0x80->0xFF and `0x11` IDCODE for 01 20 68 1B. See docs/fpga_stock_bringup_diff_plan.md. */
+/* Experiment E: spin forever at the config-enable instant for an SWD state dump.
+ * Build with `make guest-spin`. Never enable in a normal build — the device
+ * parks in fpga_init and never reaches the scheduler (recover by reflashing). */
+#ifndef FPGA_SPIN_AT_CONFIG_ENABLE
+#define FPGA_SPIN_AT_CONFIG_ENABLE  0
+#endif
+
 #ifndef FPGA_USART_SILENT_SCOPE
 #define FPGA_USART_SILENT_SCOPE  0
 #endif
@@ -1623,6 +1630,16 @@ uint8_t fpga_spi3_config_sequence(const fpga_cfg_seq_opts_t *opt)
 
         /* [3] 15 00 — own frame (mode 0) or held LOW into the upload (mode 2) */
         SPI3_CS_ASSERT();
+#if FPGA_SPIN_AT_CONFIG_ENABLE
+        /* Experiment E (2026-07-27): park forever with the bus in EXACTLY the
+         * state stock has at flash 0x0802DA42 — prelude 05/12 already sent, CS
+         * LOW, 0x15 not yet clocked — so SWD can dump the full peripheral state
+         * and diff it against the stock spin image (which has `b .` patched in
+         * at that same instruction). Feed the IWDG in the loop: our firmware
+         * starts it late, but it survives a soft reset from a previous boot and
+         * must not reset us mid-dump. */
+        for (;;) { wdt_counter_reload(); }
+#endif
         fpga.init_hs[7] = spi3_xfer(0x15);
         fpga.init_hs[8] = spi3_xfer(0x00);
         if (opt->prelude_frame_mode != 2) SPI3_CS_DEASSERT();
@@ -2081,6 +2098,33 @@ void fpga_init(void)
         .prelude_gap_ms = 100,
         .post_close_ms  = 600,
         .arm_pb11       = 1,
+        /* 2026-07-27: the boot path had never set these two, so both took the
+         * zero default — and both defaults were wrong.
+         *
+         * cmd_br = 7 (/256): the SSPI READ path is clock-limited (this file,
+         * L1564: "IDCODE reads garbage at /2, clean at /256"). At the previous
+         * default of 0 (/2, 60MHz) every status read — 0x3A close, the 0x03
+         * scope status, and the 0x41 STATUS_REGISTER — was clocked in the known-
+         * garbage domain, which is exactly what the bench showed (CL=FF instead
+         * of stock's F8; SS/CFG returning rotations of a repeating 00 01 C8 10
+         * pattern). Only the bulk 0x3B payload uses upload_br, so this does not
+         * slow the 115KB upload.
+         *
+         * KNOWN TRADEOFF: stock clocks its prelude writes at /2, so /256 is a
+         * deliberate divergence on the WRITE side. It is currently the right
+         * call because stock never gates on the config status reply (it ignores
+         * it entirely) whereas we depend on reading it, and switching br mid-CS-
+         * frame would glitch the frame. Revisit if write timing is ever
+         * implicated. Bench-checked 2026-07-27: prelude at /256 changed nothing
+         * behaviourally, and turned CFG from garbage (8001C810) into the real
+         * value (00039020).
+         *
+         * trailing_clocks: left at the stock-faithful 0. Gowin runs CRC-check /
+         * DONE / wakeup on CCLK cycles after the last config byte and
+         * rosenrot00's 2C23T loader clocks ~200 dummy bytes, so 256 was tried
+         * on the bench 2026-07-27 — it did NOT produce DONE (status unchanged at
+         * 00039020). Reverted rather than left as untested drift. */
+        .cmd_br         = 7,
     });
 #endif
 
