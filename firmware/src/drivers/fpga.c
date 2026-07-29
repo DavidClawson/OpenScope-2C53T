@@ -351,6 +351,39 @@ static void spi3_pump(const uint8_t *tx, volatile uint8_t *rx, uint32_t n)
 #define FPGA_FIDELITY_DRIVE_PB9  0
 #endif
 
+/* RECONFIG_N pulse candidate (2026-07-28, Experiment G).
+ *
+ * Exp F closed all five enumerable MCU-state differences and the wall held
+ * (ED = 0x00039020, Edit Mode bit7 clear). That sends us back to apicula's
+ * 2026-06-13 reply (docs/CONFIG_ENTRY_REPLY_FROM_APICULA.md), which already
+ * told us the mechanism: an already-configured, auto-booted, RUNNING GW1N does
+ * not re-enter config from an SSPI CONFIG_ENABLE alone. The documented triggers
+ * are **RECONFIG_N (low pulse >=25ns) or a power cycle**. FLASH_LOCK is a red
+ * herring (flash read-back protection only, per UG290 Table 7-12 note [2]).
+ *
+ * The critical realisation: **Exp E was a STATIC snapshot and is structurally
+ * blind to transitions.** A RECONFIG_N pulse issued by stock at any point
+ * BEFORE the config-enable instant leaves the pin sitting HIGH — identical to
+ * a pin that was merely driven HIGH and never pulsed. So "PC2/PB12 read HIGH in
+ * both dumps" is NOT evidence stock didn't pulse them, and Exp F driving them
+ * statically HIGH was the wrong test for a pulse.
+ *
+ * PC2 and PB12 are now the top RECONFIG_N candidates: outside the Exp C-refuted
+ * analog-frontend bank they are the ONLY pins stock drives that we leave
+ * floating. Pulse LOW -> HIGH before the prelude via the existing reset_port /
+ * reset_pin / reset_low_ms machinery.
+ *
+ * Port encoding matches fpga_cfg_seq_opts_t: 0=none, 1=A, 2=B, 3=C, 4=D, 5=E.
+ *   PC2  -> port 3, pin 2   (`make guest-reconfig-pc2`)
+ *   PB12 -> port 2, pin 12  (`make guest-reconfig-pb12`)
+ */
+#ifndef FPGA_FIDELITY_RECONFIG_PORT
+#define FPGA_FIDELITY_RECONFIG_PORT  0
+#endif
+#ifndef FPGA_FIDELITY_RECONFIG_PIN
+#define FPGA_FIDELITY_RECONFIG_PIN   0
+#endif
+
 /* Boot-into-bus-released experiment (2026-06-14, experimental/esp32-bringup).
  * For the external-master bench rig: the MCU brings up SPI3/USART/control pins,
  * then — instead of running its own SSPI config upload — immediately hands the
@@ -2221,6 +2254,11 @@ void fpga_init(void)
          * That is the best of both: stock-faithful writes, valid reads. */
         .cmd_br         = 0,
         .probe_edit     = 1,
+        /* Experiment G: optional RECONFIG_N pulse on the candidate pin BEFORE
+         * the prelude (0/0 = no pulse = plain Exp F behaviour). */
+        .reset_port     = FPGA_FIDELITY_RECONFIG_PORT,
+        .reset_pin      = FPGA_FIDELITY_RECONFIG_PIN,
+        .reset_low_ms   = 10,
 #else
         .cmd_br         = 7,
 #endif

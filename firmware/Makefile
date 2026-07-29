@@ -397,3 +397,19 @@ guest-spin: clean all
 guest-fidelity: CFLAGS += -DGUEST_BUILD -DFPGA_STOCK_FIDELITY=1 -DFPGA_USART_SILENT_SCOPE=1
 guest-fidelity: LDSCRIPT = ld/at32f403a_guest.ld
 guest-fidelity: clean all
+
+# Experiment G (2026-07-28): RECONFIG_N pulse candidates. Exp F closed every
+# enumerable static MCU-state difference and the wall held, which sends us back
+# to apicula's answer (docs/CONFIG_ENTRY_REPLY_FROM_APICULA.md): a running GW1N
+# needs RECONFIG_N (low pulse >=25ns) or a power cycle before CONFIG_ENABLE will
+# engage. Exp E's static snapshot cannot see a pulse — a pin pulsed LOW earlier
+# reads HIGH at the config-enable instant, exactly like one merely held HIGH.
+# PC2 and PB12 are the only pins stock drives that we float (outside the Exp
+# C-refuted frontend bank), so they are the candidates. Fidelity build + pulse.
+guest-reconfig-pc2: CFLAGS += -DGUEST_BUILD -DFPGA_STOCK_FIDELITY=1 -DFPGA_USART_SILENT_SCOPE=1 -DFPGA_FIDELITY_RECONFIG_PORT=3 -DFPGA_FIDELITY_RECONFIG_PIN=2
+guest-reconfig-pc2: LDSCRIPT = ld/at32f403a_guest.ld
+guest-reconfig-pc2: clean all
+
+guest-reconfig-pb12: CFLAGS += -DGUEST_BUILD -DFPGA_STOCK_FIDELITY=1 -DFPGA_USART_SILENT_SCOPE=1 -DFPGA_FIDELITY_RECONFIG_PORT=2 -DFPGA_FIDELITY_RECONFIG_PIN=12
+guest-reconfig-pb12: LDSCRIPT = ld/at32f403a_guest.ld
+guest-reconfig-pb12: clean all
