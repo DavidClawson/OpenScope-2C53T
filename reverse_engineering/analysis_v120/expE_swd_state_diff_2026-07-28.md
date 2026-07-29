@@ -247,3 +247,63 @@ PC2, PB12, or anything else), or the trigger is not a GPIO at all.
    uses). apicula's recommendation in the same reply, and it bypasses the
    trigger problem entirely rather than solving it. **SRAM ONLY — never
    `--write-flash`; the NV flash holds the sole copy of the stock meter design.**
+
+---
+
+# Step 1 result — static hunt for a RECONFIG_N pulse (2026-07-28)
+
+Tool: `scripts/find_gpio_pulses.py` (disassembles the stock image and reports
+every store to a GPIO `ODR`/`BSRR(scr)`/`BRR(clr)` offset, dropping `sp`-relative
+stack traffic).
+
+## Negative result on the obvious idiom
+
+Scanning the WHOLE image for a `str rX,[rY,#20]` (clr) followed within a few
+instructions by `str rZ,[rY,#16]` (scr) on the **same base register** — the
+textbook pulse — returns **56 candidates, and every one before the
+config-enable instruction at `0x0802DA42` has `base=sp`**, i.e. stack-frame
+stores, not GPIO at all. The first genuine register-based pair is `0x0802E136`,
+which is *after* config-enable.
+
+**So stock contains no same-register clr→scr pulse pair before CONFIG_ENABLE.**
+
+## But the search is not closed — 5 real candidates remain
+
+Restricting to master init (`0x08023A50`) through config-enable (`0x0802DA42`)
+and dropping `sp`, there are **21 GPIO-shaped stores**, of which **five drive a
+pin LOW**:
+
+```
+  0x080295DE  str r2,[sl,#20]   clr/BRR
+  0x08029DCA  str r0,[r4,#20]   clr/BRR
+  0x08029DEE  str r1,[r0,#20]   clr/BRR
+  0x0802B2D0  str r0,[r6,#20]   clr/BRR
+  0x0802B308  str r0,[r7,#20]   clr/BRR
+```
+
+with `scr` writes interleaved at `0x0802B284/2AA/346/412`, `0x0802C626/62C/642`
+and a last one at `0x0802D63C` before config-enable.
+
+These are pins stock drives LOW during init. **Which port and pin each targets is
+unresolved** — the base registers (`sl`, `r4`, `r0`, `r6`, `r7`) are loaded
+elsewhere, and resolving them needs dataflow, not a regex. That is a job for the
+existing Ghidra project (`ghidra_project/`), not a disassembly scan.
+
+Note the scan also cannot see:
+- a reset performed via the **BSRR upper half** (`BSRR = 1 << (pin+16)`), which
+  appears as a second `#16` store rather than a `#20` store;
+- a pulse produced by a HAL call (`gpio_bits_reset()`) rather than inline stores;
+- a write through an absolute literal address rather than a base register.
+
+## Where this leaves the hunt
+
+The five `clr/BRR` sites above are the concrete, bounded next target: resolve
+each base register to a port/pin in Ghidra, and check whether any is set HIGH
+again before `0x0802DA42`. Any that is = a RECONFIG_N candidate, and it would be
+invisible to Exp E's static diff by construction.
+
+Reproduce with:
+
+```
+scripts/find_gpio_pulses.py "archive/2C53T Firmware V1.2.0/APP_2C53T_V1.2.0_251015.bin"
+```
