@@ -800,3 +800,70 @@ working at the moment of the halt.
    and read IDCODE + STATUS there. That is the only window in which a
    successfully-configured part might still answer the config engine. Requires
    locating the `0x3A` write in the disassembly and a new spin patch.
+
+---
+
+# Experiment M (2026-07-28) — anchored proof that we never enter config
+
+## Result — bench unit #1, `make guest-idcode` + the post-`0x3A` anchor
+
+```
+Magenta: ID@0 SM:N RP:Y PO@0 CL@0
+Yellow:  ST:00039020  US:00000000
+```
+
+| checkpoint | reading | config port |
+|---|---|---|
+| pre-prelude, pristine bus | `ID@0`, `SM:N`, `RP:Y` | **open** |
+| after CONFIG_ENABLE (`0x15`) | `PO@0` | **open** |
+| after the full 115,638-byte upload and `0x3A` close | **`CL@0`** | **open** |
+
+Exp L established that a successfully configured part stops answering `0x11` —
+the SSPI config port closes and the pins pass to the user design. Ours answers it
+perfectly aligned at all three checkpoints.
+
+**We are definitively not configured**, proven on a read path validated against a
+known answer at every step rather than inferred from a status value.
+
+And the status register never moves: `ST` (pre-prelude) = `ED` (post-CONFIG_ENABLE,
+Exp F/I) = `CFG` (post-close, Exp I) = `0x00039020`, with the error nibble clear
+throughout.
+
+## What this pins down
+
+No CRC_ERROR, no BAD_COMMAND, no ID_VERIFY_FAILED, no TIMEOUT — yet nothing is
+configured. Combined with the port staying open, the bytes are being **silently
+discarded, not rejected**: they were never treated as configuration data, because
+the part never entered config mode. That is a different failure from "our
+bitstream is wrong" or "our framing is wrong", both of which would produce an
+error bit, and it is consistent with everything since Exp J.
+
+The part decodes *reads* (IDCODE, USERCODE, STATUS all discriminate correctly)
+but does not act on the config-mode *commands*. `0x15` in particular changes
+nothing observable.
+
+## Known defect in this build's overlay
+
+The Exp J overlay block replaces the whole overlay and early-returns, so the
+`CFG:... D E A` line never renders in `guest-idcode` — the `A` anchor added in
+79ce306 was not visible. No information was lost (`CL@` is the same measurement
+from the same read) but the two should not silently shadow each other.
+
+## Next: use the instrument to search, not to confirm
+
+Every remaining question is now cheap to ask, because STATUS and the open/closed
+test are both trustworthy and both on-screen.
+
+1. **Step-resolved status trace.** Read the anchored STATUS after each of `0x05`,
+   `0x12`, `0x15`, the `0x3B` open, mid-upload, post-upload, post-`0x3A`. If it
+   never moves at any step, the part is ignoring every config command while still
+   answering reads — which localises the problem precisely and cheaply.
+2. **Command-order variants.** Gowin's documented SSPI flow is CONFIG_ENABLE
+   first, then ERASE_SRAM, then write. Stock's captured order is `05` -> `12` ->
+   `15`, i.e. CONFIG_ENABLE last. Worth one build to try the documented order and
+   watch STATUS.
+3. **RECONFIG_N hunt as a search rather than a guess.** Exp G "refuted" PC2 and
+   PB12 by watching a number we could not read. With live status, pulse a
+   candidate and look for bit 7 immediately.
+4. The `DONE=0` + `POR=1` + `MEMORY_ERASE=1` combination on a part supposedly
+   running its NV design remains unexplained and may be the thread that matters.
