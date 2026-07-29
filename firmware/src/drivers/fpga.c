@@ -1708,30 +1708,42 @@ typedef struct {
     const char *name;
 } sweep_cand_t;
 
+/* SWEEP v2 CANDIDATES — chosen by the Exp P static scan, not a priori.
+ *
+ * Exp P resolved every GPIO level write in stock up to CONFIG_ENABLE and paired
+ * them by pin mask. These are the pins stock drives BOTH low and high, i.e. the
+ * only ones that are pulse-shaped at all:
+ *
+ *   PA15 PB10 PB11 PC1 PC2 PC4 PC9 PC11 PD12 PE4 PE5 PE6   (+ PD13, LOW only)
+ *
+ * PC9 is power hold and is excluded — driving it low kills the device.
+ *
+ * Versus Exp O this ADDS PC1, PC4, PD12 and DROPS twelve pins (PA6, PA10, PB0,
+ * PB7, PB9, PB12, PC5, PC6, PC10, PC12, PE2, PE3) that stock never drives LOW at
+ * all, so they were never pulse candidates.
+ *
+ *   PC1  — entirely new; in no pinout doc, never previously considered
+ *   PC4  — hunted 2026-06 (3c53e53, "negative") but under the unreadable-status
+ *          regime, so it has never had a valid test
+ *   PD12 — strap_pd1213 tested it as a HELD level; a pulse is a different test
+ *          (Exp E is blind to transitions by construction)
+ *
+ * All are pins stock itself drives, so the MCU owns them: no contention. */
 static const sweep_cand_t sweep_cands[] = {
-    /* FPGA-adjacent control straps — the highest-prior candidates */
-    { GPIOC,  6, "PC6"  },   /* FPGA SPI enable strap */
-    { GPIOB, 11, "PB11" },   /* FPGA active mode */
-    { GPIOC, 11, "PC11" },   /* meter MUX enable */
-    { GPIOC,  2, "PC2"  },   /* Exp E: stock drives PP HIGH, we float — redo Exp G */
-    { GPIOB, 12, "PB12" },   /* Exp E: same — redo Exp G */
-    { GPIOB,  9, "PB9"  },   /* Exp E: stock AF-PP, we float */
-    { GPIOA,  6, "PA6"  },   /* undocumented frontend control, stock drives it */
-    /* Analog-frontend relay / gain bank (static posture refuted by Exp C) */
-    { GPIOC, 12, "PC12" },
+    /* Newly surfaced by Exp P — the reason this build exists */
+    { GPIOC,  1, "PC1"  },
+    { GPIOC,  4, "PC4"  },
+    { GPIOD, 12, "PD12" },
+    { GPIOD, 13, "PD13" },   /* driven LOW by stock; HIGH not paired, included anyway */
+    /* Pulse-shaped and already refuted at +1ms — retested with transient sampling */
+    { GPIOC,  2, "PC2"  },
+    { GPIOC, 11, "PC11" },
+    { GPIOB, 11, "PB11" },
+    { GPIOB, 10, "PB10" },
+    { GPIOA, 15, "PA15" },
     { GPIOE,  4, "PE4"  },
     { GPIOE,  5, "PE5"  },
     { GPIOE,  6, "PE6"  },
-    { GPIOA, 15, "PA15" },
-    { GPIOA, 10, "PA10" },
-    { GPIOB, 10, "PB10" },
-    /* Button-matrix drive lines — MCU-owned outputs, cheap to include */
-    { GPIOB,  0, "PB0"  },
-    { GPIOC,  5, "PC5"  },
-    { GPIOC, 10, "PC10" },
-    { GPIOE,  2, "PE2"  },
-    { GPIOE,  3, "PE3"  },
-    { GPIOB,  7, "PB7"  },
 };
 #define SWEEP_N ((uint8_t)(sizeof(sweep_cands) / sizeof(sweep_cands[0])))
 
@@ -1767,6 +1779,7 @@ void fpga_reconfig_pin_sweep(void)
     fpga.sweep_anchor_fail = 0;
     fpga.sweep_first_hit   = 0xFF;
     fpga.sweep_hit_status  = 0;
+    fpga.sweep_hit_phase   = 0;
 
     int sched_running = (xTaskGetSchedulerState() == taskSCHEDULER_RUNNING);
     if (sched_running && acq_task_handle) vTaskSuspend(acq_task_handle);
@@ -1795,26 +1808,54 @@ void fpga_reconfig_pin_sweep(void)
         port->scr = mask;                 /* HIGH — release */
         fpga_scope_delay_ms(1);
 
-        /* CONFIG_ENABLE in its own CS frame, at stock's /2. */
-        SPI3_CS_ASSERT();
-        spi3_xfer(0x15);
-        spi3_xfer(0x00);
-        SPI3_CS_DEASSERT();
+        /* PHASE 1 — watch the pulse alone. Exp O's blind spot: it sampled ONCE at
+         * a fixed +1ms. If pulsing the real RECONFIG_N makes the part reload its
+         * design from NV flash, that is a TRANSIENT — the status moves and then
+         * settles, plausibly back to something indistinguishable from baseline by
+         * the time a single late snapshot lands. Sample across the window instead
+         * and flag ANY deviation at ANY point. */
+        uint8_t  phase = 0;
+        uint32_t hit   = 0;
+        uint8_t  afail = 0;
 
-        uint32_t st = sweep_read_status();
+        for (unsigned k = 0; k < 12 && !phase; k++) {
+            uint32_t st = sweep_read_status();
+            if (st == 0xFFFFFFFFu)            afail = 1;
+            else if (st != fpga.sweep_baseline) { phase = 1; hit = st; }
+            fpga_scope_delay_ms(10);
+        }
+
+        /* PHASE 2 — did the pulse make CONFIG_ENABLE land? */
+        if (!phase) {
+            SPI3_CS_ASSERT();
+            spi3_xfer(0x15);
+            spi3_xfer(0x00);
+            SPI3_CS_DEASSERT();
+
+            for (unsigned k = 0; k < 12 && !phase; k++) {
+                uint32_t st = sweep_read_status();
+                if (st == 0xFFFFFFFFu)            afail = 1;
+                else if (st != fpga.sweep_baseline) { phase = 2; hit = st; }
+                fpga_scope_delay_ms(10);
+            }
+        }
 
         /* Restore before evaluating, so an early exit can never leave a pin driven. */
         *cfg = saved;
         if (saved_od) port->scr = mask; else port->clr = mask;
 
-        if (st == 0xFFFFFFFFu) {
-            fpga.sweep_anchor_fail++;
-        } else if (st != fpga.sweep_baseline) {
+        if (phase) {
             if (fpga.sweep_first_hit == 0xFF) {
                 fpga.sweep_first_hit  = i;
-                fpga.sweep_hit_status = st;
+                fpga.sweep_hit_status = hit;
+                fpga.sweep_hit_phase  = phase;
             }
             fpga.sweep_hits++;
+        } else if (afail) {
+            /* Anchor failed at some point and never produced a valid deviation.
+             * Not a hit — but not nothing either: a pin that CLOSES the config
+             * port would look exactly like this (Exp L). */
+            fpga.sweep_anchor_fail++;
         }
         fpga.sweep_tested = i + 1;
     }

@@ -312,6 +312,14 @@ typedef struct {
     volatile uint8_t  sweep_first_hit;  /* index into the candidate table, 0xFF = none */
     volatile uint32_t sweep_baseline;   /* anchored STATUS before the sweep */
     volatile uint32_t sweep_hit_status; /* anchored STATUS at the first hit */
+    volatile uint8_t  sweep_hit_phase;  /* 0 = none, 1 = during the post-pulse
+                                         * sampling window (the pulse ALONE did
+                                         * something — a reconfiguration), 2 =
+                                         * during the post-CONFIG_ENABLE window
+                                         * (the pulse made 0x15 land). Exp O could
+                                         * not distinguish these: it took a single
+                                         * snapshot at a fixed +1ms and would have
+                                         * missed a transient entirely. */
 
     /* Experimental stock runtime shadow for scope-mode bench work.
      * These are NOT the original firmware RAM locations. They are a small

@@ -823,8 +823,16 @@ static void draw_scope_debug(const theme_t *th)
                  (unsigned long)fpga.sweep_baseline);
         font_draw_string(2, SCOPE_DBG_Y + 15, buf, 0x07FF, 0x0000, &font_small);
 
-        snprintf(buf, sizeof(buf), "HIT:%s %08lX",
-                 fpga_sweep_pin_name(fpga.sweep_first_hit),
+        /* PH distinguishes two very different findings, which Exp O's single
+         * snapshot could not tell apart:
+         *   P = the PULSE ALONE moved the status — the pin triggered something
+         *       on its own, which is what a real RECONFIG_N does (reload from NV).
+         *   C = the status only moved after CONFIG_ENABLE — the pulse made 0x15
+         *       land, i.e. it unlocked config entry. This is the jackpot. */
+        const char *ph = (fpga.sweep_hit_phase == 1) ? "P" :
+                         (fpga.sweep_hit_phase == 2) ? "C" : "-";
+        snprintf(buf, sizeof(buf), "HIT:%s/%s %08lX",
+                 fpga_sweep_pin_name(fpga.sweep_first_hit), ph,
                  (unsigned long)fpga.sweep_hit_status);
         font_draw_string(2, SCOPE_DBG_Y + 28, buf, 0xFFE0, 0x0000, &font_small);
 
