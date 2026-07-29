@@ -267,6 +267,29 @@ typedef struct {
     volatile uint8_t  probe_idcode_close[8];
     volatile int8_t   probe_id_bit_close;
 
+    /* ── Step-resolved config-status trace (2026-07-28) ────────────────────
+     * The whole sequence measured one checkpoint at a time, each anchored on the
+     * IDCODE so a reading is only kept if the read path proved itself first.
+     * Captures sit at CS-frame BOUNDARIES only — never inside a frame, and never
+     * between the 0x3B open and its data, which would break the upload frame.
+     *
+     *   0  pristine, before the 05 prelude
+     *   1  after 05 00   (ERASE_SRAM)
+     *   2  after 12 00   (INIT_ADDR)
+     *   3  after 15 00   (CONFIG_ENABLE)
+     *   4  after the full 115,638-byte upload, before 3A
+     *   5  after 3A 00   (CONFIG_DISABLE / close)
+     *
+     * cfg_trace[i] is anchor-corrected. 0xFFFFFFFF means the anchor FAILED at
+     * that checkpoint and the value is not to be believed — the same refusal the
+     * SWD script makes, rather than storing a plausible-looking number.
+     *
+     * If all six are identical the part ignores every config command while still
+     * answering reads, which localises the failure without further guessing. */
+#define FPGA_CFG_TRACE_N 6
+    volatile uint32_t cfg_trace[FPGA_CFG_TRACE_N];
+    volatile int8_t   cfg_trace_anchor[FPGA_CFG_TRACE_N];
+
     /* Experimental stock runtime shadow for scope-mode bench work.
      * These are NOT the original firmware RAM locations. They are a small
      * explicit mirror we can inspect and stage from the shell while testing
@@ -335,6 +358,11 @@ typedef struct {
     uint8_t  reload_3c;       /* 1 = send Gowin RELOAD (0x3C) at /256 before the
                                *     prelude — software reconfig trigger; does it
                                *     clear GWVLD/FLASH_LOCK and let CONFIG_ENABLE land? */
+    uint8_t  cfg_trace;       /* 1 = capture the anchored step-resolved status trace
+                               *     at all six CS-frame boundaries (see cfg_trace[]).
+                               *     Adds read frames between the prelude steps, so
+                               *     keep it off for stock-faithful runs. Requires
+                               *     prelude_frame_mode 0 (split) for steps 1-3. */
     uint8_t  probe_idcode;    /* 1 = Exp J anchored opcode-discrimination probe: read
                                *     0x11/0x00/0x41/0x13 at /256 (8 bytes each) BEFORE
                                *     the prelude, and 0x11 again after CONFIG_ENABLE.

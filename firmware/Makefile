@@ -432,3 +432,20 @@ guest-reconfig-pb12: clean all
 guest-idcode: CFLAGS += -DGUEST_BUILD -DFPGA_STOCK_FIDELITY=1 -DFPGA_USART_SILENT_SCOPE=1 -DFPGA_IDCODE_PROBE=1
 guest-idcode: LDSCRIPT = ld/at32f403a_guest.ld
 guest-idcode: clean all
+
+# Step-resolved anchored config-status trace (2026-07-28).
+# Exp M proved we never enter config mode: the port answers IDCODE at every
+# checkpoint and STATUS never moves. This build resolves that by STEP — the
+# anchored STATUS is captured at all six CS-frame boundaries (pristine, after
+# 05, after 12, after 15, after the full upload, after 3A), each one validated
+# against the known IDCODE first and DISCARDED if the anchor fails.
+#   all six identical => the part ignores every config command while still
+#                        answering reads; the failure is config ENTRY, full stop.
+#   one step moves    => that is where our sequence first has an effect, and
+#                        where to aim next.
+#   an 'x' partway    => the config port CLOSED at that step (Exp L behaviour),
+#                        which would mean something DID take.
+# Built on the fidelity image so wire conditions match Exp F/I/M.
+guest-trace: CFLAGS += -DGUEST_BUILD -DFPGA_STOCK_FIDELITY=1 -DFPGA_USART_SILENT_SCOPE=1 -DFPGA_CFG_TRACE_BUILD=1
+guest-trace: LDSCRIPT = ld/at32f403a_guest.ld
+guest-trace: clean all

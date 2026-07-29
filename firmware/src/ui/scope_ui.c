@@ -801,6 +801,51 @@ static void draw_scope_debug(const theme_t *th)
 
     char buf[64];
 
+#if defined(FPGA_CFG_TRACE_BUILD) && FPGA_CFG_TRACE_BUILD
+    /* ── Step-resolved anchored status trace ────────────────────────────────
+     * Six checkpoints through the config sequence, each anchored on the IDCODE.
+     * Checked in this order before drawing any conclusion:
+     *
+     *   A: line     the anchor at each checkpoint. '0' = IDCODE found aligned,
+     *               'x' = anchor FAILED and that Tn is NOT a measurement. An 'x'
+     *               appearing partway through is itself the finding: the config
+     *               port closed at that step (Exp L behaviour).
+     *   T0..T5      anchor-corrected STATUS. FFFFFFFF means "not measured".
+     *
+     * All six identical => the part ignores every config command while still
+     * answering reads. Any step where it MOVES is where the sequence first has
+     * an effect, and is where to aim next. */
+    {
+        snprintf(buf, sizeof(buf), "T0:%08lX T1:%08lX",
+                 (unsigned long)fpga.cfg_trace[0], (unsigned long)fpga.cfg_trace[1]);
+        font_draw_string(2, SCOPE_DBG_Y + 2, buf, 0x07E0, 0x0000, &font_small);
+
+        snprintf(buf, sizeof(buf), "T2:%08lX T3:%08lX",
+                 (unsigned long)fpga.cfg_trace[2], (unsigned long)fpga.cfg_trace[3]);
+        font_draw_string(2, SCOPE_DBG_Y + 15, buf, 0x07FF, 0x0000, &font_small);
+
+        snprintf(buf, sizeof(buf), "T4:%08lX T5:%08lX",
+                 (unsigned long)fpga.cfg_trace[4], (unsigned long)fpga.cfg_trace[5]);
+        font_draw_string(2, SCOPE_DBG_Y + 28, buf, 0xFFE0, 0x0000, &font_small);
+
+        char a[FPGA_CFG_TRACE_N + 1];
+        for (unsigned i = 0; i < FPGA_CFG_TRACE_N; i++) {
+            int8_t o = fpga.cfg_trace_anchor[i];
+            a[i] = (o < 0) ? 'x' : (char)('0' + (o % 10));
+        }
+        a[FPGA_CFG_TRACE_N] = '\0';
+        /* MV = the count of checkpoints whose status differs from T0. 0 means the
+         * register never moved anywhere in the sequence. */
+        unsigned moved = 0;
+        for (unsigned i = 1; i < FPGA_CFG_TRACE_N; i++)
+            if (fpga.cfg_trace[i] != fpga.cfg_trace[0]) moved++;
+        snprintf(buf, sizeof(buf), "A:%s MV:%u H2:%c", a, moved,
+                 fpga.h2_upload_done ? 'Y' : 'N');
+        font_draw_string(2, SCOPE_DBG_Y + 41, buf, 0xF81F, 0x0000, &font_small);
+    }
+    return;
+#endif
+
 #if defined(FPGA_IDCODE_PROBE) && FPGA_IDCODE_PROBE
     /* ── Experiment J overlay: the anchored opcode-discrimination probe ──────
      * Replaces the normal overlay entirely for this build. Four opcodes read at
