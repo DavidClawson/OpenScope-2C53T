@@ -307,3 +307,30 @@ Reproduce with:
 ```
 scripts/find_gpio_pulses.py "archive/2C53T Firmware V1.2.0/APP_2C53T_V1.2.0_251015.bin"
 ```
+
+## CORRECTION — three of the "five candidates" are not GPIO at all
+
+Resolving the base registers from the disassembly (no Ghidra needed — they are
+`movw`/`movt` immediate pairs) shows the scan produced **false positives**. Its
+premise was "offset `+0x14` = GPIO BRR", but every peripheral has a `+0x14`
+register, so timer writes matched too:
+
+| site | base reg loaded as | effective | verdict |
+|---|---|---|---|
+| `0x08029DCA` | `movw #0x1400` + `movt #0x4000` | `0x40001400` | **TMR7** — not GPIO |
+| `0x0802B2D0` | `movw #0x5404` + `movt #0x4001` | `0x40015404` | APB2 timer range — not GPIO |
+| `0x0802B308` | `movw #0x1C00` + `movt #0x4000` | `0x40001C00` | **TMR13** — not GPIO |
+| `0x080295DE` | `mov sl, r0` @ `0x08029406` | function argument | **unresolved** |
+| `0x08029DEE` | `ldr r0,[r5,#0/#4]` | pointer from a struct | **unresolved** |
+
+GPIO bases are `0x40010800/0C00/1000/1400/1800`; none of the three resolved
+sites is in that range.
+
+**Net: the static scan finds NO confirmed GPIO LOW-drive in stock before
+CONFIG_ENABLE.** Two sites remain genuinely unresolved because their base
+arrives indirectly (a function parameter and a struct pointer) — those need real
+dataflow analysis, which is what Ghidra is for.
+
+**Lesson for the tool:** `find_gpio_pulses.py` must resolve the base register to
+a GPIO port before reporting, rather than assuming the offset implies GPIO.
+Until it does, treat its output as candidates to verify, not findings.
