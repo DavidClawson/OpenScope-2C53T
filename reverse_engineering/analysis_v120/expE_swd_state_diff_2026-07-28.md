@@ -664,3 +664,73 @@ result above, so the probe was not the cause. This unit has now shown an
 unexplained early-boot hang twice (see also the splash-hang noted 2026-07-27).
 It is intermittent, unexplained, and worth keeping in view — an early-boot fault
 that corrupts a bench result would be easy to mistake for a real finding.
+
+---
+
+# Experiment K (2026-07-28) — Exp H redone, anchored: stock and ours are identical
+
+Re-ran the SWD status read on parked stock with `scripts/swd_fpga_status.sh`
+rewritten to anchor on the known IDCODE first (commit 2d43d34).
+
+```
+park       : SPI3 CTRL1 = 0x00000347  SPE=1 BR=0 ; PB6/CS=0 ; PB11=1
+ANCHOR OK  : IDCODE raw 0120681B0120681B — found at bit offset 0
+STATUS     : raw 0003902000039020 -> 0x00039020
+             EDIT_MODE(bit7)=0  DONE(bit13)=0  ERR(bits0-3)=0x0
+after injected CONFIG_ENABLE (see caveat): unchanged, re-anchor still offset 0
+```
+
+**Stock reads `0x00039020` at the CONFIG_ENABLE instant — bit-identical to our
+firmware.** No errors, DONE clear, SYSTEM_EDIT_MODE clear. Exp H's conclusion is
+reinstated on a validated channel: **the FPGA presents the same state to both
+firmwares, so FPGA state is not the differentiator.**
+
+Raw dump archived as `swd_fpgastatus_stock_anchored.txt`.
+
+Note the IDCODE came back at offset 0 with no phase correction needed, and the
+old 4-byte read's "90 20 00 03" rotation did not recur — consistent with that
+having been a first-read framing artifact of the previous script.
+
+The injected-`0x15` half again showed no change, but it still carries the timing
+caveat (~100us SWD inter-byte gaps vs ~17us native) and should not be leaned on.
+
+## Where this leaves the search
+
+Both firmwares stand at the same instruction, with the same peripheral state
+(Exp E: clock tree byte-identical, Exp F: all five enumerables closed), facing an
+FPGA in the same state (Exp K), on a bus that demonstrably works (Exp J). Stock
+then succeeds and we do not. **The divergence must therefore be in what happens
+after that instant, at native speed** — the `0x15` -> `0x3B` -> 115,638 bytes ->
+`0x3A` execution itself.
+
+## Next: measure what SUCCESS looks like
+
+The reference measurement this project has never taken is **the status of an FPGA
+that has been configured successfully.** It does not need a spin patch:
+
+1. Flash CLEAN stock. Boot fully. Confirm the scope actually works (trace on
+   screen) — that is proof configuration completed.
+2. Attach SWD, halt, and run the anchored read.
+
+If DONE(bit13) is SET there, we finally know the success signature, and our
+firmware's post-upload `D0` becomes a meaningful contrast. If DONE is CLEAR on a
+demonstrably working scope, then DONE is not the success signal on this board and
+every conclusion drawn from it — including today's — needs rethinking.
+
+Either result is worth more than another pin experiment. Do this before parking
+stock at later instructions (post-`0x15` at `0x0802DA62`, post-`0x3A`), because it
+tells us which bit to even look at.
+
+Disassembly reference for later parks (r6 = SPI3+0x08, so [r6,#0]=STS, [r6,#4]=DT):
+```
+802da42: 2015       movs r0,#0x15
+802da44: 6070       str  r0,[r6,#4]   <- CONFIG_ENABLE hits the wire
+802da48..802da60:   wait RDBF (bit0)
+802da62: 6870       ldr  r0,[r6,#4]   <- 0x15 byte fully clocked; current park is before 802da44
+802da64..802da7c:   wait TDBE (bit1)
+802da7e: 2000       movs r0,#0        <- the dummy 0x00 follows
+```
+CAVEAT for a post-`0x15` park: reading STATUS requires opening a new CS frame,
+which may itself end an active config session — so a clear EDIT_MODE there would
+be ambiguous. DONE after `0x3A` is the more robust target, since it reflects a
+completed configuration rather than a transient session flag.
