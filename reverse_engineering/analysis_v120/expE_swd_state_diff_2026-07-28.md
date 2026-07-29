@@ -431,3 +431,119 @@ Two live directions, in priority order:
 
 The FT232H JTAG oracle remains the guaranteed bypass — SRAM load only, **never
 `--write-flash`.**
+
+---
+
+# Experiment I (2026-07-28) — the status register was never a status register
+
+## What was run
+
+Step 1 of the post-Exp-H plan: make the post-upload Gowin `0x41` STATUS read
+valid. It had always run at `opt->cmd_br`, which the Exp F fidelity build sets
+to 0 (`/2`) — the clock `fpga.c:1564` documents as producing garbage reads.
+Forced it to `/256` unconditionally (`fpga.c` [6b]) and put a decoded DONE flag
+and error nibble on the LCD overlay.
+
+Prediction made before the flash: if the persistent `CFG:8001C810` was a
+one-bit-early sample of `0x00039020`, then reading at `/256` would return
+`00039020`.
+
+## Bench result — bench unit #1, `make guest-fidelity` + the [6b] fix
+
+```
+Yellow:   CFG:00039020 D0 E0 L0 H0
+Magenta:  S1:0347 ED:00039020 H2:Y
+```
+
+`S1:0347` = BR 0 = `/2` on the wire, so this is the Exp F condition with only
+the read clock changed. Prediction confirmed exactly.
+
+## The arithmetic
+
+`0x8001C810` is `0x00039020` sampled one bit early:
+
+```
+0x00039020 = 0000 0000 0000 0011 1001 0000 0010 0000
+prepend a 1, shift right one:
+           = 1000 0000 0000 0001 1100 1000 0001 0000 = 0x8001C810
+```
+
+`0x8001C810` sets bits 4, 11 and 31, which are not defined bits in the Gowin
+map at all — the giveaway that it was never a register value.
+
+## The finding that matters
+
+`0x00039020` is **not a register value either.** It is a bit-rotation of
+`0xC8100001`:
+
+```python
+pat = 0xC8100001
+rots = {((pat << i) | (pat >> (32 - i))) & 0xFFFFFFFF for i in range(32)}
+0x00039020 in rots   # True
+0x8001C810 in rots   # False  (a rotation PLUS a spurious leading bit)
+```
+
+`0xC8100001` is the free-running pattern the 2026-06-13 opcode-discrimination
+probe recorded: opcodes `0x11` (IDCODE), `0x41` (STATUS), `0x00` (no-op) and
+`0x13` (USERCODE) **all returned identical MISO `10 00 01 C8 10 00 01 C8`** —
+the FPGA emitting a fixed 4-byte pattern from its running NV design and ignoring
+MOSI entirely. `sibling_loader_config_diff.md:87` drew the right conclusion at
+the time: *"The `0x41`='READY POR' decode was a spurious phase-slice of the
+free-running stream (proven by `0x00` giving the same bytes)."*
+
+Chance of a genuine status value landing on one of 32 rotations of that pattern
+is ~7.5e-9. This is the stream, not a register.
+
+**We have never successfully read the Gowin STATUS register.** Every status
+number in this investigation — `ED`, `CFG`, the "refusal signature" — is a
+phase-slice of a free-running pattern, at a phase set by the sampling clock.
+`/2` and `/256` land on different rotations; that is the whole difference
+between `8001C810` and `00039020`.
+
+## Conclusions this retracts
+
+- **Exp F's "RETRO-VALIDATES the refusal signature as genuine, not a
+  floating-input artifact" — WITHDRAWN.** Pulling MISO up removed one artifact
+  and left another. A stable reading is not a valid reading.
+- **Exp H's "stock reads the same `0x00039020`, therefore FPGA state is not the
+  differentiator" — UNSUPPORTED.** Both firmwares sample the same free-running
+  stream, so of course they agree. The conclusion may still be true; the
+  evidence for it is gone.
+- **"SYSTEM_EDIT_MODE never engages" as the definition of the wall —
+  UNSUPPORTED.** Bit 7 of a phase-slice means nothing. (Separately: bit 7 is
+  bit 7 of the *assembled word*, i.e. `ED[3]`; this doc, the overlay comment and
+  `scripts/swd_fpga_status.sh` all previously tested `ED[0]`/bit 31.)
+- **apicula's confirmation does not rescue it.** They were asked what the bits
+  mean and answered correctly. They were never in a position to judge whether
+  the number was a real measurement.
+- **The 2026-06-13 trailing-clock sweep (64/200/512 → "`0x41` stays
+  80 01 C8 10") is unsupported as written** — an invalid but deterministic read
+  shows "no change" whether or not anything changed. The conclusion may hold;
+  it needs re-running against a valid readout.
+
+Today's `D0 E0` is therefore NOT evidence that the config engine received
+nothing. It is evidence that we still cannot see the config engine.
+
+## The gap this exposes
+
+Every measurement this project has taken of the FPGA has been **unanchored** —
+we have never once read a value whose correct answer we knew in advance. That
+is why three separate artifacts (garbage at `/2`, floating MISO, byte-rotation
+in the SWD script) each survived for weeks: with no ground truth, a stable
+wrong number is indistinguishable from a right one.
+
+## Next: a known-answer test
+
+Send `0x11` (READ_IDCODE) at `/256` and check for `0x0120681B` — a value we know
+independently (Gowin GW1N-2 family; confirmed in the `.fs` preamble at file
+offset `0x4AD19`).
+
+- **IDCODE returns `0120681B`** → the FPGA *is* decoding SSPI opcodes. The June
+  "not in config-receive mode" conclusion collapses, and with it the reasoning
+  that sent this project toward JTAG.
+- **All opcodes still return rotations of `C8100001` at `/256`** → the FPGA
+  genuinely ignores SSPI while running its NV design. The June conclusion stands
+  on a valid measurement for the first time, and JTAG is the route.
+
+Either way it is the first anchored measurement in the investigation, and it
+costs one build and one flash. Do this before any hardware step.

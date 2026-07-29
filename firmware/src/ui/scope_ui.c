@@ -841,13 +841,27 @@ static void draw_scope_debug(const theme_t *th)
             if (v > hi) hi = v;
         }
         /* CFG = Gowin STATUS_REGISTER (opcode 0x41) read right after the 0x3A
-         * close — the authoritative config verdict, captured at fpga.c:1692 but
-         * never surfaced until now. All-FF = FPGA never entered config-receive
-         * (config-entry wall). Non-FF = bytes reached the config engine; decode
-         * CRC_ERROR / ID_VERIFY_FAILED / DONE bits. */
-        snprintf(buf, sizeof(buf), "CFG:%02X%02X%02X%02X L%u H%u",
-                 fpga.cfg_status_reg[0], fpga.cfg_status_reg[1],
-                 fpga.cfg_status_reg[2], fpga.cfg_status_reg[3],
+         * close — the authoritative "did the upload take?" verdict. Read at a
+         * forced /256 since 2026-07-28; every earlier value was clocked at /2
+         * and slipped one bit (the persistent 80 01 C8 10 is 0x00039020 read
+         * one bit early — see fpga.c [6b]).
+         *
+         * D = DONE_FINAL (bit 13) — 1 means configuration completed. This, not
+         *     SYSTEM_EDIT_MODE, is the success signal (Exp H showed stock reads
+         *     the same 0x00039020 at the config-enable instant that we do, so
+         *     ED cannot discriminate).
+         * E = the error nibble, bits 3..0 = TIMEOUT | ID_VERIFY_FAILED |
+         *     BAD_COMMAND | CRC_ERROR. Non-zero means bytes DID reach the config
+         *     engine and were rejected → a content/transport bug, localizable.
+         *     Zero with D=0 means the engine never received anything at all. */
+        uint32_t sr = ((uint32_t)fpga.cfg_status_reg[0] << 24) |
+                      ((uint32_t)fpga.cfg_status_reg[1] << 16) |
+                      ((uint32_t)fpga.cfg_status_reg[2] << 8)  |
+                      ((uint32_t)fpga.cfg_status_reg[3]);
+        snprintf(buf, sizeof(buf), "CFG:%08lX D%u E%X L%u H%u",
+                 (unsigned long)sr,
+                 (unsigned)((sr >> 13) & 1u),
+                 (unsigned)(sr & 0x0Fu),
                  (unsigned)lo, (unsigned)hi);
     }
     font_draw_string(2, SCOPE_DBG_Y + 28, buf,
@@ -857,10 +871,13 @@ static void draw_scope_debug(const theme_t *th)
      * S1 = SPI3 CTRL1 as latched during the config frame. Bits[5:3] are BR, so
      *      0347 = /2 (stock, Exp F fidelity build) and 037F = /256. This is the
      *      on-device proof of which clock the config frame actually ran at.
-     * ED = STATUS_REGISTER (0x41) read at /256 immediately after 0x15, i.e. the
-     *      precise config-entry wall test: bit7 of ED[0] is SYSTEM_EDIT_MODE.
-     *      Set => CONFIG_ENABLE landed. Clear => the wall is still up.
-     *      Only populated when opts.probe_edit = 1.
+     * ED = STATUS_REGISTER (0x41) read at /256 immediately after 0x15.
+     *      SYSTEM_EDIT_MODE is bit 7 of the ASSEMBLED 32-bit word, i.e. bit 7 of
+     *      ED[3] — NOT bit 7 of ED[0], as this comment and scripts/swd_fpga_status.sh
+     *      both said until 2026-07-28. (Same verdict either way for 0x00039020:
+     *      ED[3]=0x20, bit 7 clear. But the test was reading bit 31.)
+     *      Exp H demoted this from "the wall" to a non-discriminator: stock reads
+     *      the same 0x00039020 here and still configures. Compare CFG's D flag.
      * Dropped S2/ST here — CTRL2 and STS were static (0003 / 0002) across every
      * run so far, and ED is the number this experiment turns on. */
     snprintf(buf, sizeof(buf), "S1:%04X ED:%02X%02X%02X%02X H2:%c",

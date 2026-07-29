@@ -1775,7 +1775,24 @@ uint8_t fpga_spi3_config_sequence(const fpga_cfg_seq_opts_t *opt)
      * opcode 0x41 + 3 pad bytes, then clock 4 bytes back. Decoded by the shell.
      * All-0xFF = FPGA not driving MISO (never entered config-receive) → config-
      * entry wall; CRC_ERROR/ID_VERIFY_FAILED set = bytes reached the engine →
-     * wire/content problem. See sibling_loader_config_diff.md. */
+     * wire/content problem. See sibling_loader_config_diff.md.
+     *
+     * CLOCK: forced to /256 here, NOT opt->cmd_br. SSPI reads are only valid at
+     * a slow clock (fpga.c:1564); at /2 the MISO data arrives after the sampling
+     * edge and we latch the PREVIOUS bit. That is not hypothetical — it is what
+     * this very read has been doing since it was added. Every historical value
+     * of this register ("stable 80 01 C8 10 across repeats", decoded as
+     * "READY POR" in sibling_loader_config_diff.md:85-86) was taken at /2, and
+     * 0x8001C810 is bit-for-bit 0x00039020 sampled one bit early:
+     *
+     *   0x00039020 = 0000 0000 0000 0011 1001 0000 0010 0000
+     *   prepend the trailing 1 of the preceding word, shift right one:
+     *              = 1000 0000 0000 0001 1100 1000 0001 0000 = 0x8001C810
+     *
+     * 0x8001C810 sets bits 4/11/31, which are not defined bits in the Gowin map
+     * at all — the giveaway that it was never a real register value. Same bug
+     * family as the /2 status reads and the floating-MISO reads. */
+    spi3_set_br(7);                           /* /256 — the only valid SSPI read clock */
     spi3_xfer(0x00);                          /* bare clock, CS HIGH (frame) */
     SPI3_CS_ASSERT();
     spi3_xfer(0x41);
@@ -1783,6 +1800,7 @@ uint8_t fpga_spi3_config_sequence(const fpga_cfg_seq_opts_t *opt)
     for (unsigned i = 0; i < 4; i++)
         fpga.cfg_status_reg[i] = spi3_xfer(0x00);
     SPI3_CS_DEASSERT();
+    spi3_set_br(opt->cmd_br);                 /* restore the command clock */
 
     /* Step 7c: post-upload scope config (5 register writes + status read). */
     fpga_scope_delay_ms(opt->post_close_ms);
