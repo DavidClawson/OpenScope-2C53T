@@ -43,6 +43,15 @@
 # the GW1N SSPI has a frame timeout, the injected CONFIG_ENABLE is not equivalent
 # to stock's. The BEFORE reading does not depend on it and stands alone.
 #
+# ⚠ DO NOT RUN THIS AGAINST A FULLY-BOOTED, WORKING DEVICE unless you intend to
+# disturb it. Once the FPGA is configured, this SPI port belongs to the USER
+# DESIGN and carries ADC sample data — asserting CS and clocking 12 bytes into it
+# injects garbage mid-stream and desynchronises acquisition (observed 2026-07-28,
+# Exp L: the scope trace stopped). Harmless and fully recovered by a POWER-cycle,
+# which makes stock re-run its boot upload. Nothing touches the FPGA's NV flash.
+# The intended targets are the PARKED spin images, where the config port is still
+# the thing on the other end of the wire.
+#
 # SAFETY: reads/writes only SPI3 + GPIOB. Never touches PC9 (power hold).
 # Unplug the ST-Link before any IAP flash; replug only once the image is parked.
 #
@@ -131,7 +140,7 @@ set odr [rd32 0x40010C0C]
 echo [format "SPI3 CTRL1 = 0x%08X   SPE=%d  BR=%d" $c1 [expr {($c1>>6)&1}] [expr {($c1>>3)&7}]]
 echo [format "GPIOB ODR  = 0x%08X   PB6/CS=%d (0=asserted)  PB11=%d" \
       $odr [expr {($odr>>6)&1}] [expr {($odr>>11)&1}]]
-if {[expr {($c1>>6)&1}] == 0} { echo "!! SPE clear — NOT parked in the config sequence. Aborting."; shutdown }
+if {[expr {($c1>>6)&1}] == 0} { echo "!! SPE clear — NOT parked in the config sequence. Aborting."; resume; shutdown }
 
 echo ""
 echo "=== ANCHOR: IDCODE (0x11) at /256 — known answer 0x0120681B ==="
@@ -143,6 +152,7 @@ if {$idoff < 0} {
     echo "!! IDCODE NOT FOUND at any bit alignment."
     echo "!! The read path is not validated, so no value from this session can be"
     echo "!! trusted. Aborting rather than printing a plausible-looking number."
+    resume
     shutdown
 }
 echo [format "ANCHOR OK  : IDCODE found at bit offset %d" $idoff]
@@ -176,6 +186,7 @@ if {$idoff2 < 0} {
     echo [format "IDCODE raw : %s" [hex8 $idb2]]
     echo "!! IDCODE no longer answers after CONFIG_ENABLE — the bus did not survive."
     echo "!! Any STATUS read here would be meaningless. Aborting."
+    resume
     shutdown
 }
 echo [format "re-anchor  : IDCODE still present at bit offset %d" $idoff2]
@@ -196,6 +207,7 @@ if {[expr {($after >> 7) & 1}]} {
 } else {
     echo ">>> SYSTEM_EDIT_MODE clear — config entry did NOT engage."
 }
+resume
 shutdown
 EOF
 
