@@ -6,6 +6,26 @@
 # status itself (it ignores the reply), so the only way to get it is to halt the
 # MCU mid-sequence and clock the transaction ourselves.
 #
+# ── ANCHORED (2026-07-28, Exp J) ──────────────────────────────────────────────
+# Every read here is now validated against a KNOWN ANSWER before anything else is
+# believed: opcode 0x11 must return IDCODE 0x0120681B (Gowin GW1N-2 family;
+# established independently from the .fs preamble at file offset 0x4AD19).
+#
+# This is not ceremony. Three separate artifacts survived for weeks in this
+# project purely because no measurement had a known correct answer:
+#   * reads at /2 return garbage    -> the persistent "80 01 C8 10"
+#   * PB4/MISO left floating        -> no defined idle level
+#   * this script's own 4-byte read -> reported a 2-byte rotation as EDIT_MODE
+# A stable wrong number is indistinguishable from a right one. If the IDCODE does
+# not come back, this script ABORTS rather than print a plausible-looking value.
+#
+# Two further fixes over the first version:
+#   * reads are 8 bytes, not 4, and every value is located by sliding a 32-bit
+#     window across all 33 bit alignments — so a phase-shifted-but-real reply is
+#     reported as such instead of being mistaken for a different value.
+#   * SYSTEM_EDIT_MODE is bit 7 of the ASSEMBLED 32-bit word (i.e. byte[3]).
+#     The first version tested bit 31 and would have missed a real hit.
+#
 # Requires a spin image parked with the 05/12 prelude sent, CS LOW, and 0x15 not
 # yet clocked:
 #   stock : /tmp/APP_2C53T_expE_spin_stock.bin
@@ -14,12 +34,14 @@
 # What it does, with the CPU halted:
 #   1. verify the park from peripherals (pc is useless here — RDP artifact)
 #   2. close stock's open CS frame
-#   3. STATUS_BEFORE : read 0x41 at /256 (the only valid SSPI read clock)
-#   4. send CONFIG_ENABLE (0x15 00) at /2, exactly as stock would have
-#   5. STATUS_AFTER  : read 0x41 at /256 again
+#   3. ANCHOR: read 0x11, require IDCODE 0x0120681B, record its bit offset
+#   4. STATUS_BEFORE : read 0x41 at /256, corrected by the anchor offset
+#   5. send CONFIG_ENABLE (0x15 00) at /2, exactly as stock would have
+#   6. STATUS_AFTER  : read 0x41 again, and re-anchor to prove the bus survived
 #
-# Bit 7 of the FIRST status byte is SYSTEM_EDIT_MODE. Set => CONFIG_ENABLE
-# engaged. Our firmware measures 0x00039020 here (bit 7 clear).
+# CAVEAT on step 5: SWD forces ~100us between injected bytes vs ~17us native. If
+# the GW1N SSPI has a frame timeout, the injected CONFIG_ENABLE is not equivalent
+# to stock's. The BEFORE reading does not depend on it and stands alone.
 #
 # SAFETY: reads/writes only SPI3 + GPIOB. Never touches PC9 (power hold).
 # Unplug the ST-Link before any IAP flash; replug only once the image is parked.
@@ -61,18 +83,44 @@ proc sx {b} {
     return [expr {[rd32 0x40003C0C] & 0xff}]
 }
 
-proc read_status {tag} {
+# Read a Gowin register, sibling/openFPGALoader framing: a bare clock with CS
+# HIGH to frame, then CS LOW, the 4-byte command word <opcode 00 00 00>, then
+# clock the reply. EIGHT bytes so a repeating 4-byte group is visible as data.
+proc read_reg8 {opcode} {
     cs_high
-    rd32 0x40003C0C
+    sx 0x00
     cs_low
-    sx 0x41
+    sx $opcode
     sx 0x00 ; sx 0x00 ; sx 0x00
-    set b0 [sx 0x00] ; set b1 [sx 0x00] ; set b2 [sx 0x00] ; set b3 [sx 0x00]
+    set out {}
+    for {set i 0} {$i < 8} {incr i} { lappend out [sx 0x00] }
     cs_high
-    set v [expr {($b0<<24)|($b1<<16)|($b2<<8)|$b3}]
-    echo [format "%-14s %02X %02X %02X %02X   = 0x%08X   EDIT_MODE(bit7 of b0) = %d" \
-          $tag $b0 $b1 $b2 $b3 $v [expr {($b0 >> 7) & 1}]]
-    return $v
+    return $out
+}
+
+proc as64 {bytes} {
+    set w 0
+    foreach b $bytes { set w [expr {($w << 8) | $b}] }
+    return $w
+}
+
+# 32-bit window at bit offset s (0..32) of the 64-bit reply.
+proc win32 {bytes s} {
+    return [expr {([as64 $bytes] >> (32 - $s)) & 0xFFFFFFFF}]
+}
+
+# Slide across all 33 alignments looking for a known value. -1 = absent.
+proc find_at {bytes target} {
+    for {set s 0} {$s <= 32} {incr s} {
+        if {[win32 $bytes $s] == $target} { return $s }
+    }
+    return -1
+}
+
+proc hex8 {bytes} {
+    set s ""
+    foreach b $bytes { append s [format "%02X" $b] }
+    return $s
 }
 
 halt
@@ -86,12 +134,33 @@ echo [format "GPIOB ODR  = 0x%08X   PB6/CS=%d (0=asserted)  PB11=%d" \
 if {[expr {($c1>>6)&1}] == 0} { echo "!! SPE clear — NOT parked in the config sequence. Aborting."; shutdown }
 
 echo ""
-echo "=== STATUS before CONFIG_ENABLE (read at /256) ==="
+echo "=== ANCHOR: IDCODE (0x11) at /256 — known answer 0x0120681B ==="
 set_br 7
-set before [read_status "BEFORE:"]
+set idb [read_reg8 0x11]
+set idoff [find_at $idb 0x0120681B]
+echo [format "IDCODE raw : %s" [hex8 $idb]]
+if {$idoff < 0} {
+    echo "!! IDCODE NOT FOUND at any bit alignment."
+    echo "!! The read path is not validated, so no value from this session can be"
+    echo "!! trusted. Aborting rather than printing a plausible-looking number."
+    shutdown
+}
+echo [format "ANCHOR OK  : IDCODE found at bit offset %d" $idoff]
+if {$idoff != 0} {
+    echo [format "NOTE       : replies are phase-shifted %d bits; correcting all reads below." $idoff]
+}
+
+echo ""
+echo "=== STATUS before CONFIG_ENABLE (0x41 at /256, anchor-corrected) ==="
+set sb [read_reg8 0x41]
+set before [win32 $sb $idoff]
+echo [format "raw        : %s" [hex8 $sb]]
+echo [format "STATUS     : 0x%08X   EDIT_MODE(bit7)=%d  DONE(bit13)=%d  ERR(bits0-3)=0x%X" \
+      $before [expr {($before>>7)&1}] [expr {($before>>13)&1}] [expr {$before & 0xF}]]
 
 echo ""
 echo "=== sending CONFIG_ENABLE (15 00) at /2, as stock would ==="
+echo "    (SWD inter-byte gap ~100us vs ~17us native — see CAVEAT in the header)"
 set_br 0
 cs_low
 sx 0x15
@@ -99,21 +168,38 @@ sx 0x00
 cs_high
 
 echo ""
-echo "=== STATUS after CONFIG_ENABLE (read at /256) ==="
+echo "=== re-anchor + STATUS after CONFIG_ENABLE ==="
 set_br 7
-set after [read_status "AFTER: "]
+set idb2 [read_reg8 0x11]
+set idoff2 [find_at $idb2 0x0120681B]
+if {$idoff2 < 0} {
+    echo [format "IDCODE raw : %s" [hex8 $idb2]]
+    echo "!! IDCODE no longer answers after CONFIG_ENABLE — the bus did not survive."
+    echo "!! Any STATUS read here would be meaningless. Aborting."
+    shutdown
+}
+echo [format "re-anchor  : IDCODE still present at bit offset %d" $idoff2]
+set sa [read_reg8 0x41]
+set after [win32 $sa $idoff2]
+echo [format "raw        : %s" [hex8 $sa]]
+echo [format "STATUS     : 0x%08X   EDIT_MODE(bit7)=%d  DONE(bit13)=%d  ERR(bits0-3)=0x%X" \
+      $after [expr {($after>>7)&1}] [expr {($after>>13)&1}] [expr {$after & 0xF}]]
 
 echo ""
 if {$before == $after} {
-    echo ">>> UNCHANGED — CONFIG_ENABLE had no effect on this bus."
+    echo ">>> STATUS UNCHANGED across CONFIG_ENABLE."
 } else {
-    echo [format ">>> CHANGED 0x%08X -> 0x%08X" $before $after]
+    echo [format ">>> STATUS CHANGED 0x%08X -> 0x%08X" $before $after]
 }
-if {[expr {($after >> 31) & 1}]} { echo ">>> EDIT_MODE ENGAGED — config entry succeeded." }
+if {[expr {($after >> 7) & 1}]} {
+    echo ">>> SYSTEM_EDIT_MODE SET — config entry succeeded."
+} else {
+    echo ">>> SYSTEM_EDIT_MODE clear — config entry did NOT engage."
+}
 shutdown
 EOF
 
-echo "# SWD-driven FPGA status — label=${LABEL}  $(date -Is)" > "$OUT"
+echo "# SWD-driven FPGA status (anchored) — label=${LABEL}  $(date -Is)" > "$OUT"
 sudo timeout 90 openocd -f "$CFG" -c "init" -c "$TCL" 2>&1 | tee -a "$OUT"
 echo
 echo "wrote $OUT"
