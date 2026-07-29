@@ -801,6 +801,57 @@ static void draw_scope_debug(const theme_t *th)
 
     char buf[64];
 
+#if defined(FPGA_IDCODE_PROBE) && FPGA_IDCODE_PROBE
+    /* ── Experiment J overlay: the anchored opcode-discrimination probe ──────
+     * Replaces the normal overlay entirely for this build. Four opcodes read at
+     * /256 on a pristine bus before the prelude, 8 bytes each.
+     *
+     * READ IT LIKE THIS:
+     *   ID / NP identical, and each showing a repeated 4-byte group
+     *     => the FPGA free-runs a fixed pattern and ignores MOSI. Confirms the
+     *        2026-06-13 conclusion on a valid measurement for the first time;
+     *        SSPI cannot reach the config engine and JTAG is the route.
+     *   ID differs from NP, ID@ >= 0
+     *     => the FPGA DOES decode SSPI opcodes. The "not in config-receive mode"
+     *        conclusion collapses and the config-entry search reopens.
+     *   ID@ >= 0 but not 0
+     *     => IDCODE present but phase-shifted by that many bits; the reply is
+     *        real and our sampling alignment is off (see Exp I).
+     */
+    {
+        const volatile uint8_t *p;
+
+        p = fpga.probe_idcode;
+        snprintf(buf, sizeof(buf), "ID:%02X%02X%02X%02X %02X%02X%02X%02X",
+                 p[0], p[1], p[2], p[3], p[4], p[5], p[6], p[7]);
+        font_draw_string(2, SCOPE_DBG_Y + 2, buf, 0x07E0, 0x0000, &font_small);
+
+        p = fpga.probe_noop;
+        snprintf(buf, sizeof(buf), "NP:%02X%02X%02X%02X %02X%02X%02X%02X",
+                 p[0], p[1], p[2], p[3], p[4], p[5], p[6], p[7]);
+        font_draw_string(2, SCOPE_DBG_Y + 15, buf, 0x07FF, 0x0000, &font_small);
+
+        snprintf(buf, sizeof(buf), "ST:%02X%02X%02X%02X US:%02X%02X%02X%02X",
+                 fpga.probe_status[0], fpga.probe_status[1],
+                 fpga.probe_status[2], fpga.probe_status[3],
+                 fpga.probe_user[0], fpga.probe_user[1],
+                 fpga.probe_user[2], fpga.probe_user[3]);
+        font_draw_string(2, SCOPE_DBG_Y + 28, buf, 0xFFE0, 0x0000, &font_small);
+
+        /* ID@ = bit offset where 0x0120681B was found, -1 = absent.
+         * SM  = 0x11 and 0x00 returned identical bytes (Y => no opcode decode).
+         * RP  = the 0x11 reply repeats every 4 bytes (Y => free-running pattern).
+         * PO@ = same IDCODE search on the 0x11 read taken AFTER CONFIG_ENABLE. */
+        snprintf(buf, sizeof(buf), "ID@%d SM:%c RP:%c PO@%d",
+                 (int)fpga.probe_id_bit,
+                 fpga.probe_all_same ? 'Y' : 'N',
+                 fpga.probe_repeats  ? 'Y' : 'N',
+                 (int)fpga.probe_id_bit_post);
+        font_draw_string(2, SCOPE_DBG_Y + 41, buf, 0xF81F, 0x0000, &font_small);
+    }
+    return;
+#endif
+
     /* Line 1 (green): transport counters from the real FPGA path */
     /* Line 1 (green): post-upload scope-engine config readback.
      * SS = fpga.scope_status[] from the 0x03 status read — stock capture

@@ -384,6 +384,13 @@ static void spi3_pump(const uint8_t *tx, volatile uint8_t *rx, uint32_t n)
 #define FPGA_FIDELITY_RECONFIG_PIN   0
 #endif
 
+/* Experiment J (2026-07-28): anchored opcode-discrimination probe at /256.
+ * Reads 0x11/0x00/0x41/0x13 before the prelude and 0x11 again after
+ * CONFIG_ENABLE, looking for the independently-known IDCODE 0x0120681B. */
+#ifndef FPGA_IDCODE_PROBE
+#define FPGA_IDCODE_PROBE  0
+#endif
+
 /* Boot-into-bus-released experiment (2026-06-14, experimental/esp32-bringup).
  * For the external-master bench rig: the MCU brings up SPI3/USART/control pins,
  * then — instead of running its own SSPI config upload — immediately hands the
@@ -1569,10 +1576,62 @@ static void fpga_acquisition_task(void *pv)
  *   | CS↓ 3A <close> CS↑00 | CS↓00 CS↑00 | [post_close delay]
  *   | CS↓ 01 08 CS↑ | 02 03 | 06 00 | 07 00 | 08 AD | CS↓ 03 <status×4> CS↑
  * ═══════════════════════════════════════════════════════════════════ */
+/* ── Exp J helpers: the anchored opcode-discrimination probe ───────────────
+ * Read a Gowin register in the sibling's framing (openFPGALoader
+ * read_register32): a bare clock with CS HIGH to frame, then CS LOW, the 4-byte
+ * command word <opcode 00 00 00>, then clock the reply out.
+ *
+ * We clock EIGHT bytes, not four. A Gowin register is 32 bits, so the second
+ * four are "extra" — and that is the point: if the FPGA is free-running a fixed
+ * 4-byte pattern instead of answering, the read shows it directly as
+ * <abcd abcd> rather than leaving us to infer it. Exp I established that every
+ * status number this project has recorded was such a pattern; four bytes cannot
+ * tell the two cases apart, eight can.
+ *
+ * CALLER MUST already be at /256 — SSPI reads are garbage at /2 (fpga.c:1564). */
+static void spi3_read_reg8(uint8_t opcode, volatile uint8_t *out8)
+{
+    spi3_xfer(0x00);                      /* bare clock, CS HIGH (frame) */
+    SPI3_CS_ASSERT();
+    spi3_xfer(opcode);
+    spi3_xfer(0x00); spi3_xfer(0x00); spi3_xfer(0x00);
+    for (unsigned i = 0; i < 8; i++)
+        out8[i] = spi3_xfer(0x00);
+    SPI3_CS_DEASSERT();
+}
+
+/* Slide a 32-bit window across all 33 bit alignments of the 64-bit reply and
+ * look for the known IDCODE 0x0120681B (GW1N-2 family; independently confirmed
+ * in the Gowin .fs preamble at file offset 0x4AD19).
+ *
+ * The bit-offset search is deliberate, not defensive. Every measurement artifact
+ * this project has hit — garbage reads at /2, floating MISO, the SWD script's
+ * byte rotation — manifests as a PHASE SHIFT of otherwise-correct data. An
+ * exact-match test would report "IDCODE absent" when the IDCODE is present but
+ * misaligned, which is precisely the mistake that kept 0x8001C810 alive for six
+ * weeks. Returns the offset (0..32), or -1 if the IDCODE is genuinely not there. */
+static int8_t spi3_find_idcode(const volatile uint8_t *b8)
+{
+    uint64_t w = 0;
+    for (unsigned i = 0; i < 8; i++)
+        w = (w << 8) | b8[i];
+    for (unsigned s = 0; s <= 32; s++) {
+        if ((uint32_t)((w >> (32 - s)) & 0xFFFFFFFFu) == 0x0120681Bu)
+            return (int8_t)s;
+    }
+    return -1;
+}
+
 uint8_t fpga_spi3_config_sequence(const fpga_cfg_seq_opts_t *opt)
 {
     gpio_init_type gpio_cfg;
     gpio_default_para_init(&gpio_cfg);
+
+    /* -1 = "IDCODE not found". Must be set explicitly: fpga is zero-initialised,
+     * and 0 is a VALID bit offset (perfectly aligned), so leaving these at 0
+     * would report a successful match on a probe that never ran. */
+    fpga.probe_id_bit      = -1;
+    fpga.probe_id_bit_post = -1;
 
     /* Keep the acquisition task off the SPI3 bus during the handshake.
      * No-op pre-RTOS; essential when replayed live via `fpga reinit`. */
@@ -1649,6 +1708,47 @@ uint8_t fpga_spi3_config_sequence(const fpga_cfg_seq_opts_t *opt)
      * and then returns to cmd_br for the close/status reads. Restored to /2 at
      * function exit. */
     spi3_set_br(opt->cmd_br);
+
+    /* [0-] Exp J (probe_idcode): ANCHORED opcode-discrimination probe, run on a
+     * pristine bus BEFORE the prelude — the FPGA is running its NV design and we
+     * have not yet touched it.
+     *
+     * This is the first test in the investigation with a known correct answer.
+     * Read four opcodes at /256: 0x11 READ_IDCODE (answer: 0x0120681B),
+     * 0x13 USERCODE, 0x41 STATUS, and 0x00 no-op as the control.
+     *
+     *   IDCODE found, and 0x11 != 0x00  => the FPGA DOES decode SSPI opcodes.
+     *                                      The 2026-06-13 "not in config-receive
+     *                                      mode" conclusion — the one that sent
+     *                                      this project toward JTAG — collapses.
+     *   all four identical, repeating   => the FPGA free-runs a fixed pattern and
+     *                                      ignores MOSI. June's conclusion finally
+     *                                      rests on a valid measurement, and the
+     *                                      FT232H JTAG route is the answer.
+     *
+     * Note this ADDS CS frames ahead of the config attempt, so it is off by
+     * default; a stock-faithful run must leave probe_idcode = 0. */
+    if (opt->probe_idcode) {
+        spi3_set_br(7);                      /* /256 — the only valid read clock */
+        spi3_read_reg8(0x11, fpga.probe_idcode);
+        spi3_read_reg8(0x00, fpga.probe_noop);
+        spi3_read_reg8(0x41, fpga.probe_status);
+        spi3_read_reg8(0x13, fpga.probe_user);
+
+        fpga.probe_id_bit = spi3_find_idcode(fpga.probe_idcode);
+
+        uint8_t same = 1;
+        for (unsigned i = 0; i < 8; i++)
+            if (fpga.probe_idcode[i] != fpga.probe_noop[i]) { same = 0; break; }
+        fpga.probe_all_same = same;
+
+        uint8_t rep = 1;
+        for (unsigned i = 0; i < 4; i++)
+            if (fpga.probe_idcode[i] != fpga.probe_idcode[i + 4]) { rep = 0; break; }
+        fpga.probe_repeats = rep;
+
+        spi3_set_br(opt->cmd_br);
+    }
 
     /* [0a] DIAGNOSTIC (reload_3c): Gowin SSPI RELOAD (0x3C) — software reconfig
      * trigger, sent at /256 in its own CS frame before the prelude, with a settle
@@ -1734,6 +1834,18 @@ uint8_t fpga_spi3_config_sequence(const fpga_cfg_seq_opts_t *opt)
             fpga.edit_mode_status[i] = spi3_xfer(0x00);
         SPI3_CS_DEASSERT();
         spi3_set_br(opt->cmd_br);        /* restore command clock */
+    }
+
+    /* [3c] Exp J, second half: read IDCODE again AFTER CONFIG_ENABLE. The
+     * pre-prelude probe asks "does the FPGA answer at all?"; this asks "did 0x15
+     * change that?" A part that ignores 0x11 before but answers it after would
+     * mean CONFIG_ENABLE is landing and only the upload is broken — the opposite
+     * of the current working theory, and worth one CS frame to rule out. */
+    if (opt->probe_idcode && opt->prelude_frame_mode != 2) {
+        spi3_set_br(7);                  /* /256 */
+        spi3_read_reg8(0x11, fpga.probe_idcode_post);
+        fpga.probe_id_bit_post = spi3_find_idcode(fpga.probe_idcode_post);
+        spi3_set_br(opt->cmd_br);
     }
 
     /* Optional digest gap between CONFIG_ENABLE and the data stream (stock ~8µs
@@ -2255,8 +2367,11 @@ void fpga_init(void)
          * it entirely) whereas we depend on reading it, and switching br mid-CS-
          * frame would glitch the frame. Revisit if write timing is ever
          * implicated. Bench-checked 2026-07-27: prelude at /256 changed nothing
-         * behaviourally, and turned CFG from garbage (8001C810) into the real
-         * value (00039020).
+         * behaviourally, and turned CFG from 8001C810 into 00039020.
+         * CORRECTED 2026-07-28 (Exp I): 00039020 is NOT "the real value" — it is
+         * a bit-rotation of the free-running 0xC8100001 MISO pattern, just as
+         * 8001C810 was. /256 buys a different phase of the same stream, not a
+         * register read. See expE_swd_state_diff_2026-07-28.md § Experiment I.
          *
          * trailing_clocks: left at the stock-faithful 0. Gowin runs CRC-check /
          * DONE / wakeup on CCLK cycles after the last config byte and
@@ -2280,6 +2395,10 @@ void fpga_init(void)
 #else
         .cmd_br         = 7,
 #endif
+        /* Experiment J (2026-07-28): anchored opcode-discrimination probe.
+         * Off unless built with -DFPGA_IDCODE_PROBE=1 (`make guest-idcode`),
+         * since it adds CS frames before the config attempt. */
+        .probe_idcode   = FPGA_IDCODE_PROBE,
     });
 #endif
 

@@ -213,9 +213,39 @@ typedef struct {
                                             * See sibling_loader_config_diff.md. */
     volatile uint8_t  edit_mode_status[4]; /* STATUS (0x41) read at /256 IMMEDIATELY
                                             * after 0x15 CONFIG_ENABLE (probe_edit knob).
-                                            * bit7 = SYSTEM_EDIT_MODE — if clear here,
-                                            * CONFIG_ENABLE never engaged config-receive
-                                            * (the precise wall). Only valid at slow clk. */
+                                            * SYSTEM_EDIT_MODE is bit 7 of the ASSEMBLED
+                                            * word = bit 7 of [3], not of [0]. NOTE: as of
+                                            * Exp I (2026-07-28) this value is known to be
+                                            * a phase-slice of a free-running MISO pattern,
+                                            * NOT a register read. Kept for continuity. */
+
+    /* ── Exp J: ANCHORED opcode-discrimination probe (2026-07-28) ──────────
+     * The first measurement in this project with a known correct answer.
+     * Exp I showed every prior status read was a phase-slice of the free-running
+     * 0xC8100001 pattern the FPGA emits from its running NV design; with no
+     * ground truth, a stable wrong number was indistinguishable from a right one.
+     *
+     * Each probe clocks 8 bytes (not 4) so a repeating 4-byte pattern is visible
+     * as data rather than inferred. All reads at /256 — the only valid SSPI read
+     * clock (fpga.c:1564). Populated only when opts.probe_idcode = 1. */
+    volatile uint8_t  probe_idcode[8];     /* 0x11 READ_IDCODE, before the prelude */
+    volatile uint8_t  probe_noop[8];       /* 0x00 no-op — the control */
+    volatile uint8_t  probe_status[8];     /* 0x41 STATUS */
+    volatile uint8_t  probe_user[8];       /* 0x13 USERCODE */
+    volatile uint8_t  probe_idcode_post[8];/* 0x11 again, AFTER 0x15 CONFIG_ENABLE */
+    volatile int8_t   probe_id_bit;        /* bit offset 0..32 where 0x0120681B was
+                                            * found in probe_idcode, else -1. Searched
+                                            * across ALL bit offsets deliberately: every
+                                            * artifact this project has hit (garbage at
+                                            * /2, floating MISO, SWD byte-rotation) shows
+                                            * up as a phase shift, so an exact-match test
+                                            * would report absent when it is merely
+                                            * misaligned. */
+    volatile int8_t   probe_id_bit_post;   /* same search over probe_idcode_post */
+    volatile uint8_t  probe_all_same;      /* 1 = 0x11 and 0x00 returned identical bytes
+                                            * => the FPGA is not decoding opcodes */
+    volatile uint8_t  probe_repeats;       /* 1 = first 4 bytes == last 4 bytes of the
+                                            * 0x11 read => free-running fixed pattern */
 
     /* Experimental stock runtime shadow for scope-mode bench work.
      * These are NOT the original firmware RAM locations. They are a small
@@ -285,6 +315,12 @@ typedef struct {
     uint8_t  reload_3c;       /* 1 = send Gowin RELOAD (0x3C) at /256 before the
                                *     prelude — software reconfig trigger; does it
                                *     clear GWVLD/FLASH_LOCK and let CONFIG_ENABLE land? */
+    uint8_t  probe_idcode;    /* 1 = Exp J anchored opcode-discrimination probe: read
+                               *     0x11/0x00/0x41/0x13 at /256 (8 bytes each) BEFORE
+                               *     the prelude, and 0x11 again after CONFIG_ENABLE.
+                               *     Known answer: IDCODE = 0x0120681B. Adds CS frames
+                               *     ahead of the config attempt, so keep it off for
+                               *     stock-faithful runs. */
 } fpga_cfg_seq_opts_t;
 
 /* Run the full SPI3 config handshake. Returns the 0x3A close status byte

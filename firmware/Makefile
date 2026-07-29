@@ -413,3 +413,22 @@ guest-reconfig-pc2: clean all
 guest-reconfig-pb12: CFLAGS += -DGUEST_BUILD -DFPGA_STOCK_FIDELITY=1 -DFPGA_USART_SILENT_SCOPE=1 -DFPGA_FIDELITY_RECONFIG_PORT=2 -DFPGA_FIDELITY_RECONFIG_PIN=12
 guest-reconfig-pb12: LDSCRIPT = ld/at32f403a_guest.ld
 guest-reconfig-pb12: clean all
+
+# Experiment J (2026-07-28): ANCHORED opcode-discrimination probe.
+# Exp I established that every FPGA status number this project has recorded was
+# a phase-slice of the free-running 0xC8100001 MISO pattern, not a register read
+# — the root cause being that no measurement here has ever had a known correct
+# answer. This build fixes that: it reads 0x11 READ_IDCODE at /256 and looks for
+# 0x0120681B (known independently from the Gowin .fs preamble at file offset
+# 0x4AD19), with 0x00 / 0x41 / 0x13 alongside as controls, 8 bytes each so a
+# repeating 4-byte pattern is visible as data rather than inferred.
+#   IDCODE found + ID != NP  => the FPGA decodes SSPI opcodes; the 2026-06-13
+#                               "not in config-receive mode" conclusion (which is
+#                               what pointed this project at JTAG) collapses.
+#   all opcodes identical    => that conclusion finally rests on a valid
+#                               measurement, and the FT232H is the route.
+# Built on the fidelity image so the wire conditions match Exp F/I.
+# See reverse_engineering/analysis_v120/expE_swd_state_diff_2026-07-28.md § Exp I/J
+guest-idcode: CFLAGS += -DGUEST_BUILD -DFPGA_STOCK_FIDELITY=1 -DFPGA_USART_SILENT_SCOPE=1 -DFPGA_IDCODE_PROBE=1
+guest-idcode: LDSCRIPT = ld/at32f403a_guest.ld
+guest-idcode: clean all
