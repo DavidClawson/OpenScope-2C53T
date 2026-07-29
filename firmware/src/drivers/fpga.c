@@ -309,6 +309,48 @@ static void spi3_pump(const uint8_t *tx, volatile uint8_t *rx, uint32_t n)
 #define FPGA_USART_SILENT_SCOPE  0
 #endif
 
+/* Stock-fidelity config build (2026-07-28, Experiment F — follow-on to Exp E).
+ * The Exp E SWD dump parked both stock and our firmware one instruction before
+ * 0x15 reaches the SPI3 data register and diffed every peripheral register.
+ * Clock tree came back byte-identical; what remained were five enumerable MCU
+ * state differences. This flag closes ALL of them at once so a single bench
+ * cycle can decide whether MCU-side state is the cause at all:
+ *
+ *   1. SPI3 CTRL1 BR — stock 0x347 (BR=0, /2), ours 0x37f (BR=7, /256).
+ *      => cmd_br forced to 0. The /256 read clock moves OUT of the config
+ *         frame and into the probe_edit STATUS read, which already runs at
+ *         /256 in its own CS frame, so we keep a VALID readout.
+ *   2. PB4 / SPI3_MISO — stock input PULL-UP, ours input FLOATING. This is
+ *      why undriven MISO reads 0xFF in the stock capture; ours had no defined
+ *      idle level, so every status read this project has taken was made under
+ *      the wrong electrical conditions. Cannot itself gate config (it is an
+ *      MCU input) — this is a measurement fix.
+ *   3. PC2 and PB12 — stock drives both output push-pull HIGH; ours leaves
+ *      them floating. NOT covered by the Exp C frontend ablation.
+ *   4. USART2 UEN — stock CLEAR at the CONFIG_ENABLE instant (measured:
+ *      CTRL1=0x0000002c). Paired with FPGA_USART_SILENT_SCOPE by the Makefile
+ *      target. Already bench-refuted in isolation (2026-06-13); included only
+ *      so this build is a clean superset.
+ *   5. SPI2 peripheral clock — stock sets APB1EN bit14; ours does not.
+ *
+ * PB9 is deliberately NOT driven: stock has it AF push-pull, and an AF output
+ * level is not reflected in ODR, so we cannot know what level to match. See
+ * FPGA_FIDELITY_DRIVE_PB9 below.
+ *
+ * Build with `make guest-fidelity`. Full rationale + raw dumps:
+ * reverse_engineering/analysis_v120/expE_swd_state_diff_2026-07-28.md */
+#ifndef FPGA_STOCK_FIDELITY
+#define FPGA_STOCK_FIDELITY  0
+#endif
+
+/* PB9 is AF push-pull in stock (likely a timer channel — PB8, the LCD
+ * backlight, is AF-PP too and stock PWM-dims it). ODR does not reflect an AF
+ * output level, so driving PB9 as a plain GPIO is a guess in BOTH directions.
+ * Off by default; flip only to sweep it deliberately. */
+#ifndef FPGA_FIDELITY_DRIVE_PB9
+#define FPGA_FIDELITY_DRIVE_PB9  0
+#endif
+
 /* Boot-into-bus-released experiment (2026-06-14, experimental/esp32-bringup).
  * For the external-master bench rig: the MCU brings up SPI3/USART/control pins,
  * then — instead of running its own SSPI config upload — immediately hands the
@@ -1925,11 +1967,21 @@ void fpga_init(void)
     gpio_cfg.gpio_drive_strength = GPIO_DRIVE_STRENGTH_STRONGER;
     gpio_init(GPIOB, &gpio_cfg);
 
-    /* PB4 = SPI3_MISO: Input floating */
+    /* PB4 = SPI3_MISO.
+     * Exp E (2026-07-28) measured stock as input PULL-UP here (GPIOB CRL pin4
+     * nibble 8 = CNF 10, with ODR bit4 set) while ours was input FLOATING
+     * (nibble 4 = CNF 01). Stock's pull-up is exactly why an undriven MISO
+     * reads 0xFF in the issue-#18 capture; a floating input has no defined
+     * idle level, which makes every status byte we sample suspect. */
     gpio_cfg.gpio_pins = GPIO_PINS_4;
     gpio_cfg.gpio_mode = GPIO_MODE_INPUT;
+#if FPGA_STOCK_FIDELITY
+    gpio_cfg.gpio_pull = GPIO_PULL_UP;
+#else
     gpio_cfg.gpio_pull = GPIO_PULL_NONE;
+#endif
     gpio_init(GPIOB, &gpio_cfg);
+    gpio_cfg.gpio_pull = GPIO_PULL_NONE;   /* restore shared struct default */
 
     /* PB5 = SPI3_MOSI: AF push-pull, 50MHz */
     gpio_cfg.gpio_pins = GPIO_PINS_5;
@@ -1955,6 +2007,42 @@ void fpga_init(void)
     gpio_cfg.gpio_drive_strength = GPIO_DRIVE_STRENGTH_STRONGER;
     gpio_init(GPIOC, &gpio_cfg);
     GPIOC->scr = PC6_MASK;  /* PC6 HIGH — FPGA SPI enable (match stock) */
+
+#if FPGA_STOCK_FIDELITY
+    /* Experiment F: the two pins stock drives that Exp C never covered.
+     * At the CONFIG_ENABLE instant the Exp E dump measured stock as
+     *   PC2  : GPIOC CRL nibble 1 (output push-pull 10MHz), ODR bit2  = 1 -> HIGH
+     *   PB12 : GPIOB CRH nibble 1 (output push-pull 10MHz), ODR bit12 = 1 -> HIGH
+     * and our firmware as floating input (nibble 4) on both. The Exp C ablation
+     * covered only the analog-frontend bank (PC12/PE4/PE5/PE6/PA15/PA10/PB10),
+     * so neither of these is refuted. PB12 is plausibly SPI2 NSS = SPI-flash CS
+     * (stock enables SPI2 and drives PB13/14/15 AF-PP) and therefore probably
+     * benign, but that is unproven and it costs nothing to match. */
+    gpio_cfg.gpio_mode = GPIO_MODE_OUTPUT;
+    gpio_cfg.gpio_out_type = GPIO_OUTPUT_PUSH_PULL;
+    gpio_cfg.gpio_drive_strength = GPIO_DRIVE_STRENGTH_STRONGER;
+
+    gpio_cfg.gpio_pins = GPIO_PINS_2;
+    gpio_init(GPIOC, &gpio_cfg);
+    GPIOC->scr = (1U << 2);    /* PC2 HIGH */
+
+    gpio_cfg.gpio_pins = GPIO_PINS_12;
+    gpio_init(GPIOB, &gpio_cfg);
+    GPIOB->scr = (1U << 12);   /* PB12 HIGH */
+
+#if FPGA_FIDELITY_DRIVE_PB9
+    /* Stock has PB9 AF push-pull; level unknown (AF output is not in ODR).
+     * Driving it HIGH as GPIO is a guess — sweep knob only. */
+    gpio_cfg.gpio_pins = GPIO_PINS_9;
+    gpio_init(GPIOB, &gpio_cfg);
+    GPIOB->scr = (1U << 9);
+#endif
+
+    /* Stock sets APB1EN bit14 (SPI2) before the config sequence; we never did.
+     * The peripheral itself is unused by us — this only matches the clock-gate
+     * state so the enumerable diff closes to zero. */
+    crm_periph_clock_enable(CRM_SPI2_PERIPH_CLOCK, TRUE);
+#endif  /* FPGA_STOCK_FIDELITY */
 
     /* PB11 = FPGA active mode — DO NOT configure as output yet!
      *
@@ -2124,7 +2212,18 @@ void fpga_init(void)
          * rosenrot00's 2C23T loader clocks ~200 dummy bytes, so 256 was tried
          * on the bench 2026-07-27 — it did NOT produce DONE (status unchanged at
          * 00039020). Reverted rather than left as untested drift. */
+#if FPGA_STOCK_FIDELITY
+        /* Experiment F (2026-07-28): close the KNOWN TRADEOFF above. Exp E
+         * measured stock's SPI3 CTRL1 as 0x347 (BR=0, /2) at the CONFIG_ENABLE
+         * instant against our 0x37f (BR=7, /256), so the config frame now runs
+         * at stock's /2 — and we do NOT lose the readout, because probe_edit
+         * takes the 0x41 STATUS read at /256 in its own CS frame afterwards.
+         * That is the best of both: stock-faithful writes, valid reads. */
+        .cmd_br         = 0,
+        .probe_edit     = 1,
+#else
         .cmd_br         = 7,
+#endif
     });
 #endif
 

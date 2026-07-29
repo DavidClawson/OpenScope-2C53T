@@ -384,3 +384,16 @@ soak-quick: emu
 guest-spin: CFLAGS += -DGUEST_BUILD -DFPGA_SPIN_AT_CONFIG_ENABLE=1
 guest-spin: LDSCRIPT = ld/at32f403a_guest.ld
 guest-spin: clean all
+
+# Experiment F (2026-07-28): stock-fidelity config build. Closes ALL five
+# enumerable MCU-state differences the Exp E SWD diff found at the CONFIG_ENABLE
+# instant, in one image: SPI3 BR back to stock's /2, PB4/MISO pulled up instead
+# of floating, PC2 + PB12 driven push-pull HIGH, USART2 UEN held clear (via
+# FPGA_USART_SILENT_SCOPE), and the SPI2 clock gate enabled. probe_edit is turned
+# on so the 0x41 STATUS read still happens at /256 in its own CS frame — read it
+# on the LCD overlay as ED:. Wall breaks => bisect the five. Wall holds => MCU-side
+# state is excluded and the FT232H JTAG oracle is the only remaining test.
+# See reverse_engineering/analysis_v120/expE_swd_state_diff_2026-07-28.md
+guest-fidelity: CFLAGS += -DGUEST_BUILD -DFPGA_STOCK_FIDELITY=1 -DFPGA_USART_SILENT_SCOPE=1
+guest-fidelity: LDSCRIPT = ld/at32f403a_guest.ld
+guest-fidelity: clean all

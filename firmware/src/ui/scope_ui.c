@@ -853,11 +853,20 @@ static void draw_scope_debug(const theme_t *th)
     font_draw_string(2, SCOPE_DBG_Y + 28, buf,
                      0xFFE0, 0x0000, &font_small);  /* yellow */
 
-    /* Line 4 (magenta): live SPI3 register state + H2 upload flag */
-    snprintf(buf, sizeof(buf), "S1:%04X S2:%04X ST:%04X H2:%c",
+    /* Line 4 (magenta): SPI3 CTRL1 + the EDIT_MODE probe + H2 upload flag.
+     * S1 = SPI3 CTRL1 as latched during the config frame. Bits[5:3] are BR, so
+     *      0347 = /2 (stock, Exp F fidelity build) and 037F = /256. This is the
+     *      on-device proof of which clock the config frame actually ran at.
+     * ED = STATUS_REGISTER (0x41) read at /256 immediately after 0x15, i.e. the
+     *      precise config-entry wall test: bit7 of ED[0] is SYSTEM_EDIT_MODE.
+     *      Set => CONFIG_ENABLE landed. Clear => the wall is still up.
+     *      Only populated when opts.probe_edit = 1.
+     * Dropped S2/ST here — CTRL2 and STS were static (0003 / 0002) across every
+     * run so far, and ED is the number this experiment turns on. */
+    snprintf(buf, sizeof(buf), "S1:%04X ED:%02X%02X%02X%02X H2:%c",
              (uint16_t)fpga.diag_spi_ctrl1,
-             (uint16_t)(*(volatile uint32_t *)0x40003C04),  /* live CTRL2 */
-             (uint16_t)(*(volatile uint32_t *)0x40003C08),  /* live STS */
+             fpga.edit_mode_status[0], fpga.edit_mode_status[1],
+             fpga.edit_mode_status[2], fpga.edit_mode_status[3],
              fpga.h2_upload_done ? 'Y' : 'N');
     font_draw_string(2, SCOPE_DBG_Y + 41, buf,
                      0xF81F, 0x0000, &font_small);  /* magenta */
