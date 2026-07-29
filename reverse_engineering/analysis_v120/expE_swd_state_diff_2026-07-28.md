@@ -547,3 +547,120 @@ offset `0x4AD19`).
 
 Either way it is the first anchored measurement in the investigation, and it
 costs one build and one flash. Do this before any hardware step.
+
+---
+
+# Experiment J (2026-07-28) — the first anchored measurement: the FPGA answers
+
+## What was run
+
+`make guest-idcode` (fidelity image + `FPGA_IDCODE_PROBE=1`). On a pristine bus,
+before the prelude, at `/256`, read four opcodes 8 bytes each and slide a 32-bit
+window across all 33 bit alignments looking for the IDCODE `0x0120681B` — a value
+known independently of any measurement we have taken (Gowin `.fs` preamble at
+file offset `0x4AD19`). `0x11` is read again after CONFIG_ENABLE.
+
+The bit-offset search and the 8-byte (rather than 4-byte) reads were deliberate:
+every artifact this project has hit manifests as a phase shift, and 4 bytes
+cannot distinguish "a register" from "a repeating pattern".
+
+## Bench result — unit #1
+
+```
+ID:0120681B 0120681B     0x11 READ_IDCODE
+NP:FFFFFFFF FFFFFFFF     0x00 no-op (control)
+ST:00039020  US:00000000 0x41 STATUS, 0x13 USERCODE
+ID@0 SM:N RP:Y PO@0
+```
+
+- `ID@0` — IDCODE found at bit offset **0**. Perfectly aligned, no phase shift.
+- `SM:N` — `0x11` and `0x00` returned **different** bytes.
+- Four opcodes, four distinct replies.
+- `PO@0` — IDCODE still answers **after** CONFIG_ENABLE.
+
+## Conclusion
+
+**The FPGA decodes SSPI opcodes.** The bus, SPI mode (3), clock, CS framing and
+wiring are all correct. MOSI is being read by the part.
+
+### This refutes the conclusion that sent the project to JTAG
+
+`sibling_loader_config_diff.md` (2026-06-13) concluded from `0x11`/`0x41`/`0x00`/
+`0x13` all returning identical MISO that the FPGA "free-runs a fixed 4-byte
+pattern and ignores MOSI" and is "not in SSPI config-receive mode", and that
+"FT232H JTAG SRAM-load remains the route". Those reads were taken at `/2`
+(`cmd_br` defaulted to 0 until 2026-07-27), where SSPI reads are garbage. At
+`/256` the opcodes discriminate cleanly. **The JTAG rationale is substantially
+weakened** — SSPI reaches the config engine fine.
+
+### And it corrects Experiment I, from earlier the same night
+
+Exp I concluded `0x00039020` was phase noise because it is a bit-rotation of
+`0xC8100001`. The rotation is real — `0xC8100001` = `0x00039020` rotated left 15
+— but **the causality was inverted.** `0x11` returning the known IDCODE proves
+the `/256` read path is sound, and on that same validated path `0x41` returns
+`0x00039020`. So `0x00039020` is the genuine register value and `0xC8100001` was
+a misaligned `/2` read *of it*. June did not find a free-running pattern that
+resembles the status register; June found the status register, mangled.
+
+Reinstated: **Exp F's "retro-validates the refusal signature"** (it was right).
+**Exp H's identical-status result** is meaningful again — its separate caveat
+about SWD injected-byte timing is unaffected and still stands.
+
+Still correct from Exp I: `0x8001C810` = `0x00039020` one bit early (it sets bits
+4/11/31, undefined in the Gowin map); `/2` reads are invalid; and the
+unanchored-measurement lesson, which is what produced this experiment.
+
+## The wall, measured properly for the first time
+
+```
+SET   bit5  MEMORY_ERASE       clear bit7  SYSTEM_EDIT_MODE
+SET   bit12 GOWIN_VLD          clear bit13 DONE_FINAL
+SET   bit15 READY              clear bits 0-3  (no CRC_ERROR, BAD_COMMAND,
+SET   bit16 POR                                 ID_VERIFY_FAILED, TIMEOUT)
+SET   bit17 FLASH_LOCK
+```
+
+The part talks to us, reports **no errors at all**, and will not enter edit mode
+on CONFIG_ENABLE. No CRC/BAD_COMMAND/ID_VERIFY means the bitstream bytes are not
+being *rejected* — config entry never happens, so they are never parsed.
+
+This is exactly apicula's answer (`docs/CONFIG_ENTRY_REPLY_FROM_APICULA.md`,
+2026-06-13): a running auto-booted GW1N re-enters configuration only via
+RECONFIG_N (low pulse >= 25 ns) or a power cycle. We now have that on our own
+measurement rather than on a correspondent's word.
+
+## Open question
+
+**DONE_FINAL is clear and POR is set** on a part that is supposedly running its
+NV design and servicing USART meter traffic. That combination is not obviously
+consistent, and it may be the thread that explains how stock succeeds. Worth
+chasing before more pin hunting.
+
+## Method change — now mandatory
+
+**Anchor every FPGA measurement: read `0x11` at `/256` and confirm `0x0120681B`
+before trusting anything else in the same session.** Three artifacts (garbage at
+`/2`, floating MISO, the SWD script's byte rotation) each survived for weeks for
+one reason — no measurement had a known correct answer, so a stable wrong number
+was indistinguishable from a right one.
+
+## Re-run backlog, now that readout is valid
+
+1. `scripts/swd_fpga_status.sh` — add the IDCODE anchor, then re-run Exp H on
+   stock. Also fix its SYSTEM_EDIT_MODE test: bit 7 of the ASSEMBLED word is
+   byte[3], not byte[0] (it currently tests bit 31).
+2. The 2026-06-13 trailing-clock sweep (64/200/512) — "no change" was measured
+   through an invalid read.
+3. The `0x3C` RELOAD test (`reload_3c`) — same.
+4. With a live status readout, a RECONFIG_N hunt can now be run as a *search*
+   rather than a guess: pulse a candidate pin, read STATUS, look for bit 7.
+
+## Bench note
+
+The first flash of this image came up with a dark screen and had to be recovered
+via upgrade mode. Reflashing the identical image booted fine and produced the
+result above, so the probe was not the cause. This unit has now shown an
+unexplained early-boot hang twice (see also the splash-hang noted 2026-07-27).
+It is intermittent, unexplained, and worth keeping in view — an early-boot fault
+that corrupts a bench result would be easy to mistake for a real finding.
