@@ -1080,3 +1080,74 @@ Each candidate still has to be confirmed on the bench.
 Sweep v2: add **PC1, PC4, PD12**, drop the 12 pins stock never drives LOW, and
 fix the Exp O blind spot by sampling the status repeatedly after each pulse
 (~20 reads over 200ms, flagging any deviation) instead of one snapshot at +1ms.
+
+---
+
+# Experiment Q (2026-07-29) — sweep v2: pin-pulse theory effectively dead
+
+```
+SWEEP:DONE 12/12
+BASE:00039020
+HIT:--/- H:0 AF:0
+```
+
+12 candidates from the Exp P static scan — every pin stock drives both LOW and
+HIGH before CONFIG_ENABLE, minus PC9 (power hold) — each pulsed LOW->HIGH and
+then watched across two ~120ms sampling windows: one after the pulse alone, one
+after CONFIG_ENABLE. **No deviation from baseline at any sample, on any pin, in
+either phase.** No anchor failures, so all 12 are genuine measurements.
+
+This closes the Exp O blind spot (a single snapshot at +1ms, which could miss a
+transient reconfiguration) and covers PC1, PC4, PD12, PD13 — pins Exp O never
+tested. PC1 in particular appears in no pinout doc and had never been considered
+before the corrected scan surfaced it.
+
+A prior run of the v1 image also reproduced Exp O exactly (20/20, no hits,
+AF:0, same baseline), so the negative is stable across builds.
+
+**Verdict: no MCU-driven GPIO pulse unlocks config entry.** Combined with Exp C
+(frontend posture), Exp E/F (static MCU state), Exp G (PC2/PB12 pulses) and Exp P
+(the pin set is complete for pins stock drives at all), the "stock pulses
+something" theory is out of room on the MCU side.
+
+## Back to an anomaly we noted and walked past
+
+The status we read at every checkpoint, on both firmwares, decodes as:
+
+```
+SET   MEMORY_ERASE(5)  GOWIN_VLD(12)  READY(15)  POR(16)  FLASH_LOCK(17)
+clear SYSTEM_EDIT_MODE(7)  DONE_FINAL(13)  and all four error bits
+```
+
+**POR set and DONE_FINAL clear is not what a part that has auto-booted its NV
+design should report.** DONE goes HIGH when configuration completes. A GW1N
+running a resident design ought to show DONE set; this one shows POR — the
+power-on-reset state — and no DONE at all.
+
+That was flagged as an open question in Exp J and never chased. It now looks
+important, because it suggests the part may not have finished (or begun) loading
+a design at the moment we talk to it.
+
+Which raises a hypothesis this project has never tested: **our firmware may reach
+the FPGA handshake TOO EARLY.** Exp B2 established that LATE is fine — a 5-10s
+delay inserted into stock changed nothing, so there is no narrow window closing
+behind us. But nothing has ever tested the other direction. Stock performs a very
+large amount of init before its handshake (LCD/EXMC, FatFs, SPI flash, DAC/ADC,
+USART2, the frontend relays); our firmware is far leaner and reaches the same
+point much sooner after power-on. If the GW1N is still in its own power-up
+sequence when our CONFIG_ENABLE arrives, ignoring it is exactly the observed
+behaviour — reads answered, config commands inert, POR set, DONE clear.
+
+## Next, cheapest first
+
+1. **Pre-config delay sweep.** Insert a large delay (1s, 3s, 5s) before the whole
+   sequence and re-run the Exp N step trace. One build, one flash, one button.
+   Directly tests the too-early hypothesis and is motivated by the POR/DONE
+   anomaly rather than by guessing.
+2. **Park stock AFTER its 0x3A close** and read the anchored status/IDCODE there.
+   We have measured stock only BEFORE its config commands. We have never measured
+   stock where it SUCCEEDS, so we still do not know what success looks like on
+   this board (Exp L could not get it — the port had already closed by then).
+3. **Logic analyzer.** Everything state-shaped is now excluded; what remains is
+   the wire itself. Capture our SPI3 at /64 and diff against the issue-#18 stock
+   capture.
