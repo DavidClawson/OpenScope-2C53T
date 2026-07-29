@@ -334,3 +334,100 @@ dataflow analysis, which is what Ghidra is for.
 **Lesson for the tool:** `find_gpio_pulses.py` must resolve the base register to
 a GPIO port before reporting, rather than assuming the offset implies GPIO.
 Until it does, treat its output as candidates to verify, not findings.
+
+---
+
+# Experiment H — SWD-driven status read on PARKED STOCK (2026-07-28)
+
+First direct measurement of what the FPGA looks like **to stock** at the
+CONFIG_ENABLE instant. Stock never reads the status itself (it ignores the
+reply), so the only way to obtain it is to halt the MCU mid-sequence and clock
+the transaction from the host. Tool: `scripts/swd_fpga_status.sh`.
+
+Park verified from peripherals: `SPI3 CTRL1 = 0x00000347` (SPE=1, BR=0 = /2),
+`GPIOB ODR = 0x00001910` (PB6/CS asserted LOW, PB11 HIGH).
+
+## Headline result
+
+```
+STOCK, at the CONFIG_ENABLE instant:   00 03 90 20   = 0x00039020
+```
+
+**Identical to our firmware's `ED:00039020`.** The FPGA presents the *same
+state* to stock as it does to us at the moment CONFIG_ENABLE goes out.
+
+⇒ **FPGA state is NOT the differentiator.** Both firmwares face an identically
+reporting part; stock's `0x15` leads to a working scope and ours does not.
+
+## FALSE POSITIVE — corrected
+
+The script initially reported `AFTER: 90 20 00 03` and printed
+"EDIT_MODE ENGAGED". **That was wrong.** `90 20 00 03` is the same four bytes as
+`00 03 90 20` rotated by two positions; the naive "bit 7 of the first byte"
+check simply found `0x90` in slot 0. Same artifact class as `SS:20000390` in the
+Exp A notes.
+
+Control (device still parked, four consecutive reads, **nothing** sent between
+them):
+
+```
+read1:  90 20 00 03
+read2:  90 20 00 03
+read3:  90 20 00 03
+read4:  90 20 00 03
+```
+
+Stable. So the rotation is a **first-read-vs-subsequent phase offset** — the
+first read follows the closing of stock's parked CS frame — and **`0x15`
+changed nothing at all.**
+
+**Instrument caveat to carry forward:** our `0x41` read framing has a two-byte
+phase ambiguity between the first read and subsequent reads. Any status claim
+must be checked against all four rotations of `{00,03,90,20}` before being
+believed. `scripts/swd_fpga_status.sh` must be fixed to test rotations rather
+than bit 7 of slot 0.
+
+## The reframe this forces
+
+We have now watched **stock's own bus, in stock's own FPGA state, receive
+`0x15`, and NOT show SYSTEM_EDIT_MODE** — while stock, moments later in normal
+operation, configures successfully and the scope works.
+
+That undermines the framing this whole investigation has rested on since June:
+
+> "CONFIG_ENABLE never engages SYSTEM_EDIT_MODE" = the wall
+
+If stock reads `0x00039020` at the same instant and still succeeds, then
+`0x00039020` is **compatible with successful configuration**, and
+"EDIT_MODE never engages" may be a **measurement artifact rather than the
+failure**. A plausible mechanism: reading STATUS requires its own CS frame, and
+opening one may itself terminate the config session — i.e. the act of measuring
+destroys what is being measured.
+
+**Caveat, stated plainly:** the `0x15` we injected went out with ~100 µs
+SWD-imposed inter-byte gaps versus ~17 µs native at /256 (and ~0.13 µs at /2),
+with CS held LOW throughout. If the GW1N SSPI has a frame timeout, that alone
+would void the injected-`0x15` half of this experiment. The **BEFORE** reading
+is unaffected by this and stands on its own.
+
+## What this means for the search
+
+Excluded so far: bitstream bytes, framing, prelude, trailing clocks, timing
+(Exp B2), analog frontend (Exp C), static MCU register state (Exp E/F), USART2
+state, clock tree, the PC2/PB12 pulse candidates (Exp G) — and now **FPGA state
+itself (Exp H)**.
+
+Two live directions, in priority order:
+
+1. **Stop trusting EDIT_MODE as the success signal.** Verify against DONE
+   (bit 13) after a full upload instead, and confirm what stock's status reads
+   at points where stock is *known* to have succeeded. If EDIT_MODE is
+   unobservable by construction, every "wall" conclusion built on it needs
+   re-examination.
+2. **Wire-level comparison.** Everything state-shaped is now excluded, which
+   leaves signal shape/timing. Capture our firmware's SPI3 lines with the
+   HiLetgo 24 MHz analyser (slow the prescaler as maksidze did) and diff against
+   the issue-#18 stock capture.
+
+The FT232H JTAG oracle remains the guaranteed bypass — SRAM load only, **never
+`--write-flash`.**
