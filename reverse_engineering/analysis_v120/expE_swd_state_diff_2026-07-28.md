@@ -1151,3 +1151,92 @@ behaviour — reads answered, config commands inert, POR set, DONE clear.
 3. **Logic analyzer.** Everything state-shaped is now excluded; what remains is
    the wire itself. Capture our SPI3 at /64 and diff against the issue-#18 stock
    capture.
+
+---
+
+# Corrections from the Ghidra-side review (2026-07-29)
+
+`next_five_experiments_2026-07-28.md` (parallel Ghidra-side effort) raises two
+corrections to this document. Both are right and are adopted.
+
+## 1. Exp K's conclusion was stated too strongly
+
+Written: *"the FPGA presents the same state to both firmwares, so FPGA state is
+not the differentiator."*
+
+Exp K measured **STATUS** — one 32-bit view. "Will the next config command be
+honoured" need not be exposed there; `EDIT_MODE` reads 0 in both cases, which is
+the very thing under investigation. A part pulsed on RECONFIG_N earlier and
+reloaded from NV flash would present an identical STATUS while differing in
+config-FSM state.
+
+Supported: **"STATUS is not the differentiator."**
+Not supported: "FPGA state is not the differentiator."
+
+This matters because the stronger reading retires the RECONFIG_N hypothesis, and
+Exp O/Q's own disclosed blind spots mean it has not been tested to exhaustion.
+Corrected in `CLAUDE.md` too.
+
+## 2. Exp B2 does not bound the trigger→config-enable interval
+
+B2 pushed stock's config-enable 5-10s later via a code-cave busy loop and stock
+still configured. That refutes a narrow **absolute** window from power-on. It does
+not refute "stock asserts a trigger shortly before config-enable": the cave sits
+ahead of the whole FPGA-init block, so trigger and config-enable shift **together**
+and their relative spacing is preserved.
+
+So a pin trigger should be looked for **near config-enable in the instruction
+stream**. Both scans agree there are no GPIO writes at all between `0x0802D63C`
+(last GPIO write before the prelude) and `0x0802DA42` (CONFIG_ENABLE) — which
+constrains, but does not close, that search.
+
+## 3. A gap in Exp Q
+
+**Stock drives PC1 and PC2 as a PAIR** — same instruction pair, both arms of the
+mode branch at `0x0802C618`, verified here against the disassembly:
+
+```
+802c624: movs  r0,#4          ; PC2
+802c626: str.w r0,[sl,#0x10]  ; sl = GPIOC BSRR -> SET
+802c62a: movs  r0,#2          ; PC1
+802c62c: str.w r0,[sl,#0x10]  ; SET
+```
+
+Exp Q pulsed PC1 **singly**. Stock never drives one without the other, so a
+single-pin test may not reproduce the condition. **The paired case has never been
+run.** (PC1 is `Unknown` in `HARDWARE_PINOUT.md:73`; our firmware never drives it.)
+
+## 4. Blind spots that list adds to ours
+
+Recorded because they are not closed by anything we have run:
+
+* **Peripheral-driven (AF-mode) pins produce no GPIO store at all** and are
+  invisible to every scan run to date, including Exp P. Exp E already noted
+  **PB9 is AF-PP in stock and floating in ours.**
+* **DMA-driven BSRR writes** produce pulses with no instruction anywhere. Only
+  DMA1 Ch1 (LCD) is accounted for.
+* **`FUN_080165A8`: 25,548 bytes, zero direct callers, larger than `master_init`,
+  never examined.**
+* **STATUS may be the wrong detector.** Exp L found a fully configured part stops
+  answering SSPI; a part *in config mode* must still answer. That is three states
+  — running-NV, in-config, configured — and our detector distinguishes two.
+* The indirect `blx` targets in the reset stub are still not followed.
+
+## Where we differ on ordering
+
+That document recommends its experiment 3 (Unicorn execution-ordered trace)
+first, as "zero bench cost". It is zero *bench* cost but not zero cost: the
+harness has never run past legacy `0x08024412`, and repairing an emulator enough
+to trace a 15KB function is a substantial job.
+
+Higher value per unit of effort, in our view:
+
+1. **Paired PC1+PC2 pulse, and PC1/PC2 held at stock's level** — one build each,
+   and the concrete gap in Exp Q.
+2. **Their experiment 4 — physically ohm out RECONFIG_N.** This is the one to
+   elevate. It converts a search over ~50 candidate pins into a single
+   measurement, and its NEGATIVE case is the more valuable: if RECONFIG_N lands on
+   an RC or a supervisor rather than the MCU, then Exps G/O/Q were unwinnable by
+   construction and no firmware-side pin experiment can ever succeed.
+3. **The pre-config delay test** (Exp Q's closing note) — still cheap, still
+   untested, and motivated by the unexplained POR-set/DONE-clear reading.
