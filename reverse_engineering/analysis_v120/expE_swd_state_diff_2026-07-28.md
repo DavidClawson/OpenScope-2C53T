@@ -156,3 +156,94 @@ Both outcomes are decisive:
   clocks, and timing (Exp A/B2/C), that makes the cause **not MCU-side**, and promotes
   the **FT232H JTAG oracle** (SRAM-load over the JTAG TAP pads — a port stock never
   uses) from "decisive next test" to "the only remaining test."
+
+---
+
+# Experiment F — stock-fidelity build (2026-07-28)
+
+**Result: the wall HOLDS. Static MCU state is now excluded.**
+
+`make guest-fidelity` closed all five enumerable differences at once (SPI3 BR
+back to `/2`, PB4/MISO pulled up, PC2 + PB12 driven push-pull HIGH, USART2 UEN
+clear, SPI2 clock enabled). Bench readout:
+
+```
+Magenta: S1:0347 ED:00039020 H2:y
+Yellow:  CFG:8001C810 L0 H0
+```
+
+- `S1:0347` — BR=0 (`/2`) confirmed **on-device**; the fidelity change landed.
+- `ED:00039020` — STATUS (0x41) at `/256` immediately after `0x15`.
+  **Bit 7 SYSTEM_EDIT_MODE clear. Unchanged.**
+- `CFG:8001C810` is expected garbage, not a regression: the post-close read
+  inherits `cmd_br`, now `0` = `/2` = the known-garbage clock domain. `ED` is
+  the trustworthy number.
+- `L0 H0` — `FPGA_USART_SILENT_SCOPE` creates no acquisition tasks. Expected.
+
+**Valuable side result:** `ED` was measured at `/256` with MISO **pulled up**,
+i.e. under stock's actual electrical conditions, and returned the identical
+`0x00039020` we had read on a floating line. That **retro-validates the refusal
+signature** — `0x00039020` is genuine, not a floating-input artifact.
+
+# Experiment G — RECONFIG_N pulse candidates (2026-07-28)
+
+**Result: both candidates REFUTED. `ED:00039020` unchanged for both.**
+
+| Build | Pulse | Outcome |
+|---|---|---|
+| `make guest-reconfig-pc2` | PC2 LOW 10 ms → HIGH before the prelude | no change |
+| `make guest-reconfig-pb12` | PB12 LOW 10 ms → HIGH before the prelude | no change |
+
+## Why a pulse was the right thing to try
+
+Exp F's failure sent us back to `docs/CONFIG_ENTRY_REPLY_FROM_APICULA.md`
+(2026-06-13), which already named the mechanism and which we had not acted on:
+
+> An already-configured, auto-booted, running GW1N does not re-enter config from
+> an SSPI `CONFIG_ENABLE` alone. The documented triggers to reload a running
+> device are **RECONFIG_N (low pulse >=25 ns) or power cycle**.
+
+apicula also confirms our decode is exact (bits 5,12,15,16,17 set; **bit 7 Edit
+Mode = 0 is "the smoking gun"**) and that **FLASH_LOCK is a red herring** —
+flash read-back protection only, per UG290 Table 7-12 note [2]. Nothing to clear.
+
+**Exp E is structurally blind to transitions.** A RECONFIG_N pulse issued before
+the config-enable instant leaves the pin HIGH, indistinguishable from a pin
+merely held HIGH. So Exp F driving PC2/PB12 statically HIGH was the wrong test
+for a pulse — matching a steady state cannot reproduce an edge.
+
+## CORRECTION to an overreach
+
+It was claimed mid-session that PC2 and PB12 were "the complete list" of
+candidates. **That is too strong.** They are the complete list of pins that
+differ **statically** between stock and ours at the config-enable instant. A pin
+that stock pulses LOW and then returns to a level our firmware also happens to
+sit at is **invisible to a static diff** — the census would never flag it.
+Refuting PC2 and PB12 closes the *static-difference* search, not the
+pulsed-pin search.
+
+## Unresolved tension worth stating plainly
+
+apicula's model says a running, auto-booted GW1N needs a reconfig trigger. But
+**Exp B2 (2026-07-27) delayed stock's config-enable by 5-10 s and stock still
+configured successfully** — at which point the FPGA is unambiguously auto-booted
+and in user mode. Stock therefore reconfigures a *running* part with no reset
+pulse visible on the SPI3 lines. Either stock asserts a trigger on a pin the
+issue-#18 capture never watched (it probed SPI3 only — it would never have seen
+PC2, PB12, or anything else), or the trigger is not a GPIO at all.
+
+## Next steps, in order
+
+1. **Zero-bench, do this first: static hunt in the stock binary.** Search all of
+   stock's init path before `0x0802DA42` for a GPIO `clr` (BRR) write followed
+   by an `scr` (BSRR) write to the same pin — i.e. a pulse — on ANY port. This
+   directly answers "does stock pulse a pin low before config-enable, and which
+   one?" without guessing and without a bench cycle. It also covers the pulsed-
+   pin blind spot the static diff cannot reach.
+2. **Logic-analyzer sweep of stock's boot.** The HiLetgo 24 MHz 8-channel unit
+   is adequate — a rosenrot-style reset pulse is ms-scale, not 25 ns. Sweep
+   candidate pins 8 at a time across a stock power-on.
+3. **FT232H JTAG oracle** (SRAM load over the JTAG TAP pads, a port stock never
+   uses). apicula's recommendation in the same reply, and it bypasses the
+   trigger problem entirely rather than solving it. **SRAM ONLY — never
+   `--write-flash`; the NV flash holds the sole copy of the stock meter design.**
