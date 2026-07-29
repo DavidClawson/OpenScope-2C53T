@@ -867,3 +867,82 @@ test are both trustworthy and both on-screen.
    candidate and look for bit 7 immediately.
 4. The `DONE=0` + `POR=1` + `MEMORY_ERASE=1` combination on a part supposedly
    running its NV design remains unexplained and may be the thread that matters.
+
+---
+
+# Experiment N (2026-07-28) — step-resolved: not one config command has any effect
+
+## Result — bench unit #1, `make guest-trace`
+
+```
+T0:00039020 T1:00039020      pristine        / after 05 ERASE_SRAM
+T2:00039020 T3:00039020      after 12        / after 15 CONFIG_ENABLE
+T4:00039020 T5:00039020      after upload    / after 3A close
+A:000000 MV:0 H2:Y
+```
+
+`A:000000` — the IDCODE anchor succeeded at every one of the six checkpoints, so
+all six are measurements rather than placeholders. `MV:0` — **not one of them
+differs from the pristine baseline.**
+
+## What it establishes
+
+The Gowin STATUS register does not change by a single bit across:
+
+| command | effect on STATUS |
+|---|---|
+| `0x05` ERASE_SRAM | none |
+| `0x12` INIT_ADDR | none |
+| `0x15` CONFIG_ENABLE | none |
+| `0x3B` + 115,638-byte bitstream | none |
+| `0x3A` CONFIG_DISABLE | none |
+
+while, in the same windows and on the same wire, every READ command answers
+correctly — IDCODE aligned at offset 0, USERCODE `0x00000000`, STATUS a coherent
+value, and the three discriminating cleanly from one another (Exp J).
+
+**The SSPI read path works; the SSPI config-command path is inert.** This is not
+a late-stage rejection (no CRC_ERROR, no ID_VERIFY_FAILED), not a partial load,
+and not a framing problem. The part is servicing reads and treating every config
+command as a no-op.
+
+That asymmetry is exactly the documented behaviour of a running, auto-booted
+GW1N: read commands remain available at all times, configuration commands are
+refused until RECONFIG_N is pulsed or the part is power-cycled
+(`docs/CONFIG_ENTRY_REPLY_FROM_APICULA.md`, UG290). We now have that from our own
+instrument at every step of our own sequence.
+
+## The remaining contradiction, stated precisely
+
+Stock configures this part successfully **from the same pre-state** (Exp K:
+identical STATUS, identical FPGA state at the CONFIG_ENABLE instant), with the
+same peripheral state (Exp E: clock tree byte-identical; Exp F: all five
+enumerables closed), over the same working bus (Exp J), and with no narrow timing
+window (Exp B2: a 5-10 s delay changed nothing). Yet stock's config commands take
+and ours do not.
+
+Everything reachable from the MCU's SPI3 pins is now excluded. Whatever stock
+does to make the part accept configuration is **not on the SPI3 bus** — which is
+consistent with the issue-#18 capture never having watched anything else.
+
+## Next: the RECONFIG_N hunt becomes a search, not a guess
+
+Exp G "refuted" PC2 and PB12 one pin per flash, while watching a status value we
+could not actually read. Both premises are now fixed: the status is trustworthy,
+and `MV` is a one-glance detector for "did anything change at all".
+
+A single boot can therefore sweep many candidate pins — pulse a pin LOW->HIGH,
+send `0x15`, read the anchored STATUS, and record whether anything moved — where
+Exp G managed two pins in two bench cycles.
+
+**Hardware-risk constraint on any such sweep.** Driving a pin that something else
+is already driving is contention. The sweep must be restricted to pins stock
+itself configures as outputs (per `stock_pre_fpga_gpio_state.md`) plus genuinely
+unmapped pins, and must exclude:
+  * `PC9`  power hold — the device dies instantly
+  * `PC8`  power button
+  * `PB3/4/5/6` SPI3 (the bus under test)
+  * `PA13/PA14` SWD
+  * `PA2/PA3` USART2
+  * the EXMC/LCD bus
+  * button-matrix inputs and any FPGA-driven pin (contention)
