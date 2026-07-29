@@ -1010,3 +1010,73 @@ starts at `MASTER_INIT_ADDR` and inherits the same hole.
 2. **Sweep v2:** transient-aware sampling, closing the blind spot above.
 3. **Broad sweep:** pins that NEITHER firmware drives, accepting the contention
    risk that the conservative list was chosen to avoid.
+
+---
+
+# Experiment P (2026-07-28) — static GPIO pulse scan, whole image
+
+Zero bench time. `scripts/find_gpio_pulses.py` rewritten and run over clean stock
+across the ENTIRE image up to CONFIG_ENABLE (`0x08007000..0x0802DA42`), reset stub
+included. Full output: `stock_gpio_pulse_scan_2026-07-28.txt`.
+
+## Script fixes (the previous version could not have found this)
+
+1. **Scan window.** It started at MASTER_INIT and so could never see anything
+   before it. Now the whole image.
+2. **Base-register resolution.** It reported any store to `+0x0C/+0x10/+0x14` as
+   GPIO without resolving the base — every peripheral has those offsets, which is
+   why the 2026-07-27 run gave 5 candidates of which 3 were timers. Now resolved
+   by backward dataflow (literal pool read out of the binary, movw/movt pairs,
+   register moves, constant adds), and unresolvable stores are reported
+   separately rather than dropped or counted.
+3. **movt handling — the bug that made the first corrected run report ZERO hits.**
+   Walking backwards, `movt` is met BEFORE the `movw` that supplies the low half.
+   Treating it as an opaque write aborted resolution on every movw/movt-built
+   base, which is most of them.
+4. **Pin masks.** The stored value is now resolved too, so a LOW and a HIGH can be
+   paired into a pulse. Without the mask the register alone says nothing.
+
+**Validated against a known answer before the output was believed:** the scan
+finds `0x0802AAB6  GPIOC clr/BRR  pin 9` — the PC9 power-hold write documented in
+`stock_pre_fpga_gpio_state.md`. Same discipline as the IDCODE anchor.
+
+## Result — 103 GPIO level writes; pins driven both LOW and HIGH
+
+```
+PA15  PB10 PB11  PC1 PC2 PC4 PC9 PC11  PD12  PE4 PE5 PE6
+```
+
+**Not covered by the Exp O sweep: PC1, PC4, PC9, PD12.**
+
+| pin | standing |
+|---|---|
+| **PC1** | **entirely new** — in no pinout doc, in neither sweep, never considered |
+| PC4  | hunted 2026-06 (commit 3c53e53, "negative") under the unreadable-status regime |
+| PD12 | `strap_pd1213` tested it as a HELD level, never as a pulse |
+| PC9  | power hold — stays excluded; driving it low kills the device |
+
+Conversely, Exp O spent 12 of its 20 slots on pins stock never drives LOW at all
+(PA6, PA10, PB0, PB7, PB9, PB12, PC5, PC6, PC10, PC12, PE2, PE3). Defensible a
+priori, but the scan says they were never pulse candidates.
+
+## Null result worth recording
+
+**There is no GPIO level write in the reset/clock-init stub** (`0x08007000` to
+`0x08007238`); the earliest in the whole image is `0x080088E4`. The gap that
+motivated this scan turned out to be empty. The missed pins were hiding in helper
+functions instead — which is exactly why a static-window enumeration
+(`stock_pre_fpga_gpio_state.md`, master-init entry to first SPI3 byte) did not
+list them.
+
+## Caveat — address order is not execution order
+
+Pairs are reported in ADDRESS order. A LOW at `0x0800DFCC` paired with a HIGH at
+`0x08023758` spans different functions and is almost certainly not a runtime
+pulse. **The reliable output of this scan is the PIN SET, not the pairings.**
+Each candidate still has to be confirmed on the bench.
+
+## Next
+
+Sweep v2: add **PC1, PC4, PD12**, drop the 12 pins stock never drives LOW, and
+fix the Exp O blind spot by sampling the status repeatedly after each pulse
+(~20 reads over 200ms, flagging any deviation) instead of one snapshot at +1ms.

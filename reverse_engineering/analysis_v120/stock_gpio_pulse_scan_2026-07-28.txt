@@ -1,0 +1,141 @@
+disassembled 256005 instructions
+scanning 0x08007000..0x0802DA42  (whole image up to CONFIG_ENABLE, reset stub included)
+
+=== GPIO level writes before CONFIG_ENABLE: 103 ===
+  0x080088E4  GPIOE clr/BRR (set LOW)      pins 4  <-- LOW
+  0x080088E8  GPIOE scr/BSRR (set HIGH)    pins 5
+  0x08008910  GPIOE scr/BSRR (set HIGH)    pins 4
+  0x0800891C  GPIOE clr/BRR (set LOW)      pins 5  <-- LOW
+  0x08008938  GPIOE scr/BSRR (set HIGH)    pins 4
+  0x0800895C  GPIOE clr/BRR (set LOW)      pins 4  <-- LOW
+  0x08008960  GPIOE scr/BSRR (set HIGH)    pins 5
+  0x08008964  GPIOE scr/BSRR (set HIGH)    pins 6
+  0x08008980  GPIOE scr/BSRR (set HIGH)    pins 4
+  0x08008984  GPIOE scr/BSRR (set HIGH)    pins 5
+  0x080089A8  GPIOE scr/BSRR (set HIGH)    pins 4
+  0x080089B4  GPIOE clr/BRR (set LOW)      pins 5  <-- LOW
+  0x080089B8  GPIOE clr/BRR (set LOW)      pins 6  <-- LOW
+  0x08008A9A  GPIOB clr/BRR (set LOW)      pins 11  <-- LOW
+  0x08008AB8  GPIOB scr/BSRR (set HIGH)    pins 11
+  0x08008AC6  GPIOB clr/BRR (set LOW)      pins 10  <-- LOW
+  0x08008AEC  GPIOB scr/BSRR (set HIGH)    pins 11
+  0x08008AF6  GPIOB scr/BSRR (set HIGH)    pins 10
+  0x08008B14  GPIOB scr/BSRR (set HIGH)    pins 11
+  0x08008B22  GPIOB clr/BRR (set LOW)      pins 10  <-- LOW
+  0x08008B48  GPIOB scr/BSRR (set HIGH)    pins 11
+  0x08008B6E  GPIOB clr/BRR (set LOW)      pins 11  <-- LOW
+  0x08008B74  GPIOB scr/BSRR (set HIGH)    pins 10
+  0x08008B9C  GPIOB scr/BSRR (set HIGH)    pins 11
+  0x08008BA2  GPIOB scr/BSRR (set HIGH)    pins 10
+  0x08008BC4  GPIOB scr/BSRR (set HIGH)    pins 11
+  0x08008BCE  GPIOB clr/BRR (set LOW)      pins 10  <-- LOW
+  0x08008E66  GPIOD scr/BSRR (set HIGH)    pins ?
+  0x0800B75E  GPIOD scr/BSRR (set HIGH)    pins 2
+  0x0800BD12  GPIOD scr/BSRR (set HIGH)    pins 2
+  0x0800BDEE  GPIOC scr/BSRR (set HIGH)    pins 11
+  0x0800C484  GPIOC scr/BSRR (set HIGH)    pins 4
+  0x0800C858  GPIOD scr/BSRR (set HIGH)    pins 12
+  0x0800C922  GPIOD clr/BRR (set LOW)      pins 12  <-- LOW
+  0x0800C93E  GPIOD clr/BRR (set LOW)      pins 13  <-- LOW
+  0x0800C98A  GPIOD scr/BSRR (set HIGH)    pins 2
+  0x0800C99E  GPIOC scr/BSRR (set HIGH)    pins 2
+  0x0800C9A2  GPIOC scr/BSRR (set HIGH)    pins 1
+  0x0800C9A6  GPIOC scr/BSRR (set HIGH)    pins ?
+  0x0800C9AC  GPIOC clr/BRR (set LOW)      pins 2  <-- LOW
+  0x0800C9B0  GPIOC clr/BRR (set LOW)      pins 1  <-- LOW
+  0x0800CAB4  GPIOC clr/BRR (set LOW)      pins 4  <-- LOW
+  0x0800CACE  GPIOC scr/BSRR (set HIGH)    pins 4
+  0x0800CC4E  GPIOD clr/BRR (set LOW)      pins 12  <-- LOW
+  0x0800CC54  GPIOC scr/BSRR (set HIGH)    pins ?
+  0x0800CC5A  GPIOE scr/BSRR (set HIGH)    pins 4
+  0x0800CC68  GPIOE clr/BRR (set LOW)      pins 5  <-- LOW
+  0x0800CC6C  GPIOE scr/BSRR (set HIGH)    pins 6
+  0x0800CDA6  GPIOA scr/BSRR (set HIGH)    pins 15
+  0x0800CDAC  GPIOB scr/BSRR (set HIGH)    pins 11
+  0x0800CDB6  GPIOA scr/BSRR (set HIGH)    pins ?
+  0x0800D8AC  GPIOC clr/BRR (set LOW)      pins 11  <-- LOW
+  0x0800D9C2  GPIOD scr/BSRR (set HIGH)    pins 2
+  0x0800D9D6  GPIOC scr/BSRR (set HIGH)    pins 2
+  0x0800D9DC  GPIOC scr/BSRR (set HIGH)    pins 1
+  0x0800DADA  GPIOE clr/BRR (set LOW)      pins 4  <-- LOW
+  0x0800DBD2  GPIOA clr/BRR (set LOW)      pins 15  <-- LOW
+  0x0800DBE2  GPIOB scr/BSRR (set HIGH)    pins 10
+  0x0800DBE6  GPIOA scr/BSRR (set HIGH)    pins ?
+  0x0800DFA4  GPIOD scr/BSRR (set HIGH)    pins 2
+  0x0800DFB8  GPIOC scr/BSRR (set HIGH)    pins 2
+  0x0800DFBE  GPIOC scr/BSRR (set HIGH)    pins 1
+  0x0800DFC4  GPIOC scr/BSRR (set HIGH)    pins ?
+  0x0800DFCC  GPIOC clr/BRR (set LOW)      pins 2  <-- LOW
+  0x0800DFD2  GPIOC clr/BRR (set LOW)      pins 1  <-- LOW
+  0x0800DFF2  GPIOD clr/BRR (set LOW)      pins 12  <-- LOW
+  0x0800DFF8  GPIOC scr/BSRR (set HIGH)    pins ?
+  0x0800DFFC  GPIOE scr/BSRR (set HIGH)    pins 4
+  0x0800E00A  GPIOE clr/BRR (set LOW)      pins 5  <-- LOW
+  0x0800E00E  GPIOE scr/BSRR (set HIGH)    pins 6
+  0x0800E0F6  GPIOA scr/BSRR (set HIGH)    pins 15
+  0x0800E0FC  GPIOB scr/BSRR (set HIGH)    pins 11
+  0x0800E10C  GPIOA scr/BSRR (set HIGH)    pins ?
+  0x0800E39E  GPIOC scr/BSRR (set HIGH)    pins 11
+  0x0800E452  GPIOC clr/BRR (set LOW)      pins 11  <-- LOW
+  0x0800E562  GPIOC clr/BRR (set LOW)      pins 11  <-- LOW
+  0x080229C6  GPIOD scr/BSRR (set HIGH)    pins 2
+  0x080235F6  GPIOD scr/BSRR (set HIGH)    pins 2
+  0x08023758  GPIOC scr/BSRR (set HIGH)    pins 2
+  0x0802375E  GPIOC scr/BSRR (set HIGH)    pins 1
+  0x0802376E  GPIOC scr/BSRR (set HIGH)    pins 2
+  0x0802377E  GPIOC clr/BRR (set LOW)      pins 2  <-- LOW
+  0x08023782  GPIOC clr/BRR (set LOW)      pins 1  <-- LOW
+  0x08023C38  GPIOD scr/BSRR (set HIGH)    pins 2
+  0x08023C54  GPIOC scr/BSRR (set HIGH)    pins 2
+  0x08023C5A  GPIOC scr/BSRR (set HIGH)    pins 1
+  0x08023CB8  GPIOC scr/BSRR (set HIGH)    pins 2
+  0x08023CBE  GPIOC scr/BSRR (set HIGH)    pins 1
+  0x08023E16  GPIOC scr/BSRR (set HIGH)    pins 2
+  0x08023E26  GPIOC clr/BRR (set LOW)      pins 2  <-- LOW
+  0x08023E2A  GPIOC clr/BRR (set LOW)      pins 1  <-- LOW
+  0x08029D3A  GPIOC clr/BRR (set LOW)      pins 9  <-- LOW
+  0x0802AAB6  GPIOC clr/BRR (set LOW)      pins ?  <-- LOW
+  0x0802B412  GPIOC scr/BSRR (set HIGH)    pins 9
+  0x0802C626  GPIOC scr/BSRR (set HIGH)    pins 2
+  0x0802C62C  GPIOC scr/BSRR (set HIGH)    pins 1
+  0x0802C642  GPIOC scr/BSRR (set HIGH)    pins ?
+  0x0802C646  GPIOC clr/BRR (set LOW)      pins ?  <-- LOW
+  0x0802C654  GPIOC clr/BRR (set LOW)      pins 2  <-- LOW
+  0x0802C65C  GPIOC clr/BRR (set LOW)      pins 1  <-- LOW
+  0x0802C6B2  GPIOD scr/BSRR (set HIGH)    pins 3
+  0x0802C71E  GPIOC clr/BRR (set LOW)      pins ?  <-- LOW
+  0x0802D63C  GPIOC scr/BSRR (set HIGH)    pins ?
+
+=== pulse candidates (a LOW, then a HIGH, same port+pin) ===
+  GPIOE pin(s) 4:  LOW 0x080088E4  ->  HIGH 0x08008910
+  GPIOE pin(s) 5:  LOW 0x0800891C  ->  HIGH 0x08008960
+  GPIOE pin(s) 4:  LOW 0x0800895C  ->  HIGH 0x08008980
+  GPIOE pin(s) 6:  LOW 0x080089B8  ->  HIGH 0x0800CC6C
+  GPIOB pin(s) 11:  LOW 0x08008A9A  ->  HIGH 0x08008AB8
+  GPIOB pin(s) 10:  LOW 0x08008AC6  ->  HIGH 0x08008AF6
+  GPIOB pin(s) 10:  LOW 0x08008B22  ->  HIGH 0x08008B74
+  GPIOB pin(s) 11:  LOW 0x08008B6E  ->  HIGH 0x08008B9C
+  GPIOB pin(s) 10:  LOW 0x08008BCE  ->  HIGH 0x0800DBE2
+  GPIOC pin(s) 2:  LOW 0x0800C9AC  ->  HIGH 0x0800D9D6
+  GPIOC pin(s) 1:  LOW 0x0800C9B0  ->  HIGH 0x0800D9DC
+  GPIOC pin(s) 4:  LOW 0x0800CAB4  ->  HIGH 0x0800CACE
+  GPIOC pin(s) 11:  LOW 0x0800D8AC  ->  HIGH 0x0800E39E
+  GPIOE pin(s) 4:  LOW 0x0800DADA  ->  HIGH 0x0800DFFC
+  GPIOA pin(s) 15:  LOW 0x0800DBD2  ->  HIGH 0x0800E0F6
+  GPIOC pin(s) 2:  LOW 0x0800DFCC  ->  HIGH 0x08023758
+  GPIOC pin(s) 1:  LOW 0x0800DFD2  ->  HIGH 0x0802375E
+  GPIOC pin(s) 2:  LOW 0x0802377E  ->  HIGH 0x08023C54
+  GPIOC pin(s) 1:  LOW 0x08023782  ->  HIGH 0x08023C5A
+  GPIOC pin(s) 2:  LOW 0x08023E26  ->  HIGH 0x0802C626
+  GPIOC pin(s) 1:  LOW 0x08023E2A  ->  HIGH 0x0802C62C
+  GPIOC pin(s) 9:  LOW 0x08029D3A  ->  HIGH 0x0802B412
+
+36 write(s) drive a pin LOW; 22 form a LOW->HIGH pulse.
+NOTE: this is ADDRESS order, not EXECUTION order. A pair here is a
+candidate to check, not a proven runtime pulse.
+
+=== unresolved base registers: 998 ===
+These are stores this script could not attribute to a peripheral.
+They are NOT hits, but they are NOT cleared either -- a GPIO write
+through a function argument or struct pointer lands here.
+Re-run with --show-unresolved to list them.
