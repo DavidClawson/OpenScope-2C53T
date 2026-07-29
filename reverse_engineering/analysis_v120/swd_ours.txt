@@ -1,0 +1,46 @@
+# Experiment E SWD dump — label=ours  2026-07-28T21:18:48-06:00
+Open On-Chip Debugger 0.12.0
+Licensed under GNU GPL v2
+For bug reports, read
+	http://openocd.org/doc/doxygen/bugs.html
+Info : The selected transport took over low-level target control. The results might differ compared to plain JTAG/SWD
+none separate
+
+Info : clock speed 1000 kHz
+Info : STLINK V2J37S7 (API v2) VID:PID 0483:3748
+Info : Target voltage: 3.294997
+Info : [at32f403a.cpu] Cortex-M4 r0p1 processor detected
+Info : [at32f403a.cpu] target has 6 breakpoints, 4 watchpoints
+Info : starting gdb server for at32f403a.cpu on 3333
+Info : Listening on port 3333 for gdb connections
+[at32f403a.cpu] halted due to debug-request, current mode: Handler HardFault
+xPSR: 0x81000003 pc: 0xfffffffe msp: 0x20037ea8
+=== GPIOA (CRL CRH IDR ODR) ===
+0x40010800: 84404944 88844441 000046ad 0000a080 
+
+=== GPIOB (CRL CRH IDR ODR) ===
+0x40010c00: 81949408 44441443 0000fd19 00000911 
+
+=== GPIOC (CRL CRH IDR ODR) ===
+0x40011000: 41844444 44844138 0000abff 00002360 
+
+=== GPIOD (CRL CRH IDR ODR) ===
+0x40011400: b4bb44bb bb4bbbbb 0000c7ff 00000000 
+
+=== GPIOE (CRL CRH IDR ODR) ===
+0x40011800: b4441844 bbbbbbbb 0000fff7 00000004 
+
+=== AFIO (EVCR MAPR EXTICR1-4 .. MAPR2) ===
+0x40010000: 00000000 02000000 00000000 00000000 00000000 00000000 00000000 00000000 
+
+=== SPI3 (CTRL1 CTRL2 STS) ===
+0x40003c00: 0000037f 00000003 00000002 
+
+=== CRM (0x40021000 .. +0x2C) ===
+0x40021000: 03038f83 e02fa40a 00000000 00000000 00000000 00000116 0040027d 20828010 
+0x40021020: 00000000 0c000000 00000000 00000000 
+
+=== USART2 (STS CTRL1@+0x0C) ===
+0x40004400: 000000f8 0000005a 000030d4 0000202c 00000000 
+
+shutdown command invoked
