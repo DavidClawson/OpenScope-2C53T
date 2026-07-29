@@ -247,6 +247,26 @@ typedef struct {
     volatile uint8_t  probe_repeats;       /* 1 = first 4 bytes == last 4 bytes of the
                                             * 0x11 read => free-running fixed pattern */
 
+    /* ── Post-0x3A anchor (Exp L follow-up, 2026-07-28) ────────────────────
+     * IDCODE read at /256 immediately BEFORE cfg_status_reg, in the same window,
+     * so the post-upload status is only believed on a validated read path.
+     * Unlike the other probe_* fields this runs on EVERY build, because an
+     * unanchored cfg_status_reg is exactly the kind of reading this project has
+     * repeatedly mistaken for a measurement.
+     *
+     * It is also a direct configured/not-configured test. Exp L: once stock has
+     * configured the FPGA successfully, the SSPI config port CLOSES and 0x11
+     * returns zeros — the port belongs to the user design from then on. So:
+     *   probe_id_bit_close >= 0  => config port still OPEN after our full
+     *                               115,638-byte upload and 0x3A close, i.e. we
+     *                               are definitively NOT configured.
+     *   probe_id_bit_close == -1 => the port stopped answering. Consistent with
+     *                               configuration having completed — but NOT
+     *                               proof of it, since a dead bus reads the same.
+     *                               Corroborate with DONE and a live trace. */
+    volatile uint8_t  probe_idcode_close[8];
+    volatile int8_t   probe_id_bit_close;
+
     /* Experimental stock runtime shadow for scope-mode bench work.
      * These are NOT the original firmware RAM locations. They are a small
      * explicit mirror we can inspect and stage from the shell while testing

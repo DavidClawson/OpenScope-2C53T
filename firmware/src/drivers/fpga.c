@@ -1630,8 +1630,9 @@ uint8_t fpga_spi3_config_sequence(const fpga_cfg_seq_opts_t *opt)
     /* -1 = "IDCODE not found". Must be set explicitly: fpga is zero-initialised,
      * and 0 is a VALID bit offset (perfectly aligned), so leaving these at 0
      * would report a successful match on a probe that never ran. */
-    fpga.probe_id_bit      = -1;
-    fpga.probe_id_bit_post = -1;
+    fpga.probe_id_bit       = -1;
+    fpga.probe_id_bit_post  = -1;
+    fpga.probe_id_bit_close = -1;
 
     /* Keep the acquisition task off the SPI3 bus during the handshake.
      * No-op pre-RTOS; essential when replayed live via `fpga reinit`. */
@@ -1905,6 +1906,22 @@ uint8_t fpga_spi3_config_sequence(const fpga_cfg_seq_opts_t *opt)
      * at all — the giveaway that it was never a real register value. Same bug
      * family as the /2 status reads and the floating-MISO reads. */
     spi3_set_br(7);                           /* /256 — the only valid SSPI read clock */
+
+    /* ANCHOR FIRST. Read the IDCODE in the same window and at the same clock as
+     * the status below, so cfg_status_reg is only believed on a read path proven
+     * against a known answer (0x0120681B). This runs on every build, not just the
+     * probe build: an unanchored status read is precisely what produced
+     * "80 01 C8 10 = READY POR" and kept it alive for six weeks.
+     *
+     * It doubles as the configured/not-configured test. Exp L (2026-07-28): once
+     * stock has configured the FPGA, the SSPI config port CLOSES and 0x11 returns
+     * zeros, because the port then belongs to the user design carrying ADC data.
+     * So an IDCODE that still answers HERE — after our full 115,638-byte upload
+     * and the 0x3A close — means the config port never closed and we are
+     * definitively not configured. */
+    spi3_read_reg8(0x11, fpga.probe_idcode_close);
+    fpga.probe_id_bit_close = spi3_find_idcode(fpga.probe_idcode_close);
+
     spi3_xfer(0x00);                          /* bare clock, CS HIGH (frame) */
     SPI3_CS_ASSERT();
     spi3_xfer(0x41);

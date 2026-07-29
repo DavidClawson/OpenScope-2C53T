@@ -841,12 +841,16 @@ static void draw_scope_debug(const theme_t *th)
         /* ID@ = bit offset where 0x0120681B was found, -1 = absent.
          * SM  = 0x11 and 0x00 returned identical bytes (Y => no opcode decode).
          * RP  = the 0x11 reply repeats every 4 bytes (Y => free-running pattern).
-         * PO@ = same IDCODE search on the 0x11 read taken AFTER CONFIG_ENABLE. */
-        snprintf(buf, sizeof(buf), "ID@%d SM:%c RP:%c PO@%d",
+         * PO@ = same IDCODE search on the 0x11 read taken AFTER CONFIG_ENABLE.
+         * CL@ = same again AFTER the full upload and the 0x3A close. Per Exp L a
+         *       configured part stops answering 0x11, so CL@ >= 0 means the config
+         *       port never closed => we are definitively NOT configured. */
+        snprintf(buf, sizeof(buf), "ID@%d SM:%c RP:%c PO@%d CL@%d",
                  (int)fpga.probe_id_bit,
                  fpga.probe_all_same ? 'Y' : 'N',
                  fpga.probe_repeats  ? 'Y' : 'N',
-                 (int)fpga.probe_id_bit_post);
+                 (int)fpga.probe_id_bit_post,
+                 (int)fpga.probe_id_bit_close);
         font_draw_string(2, SCOPE_DBG_Y + 41, buf, 0xF81F, 0x0000, &font_small);
     }
     return;
@@ -909,10 +913,18 @@ static void draw_scope_debug(const theme_t *th)
                       ((uint32_t)fpga.cfg_status_reg[1] << 16) |
                       ((uint32_t)fpga.cfg_status_reg[2] << 8)  |
                       ((uint32_t)fpga.cfg_status_reg[3]);
-        snprintf(buf, sizeof(buf), "CFG:%08lX D%u E%X L%u H%u",
+        /* A = the post-0x3A IDCODE anchor: the bit offset at which 0x0120681B was
+         *     found in the read taken immediately before CFG, at the same clock.
+         *     A>=0  -> CFG was read on a validated path AND the config port is
+         *             still open, i.e. we are definitively NOT configured.
+         *     A=-1  -> either the port closed (Exp L: what a successfully
+         *             configured part does) or the bus is dead. CFG is then
+         *             UNTRUSTWORTHY on its own — corroborate with a live trace. */
+        snprintf(buf, sizeof(buf), "CFG:%08lX D%u E%X A%d L%u H%u",
                  (unsigned long)sr,
                  (unsigned)((sr >> 13) & 1u),
                  (unsigned)(sr & 0x0Fu),
+                 (int)fpga.probe_id_bit_close,
                  (unsigned)lo, (unsigned)hi);
     }
     font_draw_string(2, SCOPE_DBG_Y + 28, buf,
