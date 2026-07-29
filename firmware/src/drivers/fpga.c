@@ -397,6 +397,13 @@ static void spi3_pump(const uint8_t *tx, volatile uint8_t *rx, uint32_t n)
 #define FPGA_CFG_TRACE_BUILD  0
 #endif
 
+/* Button-gated RECONFIG_N candidate pin sweep (`make guest-sweep`). Runs from
+ * the UI task, never from fpga_init — a bad pulse during init fails the boot,
+ * and three failed boots latch the bootloader into SAFE MODE. */
+#ifndef FPGA_PIN_SWEEP_BUILD
+#define FPGA_PIN_SWEEP_BUILD  0
+#endif
+
 /* Boot-into-bus-released experiment (2026-06-14, experimental/esp32-bringup).
  * For the external-master bench rig: the MCU brings up SPI3/USART/control pins,
  * then — instead of running its own SSPI config upload — immediately hands the
@@ -1662,6 +1669,160 @@ static void cfg_trace_capture(const fpga_cfg_seq_opts_t *opt, unsigned idx)
     fpga.cfg_trace_anchor[idx] = off;
     fpga.cfg_trace[idx] = (off >= 0) ? spi3_win32(stb, off) : 0xFFFFFFFFu;
 }
+
+#if FPGA_PIN_SWEEP_BUILD
+/* ═══════════════════════════════════════════════════════════════════
+ * RECONFIG_N candidate pin sweep
+ *
+ * Exp N: no config command moves the STATUS register, while every read command
+ * answers correctly — the documented behaviour of a running auto-booted GW1N
+ * that will not accept configuration until RECONFIG_N is pulsed or the part is
+ * power-cycled. This searches for that pin.
+ *
+ * CANDIDATE SELECTION — conservative, and the reasoning matters more than the
+ * list. Driving a pin something else is already driving is contention, and this
+ * is the only bench unit. So the table contains ONLY pins that stock itself
+ * configures as outputs before the FPGA handshake (per
+ * stock_pre_fpga_gpio_state.md), which proves the MCU owns them.
+ *
+ * Deliberately excluded, with cause:
+ *   PC9              power hold — driving it low kills the device instantly
+ *   PC8, PC13        passive button inputs (stock pulls them up)
+ *   PB3/PB4/PB5/PB6  SPI3 — the bus under test
+ *   PA13/PA14        SWD
+ *   PA2/PA3          USART2
+ *   PA4/PA5          DAC analog outputs (siggen)
+ *   PB8              LCD backlight — safe, but its function is known and
+ *                    pulsing it just flickers the screen
+ *   PD*, PE7-PE15    EXMC/LCD bus
+ *
+ * Note the frontend bank (PC12, PE4/5/6, PA15, PA10, PB10) is included even
+ * though Exp C refuted it: Exp C ablated stock's static POSTURE, whereas this
+ * pulses the pin. Exp E is likewise blind to transitions. Different test.
+ * PC2 and PB12 are included to redo Exp G, which "refuted" them while watching
+ * a status value we now know was unreadable.
+ * ═══════════════════════════════════════════════════════════════════ */
+typedef struct {
+    gpio_type  *port;
+    uint8_t     pin;
+    const char *name;
+} sweep_cand_t;
+
+static const sweep_cand_t sweep_cands[] = {
+    /* FPGA-adjacent control straps — the highest-prior candidates */
+    { GPIOC,  6, "PC6"  },   /* FPGA SPI enable strap */
+    { GPIOB, 11, "PB11" },   /* FPGA active mode */
+    { GPIOC, 11, "PC11" },   /* meter MUX enable */
+    { GPIOC,  2, "PC2"  },   /* Exp E: stock drives PP HIGH, we float — redo Exp G */
+    { GPIOB, 12, "PB12" },   /* Exp E: same — redo Exp G */
+    { GPIOB,  9, "PB9"  },   /* Exp E: stock AF-PP, we float */
+    { GPIOA,  6, "PA6"  },   /* undocumented frontend control, stock drives it */
+    /* Analog-frontend relay / gain bank (static posture refuted by Exp C) */
+    { GPIOC, 12, "PC12" },
+    { GPIOE,  4, "PE4"  },
+    { GPIOE,  5, "PE5"  },
+    { GPIOE,  6, "PE6"  },
+    { GPIOA, 15, "PA15" },
+    { GPIOA, 10, "PA10" },
+    { GPIOB, 10, "PB10" },
+    /* Button-matrix drive lines — MCU-owned outputs, cheap to include */
+    { GPIOB,  0, "PB0"  },
+    { GPIOC,  5, "PC5"  },
+    { GPIOC, 10, "PC10" },
+    { GPIOE,  2, "PE2"  },
+    { GPIOE,  3, "PE3"  },
+    { GPIOB,  7, "PB7"  },
+};
+#define SWEEP_N ((uint8_t)(sizeof(sweep_cands) / sizeof(sweep_cands[0])))
+
+const char *fpga_sweep_pin_name(uint8_t idx)
+{
+    return (idx < SWEEP_N) ? sweep_cands[idx].name : "--";
+}
+
+/* Anchored STATUS read at /256. Returns 0xFFFFFFFF if the IDCODE anchor fails,
+ * so an unvalidated value is never mistaken for a measurement. */
+static uint32_t sweep_read_status(void)
+{
+    volatile uint8_t idb[8], stb[8];
+
+    spi3_set_br(7);
+    spi3_read_reg8(0x11, idb);
+    int8_t off = spi3_find_idcode(idb);
+    spi3_read_reg8(0x41, stb);
+    spi3_set_br(0);
+
+    return (off >= 0) ? spi3_win32(stb, off) : 0xFFFFFFFFu;
+}
+
+void fpga_reconfig_pin_sweep(void)
+{
+    if (fpga.sweep_state == 1)
+        return;                       /* already running — never re-enter */
+
+    fpga.sweep_state       = 1;
+    fpga.sweep_total       = SWEEP_N;
+    fpga.sweep_tested      = 0;
+    fpga.sweep_hits        = 0;
+    fpga.sweep_anchor_fail = 0;
+    fpga.sweep_first_hit   = 0xFF;
+    fpga.sweep_hit_status  = 0;
+
+    int sched_running = (xTaskGetSchedulerState() == taskSCHEDULER_RUNNING);
+    if (sched_running && acq_task_handle) vTaskSuspend(acq_task_handle);
+
+    fpga.sweep_baseline = sweep_read_status();
+
+    for (uint8_t i = 0; i < SWEEP_N; i++) {
+        gpio_type *port = sweep_cands[i].port;
+        uint8_t    pin  = sweep_cands[i].pin;
+        uint32_t   mask = (1u << pin);
+
+        wdt_counter_reload();
+
+        /* Save the pin's 4-bit CNF/MODE field and its output latch, so the pin
+         * is left exactly as found whether or not it turns out to be a hit. */
+        volatile uint32_t *cfg = (pin < 8) ? &port->cfglr : &port->cfghr;
+        uint32_t shift    = (uint32_t)(pin & 7u) * 4u;
+        uint32_t saved    = *cfg;
+        uint32_t saved_od = port->odt & mask;
+
+        /* Drive it: output push-pull, 50MHz. */
+        *cfg = (saved & ~(0xFu << shift)) | (0x3u << shift);
+
+        port->clr = mask;                 /* LOW  — the RECONFIG_N assertion */
+        fpga_scope_delay_ms(10);          /* spec needs >=25ns; 10ms is generous */
+        port->scr = mask;                 /* HIGH — release */
+        fpga_scope_delay_ms(1);
+
+        /* CONFIG_ENABLE in its own CS frame, at stock's /2. */
+        SPI3_CS_ASSERT();
+        spi3_xfer(0x15);
+        spi3_xfer(0x00);
+        SPI3_CS_DEASSERT();
+
+        uint32_t st = sweep_read_status();
+
+        /* Restore before evaluating, so an early exit can never leave a pin driven. */
+        *cfg = saved;
+        if (saved_od) port->scr = mask; else port->clr = mask;
+
+        if (st == 0xFFFFFFFFu) {
+            fpga.sweep_anchor_fail++;
+        } else if (st != fpga.sweep_baseline) {
+            if (fpga.sweep_first_hit == 0xFF) {
+                fpga.sweep_first_hit  = i;
+                fpga.sweep_hit_status = st;
+            }
+            fpga.sweep_hits++;
+        }
+        fpga.sweep_tested = i + 1;
+    }
+
+    if (sched_running && acq_task_handle) vTaskResume(acq_task_handle);
+    fpga.sweep_state = 2;
+}
+#endif /* FPGA_PIN_SWEEP_BUILD */
 
 uint8_t fpga_spi3_config_sequence(const fpga_cfg_seq_opts_t *opt)
 {

@@ -298,6 +298,19 @@ uint8_t input_handle_button(button_id_t button, QueueHandle_t dq)
     /* -- Save (screenshot) ---------------------------------------- */
 
     case BTN_SAVE:
+#if defined(FPGA_PIN_SWEEP_BUILD) && FPGA_PIN_SWEEP_BUILD
+        /* Bench build: SAVE runs the RECONFIG_N candidate pin sweep instead of
+         * its normal action. Gated to a button and run from here — NOT from
+         * fpga_init — so a bad pulse costs a power-cycle rather than a failed
+         * boot; three failed boots latch the bootloader into SAFE MODE, which
+         * this unit has already done twice. Re-runnable without a reflash. */
+        if (current_mode == MODE_OSCILLOSCOPE) {
+            scope_show_popup("PIN SWEEP...");
+            fpga_reconfig_pin_sweep();
+            send_cmd(dq, cmd);
+            break;
+        }
+#endif
         if (current_mode == MODE_MULTIMETER) {
             meter_toggle_debug_overlay();
             send_cmd(dq, cmd);

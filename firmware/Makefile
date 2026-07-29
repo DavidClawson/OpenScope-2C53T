@@ -449,3 +449,24 @@ guest-idcode: clean all
 guest-trace: CFLAGS += -DGUEST_BUILD -DFPGA_STOCK_FIDELITY=1 -DFPGA_USART_SILENT_SCOPE=1 -DFPGA_CFG_TRACE_BUILD=1
 guest-trace: LDSCRIPT = ld/at32f403a_guest.ld
 guest-trace: clean all
+
+# RECONFIG_N candidate pin sweep (2026-07-28), button-gated.
+# Exp N: no config command moves the STATUS register while every read command
+# answers correctly — the documented behaviour of a running auto-booted GW1N that
+# refuses configuration until RECONFIG_N is pulsed. This searches for that pin.
+# Press SAVE in scope mode: each candidate is pulsed LOW->HIGH, CONFIG_ENABLE is
+# sent, and the anchored STATUS is read; anything off the baseline is a hit.
+#
+# Candidates are CONSERVATIVE — only pins stock itself drives as outputs before
+# the FPGA handshake (stock_pre_fpga_gpio_state.md), so the MCU provably owns
+# them and there is no contention risk. PC9 (power hold), PC8/PC13 (button
+# inputs), SPI3, SWD, USART2, the DAC pins, PB8 and the EXMC/LCD bus are all
+# excluded. Every pin's config and output latch are restored as the sweep goes.
+#
+# Button-gated and run from the UI task rather than fpga_init: a bad pulse during
+# init fails the boot, and three failed boots latch the bootloader into SAFE MODE
+# (this unit has done that twice). From the UI it costs a power-cycle, and the
+# sweep can be re-run without a reflash.
+guest-sweep: CFLAGS += -DGUEST_BUILD -DFPGA_STOCK_FIDELITY=1 -DFPGA_USART_SILENT_SCOPE=1 -DFPGA_PIN_SWEEP_BUILD=1
+guest-sweep: LDSCRIPT = ld/at32f403a_guest.ld
+guest-sweep: clean all
