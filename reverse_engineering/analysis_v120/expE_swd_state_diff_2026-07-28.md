@@ -946,3 +946,67 @@ unmapped pins, and must exclude:
   * `PA2/PA3` USART2
   * the EXMC/LCD bus
   * button-matrix inputs and any FPGA-driven pin (contention)
+
+---
+
+# Experiment O (2026-07-28) — conservative RECONFIG_N pin sweep: 20/20 negative
+
+## Result — bench unit #1, `make guest-sweep`, SAVE in scope mode
+
+```
+SWEEP:DONE 20/20
+BASE:00039020
+HIT:-- 000000
+H:0 AF:0
+```
+
+20 candidates pulsed LOW->HIGH (10ms) immediately before CONFIG_ENABLE, each
+followed by an anchored STATUS read. **Zero hits. Zero anchor failures.**
+
+`AF:0` matters: every one of the 20 readings passed its IDCODE anchor, so the
+config port stayed open and answering throughout and this is a genuine negative
+rather than 20 failed measurements. `BASE:00039020` matches every other reading.
+
+Candidates (all pins stock drives as outputs per `stock_pre_fpga_gpio_state.md`,
+ordered by prior): PC6, PB11, PC11, PC2, PB12, PB9, PA6, PC12, PE4, PE5, PE6,
+PA15, PA10, PB10, PB0, PC5, PC10, PE2, PE3, PB7.
+
+This also re-runs Exp G (PC2, PB12) with a status readout that actually works,
+and extends Exp C's static-posture ablation of the frontend bank into a
+transition test. Both stay refuted.
+
+## KNOWN BLIND SPOT — do not over-read this result
+
+The detector takes **one status snapshot at a fixed +1ms after the pulse**. If
+pulsing the real RECONFIG_N causes the part to reconfigure from its NV flash,
+that is a TRANSIENT: the status changes and then settles, plausibly back to a
+value indistinguishable from the baseline by the time we sample.
+
+So what Exp O establishes is: **no candidate produced a PERSISTENT status change
+at +1ms.** That is weaker than "no candidate is RECONFIG_N", and the gap should
+be closed before the conservative pin hypothesis is retired.
+
+Fix: sample the status repeatedly after each pulse (e.g. ~20 reads over 200ms)
+and flag ANY deviation at any point, rather than one snapshot at one delay.
+
+## Second gap — the candidate list has a hole by construction
+
+The list came from `stock_pre_fpga_gpio_state.md`, which enumerates the window
+`0x0802AA50 -> 0x0802D63C` — master-init entry to the first SPI3 byte. Anything
+stock does BEFORE master init is outside it. That is not hypothetical: the same
+doc notes PC9's power-hold is asserted by the reset/clock-init stub at
+`0x08000000`, before master init runs.
+
+An early hardware-init pulse is exactly where a RECONFIG_N assertion would
+sensibly live, and we have never scanned there. `scripts/find_gpio_pulses.py`
+starts at `MASTER_INIT_ADDR` and inherits the same hole.
+
+## Next, in order
+
+1. **Zero bench time:** rescan for GPIO pulses across the whole image up to
+   CONFIG_ENABLE, including the reset/clock-init stub and everything before
+   master init. Fix the script's base-register resolution first — the 2026-07-27
+   run reported 5 candidates of which 3 turned out to be timers.
+2. **Sweep v2:** transient-aware sampling, closing the blind spot above.
+3. **Broad sweep:** pins that NEITHER firmware drives, accepting the contention
+   risk that the conservative list was chosen to avoid.
