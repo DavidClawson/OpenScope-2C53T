@@ -734,3 +734,69 @@ CAVEAT for a post-`0x15` park: reading STATUS requires opening a new CS frame,
 which may itself end an active config session — so a clear EDIT_MODE there would
 be ambiguous. DONE after `0x3A` is the more robust target, since it reflects a
 completed configuration rather than a transient session flag.
+
+---
+
+# Experiment L (2026-07-28) — a configured FPGA stops answering SSPI
+
+## What was run
+
+Flashed CLEAN stock (`/tmp/clean.bin`, verified byte-identical to
+`archive/2C53T Firmware V1.2.0/APP_2C53T_V1.2.0_251015.bin`), booted fully,
+**confirmed the scope was drawing a trace** — proof that configuration completed
+— then halted over SWD and ran the anchored read. No spin patch needed.
+
+## Result — the anchor failed, and the script aborted
+
+```
+park       : SPI3 CTRL1 = 0x00000347  SPE=1 BR=0 ; PB6/CS=1 ; PB11=1
+IDCODE raw : 0000000000000000
+!! IDCODE NOT FOUND at any bit alignment. Aborting.
+```
+
+The FPGA does not answer `0x11` at all once it is configured and running the
+scope design. Compare Exp J/K, where the same read on the same board returned
+`0120681B` cleanly. The idle level flipped too: Exp J's `0x00` no-op control read
+`FF...` on a pulled-up MISO, whereas this reads as actively driven low.
+
+**Reading: the SSPI configuration port closes once configuration completes and
+the user design takes over the bus.** That is consistent with the known protocol
+— post-config, PB4/MISO carries ADC sample data for the `0x04`/`0x05` per-channel
+reads, so the config engine is no longer the thing on the other end of the wire.
+
+The success signature (DONE bit 13) was therefore NOT obtained; it is unreadable
+at this point in the boot. The prediction going in was `DONE=1`; it was neither
+confirmed nor refuted.
+
+**Process note: this is the first time the anchoring discipline actively
+prevented a false reading.** The old script would have printed
+`STATUS 0x00000000  EDIT_MODE=0  DONE=0` — a plausible-looking, entirely
+meaningless line that we would have spent time interpreting.
+
+## What it does give us: a binary discriminator
+
+| state | `0x11` READ_IDCODE | config port |
+|---|---|---|
+| stock, parked pre-config (Exp K) | `0120681B` | **open** |
+| ours, post-upload (Exp I, via a valid `0x41` read) | STATUS `0x00039020` | **open** |
+| stock, configured, scope working (Exp L) | zeros | **closed** |
+
+Our firmware's post-upload `0x41` returning a valid `0x00039020` is itself
+evidence that the config port is still open after our entire 115,638-byte
+upload — i.e. we are definitively not configured. The contrast with stock is
+already established; it is simply not yet IDCODE-anchored on our side.
+
+Caveat: "no IDCODE" is not by itself proof of "configured" — a broken bus reads
+the same way. It is only interpretable here because the scope was visibly
+working at the moment of the halt.
+
+## Next
+
+1. **Cheap and airtight:** add an IDCODE anchor to our firmware's post-`0x3A`
+   read (one call in the existing `probe_idcode` block). If IDCODE still answers
+   after the full upload and close, "not configured" is proven on a validated
+   channel rather than inferred from a status value.
+2. **The real success signature:** park stock immediately after its `0x3A` close
+   and read IDCODE + STATUS there. That is the only window in which a
+   successfully-configured part might still answer the config engine. Requires
+   locating the `0x3A` write in the disassembly and a new spin patch.
