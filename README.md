@@ -126,10 +126,10 @@ The short version:
    ```bash
    make flash-all
    ```
-   If the second `dfu-util` command reports `File downloaded successfully` but
-   fails while submitting `leave`, do not assume the application has booted.
-   Remove the BOOT0 jumper, reset into the USB HID bootloader, and run
-   `make flash` to install the application through the bootloader.
+   If the application write finishes but the device does not come up running the
+   app, do not assume it booted. Remove the BOOT0 jumper, reset into the USB HID
+   bootloader, and run `make flash` to install the application through the
+   bootloader.
 7. Remove the BOOT0 jumper, pinhole reset, close the case — you won't need to open it again once the application boots
 
 ### Normal Development Cycle (case closed)
