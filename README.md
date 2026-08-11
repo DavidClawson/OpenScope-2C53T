@@ -8,7 +8,7 @@
 
 The FNIRSI 2C53T is a capable $75 handheld 3-in-1 instrument held back by buggy stock firmware. This project is a complete clean-room firmware rewrite built from reverse engineering the original binary.
 
-> **Looking for contributors with test equipment.** The firmware runs on real hardware — UI, meter, bootloader, and button input all work. The next milestones (live oscilloscope waveforms, factory calibration) need hardware captures we can't do with a single bench unit. If you have a 2C53T and a logic analyzer, or experience with Gowin FPGAs, [see how you can help](#help-wanted).
+> **Looking for help with one specific problem.** The firmware runs on real hardware — UI, meter, bootloader and button input all work. Live oscilloscope waveforms are blocked on getting the Gowin FPGA to accept its configuration at boot, which stock firmware does and we cannot. We have narrowed it a long way; if you know Gowin parts, [that's the ask](#2-gowin-fpga-configuration-expertise--the-highest-value-ask).
 
 ## Current Status
 
@@ -43,7 +43,15 @@ These algorithms are written and unit-tested, but currently run on demo waveform
 - Screenshot capture (BMP)
 
 ### In progress
-- **FPGA SPI3 data acquisition** — **major breakthrough (Jun 2026).** A community logic-analyzer capture of a stock boot ([issue #18](https://github.com/DavidClawson/OpenScope-2C53T/issues/18), thanks to @maksidze) revealed that our FPGA configuration bitstream had been extracted from the wrong flash offset — we'd been uploading garbage. With the corrected 115,638-byte bitstream, the FPGA now accepts the config and the PC0 data-ready line arms for the first time. Remaining work: implement the per-channel `0x04`/`0x05` sample-read protocol the capture revealed and wire it to the waveform renderer. This is the critical path to a working oscilloscope.
+- **FPGA configuration — the one blocking problem.** The oscilloscope path needs the MCU to upload a 115,638-byte configuration to the Gowin GW1N-UV2 at every boot. Stock firmware does this successfully; ours does not, and that is why there are no live waveforms.
+
+  A community logic-analyzer capture of a stock boot ([issue #18](https://github.com/DavidClawson/OpenScope-2C53T/issues/18), thanks to @maksidze) fixed one real bug — our bitstream had been extracted from the wrong file offset, so we'd been uploading garbage. The corrected bitstream is byte-exact against the capture. **It did not fix the problem.**
+
+  As of August 2026 we can state the failure precisely. The FPGA decodes our commands correctly (it answers IDCODE, USERCODE and STATUS, all distinct), reports **no errors at all** (no CRC, no bad-command, no ID-verify), and **not one configuration command moves its status register by a single bit**. The bytes aren't being rejected — they're being silently discarded, because the part never enters configuration mode. That is the documented behaviour of a Gowin FPGA that has already booted its own resident design.
+
+  Ruled out by measurement, not argument: the bitstream contents, the framing, the timing, the analog front-end state, the MCU's register state, the clock tree, and every GPIO pin the stock firmware pulses. The stock firmware's FPGA is in a **measurably identical state** to ours at the critical moment — and stock succeeds anyway. Resolving that contradiction is the critical path to a working oscilloscope.
+
+  The story of how we got here, including the six weeks lost to a mis-clocked register read, is in the [devlog](docs/devlog/).
 
 ## Hardware
 
@@ -169,7 +177,7 @@ make renode              # Run in Renode with LCD display
 make renode-interactive  # Run with keyboard input
 ```
 
-Requires [Renode](https://renode.io/) at `/Applications/Renode.app`. An SDL3 native LCD viewer is also available (`brew install sdl3 && cd emulator && make`).
+Requires [Renode](https://renode.io/) (the Makefile looks for `/Applications/Renode.app` on macOS; set `RENODE` to override). An SDL3 native LCD viewer is also available (`brew install sdl3 && cd emulator && make`).
 
 ## Project Structure
 
@@ -204,6 +212,7 @@ Start with the [Documentation Index](docs/README.md). Key documents:
 - [FPGA Protocol](reverse_engineering/FPGA_PROTOCOL_COMPLETE.md) — ADC sampling and command interface
 - [Hardware Pinout](reverse_engineering/HARDWARE_PINOUT.md) — Every MCU pin mapped
 - [Roadmap](docs/roadmap.md) — What's done, what's next, future plans
+- [Devlog](docs/devlog/) — Dated notes on what we tried, including the wrong turns
 
 ## Reverse Engineering
 
@@ -216,15 +225,24 @@ No FNIRSI source code is distributed in this repository. See [reverse_engineerin
 The firmware is functionally complete for the UI layer, but the next milestones are blocked on hardware captures and experimentation that a single bench unit can't provide. **You don't need to write code to make a big contribution here.**
 
 ### 1. ~~Logic analyzer captures of the stock firmware boot sequence~~ ✅ DONE
-**Solved June 2026** thanks to @maksidze ([issue #18](https://github.com/DavidClawson/OpenScope-2C53T/issues/18)), who patched the stock firmware's SPI prescaler to /64 and captured a full stock boot on a Saleae. That capture revealed our FPGA bitstream was extracted from the wrong file offset (we'd treated the flash address as a file offset, ignoring the `0x08007000` link base — the real bitstream is at file offset `0x4AD19`). The corrected bitstream is byte-exact against the capture and the FPGA now accepts it. Full decode: [`reverse_engineering/captures/`](reverse_engineering/captures/). Still useful: captures from **other board revisions** to confirm the bitstream and sequence generalize.
+**Capture obtained June 2026** thanks to @maksidze ([issue #18](https://github.com/DavidClawson/OpenScope-2C53T/issues/18)), who patched the stock firmware's SPI prescaler to /64 and captured a full stock boot on a Saleae. That capture revealed our FPGA bitstream was extracted from the wrong file offset (we'd treated the flash address as a file offset, ignoring the `0x08007000` link base — the real bitstream is at file offset `0x4AD19`). The corrected bitstream is byte-exact against the capture. Full decode: [`reverse_engineering/captures/`](reverse_engineering/captures/).
 
-### 2. Oscilloscope sample-read implementation
-The capture revealed the post-config read protocol: per-channel 1026-byte reads with opcodes `0x04` (CH1) / `0x05` (CH2), gated on the PC0 data-ready line. We're implementing this now. If you have a 2C53T + logic analyzer and want to help characterize the runtime trigger/timebase command sequence (the part that rides on USART, which the SPI capture couldn't see), open an issue. See [FPGA Protocol](reverse_engineering/FPGA_PROTOCOL_COMPLETE.md) for the full command table.
+**It did not fix FPGA configuration** — see [In progress](#in-progress). The capture was still worth every minute: it eliminated the payload as a variable, which is why we can now say the problem is config *entry* rather than config *content*.
 
-### 3. Board variant documentation
+### 2. Gowin FPGA configuration expertise — the highest-value ask
+This is the blocker. A GW1N-UV2 that has auto-booted its own resident design answers SSPI queries but refuses to be reconfigured; the documented ways in are a RECONFIG_N pulse or a power cycle. On this board **RECONFIG_N never pulses** (measured on the pin), no MCU-driven GPIO changes anything, and yet the stock firmware reconfigures it successfully at every boot from a state we have measured to be identical to ours.
+
+If you have worked with Gowin parts, or know what else can put one back into configuration mode, [issue #18](https://github.com/DavidClawson/OpenScope-2C53T/issues/18) is the thread. A single well-informed answer here is worth more than any amount of code.
+
+Specifically useful: if you own an **FNIRSI 2C23T** running [rosenrot00's firmware](https://github.com/rosenrot00/OpenScope-2C23T) — whose SSPI upload *works* on near-identical hardware — we'd like to know whether that board's FPGA has a resident NV image at all, and whether RECONFIG_N is wired there.
+
+### 3. Oscilloscope sample-read implementation
+The capture revealed the post-config read protocol: per-channel 1026-byte reads with opcodes `0x04` (CH1) / `0x05` (CH2), gated on the PC0 data-ready line. This is written but unexercised — it cannot be tested until configuration works. If you have a 2C53T + logic analyzer and want to help characterize the runtime trigger/timebase command sequence (the part that rides on USART, which the SPI capture couldn't see), open an issue. See [FPGA Protocol](reverse_engineering/FPGA_PROTOCOL_COMPLETE.md) for the full command table.
+
+### 4. Board variant documentation
 We've confirmed one board revision (V1.4) and one user has reported a different layout with no version marking. If your 2C53T looks different from [our photos](docs/images/), photos of your PCB (top and bottom) are extremely valuable — especially near the FPGA, SPI flash, and analog frontend.
 
-### 4. Everything else
+### 5. Everything else
 - **Test on your hardware** — different units reveal things a single bench unit can't
 - **Document what worked** — first-flash walkthroughs for Linux or Windows are always welcome
 - **Contribute modules** (`modules/*.json`) for your domain (automotive, HVAC, ham radio, etc.)
