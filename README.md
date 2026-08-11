@@ -10,6 +10,14 @@ The FNIRSI 2C53T is a capable $75 handheld 3-in-1 instrument held back by buggy 
 
 > **Looking for help with one specific problem.** The firmware runs on real hardware — UI, meter, bootloader and button input all work. Live oscilloscope waveforms are blocked on getting the Gowin FPGA to accept its configuration at boot, which stock firmware does and we cannot. We have narrowed it a long way; if you know Gowin parts, [that's the ask](#2-gowin-fpga-configuration-expertise--the-highest-value-ask).
 
+> ### ⚠️ This is development firmware — don't depend on it for real measurements
+>
+> **The oscilloscope does not capture.** The scope UI renders, but there is no trace, because the FPGA will not accept its configuration from our firmware. If you need a working scope, stay on stock.
+>
+> **The multimeter works, but treat it as unverified on your unit.** The decode is accurate within a few percent on our bench device, but the low-Ω calibration factor is *per-device* and currently hardcoded to that one unit — so absolute readings on your hardware have not been checked by anyone. **Use it alongside a known-good meter**, the way you would with any unfamiliar instrument, and don't trust it alone for anything that matters.
+>
+> Flash it to help develop it, to explore the hardware, or because the reverse engineering interests you. **PR #16 adds a dual-boot switcher** so you can keep stock and switch between them rather than choosing.
+
 ## Current Status
 
 **Custom firmware runs on real hardware.** The UI, button input, battery management, and USB bootloader all work. Active development is focused on getting live oscilloscope data from the FPGA.
