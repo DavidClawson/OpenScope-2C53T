@@ -49,8 +49,10 @@ typedef struct {
 
     uint32_t exc_return;   /* bit2: 0 = frame on MSP, 1 = on PSP */
     uint32_t sp;           /* the stack the frame was found on */
-    uint32_t tick;         /* xTickCount at fault — gives time-since-boot */
-    char     task[16];     /* current task name, best effort */
+    uint32_t cyccnt;       /* DWT cycle counter at fault. NOT a FreeRTOS tick:
+                            * the handler must not call FreeRTOS (see fault.c). */
+    char     task[16];     /* left empty by the handler on purpose — identify the
+                            * task offline from `sp`, which lands in its stack. */
 } fault_record_t;
 
 /* Non-static so the address comes out of the ELF with nm and the record can be

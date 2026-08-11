@@ -4,8 +4,8 @@
 
 #include "fault.h"
 #include "at32f403a_407.h"
-#include "FreeRTOS.h"
-#include "task.h"
+/* Deliberately NOT including FreeRTOS headers: nothing in the fault path
+ * may call a FreeRTOS API. See the note in fault_capture(). */
 
 #include <stdio.h>
 #include <string.h>
@@ -41,7 +41,7 @@ void fault_init(void)
                  "%s pc=%08lx lr=%08lx cfsr=%08lx t=%lu %s",
                  kind_name(prev.kind),
                  (unsigned long)prev.pc, (unsigned long)prev.lr,
-                 (unsigned long)prev.cfsr, (unsigned long)prev.tick,
+                 (unsigned long)prev.cfsr, (unsigned long)prev.cyccnt,
                  prev.task);
     } else {
         prev_summary[0] = '\0';
@@ -73,6 +73,14 @@ void fault_init(void)
      * ACTLR is at 0xE000E008 and is not a member of SCB_Type in this CMSIS
      * version, hence the direct access. */
     *(volatile uint32_t *)0xE000E008u |= (1u << 1);
+
+    /* DWT cycle counter — the fault handler's only timestamp source, since it
+     * must not call into FreeRTOS. At 240 MHz CYCCNT wraps every ~17.9 s, so it
+     * gives sub-wrap precision rather than absolute uptime; pair it with the
+     * boot_count and the observed ~55 s figure. */
+    CoreDebug->DEMCR |= CoreDebug_DEMCR_TRCENA_Msk;
+    DWT->CYCCNT = 0;
+    DWT->CTRL  |= 1u;            /* CYCCNTENA */
 }
 
 bool fault_have_previous(void)      { return prev_valid; }
@@ -107,26 +115,29 @@ static void fault_capture(uint32_t *frame, uint32_t exc_return, uint32_t kind)
 
     g_fault.exc_return = exc_return;
     g_fault.sp         = (uint32_t)frame;
-    g_fault.tick       = (uint32_t)xTaskGetTickCountFromISR();
 
-    /* Best effort — pcTaskGetName walks pxCurrentTCB, which may itself be the
-     * thing that is corrupt, so copy defensively rather than trusting strncpy
-     * on a wild pointer. */
+    /* Timestamp from the DWT cycle counter, NOT from FreeRTOS.
+     *
+     * The first version of this called xTaskGetTickCountFromISR() here and it
+     * destroyed the whole handler. That function runs
+     * portASSERT_IF_INTERRUPT_PRIORITY_INVALID(), which ALWAYS fails in a fault
+     * handler (priority -1/-2, above configMAX_SYSCALL_INTERRUPT_PRIORITY), and
+     * this project's configASSERT calls fault_display() — i.e. it drives the
+     * LCD over EXMC from inside a fault handler. That faulted again, escalated,
+     * and locked the core up at 0xFFFFFFFE with the record already invalidated
+     * by the magic=0 above. Measured: SHCSR showed USGFAULTACT set with
+     * CFSR = UNDEFINSTR and HFSR = FORCED, and g_fault was never written.
+     *
+     * A fault handler must touch NOTHING but architectural state. No FreeRTOS
+     * API, no LCD, no printf. DWT is a core peripheral: a plain register read
+     * that cannot assert, block or fault. */
+    g_fault.cyccnt = DWT->CYCCNT;
+
+    /* The task is identified offline from `sp`: each task's stack occupies a
+     * known range, so the stack the frame landed on names the task without
+     * calling pcTaskGetName() — which asserts on a bad handle, and pxCurrentTCB
+     * may be exactly what is corrupt. */
     g_fault.task[0] = '\0';
-    {
-        TaskHandle_t h = xTaskGetCurrentTaskHandle();
-        if (h != NULL) {
-            const char *n = pcTaskGetName(h);
-            if (n != NULL) {
-                for (unsigned i = 0; i < sizeof(g_fault.task) - 1u; i++) {
-                    char c = n[i];
-                    g_fault.task[i] = c;
-                    if (c == '\0') break;
-                }
-                g_fault.task[sizeof(g_fault.task) - 1u] = '\0';
-            }
-        }
-    }
 
     __DMB();
     g_fault.magic = FAULT_MAGIC;
