@@ -18,6 +18,22 @@
 #include "dfu_boot.h"
 #include "flash_fs.h"
 #include "rtt.h"
+
+/* On the bench unit USB CDC never enumerates (error -71, unsolved), yet
+ * usbd_connect_state_get() still reports CONFIGURED — so usb_send_bytes()
+ * walks into the CDC TX path and the shell task stalls there instead of
+ * returning to poll RTT. Measured 2026-08-11: the banner reached the RTT
+ * buffer (rtt_write runs first) and the task never came back.
+ *
+ * RTT exists precisely to bypass that transport, so this flag cuts the CDC
+ * half out entirely. Build with -DDEBUG_SHELL_RTT_ONLY=1.
+ *
+ * NOTE this is an isolation switch, not the real fix. The underlying defect is
+ * that a half-alive USB stack can wedge the shell; the proper repair is to
+ * count consecutive CDC TX timeouts and latch the transport dead. */
+#ifndef DEBUG_SHELL_RTT_ONLY
+#define DEBUG_SHELL_RTT_ONLY 0
+#endif
 #include "scope_trigger.h"
 #include "fpga.h"
 #include "ui.h"
@@ -130,6 +146,10 @@ static void usb_send_bytes(const uint8_t *data, uint16_t len)
 {
     rtt_write(data, len);
 
+#if DEBUG_SHELL_RTT_ONLY
+    (void)data; (void)len;
+    return;
+#else
     if (!usb_debug_connected()) return;
 
     cdc_struct_type *pcdc = (cdc_struct_type *)usb_core_dev.class_handler->pdata;
@@ -151,6 +171,7 @@ static void usb_send_bytes(const uint8_t *data, uint16_t len)
         data += chunk;
         len -= chunk;
     }
+#endif
 }
 
 static void usb_send_str(const char *str)
@@ -2698,6 +2719,7 @@ static void vUsbDebugTask(void *pvParameters)
         }
 
         /* ---- USB CDC transport ---- */
+#if !DEBUG_SHELL_RTT_ONLY
         if (usb_debug_connected()) {
             if (!usb_banner_sent) {
                 /* Let the host finish enumerating before the first write. */
@@ -2718,6 +2740,9 @@ static void vUsbDebugTask(void *pvParameters)
             usb_banner_sent = false;
             usb_settle = 0;
         }
+#else
+        (void)rx_buf; (void)usb_banner_sent; (void)usb_settle;
+#endif
 
         if (!did_work) {
             vTaskDelay(pdMS_TO_TICKS(10));

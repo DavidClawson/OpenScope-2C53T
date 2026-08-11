@@ -471,3 +471,13 @@ guest-trace: clean all
 guest-sweep: CFLAGS += -DGUEST_BUILD -DFPGA_STOCK_FIDELITY=1 -DFPGA_USART_SILENT_SCOPE=1 -DFPGA_PIN_SWEEP_BUILD=1
 guest-sweep: LDSCRIPT = ld/at32f403a_guest.ld
 guest-sweep: clean all
+
+# RTT-only debug shell (2026-08-11). Cuts the USB CDC half out of the console.
+# Measured on the bench unit: usbd_connect_state_get() reports CONFIGURED even
+# though CDC never enumerates (error -71), so usb_send_bytes() enters the CDC TX
+# path and the shell task stalls there instead of returning to poll RTT — the
+# banner reached the RTT ring (rtt_write runs first) and nothing followed.
+# RTT exists to bypass that transport; this stops the tee re-introducing it.
+guest-rtt: CFLAGS += -DGUEST_BUILD -DDEBUG_SHELL_RTT_ONLY=1
+guest-rtt: LDSCRIPT = ld/at32f403a_guest.ld
+guest-rtt: clean all
