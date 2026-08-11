@@ -32,6 +32,14 @@ class FlashSafetyTests(unittest.TestCase):
         self.assertIn("validate_preserve_ranges", hid_flash)
         self.assertIn("not {SECTOR_SIZE}-byte sector-aligned", hid_flash)
 
+    def test_bootloader_nacks_misaligned_erase_addresses(self) -> None:
+        source = (Path(__file__).resolve().parents[1] / "firmware/bootloader/src/hid_iap_user.c").read_text()
+        self.assertIn("static uint8_t iap_erase_address_valid(uint32_t address)", source)
+        self.assertIn("iap_result_type iap_erase_sector(uint32_t address)", source)
+        self.assertIn("return (address & (SECTOR_SIZE_2K - 1)) == 0", source)
+        self.assertIn("if (iap_erase_sector(address) == IAP_SUCCESS)", source)
+        self.assertIn("result = IAP_NACK", source)
+
     def test_stock_named_image_is_classified_and_hid_rejected(self) -> None:
         with tempfile.TemporaryDirectory() as td:
             path = Path(td) / "APP_2C53T_V1.2.0.bin"

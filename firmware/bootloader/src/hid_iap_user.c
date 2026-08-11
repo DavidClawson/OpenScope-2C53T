@@ -156,8 +156,22 @@ iap_result_type iap_get_upgrade_flag(void)
   return IAP_FAILED;
 }
 
-void iap_erase_sector(uint32_t address)
+static uint8_t iap_erase_address_valid(uint32_t address)
 {
+  if (iap_info.sector_size == SECTOR_SIZE_1K)
+    return 1;
+  if (iap_info.sector_size == SECTOR_SIZE_2K)
+    return (address & (SECTOR_SIZE_2K - 1)) == 0;
+  if (iap_info.sector_size == SECTOR_SIZE_4K)
+    return (address & (SECTOR_SIZE_4K - 1)) == 0;
+  return 0;
+}
+
+iap_result_type iap_erase_sector(uint32_t address)
+{
+  if (!iap_erase_address_valid(address))
+    return IAP_FAILED;
+
   flash_unlock();
   if (iap_info.sector_size == SECTOR_SIZE_1K)
   {
@@ -165,15 +179,14 @@ void iap_erase_sector(uint32_t address)
   }
   else if (iap_info.sector_size == SECTOR_SIZE_2K)
   {
-    if ((address & (SECTOR_SIZE_2K - 1)) == 0)
-      flash_sector_erase(address);
+    flash_sector_erase(address);
   }
   else if (iap_info.sector_size == SECTOR_SIZE_4K)
   {
-    if ((address & (SECTOR_SIZE_4K - 1)) == 0)
-      flash_sector_erase(address);
+    flash_sector_erase(address);
   }
   flash_lock();
+  return IAP_SUCCESS;
 }
 
 uint32_t crc_cal(uint32_t addr, uint16_t nk)
@@ -245,14 +258,26 @@ iap_result_type iap_address(uint8_t *pdata, uint32_t len)
   }
   else
   {
-    iap_info.iap_address = address;
-    lcd_draw_iap_status("Flashing...");
-    if (iap_info.state == IAP_STS_START && !iap_native_write)
-      iap_clear_upgrade_flag();
-    iap_erase_sector(iap_info.iap_address);
+    uint8_t clear_upgrade_flag = (iap_info.state == IAP_STS_START && !iap_native_write);
+    if (iap_erase_address_valid(address))
+    {
+      iap_info.iap_address = address;
+      lcd_draw_iap_status("Flashing...");
+      if (clear_upgrade_flag)
+        iap_clear_upgrade_flag();
+      if (iap_erase_sector(address) == IAP_SUCCESS)
+        iap_info.state = IAP_STS_ADDR;
+      else
+        result = IAP_NACK;
+      status = (result == IAP_ACK) ? IAP_SUCCESS : IAP_FAILED;
+    }
+    else
+    {
+      status = IAP_FAILED;
+      result = IAP_NACK;
+    }
   }
 
-  iap_info.state = IAP_STS_ADDR;
   iap_respond(iap_info.iap_tx, IAP_CMD_ADDR, result);
   return status;
 }
