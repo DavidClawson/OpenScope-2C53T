@@ -1,0 +1,240 @@
+#!/usr/bin/env python3
+"""Build the stock-user image used by the PC firmware switcher.
+
+The archived APP_2C53T V1.2.0 image is linked for 0x08007000: its reset
+vector is 0x08007311 and stock later writes VTOR=0x08007000.  The switcher
+therefore keeps only a low reset vector at 0x08000000, places the stock APP at
+0x08007000, and jumps through a tiny high-flash dispatcher at 0x080E0000.  The
+high recovery HID bootloader remains at 0x080F0000.
+"""
+
+from __future__ import annotations
+
+import argparse
+import hashlib
+import json
+from pathlib import Path
+
+
+ROOT = Path(__file__).resolve().parent.parent
+DEFAULT_STOCK = ROOT / "archive" / "2C53T Firmware V1.2.0" / "APP_2C53T_V1.2.0_251015.bin"
+DEFAULT_STOCK_DISPATCHER = ROOT / "firmware" / "stock_dispatcher" / "build" / "stock_dispatcher.bin"
+DEFAULT_OUT = ROOT / "firmware" / "build" / "stock_user_dispatcher.bin"
+
+FLASH_BASE = 0x08000000
+STOCK_APP_ADDRESS = 0x08007000
+STOCK_APP_OFFSET = STOCK_APP_ADDRESS - FLASH_BASE
+HIGH_DISPATCHER_ADDRESS = 0x080E0000
+HIGH_DISPATCHER_OFFSET = HIGH_DISPATCHER_ADDRESS - FLASH_BASE
+HIGH_RECOVERY_ADDRESS = 0x080F0000
+FLASH_MAX = 0x08100000
+
+EXPECTED_STOCK_SHA256 = "a17c5c35c97bb898f15672a1747bc1041d8ed507c16999ddba0d1e4e2ec0c760"
+EXPECTED_STOCK_SP = 0x20036F90
+EXPECTED_STOCK_RV = 0x08007311
+STOCK_RUNTIME_TABLE_CHECK_OFFSET = 0x00033F7C
+STOCK_END_CHECK_OFFSET = 0x000B7670
+STOCK_PC9_CLEAR_OFFSET = 0x00023AB6
+STOCK_PC9_CLEAR_ORIGINAL = b"\x3c\x60"  # str r4, [r7]; r7 = GPIOC_BC, r4 = PC9
+STOCK_PC9_CLEAR_PATCH = b"\x00\xbf"  # nop
+STOCK_PC9_REASSERT_OFFSET = 0x00024412
+STOCK_PC9_REASSERT_ORIGINAL = b"\x10\x61"  # str r0, [r2, #0x10]; GPIOC_BOP
+STOCK_SPLASH_INITIAL_STEP_OFFSET = 0x00024506
+STOCK_SPLASH_INITIAL_STEP_ORIGINAL = b"\x00\x20"  # movs r0, #0
+STOCK_SPLASH_INITIAL_STEP_PATCH = b"\xff\x20"  # movs r0, #255
+STOCK_SPLASH_DELAY_MS = 256 * 3
+
+
+def sha256(data: bytes) -> str:
+    return hashlib.sha256(data).hexdigest()
+
+
+def word(data: bytes, offset: int) -> int:
+    return int.from_bytes(data[offset:offset + 4], "little")
+
+
+def validate_stock(stock: bytes) -> list[str]:
+    errors: list[str] = []
+    if sha256(stock) != EXPECTED_STOCK_SHA256:
+        errors.append(f"stock sha256 drifted: {sha256(stock)}")
+    if len(stock) <= STOCK_END_CHECK_OFFSET + 4:
+        errors.append("stock image is truncated")
+        return errors
+    sp = word(stock, 0)
+    rv = word(stock, 4)
+    if sp != EXPECTED_STOCK_SP:
+        errors.append(f"unexpected stock stack pointer 0x{sp:08X}")
+    if rv != EXPECTED_STOCK_RV:
+        errors.append(f"unexpected stock reset vector 0x{rv:08X}")
+    if word(stock, STOCK_RUNTIME_TABLE_CHECK_OFFSET) != 0x008F008F:
+        errors.append("stock runtime table anchor drifted")
+    if word(stock, STOCK_END_CHECK_OFFSET) != 0x3F027302:
+        errors.append("stock tail anchor drifted")
+    if stock[STOCK_PC9_CLEAR_OFFSET:STOCK_PC9_CLEAR_OFFSET + 2] != STOCK_PC9_CLEAR_ORIGINAL:
+        errors.append("stock PC9 clear instruction drifted")
+    if stock[STOCK_PC9_REASSERT_OFFSET:STOCK_PC9_REASSERT_OFFSET + 2] != STOCK_PC9_REASSERT_ORIGINAL:
+        errors.append("stock PC9 reassert instruction drifted")
+    if stock[
+        STOCK_SPLASH_INITIAL_STEP_OFFSET:STOCK_SPLASH_INITIAL_STEP_OFFSET + 2
+    ] != STOCK_SPLASH_INITIAL_STEP_ORIGINAL:
+        errors.append("stock splash initial-step instruction drifted")
+    return errors
+
+
+def validate_dispatcher(dispatcher: bytes) -> list[str]:
+    errors: list[str] = []
+    if len(dispatcher) < 8:
+        return ["stock dispatcher image is too small"]
+    sp = word(dispatcher, 0)
+    rv = word(dispatcher, 4)
+    if (sp & 0xFFF00000) != 0x20000000:
+        errors.append(f"stock dispatcher SP 0x{sp:08X} is not SRAM")
+    if not (HIGH_DISPATCHER_ADDRESS <= rv < HIGH_RECOVERY_ADDRESS):
+        errors.append(f"stock dispatcher reset vector 0x{rv:08X} is not in dispatcher flash")
+    if HIGH_DISPATCHER_OFFSET + len(dispatcher) > HIGH_RECOVERY_ADDRESS - FLASH_BASE:
+        errors.append("stock dispatcher would overlap high recovery bootloader")
+    return errors
+
+
+def patch_stock_power_hold(stock: bytes) -> bytes:
+    patched = bytearray(stock)
+    actual = bytes(patched[STOCK_PC9_CLEAR_OFFSET:STOCK_PC9_CLEAR_OFFSET + 2])
+    if actual != STOCK_PC9_CLEAR_ORIGINAL:
+        raise ValueError(
+            "stock PC9 clear instruction drifted: "
+            f"offset 0x{STOCK_PC9_CLEAR_OFFSET:X} has {actual.hex()}"
+        )
+    patched[STOCK_PC9_CLEAR_OFFSET:STOCK_PC9_CLEAR_OFFSET + 2] = STOCK_PC9_CLEAR_PATCH
+    return bytes(patched)
+
+
+def patch_stock_fast_splash(stock: bytes) -> bytes:
+    patched = bytearray(stock)
+    actual = bytes(
+        patched[STOCK_SPLASH_INITIAL_STEP_OFFSET:STOCK_SPLASH_INITIAL_STEP_OFFSET + 2]
+    )
+    if actual != STOCK_SPLASH_INITIAL_STEP_ORIGINAL:
+        raise ValueError(
+            "stock splash initial-step instruction drifted: "
+            f"offset 0x{STOCK_SPLASH_INITIAL_STEP_OFFSET:X} has {actual.hex()}"
+        )
+    patched[
+        STOCK_SPLASH_INITIAL_STEP_OFFSET:STOCK_SPLASH_INITIAL_STEP_OFFSET + 2
+    ] = STOCK_SPLASH_INITIAL_STEP_PATCH
+    return bytes(patched)
+
+
+def patch_stock_runtime(stock: bytes, *, fast_splash: bool = True) -> bytes:
+    stock = patch_stock_power_hold(stock)
+    if fast_splash:
+        stock = patch_stock_fast_splash(stock)
+    return stock
+
+
+def runtime_patch_report(*, fast_splash: bool = True) -> dict[str, object]:
+    patches = [
+        {
+            "name": "pc9_power_hold",
+            "kind": "safety",
+            "file_offset": STOCK_PC9_CLEAR_OFFSET,
+            "stock_app_address": STOCK_APP_ADDRESS + STOCK_PC9_CLEAR_OFFSET,
+            "original": STOCK_PC9_CLEAR_ORIGINAL.hex(),
+            "patched": STOCK_PC9_CLEAR_PATCH.hex(),
+            "enabled": True,
+            "reason": "Keep PC9 power-hold latched during battery-only stock handoff.",
+        },
+        {
+            "name": "fnirsi_fast_splash",
+            "kind": "cosmetic_boot_delay",
+            "file_offset": STOCK_SPLASH_INITIAL_STEP_OFFSET,
+            "stock_app_address": STOCK_APP_ADDRESS + STOCK_SPLASH_INITIAL_STEP_OFFSET,
+            "original": STOCK_SPLASH_INITIAL_STEP_ORIGINAL.hex(),
+            "patched": STOCK_SPLASH_INITIAL_STEP_PATCH.hex(),
+            "enabled": fast_splash,
+            "estimated_saved_ms": STOCK_SPLASH_DELAY_MS if fast_splash else 0,
+            "reason": (
+                "Start the 256-step boot logo gradient at its final step; "
+                "reverse_engineering/TIMING_AND_STATE_MACHINES.md maps this "
+                "as 256 iterations at 3 ms each."
+            ),
+        },
+    ]
+    return {
+        "format": "stock-runtime-patch-report-v1",
+        "stock_app_base": STOCK_APP_ADDRESS,
+        "fast_splash": fast_splash,
+        "estimated_fast_splash_saved_ms": STOCK_SPLASH_DELAY_MS if fast_splash else 0,
+        "hardware_init_skipped_by_fast_splash": False,
+        "hardware_init_note": (
+            "The fast-splash patch changes only the boot-logo initial step. "
+            "LCD, SPI3/FPGA, and post-config waits remain in the stock init path."
+        ),
+        "patches": patches,
+    }
+
+
+def build(stock: bytes, dispatcher: bytes, *, fast_splash: bool = True) -> tuple[bytes, list[str]]:
+    errors = validate_stock(stock) + validate_dispatcher(dispatcher)
+    worst_len = max(STOCK_APP_OFFSET + len(stock), HIGH_DISPATCHER_OFFSET + len(dispatcher))
+    if FLASH_BASE + worst_len > HIGH_RECOVERY_ADDRESS:
+        errors.append("stock user image would overlap high recovery bootloader")
+    if FLASH_BASE + worst_len > FLASH_MAX:
+        errors.append("stock user image would exceed internal flash")
+    if errors:
+        raise SystemExit("stock user image rejected:\n  - " + "\n  - ".join(errors))
+
+    stock = patch_stock_runtime(stock, fast_splash=fast_splash)
+    dispatcher_rv = word(dispatcher, 4)
+    image = bytearray(b"\xFF" * worst_len)
+    image[0:4] = stock[0:4]
+    image[4:8] = dispatcher_rv.to_bytes(4, "little")
+    image[STOCK_APP_OFFSET:STOCK_APP_OFFSET + len(stock)] = stock
+    image[HIGH_DISPATCHER_OFFSET:HIGH_DISPATCHER_OFFSET + len(dispatcher)] = dispatcher
+    stock_patch_note = "PC9 clear NOP patched"
+    if fast_splash:
+        stock_patch_note += ", fast splash patched"
+    else:
+        stock_patch_note += ", stock splash kept"
+
+    return bytes(image), [
+        f"0x08000004: low vector -> 0x{dispatcher_rv:08X}",
+        f"0x{STOCK_APP_ADDRESS:08X}: stock APP bytes ({len(stock)} bytes, {stock_patch_note})",
+        f"0x{HIGH_DISPATCHER_ADDRESS:08X}: stock launcher ({len(dispatcher)} bytes)",
+    ]
+
+
+def main() -> int:
+    parser = argparse.ArgumentParser(description="Build stock-user launcher image")
+    parser.add_argument("--stock", type=Path, default=DEFAULT_STOCK)
+    parser.add_argument("--stock-dispatcher", type=Path, default=DEFAULT_STOCK_DISPATCHER)
+    parser.add_argument("--out", type=Path, default=DEFAULT_OUT)
+    parser.add_argument(
+        "--keep-splash",
+        action="store_true",
+        help="leave the stock FNIRSI splash animation untouched for A/B boot timing tests",
+    )
+    parser.add_argument("--json-report", action="store_true", help="emit structured stock patch evidence")
+    args = parser.parse_args()
+
+    stock = args.stock.read_bytes()
+    dispatcher = args.stock_dispatcher.read_bytes()
+    image, layout = build(stock, dispatcher, fast_splash=not args.keep_splash)
+    args.out.parent.mkdir(parents=True, exist_ok=True)
+    args.out.write_bytes(image)
+
+    print(f"stock:  {args.stock}")
+    print(f"launcher: {args.stock_dispatcher}")
+    print(f"out:    {args.out}")
+    print(f"size:   {len(image)} bytes")
+    print(f"sha256: {sha256(image)}")
+    print("layout: low vector at 0x08000000, stock APP at 0x08007000, high launcher at 0x080E0000")
+    for item in layout:
+        print(f"stock_layout: {item}")
+    if args.json_report:
+        print("patch_report:")
+        print(json.dumps(runtime_patch_report(fast_splash=not args.keep_splash), indent=2, sort_keys=True))
+    return 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

@@ -120,7 +120,7 @@ This populates `firmware/build/` with `firmware.bin` (the application) and `opti
 
 The first flash requires opening the case to enter the AT32's **ROM DFU mode** — this is the only mode that can write option bytes. After the initial flash installs the USB HID bootloader, all future updates go over USB-C with the case closed.
 
-> **Two bootloaders — don't confuse them.** *ROM DFU* (entered via BOOT0 + pinhole reset, LCD dark, `2e3c:df11`) is required for the one-time EOPB0 setup. The *USB HID bootloader* (Settings → Firmware Update, "BOOTLOADER MODE" on the LCD) handles every update after that but cannot write option bytes.
+> **Two bootloaders — don't confuse them.** *ROM DFU* (entered via BOOT0 + pinhole reset, LCD dark, `2e3c:df11`) is required for the one-time EOPB0 setup. The *USB HID bootloader* (Settings → Firmware Update, or POWER+PRM during reset, "BOOTLOADER MODE" on the LCD) handles every update after that but cannot write option bytes.
 
 **See the full walkthrough with photos: [DFU Mode Guide](docs/dfu_mode_guide.md)**
 
@@ -154,6 +154,10 @@ Once the USB HID bootloader is installed, updates are simple:
    cd firmware && make flash
    ```
 3. The device auto-reboots into the updated firmware
+
+If the app image is invalid or will not boot, reset while holding **POWER+PRM**
+to force the HID bootloader. POWER alone remains the normal battery power-on
+gesture.
 
 ### Restoring Stock or Flashing via USB-C (macOS & Linux)
 

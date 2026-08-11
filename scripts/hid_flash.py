@@ -20,6 +20,20 @@ Usage:
 import sys
 import struct
 import time
+import glob
+import os
+import select
+from pathlib import Path
+
+from flash_preflight import (
+    APP_ADDRESS,
+    APP_SLOT_END_ADDRESS,
+    classify_image,
+    padded_len,
+    sha256,
+    validate_stock_saved_config_hole,
+    validate_vectors,
+)
 
 try:
     import hid
@@ -29,9 +43,9 @@ except ImportError:
 
 VID = 0x2E3C
 PID = 0xAF01
-APP_ADDRESS = 0x08004000
 CHUNK_SIZE = 60       # data bytes per HID report (64 - 4 header)
 BLOCK_SIZE = 1024     # bootloader buffers this much before programming
+SECTOR_SIZE = 2048    # AT32F403A sectors on this 1MB part
 REPORT_SIZE = 64
 
 # IAP commands
@@ -43,9 +57,104 @@ CMD_FINISH = 0x5AA4
 CMD_CRC    = 0x5AA5
 CMD_JMP    = 0x5AA6
 CMD_GET    = 0x5AA7
+CMD_DFU    = 0x5AA8
+CMD_LOW_FLASH = 0x5AA9
+CMD_RUN_ADDR  = 0x5AAA
+CMD_READ_MEM  = 0x5AAB
+LOW_FLASH_MAGIC = 0x4C4F5746
+READ_MEM_CHUNK_SIZE = 59
 
 ACK  = 0xFF00
 NACK = 0x00FF
+
+
+class HidrawBootloaderDevice:
+    """Minimal hidraw transport for Linux hosts where hidapi open() fails."""
+
+    def __init__(self, path):
+        self.path = path
+        self.fd = os.open(path, os.O_RDWR | os.O_NONBLOCK)
+
+    def write(self, data):
+        offset = 0
+        while offset < len(data):
+            _, writable, _ = select.select([], [self.fd], [], 5.0)
+            if not writable:
+                raise TimeoutError(f"hidraw write timeout on {self.path}")
+            offset += os.write(self.fd, data[offset:])
+        return offset
+
+    def read(self, length, timeout_ms=5000):
+        deadline = time.monotonic() + timeout_ms / 1000.0
+        while time.monotonic() < deadline:
+            remaining = max(0.0, deadline - time.monotonic())
+            readable, _, _ = select.select([self.fd], [], [], min(0.05, remaining))
+            if not readable:
+                continue
+            try:
+                return os.read(self.fd, length)
+            except BlockingIOError:
+                continue
+        return []
+
+    def get_manufacturer_string(self):
+        return "Artery"
+
+    def get_product_string(self):
+        return "HID IAP (hidraw)"
+
+    def close(self):
+        os.close(self.fd)
+
+
+def _candidate_hidraw_paths():
+    patterns = [
+        "/dev/input/by-id/usb-Artery_HID_IAP*-hidraw",
+        "/dev/input/by-path/*-hidraw",
+        "/dev/hidraw*",
+    ]
+    seen = set()
+    for pattern in patterns:
+        for raw_path in glob.glob(pattern):
+            path = os.path.realpath(raw_path)
+            if path in seen:
+                continue
+            seen.add(path)
+            yield path
+
+
+def _hidraw_matches_bootloader(path):
+    try:
+        name = os.path.basename(path)
+        with open(f"/sys/class/hidraw/{name}/device/uevent", "r", encoding="ascii") as f:
+            text = f.read()
+    except OSError:
+        return False
+    return "HID_ID=0003:00002E3C:0000AF01" in text
+
+
+def open_bootloader_device():
+    dev = hid.device()
+    errors = []
+    try:
+        dev.open(VID, PID)
+        return dev
+    except OSError as exc:
+        last_error = exc
+        errors.append(f"hidapi open VID:0x{VID:04X} PID:0x{PID:04X}: {exc}")
+
+    for path in _candidate_hidraw_paths():
+        if not _hidraw_matches_bootloader(path):
+            continue
+        try:
+            return HidrawBootloaderDevice(path)
+        except OSError as exc:
+            last_error = exc
+            errors.append(f"{path}: {exc}")
+
+    if errors:
+        last_error.args = (*last_error.args, "; ".join(errors))
+    raise last_error
 
 
 def make_cmd(cmd, payload=b""):
@@ -74,55 +183,316 @@ def send_recv(dev, cmd, payload=b"", expect_cmd=None):
     return resp
 
 
-def flash_firmware(binpath, do_jump=True, app_address=APP_ADDRESS):
+def initialize_iap(dev):
+    """Reset the HID IAP command state before a flash or diagnostic session."""
+    send_recv(dev, CMD_IDLE, expect_cmd=CMD_IDLE)
+
+
+def at32_crc32_words(data):
+    """Match the bootloader CRC peripheral path over 32-bit flash words.
+
+    The bootloader reads little-endian flash words, byte-swaps each word with
+    CONVERT_ENDIAN(), then feeds the AT32 hardware CRC unit.  That unit uses
+    the standard STM32/AT32 0x04C11DB7 polynomial, initial value 0xFFFFFFFF,
+    no reflected input/output, and no final xor.
+    """
+    if len(data) % 4 != 0:
+        raise ValueError("AT32 flash CRC input must be word-aligned")
+    crc = 0xFFFFFFFF
+    for offset in range(0, len(data), 4):
+        word = struct.unpack_from("<I", data, offset)[0]
+        value = struct.unpack(">I", struct.pack("<I", word))[0]
+        crc ^= value
+        for _ in range(32):
+            if crc & 0x80000000:
+                crc = ((crc << 1) ^ 0x04C11DB7) & 0xFFFFFFFF
+            else:
+                crc = (crc << 1) & 0xFFFFFFFF
+    return crc
+
+
+def verify_flash_crc(dev, app_address, firmware):
+    if len(firmware) % BLOCK_SIZE != 0:
+        raise ValueError("padded firmware must be a whole number of 1KB blocks")
+    block_count = len(firmware) // BLOCK_SIZE
+    if block_count > 0xFFFF:
+        raise ValueError("firmware is too large for bootloader CRC command")
+
+    payload = struct.pack(">IH", app_address, block_count)
+    resp = send_recv(dev, CMD_CRC, payload, expect_cmd=CMD_CRC)
+    device_crc = struct.unpack(">I", bytes(resp[4:8]))[0]
+    expected_crc = at32_crc32_words(firmware)
+    print(f"CRC32: device=0x{device_crc:08X} expected=0x{expected_crc:08X}")
+    if device_crc != expected_crc:
+        raise RuntimeError(
+            f"flash CRC mismatch: device=0x{device_crc:08X}, expected=0x{expected_crc:08X}"
+        )
+
+
+def read_memory(dev, address, size):
+    """Read flash/SRAM through the high-recovery HID diagnostic command."""
+    if size < 0:
+        raise ValueError("read size must be non-negative")
+
+    initialize_iap(dev)
+
+    data = bytearray()
+    offset = 0
+    while offset < size:
+        chunk_len = min(READ_MEM_CHUNK_SIZE, size - offset)
+        payload = struct.pack(">IH", address + offset, chunk_len)
+        resp = send_recv(dev, CMD_READ_MEM, payload, expect_cmd=CMD_READ_MEM)
+        actual_len = resp[4]
+        if actual_len != chunk_len:
+            raise RuntimeError(
+                f"HID read length mismatch at 0x{address + offset:08X}: "
+                f"device={actual_len}, expected={chunk_len}"
+            )
+        data.extend(bytes(resp[5:5 + actual_len]))
+        offset += actual_len
+    return bytes(data)
+
+
+def _written_ranges(blocks):
+    if not blocks:
+        return []
+
+    ranges = []
+    start_address, data = blocks[0]
+    cursor = start_address + len(data)
+    chunks = [data]
+
+    for address, block in blocks[1:]:
+        if address == cursor:
+            chunks.append(block)
+            cursor += len(block)
+            continue
+        ranges.append((start_address, b"".join(chunks)))
+        start_address = address
+        cursor = address + len(block)
+        chunks = [block]
+
+    ranges.append((start_address, b"".join(chunks)))
+    return ranges
+
+
+def parse_preserve_range(text):
+    """Parse START:END or START+LEN into a half-open address range."""
+    if ":" in text:
+        start_text, end_text = text.split(":", 1)
+        start = int(start_text, 0)
+        end = int(end_text, 0)
+    elif "+" in text:
+        start_text, length_text = text.split("+", 1)
+        start = int(start_text, 0)
+        end = start + int(length_text, 0)
+    else:
+        raise ValueError("expected START:END or START+LEN")
+    if end <= start:
+        raise ValueError("preserve range end must be greater than start")
+    return start, end
+
+
+def _block_in_preserve_ranges(addr, block_size, ranges):
+    block_end = addr + block_size
+    return any(start <= addr and block_end <= end for start, end in ranges)
+
+
+def validate_preserve_ranges(*, preserve_from, ranges):
+    errors = []
+    if preserve_from is not None and preserve_from % SECTOR_SIZE != 0:
+        errors.append(f"--preserve-blank-blocks-from 0x{preserve_from:08X} is not {SECTOR_SIZE}-byte sector-aligned")
+    for start, end in ranges:
+        if start % SECTOR_SIZE != 0 or end % SECTOR_SIZE != 0:
+            errors.append(
+                f"--preserve-blank-blocks-range 0x{start:08X}:0x{end:08X} is not {SECTOR_SIZE}-byte sector-aligned"
+            )
+    if errors:
+        raise RuntimeError("preserve-range preflight failed:\n  - " + "\n  - ".join(errors))
+
+
+def _preserve_qualified(addr, block, preserve_from, ranges):
+    return (
+        block == b"\xFF" * BLOCK_SIZE
+        and (
+            (preserve_from is not None and addr >= preserve_from)
+            or _block_in_preserve_ranges(addr, BLOCK_SIZE, ranges)
+        )
+    )
+
+
+def validate_preserved_sectors(firmware, app_address, *, preserve_from, ranges):
+    errors = []
+    for sector_offset in range(0, len(firmware), SECTOR_SIZE):
+        sector = firmware[sector_offset:sector_offset + SECTOR_SIZE]
+        if len(sector) < SECTOR_SIZE:
+            sector = sector.ljust(SECTOR_SIZE, b"\xFF")
+        sector_addr = app_address + sector_offset
+        blocks = [
+            (
+                sector_addr + block_offset,
+                sector[block_offset:block_offset + BLOCK_SIZE],
+            )
+            for block_offset in range(0, SECTOR_SIZE, BLOCK_SIZE)
+        ]
+        preserved = [
+            _preserve_qualified(addr, block, preserve_from, ranges)
+            for addr, block in blocks
+        ]
+        if any(preserved) and not all(preserved):
+            errors.append(
+                f"preserve selection covers only part of erase sector 0x{sector_addr:08X}:0x{sector_addr + SECTOR_SIZE:08X}"
+            )
+    if errors:
+        raise RuntimeError("preserve-sector preflight failed:\n  - " + "\n  - ".join(errors))
+
+
+def verify_written_ranges(dev, blocks):
+    for address, expected in _written_ranges(blocks):
+        verify_flash_crc(dev, address, expected)
+
+
+def validate_hid_app_image(binpath, firmware, app_address, allow_unknown_app=False, allow_low_flash=False):
+    """Validate an image before opening HID IAP or erasing any app sector."""
+    path = Path(binpath)
+    kind = classify_image(path, firmware, app_address)
+    sp, rv, errors = validate_vectors(firmware, app_address, app_slot=True)
+    print("Preflight:")
+    print(f"  kind: {kind}")
+    print(f"  address: 0x{app_address:08X}")
+    print(f"  sha256: {sha256(firmware)}")
+    print(f"  stack pointer: 0x{sp:08X}")
+    print(f"  reset vector:  0x{rv:08X}")
+
+    if allow_low_flash:
+        if app_address < 0x08000000:
+            errors.append("low-flash HID writes must start in internal flash")
+    elif app_address != APP_ADDRESS:
+        errors.append("HID IAP app flashing is only allowed at 0x08004000")
+    if app_address + padded_len(len(firmware)) > APP_SLOT_END_ADDRESS:
+        errors.append("padded app image would overlap the high recovery bootloader region")
+    errors.extend(validate_stock_saved_config_hole(firmware, app_address))
+    if kind == "stock-app":
+        errors.append("refusing stock/vendor APP_2C53T image through custom HID IAP")
+    elif kind != "openscope-app" and not allow_unknown_app:
+        errors.append(
+            f"image kind is {kind}; pass --allow-unknown-app only for a proven custom app image"
+        )
+
+    if errors:
+        joined = "\n  - ".join(errors)
+        raise RuntimeError(f"HID flash preflight failed:\n  - {joined}")
+
+
+def flash_firmware(
+    binpath,
+    do_jump=True,
+    app_address=APP_ADDRESS,
+    allow_unknown_app=False,
+    allow_low_flash=False,
+    run_address=None,
+    preserve_blank_blocks=False,
+    preserve_blank_blocks_from=None,
+    preserve_blank_block_ranges=None,
+):
     """Flash a firmware binary to the device."""
     with open(binpath, "rb") as f:
         firmware = f.read()
 
     fw_size = len(firmware)
     print(f"Firmware: {binpath} ({fw_size} bytes)")
+    validate_hid_app_image(
+        binpath,
+        firmware,
+        app_address,
+        allow_unknown_app=allow_unknown_app,
+        allow_low_flash=allow_low_flash,
+    )
 
     # Pad to BLOCK_SIZE boundary
     pad = BLOCK_SIZE - (fw_size % BLOCK_SIZE)
     if pad < BLOCK_SIZE:
         firmware += b"\xFF" * pad
 
+    min_address = 0x08000000 if allow_low_flash else APP_ADDRESS
+    if app_address < min_address or app_address + len(firmware) > APP_SLOT_END_ADDRESS:
+        max_size = APP_SLOT_END_ADDRESS - app_address
+        raise RuntimeError(
+            f"refusing to flash {len(firmware)} padded bytes at 0x{app_address:08X}: "
+            f"maximum app payload before high recovery bootloader region is {max_size} bytes"
+        )
+    preserve_blank_block_ranges = preserve_blank_block_ranges or []
+    if preserve_blank_blocks:
+        validate_preserve_ranges(
+            preserve_from=preserve_blank_blocks_from,
+            ranges=preserve_blank_block_ranges,
+        )
+        validate_preserved_sectors(
+            firmware,
+            app_address,
+            preserve_from=preserve_blank_blocks_from,
+            ranges=preserve_blank_block_ranges,
+        )
+
     print(f"Padded to {len(firmware)} bytes ({len(firmware) // BLOCK_SIZE} blocks)")
 
-    # Open HID device
-    dev = hid.device()
     try:
-        dev.open(VID, PID)
-    except OSError:
+        dev = open_bootloader_device()
+    except OSError as exc:
         print(f"Error: Cannot find device VID:0x{VID:04X} PID:0x{PID:04X}")
         print("Make sure the bootloader is running (Settings > Firmware Update, or no valid app)")
+        details = str(exc)
+        if details:
+            print(f"Open error: {details}")
         sys.exit(1)
 
     print(f"Connected: {dev.get_manufacturer_string()} - {dev.get_product_string()}")
 
     try:
         # IDLE - reset state
-        send_recv(dev, CMD_IDLE, expect_cmd=CMD_IDLE)
+        initialize_iap(dev)
         print("IAP initialized")
 
         # START
         send_recv(dev, CMD_START, expect_cmd=CMD_START)
         print("Programming started")
+        if allow_low_flash:
+            send_recv(dev, CMD_LOW_FLASH, struct.pack(">I", LOW_FLASH_MAGIC), expect_cmd=CMD_LOW_FLASH)
+            print("Low-flash write window unlocked by high recovery")
 
-        # Flash in 1KB blocks
+        # Flash in 1KB blocks.  In stock-switcher low-flash mode the generated
+        # image intentionally contains 0xFF holes.  Preserve only caller-named
+        # holes that may contain stock settings or app-adjacent user data.
         offset = 0
         total_blocks = len(firmware) // BLOCK_SIZE
         block_num = 0
+        written_blocks = []
 
         while offset < len(firmware):
             addr = app_address + offset
+            block_end = offset + BLOCK_SIZE
+            block = firmware[offset:block_end]
+
+            preserve_this_block = preserve_blank_blocks and _preserve_qualified(
+                addr,
+                block,
+                preserve_blank_blocks_from,
+                preserve_blank_block_ranges,
+            )
+
+            if preserve_this_block:
+                offset = block_end
+                block_num += 1
+                pct = block_num * 100 // total_blocks
+                bar = "#" * (pct // 2) + "-" * (50 - pct // 2)
+                print(f"\r  [{bar}] {pct:3d}% ({block_num}/{total_blocks})", end="", flush=True)
+                continue
 
             # ADDR - set write address (triggers sector erase)
             addr_payload = struct.pack(">I", addr)
             send_recv(dev, CMD_ADDR, addr_payload, expect_cmd=CMD_ADDR)
 
             # DATA - send 1KB in CHUNK_SIZE-byte pieces, then wait for ACK
-            block_end = offset + BLOCK_SIZE
             pos = offset
             while pos < block_end:
                 chunk = firmware[pos:min(pos + CHUNK_SIZE, block_end)]
@@ -141,6 +511,7 @@ def flash_firmware(binpath, do_jump=True, app_address=APP_ADDRESS):
 
             offset = block_end
             block_num += 1
+            written_blocks.append((addr, block))
 
             # Progress bar
             pct = block_num * 100 // total_blocks
@@ -153,10 +524,19 @@ def flash_firmware(binpath, do_jump=True, app_address=APP_ADDRESS):
         send_recv(dev, CMD_FINISH, expect_cmd=CMD_FINISH)
         print("Upgrade flag set")
 
+        if preserve_blank_blocks:
+            verify_written_ranges(dev, written_blocks)
+        else:
+            verify_flash_crc(dev, app_address, firmware)
+        print("Flash verified")
+
         if do_jump:
-            # JMP - jump to app
-            send_recv(dev, CMD_JMP, expect_cmd=CMD_JMP)
-            print("Jumping to application...")
+            if run_address is None:
+                send_recv(dev, CMD_JMP, expect_cmd=CMD_JMP)
+                print("Jumping to application...")
+            else:
+                send_recv(dev, CMD_RUN_ADDR, struct.pack(">I", run_address), expect_cmd=CMD_RUN_ADDR)
+                print(f"Jumping to 0x{run_address:08X}...")
             time.sleep(0.5)
         else:
             print("Flash complete (no jump requested)")
@@ -175,9 +555,52 @@ def main():
                         help="Don't jump to app after flashing")
     parser.add_argument("--address", type=lambda x: int(x, 0), default=APP_ADDRESS,
                         help=f"App start address (default: 0x{APP_ADDRESS:08X})")
+    parser.add_argument(
+        "--allow-unknown-app",
+        action="store_true",
+        help="allow a non-stock image without the OpenScope app marker after independent proof",
+    )
+    parser.add_argument(
+        "--allow-low-flash",
+        action="store_true",
+        help="unlock high-recovery low-flash writes; ordinary bootloaders NACK this command",
+    )
+    parser.add_argument(
+        "--preserve-blank-blocks",
+        action="store_true",
+        help="do not erase/program all-0xFF 1KB blocks; preserves stock settings holes",
+    )
+    parser.add_argument(
+        "--preserve-blank-blocks-from",
+        type=lambda x: int(x, 0),
+        help="only preserve all-0xFF blocks at or above this address",
+    )
+    parser.add_argument(
+        "--preserve-blank-blocks-range",
+        action="append",
+        type=parse_preserve_range,
+        default=[],
+        metavar="START:END",
+        help="preserve all-0xFF blocks wholly inside this half-open address range; may be repeated",
+    )
+    parser.add_argument(
+        "--run-address",
+        type=lambda x: int(x, 0),
+        help="after flashing, ask the bootloader to jump directly to this vector table",
+    )
     args = parser.parse_args()
 
-    flash_firmware(args.firmware, do_jump=not args.no_jump, app_address=args.address)
+    flash_firmware(
+        args.firmware,
+        do_jump=not args.no_jump,
+        app_address=args.address,
+        allow_unknown_app=args.allow_unknown_app,
+        allow_low_flash=args.allow_low_flash,
+        run_address=args.run_address,
+        preserve_blank_blocks=args.preserve_blank_blocks,
+        preserve_blank_blocks_from=args.preserve_blank_blocks_from,
+        preserve_blank_block_ranges=args.preserve_blank_blocks_range,
+    )
 
 
 if __name__ == "__main__":

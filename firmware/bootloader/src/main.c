@@ -1,14 +1,16 @@
 /*
  * OpenScope 2C53T - USB HID In-Application Bootloader
  *
- * Permanent bootloader at 0x08000000. Never overwritten by user firmware.
+ * Permanent/recovery bootloader. In the default ROM-DFU install it can live at
+ * 0x08000000; for the stock-switcher layout a tiny stage0 remains there and
+ * this full HID recovery image is linked at 0x080F0000.
  * Application lives at 0x08004000.
  *
  * Boot flow:
  *   1. PC9 HIGH (power hold) — must be first or device shuts off
  *   2. Check RAM magic at 0x20037FE0 → enter USB HID IAP
  *   2.5 Check boot counter ≥ 3 → safe mode entry
- *   3. Delayed POWER button check (800ms) → hold POWER at boot = force bootloader
+ *   3. POWER+PRM check → explicit recovery entry
  *   4. Check flash upgrade flag → jump to app at 0x08004000
  *   5. Otherwise → enter USB HID IAP (no valid app)
  *
@@ -36,9 +38,19 @@
  * After BOOT_FAIL_MAX consecutive failures, enter bootloader.
  * Power cycle resets RAM (counter = garbage), so we validate range. */
 #define BOOT_COUNTER_ADDR    ((volatile uint32_t *)0x20037FDC)
-#define BOOT_COUNTER_MAGIC   0xB007F000  /* Upper 16 bits = magic, lower 16 = count */
+#define BOOT_COUNTER_MAGIC   0xB0070000  /* Upper 16 bits = magic, lower 16 = count */
 #define BOOT_COUNTER_MASK    0xFFFF0000
 #define BOOT_FAIL_MAX        3
+
+/* In the stock-switcher layout this bootloader lives at 0x080F0000, while the
+ * reset vector at 0x08000000 points to the high-flash stock launcher and the
+ * archived stock APP itself remains at its linked 0x08007000 address. */
+#define STOCK_USER_LAUNCH_ADDRESS        0x08000000U
+#define STOCK_APP_ADDRESS                0x08007000U
+#define STOCK_LAUNCHER_ADDRESS           0x080E0000U
+#define STOCK_TAIL_CHECK_ADDRESS         (STOCK_APP_ADDRESS + 0x00000800U)
+#define STOCK_RUNTIME_TABLE_CHECK_ADDRESS (STOCK_APP_ADDRESS + 0x00033F7CU)
+#define STOCK_END_CHECK_ADDRESS          (STOCK_APP_ADDRESS + 0x000B7670U)
 
 /* LCD registers via EXMC */
 #define LCD_CMD   (*(volatile uint16_t *)0x6001FFFE)
@@ -252,15 +264,14 @@ static void lcd_draw_bootloader_screen(void)
     /* Instructions */
     lcd_draw_string_center(160, 180, "Run: make flash", 0xBDF7, 0x0008, 1);
     lcd_draw_string_center(160, 195, "POWER+PRM at boot = bootloader", 0xBDF7, 0x0008, 1);
-    lcd_draw_string_center(160, 210, "Hold POWER here   = boot to app", 0xBDF7, 0x0008, 1);
+    lcd_draw_string_center(160, 210, "Hold POWER here   = boot target", 0xBDF7, 0x0008, 1);
 }
 
-/* Called from iap_loop before NVIC_SystemReset after successful flash */
-void lcd_draw_reboot_message(void)
+void lcd_draw_iap_status(const char *status)
 {
     lcd_fill(0, 0, 320, 240, 0x0008);
     lcd_draw_string_center(160, 80, "OPENSCOPE 2C53T", 0x07FF, 0x0008, 3);
-    lcd_draw_string_center(160, 130, "Rebooting...", 0x07E0, 0x0008, 2);
+    lcd_draw_string_center(160, 130, status, 0x07E0, 0x0008, 2);
 }
 
 #undef _GPIO_CFG
@@ -354,12 +365,55 @@ static void busy_delay_ms(uint32_t ms)
     for (volatile uint32_t i = 0; i < ms * 2000; i++) {}
 }
 
+static int stock_user_image_valid(void)
+{
+#ifdef HIGH_IAP_ALLOW_LOW_FLASH
+    uint32_t sp = *(const uint32_t *)STOCK_USER_LAUNCH_ADDRESS;
+    uint32_t rv = *(const uint32_t *)(STOCK_USER_LAUNCH_ADDRESS + 4U);
+
+    if ((sp & 0xFFF00000U) != 0x20000000U)
+        return 0;
+    if (rv < STOCK_LAUNCHER_ADDRESS || rv >= BOOTLOADER_BASE_ADDRESS)
+        return 0;
+    return (*(const uint32_t *)STOCK_TAIL_CHECK_ADDRESS == 0xF04FB430U) &&
+           (*(const uint32_t *)STOCK_RUNTIME_TABLE_CHECK_ADDRESS == 0x008F008FU) &&
+           (*(const uint32_t *)STOCK_END_CHECK_ADDRESS == 0x3F027302U);
+#else
+    return 0;
+#endif
+}
+
+static uint32_t boot_target_address(void)
+{
+    if (stock_user_image_valid())
+        return STOCK_USER_LAUNCH_ADDRESS;
+    return FLASH_APP_ADDRESS;
+}
+
+static void boot_target_now(void)
+{
+    uint32_t target = boot_target_address();
+
+    if (target == STOCK_USER_LAUNCH_ADDRESS) {
+        *BOOT_COUNTER_ADDR = 0U;
+    } else {
+        uint32_t boot_val = *BOOT_COUNTER_ADDR;
+        uint16_t fail_count = 0;
+        if ((boot_val & BOOT_COUNTER_MASK) == BOOT_COUNTER_MAGIC) {
+            fail_count = boot_val & 0xFFFF;
+        }
+        *BOOT_COUNTER_ADDR = BOOT_COUNTER_MAGIC | (fail_count + 1);
+    }
+    jump_to_app(target);
+}
+
 /* ═══════════════════════════════════════════════════════════════════
  * Main
  * ═══════════════════════════════════════════════════════════════════ */
 
 int main(void)
 {
+    SCB->VTOR = BOOTLOADER_BASE_ADDRESS;
     int enter_bootloader = 0;
 
     /* ── Power hold: PC9 HIGH (MUST be first!) ── */
@@ -393,11 +447,10 @@ int main(void)
 
     /* 2.5: Button-based bootloader entry.
      *
-     * Two methods:
-     *   A) POWER + PRM held simultaneously — immediate entry, no timing dance.
-     *      Checked early (200ms) so it's hard to miss. This is the recommended
-     *      recovery method when the app is crashing.
-     *   B) POWER held alone for 800ms — original method, still works.
+     * POWER alone is the normal battery-power-on gesture and reads LOW while
+     * the user is turning the device on.  Treating it as recovery makes
+     * battery-only stock boots land in HID recovery; requiring PRM keeps normal
+     * power-on and explicit recovery separate.
      *
      * PRM (PB7) was chosen because it's a passive button (not in the scan
      * matrix), easy to reach, and unlikely to be held accidentally. */
@@ -405,33 +458,18 @@ int main(void)
         power_button_init();
         prm_button_init();
 
-        /* Quick check: POWER + PRM combo (200ms debounce) */
+        /* POWER + PRM combo (200ms debounce) */
         busy_delay_ms(200);
         if (power_button_pressed() && prm_button_pressed()) {
             enter_bootloader = 1;
-        }
-
-        /* Longer check: POWER alone (800ms total from boot) */
-        if (!enter_bootloader) {
-            busy_delay_ms(600);  /* 200 + 600 = 800ms total */
-            if (power_button_pressed()) {
-                enter_bootloader = 1;
-            }
         }
     }
 
     /* 3. Flash upgrade flag (valid app installed?) */
     if (!enter_bootloader) {
         iap_init();
-        if (iap_get_upgrade_flag() == IAP_SUCCESS) {
-            /* Increment boot attempt counter before jumping */
-            uint32_t boot_val = *BOOT_COUNTER_ADDR;
-            uint16_t fail_count = 0;
-            if ((boot_val & BOOT_COUNTER_MASK) == BOOT_COUNTER_MAGIC) {
-                fail_count = boot_val & 0xFFFF;
-            }
-            *BOOT_COUNTER_ADDR = BOOT_COUNTER_MAGIC | (fail_count + 1);
-            jump_to_app(FLASH_APP_ADDRESS);
+        if (stock_user_image_valid() || iap_get_upgrade_flag() == IAP_SUCCESS) {
+            boot_target_now();
         }
         enter_bootloader = 1;
     }
@@ -474,7 +512,7 @@ int main(void)
                 lcd_fill(0, 130, 320, 14, 0x0008);
                 lcd_draw_string_center(160, 130, "Booting...", 0xFFE0, 0x0008, 2);
                 delay_ms(300);
-                NVIC_SystemReset();
+                boot_target_now();
             }
         } else {
             hold_count = 0;

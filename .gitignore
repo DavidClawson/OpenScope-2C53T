@@ -25,6 +25,7 @@ FNIRSI_1014D_Firmware/
 # Build output
 firmware/build/
 firmware/bootloader/build/
+firmware/stock_dispatcher/build/
 
 # Compiled test binaries (keep .c source, ignore executables)
 firmware/tests/test_automotive

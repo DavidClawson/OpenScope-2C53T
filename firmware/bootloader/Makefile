@@ -10,11 +10,13 @@ CC      = $(PREFIX)gcc
 AS      = $(PREFIX)gcc -x assembler-with-cpp
 CP      = $(PREFIX)objcopy
 SZ      = $(PREFIX)size
+NANO_SPECS := $(shell f="$(shell $(CC) -print-file-name=nano.specs 2>/dev/null)"; test "$$f" != "nano.specs" -a -f "$$f" && printf '%s' '-specs=nano.specs')
 
 ######################################################################
 # Paths
 ######################################################################
 BUILD_DIR  = build
+HIGH_BUILD_DIR = build_high
 AT32_LIB   = ../at32f403a_lib/libraries
 AT32_DRV   = $(AT32_LIB)/drivers
 AT32_CMSIS = $(AT32_LIB)/cmsis/cm4
@@ -87,18 +89,29 @@ ASFLAGS = $(MCU) $(C_DEFS) $(C_INCLUDES)
 LDSCRIPT = bootloader.ld
 
 LDFLAGS  = $(MCU)
-LDFLAGS += -specs=nano.specs
+LDFLAGS += $(NANO_SPECS)
 LDFLAGS += -T$(LDSCRIPT)
 LDFLAGS += -Wl,--gc-sections
 LDFLAGS += -Wl,-Map=$(BUILD_DIR)/bootloader.map,--cref
 LDFLAGS += -lc -lm -lnosys
 
+HIGH_CFLAGS = $(CFLAGS) -DBOOTLOADER_BASE_ADDRESS=0x080F0000 -DHIGH_IAP_ALLOW_LOW_FLASH=1
+HIGH_ASFLAGS = $(ASFLAGS) -DBOOTLOADER_BASE_ADDRESS=0x080F0000
+HIGH_LDFLAGS  = $(MCU)
+HIGH_LDFLAGS += $(NANO_SPECS)
+HIGH_LDFLAGS += -Tbootloader_high.ld
+HIGH_LDFLAGS += -Wl,--gc-sections
+HIGH_LDFLAGS += -Wl,-Map=$(HIGH_BUILD_DIR)/bootloader_high.map,--cref
+HIGH_LDFLAGS += -lc -lm -lnosys
+
 ######################################################################
 # Build targets
 ######################################################################
 TARGET = bootloader
+HIGH_TARGET = bootloader_high
 
 all: $(BUILD_DIR)/$(TARGET).bin size
+high: $(HIGH_BUILD_DIR)/$(HIGH_TARGET).bin high-size
 
 OBJECTS = $(addprefix $(BUILD_DIR)/,$(notdir $(C_SOURCES:.c=.o)))
 vpath %.c $(sort $(dir $(C_SOURCES)))
@@ -106,14 +119,26 @@ vpath %.c $(sort $(dir $(C_SOURCES)))
 OBJECTS += $(addprefix $(BUILD_DIR)/,$(notdir $(ASM_SOURCES:.s=.o)))
 vpath %.s $(sort $(dir $(ASM_SOURCES)))
 
+HIGH_OBJECTS = $(addprefix $(HIGH_BUILD_DIR)/,$(notdir $(C_SOURCES:.c=.o)))
+HIGH_OBJECTS += $(addprefix $(HIGH_BUILD_DIR)/,$(notdir $(ASM_SOURCES:.s=.o)))
+
 $(BUILD_DIR)/%.o: %.c Makefile | $(BUILD_DIR)
 	$(CC) -c $(CFLAGS) $< -o $@
 
 $(BUILD_DIR)/%.o: %.s Makefile | $(BUILD_DIR)
 	$(AS) -c $(ASFLAGS) $< -o $@
 
+$(HIGH_BUILD_DIR)/%.o: %.c Makefile | $(HIGH_BUILD_DIR)
+	$(CC) -c $(HIGH_CFLAGS) $< -o $@
+
+$(HIGH_BUILD_DIR)/%.o: %.s Makefile | $(HIGH_BUILD_DIR)
+	$(AS) -c $(HIGH_ASFLAGS) $< -o $@
+
 $(BUILD_DIR)/$(TARGET).elf: $(OBJECTS) Makefile $(LDSCRIPT)
 	$(CC) $(OBJECTS) $(LDFLAGS) -o $@
+
+$(HIGH_BUILD_DIR)/$(HIGH_TARGET).elf: $(HIGH_OBJECTS) Makefile bootloader_high.ld
+	$(CC) $(HIGH_OBJECTS) $(HIGH_LDFLAGS) -o $@
 
 $(BUILD_DIR)/$(TARGET).bin: $(BUILD_DIR)/$(TARGET).elf
 	$(CP) -O binary $< $@
@@ -129,17 +154,34 @@ $(BUILD_DIR)/$(TARGET).bin: $(BUILD_DIR)/$(TARGET).elf
 		echo "OK: $$SIZE / 16384 bytes ($$(( $$SIZE * 100 / 16384 ))%% used)"; \
 	fi
 
+$(HIGH_BUILD_DIR)/$(HIGH_TARGET).bin: $(HIGH_BUILD_DIR)/$(HIGH_TARGET).elf
+	$(CP) -O binary $< $@
+	@echo "Built: $@ ($$(wc -c < $@ | tr -d ' ') bytes)"
+	@SIZE=$$(wc -c < $@ | tr -d ' '); \
+	if [ $$SIZE -gt 65536 ]; then \
+		echo "ERROR: High bootloader is $$SIZE bytes, exceeds 64KB reserved region!"; \
+		exit 1; \
+	else \
+		echo "OK: $$SIZE / 65536 bytes ($$(( $$SIZE * 100 / 65536 ))%% used)"; \
+	fi
+
 $(BUILD_DIR):
+	mkdir -p $@
+
+$(HIGH_BUILD_DIR):
 	mkdir -p $@
 
 size: $(BUILD_DIR)/$(TARGET).elf
 	$(SZ) --format=berkeley $<
 
+high-size: $(HIGH_BUILD_DIR)/$(HIGH_TARGET).elf
+	$(SZ) --format=berkeley $<
+
 clean:
-	rm -rf $(BUILD_DIR)
+	rm -rf $(BUILD_DIR) $(HIGH_BUILD_DIR)
 
 # Flash bootloader via DFU (one-time, requires BOOT0 + reset)
 flash-dfu: $(BUILD_DIR)/$(TARGET).bin
 	dfu-util -a 0 -d 2e3c:df11 -s 0x08000000 -D $<
 
-.PHONY: all clean size flash-dfu
+.PHONY: all high clean size high-size flash-dfu

@@ -157,9 +157,9 @@ void fault_display(const char *title, const char *detail)
     lcd_draw_string(10, 130, "The system will restart", COLOR_WHITE, COLOR_RED);
     lcd_draw_string(10, 155, "automatically in ~3 seconds.", COLOR_WHITE, COLOR_RED);
 
-    lcd_draw_string(10, 200, "If this persists, hold POWER",
+    lcd_draw_string(10, 200, "If this persists, hold POWER+PRM",
                     COLOR_GRAY, COLOR_RED);
-    lcd_draw_string(10, 218, "to force shutdown.",
+    lcd_draw_string(10, 218, "at boot for recovery.",
                     COLOR_GRAY, COLOR_RED);
 
     /*

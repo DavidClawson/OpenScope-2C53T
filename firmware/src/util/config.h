@@ -15,7 +15,12 @@
 #include <stdbool.h>
 
 #define CONFIG_MAGIC    0x4F534332  /* "OSC2" */
-#define CONFIG_VERSION  1
+#define CONFIG_VERSION  2
+
+#define CONFIG_MODE_OSCILLOSCOPE  0
+#define CONFIG_MODE_MULTIMETER    1
+#define CONFIG_MODE_SIGNAL_GEN     2
+#define CONFIG_MODE_SETTINGS       3
 
 /* All user-configurable settings */
 typedef struct {
@@ -45,6 +50,7 @@ typedef struct {
     uint8_t  display_brightness;
     uint8_t  display_persist_mode;
     uint8_t  language;           /* 0=English */
+    uint8_t  startup_mode;       /* CONFIG_MODE_* */
     /* System */
     uint8_t  auto_shutdown_mins; /* 0=disabled, 5/10/15/30/60 */
     uint8_t  sound_enabled;

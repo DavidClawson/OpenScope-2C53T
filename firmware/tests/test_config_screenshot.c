@@ -3,8 +3,8 @@
  *
  * Build (native):
  *   gcc -o tests/test_config_screenshot tests/test_config_screenshot.c \
- *       src/util/config.c src/util/screenshot.c \
- *       -DFEATURE_SCREENSHOT -Isrc/util -lm
+ *       src/util/config.c src/util/screenshot.c src/dsp/shared_mem.c \
+ *       -DFEATURE_SCREENSHOT -Isrc/util -Isrc/dsp -lm
  *
  * Run:
  *   ./tests/test_config_screenshot
@@ -58,6 +58,8 @@ static void test_config_defaults(void)
     ASSERT_TRUE(cfg.scope_ch2_enabled, "ch2 should be enabled");
     ASSERT_EQ(cfg.scope_ch1_vdiv, 3, "ch1 vdiv default");
     ASSERT_EQ(cfg.display_brightness, 80, "brightness default");
+    ASSERT_EQ(cfg.language, 0, "language default");
+    ASSERT_EQ(cfg.startup_mode, CONFIG_MODE_MULTIMETER, "startup mode default");
     PASS();
 }
 
@@ -113,6 +115,8 @@ static void test_config_serialize_roundtrip(void)
     config_init_defaults(&original);
     original.siggen_frequency = 5000.0f;
     original.scope_trigger_level = -42;
+    original.language = 1;
+    original.startup_mode = CONFIG_MODE_SIGNAL_GEN;
     original.checksum = config_compute_checksum(&original);
 
     uint8_t buf[256];
@@ -124,6 +128,8 @@ static void test_config_serialize_roundtrip(void)
     ASSERT_TRUE(ok, "deserialize should succeed");
     ASSERT_EQ(loaded.magic, CONFIG_MAGIC, "magic");
     ASSERT_EQ(loaded.scope_trigger_level, -42, "trigger level");
+    ASSERT_EQ(loaded.language, 1, "language");
+    ASSERT_EQ(loaded.startup_mode, CONFIG_MODE_SIGNAL_GEN, "startup mode");
     ASSERT_TRUE(loaded.siggen_frequency == 5000.0f, "frequency");
     PASS();
 }

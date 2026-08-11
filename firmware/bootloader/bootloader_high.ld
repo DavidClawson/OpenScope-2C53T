@@ -1,30 +1,22 @@
 /*
- * Linker script for OpenScope 2C53T Application Firmware
- * (when used with USB HID bootloader)
+ * Linker script for relocated OpenScope 2C53T USB HID recovery bootloader.
  *
- * Flash layout:
- *   0x08000000 - 0x08003FFF  Bootloader (16KB, not touched by app)
- *   0x08004000 - 0x08005FFF  App vector table / boot header
- *   0x08006000 - 0x08006FFF  Stock saved-settings page (preserved)
- *   0x08007000 - 0x080EFFFF  Application code/data
- *
- * RAM: 224KB with EOPB0=0xFE
- * Note: 0x20037FF0 is reserved for bootloader magic word
+ * A tiny stage0 at 0x08000000 jumps here when recovery is requested.  Keeping
+ * the full HID implementation in the upper flash window leaves the stock-sized
+ * app region below it available for launcher/relocation experiments.
  */
 
 ENTRY(Reset_Handler)
 
-_estack = 0x20037FE0;    /* leave top 32 bytes for DFU magic at 0x20037FE0 */
+_estack = 0x20037FE0;
 
-_Min_Heap_Size = 0x200;
+_Min_Heap_Size = 0x100;
 _Min_Stack_Size = 0x400;
 
 MEMORY
 {
-  FLASH_VEC (rx)  : ORIGIN = 0x08004000, LENGTH = 8K
-  FLASH_APP (rx)  : ORIGIN = 0x08007000, LENGTH = 932K
-  RAM (xrw)       : ORIGIN = 0x20000000, LENGTH = 224K
-  SPIM (rx)       : ORIGIN = 0x08400000, LENGTH = 16384K
+  FLASH (rx)  : ORIGIN = 0x080F0000, LENGTH = 64K
+  RAM (xrw)   : ORIGIN = 0x20000000, LENGTH = 224K
 }
 
 SECTIONS
@@ -34,8 +26,7 @@ SECTIONS
     . = ALIGN(4);
     KEEP(*(.isr_vector))
     . = ALIGN(4);
-    __isr_vector_end = .;
-  } >FLASH_VEC
+  } >FLASH
 
   .text :
   {
@@ -49,7 +40,7 @@ SECTIONS
     KEEP (*(.fini))
     . = ALIGN(4);
     _etext = .;
-  } >FLASH_APP
+  } >FLASH
 
   .rodata :
   {
@@ -57,35 +48,35 @@ SECTIONS
     *(.rodata)
     *(.rodata*)
     . = ALIGN(4);
-  } >FLASH_APP
+  } >FLASH
 
-  .ARM.extab   : { *(.ARM.extab* .gnu.linkonce.armextab.*) } >FLASH_APP
+  .ARM.extab   : { *(.ARM.extab* .gnu.linkonce.armextab.*) } >FLASH
   .ARM : {
     __exidx_start = .;
     *(.ARM.exidx*)
     __exidx_end = .;
-  } >FLASH_APP
+  } >FLASH
 
   .preinit_array :
   {
     PROVIDE_HIDDEN (__preinit_array_start = .);
     KEEP (*(.preinit_array*))
     PROVIDE_HIDDEN (__preinit_array_end = .);
-  } >FLASH_APP
+  } >FLASH
   .init_array :
   {
     PROVIDE_HIDDEN (__init_array_start = .);
     KEEP (*(SORT(.init_array.*)))
     KEEP (*(.init_array*))
     PROVIDE_HIDDEN (__init_array_end = .);
-  } >FLASH_APP
+  } >FLASH
   .fini_array :
   {
     PROVIDE_HIDDEN (__fini_array_start = .);
     KEEP (*(SORT(.fini_array.*)))
     KEEP (*(.fini_array*))
     PROVIDE_HIDDEN (__fini_array_end = .);
-  } >FLASH_APP
+  } >FLASH
 
   _sidata = LOADADDR(.data);
 
@@ -97,20 +88,7 @@ SECTIONS
     *(.data*)
     . = ALIGN(4);
     _edata = .;
-  } >RAM AT> FLASH_APP
-
-  _spim_init_base = LOADADDR(.spim);
-  _spim_init_length = SIZEOF(.spim);
-
-  .spim :
-  {
-    . = ALIGN(4);
-    _spim_start = .;
-    *(.spim)
-    *(.spim*)
-    . = ALIGN(4);
-    _spim_end = .;
-  } >SPIM
+  } >RAM AT> FLASH
 
   . = ALIGN(4);
   .bss :
@@ -125,7 +103,6 @@ SECTIONS
     __bss_end__ = _ebss;
   } >RAM
 
-  /* Preserved across reset — not zeroed by startup code */
   .noinit (NOLOAD) :
   {
     . = ALIGN(4);
@@ -152,6 +129,3 @@ SECTIONS
 
   .ARM.attributes 0 : { *(.ARM.attributes) }
 }
-
-ASSERT(__isr_vector_end <= ORIGIN(FLASH_VEC) + LENGTH(FLASH_VEC),
-       "OpenScope vector table overlaps the stock saved-settings preserve gap")
