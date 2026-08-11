@@ -37,6 +37,7 @@ extern void system_clock_config(void);
 #include "flash_fs.h"
 #include "usb_debug.h"
 #include "rtt.h"
+#include "fault.h"
 
 /* ═══════════════════════════════════════════════════════════════════
  * Global State (extern'd via ui.h for UI modules)
@@ -390,6 +391,12 @@ int main(void)
      * hundred cycles and no peripheral, so it is safe this early — and it means
      * boot-time output is captured even if the device later hangs. */
     rtt_init();
+
+    /* Enable the configurable fault handlers and clear stale CFSR bits before
+     * anything can fault. Also recovers the record from a previous boot, which
+     * survives reset in .noinit — the point of the whole exercise for a fault
+     * that only shows up ~55s in. */
+    fault_init();
 
     /* Clock init to 240MHz */
     system_clock_config();

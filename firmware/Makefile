@@ -55,6 +55,7 @@ C_SOURCES += src/drivers/scope_trigger.c
 C_SOURCES += src/drivers/meter_data.c
 C_SOURCES += src/drivers/usb_debug.c
 C_SOURCES += src/drivers/rtt.c
+C_SOURCES += src/drivers/fault.c
 C_SOURCES += src/dsp/signal_gen.c
 C_SOURCES += src/dsp/shared_mem.c
 C_SOURCES += src/ui/persistence.c
