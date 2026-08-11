@@ -122,8 +122,43 @@ Issue templates will be added soon to make this easier — until then, just incl
 4. **Sign off your commits** with `git commit -s` (see DCO below).
 5. **Test on hardware if your change touches firmware.** If you can't test on hardware, say so in the PR description — I'll test it on mine before merging, but I need to know that's required.
 6. **Don't reformat files you didn't otherwise touch.** Whitespace-only diffs inside an otherwise substantive PR make review painful. If you want to fix formatting, do it as its own PR.
+7. **Run the test suite and report skips, not just passes** (see below).
 
 I will generally respond to PRs within a few days, but if something is time-sensitive (e.g., it's blocking you from testing something else), say so in the PR title or description and I'll try to prioritize.
+
+### Running the tests
+
+```bash
+python3 scripts/run_tests.py            # all suites; skips are reported prominently
+python3 scripts/run_tests.py --strict   # exit non-zero if anything was skipped
+python3 scripts/run_tests.py -k iap     # just the suites matching a substring
+```
+
+**A skipped test is not a passing test.** Several suites skip when a local artifact
+is missing — the stock archive image (not redistributable) or a firmware binary you
+haven't built yet — and those skips remove real coverage. Build first
+(`make -C firmware`, `make -C firmware/bootloader`, and the `stage0` /
+`stock_dispatcher` / `bootloader_updater` / `high_layout_updater` targets) so the
+checks that inspect **built binaries** actually run. `--strict` is the honest setting
+when you're about to claim a change is verified.
+
+This matters more than it sounds. In August 2026 a bootloader regression that would
+have NACKed half of every flash passed a clean build, the full suite and a manual
+regression hunt, and was caught only when a contributor flashed real hardware. The
+suite could not see it because most of these tests assert on the **text** of the
+source, and the strings they grep for were present in both the correct and the broken
+version.
+
+So, when you touch flash or boot paths:
+
+- **Prefer a test that executes the logic** over one that greps for it.
+  `scripts/test_iap_erase_guard.py` is the worked example: it lifts the guard
+  functions verbatim out of `hid_iap_user.c`, compiles them against a simulated
+  flash array, and checks what actually happened to the flash.
+- **Prove the test can fail.** Reintroduce the bug it's meant to catch and confirm it
+  goes red. An assertion that has never failed hasn't been tested either. The mutation
+  list at the top of `test_iap_erase_guard.py` shows the format — and two of its own
+  assertions were vacuous on the first draft until exactly this exercise caught them.
 
 ### Developer Certificate of Origin
 
