@@ -131,3 +131,76 @@ the RTT workflow is worth anything.**
    staged image is 2026-07-28; anything older needs a rebuild.
 4. Check whether it is time-based (~55 s) or count-based by instrumenting a
    second, independent counter.
+
+---
+
+# Update — the fault handler is validated, and the ~55 s claim is now in doubt
+
+## The self-test passed completely
+
+`make guest-faulttest` fires `udf #0` from the shell task ~10 s after boot.
+**With no debugger attached, the UI froze at ~10 s** — so the fault fires, reaches
+the handler, and freezes the device on its own. Attaching afterwards read:
+
+```
+magic      = FA17ED00   valid record
+kind       = 4          UsageFault — identified specifically, not as a HardFault
+cfsr       = 00010000   UNDEFINSTR only: one clean event, because CFSR is now
+                        cleared at boot instead of accumulating since reset
+hfsr       = 00000000   did NOT escalate — the configurable handlers work
+r3         = 000003E8   = 1000, our exact trigger (dbg_shell_loops == 1000)
+exc_return = FFFFFFFD   PSP / task context, correctly resolved from EXC_RETURN
+pc         = 08019F48 -> `udf #0` in vUsbDebugTask, usb_debug.c:2733
+sp         = 20031100
+cyccnt     = D881B234
+```
+
+Byte-exact on every field. The instrument is sound.
+
+## Which undermines the headline of this document
+
+The handler demonstrably records a task-context fault into `.noinit`. Yet the
+"~55 s HardFault" produced **no record at all** — `magic` stayed uninitialised
+garbage across two separate attempts, even though `SHCSR` showed `USGFAULTACT`
+and `.noinit` is provably writable (`fault_init()` wrote `boot_count` four words
+along).
+
+A handler that captures a deliberate fault perfectly but never captures the
+"real" one is evidence that the real one is not the same kind of event.
+
+**And the user reports the UI comes up fine and only halts "when we ran some of
+the tests".** Re-reading the timeline: the loop counter froze at 5479 iterations
+= 54.79 s, which is about when the FIRST OpenOCD attach happened. Every freeze
+observed so far has been noticed *after* attaching.
+
+So the likely correct statement is **not** "the firmware HardFaults ~55 s into
+every boot" but **"attaching the debugger puts it into a fault"** — plausibly a
+DEMCR vector-catch halt configured by OpenOCD at `init`, which stops the core on
+exception entry *before* the handler's first instruction. That would explain
+`USGFAULTACT` set with nothing recorded.
+
+**This is a confound I built a theory on top of without controlling for it**, and
+it is the same mistake pattern as the `/2` status reads: an anomaly observed
+only through an instrument, attributed to the target rather than the instrument.
+
+## What still stands
+
+* The fault handler, CFSR clearing, and `.noinit` record are real improvements
+  and are validated.
+* `pc = 0xFFFFFFFE` with `IPSR = 3` is the Cortex-M LOCKUP signature, not
+  self-evidently "an RDP artifact". Whether it is provoked by attaching is now
+  the open question — and if it is, that is *still* worth knowing, because it
+  means SWD-derived readings need care.
+
+## The experiment that settles it
+
+Flash a normal `make guest`, boot it, and **leave it alone with no debugger for
+5+ minutes, watching the UI**. Nothing else.
+
+* **UI stays alive** -> there is no ~55 s bug; the freeze is debugger-induced,
+  this document's headline is wrong, and the remaining question is what OpenOCD
+  does at attach.
+* **UI freezes on its own** -> the bug is real. Attach afterwards and read
+  `g_fault`, which we now know works.
+
+Cost: one flash and five minutes of not touching anything.
