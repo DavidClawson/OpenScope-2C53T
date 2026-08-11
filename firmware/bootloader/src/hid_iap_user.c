@@ -3,7 +3,8 @@
  * Adapted from ArteryTek SDK hid_iap_user.c
  *
  * Changes from SDK:
- *   - FLASH_APP_ADDRESS = 0x08002000 (was 0x08005000)
+ *   - FLASH_APP_ADDRESS = 0x08004000 (SDK default was 0x08005000);
+ *     see hid_iap_user.h and firmware/ld/at32f403a_app.ld, which must agree
  *   - Flag address auto-calculated as app_address - sector_size
  *   - jump_to_app disables more peripherals for clean handoff
  */
