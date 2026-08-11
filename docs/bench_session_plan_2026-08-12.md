@@ -199,6 +199,33 @@ takes — a runtime question. Either park stock at `0x0802C618` over SWD and rea
 
 Read the result from the LCD overlay. **Do not attach SWD to read it.**
 
+### 1b. Experiment S — Gowin RELOAD (0x3C)  ⏱ built and staged, ~15 min bench
+
+**The highest-value single shot left, and the image is already built**
+(`make guest-reload`).
+
+Gowin documents two ways to make a running part accept a new configuration:
+pulse RECONFIG_N, or power-cycle it. As of Exp R **both are closed** — every GPIO
+form of the pulse is refuted (Exps G/O/Q, plus maksidze's measurement that QN48
+pin 48 never pulses at all), and a genuine FPGA power cycle leaves STATUS
+unchanged.
+
+RELOAD is the third form: the same request as a **command**, on a bus we have
+proven the part decodes (Exp J — four opcodes, four distinct replies).
+
+**It has never been run on a validated readout.** The send code and the
+`reload_3c` field have existed since June, but the only way to reach them was the
+debug shell — which needs USB CDC (never enumerated here) or RTT (impossible
+under RDP). There was no make target. It sits in the re-run backlog alongside the
+trailing-clock sweep and Exp H on stock, all three "measured" through instruments
+we now know were broken.
+
+Built on the fidelity base, so the only difference from Exp F/R is the `0x3C`
+frame. Read `ED:` on the overlay; anchor as always.
+
+While the device is open for flashing, also re-run the other two backlog items —
+same trip, near-zero marginal cost.
+
 ### 2. Chase the responses  ⏱ zero bench — NOW THE TOP ITEM
 
 maksidze's answer on the 2C23T could end this outright: if rosenrot00's board has
@@ -330,6 +357,7 @@ make guest-idcode     # Exp J anchored opcode probe (ID@/PO@/CL@ on the overlay)
 make guest-trace      # Exp N six-checkpoint anchored status trace
 make guest-sweep      # Exp O/Q pin sweep, press SAVE in scope mode
 make guest-fidelity   # Exp F stock-fidelity config frame
+make guest-reload     # Exp S Gowin RELOAD (0x3C) before the prelude  <-- NEXT
 make guest-pc1        # Exp R fidelity + PC1 LOW (stock's full PC2:PC1 code)
 make guest-fidelity2  # Exp R fidelity + PC1 PA6 PC11 PD2 PD3 PD6 PD13
 ```
