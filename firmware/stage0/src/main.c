@@ -19,7 +19,7 @@
 #define BOOT_COUNTER_MAGIC            0xB0070000u
 #define BOOT_COUNTER_MASK             0xFFFF0000u
 #define BOOT_FAIL_MAX                 3u
-#define IAP_UPGRADE_COMPLETE_FLAG     0x41544F4Bu
+#define IAP_UPGRADE_COMPLETE_FLAG     0x41544B38u
 #define IAP_FLAG_ADDRESS              0x08003800u
 
 static void busy_delay(uint32_t loops)

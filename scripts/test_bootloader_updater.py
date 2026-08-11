@@ -30,6 +30,26 @@ def high_bootloader_marker() -> bytes:
 
 
 class BootloaderUpdaterPreflightTests(unittest.TestCase):
+    def test_updater_binaries_gap_fill_stock_settings_page(self) -> None:
+        root = Path(__file__).resolve().parents[1]
+        bootloader_makefile = (root / "firmware/bootloader_updater/Makefile").read_text()
+        high_makefile = (root / "firmware/high_layout_updater/Makefile").read_text()
+        self.assertIn("--gap-fill 0xFF -R .data -R .spim", bootloader_makefile)
+        self.assertIn("--gap-fill 0xFF -R .data -R .spim", high_makefile)
+
+        start = flash_preflight.STOCK_SAVED_CONFIG_ADDRESS - flash_preflight.APP_ADDRESS
+        end = flash_preflight.STOCK_SAVED_CONFIG_END_ADDRESS - flash_preflight.APP_ADDRESS
+        for image_path in (
+            root / "firmware/bootloader_updater/build/bootloader_updater.bin",
+            root / "firmware/high_layout_updater/build/high_layout_updater.bin",
+        ):
+            if not image_path.exists():
+                self.skipTest(f"{image_path} has not been built")
+            data = image_path.read_bytes()
+            self.assertGreaterEqual(len(data), end)
+            self.assertLess(len(data), 128 * 1024)
+            self.assertEqual(data[start:end], b"\xFF" * (end - start))
+
     def test_stage0_directory_is_tracked_for_high_layout_builds(self) -> None:
         root = Path(__file__).resolve().parents[1]
         self.assertTrue((root / "firmware/stage0/Makefile").exists())

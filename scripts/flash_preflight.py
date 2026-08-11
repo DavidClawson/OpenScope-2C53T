@@ -473,7 +473,11 @@ def preflight_rom_dfu_app(args: argparse.Namespace) -> int:
     if APP_ADDRESS + len(data) > APP_SLOT_END_ADDRESS:
         errors.append("app image would overlap the high recovery bootloader region")
     errors.extend(validate_stock_saved_config_hole(data, APP_ADDRESS))
-    return finish(errors, "dfu-util -a 0 -d 2e3c:df11 -s 0x08004000:leave -D <image>")
+    return finish(
+        errors,
+        "python3 ../scripts/at32_dfuse_write.py 0x08004000 <image> "
+        "--preserve-blank-pages-range 0x08006000:0x08007000 --leave 0x08004000",
+    )
 
 
 def preflight_rom_dfu_bootloader(args: argparse.Namespace) -> int:
@@ -506,7 +510,11 @@ def preflight_rom_dfu_all(args: argparse.Namespace) -> int:
     if APP_ADDRESS + len(app) > APP_SLOT_END_ADDRESS:
         errors.append("app image would overlap the high recovery bootloader region")
     errors.extend(validate_stock_saved_config_hole(app, APP_ADDRESS))
-    return finish(errors, "dfu-util bootloader at 0x08000000, then app at 0x08004000:leave")
+    return finish(
+        errors,
+        "dfu-util bootloader at 0x08000000, then at32_dfuse_write app at 0x08004000 "
+        "with --leave 0x08004000",
+    )
 
 
 def preflight_rom_dfu_high_layout(args: argparse.Namespace) -> int:

@@ -23,6 +23,7 @@
 #define IAP_READ_MEM_MAX  59u
 #define SRAM_BASE_ADDRESS 0x20000000u
 #define SRAM_END_ADDRESS  0x20038000u
+#define IAP_ERASED_SECTOR_INVALID 0xFFFFFFFFu
 
 void (*pftarget)(void);
 void iap_clear_upgrade_flag(void);
@@ -49,6 +50,7 @@ static uint8_t iap_native_write;
 static volatile uint8_t run_addr_wait;
 static volatile uint8_t run_addr_enter;
 static uint32_t run_addr_target;
+static uint32_t iap_erased_sector_address;
 
 /* Defined in main.c — draw transfer state on bootloader LCD */
 extern void lcd_draw_iap_status(const char *status);
@@ -156,7 +158,31 @@ iap_result_type iap_get_upgrade_flag(void)
   return IAP_FAILED;
 }
 
-static uint8_t iap_erase_address_valid(uint32_t address)
+static uint32_t iap_erase_sector_base(uint32_t address)
+{
+  if (iap_info.sector_size == SECTOR_SIZE_1K)
+    return address;
+  if (iap_info.sector_size == SECTOR_SIZE_2K)
+    return address & ~(SECTOR_SIZE_2K - 1);
+  if (iap_info.sector_size == SECTOR_SIZE_4K)
+    return address & ~(SECTOR_SIZE_4K - 1);
+  return IAP_ERASED_SECTOR_INVALID;
+}
+
+static uint8_t iap_write_address_valid(uint32_t address)
+{
+  if (address & (HID_IAP_BUFFER_LEN - 1))
+    return 0;
+  if (iap_info.sector_size == SECTOR_SIZE_1K)
+    return 1;
+  if (iap_info.sector_size == SECTOR_SIZE_2K)
+    return 1;
+  if (iap_info.sector_size == SECTOR_SIZE_4K)
+    return 1;
+  return 0;
+}
+
+static uint8_t iap_erase_required(uint32_t address)
 {
   if (iap_info.sector_size == SECTOR_SIZE_1K)
     return 1;
@@ -169,7 +195,7 @@ static uint8_t iap_erase_address_valid(uint32_t address)
 
 iap_result_type iap_erase_sector(uint32_t address)
 {
-  if (!iap_erase_address_valid(address))
+  if (!iap_erase_required(address))
     return IAP_FAILED;
 
   flash_unlock();
@@ -186,6 +212,7 @@ iap_result_type iap_erase_sector(uint32_t address)
     flash_sector_erase(address);
   }
   flash_lock();
+  iap_erased_sector_address = iap_erase_sector_base(address);
   return IAP_SUCCESS;
 }
 
@@ -224,6 +251,7 @@ void iap_init(void)
 
   iap_info.fifo_length = 0;
   iap_info.iap_address = 0;
+  iap_erased_sector_address = IAP_ERASED_SECTOR_INVALID;
 }
 
 void iap_idle(void)
@@ -259,16 +287,24 @@ iap_result_type iap_address(uint8_t *pdata, uint32_t len)
   else
   {
     uint8_t clear_upgrade_flag = (iap_info.state == IAP_STS_START && !iap_native_write);
-    if (iap_erase_address_valid(address))
+    uint8_t erase_needed = iap_erase_required(address);
+    uint32_t sector_base = iap_erase_sector_base(address);
+    uint8_t same_erased_sector =
+      sector_base != IAP_ERASED_SECTOR_INVALID && iap_erased_sector_address == sector_base;
+    if (iap_write_address_valid(address) && (erase_needed || same_erased_sector))
     {
       iap_info.iap_address = address;
       lcd_draw_iap_status("Flashing...");
-      if (clear_upgrade_flag)
-        iap_clear_upgrade_flag();
-      if (iap_erase_sector(address) == IAP_SUCCESS)
+      if (!erase_needed || iap_erase_sector(address) == IAP_SUCCESS)
+      {
+        if (clear_upgrade_flag)
+          iap_clear_upgrade_flag();
         iap_info.state = IAP_STS_ADDR;
+      }
       else
+      {
         result = IAP_NACK;
+      }
       status = (result == IAP_ACK) ? IAP_SUCCESS : IAP_FAILED;
     }
     else

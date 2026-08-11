@@ -79,7 +79,7 @@ $(BUILD_DIR)/$(TARGET).elf: $(OBJECTS) Makefile $(LDSCRIPT)
 	$(CC) $(OBJECTS) $(LDFLAGS) -o $@
 
 $(BUILD_DIR)/$(TARGET).bin: $(BUILD_DIR)/$(TARGET).elf
-	$(CP) -O binary $< $@
+	$(CP) -O binary --gap-fill 0xFF -R .data -R .spim $< $@
 	@echo "Built: $@ ($$(wc -c < $@ | tr -d ' ') bytes)"
 
 $(BUILD_DIR):

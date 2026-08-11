@@ -328,7 +328,7 @@ flash: $(BUILD_DIR)/$(TARGET).bin
 # Flash app via DFU (device must be in ROM DFU mode — BOOT0 + reset)
 flash-dfu: $(BUILD_DIR)/$(TARGET).bin
 	python3 ../scripts/flash_preflight.py rom-dfu-app --image $<
-	python3 ../scripts/at32_dfuse_write.py 0x08004000 $< --preserve-blank-pages-range 0x08006000:0x08007000
+	python3 ../scripts/at32_dfuse_write.py 0x08004000 $< --preserve-blank-pages-range 0x08006000:0x08007000 --leave 0x08004000
 
 # Build and flash the bootloader (one-time, via DFU)
 bootloader:
@@ -343,7 +343,7 @@ flash-bootloader:
 flash-all: $(BUILD_DIR)/$(TARGET).bin bootloader
 	python3 ../scripts/flash_preflight.py rom-dfu-all --bootloader bootloader/build/bootloader.bin --image $(BUILD_DIR)/$(TARGET).bin --option-bytes $(BUILD_DIR)/option_bytes48.bin
 	dfu-util -a 0 -d 2e3c:df11 -s 0x08000000 -D bootloader/build/bootloader.bin
-	python3 ../scripts/at32_dfuse_write.py 0x08004000 $(BUILD_DIR)/$(TARGET).bin --preserve-blank-pages-range 0x08006000:0x08007000
+	python3 ../scripts/at32_dfuse_write.py 0x08004000 $(BUILD_DIR)/$(TARGET).bin --preserve-blank-pages-range 0x08006000:0x08007000 --leave 0x08004000
 
 # Run in Renode emulator (display only, no input)
 renode: emu

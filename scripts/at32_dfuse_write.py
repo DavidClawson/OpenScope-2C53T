@@ -103,6 +103,20 @@ def write_block(dev, data: bytes):
     time.sleep(0.08)
 
 
+def leave(dev, address: int):
+    clear_to_idle(dev)
+    set_address(dev, address)
+    dev.ctrl_transfer(0x21, DFU_DNLOAD, 0, INTF, b"", timeout=5000)
+    for _ in range(20):
+        try:
+            status, poll_ms, state = get_status(dev)
+            print(f"leave status={status} state={state}", flush=True)
+        except usb.core.USBError as exc:
+            print(f"device detached after leave: {exc}", flush=True)
+            break
+        time.sleep(max(poll_ms, 20) / 1000.0)
+
+
 def parse_preserve_range(text: str) -> tuple[int, int]:
     if ":" in text:
         start_text, end_text = text.split(":", 1)
@@ -195,18 +209,31 @@ def main() -> int:
         metavar="START:END",
         help="for all-0xFF pages wholly inside this sector-aligned range, do not erase/program",
     )
+    parser.add_argument(
+        "--leave",
+        type=lambda s: int(s, 0),
+        help="send the DfuSe leave request after writing, jumping to this flash address",
+    )
     args = parser.parse_args()
     dev = open_dev()
-    clear_to_idle(dev)
-    write_image(
-        dev,
-        args.address,
-        args.image.read_bytes(),
-        verify=not args.no_inline_verify,
-        skip_blank_pages=args.skip_blank_pages,
-        preserve_blank_page_ranges=args.preserve_blank_pages_range,
-    )
-    clear_to_idle(dev)
+    try:
+        clear_to_idle(dev)
+        write_image(
+            dev,
+            args.address,
+            args.image.read_bytes(),
+            verify=not args.no_inline_verify,
+            skip_blank_pages=args.skip_blank_pages,
+            preserve_blank_page_ranges=args.preserve_blank_pages_range,
+        )
+        clear_to_idle(dev)
+        if args.leave is not None:
+            leave(dev, args.leave)
+    finally:
+        try:
+            usb.util.release_interface(dev, INTF)
+        except usb.core.USBError:
+            pass
     return 0
 
 

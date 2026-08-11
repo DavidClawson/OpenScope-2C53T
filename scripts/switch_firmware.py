@@ -34,6 +34,7 @@ DEFAULT_STOCK_USER = ROOT / "firmware" / "build" / "stock_user_dispatcher.bin"
 HID_FLASH = ROOT / "scripts" / "hid_flash.py"
 FLASH_PREFLIGHT = ROOT / "scripts" / "flash_preflight.py"
 STOCK_BUILDER = ROOT / "scripts" / "build_stock_hybrid_image.py"
+HID_FLASH_CMD = ["uv", "run", str(HID_FLASH)]
 
 EXPECTED_STOCK_SHA256 = "a17c5c35c97bb898f15672a1747bc1041d8ed507c16999ddba0d1e4e2ec0c760"
 INTERNAL_FLASH_BYTES = 1024 * 1024
@@ -153,8 +154,7 @@ def cmd_openscope(args: argparse.Namespace) -> int:
     if rc or args.preflight_only:
         return rc
     flash_cmd = [
-        sys.executable,
-        str(HID_FLASH),
+        *HID_FLASH_CMD,
         str(args.image),
         "--preserve-blank-blocks",
         "--preserve-blank-blocks-range",
@@ -198,8 +198,7 @@ def cmd_stock(args: argparse.Namespace) -> int:
 
     stock_settings_start = STOCK_APP_ADDRESS + padded_len(args.image.stat().st_size)
     flash_cmd = [
-        sys.executable,
-        str(HID_FLASH),
+        *HID_FLASH_CMD,
         str(args.out),
         "--address",
         "0x08000000",

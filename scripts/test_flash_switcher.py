@@ -34,11 +34,28 @@ class FlashSafetyTests(unittest.TestCase):
 
     def test_bootloader_nacks_misaligned_erase_addresses(self) -> None:
         source = (Path(__file__).resolve().parents[1] / "firmware/bootloader/src/hid_iap_user.c").read_text()
-        self.assertIn("static uint8_t iap_erase_address_valid(uint32_t address)", source)
-        self.assertIn("iap_result_type iap_erase_sector(uint32_t address)", source)
-        self.assertIn("return (address & (SECTOR_SIZE_2K - 1)) == 0", source)
-        self.assertIn("if (iap_erase_sector(address) == IAP_SUCCESS)", source)
-        self.assertIn("result = IAP_NACK", source)
+        validator = source.split("iap_result_type iap_erase_sector(uint32_t address)", 1)[0]
+        self.assertIn("static uint8_t iap_write_address_valid(uint32_t address)", validator)
+        self.assertIn("address & (HID_IAP_BUFFER_LEN - 1)", validator)
+        self.assertIn("static uint8_t iap_erase_required(uint32_t address)", validator)
+        self.assertIn("return (address & (SECTOR_SIZE_2K - 1)) == 0", validator)
+
+        addr_handler = source.split("iap_result_type iap_address(uint8_t *pdata, uint32_t len)\n{", 1)[1]
+        addr_handler = addr_handler.split("iap_result_type iap_data_write", 1)[0]
+        self.assertIn("same_erased_sector", addr_handler)
+        self.assertIn("iap_write_address_valid(address) && (erase_needed || same_erased_sector)", addr_handler)
+        self.assertIn("!erase_needed || iap_erase_sector(address) == IAP_SUCCESS", addr_handler)
+        self.assertIn("result = IAP_NACK;", addr_handler)
+        self.assertLess(addr_handler.index("iap_erase_sector(address)"), addr_handler.index("iap_clear_upgrade_flag()"))
+        self.assertLess(addr_handler.index("iap_clear_upgrade_flag()"), addr_handler.index("iap_info.state = IAP_STS_ADDR"))
+
+    def test_high_layout_stage0_uses_hid_upgrade_flag(self) -> None:
+        stage0 = (Path(__file__).resolve().parents[1] / "firmware/stage0/src/main.c").read_text()
+        dispatcher = (Path(__file__).resolve().parents[1] / "firmware/stock_dispatcher/src/main.c").read_text()
+
+        self.assertIn("IAP_UPGRADE_COMPLETE_FLAG     0x41544B38u", stage0)
+        self.assertIn("IAP_UPGRADE_COMPLETE_FLAG     0x41544B38u", dispatcher)
+        self.assertNotIn("0x41544F4Bu", stage0)
 
     def test_stock_named_image_is_classified_and_hid_rejected(self) -> None:
         with tempfile.TemporaryDirectory() as td:
@@ -132,6 +149,7 @@ class FlashSafetyTests(unittest.TestCase):
             rc = switch_firmware.cmd_stock(args)
         text = out.getvalue()
         self.assertEqual(rc, 0)
+        self.assertIn("+ uv run", text)
         self.assertIn(str(switch_firmware.HID_FLASH), text)
         self.assertIn(str(switch_firmware.DEFAULT_STOCK_USER), text)
         self.assertIn("--address 0x08000000", text)
@@ -218,6 +236,7 @@ class FlashSafetyTests(unittest.TestCase):
 
         text = out.getvalue()
         self.assertEqual(rc, 0)
+        self.assertIn("+ uv run", text)
         self.assertIn("--preserve-blank-blocks", text)
         self.assertIn("--preserve-blank-blocks-range 0x08006000:0x08007000", text)
 
