@@ -204,3 +204,91 @@ Flash a normal `make guest`, boot it, and **leave it alone with no debugger for
   `g_fault`, which we now know works.
 
 Cost: one flash and five minutes of not touching anything.
+
+---
+
+# RESOLVED — flash read protection kills the CPU the moment SWD attaches
+
+## The measurement
+
+Device left alone with no debugger: **UI still animating after 5 minutes.**
+ST-Link merely plugged in: **still animating.** Bare
+`openocd -c init -c targets -c shutdown`: **frozen.** Same with a minimal config
+that omits `target/stm32f1x.cfg` entirely (no flash bank, no DBGMCU poke) —
+`scripts/at32_minimal.cfg`. So it is not the config; it is enabling debug.
+
+```
+FLASH_OBR = 0x03FFFFFE   bit1 RDPRT = 1  -> READ PROTECTION ACTIVE
+option bytes @0x1FFFF800 = FFFFFFFF      -> blocked
+flash @0x08007000        = FFFFFFFF      -> blocked
+SRAM  @0x20000000        = 20000004      -> readable, fine
+```
+
+## The mechanism
+
+RDP is set. On STM32F1-class parts and their AT32 equivalents this is not merely
+"the debugger cannot read flash" — **bringing up the debug port disables the
+flash array**, as an anti-extraction measure. The CPU executes from flash, so at
+the instant of attach it can no longer fetch instructions:
+
+```
+attach -> flash array disabled -> instruction fetch fails
+       -> IACCVIOL / UNDEFINSTR -> HardFault
+       -> the fault handler is ALSO in flash, unfetchable
+       -> LOCKUP, pc = 0xFFFFFFFE, IPSR = 3
+```
+
+## What this explains, all at once
+
+| Observation | Cause |
+|---|---|
+| freezes on every attach | flash disabled, CPU cannot fetch |
+| `pc=0xFFFFFFFE`, `IPSR=3` on every halt | genuine LOCKUP |
+| CFSR shows IACCVIOL + UNDEFINSTR | fetching from a dead flash array |
+| the fault handler never recorded the "~55 s fault" | handler is in flash |
+| **the RTT console never worked** | RTT needs a LIVE CPU while the host reads SRAM |
+| the self-test DID record | `udf` fired at 10 s with nothing attached: flash alive, handler ran, record written to SRAM; we attached afterwards and read it |
+
+The self-test is the clean confirmation: the handler works, and only ever when
+nothing is attached.
+
+## Retraction
+
+**There is no "~55 s HardFault". The device runs indefinitely.** The earlier
+sections of this document claim a spontaneous periodic fault; that is wrong. The
+counter froze at 54.79 s because that is when the first OpenOCD attach happened.
+Everything downstream of that reading — including "any bench observation later
+than ~55 s is suspect" — is withdrawn.
+
+The `pc = 0xFFFFFFFE` note in `CLAUDE.md` was closer to right than my correction
+of it: it IS an artifact of read protection. It is just not benign, and not a
+readout glitch — the core really is locked up, because attaching killed it.
+
+## What survives, and what does not
+
+**Survives.** Exp E (register diff), Exp K and Exp L (anchored FPGA status
+reads). All of these attach, let the CPU die, and then have the HOST drive SPI3
+and read peripherals. Peripherals keep the state the firmware configured before
+the attach, and the FPGA does not care why the CPU stopped. The spin-park images
+still did their job: they stopped execution at the config-enable instant so the
+peripheral state we read was the state at that instant.
+
+**Does not survive.** Anything needing the CPU to RUN with a debugger attached:
+* **the RTT console** — dead on this unit while RDP is set, in any form
+* **the "SWD GPIO sampler on a running target"** (bench_session_plan_2026-07-30
+  Task 2b) — same reason; it was never going to work
+* live `mdw` polling of firmware variables
+
+## Options
+
+1. **Accept it.** SWD stays a halt-and-poke instrument: attach, CPU dies, host
+   drives the bus. That is exactly how Exps E/K/L worked and they were the most
+   productive SWD sessions this project has had. The on-LCD overlays remain the
+   way to read live firmware state.
+2. **Clear RDP.** Unprotecting triggers a mass erase by design — that removes the
+   FACTORY IAP bootloader this unit depends on, not just the app. Recovery needs
+   ROM DFU via BOOT0, i.e. opening the case, and afterwards the flashing
+   workflow changes (our bootloader uses a different app slot). Real risk, real
+   payoff: it would unlock RTT and the host-driven sweep loop that motivated all
+   of this. **Not to be done casually, and not without checking we can restore
+   the factory bootloader.**
