@@ -2687,9 +2687,21 @@ static const char shell_banner[] =
     "+----------------------------------+\r\n"
     "\r\n> ";
 
+/* Instrumentation for the 2026-08-11 "shell task never polls RTT" hunt.
+ * Non-static so the addresses come out of the ELF with nm and can be read over
+ * SWD on a running target — no console needed, which is the whole problem.
+ *   dbg_shell_entered == 0  -> the task never ran; look at task creation
+ *   dbg_shell_loops   == 0  -> it started but never completed an iteration
+ *   dbg_shell_loops growing -> the loop is fine and rtt_read() is the fault */
+volatile uint32_t dbg_shell_entered;
+volatile uint32_t dbg_shell_loops;
+volatile uint32_t dbg_shell_rtt_bytes;
+
 static void vUsbDebugTask(void *pvParameters)
 {
     (void)pvParameters;
+
+    dbg_shell_entered = 0xA5A5A5A5u;
 
     uint8_t rx_buf[USBD_CDC_OUT_MAXPACKET_SIZE];
     uint8_t rtt_buf[64];
@@ -2699,6 +2711,7 @@ static void vUsbDebugTask(void *pvParameters)
 
     for (;;) {
         bool did_work = false;
+        dbg_shell_loops++;
 
         /* ---- RTT (SWD) transport ---- */
         if (!rtt_banner_sent && rtt_host_attached()) {
@@ -2707,6 +2720,7 @@ static void vUsbDebugTask(void *pvParameters)
         }
 
         size_t rtt_len = rtt_read(rtt_buf, sizeof(rtt_buf));
+        dbg_shell_rtt_bytes += (uint32_t)rtt_len;
         if (rtt_len > 0) {
             /* Attaching mid-session: the host may never have moved read_pos
              * before typing, so print the banner on first input too. */
