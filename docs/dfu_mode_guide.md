@@ -167,17 +167,36 @@ This was tested end-to-end on a unit whose factory bootloader had been erased mo
 
 ### Windows: Artery ISP Programmer (community-contributed)
 
-Artery ships a Windows GUI flasher that speaks the same ROM DFU protocol as `dfu-util`. A user on Windows 11 reported (see [#4](https://github.com/DavidClawson/OpenScope-2C53T/issues/4)) that after fighting WinUSB/`dfu-util` setup they flashed successfully using Artery's tool instead.
+Artery ships a Windows GUI flasher that speaks the same ROM DFU protocol as `dfu-util`, and it handles the option bytes through a menu rather than a binary blob — which makes it the easier route on Windows than fighting WinUSB and `dfu-util`.
 
-**Rough flow** (if you try this and it works, please post the exact steps on #4 so I can tighten this up):
+The walkthrough below comes from **[@baraa1936 in #20](https://github.com/DavidClawson/OpenScope-2C53T/issues/20)**, who did this on real hardware and documented every dialog with screenshots. **[Go there for the screenshots](https://github.com/DavidClawson/OpenScope-2C53T/issues/20)** — they make each step unambiguous in a way prose can't. Earlier reports of the same approach are in [#4](https://github.com/DavidClawson/OpenScope-2C53T/issues/4).
 
-1. Build the firmware on Windows (MSYS2/WSL) so you have `firmware/build/firmware.bin`, `firmware/build/bootloader.bin`, and `firmware/build/option_bytes48.bin`.
-2. Put the device in **ROM DFU mode** using the BOOT0 + pinhole-reset procedure above. You're still entering the same mode — only the host-side tool changes.
-3. Download **Artery ISP Programmer** from the ArteryTek website (search for "AT32 ISP Programmer").
-4. In the tool, select the USB DFU interface, load each `.bin` at its flash address, and program. You'll need to program the option byte region (`0x1FFFF800`) from `option_bytes48.bin` as well — this is what `dfu-util -a 1 ... -s 0x1FFFF800` does in the command-line flow.
-5. After the first successful flash, close the case. All future updates still go through `make flash` over USB-C via the HID bootloader — you're only using Artery ISP for the one-time setup.
+> **Not verified by the maintainer** — I don't have a Windows machine. This worked for the contributor who wrote it. If a step is wrong or a dialog has changed, please say so on [#20](https://github.com/DavidClawson/OpenScope-2C53T/issues/20).
 
-If you hit this and it works, **please post your exact steps on [#4](https://github.com/DavidClawson/OpenScope-2C53T/issues/4)** — it'll help the next Windows user and let me turn this stub into a proper walkthrough.
+**Before you start:** build the firmware (MSYS2 or WSL) so you have `firmware/build/bootloader.bin` and `firmware/build/firmware.bin`, and put the device in **ROM DFU mode** using the BOOT0 + pinhole-reset procedure above. Install the DFU driver if Windows hasn't already.
+
+1. Download **[Artery ISP Programmer](https://www.arterychip.com/file/download/1764)** and run it.
+2. Set **Language → English**, and confirm **Port Type** is **USB DFU**. Click through **Next**.
+3. Choose **Edit User system data**, then **Next**.
+4. Set **EOPB0** to **224KB SRAM**, then **Apply to device**.
+   This is the one-time option-byte write — the same thing `dfu-util -a 1 -s 0x1FFFF800` does in the command-line flow. Without it the MCU comes up in 96 KB SRAM mode and the firmware won't run.
+5. **The device will disconnect.** Re-enter ROM DFU mode (BOOT0 + pinhole reset), then click **Back** in the tool.
+6. Switch the mode selector from **Edit User system data** to **Download to device**, and add both images at their correct addresses:
+
+   | File | Address |
+   |---|---|
+   | `bootloader.bin` | `0x08000000` |
+   | `firmware.bin` | `0x08004000` |
+
+7. **Next**, then **OK**, and wait for it to finish.
+8. **Expected at this point: the device shows the bootloader screen and will *not* boot the application.** This is correct behaviour, not a failed flash — see below.
+9. Finish with `make flash` from a machine with the toolchain. The contributor used a Raspberry Pi; WSL or MSYS2 should also work, though neither has been confirmed for this final step.
+
+**Why step 8 happens.** Our bootloader only jumps to the application after the app has been *validated* — it checks a boot-handshake flag before handing over. Writing `firmware.bin` directly with Artery ISP puts the bytes in flash but never sets that flag, so the bootloader correctly refuses to jump and stays on its own screen. `make flash` goes through the HID update path, which sets the flag and blesses the app. That last step is doing the validation, not re-flashing for nothing.
+
+After this one-time setup, close the case — all future updates go through **Settings → Firmware Update** on the device followed by `make flash` on the host.
+
+*Thanks to [@baraa1936](https://github.com/baraa1936) for writing this up and testing it on hardware.*
 
 ### Linux: From-Scratch Recipe
 
