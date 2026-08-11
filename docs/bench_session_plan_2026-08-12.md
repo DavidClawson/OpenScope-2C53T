@@ -85,14 +85,19 @@ Each of these is closed by a bench measurement, not by argument:
 | The ESP32 SSPI route | mooted by Exp J — an external master hits the same wall |
 | The user-mode-lockout / USART-silent theory | bench-refuted 2026-06-13 |
 | **A "~55 s HardFault"** | **Does not exist.** Retracted 2026-08-11 — it was the debugger attach (see rule 2) |
+| **Static MCU register state — for real this time** | **Exp R.** Exp F's exclusion was scoped to its method; Exp R closed the class it could not see (below) |
+| Paired PC1 + PC2, held at stock's exact 2-bit code | **Exp R** — `guest-pc1` and `guest-fidelity2`, both `00039020` |
+| A USART-borne "prepare for reconfig" command | **Exp R**, statically: stock clears UEN and never writes `0x40004404` before CONFIG_ENABLE |
+| A fresh FPGA power-on reopening the config port | **Exp R** — first true FPGA power cycle in the project; status unchanged |
 
 ---
 
 ## Still genuinely open
 
-1. **Paired PC1 + PC2** — stock drives them together, same instruction pair, both
-   arms of the branch at `0x0802C618`. Exp Q pulsed PC1 **singly**. Never tested
-   paired, and never tested as a *held level*.
+1. ~~**Paired PC1 + PC2**~~ — **DONE 2026-08-11, negative (Exp R), and the framing
+   was wrong.** `0x0802C608` is a 4-way selector driving a 2-bit code; every arm
+   writes BSRR *or* BRR, never both, so **stock never pulses these pins**. The
+   held code (`PC2 H, PC1 L`) was tested and the wall held.
 2. **`POR`(16) SET with `DONE_FINAL`(13) CLEAR** — not what a part that has
    auto-booted its NV design should report. Unexplained since Exp J.
 3. **MODE0 (QN48 pin 13) and JTAGSEL_N (pin 3)** — never measured. MODE0 sets the
@@ -114,7 +119,24 @@ Each of these is closed by a bench measurement, not by argument:
 
 ## Plan, in order
 
-### 1. Paired PC1 + PC2 — pulsed, then held  ⏱ two builds, ~20 min bench
+### 0. DONE — Experiment R (2026-08-11)
+
+Item 1 below is complete and negative. Its real value was methodological: it
+found that **Exp F's "static MCU state is EXCLUDED" was scoped to its method.**
+That diff compared output LEVELS (ODT), where a pin stock drives LOW and a pin we
+leave FLOATING both read 0. Diffing the CONFIG registers (CRL/CRH) instead
+surfaced seven more pins — PC1, PA6, PC11, PD2, PD3, PD6, PD13 — all since
+matched, singly (`guest-pc1`) and together (`guest-fidelity2`), both `00039020`.
+
+The exclusion is now genuine. Two knobs remain in the tree for reuse:
+`FPGA_FIDELITY_DRIVE_PC1`, `FPGA_FIDELITY_DRIVE_UNCOVERED`.
+
+**Read this before proposing anything:** that is the fourth time a stable-looking
+measurement turned out to be blind to the thing it was being used to rule out
+(after the `/2` reads, the floating MISO and the script's byte rotation). Before
+running a new experiment, ask what its instrument *cannot* see.
+
+### 1. ~~Paired PC1 + PC2 — pulsed, then held~~  ✅ DONE, NEGATIVE
 
 The cheapest untested thing, and the one concrete gap the Ghidra-side review
 found in Exp Q.
@@ -135,12 +157,29 @@ takes — a runtime question. Either park stock at `0x0802C618` over SWD and rea
 
 Read the result from the LCD overlay. **Do not attach SWD to read it.**
 
-### 2. Chase the responses  ⏱ zero bench
+### 2. Chase the responses  ⏱ zero bench — NOW THE TOP ITEM
 
 maksidze's answer on the 2C23T could end this outright: if rosenrot00's board has
 **no resident NV image** (config port open, waiting) while ours auto-boots one,
 that is the whole difference and explains why the same byte sequence works there
 and not here. Question already posted on #18.
+
+**Second question posted 2026-08-11 — possibly the bigger one.** Exp N's `T0` is
+captured *before any config command* and already reads `DONE_FINAL` clear with the
+port answering, i.e. our part presents as **unconfigured** — while Exp L showed a
+*configured* part stops answering SSPI entirely. **Yet our meter works.** If the
+fabric serviced the meter it would have to be configured. So either `DONE`=0 means
+something else for an NV-booted part, **or the meter was never the FPGA** — a
+separate device on the USART2 line.
+
+The whole "resident NV design is meter-only" model rests on Exp A (ablation kills
+the scope, meter survives) — which supports "the meter was never the FPGA" exactly
+as well, and the two were never distinguished. Asked maksidze where PA2/PA3
+actually land, and whether there is a second IC near the input jacks.
+
+**Keep the counter-argument in view:** Exp A *did* kill stock's scope, so stock's
+scope genuinely needs the upload. A theory in which the config port is shut to
+everyone still owes an explanation of how stock gets through it.
 
 ### 3. MODE0 / JTAGSEL_N with a DMM  ⏱ ~20 min, no soldering
 
@@ -188,8 +227,20 @@ start it late at night.
   flash while it sees `0483:3748`.
 * Flash with `python3 scripts/iap_flash.py flash <image>` after MENU+Power puts
   the device in upgrade mode (`2e3c:5720`, mounts as `IAP`).
-* **After an IAP flash the device reboots into charge-display mode**, which skips
-  FPGA init entirely. **Press POWER for a real boot** or every reading is void.
+* **The charge-display-mode warning is STOCK-ONLY** (corrected 2026-08-11). Our
+  images auto-boot straight into the app after an IAP flash; no POWER press is
+  needed to get a real boot. Stock is what lands in charge mode.
+* **To actually POWER-CYCLE THE FPGA** — nothing else in the loop does it. The
+  pinhole reset resets the **MCU only**; the FPGA stays powered. A POWER-button
+  shutdown with USB attached does not remove power either — the countdown releases
+  the PC9 hold but VBUS keeps the rail up and the device hangs on "Goodbye". The
+  only sequence that works:
+
+      hold POWER -> "Goodbye" -> UNPLUG USB (device goes dark) -> replug
+
+  Much of this project's testing has run on an FPGA that was never power-cycled.
+  Exp R did it properly: status still `00039020`, so a fresh POR does not open the
+  config port for us.
 * Results come off the **LCD debug overlay** (`SCOPE_DEBUG_OVERLAY`, on by
   default in these builds). SWD is only for host-driven bus work.
 
@@ -229,6 +280,8 @@ make guest-idcode     # Exp J anchored opcode probe (ID@/PO@/CL@ on the overlay)
 make guest-trace      # Exp N six-checkpoint anchored status trace
 make guest-sweep      # Exp O/Q pin sweep, press SAVE in scope mode
 make guest-fidelity   # Exp F stock-fidelity config frame
+make guest-pc1        # Exp R fidelity + PC1 LOW (stock's full PC2:PC1 code)
+make guest-fidelity2  # Exp R fidelity + PC1 PA6 PC11 PD2 PD3 PD6 PD13
 ```
 
 ---
