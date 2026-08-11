@@ -54,6 +54,8 @@ C_SOURCES += src/drivers/dac_output.c
 C_SOURCES += src/drivers/scope_trigger.c
 C_SOURCES += src/drivers/meter_data.c
 C_SOURCES += src/drivers/usb_debug.c
+C_SOURCES += src/drivers/rtt.c
+C_SOURCES += src/drivers/fault.c
 C_SOURCES += src/dsp/signal_gen.c
 C_SOURCES += src/dsp/shared_mem.c
 C_SOURCES += src/ui/persistence.c
@@ -319,6 +321,17 @@ guest-usart-silent: CFLAGS += -DGUEST_BUILD -DFPGA_USART_SILENT_SCOPE=1
 guest-usart-silent: LDSCRIPT = ld/at32f403a_guest.ld
 guest-usart-silent: clean all
 
+# External-master bring-up build (guest image). fpga_init() brings up the
+# peripherals then calls fpga_bus_release() instead of its own SSPI upload:
+# tri-states PB3/PB5/PB6 (Hi-Z), stages PC6/PB11 HIGH, keeps PC9 power-hold,
+# creates no auto-tasks. Pairs FPGA_USART_SILENT_SCOPE to keep the wire fully
+# quiet, so the FPGA's config port is pristine for an external ESP32 (SSPI pads)
+# or FT232H (JTAG TAP pads, issue #18). UNTESTED. See fpga.c FPGA_BUS_RELEASED_BOOT
+# and tools/esp32_sspi_bringup/README.md.
+guest-bringup: CFLAGS += -DGUEST_BUILD -DFPGA_BUS_RELEASED_BOOT=1 -DFPGA_USART_SILENT_SCOPE=1
+guest-bringup: LDSCRIPT = ld/at32f403a_guest.ld
+guest-bringup: clean all
+
 # Flash app via USB HID bootloader (bootloader must be running)
 flash: $(BUILD_DIR)/$(TARGET).bin
 	uv run ../scripts/hid_flash.py $<
@@ -365,3 +378,116 @@ soak-quick: emu
 	python3 ../scripts/soak_test.py --no-build --duration 30 --seed $(SOAK_SEED) --verbose
 
 .PHONY: all clean disasm size renode soak-test soak-quick flash flash-dfu bootloader flash-bootloader flash-all guest guest-warmtest guest-usart-silent emu
+
+# Experiment E (2026-07-27): park in fpga_init at the exact config-enable instant
+# (prelude 05/12 sent, CS LOW, 0x15 not yet clocked) so SWD can dump peripheral
+# state for a diff vs the stock spin image (/tmp/APP_2C53T_expE_spin_stock.bin).
+# The device intentionally never reaches the scheduler — reflash to recover.
+guest-spin: CFLAGS += -DGUEST_BUILD -DFPGA_SPIN_AT_CONFIG_ENABLE=1
+guest-spin: LDSCRIPT = ld/at32f403a_guest.ld
+guest-spin: clean all
+
+# Experiment F (2026-07-28): stock-fidelity config build. Closes ALL five
+# enumerable MCU-state differences the Exp E SWD diff found at the CONFIG_ENABLE
+# instant, in one image: SPI3 BR back to stock's /2, PB4/MISO pulled up instead
+# of floating, PC2 + PB12 driven push-pull HIGH, USART2 UEN held clear (via
+# FPGA_USART_SILENT_SCOPE), and the SPI2 clock gate enabled. probe_edit is turned
+# on so the 0x41 STATUS read still happens at /256 in its own CS frame — read it
+# on the LCD overlay as ED:. Wall breaks => bisect the five. Wall holds => MCU-side
+# state is excluded and the FT232H JTAG oracle is the only remaining test.
+# See reverse_engineering/analysis_v120/expE_swd_state_diff_2026-07-28.md
+guest-fidelity: CFLAGS += -DGUEST_BUILD -DFPGA_STOCK_FIDELITY=1 -DFPGA_USART_SILENT_SCOPE=1
+guest-fidelity: LDSCRIPT = ld/at32f403a_guest.ld
+guest-fidelity: clean all
+
+# Experiment G (2026-07-28): RECONFIG_N pulse candidates. Exp F closed every
+# enumerable static MCU-state difference and the wall held, which sends us back
+# to apicula's answer (docs/CONFIG_ENTRY_REPLY_FROM_APICULA.md): a running GW1N
+# needs RECONFIG_N (low pulse >=25ns) or a power cycle before CONFIG_ENABLE will
+# engage. Exp E's static snapshot cannot see a pulse — a pin pulsed LOW earlier
+# reads HIGH at the config-enable instant, exactly like one merely held HIGH.
+# PC2 and PB12 are the only pins stock drives that we float (outside the Exp
+# C-refuted frontend bank), so they are the candidates. Fidelity build + pulse.
+guest-reconfig-pc2: CFLAGS += -DGUEST_BUILD -DFPGA_STOCK_FIDELITY=1 -DFPGA_USART_SILENT_SCOPE=1 -DFPGA_FIDELITY_RECONFIG_PORT=3 -DFPGA_FIDELITY_RECONFIG_PIN=2
+guest-reconfig-pc2: LDSCRIPT = ld/at32f403a_guest.ld
+guest-reconfig-pc2: clean all
+
+guest-reconfig-pb12: CFLAGS += -DGUEST_BUILD -DFPGA_STOCK_FIDELITY=1 -DFPGA_USART_SILENT_SCOPE=1 -DFPGA_FIDELITY_RECONFIG_PORT=2 -DFPGA_FIDELITY_RECONFIG_PIN=12
+guest-reconfig-pb12: LDSCRIPT = ld/at32f403a_guest.ld
+guest-reconfig-pb12: clean all
+
+# Experiment J (2026-07-28): ANCHORED opcode-discrimination probe.
+# Exp I established that every FPGA status number this project has recorded was
+# a phase-slice of the free-running 0xC8100001 MISO pattern, not a register read
+# — the root cause being that no measurement here has ever had a known correct
+# answer. This build fixes that: it reads 0x11 READ_IDCODE at /256 and looks for
+# 0x0120681B (known independently from the Gowin .fs preamble at file offset
+# 0x4AD19), with 0x00 / 0x41 / 0x13 alongside as controls, 8 bytes each so a
+# repeating 4-byte pattern is visible as data rather than inferred.
+#   IDCODE found + ID != NP  => the FPGA decodes SSPI opcodes; the 2026-06-13
+#                               "not in config-receive mode" conclusion (which is
+#                               what pointed this project at JTAG) collapses.
+#   all opcodes identical    => that conclusion finally rests on a valid
+#                               measurement, and the FT232H is the route.
+# Built on the fidelity image so the wire conditions match Exp F/I.
+# See reverse_engineering/analysis_v120/expE_swd_state_diff_2026-07-28.md § Exp I/J
+guest-idcode: CFLAGS += -DGUEST_BUILD -DFPGA_STOCK_FIDELITY=1 -DFPGA_USART_SILENT_SCOPE=1 -DFPGA_IDCODE_PROBE=1
+guest-idcode: LDSCRIPT = ld/at32f403a_guest.ld
+guest-idcode: clean all
+
+# Step-resolved anchored config-status trace (2026-07-28).
+# Exp M proved we never enter config mode: the port answers IDCODE at every
+# checkpoint and STATUS never moves. This build resolves that by STEP — the
+# anchored STATUS is captured at all six CS-frame boundaries (pristine, after
+# 05, after 12, after 15, after the full upload, after 3A), each one validated
+# against the known IDCODE first and DISCARDED if the anchor fails.
+#   all six identical => the part ignores every config command while still
+#                        answering reads; the failure is config ENTRY, full stop.
+#   one step moves    => that is where our sequence first has an effect, and
+#                        where to aim next.
+#   an 'x' partway    => the config port CLOSED at that step (Exp L behaviour),
+#                        which would mean something DID take.
+# Built on the fidelity image so wire conditions match Exp F/I/M.
+guest-trace: CFLAGS += -DGUEST_BUILD -DFPGA_STOCK_FIDELITY=1 -DFPGA_USART_SILENT_SCOPE=1 -DFPGA_CFG_TRACE_BUILD=1
+guest-trace: LDSCRIPT = ld/at32f403a_guest.ld
+guest-trace: clean all
+
+# RECONFIG_N candidate pin sweep (2026-07-28), button-gated.
+# Exp N: no config command moves the STATUS register while every read command
+# answers correctly — the documented behaviour of a running auto-booted GW1N that
+# refuses configuration until RECONFIG_N is pulsed. This searches for that pin.
+# Press SAVE in scope mode: each candidate is pulsed LOW->HIGH, CONFIG_ENABLE is
+# sent, and the anchored STATUS is read; anything off the baseline is a hit.
+#
+# Candidates are CONSERVATIVE — only pins stock itself drives as outputs before
+# the FPGA handshake (stock_pre_fpga_gpio_state.md), so the MCU provably owns
+# them and there is no contention risk. PC9 (power hold), PC8/PC13 (button
+# inputs), SPI3, SWD, USART2, the DAC pins, PB8 and the EXMC/LCD bus are all
+# excluded. Every pin's config and output latch are restored as the sweep goes.
+#
+# Button-gated and run from the UI task rather than fpga_init: a bad pulse during
+# init fails the boot, and three failed boots latch the bootloader into SAFE MODE
+# (this unit has done that twice). From the UI it costs a power-cycle, and the
+# sweep can be re-run without a reflash.
+guest-sweep: CFLAGS += -DGUEST_BUILD -DFPGA_STOCK_FIDELITY=1 -DFPGA_USART_SILENT_SCOPE=1 -DFPGA_PIN_SWEEP_BUILD=1
+guest-sweep: LDSCRIPT = ld/at32f403a_guest.ld
+guest-sweep: clean all
+
+# RTT-only debug shell (2026-08-11). Cuts the USB CDC half out of the console.
+# Measured on the bench unit: usbd_connect_state_get() reports CONFIGURED even
+# though CDC never enumerates (error -71), so usb_send_bytes() enters the CDC TX
+# path and the shell task stalls there instead of returning to poll RTT — the
+# banner reached the RTT ring (rtt_write runs first) and nothing followed.
+# RTT exists to bypass that transport; this stops the tee re-introducing it.
+guest-rtt: CFLAGS += -DGUEST_BUILD -DDEBUG_SHELL_RTT_ONLY=1
+guest-rtt: LDSCRIPT = ld/at32f403a_guest.ld
+guest-rtt: clean all
+
+# Fault-handler self-test (2026-08-11). Fires `udf #0` from a task ~10 s after
+# boot. Answers (a) does the fault handler record anything at all, and (b) does
+# the device freeze on its own with NO debugger attached — the confound that
+# makes the "~55 s HardFault" reading suspect, since the freeze so far has only
+# ever been observed after an OpenOCD attach.
+guest-faulttest: CFLAGS += -DGUEST_BUILD -DFAULT_SELFTEST=1
+guest-faulttest: LDSCRIPT = ld/at32f403a_guest.ld
+guest-faulttest: clean all

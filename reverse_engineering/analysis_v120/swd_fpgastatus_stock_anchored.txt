@@ -1,0 +1,40 @@
+# SWD-driven FPGA status (anchored) — label=stock  2026-07-28T23:04:20-06:00
+Open On-Chip Debugger 0.12.0
+Licensed under GNU GPL v2
+For bug reports, read
+	http://openocd.org/doc/doxygen/bugs.html
+Info : The selected transport took over low-level target control. The results might differ compared to plain JTAG/SWD
+none separate
+
+Info : clock speed 1000 kHz
+Info : STLINK V2J37S7 (API v2) VID:PID 0483:3748
+Info : Target voltage: 3.305418
+Info : [at32f403a.cpu] Cortex-M4 r0p1 processor detected
+Info : [at32f403a.cpu] target has 6 breakpoints, 4 watchpoints
+Info : starting gdb server for at32f403a.cpu on 3333
+Info : Listening on port 3333 for gdb connections
+[at32f403a.cpu] halted due to debug-request, current mode: Handler HardFault
+xPSR: 0x81000003 pc: 0xfffffffe msp: 0x20036e80
+=== park verification (peripherals, not pc) ===
+SPI3 CTRL1 = 0x00000347   SPE=1  BR=0
+GPIOB ODR  = 0x00001910   PB6/CS=0 (0=asserted)  PB11=1
+
+=== ANCHOR: IDCODE (0x11) at /256 — known answer 0x0120681B ===
+IDCODE raw : 0120681B0120681B
+ANCHOR OK  : IDCODE found at bit offset 0
+
+=== STATUS before CONFIG_ENABLE (0x41 at /256, anchor-corrected) ===
+raw        : 0003902000039020
+STATUS     : 0x00039020   EDIT_MODE(bit7)=0  DONE(bit13)=0  ERR(bits0-3)=0x0
+
+=== sending CONFIG_ENABLE (15 00) at /2, as stock would ===
+    (SWD inter-byte gap ~100us vs ~17us native — see CAVEAT in the header)
+
+=== re-anchor + STATUS after CONFIG_ENABLE ===
+re-anchor  : IDCODE still present at bit offset 0
+raw        : 0003902000039020
+STATUS     : 0x00039020   EDIT_MODE(bit7)=0  DONE(bit13)=0  ERR(bits0-3)=0x0
+
+>>> STATUS UNCHANGED across CONFIG_ENABLE.
+>>> SYSTEM_EDIT_MODE clear — config entry did NOT engage.
+shutdown command invoked

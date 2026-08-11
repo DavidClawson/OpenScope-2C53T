@@ -160,6 +160,9 @@ typedef struct {
     /* Status */
     volatile bool    initialized;      /* Boot sequence complete */
     volatile bool    spi3_active;      /* SPI3 acquisition running */
+    volatile bool    bus_released;     /* SPI3 bus handed to external SSPI
+                                        * master (ESP32) via fpga_bus_release();
+                                        * acq task stays off the bus while set */
     volatile uint16_t frame_count;     /* Data frame counter (0x5A 0xA5) */
     volatile uint16_t echo_count;     /* Echo frame counter (0xAA 0x55) */
     volatile uint16_t tx_count;       /* TX commands sent */
@@ -210,9 +213,113 @@ typedef struct {
                                             * See sibling_loader_config_diff.md. */
     volatile uint8_t  edit_mode_status[4]; /* STATUS (0x41) read at /256 IMMEDIATELY
                                             * after 0x15 CONFIG_ENABLE (probe_edit knob).
-                                            * bit7 = SYSTEM_EDIT_MODE — if clear here,
-                                            * CONFIG_ENABLE never engaged config-receive
-                                            * (the precise wall). Only valid at slow clk. */
+                                            * SYSTEM_EDIT_MODE is bit 7 of the ASSEMBLED
+                                            * word = bit 7 of [3], not of [0]. NOTE: as of
+                                            * Exp I (2026-07-28) this value is known to be
+                                            * a phase-slice of a free-running MISO pattern,
+                                            * NOT a register read. Kept for continuity. */
+
+    /* ── Exp J: ANCHORED opcode-discrimination probe (2026-07-28) ──────────
+     * The first measurement in this project with a known correct answer.
+     * Exp I showed every prior status read was a phase-slice of the free-running
+     * 0xC8100001 pattern the FPGA emits from its running NV design; with no
+     * ground truth, a stable wrong number was indistinguishable from a right one.
+     *
+     * Each probe clocks 8 bytes (not 4) so a repeating 4-byte pattern is visible
+     * as data rather than inferred. All reads at /256 — the only valid SSPI read
+     * clock (fpga.c:1564). Populated only when opts.probe_idcode = 1. */
+    volatile uint8_t  probe_idcode[8];     /* 0x11 READ_IDCODE, before the prelude */
+    volatile uint8_t  probe_noop[8];       /* 0x00 no-op — the control */
+    volatile uint8_t  probe_status[8];     /* 0x41 STATUS */
+    volatile uint8_t  probe_user[8];       /* 0x13 USERCODE */
+    volatile uint8_t  probe_idcode_post[8];/* 0x11 again, AFTER 0x15 CONFIG_ENABLE */
+    volatile int8_t   probe_id_bit;        /* bit offset 0..32 where 0x0120681B was
+                                            * found in probe_idcode, else -1. Searched
+                                            * across ALL bit offsets deliberately: every
+                                            * artifact this project has hit (garbage at
+                                            * /2, floating MISO, SWD byte-rotation) shows
+                                            * up as a phase shift, so an exact-match test
+                                            * would report absent when it is merely
+                                            * misaligned. */
+    volatile int8_t   probe_id_bit_post;   /* same search over probe_idcode_post */
+    volatile uint8_t  probe_all_same;      /* 1 = 0x11 and 0x00 returned identical bytes
+                                            * => the FPGA is not decoding opcodes */
+    volatile uint8_t  probe_repeats;       /* 1 = first 4 bytes == last 4 bytes of the
+                                            * 0x11 read => free-running fixed pattern */
+
+    /* ── Post-0x3A anchor (Exp L follow-up, 2026-07-28) ────────────────────
+     * IDCODE read at /256 immediately BEFORE cfg_status_reg, in the same window,
+     * so the post-upload status is only believed on a validated read path.
+     * Unlike the other probe_* fields this runs on EVERY build, because an
+     * unanchored cfg_status_reg is exactly the kind of reading this project has
+     * repeatedly mistaken for a measurement.
+     *
+     * It is also a direct configured/not-configured test. Exp L: once stock has
+     * configured the FPGA successfully, the SSPI config port CLOSES and 0x11
+     * returns zeros — the port belongs to the user design from then on. So:
+     *   probe_id_bit_close >= 0  => config port still OPEN after our full
+     *                               115,638-byte upload and 0x3A close, i.e. we
+     *                               are definitively NOT configured.
+     *   probe_id_bit_close == -1 => the port stopped answering. Consistent with
+     *                               configuration having completed — but NOT
+     *                               proof of it, since a dead bus reads the same.
+     *                               Corroborate with DONE and a live trace. */
+    volatile uint8_t  probe_idcode_close[8];
+    volatile int8_t   probe_id_bit_close;
+
+    /* ── Step-resolved config-status trace (2026-07-28) ────────────────────
+     * The whole sequence measured one checkpoint at a time, each anchored on the
+     * IDCODE so a reading is only kept if the read path proved itself first.
+     * Captures sit at CS-frame BOUNDARIES only — never inside a frame, and never
+     * between the 0x3B open and its data, which would break the upload frame.
+     *
+     *   0  pristine, before the 05 prelude
+     *   1  after 05 00   (ERASE_SRAM)
+     *   2  after 12 00   (INIT_ADDR)
+     *   3  after 15 00   (CONFIG_ENABLE)
+     *   4  after the full 115,638-byte upload, before 3A
+     *   5  after 3A 00   (CONFIG_DISABLE / close)
+     *
+     * cfg_trace[i] is anchor-corrected. 0xFFFFFFFF means the anchor FAILED at
+     * that checkpoint and the value is not to be believed — the same refusal the
+     * SWD script makes, rather than storing a plausible-looking number.
+     *
+     * If all six are identical the part ignores every config command while still
+     * answering reads, which localises the failure without further guessing. */
+#define FPGA_CFG_TRACE_N 6
+    volatile uint32_t cfg_trace[FPGA_CFG_TRACE_N];
+    volatile int8_t   cfg_trace_anchor[FPGA_CFG_TRACE_N];
+
+    /* ── RECONFIG_N candidate pin sweep (2026-07-28) ───────────────────────
+     * Exp N showed no config command moves the STATUS register, which matches a
+     * running GW1N refusing configuration until RECONFIG_N is pulsed. This
+     * searches for that pin: for each candidate, pulse LOW->HIGH, send
+     * CONFIG_ENABLE, and read the anchored STATUS. Anything other than the
+     * baseline is a hit.
+     *
+     * Button-gated and run from the UI task, NOT from fpga_init: a bad pulse
+     * during init would fail the boot, and three failed boots latch the
+     * bootloader into SAFE MODE (seen twice on this unit already). Run from the
+     * UI it is recoverable with a power-cycle, and repeatable without a reflash. */
+    volatile uint8_t  sweep_state;      /* 0=idle 1=running 2=done */
+    volatile uint8_t  sweep_tested;     /* candidates completed */
+    volatile uint8_t  sweep_total;      /* candidates in the table */
+    volatile uint8_t  sweep_hits;       /* count whose STATUS left the baseline */
+    volatile uint8_t  sweep_anchor_fail;/* candidates whose IDCODE anchor failed —
+                                         * NOT hits: an unvalidated read is discarded,
+                                         * though a pin that CLOSES the config port
+                                         * would also land here and is worth a look */
+    volatile uint8_t  sweep_first_hit;  /* index into the candidate table, 0xFF = none */
+    volatile uint32_t sweep_baseline;   /* anchored STATUS before the sweep */
+    volatile uint32_t sweep_hit_status; /* anchored STATUS at the first hit */
+    volatile uint8_t  sweep_hit_phase;  /* 0 = none, 1 = during the post-pulse
+                                         * sampling window (the pulse ALONE did
+                                         * something — a reconfiguration), 2 =
+                                         * during the post-CONFIG_ENABLE window
+                                         * (the pulse made 0x15 land). Exp O could
+                                         * not distinguish these: it took a single
+                                         * snapshot at a fixed +1ms and would have
+                                         * missed a transient entirely. */
 
     /* Experimental stock runtime shadow for scope-mode bench work.
      * These are NOT the original firmware RAM locations. They are a small
@@ -282,6 +389,17 @@ typedef struct {
     uint8_t  reload_3c;       /* 1 = send Gowin RELOAD (0x3C) at /256 before the
                                *     prelude — software reconfig trigger; does it
                                *     clear GWVLD/FLASH_LOCK and let CONFIG_ENABLE land? */
+    uint8_t  cfg_trace;       /* 1 = capture the anchored step-resolved status trace
+                               *     at all six CS-frame boundaries (see cfg_trace[]).
+                               *     Adds read frames between the prelude steps, so
+                               *     keep it off for stock-faithful runs. Requires
+                               *     prelude_frame_mode 0 (split) for steps 1-3. */
+    uint8_t  probe_idcode;    /* 1 = Exp J anchored opcode-discrimination probe: read
+                               *     0x11/0x00/0x41/0x13 at /256 (8 bytes each) BEFORE
+                               *     the prelude, and 0x11 again after CONFIG_ENABLE.
+                               *     Known answer: IDCODE = 0x0120681B. Adds CS frames
+                               *     ahead of the config attempt, so keep it off for
+                               *     stock-faithful runs. */
 } fpga_cfg_seq_opts_t;
 
 /* Run the full SPI3 config handshake. Returns the 0x3A close status byte
@@ -359,6 +477,22 @@ const volatile uint8_t *fpga_get_ch2_buf(void);
  * Must be HIGH during oscilloscope/meter operation.
  */
 void fpga_set_active(bool active);
+
+/*
+ * Release the SPI3 bus to an external SSPI master (ESP32) soldered to the
+ * back-side SPI3 test pads. Tri-states PB3/PB5/PB6, keeps PC6/PB11 staged,
+ * leaves PC9 power hold untouched. EXPERIMENTAL — see experimental/
+ * esp32-bringup branch (tools/esp32_sspi_bringup/). Re-flash to undo.
+ */
+void fpga_bus_release(void);
+
+/* RECONFIG_N candidate pin sweep. Pulses each candidate LOW->HIGH, sends
+ * CONFIG_ENABLE, and reads the anchored STATUS, looking for any pin that makes
+ * the part respond. Restores every pin's original config as it goes.
+ * Blocking, ~400ms. Call from a task, never from an ISR or from fpga_init.
+ * Results land in fpga.sweep_*. Built only under FPGA_PIN_SWEEP_BUILD. */
+void fpga_reconfig_pin_sweep(void);
+const char *fpga_sweep_pin_name(uint8_t idx);
 
 /*
  * Enter oscilloscope mode: send FPGA scope configuration commands

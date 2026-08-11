@@ -36,6 +36,8 @@ extern void system_clock_config(void);
 #include "meter_data.h"
 #include "flash_fs.h"
 #include "usb_debug.h"
+#include "rtt.h"
+#include "fault.h"
 
 /* ═══════════════════════════════════════════════════════════════════
  * Global State (extern'd via ui.h for UI modules)
@@ -384,6 +386,17 @@ int main(void)
     /* Feed watchdog early — IWDG may still be running from previous boot
      * (it can't be stopped once started, survives system reset) */
     wdt_counter_reload();
+
+    /* Arm the RTT console before anything else can want to print. Costs a few
+     * hundred cycles and no peripheral, so it is safe this early — and it means
+     * boot-time output is captured even if the device later hangs. */
+    rtt_init();
+
+    /* Enable the configurable fault handlers and clear stale CFSR bits before
+     * anything can fault. Also recovers the record from a previous boot, which
+     * survives reset in .noinit — the point of the whole exercise for a fault
+     * that only shows up ~55s in. */
+    fault_init();
 
     /* Clock init to 240MHz */
     system_clock_config();

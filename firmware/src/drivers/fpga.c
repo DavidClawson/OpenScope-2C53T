@@ -298,8 +298,123 @@ static void spi3_pump(const uint8_t *tx, volatile uint8_t *rx, uint32_t n)
  * USART traffic skipped, and NO auto-tasks created — the SPI3 wire stays quiet so
  * `fpga reinit` / `spi3 xfer` run unperturbed. Watch first 0x05 prelude MISO for
  * 0x80->0xFF and `0x11` IDCODE for 01 20 68 1B. See docs/fpga_stock_bringup_diff_plan.md. */
+/* Experiment E: spin forever at the config-enable instant for an SWD state dump.
+ * Build with `make guest-spin`. Never enable in a normal build — the device
+ * parks in fpga_init and never reaches the scheduler (recover by reflashing). */
+#ifndef FPGA_SPIN_AT_CONFIG_ENABLE
+#define FPGA_SPIN_AT_CONFIG_ENABLE  0
+#endif
+
 #ifndef FPGA_USART_SILENT_SCOPE
 #define FPGA_USART_SILENT_SCOPE  0
+#endif
+
+/* Stock-fidelity config build (2026-07-28, Experiment F — follow-on to Exp E).
+ * The Exp E SWD dump parked both stock and our firmware one instruction before
+ * 0x15 reaches the SPI3 data register and diffed every peripheral register.
+ * Clock tree came back byte-identical; what remained were five enumerable MCU
+ * state differences. This flag closes ALL of them at once so a single bench
+ * cycle can decide whether MCU-side state is the cause at all:
+ *
+ *   1. SPI3 CTRL1 BR — stock 0x347 (BR=0, /2), ours 0x37f (BR=7, /256).
+ *      => cmd_br forced to 0. The /256 read clock moves OUT of the config
+ *         frame and into the probe_edit STATUS read, which already runs at
+ *         /256 in its own CS frame, so we keep a VALID readout.
+ *   2. PB4 / SPI3_MISO — stock input PULL-UP, ours input FLOATING. This is
+ *      why undriven MISO reads 0xFF in the stock capture; ours had no defined
+ *      idle level, so every status read this project has taken was made under
+ *      the wrong electrical conditions. Cannot itself gate config (it is an
+ *      MCU input) — this is a measurement fix.
+ *   3. PC2 and PB12 — stock drives both output push-pull HIGH; ours leaves
+ *      them floating. NOT covered by the Exp C frontend ablation.
+ *   4. USART2 UEN — stock CLEAR at the CONFIG_ENABLE instant (measured:
+ *      CTRL1=0x0000002c). Paired with FPGA_USART_SILENT_SCOPE by the Makefile
+ *      target. Already bench-refuted in isolation (2026-06-13); included only
+ *      so this build is a clean superset.
+ *   5. SPI2 peripheral clock — stock sets APB1EN bit14; ours does not.
+ *
+ * PB9 is deliberately NOT driven: stock has it AF push-pull, and an AF output
+ * level is not reflected in ODR, so we cannot know what level to match. See
+ * FPGA_FIDELITY_DRIVE_PB9 below.
+ *
+ * Build with `make guest-fidelity`. Full rationale + raw dumps:
+ * reverse_engineering/analysis_v120/expE_swd_state_diff_2026-07-28.md */
+#ifndef FPGA_STOCK_FIDELITY
+#define FPGA_STOCK_FIDELITY  0
+#endif
+
+/* PB9 is AF push-pull in stock (likely a timer channel — PB8, the LCD
+ * backlight, is AF-PP too and stock PWM-dims it). ODR does not reflect an AF
+ * output level, so driving PB9 as a plain GPIO is a guess in BOTH directions.
+ * Off by default; flip only to sweep it deliberately. */
+#ifndef FPGA_FIDELITY_DRIVE_PB9
+#define FPGA_FIDELITY_DRIVE_PB9  0
+#endif
+
+/* RECONFIG_N pulse candidate (2026-07-28, Experiment G).
+ *
+ * Exp F closed all five enumerable MCU-state differences and the wall held
+ * (ED = 0x00039020, Edit Mode bit7 clear). That sends us back to apicula's
+ * 2026-06-13 reply (docs/CONFIG_ENTRY_REPLY_FROM_APICULA.md), which already
+ * told us the mechanism: an already-configured, auto-booted, RUNNING GW1N does
+ * not re-enter config from an SSPI CONFIG_ENABLE alone. The documented triggers
+ * are **RECONFIG_N (low pulse >=25ns) or a power cycle**. FLASH_LOCK is a red
+ * herring (flash read-back protection only, per UG290 Table 7-12 note [2]).
+ *
+ * The critical realisation: **Exp E was a STATIC snapshot and is structurally
+ * blind to transitions.** A RECONFIG_N pulse issued by stock at any point
+ * BEFORE the config-enable instant leaves the pin sitting HIGH — identical to
+ * a pin that was merely driven HIGH and never pulsed. So "PC2/PB12 read HIGH in
+ * both dumps" is NOT evidence stock didn't pulse them, and Exp F driving them
+ * statically HIGH was the wrong test for a pulse.
+ *
+ * PC2 and PB12 are now the top RECONFIG_N candidates: outside the Exp C-refuted
+ * analog-frontend bank they are the ONLY pins stock drives that we leave
+ * floating. Pulse LOW -> HIGH before the prelude via the existing reset_port /
+ * reset_pin / reset_low_ms machinery.
+ *
+ * Port encoding matches fpga_cfg_seq_opts_t: 0=none, 1=A, 2=B, 3=C, 4=D, 5=E.
+ *   PC2  -> port 3, pin 2   (`make guest-reconfig-pc2`)
+ *   PB12 -> port 2, pin 12  (`make guest-reconfig-pb12`)
+ */
+#ifndef FPGA_FIDELITY_RECONFIG_PORT
+#define FPGA_FIDELITY_RECONFIG_PORT  0
+#endif
+#ifndef FPGA_FIDELITY_RECONFIG_PIN
+#define FPGA_FIDELITY_RECONFIG_PIN   0
+#endif
+
+/* Experiment J (2026-07-28): anchored opcode-discrimination probe at /256.
+ * Reads 0x11/0x00/0x41/0x13 before the prelude and 0x11 again after
+ * CONFIG_ENABLE, looking for the independently-known IDCODE 0x0120681B. */
+#ifndef FPGA_IDCODE_PROBE
+#define FPGA_IDCODE_PROBE  0
+#endif
+
+/* Step-resolved anchored status trace across the whole config sequence
+ * (`make guest-trace`). Adds read frames between the prelude steps. */
+#ifndef FPGA_CFG_TRACE_BUILD
+#define FPGA_CFG_TRACE_BUILD  0
+#endif
+
+/* Button-gated RECONFIG_N candidate pin sweep (`make guest-sweep`). Runs from
+ * the UI task, never from fpga_init — a bad pulse during init fails the boot,
+ * and three failed boots latch the bootloader into SAFE MODE. */
+#ifndef FPGA_PIN_SWEEP_BUILD
+#define FPGA_PIN_SWEEP_BUILD  0
+#endif
+
+/* Boot-into-bus-released experiment (2026-06-14, experimental/esp32-bringup).
+ * For the external-master bench rig: the MCU brings up SPI3/USART/control pins,
+ * then — instead of running its own SSPI config upload — immediately hands the
+ * bus to an external master (ESP32 on the SPI3 pads, or an FT232H on the JTAG
+ * TAP pads @maksidze traced in #18). fpga_init() calls fpga_bus_release()
+ * (tri-states PB3/PB5/PB6, stages PC6/PB11 HIGH, PC9 power-hold kept) and bails
+ * before the meter frontend + meter USART traffic, so the FPGA's config port is
+ * pristine for JTAG/SSPI with ZERO MCU interference. No auto-tasks created.
+ * UNTESTED. See tools/esp32_sspi_bringup/README.md. Revert to 0 for normal builds. */
+#ifndef FPGA_BUS_RELEASED_BOOT
+#define FPGA_BUS_RELEASED_BOOT  0
 #endif
 
 static void spi3_set_br(uint32_t br)
@@ -1311,6 +1426,10 @@ static void fpga_acquisition_task(void *pv)
 
         if (!fpga.initialized) continue;
 
+        /* Bus handed to an external SSPI master (fpga_bus_release) — stay
+         * off SPI3 entirely to avoid contention with the ESP32. */
+        if (fpga.bus_released) continue;
+
         /* Backoff: if we've timed out too many times, pause */
         if (fpga.spi3_timeout_count >= SPI3_BACKOFF_THRESHOLD) {
             fpga.spi3_timeout_count = 0;  /* Reset for next round */
@@ -1470,10 +1589,297 @@ static void fpga_acquisition_task(void *pv)
  *   | CS↓ 3A <close> CS↑00 | CS↓00 CS↑00 | [post_close delay]
  *   | CS↓ 01 08 CS↑ | 02 03 | 06 00 | 07 00 | 08 AD | CS↓ 03 <status×4> CS↑
  * ═══════════════════════════════════════════════════════════════════ */
+/* ── Exp J helpers: the anchored opcode-discrimination probe ───────────────
+ * Read a Gowin register in the sibling's framing (openFPGALoader
+ * read_register32): a bare clock with CS HIGH to frame, then CS LOW, the 4-byte
+ * command word <opcode 00 00 00>, then clock the reply out.
+ *
+ * We clock EIGHT bytes, not four. A Gowin register is 32 bits, so the second
+ * four are "extra" — and that is the point: if the FPGA is free-running a fixed
+ * 4-byte pattern instead of answering, the read shows it directly as
+ * <abcd abcd> rather than leaving us to infer it. Exp I established that every
+ * status number this project has recorded was such a pattern; four bytes cannot
+ * tell the two cases apart, eight can.
+ *
+ * CALLER MUST already be at /256 — SSPI reads are garbage at /2 (fpga.c:1564). */
+static void spi3_read_reg8(uint8_t opcode, volatile uint8_t *out8)
+{
+    spi3_xfer(0x00);                      /* bare clock, CS HIGH (frame) */
+    SPI3_CS_ASSERT();
+    spi3_xfer(opcode);
+    spi3_xfer(0x00); spi3_xfer(0x00); spi3_xfer(0x00);
+    for (unsigned i = 0; i < 8; i++)
+        out8[i] = spi3_xfer(0x00);
+    SPI3_CS_DEASSERT();
+}
+
+/* Slide a 32-bit window across all 33 bit alignments of the 64-bit reply and
+ * look for the known IDCODE 0x0120681B (GW1N-2 family; independently confirmed
+ * in the Gowin .fs preamble at file offset 0x4AD19).
+ *
+ * The bit-offset search is deliberate, not defensive. Every measurement artifact
+ * this project has hit — garbage reads at /2, floating MISO, the SWD script's
+ * byte rotation — manifests as a PHASE SHIFT of otherwise-correct data. An
+ * exact-match test would report "IDCODE absent" when the IDCODE is present but
+ * misaligned, which is precisely the mistake that kept 0x8001C810 alive for six
+ * weeks. Returns the offset (0..32), or -1 if the IDCODE is genuinely not there. */
+static int8_t spi3_find_idcode(const volatile uint8_t *b8)
+{
+    uint64_t w = 0;
+    for (unsigned i = 0; i < 8; i++)
+        w = (w << 8) | b8[i];
+    for (unsigned s = 0; s <= 32; s++) {
+        if ((uint32_t)((w >> (32 - s)) & 0xFFFFFFFFu) == 0x0120681Bu)
+            return (int8_t)s;
+    }
+    return -1;
+}
+
+/* Assemble the 8-byte reply and take the 32-bit window at bit offset s. */
+static uint32_t spi3_win32(const volatile uint8_t *b8, int8_t s)
+{
+    uint64_t w = 0;
+    for (unsigned i = 0; i < 8; i++)
+        w = (w << 8) | b8[i];
+    return (uint32_t)((w >> (32 - s)) & 0xFFFFFFFFu);
+}
+
+/* One checkpoint of the step-resolved trace: anchor on the IDCODE, then read
+ * STATUS through the same alignment. Both at /256; the command clock is restored
+ * on the way out so the sequence continues exactly as it would have.
+ *
+ * If the anchor fails the STATUS value is DISCARDED and 0xFFFFFFFF is stored.
+ * Keeping an unvalidated number here would reintroduce the exact failure mode
+ * that produced "80 01 C8 10 = READY POR" and survived six weeks on it.
+ *
+ * MUST be called only at a CS-frame boundary — it opens its own frames. */
+static void cfg_trace_capture(const fpga_cfg_seq_opts_t *opt, unsigned idx)
+{
+    if (!opt->cfg_trace || idx >= FPGA_CFG_TRACE_N)
+        return;
+
+    volatile uint8_t idb[8], stb[8];
+
+    spi3_set_br(7);                       /* /256 — the only valid read clock */
+    spi3_read_reg8(0x11, idb);
+    int8_t off = spi3_find_idcode(idb);
+    spi3_read_reg8(0x41, stb);
+    spi3_set_br(opt->cmd_br);
+
+    fpga.cfg_trace_anchor[idx] = off;
+    fpga.cfg_trace[idx] = (off >= 0) ? spi3_win32(stb, off) : 0xFFFFFFFFu;
+}
+
+#if FPGA_PIN_SWEEP_BUILD
+/* ═══════════════════════════════════════════════════════════════════
+ * RECONFIG_N candidate pin sweep
+ *
+ * Exp N: no config command moves the STATUS register, while every read command
+ * answers correctly — the documented behaviour of a running auto-booted GW1N
+ * that will not accept configuration until RECONFIG_N is pulsed or the part is
+ * power-cycled. This searches for that pin.
+ *
+ * CANDIDATE SELECTION — conservative, and the reasoning matters more than the
+ * list. Driving a pin something else is already driving is contention, and this
+ * is the only bench unit. So the table contains ONLY pins that stock itself
+ * configures as outputs before the FPGA handshake (per
+ * stock_pre_fpga_gpio_state.md), which proves the MCU owns them.
+ *
+ * Deliberately excluded, with cause:
+ *   PC9              power hold — driving it low kills the device instantly
+ *   PC8, PC13        passive button inputs (stock pulls them up)
+ *   PB3/PB4/PB5/PB6  SPI3 — the bus under test
+ *   PA13/PA14        SWD
+ *   PA2/PA3          USART2
+ *   PA4/PA5          DAC analog outputs (siggen)
+ *   PB8              LCD backlight — safe, but its function is known and
+ *                    pulsing it just flickers the screen
+ *   PD*, PE7-PE15    EXMC/LCD bus
+ *
+ * Note the frontend bank (PC12, PE4/5/6, PA15, PA10, PB10) is included even
+ * though Exp C refuted it: Exp C ablated stock's static POSTURE, whereas this
+ * pulses the pin. Exp E is likewise blind to transitions. Different test.
+ * PC2 and PB12 are included to redo Exp G, which "refuted" them while watching
+ * a status value we now know was unreadable.
+ * ═══════════════════════════════════════════════════════════════════ */
+typedef struct {
+    gpio_type  *port;
+    uint8_t     pin;
+    const char *name;
+} sweep_cand_t;
+
+/* SWEEP v2 CANDIDATES — chosen by the Exp P static scan, not a priori.
+ *
+ * Exp P resolved every GPIO level write in stock up to CONFIG_ENABLE and paired
+ * them by pin mask. These are the pins stock drives BOTH low and high, i.e. the
+ * only ones that are pulse-shaped at all:
+ *
+ *   PA15 PB10 PB11 PC1 PC2 PC4 PC9 PC11 PD12 PE4 PE5 PE6   (+ PD13, LOW only)
+ *
+ * PC9 is power hold and is excluded — driving it low kills the device.
+ *
+ * Versus Exp O this ADDS PC1, PC4, PD12 and DROPS twelve pins (PA6, PA10, PB0,
+ * PB7, PB9, PB12, PC5, PC6, PC10, PC12, PE2, PE3) that stock never drives LOW at
+ * all, so they were never pulse candidates.
+ *
+ *   PC1  — entirely new; in no pinout doc, never previously considered
+ *   PC4  — hunted 2026-06 (3c53e53, "negative") but under the unreadable-status
+ *          regime, so it has never had a valid test
+ *   PD12 — strap_pd1213 tested it as a HELD level; a pulse is a different test
+ *          (Exp E is blind to transitions by construction)
+ *
+ * All are pins stock itself drives, so the MCU owns them: no contention. */
+static const sweep_cand_t sweep_cands[] = {
+    /* Newly surfaced by Exp P — the reason this build exists */
+    { GPIOC,  1, "PC1"  },
+    { GPIOC,  4, "PC4"  },
+    { GPIOD, 12, "PD12" },
+    { GPIOD, 13, "PD13" },   /* driven LOW by stock; HIGH not paired, included anyway */
+    /* Pulse-shaped and already refuted at +1ms — retested with transient sampling */
+    { GPIOC,  2, "PC2"  },
+    { GPIOC, 11, "PC11" },
+    { GPIOB, 11, "PB11" },
+    { GPIOB, 10, "PB10" },
+    { GPIOA, 15, "PA15" },
+    { GPIOE,  4, "PE4"  },
+    { GPIOE,  5, "PE5"  },
+    { GPIOE,  6, "PE6"  },
+};
+#define SWEEP_N ((uint8_t)(sizeof(sweep_cands) / sizeof(sweep_cands[0])))
+
+const char *fpga_sweep_pin_name(uint8_t idx)
+{
+    return (idx < SWEEP_N) ? sweep_cands[idx].name : "--";
+}
+
+/* Anchored STATUS read at /256. Returns 0xFFFFFFFF if the IDCODE anchor fails,
+ * so an unvalidated value is never mistaken for a measurement. */
+static uint32_t sweep_read_status(void)
+{
+    volatile uint8_t idb[8], stb[8];
+
+    spi3_set_br(7);
+    spi3_read_reg8(0x11, idb);
+    int8_t off = spi3_find_idcode(idb);
+    spi3_read_reg8(0x41, stb);
+    spi3_set_br(0);
+
+    return (off >= 0) ? spi3_win32(stb, off) : 0xFFFFFFFFu;
+}
+
+void fpga_reconfig_pin_sweep(void)
+{
+    if (fpga.sweep_state == 1)
+        return;                       /* already running — never re-enter */
+
+    fpga.sweep_state       = 1;
+    fpga.sweep_total       = SWEEP_N;
+    fpga.sweep_tested      = 0;
+    fpga.sweep_hits        = 0;
+    fpga.sweep_anchor_fail = 0;
+    fpga.sweep_first_hit   = 0xFF;
+    fpga.sweep_hit_status  = 0;
+    fpga.sweep_hit_phase   = 0;
+
+    int sched_running = (xTaskGetSchedulerState() == taskSCHEDULER_RUNNING);
+    if (sched_running && acq_task_handle) vTaskSuspend(acq_task_handle);
+
+    fpga.sweep_baseline = sweep_read_status();
+
+    for (uint8_t i = 0; i < SWEEP_N; i++) {
+        gpio_type *port = sweep_cands[i].port;
+        uint8_t    pin  = sweep_cands[i].pin;
+        uint32_t   mask = (1u << pin);
+
+        wdt_counter_reload();
+
+        /* Save the pin's 4-bit CNF/MODE field and its output latch, so the pin
+         * is left exactly as found whether or not it turns out to be a hit. */
+        volatile uint32_t *cfg = (pin < 8) ? &port->cfglr : &port->cfghr;
+        uint32_t shift    = (uint32_t)(pin & 7u) * 4u;
+        uint32_t saved    = *cfg;
+        uint32_t saved_od = port->odt & mask;
+
+        /* Drive it: output push-pull, 50MHz. */
+        *cfg = (saved & ~(0xFu << shift)) | (0x3u << shift);
+
+        port->clr = mask;                 /* LOW  — the RECONFIG_N assertion */
+        fpga_scope_delay_ms(10);          /* spec needs >=25ns; 10ms is generous */
+        port->scr = mask;                 /* HIGH — release */
+        fpga_scope_delay_ms(1);
+
+        /* PHASE 1 — watch the pulse alone. Exp O's blind spot: it sampled ONCE at
+         * a fixed +1ms. If pulsing the real RECONFIG_N makes the part reload its
+         * design from NV flash, that is a TRANSIENT — the status moves and then
+         * settles, plausibly back to something indistinguishable from baseline by
+         * the time a single late snapshot lands. Sample across the window instead
+         * and flag ANY deviation at ANY point. */
+        uint8_t  phase = 0;
+        uint32_t hit   = 0;
+        uint8_t  afail = 0;
+
+        for (unsigned k = 0; k < 12 && !phase; k++) {
+            uint32_t st = sweep_read_status();
+            if (st == 0xFFFFFFFFu)            afail = 1;
+            else if (st != fpga.sweep_baseline) { phase = 1; hit = st; }
+            fpga_scope_delay_ms(10);
+        }
+
+        /* PHASE 2 — did the pulse make CONFIG_ENABLE land? */
+        if (!phase) {
+            SPI3_CS_ASSERT();
+            spi3_xfer(0x15);
+            spi3_xfer(0x00);
+            SPI3_CS_DEASSERT();
+
+            for (unsigned k = 0; k < 12 && !phase; k++) {
+                uint32_t st = sweep_read_status();
+                if (st == 0xFFFFFFFFu)            afail = 1;
+                else if (st != fpga.sweep_baseline) { phase = 2; hit = st; }
+                fpga_scope_delay_ms(10);
+            }
+        }
+
+        /* Restore before evaluating, so an early exit can never leave a pin driven. */
+        *cfg = saved;
+        if (saved_od) port->scr = mask; else port->clr = mask;
+
+        if (phase) {
+            if (fpga.sweep_first_hit == 0xFF) {
+                fpga.sweep_first_hit  = i;
+                fpga.sweep_hit_status = hit;
+                fpga.sweep_hit_phase  = phase;
+            }
+            fpga.sweep_hits++;
+        } else if (afail) {
+            /* Anchor failed at some point and never produced a valid deviation.
+             * Not a hit — but not nothing either: a pin that CLOSES the config
+             * port would look exactly like this (Exp L). */
+            fpga.sweep_anchor_fail++;
+        }
+        fpga.sweep_tested = i + 1;
+    }
+
+    if (sched_running && acq_task_handle) vTaskResume(acq_task_handle);
+    fpga.sweep_state = 2;
+}
+#endif /* FPGA_PIN_SWEEP_BUILD */
+
 uint8_t fpga_spi3_config_sequence(const fpga_cfg_seq_opts_t *opt)
 {
     gpio_init_type gpio_cfg;
     gpio_default_para_init(&gpio_cfg);
+
+    /* -1 = "IDCODE not found". Must be set explicitly: fpga is zero-initialised,
+     * and 0 is a VALID bit offset (perfectly aligned), so leaving these at 0
+     * would report a successful match on a probe that never ran. */
+    fpga.probe_id_bit       = -1;
+    fpga.probe_id_bit_post  = -1;
+    fpga.probe_id_bit_close = -1;
+    for (unsigned i = 0; i < FPGA_CFG_TRACE_N; i++) {
+        fpga.cfg_trace[i]        = 0xFFFFFFFFu;  /* "not measured", same as anchor-fail */
+        fpga.cfg_trace_anchor[i] = -1;
+    }
 
     /* Keep the acquisition task off the SPI3 bus during the handshake.
      * No-op pre-RTOS; essential when replayed live via `fpga reinit`. */
@@ -1551,6 +1957,47 @@ uint8_t fpga_spi3_config_sequence(const fpga_cfg_seq_opts_t *opt)
      * function exit. */
     spi3_set_br(opt->cmd_br);
 
+    /* [0-] Exp J (probe_idcode): ANCHORED opcode-discrimination probe, run on a
+     * pristine bus BEFORE the prelude — the FPGA is running its NV design and we
+     * have not yet touched it.
+     *
+     * This is the first test in the investigation with a known correct answer.
+     * Read four opcodes at /256: 0x11 READ_IDCODE (answer: 0x0120681B),
+     * 0x13 USERCODE, 0x41 STATUS, and 0x00 no-op as the control.
+     *
+     *   IDCODE found, and 0x11 != 0x00  => the FPGA DOES decode SSPI opcodes.
+     *                                      The 2026-06-13 "not in config-receive
+     *                                      mode" conclusion — the one that sent
+     *                                      this project toward JTAG — collapses.
+     *   all four identical, repeating   => the FPGA free-runs a fixed pattern and
+     *                                      ignores MOSI. June's conclusion finally
+     *                                      rests on a valid measurement, and the
+     *                                      FT232H JTAG route is the answer.
+     *
+     * Note this ADDS CS frames ahead of the config attempt, so it is off by
+     * default; a stock-faithful run must leave probe_idcode = 0. */
+    if (opt->probe_idcode) {
+        spi3_set_br(7);                      /* /256 — the only valid read clock */
+        spi3_read_reg8(0x11, fpga.probe_idcode);
+        spi3_read_reg8(0x00, fpga.probe_noop);
+        spi3_read_reg8(0x41, fpga.probe_status);
+        spi3_read_reg8(0x13, fpga.probe_user);
+
+        fpga.probe_id_bit = spi3_find_idcode(fpga.probe_idcode);
+
+        uint8_t same = 1;
+        for (unsigned i = 0; i < 8; i++)
+            if (fpga.probe_idcode[i] != fpga.probe_noop[i]) { same = 0; break; }
+        fpga.probe_all_same = same;
+
+        uint8_t rep = 1;
+        for (unsigned i = 0; i < 4; i++)
+            if (fpga.probe_idcode[i] != fpga.probe_idcode[i + 4]) { rep = 0; break; }
+        fpga.probe_repeats = rep;
+
+        spi3_set_br(opt->cmd_br);
+    }
+
     /* [0a] DIAGNOSTIC (reload_3c): Gowin SSPI RELOAD (0x3C) — software reconfig
      * trigger, sent at /256 in its own CS frame before the prelude, with a settle
      * delay. Tests whether it knocks the running NV design back toward config
@@ -1574,6 +2021,8 @@ uint8_t fpga_spi3_config_sequence(const fpga_cfg_seq_opts_t *opt)
     SPI3_CS_DEASSERT();
     fpga_scope_delay_ms(opt->prelude_gap_ms);   /* stock waits ~100ms → 0x05 */
 
+    cfg_trace_capture(opt, 0);   /* T0: pristine, before any config command */
+
     /* [1-3] CONFIG_ENABLE prelude — 05 00 / 12 00 / 15 00.
      * Framing per opt->prelude_frame_mode (sweep knob; 0 = stock-faithful):
      *   0 split    : CS↓05 00↑ | CS↓12 00↑ | CS↓15 00↑   (then 3B in its own frame)
@@ -1595,6 +2044,7 @@ uint8_t fpga_spi3_config_sequence(const fpga_cfg_seq_opts_t *opt)
         fpga.init_hs[1] = spi3_xfer(0x05);
         fpga.init_hs[2] = spi3_xfer(0x00);
         SPI3_CS_DEASSERT();
+        cfg_trace_capture(opt, 1);   /* T1: after ERASE_SRAM */
         fpga_scope_delay_ms(opt->prelude_gap_ms);
 
         /* [2] 12 00 */
@@ -1602,13 +2052,27 @@ uint8_t fpga_spi3_config_sequence(const fpga_cfg_seq_opts_t *opt)
         fpga.init_hs[4] = spi3_xfer(0x12);
         fpga.init_hs[5] = spi3_xfer(0x00);
         SPI3_CS_DEASSERT();
+        cfg_trace_capture(opt, 2);   /* T2: after INIT_ADDR */
         fpga_scope_delay_ms(opt->prelude_gap_ms);
 
         /* [3] 15 00 — own frame (mode 0) or held LOW into the upload (mode 2) */
         SPI3_CS_ASSERT();
+#if FPGA_SPIN_AT_CONFIG_ENABLE
+        /* Experiment E (2026-07-27): park forever with the bus in EXACTLY the
+         * state stock has at flash 0x0802DA42 — prelude 05/12 already sent, CS
+         * LOW, 0x15 not yet clocked — so SWD can dump the full peripheral state
+         * and diff it against the stock spin image (which has `b .` patched in
+         * at that same instruction). Feed the IWDG in the loop: our firmware
+         * starts it late, but it survives a soft reset from a previous boot and
+         * must not reset us mid-dump. */
+        for (;;) { wdt_counter_reload(); }
+#endif
         fpga.init_hs[7] = spi3_xfer(0x15);
         fpga.init_hs[8] = spi3_xfer(0x00);
-        if (opt->prelude_frame_mode != 2) SPI3_CS_DEASSERT();
+        if (opt->prelude_frame_mode != 2) {
+            SPI3_CS_DEASSERT();
+            cfg_trace_capture(opt, 3);   /* T3: after CONFIG_ENABLE */
+        }
     }
 
     /* [3b] DIAGNOSTIC (probe_edit): read STATUS(0x41) at /256 IMMEDIATELY after
@@ -1625,6 +2089,18 @@ uint8_t fpga_spi3_config_sequence(const fpga_cfg_seq_opts_t *opt)
             fpga.edit_mode_status[i] = spi3_xfer(0x00);
         SPI3_CS_DEASSERT();
         spi3_set_br(opt->cmd_br);        /* restore command clock */
+    }
+
+    /* [3c] Exp J, second half: read IDCODE again AFTER CONFIG_ENABLE. The
+     * pre-prelude probe asks "does the FPGA answer at all?"; this asks "did 0x15
+     * change that?" A part that ignores 0x11 before but answers it after would
+     * mean CONFIG_ENABLE is landing and only the upload is broken — the opposite
+     * of the current working theory, and worth one CS frame to rule out. */
+    if (opt->probe_idcode && opt->prelude_frame_mode != 2) {
+        spi3_set_br(7);                  /* /256 */
+        spi3_read_reg8(0x11, fpga.probe_idcode_post);
+        fpga.probe_id_bit_post = spi3_find_idcode(fpga.probe_idcode_post);
+        spi3_set_br(opt->cmd_br);
     }
 
     /* Optional digest gap between CONFIG_ENABLE and the data stream (stock ~8µs
@@ -1648,12 +2124,14 @@ uint8_t fpga_spi3_config_sequence(const fpga_cfg_seq_opts_t *opt)
     SPI3_CS_DEASSERT();
     fpga.h2_bytes_sent = FPGA_H2_CAL_TABLE_SIZE;
     fpga.h2_upload_done = 1;
+    cfg_trace_capture(opt, 4);   /* T4: full bitstream sent, before the 3A close */
 
     /* [5] 3A 00 — close/commit in its own CS-LOW frame. Stock → 0xF8. */
     SPI3_CS_ASSERT();
     spi3_xfer(0x3A);
     fpga.h2_close_status = spi3_xfer(0x00);
     SPI3_CS_DEASSERT();
+    cfg_trace_capture(opt, 5);   /* T5: after CONFIG_DISABLE / close */
 
     /* [6] single 0x00 byte, CS LOW (stock flush frame at t=4.4484). */
     SPI3_CS_ASSERT();
@@ -1666,7 +2144,40 @@ uint8_t fpga_spi3_config_sequence(const fpga_cfg_seq_opts_t *opt)
      * opcode 0x41 + 3 pad bytes, then clock 4 bytes back. Decoded by the shell.
      * All-0xFF = FPGA not driving MISO (never entered config-receive) → config-
      * entry wall; CRC_ERROR/ID_VERIFY_FAILED set = bytes reached the engine →
-     * wire/content problem. See sibling_loader_config_diff.md. */
+     * wire/content problem. See sibling_loader_config_diff.md.
+     *
+     * CLOCK: forced to /256 here, NOT opt->cmd_br. SSPI reads are only valid at
+     * a slow clock (fpga.c:1564); at /2 the MISO data arrives after the sampling
+     * edge and we latch the PREVIOUS bit. That is not hypothetical — it is what
+     * this very read has been doing since it was added. Every historical value
+     * of this register ("stable 80 01 C8 10 across repeats", decoded as
+     * "READY POR" in sibling_loader_config_diff.md:85-86) was taken at /2, and
+     * 0x8001C810 is bit-for-bit 0x00039020 sampled one bit early:
+     *
+     *   0x00039020 = 0000 0000 0000 0011 1001 0000 0010 0000
+     *   prepend the trailing 1 of the preceding word, shift right one:
+     *              = 1000 0000 0000 0001 1100 1000 0001 0000 = 0x8001C810
+     *
+     * 0x8001C810 sets bits 4/11/31, which are not defined bits in the Gowin map
+     * at all — the giveaway that it was never a real register value. Same bug
+     * family as the /2 status reads and the floating-MISO reads. */
+    spi3_set_br(7);                           /* /256 — the only valid SSPI read clock */
+
+    /* ANCHOR FIRST. Read the IDCODE in the same window and at the same clock as
+     * the status below, so cfg_status_reg is only believed on a read path proven
+     * against a known answer (0x0120681B). This runs on every build, not just the
+     * probe build: an unanchored status read is precisely what produced
+     * "80 01 C8 10 = READY POR" and kept it alive for six weeks.
+     *
+     * It doubles as the configured/not-configured test. Exp L (2026-07-28): once
+     * stock has configured the FPGA, the SSPI config port CLOSES and 0x11 returns
+     * zeros, because the port then belongs to the user design carrying ADC data.
+     * So an IDCODE that still answers HERE — after our full 115,638-byte upload
+     * and the 0x3A close — means the config port never closed and we are
+     * definitively not configured. */
+    spi3_read_reg8(0x11, fpga.probe_idcode_close);
+    fpga.probe_id_bit_close = spi3_find_idcode(fpga.probe_idcode_close);
+
     spi3_xfer(0x00);                          /* bare clock, CS HIGH (frame) */
     SPI3_CS_ASSERT();
     spi3_xfer(0x41);
@@ -1674,6 +2185,7 @@ uint8_t fpga_spi3_config_sequence(const fpga_cfg_seq_opts_t *opt)
     for (unsigned i = 0; i < 4; i++)
         fpga.cfg_status_reg[i] = spi3_xfer(0x00);
     SPI3_CS_DEASSERT();
+    spi3_set_br(opt->cmd_br);                 /* restore the command clock */
 
     /* Step 7c: post-upload scope config (5 register writes + status read). */
     fpga_scope_delay_ms(opt->post_close_ms);
@@ -1891,11 +2403,21 @@ void fpga_init(void)
     gpio_cfg.gpio_drive_strength = GPIO_DRIVE_STRENGTH_STRONGER;
     gpio_init(GPIOB, &gpio_cfg);
 
-    /* PB4 = SPI3_MISO: Input floating */
+    /* PB4 = SPI3_MISO.
+     * Exp E (2026-07-28) measured stock as input PULL-UP here (GPIOB CRL pin4
+     * nibble 8 = CNF 10, with ODR bit4 set) while ours was input FLOATING
+     * (nibble 4 = CNF 01). Stock's pull-up is exactly why an undriven MISO
+     * reads 0xFF in the issue-#18 capture; a floating input has no defined
+     * idle level, which makes every status byte we sample suspect. */
     gpio_cfg.gpio_pins = GPIO_PINS_4;
     gpio_cfg.gpio_mode = GPIO_MODE_INPUT;
+#if FPGA_STOCK_FIDELITY
+    gpio_cfg.gpio_pull = GPIO_PULL_UP;
+#else
     gpio_cfg.gpio_pull = GPIO_PULL_NONE;
+#endif
     gpio_init(GPIOB, &gpio_cfg);
+    gpio_cfg.gpio_pull = GPIO_PULL_NONE;   /* restore shared struct default */
 
     /* PB5 = SPI3_MOSI: AF push-pull, 50MHz */
     gpio_cfg.gpio_pins = GPIO_PINS_5;
@@ -1921,6 +2443,42 @@ void fpga_init(void)
     gpio_cfg.gpio_drive_strength = GPIO_DRIVE_STRENGTH_STRONGER;
     gpio_init(GPIOC, &gpio_cfg);
     GPIOC->scr = PC6_MASK;  /* PC6 HIGH — FPGA SPI enable (match stock) */
+
+#if FPGA_STOCK_FIDELITY
+    /* Experiment F: the two pins stock drives that Exp C never covered.
+     * At the CONFIG_ENABLE instant the Exp E dump measured stock as
+     *   PC2  : GPIOC CRL nibble 1 (output push-pull 10MHz), ODR bit2  = 1 -> HIGH
+     *   PB12 : GPIOB CRH nibble 1 (output push-pull 10MHz), ODR bit12 = 1 -> HIGH
+     * and our firmware as floating input (nibble 4) on both. The Exp C ablation
+     * covered only the analog-frontend bank (PC12/PE4/PE5/PE6/PA15/PA10/PB10),
+     * so neither of these is refuted. PB12 is plausibly SPI2 NSS = SPI-flash CS
+     * (stock enables SPI2 and drives PB13/14/15 AF-PP) and therefore probably
+     * benign, but that is unproven and it costs nothing to match. */
+    gpio_cfg.gpio_mode = GPIO_MODE_OUTPUT;
+    gpio_cfg.gpio_out_type = GPIO_OUTPUT_PUSH_PULL;
+    gpio_cfg.gpio_drive_strength = GPIO_DRIVE_STRENGTH_STRONGER;
+
+    gpio_cfg.gpio_pins = GPIO_PINS_2;
+    gpio_init(GPIOC, &gpio_cfg);
+    GPIOC->scr = (1U << 2);    /* PC2 HIGH */
+
+    gpio_cfg.gpio_pins = GPIO_PINS_12;
+    gpio_init(GPIOB, &gpio_cfg);
+    GPIOB->scr = (1U << 12);   /* PB12 HIGH */
+
+#if FPGA_FIDELITY_DRIVE_PB9
+    /* Stock has PB9 AF push-pull; level unknown (AF output is not in ODR).
+     * Driving it HIGH as GPIO is a guess — sweep knob only. */
+    gpio_cfg.gpio_pins = GPIO_PINS_9;
+    gpio_init(GPIOB, &gpio_cfg);
+    GPIOB->scr = (1U << 9);
+#endif
+
+    /* Stock sets APB1EN bit14 (SPI2) before the config sequence; we never did.
+     * The peripheral itself is unused by us — this only matches the clock-gate
+     * state so the enumerable diff closes to zero. */
+    crm_periph_clock_enable(CRM_SPI2_PERIPH_CLOCK, TRUE);
+#endif  /* FPGA_STOCK_FIDELITY */
 
     /* PB11 = FPGA active mode — DO NOT configure as output yet!
      *
@@ -2032,7 +2590,17 @@ void fpga_init(void)
      * handshake now lives in fpga_spi3_config_sequence() so the debug shell
      * (`fpga reinit`) can replay it on demand for fast iteration without a
      * reflash. Parameters let us sweep the variables under investigation. */
-#if FPGA_WARM_HANDOFF_TEST
+#if FPGA_BUS_RELEASED_BOOT
+    /* Boot-into-bus-released: hand SPI3 to an external master and stay off it.
+     * Do NOT run the MCU's SSPI config upload — leave the FPGA's config port
+     * pristine for an FT232H (JTAG TAP) or ESP32 (SSPI pads). fpga_bus_release()
+     * tri-states PB3/PB5/PB6, stages PC6/PB11 HIGH, keeps PC9 power-hold, and the
+     * acq task is gated off via fpga.bus_released. Mark init done and bail before
+     * the meter-frontend routing + meter USART traffic (keep the wire quiet). */
+    fpga.initialized = true;
+    fpga_bus_release();
+    return;
+#elif FPGA_WARM_HANDOFF_TEST
     /* Warm-handoff test: the FPGA was already configured (scope) by stock
      * before the no-power-loss handoff. Do NOT run the SSPI config sequence —
      * it would attempt a reconfig the running design ignores anyway, and we
@@ -2054,6 +2622,57 @@ void fpga_init(void)
         .prelude_gap_ms = 100,
         .post_close_ms  = 600,
         .arm_pb11       = 1,
+        /* 2026-07-27: the boot path had never set these two, so both took the
+         * zero default — and both defaults were wrong.
+         *
+         * cmd_br = 7 (/256): the SSPI READ path is clock-limited (this file,
+         * L1564: "IDCODE reads garbage at /2, clean at /256"). At the previous
+         * default of 0 (/2, 60MHz) every status read — 0x3A close, the 0x03
+         * scope status, and the 0x41 STATUS_REGISTER — was clocked in the known-
+         * garbage domain, which is exactly what the bench showed (CL=FF instead
+         * of stock's F8; SS/CFG returning rotations of a repeating 00 01 C8 10
+         * pattern). Only the bulk 0x3B payload uses upload_br, so this does not
+         * slow the 115KB upload.
+         *
+         * KNOWN TRADEOFF: stock clocks its prelude writes at /2, so /256 is a
+         * deliberate divergence on the WRITE side. It is currently the right
+         * call because stock never gates on the config status reply (it ignores
+         * it entirely) whereas we depend on reading it, and switching br mid-CS-
+         * frame would glitch the frame. Revisit if write timing is ever
+         * implicated. Bench-checked 2026-07-27: prelude at /256 changed nothing
+         * behaviourally, and turned CFG from 8001C810 into 00039020.
+         * CORRECTED 2026-07-28 (Exp I): 00039020 is NOT "the real value" — it is
+         * a bit-rotation of the free-running 0xC8100001 MISO pattern, just as
+         * 8001C810 was. /256 buys a different phase of the same stream, not a
+         * register read. See expE_swd_state_diff_2026-07-28.md § Experiment I.
+         *
+         * trailing_clocks: left at the stock-faithful 0. Gowin runs CRC-check /
+         * DONE / wakeup on CCLK cycles after the last config byte and
+         * rosenrot00's 2C23T loader clocks ~200 dummy bytes, so 256 was tried
+         * on the bench 2026-07-27 — it did NOT produce DONE (status unchanged at
+         * 00039020). Reverted rather than left as untested drift. */
+#if FPGA_STOCK_FIDELITY
+        /* Experiment F (2026-07-28): close the KNOWN TRADEOFF above. Exp E
+         * measured stock's SPI3 CTRL1 as 0x347 (BR=0, /2) at the CONFIG_ENABLE
+         * instant against our 0x37f (BR=7, /256), so the config frame now runs
+         * at stock's /2 — and we do NOT lose the readout, because probe_edit
+         * takes the 0x41 STATUS read at /256 in its own CS frame afterwards.
+         * That is the best of both: stock-faithful writes, valid reads. */
+        .cmd_br         = 0,
+        .probe_edit     = 1,
+        /* Experiment G: optional RECONFIG_N pulse on the candidate pin BEFORE
+         * the prelude (0/0 = no pulse = plain Exp F behaviour). */
+        .reset_port     = FPGA_FIDELITY_RECONFIG_PORT,
+        .reset_pin      = FPGA_FIDELITY_RECONFIG_PIN,
+        .reset_low_ms   = 10,
+#else
+        .cmd_br         = 7,
+#endif
+        /* Experiment J (2026-07-28): anchored opcode-discrimination probe.
+         * Off unless built with -DFPGA_IDCODE_PROBE=1 (`make guest-idcode`),
+         * since it adds CS frames before the config attempt. */
+        .probe_idcode   = FPGA_IDCODE_PROBE,
+        .cfg_trace      = FPGA_CFG_TRACE_BUILD,
     });
 #endif
 
@@ -2215,7 +2834,11 @@ QueueHandle_t fpga_create_tasks(void)
     spi3_acq_queue = xQueueCreate(15, sizeof(uint8_t));
     meter_sem      = xSemaphoreCreateBinary();
 
-#if FPGA_WARM_HANDOFF_TEST
+#if FPGA_BUS_RELEASED_BOOT
+    /* Bus-released boot: create NO auto-tasks — the MCU has handed SPI3 to an
+     * external master and must not drive the bus or send USART traffic. */
+    (void)tx_task_handle; (void)rx_task_handle; (void)acq_task_handle;
+#elif FPGA_WARM_HANDOFF_TEST
     /* Warm-handoff test: create NO auto-tasks. The acquisition task uses the
      * old 0x80|range read and would both disturb the FPGA and compete with the
      * manual `spi3 acqread` probe; the meter poll/USART tasks could switch the
@@ -2304,6 +2927,71 @@ void fpga_set_active(bool active)
         GPIOB->clr = PB11_MASK;   /* PB11 LOW */
     }
     fpga.spi3_active = active;
+}
+
+/* ═══════════════════════════════════════════════════════════════════
+ * SPI3 bus release — hand the bus to an external SSPI master (ESP32)
+ * ═══════════════════════════════════════════════════════════════════
+ *
+ * EXPERIMENTAL — UNTESTED ON HARDWARE (2026-06-14). See the experimental/
+ * esp32-bringup branch README (tools/esp32_sspi_bringup/).
+ *
+ * Purpose: make the MCU let go of the SPI3 lines (PB3 SCK, PB5 MOSI, PB6 CS)
+ * so an external 3.3 V SPI master soldered to the back-side SPI3 test pads
+ * (maksidze's #18 pad map) can drive the Gowin SSPI config interface itself —
+ * at a controlled slow clock — WITHOUT bus contention, and without the
+ * build → flash → pinhole-reset loop. The MCU keeps the board alive (PC9
+ * power hold is untouched) and stages the FPGA enables, then yields the bus.
+ *
+ * Why this lets the ESP32 win the bus:
+ *   - SPI3 is point-to-point (one master). Two masters driving SCK/MOSI/CS at
+ *     once = contention = garbage. So we MUST tri-state our driven lines.
+ *   - PB4 (MISO) is FPGA→MCU; it's already an input — the ESP32 also only
+ *     reads it, so no contention there. Left as-is.
+ *   - PB3 (SCK) and PB5 (MOSI) were AF push-pull outputs; PB6 (CS) was a GPIO
+ *     output. All three become floating inputs (true Hi-Z) here.
+ *
+ * Staging held for the FPGA (not on the ESP32's 4 pads, so the MCU owns them):
+ *   - PC6 = HIGH  (FPGA SPI enable)
+ *   - PB11 = HIGH (FPGA active mode)
+ *
+ * The acquisition task checks fpga.bus_released and stays off the bus while
+ * this is set (see fpga_acquisition_task). Re-flash to undo (no un-release
+ * command on purpose — the bench operator power-cycles or reflashes). */
+void fpga_bus_release(void)
+{
+    gpio_init_type gpio_cfg;
+
+    /* Latch the flag first so the acq task bails before re-touching SPI3. */
+    fpga.bus_released = true;
+    fpga.spi3_active = false;
+
+    /* Disable the SPI3 peripheral so it stops driving SCK/MOSI. */
+    FPGA_SPI->ctrl1 &= ~(1u << 6);   /* SPE = 0 */
+
+    /* Tri-state the MCU-driven SPI3 lines: PB3 (SCK), PB5 (MOSI), PB6 (CS).
+     * Floating input = Hi-Z, so the ESP32 owns these nets. */
+    gpio_default_para_init(&gpio_cfg);
+    gpio_cfg.gpio_mode = GPIO_MODE_INPUT;
+    gpio_cfg.gpio_pull = GPIO_PULL_NONE;
+    gpio_cfg.gpio_pins = GPIO_PINS_3 | GPIO_PINS_5 | GPIO_PINS_6;
+    gpio_init(GPIOB, &gpio_cfg);
+
+    /* PB4 (MISO) is already a floating input — leave it; both we and the
+     * ESP32 only ever read it, the FPGA drives it. */
+
+    /* Stage the FPGA enables the MCU still owns (not on the ESP32 pads). */
+    gpio_default_para_init(&gpio_cfg);
+    gpio_cfg.gpio_mode = GPIO_MODE_OUTPUT;
+    gpio_cfg.gpio_out_type = GPIO_OUTPUT_PUSH_PULL;
+    gpio_cfg.gpio_drive_strength = GPIO_DRIVE_STRENGTH_STRONGER;
+    gpio_cfg.gpio_pins = GPIO_PINS_11;          /* PB11 = active mode */
+    gpio_init(GPIOB, &gpio_cfg);
+    GPIOB->scr = PB11_MASK;                      /* PB11 HIGH */
+
+    gpio_cfg.gpio_pins = GPIO_PINS_6;            /* PC6 = SPI enable */
+    gpio_init(GPIOC, &gpio_cfg);
+    GPIOC->scr = PC6_MASK;                       /* PC6 HIGH */
 }
 
 void fpga_scope_reinit(void)

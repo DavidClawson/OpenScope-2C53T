@@ -1,0 +1,32 @@
+# SWD-driven FPGA status — label=stock  2026-07-28T21:51:01-06:00
+Open On-Chip Debugger 0.12.0
+Licensed under GNU GPL v2
+For bug reports, read
+	http://openocd.org/doc/doxygen/bugs.html
+Info : The selected transport took over low-level target control. The results might differ compared to plain JTAG/SWD
+none separate
+
+Info : clock speed 1000 kHz
+Info : STLINK V2J37S7 (API v2) VID:PID 0483:3748
+Info : Target voltage: 3.301002
+Info : [at32f403a.cpu] Cortex-M4 r0p1 processor detected
+Info : [at32f403a.cpu] target has 6 breakpoints, 4 watchpoints
+Info : starting gdb server for at32f403a.cpu on 3333
+Info : Listening on port 3333 for gdb connections
+[at32f403a.cpu] halted due to debug-request, current mode: Handler HardFault
+xPSR: 0x81000003 pc: 0xfffffffe msp: 0x20036e80
+=== park verification (peripherals, not pc) ===
+SPI3 CTRL1 = 0x00000347   SPE=1  BR=0
+GPIOB ODR  = 0x00001910   PB6/CS=0 (0=asserted)  PB11=1
+
+=== STATUS before CONFIG_ENABLE (read at /256) ===
+BEFORE:        00 03 90 20   = 0x00039020   EDIT_MODE(bit7 of b0) = 0
+
+=== sending CONFIG_ENABLE (15 00) at /2, as stock would ===
+
+=== STATUS after CONFIG_ENABLE (read at /256) ===
+AFTER:         90 20 00 03   = 0x90200003   EDIT_MODE(bit7 of b0) = 1
+
+>>> CHANGED 0x00039020 -> 0x90200003
+>>> EDIT_MODE ENGAGED — config entry succeeded.
+shutdown command invoked

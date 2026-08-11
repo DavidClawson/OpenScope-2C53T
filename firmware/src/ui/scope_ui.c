@@ -801,12 +801,159 @@ static void draw_scope_debug(const theme_t *th)
 
     char buf[64];
 
+#if defined(FPGA_PIN_SWEEP_BUILD) && FPGA_PIN_SWEEP_BUILD
+    /* ── RECONFIG_N pin sweep results ───────────────────────────────────────
+     * Press SAVE in scope mode to run it. Read HIT first: it is the only line
+     * that can say "we found something".
+     *   HIT:-- H:0 AF:0  -> every candidate pulsed, nothing moved the STATUS
+     *                       register. No MCU-owned pin stock drives is RECONFIG_N.
+     *   HIT:PCn          -> that pin changed the status after CONFIG_ENABLE.
+     *   AF non-zero      -> that many candidates failed the IDCODE anchor and
+     *                       were DISCARDED, not counted as hits. Worth a look
+     *                       anyway: a pin that CLOSES the config port would also
+     *                       land here (Exp L behaviour). */
+    {
+        const char *st = (fpga.sweep_state == 0) ? "IDLE" :
+                         (fpga.sweep_state == 1) ? "RUN"  : "DONE";
+        snprintf(buf, sizeof(buf), "SWEEP:%s %u/%u", st,
+                 (unsigned)fpga.sweep_tested, (unsigned)fpga.sweep_total);
+        font_draw_string(2, SCOPE_DBG_Y + 2, buf, 0x07E0, 0x0000, &font_small);
+
+        snprintf(buf, sizeof(buf), "BASE:%08lX",
+                 (unsigned long)fpga.sweep_baseline);
+        font_draw_string(2, SCOPE_DBG_Y + 15, buf, 0x07FF, 0x0000, &font_small);
+
+        /* PH distinguishes two very different findings, which Exp O's single
+         * snapshot could not tell apart:
+         *   P = the PULSE ALONE moved the status — the pin triggered something
+         *       on its own, which is what a real RECONFIG_N does (reload from NV).
+         *   C = the status only moved after CONFIG_ENABLE — the pulse made 0x15
+         *       land, i.e. it unlocked config entry. This is the jackpot. */
+        const char *ph = (fpga.sweep_hit_phase == 1) ? "P" :
+                         (fpga.sweep_hit_phase == 2) ? "C" : "-";
+        snprintf(buf, sizeof(buf), "HIT:%s/%s %08lX",
+                 fpga_sweep_pin_name(fpga.sweep_first_hit), ph,
+                 (unsigned long)fpga.sweep_hit_status);
+        font_draw_string(2, SCOPE_DBG_Y + 28, buf, 0xFFE0, 0x0000, &font_small);
+
+        snprintf(buf, sizeof(buf), "H:%u AF:%u  press SAVE",
+                 (unsigned)fpga.sweep_hits, (unsigned)fpga.sweep_anchor_fail);
+        font_draw_string(2, SCOPE_DBG_Y + 41, buf, 0xF81F, 0x0000, &font_small);
+    }
+    return;
+#endif
+
+#if defined(FPGA_CFG_TRACE_BUILD) && FPGA_CFG_TRACE_BUILD
+    /* ── Step-resolved anchored status trace ────────────────────────────────
+     * Six checkpoints through the config sequence, each anchored on the IDCODE.
+     * Checked in this order before drawing any conclusion:
+     *
+     *   A: line     the anchor at each checkpoint. '0' = IDCODE found aligned,
+     *               'x' = anchor FAILED and that Tn is NOT a measurement. An 'x'
+     *               appearing partway through is itself the finding: the config
+     *               port closed at that step (Exp L behaviour).
+     *   T0..T5      anchor-corrected STATUS. FFFFFFFF means "not measured".
+     *
+     * All six identical => the part ignores every config command while still
+     * answering reads. Any step where it MOVES is where the sequence first has
+     * an effect, and is where to aim next. */
+    {
+        snprintf(buf, sizeof(buf), "T0:%08lX T1:%08lX",
+                 (unsigned long)fpga.cfg_trace[0], (unsigned long)fpga.cfg_trace[1]);
+        font_draw_string(2, SCOPE_DBG_Y + 2, buf, 0x07E0, 0x0000, &font_small);
+
+        snprintf(buf, sizeof(buf), "T2:%08lX T3:%08lX",
+                 (unsigned long)fpga.cfg_trace[2], (unsigned long)fpga.cfg_trace[3]);
+        font_draw_string(2, SCOPE_DBG_Y + 15, buf, 0x07FF, 0x0000, &font_small);
+
+        snprintf(buf, sizeof(buf), "T4:%08lX T5:%08lX",
+                 (unsigned long)fpga.cfg_trace[4], (unsigned long)fpga.cfg_trace[5]);
+        font_draw_string(2, SCOPE_DBG_Y + 28, buf, 0xFFE0, 0x0000, &font_small);
+
+        char a[FPGA_CFG_TRACE_N + 1];
+        for (unsigned i = 0; i < FPGA_CFG_TRACE_N; i++) {
+            int8_t o = fpga.cfg_trace_anchor[i];
+            a[i] = (o < 0) ? 'x' : (char)('0' + (o % 10));
+        }
+        a[FPGA_CFG_TRACE_N] = '\0';
+        /* MV = the count of checkpoints whose status differs from T0. 0 means the
+         * register never moved anywhere in the sequence. */
+        unsigned moved = 0;
+        for (unsigned i = 1; i < FPGA_CFG_TRACE_N; i++)
+            if (fpga.cfg_trace[i] != fpga.cfg_trace[0]) moved++;
+        snprintf(buf, sizeof(buf), "A:%s MV:%u H2:%c", a, moved,
+                 fpga.h2_upload_done ? 'Y' : 'N');
+        font_draw_string(2, SCOPE_DBG_Y + 41, buf, 0xF81F, 0x0000, &font_small);
+    }
+    return;
+#endif
+
+#if defined(FPGA_IDCODE_PROBE) && FPGA_IDCODE_PROBE
+    /* ── Experiment J overlay: the anchored opcode-discrimination probe ──────
+     * Replaces the normal overlay entirely for this build. Four opcodes read at
+     * /256 on a pristine bus before the prelude, 8 bytes each.
+     *
+     * READ IT LIKE THIS:
+     *   ID / NP identical, and each showing a repeated 4-byte group
+     *     => the FPGA free-runs a fixed pattern and ignores MOSI. Confirms the
+     *        2026-06-13 conclusion on a valid measurement for the first time;
+     *        SSPI cannot reach the config engine and JTAG is the route.
+     *   ID differs from NP, ID@ >= 0
+     *     => the FPGA DOES decode SSPI opcodes. The "not in config-receive mode"
+     *        conclusion collapses and the config-entry search reopens.
+     *   ID@ >= 0 but not 0
+     *     => IDCODE present but phase-shifted by that many bits; the reply is
+     *        real and our sampling alignment is off (see Exp I).
+     */
+    {
+        const volatile uint8_t *p;
+
+        p = fpga.probe_idcode;
+        snprintf(buf, sizeof(buf), "ID:%02X%02X%02X%02X %02X%02X%02X%02X",
+                 p[0], p[1], p[2], p[3], p[4], p[5], p[6], p[7]);
+        font_draw_string(2, SCOPE_DBG_Y + 2, buf, 0x07E0, 0x0000, &font_small);
+
+        p = fpga.probe_noop;
+        snprintf(buf, sizeof(buf), "NP:%02X%02X%02X%02X %02X%02X%02X%02X",
+                 p[0], p[1], p[2], p[3], p[4], p[5], p[6], p[7]);
+        font_draw_string(2, SCOPE_DBG_Y + 15, buf, 0x07FF, 0x0000, &font_small);
+
+        snprintf(buf, sizeof(buf), "ST:%02X%02X%02X%02X US:%02X%02X%02X%02X",
+                 fpga.probe_status[0], fpga.probe_status[1],
+                 fpga.probe_status[2], fpga.probe_status[3],
+                 fpga.probe_user[0], fpga.probe_user[1],
+                 fpga.probe_user[2], fpga.probe_user[3]);
+        font_draw_string(2, SCOPE_DBG_Y + 28, buf, 0xFFE0, 0x0000, &font_small);
+
+        /* ID@ = bit offset where 0x0120681B was found, -1 = absent.
+         * SM  = 0x11 and 0x00 returned identical bytes (Y => no opcode decode).
+         * RP  = the 0x11 reply repeats every 4 bytes (Y => free-running pattern).
+         * PO@ = same IDCODE search on the 0x11 read taken AFTER CONFIG_ENABLE.
+         * CL@ = same again AFTER the full upload and the 0x3A close. Per Exp L a
+         *       configured part stops answering 0x11, so CL@ >= 0 means the config
+         *       port never closed => we are definitively NOT configured. */
+        snprintf(buf, sizeof(buf), "ID@%d SM:%c RP:%c PO@%d CL@%d",
+                 (int)fpga.probe_id_bit,
+                 fpga.probe_all_same ? 'Y' : 'N',
+                 fpga.probe_repeats  ? 'Y' : 'N',
+                 (int)fpga.probe_id_bit_post,
+                 (int)fpga.probe_id_bit_close);
+        font_draw_string(2, SCOPE_DBG_Y + 41, buf, 0xF81F, 0x0000, &font_small);
+    }
+    return;
+#endif
+
     /* Line 1 (green): transport counters from the real FPGA path */
-    snprintf(buf, sizeof(buf), "TX:%u RX:%u DF:%u EF:%u",
-             (unsigned)fpga.tx_count,
-             (unsigned)fpga.rx_byte_count,
-             (unsigned)fpga.frame_count,
-             (unsigned)fpga.echo_count);
+    /* Line 1 (green): post-upload scope-engine config readback.
+     * SS = fpga.scope_status[] from the 0x03 status read — stock capture
+     * returns 00 01 42 2E. CL = 0x3A close status — stock returns F8.
+     * R  = first 4 raw CH1 bytes (pre-cal), to see if samples vary at all. */
+    snprintf(buf, sizeof(buf), "SS:%02X%02X%02X%02X CL:%02X R:%02X%02X%02X%02X",
+             fpga.scope_status[0], fpga.scope_status[1],
+             fpga.scope_status[2], fpga.scope_status[3],
+             fpga.h2_close_status,
+             fpga.diag_ch1_raw[0], fpga.diag_ch1_raw[1],
+             fpga.diag_ch1_raw[2], fpga.diag_ch1_raw[3]);
     font_draw_string(2, SCOPE_DBG_Y + 2, buf,
                      0x07E0, 0x0000, &font_small);  /* green */
 
@@ -824,19 +971,69 @@ static void draw_scope_debug(const theme_t *th)
     /* Line 3 (yellow): Init handshake responses + raw PB4 state
      * G1[0-3] = sync+0x05+pad, G2[4-6] = 0x12+pad, G3[7-10] = 0x15+pad+0x3B
      * PB4: raw GPIO read of the MISO pin (1=HIGH/floating, 0=driven LOW) */
-    snprintf(buf, sizeof(buf), "G1:%02X%02X G2:%02X G3:%02X%02X PB4:%d",
-             fpga.init_hs[1], fpga.init_hs[3],
-             fpga.init_hs[4],
-             fpga.init_hs[7], fpga.init_hs[10],
-             (GPIOB->idt & (1 << 4)) ? 1 : 0);
+    /* L/H = min/max across the whole CH1 acquisition buffer. If L==H the
+     * samples are a stuck constant (analog/trigger problem); if they spread,
+     * real signal is arriving and the fault is downstream in rendering. */
+    {
+        const volatile uint8_t *cb = fpga_get_ch1_buf();
+        uint8_t lo = 0xFF, hi = 0x00;
+        for (uint32_t i = 0; i < FPGA_ADC_BUF_SIZE; i++) {
+            uint8_t v = cb[i];
+            if (v < lo) lo = v;
+            if (v > hi) hi = v;
+        }
+        /* CFG = Gowin STATUS_REGISTER (opcode 0x41) read right after the 0x3A
+         * close — the authoritative "did the upload take?" verdict. Read at a
+         * forced /256 since 2026-07-28; every earlier value was clocked at /2
+         * and slipped one bit (the persistent 80 01 C8 10 is 0x00039020 read
+         * one bit early — see fpga.c [6b]).
+         *
+         * D = DONE_FINAL (bit 13) — 1 means configuration completed. This, not
+         *     SYSTEM_EDIT_MODE, is the success signal (Exp H showed stock reads
+         *     the same 0x00039020 at the config-enable instant that we do, so
+         *     ED cannot discriminate).
+         * E = the error nibble, bits 3..0 = TIMEOUT | ID_VERIFY_FAILED |
+         *     BAD_COMMAND | CRC_ERROR. Non-zero means bytes DID reach the config
+         *     engine and were rejected → a content/transport bug, localizable.
+         *     Zero with D=0 means the engine never received anything at all. */
+        uint32_t sr = ((uint32_t)fpga.cfg_status_reg[0] << 24) |
+                      ((uint32_t)fpga.cfg_status_reg[1] << 16) |
+                      ((uint32_t)fpga.cfg_status_reg[2] << 8)  |
+                      ((uint32_t)fpga.cfg_status_reg[3]);
+        /* A = the post-0x3A IDCODE anchor: the bit offset at which 0x0120681B was
+         *     found in the read taken immediately before CFG, at the same clock.
+         *     A>=0  -> CFG was read on a validated path AND the config port is
+         *             still open, i.e. we are definitively NOT configured.
+         *     A=-1  -> either the port closed (Exp L: what a successfully
+         *             configured part does) or the bus is dead. CFG is then
+         *             UNTRUSTWORTHY on its own — corroborate with a live trace. */
+        snprintf(buf, sizeof(buf), "CFG:%08lX D%u E%X A%d L%u H%u",
+                 (unsigned long)sr,
+                 (unsigned)((sr >> 13) & 1u),
+                 (unsigned)(sr & 0x0Fu),
+                 (int)fpga.probe_id_bit_close,
+                 (unsigned)lo, (unsigned)hi);
+    }
     font_draw_string(2, SCOPE_DBG_Y + 28, buf,
                      0xFFE0, 0x0000, &font_small);  /* yellow */
 
-    /* Line 4 (magenta): live SPI3 register state + H2 upload flag */
-    snprintf(buf, sizeof(buf), "S1:%04X S2:%04X ST:%04X H2:%c",
+    /* Line 4 (magenta): SPI3 CTRL1 + the EDIT_MODE probe + H2 upload flag.
+     * S1 = SPI3 CTRL1 as latched during the config frame. Bits[5:3] are BR, so
+     *      0347 = /2 (stock, Exp F fidelity build) and 037F = /256. This is the
+     *      on-device proof of which clock the config frame actually ran at.
+     * ED = STATUS_REGISTER (0x41) read at /256 immediately after 0x15.
+     *      SYSTEM_EDIT_MODE is bit 7 of the ASSEMBLED 32-bit word, i.e. bit 7 of
+     *      ED[3] — NOT bit 7 of ED[0], as this comment and scripts/swd_fpga_status.sh
+     *      both said until 2026-07-28. (Same verdict either way for 0x00039020:
+     *      ED[3]=0x20, bit 7 clear. But the test was reading bit 31.)
+     *      Exp H demoted this from "the wall" to a non-discriminator: stock reads
+     *      the same 0x00039020 here and still configures. Compare CFG's D flag.
+     * Dropped S2/ST here — CTRL2 and STS were static (0003 / 0002) across every
+     * run so far, and ED is the number this experiment turns on. */
+    snprintf(buf, sizeof(buf), "S1:%04X ED:%02X%02X%02X%02X H2:%c",
              (uint16_t)fpga.diag_spi_ctrl1,
-             (uint16_t)(*(volatile uint32_t *)0x40003C04),  /* live CTRL2 */
-             (uint16_t)(*(volatile uint32_t *)0x40003C08),  /* live STS */
+             fpga.edit_mode_status[0], fpga.edit_mode_status[1],
+             fpga.edit_mode_status[2], fpga.edit_mode_status[3],
              fpga.h2_upload_done ? 'Y' : 'N');
     font_draw_string(2, SCOPE_DBG_Y + 41, buf,
                      0xF81F, 0x0000, &font_small);  /* magenta */
