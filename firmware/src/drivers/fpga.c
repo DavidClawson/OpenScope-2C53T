@@ -2774,16 +2774,27 @@ void fpga_init(void)
          * frame would glitch the frame. Revisit if write timing is ever
          * implicated. Bench-checked 2026-07-27: prelude at /256 changed nothing
          * behaviourally, and turned CFG from 8001C810 into 00039020.
-         * CORRECTED 2026-07-28 (Exp I): 00039020 is NOT "the real value" — it is
-         * a bit-rotation of the free-running 0xC8100001 MISO pattern, just as
-         * 8001C810 was. /256 buys a different phase of the same stream, not a
-         * register read. See expE_swd_state_diff_2026-07-28.md § Experiment I.
+         * CORRECTED TWICE, read both. Exp I (2026-07-28) claimed 00039020 was
+         * NOT a real value but a bit-rotation of a free-running 0xC8100001 MISO
+         * pattern, just as 8001C810 was. **Exp J WITHDREW that same day and it
+         * must not be re-derived.** The rotation is real (0xC8100001 is
+         * 00039020 rotated left 15) but the causality was inverted: 00039020 is
+         * the GENUINE register value, and 0xC8100001 was a misaligned /2 read of
+         * it. Exp J proved this by anchoring — reading IDCODE first and matching
+         * the independently-known 0x0120681B from the .fs preamble — after which
+         * four opcodes returned four distinct correct replies. So 8001C810 is
+         * 00039020 sampled one bit early (it sets bits 4/11/31, which are not
+         * defined Gowin bits), and /256 buys a VALID READ, not a lucky phase.
+         * See expE_swd_state_diff_2026-07-28.md §§ Experiment I, J.
          *
          * trailing_clocks: left at the stock-faithful 0. Gowin runs CRC-check /
          * DONE / wakeup on CCLK cycles after the last config byte and
          * rosenrot00's 2C23T loader clocks ~200 dummy bytes, so 256 was tried
          * on the bench 2026-07-27 — it did NOT produce DONE (status unchanged at
-         * 00039020). Reverted rather than left as untested drift. */
+         * 00039020). Reverted rather than left as untested drift. Caveat: that
+         * run was at /256 so the read was valid, but it predates the anchoring
+         * discipline (Exp J, 2026-07-28), so it was never confirmed against a
+         * known-correct IDCODE. Low-cost re-run, kept in the backlog. */
 #if FPGA_STOCK_FIDELITY
         /* Experiment F (2026-07-28): close the KNOWN TRADEOFF above. Exp E
          * measured stock's SPI3 CTRL1 as 0x347 (BR=0, /2) at the CONFIG_ENABLE
