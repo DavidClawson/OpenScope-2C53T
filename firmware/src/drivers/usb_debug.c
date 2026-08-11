@@ -2713,6 +2713,27 @@ static void vUsbDebugTask(void *pvParameters)
         bool did_work = false;
         dbg_shell_loops++;
 
+#if defined(FAULT_SELFTEST) && FAULT_SELFTEST
+        /* Deliberate, self-inflicted fault ~10 s after boot, from a task (so the
+         * frame lands on the PSP exactly like the fault under investigation).
+         *
+         * Two questions at once:
+         *  1. does the fault handler actually record anything? If this writes a
+         *     valid g_fault, the handler and vector wiring are sound and the
+         *     ~55 s fault is special in some way (most likely an unusable stack
+         *     frame). If it records nothing, the instrument itself is broken.
+         *  2. does the device freeze at ~10 s WITH NO DEBUGGER ATTACHED? The UI
+         *     stopping on its own is proof the fault is real and not something
+         *     the OpenOCD attach provokes — which is the confound that makes the
+         *     whole "~55 s HardFault" reading suspect.
+         *
+         * udf #0 is the permanently-undefined encoding: guaranteed UNDEFINSTR
+         * -> UsageFault, no memory access involved, nothing ambiguous. */
+        if (dbg_shell_loops == 1000u) {
+            __asm volatile ("udf #0");
+        }
+#endif
+
         /* ---- RTT (SWD) transport ---- */
         if (!rtt_banner_sent && rtt_host_attached()) {
             usb_send_str(shell_banner);

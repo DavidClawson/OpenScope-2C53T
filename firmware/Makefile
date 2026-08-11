@@ -482,3 +482,12 @@ guest-sweep: clean all
 guest-rtt: CFLAGS += -DGUEST_BUILD -DDEBUG_SHELL_RTT_ONLY=1
 guest-rtt: LDSCRIPT = ld/at32f403a_guest.ld
 guest-rtt: clean all
+
+# Fault-handler self-test (2026-08-11). Fires `udf #0` from a task ~10 s after
+# boot. Answers (a) does the fault handler record anything at all, and (b) does
+# the device freeze on its own with NO debugger attached — the confound that
+# makes the "~55 s HardFault" reading suspect, since the freeze so far has only
+# ever been observed after an OpenOCD attach.
+guest-faulttest: CFLAGS += -DGUEST_BUILD -DFAULT_SELFTEST=1
+guest-faulttest: LDSCRIPT = ld/at32f403a_guest.ld
+guest-faulttest: clean all
