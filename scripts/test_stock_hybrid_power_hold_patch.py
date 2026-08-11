@@ -20,6 +20,20 @@ def load_builder():
 
 def main() -> int:
     builder = load_builder()
+
+    # Skip cleanly rather than dumping a FileNotFoundError traceback: the stock
+    # archive is not redistributable and the dispatcher must be built first, so
+    # a fresh clone legitimately has neither. Report it as a skip so it is
+    # counted as missing coverage, not mistaken for a broken test.
+    for label, path in (
+        ("stock archive image", builder.DEFAULT_STOCK),
+        ("stock dispatcher build", builder.DEFAULT_STOCK_DISPATCHER),
+    ):
+        if not path.exists():
+            print(f"skipped '{label} is not present: {path}'")
+            print("0 tests OK (1 skipped)")
+            return 0
+
     stock = builder.DEFAULT_STOCK.read_bytes()
     dispatcher = builder.DEFAULT_STOCK_DISPATCHER.read_bytes()
 
