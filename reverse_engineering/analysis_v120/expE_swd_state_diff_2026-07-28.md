@@ -1240,3 +1240,141 @@ Higher value per unit of effort, in our view:
    construction and no firmware-side pin experiment can ever succeed.
 3. **The pre-config delay test** (Exp Q's closing note) — still cheap, still
    untested, and motivated by the unexplained POR-set/DONE-clear reading.
+
+---
+
+## Experiment R (2026-08-11) — the pins a LEVEL diff could not see
+
+**Motivation.** The session plan's next item was a "paired PC1+PC2 pulse", on the
+grounds that Exp P listed PC1/PC2 as pins stock drives both LOW and HIGH, and
+Exp Q had only ever pulsed PC1 singly.
+
+**The premise did not survive the disassembly.** `0x0802C608` is a 4-way selector
+that drives a 2-bit code onto PC2:PC1 —
+
+```
+[r9,#20]==0                    neither pin touched
+        ==1  (0x0802C624)  BSRR=4, BSRR=2   -> PC2 H, PC1 H
+        ==2  (0x0802C64A)  BRR =4, BRR =2   -> PC2 L, PC1 L
+        ==3  (0x0802C632)  BSRR=4, BRR =2   -> PC2 H, PC1 L
+```
+
+Both writes in the `==1` arm target BSRR. **No arm produces a low-then-high edge:
+stock never pulses these pins.** Exp P flagged them as "driven both ways" only by
+aggregating across different arms of one switch. The same PC2-then-PC1 pattern
+appears at ~8 sites across the image (`0x0800C99E`, `0x0800D9D6`, `0x0800DFB8`,
+`0x08023758`, `0x08023C54`, `0x08023CB8`, `0x08023E16`, `0x0802C626`), which is
+the signature of a functional selector, not a config strap — RECONFIG_N would be
+driven once, in init.
+
+**The runtime unknown was already on disk.** The plan proposed parking stock at
+`0x0802C618` over SWD to read `r0` — which rule 2 makes impossible anyway. But the
+Exp E spin-park is at `0x0802DA42`, *after* this code, so `swd_stock.txt` already
+records the outcome: ODT bit2 set, bit1 clear ⇒ the `==3` arm ⇒ **PC2 HIGH,
+PC1 LOW** at the CONFIG_ENABLE instant.
+
+### The real finding: Exp F's exclusion was scoped to its method
+
+Chasing why PC1 had never been a candidate surfaced a whole blind spot. The Exp E
+enumeration compared output **levels** (ODT). At the CONFIG_ENABLE instant:
+
+| | PC1 CRL nibble | PC1 ODT bit1 |
+|---|---|---|
+| stock | `0x1` — output push-pull 10MHz, driven LOW | 0 |
+| ours  | `0x4` — floating input                     | 0 |
+
+**A driven-low output and a floating input report the same bit.** Every pin in
+that class was invisible. Re-diffing the same two dumps on the CONFIG registers
+(CRL/CRH) instead of ODT gives ~20 differences; after removing pins with known
+functions the open set was **PC1, PA6, PC11, PD2, PD3, PD6, PD13**.
+
+So Exp F's "all five enumerables closed ⇒ static MCU state is EXCLUDED" was true
+only of what a level-based diff could reach. Same failure mode as the `/2` reads,
+the floating MISO and the script's byte rotation: a measurement that could not
+have seen the thing it was used to rule out.
+
+### Results — both NEGATIVE
+
+`make guest-pc1` and `make guest-fidelity2`, layered on FPGA_STOCK_FIDELITY (left
+byte-identical to Exp F so the comparison stays valid).
+
+| build | pins driven at stock's levels | result |
+|---|---|---|
+| `guest-pc1` | PC1 LOW (with Exp F's PC2 HIGH = stock's full 2-bit code) | `S1:0347 ED:00039020` |
+| `guest-fidelity2` | + PA6 L, PC11 L, PD2 L, PD13 L, PD3 H, PD6 H | `S1:0347 ED:00039020` |
+
+`S1:0347` confirms BR=/2 on-device in both, so the fidelity base was intact and
+these are clean negatives. **The config-register class is now closed. Static MCU
+state is genuinely excluded** — this time by a diff that could see it.
+
+### Side result: a true FPGA power cycle does NOT open the config port
+
+The `guest-fidelity2` reading was re-taken after real power removal, which on this
+unit requires a specific sequence — worth recording, because nothing else achieves
+it:
+
+> hold POWER → "Goodbye" → **unplug USB (device goes dark)** → replug → boots
+
+The pinhole reset resets the MCU only; the FPGA stays powered. A POWER-button
+shutdown with USB attached also does **not** remove power — VBUS keeps the rail up
+and the device hangs on "Goodbye". Only the dark moment after unplugging drops FPGA
+power. Much of this project's testing has therefore run on an FPGA that had not
+been power-cycled in a long time.
+
+Status after a genuinely cold FPGA start: **`00039020`, unchanged.** Combined with
+Exp B2 (stock delayed 5–10 s still configured), both halves of apicula's answer sit
+awkwardly with the evidence: it is not a post-power-on window, because stock does
+not need one and we do not benefit from one.
+
+**Correction to bench procedure:** the standing note that "after an IAP flash the
+device reboots into charge-display mode, press POWER for a real boot" is
+**stock-only**. Our builds auto-boot straight into the app after flashing. No
+reading in this project is invalidated by it, but the instruction is wrong as
+written for our images.
+
+### Also refuted, statically: a USART-borne config trigger
+
+The Ghidra-side correction left "a trigger asserted NEAR config-enable in the
+instruction stream" unrefuted (Exp B2 shifted trigger and config-enable together,
+preserving spacing, so it bounds only an ABSOLUTE window). Every GPIO form of such
+a trigger is now excluded, so the remaining channel to the FPGA is USART2.
+
+Stock's USART2 setup at `0x0802C8D2`–`0x0802C936` (`fp` = `0x4000440C` = CTRL1):
+
+```
+[fp,#-4] BAUDR   baud (9600)
+[fp]     CTRL1   bic #0x1000    clear DBN0
+[fp,#4]  CTRL2   bic #0x3000    clear STOP
+[fp]     CTRL1   orr #8         TEN
+[fp]     CTRL1   orr #4         REN
+[fp]     CTRL1   orr #0x20      RDBFIE
+[fp]     CTRL1   bic #0x2000    clear UEN
+```
+
+Final `CTRL1 = 0x2C`, matching the Exp E dump. **There is no access to `[fp,#-8]`
+= `0x40004404` = the data register**, and UEN is explicitly cleared, so no USART
+byte can leave the MCU before CONFIG_ENABLE. A USART "prepare for reconfiguration"
+command is refuted. (This also independently re-confirms the UE=0 question settled
+by Exp E.)
+
+### Open thread raised but not tested: is the meter even the FPGA?
+
+Exp N's `T0` checkpoint is captured **before any config command is sent**
+(`fpga.c:2046`) and reads `00039020` — `DONE_FINAL` clear, config port answering.
+Per Exp L, a *successfully configured* part stops answering SSPI entirely. So at
+T0 our FPGA presents as unconfigured — yet our meter works (DCV and resistance both
+accurate).
+
+If the FPGA fabric serviced the meter it would have to be configured. Either the
+meter is **not the FPGA** (a separate device on the USART2 line), or `DONE_FINAL`=0
+does not mean unconfigured for an NV-booted part.
+
+This matters because CLAUDE.md's framing — "the resident NV design is meter-only" —
+rests on Exp A showing the meter survives ablation of the config upload, which
+equally supports "the meter was never the FPGA". If there is no resident design,
+apicula's "a running auto-booted part will not re-enter config" may simply not
+apply to this board. That is the question already posted on issue #18.
+
+**Caveat against over-reading it:** Exp A also showed ablation kills the scope, so
+stock's scope genuinely depends on the SSPI upload. Any theory in which the config
+port is closed to *everyone* has to explain how stock succeeds through it.
