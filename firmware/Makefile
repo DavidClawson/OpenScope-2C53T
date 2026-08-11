@@ -429,6 +429,29 @@ guest-fidelity2: CFLAGS += -DGUEST_BUILD -DFPGA_STOCK_FIDELITY=1 -DFPGA_USART_SI
 guest-fidelity2: LDSCRIPT = ld/at32f403a_guest.ld
 guest-fidelity2: clean all
 
+# Experiment S (2026-08-11): Gowin SSPI RELOAD (0x3C) before the prelude.
+#
+# Gowin documents two ways to make a running part accept a new configuration:
+# pulse RECONFIG_N, or power-cycle it. As of Exp R BOTH are closed to us --
+# every GPIO form of a RECONFIG_N pulse is refuted (Exps G/O/Q, plus maksidze's
+# measurement that QN48 pin 48 never pulses), and a genuine FPGA power cycle
+# leaves STATUS at 00039020.
+#
+# RELOAD is the third form: the same request as a COMMAND, on a bus we have
+# proven the part decodes (Exp J: four opcodes, four distinct replies).
+#
+# The send code and the reload_3c field have existed since June, but the only
+# way to reach them was the debug shell -- which needs USB CDC (never enumerated
+# on this unit) or RTT (impossible while RDP is set). There was never a make
+# target, so this has NEVER been run on a validated readout. It sits in the
+# re-run backlog with the trailing-clock sweep and Exp H on stock.
+#
+# Built on the fidelity base so the ONLY difference from Exp F/R is the 0x3C
+# frame. Read ED: on the LCD overlay; anchor still applies.
+guest-reload: CFLAGS += -DGUEST_BUILD -DFPGA_STOCK_FIDELITY=1 -DFPGA_USART_SILENT_SCOPE=1 -DFPGA_RELOAD_3C_BUILD=1
+guest-reload: LDSCRIPT = ld/at32f403a_guest.ld
+guest-reload: clean all
+
 # Experiment G (2026-07-28): RECONFIG_N pulse candidates. Exp F closed every
 # enumerable static MCU-state difference and the wall held, which sends us back
 # to apicula's answer (docs/CONFIG_ENTRY_REPLY_FROM_APICULA.md): a running GW1N

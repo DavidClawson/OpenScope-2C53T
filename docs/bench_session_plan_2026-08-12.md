@@ -56,11 +56,23 @@ executes from flash. So attaching SWD locks the core up instantly
 (`pc=0xFFFFFFFE`, `IPSR=3`). This is not a readout glitch — the core really is
 dead.
 
+**But the constraint is narrower than it sounds, and the ST-Link is one of the
+better instruments on this bench.** RDP kills anything needing a *live CPU with a
+debugger attached*. It does **not** touch the debug port's memory access: the host
+can read and write any peripheral register while the core is dead, and the FPGA
+neither knows nor cares why the CPU stopped.
+
+`scripts/swd_fpga_status.sh` already works this way — it drives SPI3 entirely from
+the host (writes `CTRL1`/`DT`, polls `STS`, toggles PB6/CS via `GPIOB` BSRR/BRR,
+lines 78-92) with the core dead.
+
 Consequences:
 * **Read live firmware state from the LCD overlay, never over SWD.**
-* SWD is still good for: attach, accept the CPU dies, then drive peripherals /
-  SPI3 **from the host**. That is exactly how Exps E/K/L worked and they remain
-  valid — peripherals keep whatever the firmware configured before the attach.
+* SWD is good for: attach, accept the CPU dies, then drive peripherals / SPI3
+  **from the host**. That is exactly how Exps E/K/L worked and they remain valid —
+  peripherals keep whatever the firmware configured before the attach.
+* **A host-driven pin sweep needs no reflashing at all** (see § 0b below). This is
+  strictly more capable than the `guest-sweep` builds.
 * **RTT can never work here** while RDP is set. Neither can any "sample pins live
   over SWD" scheme. Both need a running CPU with a debugger attached.
 
@@ -136,6 +148,36 @@ measurement turned out to be blind to the thing it was being used to rule out
 (after the `/2` reads, the floating MISO and the script's byte rotation). Before
 running a new experiment, ask what its instrument *cannot* see.
 
+### 0b. The instrument to use next: a HOST-DRIVEN pin sweep  ⏱ no reflash
+
+Not a hypothesis — a better way to test the ones left. Boot normally so the
+firmware configures clocks/SPI3/GPIO → attach SWD (CPU dies, peripherals keep
+their state) → from OpenOCD, drive any pin's BSRR/BRR and read anchored STATUS
+back over the same channel. Each candidate is a few TCL lines instead of a
+build → flash → power-cycle → read cycle.
+
+Reaches what the `guest-sweep` builds cannot:
+
+* **arbitrary pulse shapes and hold durations**, no rebuild per variant
+* **AF-mode pins** — reconfigure as GPIO from the host first, then drive.
+  This is the standing blind spot: an AF output's level appears in no register
+  we dump, so `FPGA_FIDELITY_DRIVE_PB9` is only ever a guess.
+* **any pin at all**, including the 0.5 mm LQFP100 legs with no breakout pads,
+  because we drive from inside the chip rather than probing from outside
+
+Settle before the session, not during it:
+
+1. **The watchdog.** With the core dead the IWDG keeps counting and will reset the
+   MCU mid-sweep, resetting peripherals with it. Exp E's spin-park image NOPed the
+   watchdog write for exactly this reason. Use a no-IWDG build, or stop it from
+   the host first.
+2. **Contention.** Same rule as the sweep builds: only pins stock itself drives.
+   **Never PC9** — power hold.
+3. **Anchor.** IDCODE `0x0120681B` before believing any status, as always.
+
+Start from `scripts/swd_fpga_status.sh`; it already has the SPI3 host driver and
+the anchor logic.
+
 ### 1. ~~Paired PC1 + PC2 — pulsed, then held~~  ✅ DONE, NEGATIVE
 
 The cheapest untested thing, and the one concrete gap the Ghidra-side review
@@ -190,6 +232,14 @@ mean the MCU could bit-bang Gowin JTAG in firmware and config entry stops
 mattering entirely. Highest payoff-to-effort ratio on the board.
 
 ### 4. The RDP decision  ⏱ discussion, then a careful session
+
+**⚠ CORRECTED 2026-08-11 — the case for this is much weaker than written below.**
+This section claimed clearing RDP would unlock "RTT and the host-driven sweep
+loop". **The sweep loop half is wrong: it works today, with RDP set** (§ 0b). The
+debug port's memory access is unaffected by read protection; only a *live* CPU is.
+So the remaining payoff is RTT — a convenience, not a capability we lack — set
+against a mass erase that takes the factory IAP bootloader. **Do not do this
+without a new reason.**
 
 Clearing read protection would unlock RTT and the host-driven sweep loop — the
 50-pins-in-one-boot workflow instead of 50 reflash cycles. But unprotecting

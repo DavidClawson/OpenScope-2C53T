@@ -373,6 +373,29 @@ static void spi3_pump(const uint8_t *tx, volatile uint8_t *rx, uint32_t n)
 #define FPGA_FIDELITY_DRIVE_UNCOVERED  0
 #endif
 
+/* Experiment S (2026-08-11) — Gowin SSPI RELOAD (0x3C) before the prelude.
+ *
+ * Gowin documents exactly two ways to get a running part to accept a new
+ * configuration: pulse RECONFIG_N, or power-cycle it. As of Exp R both are
+ * closed to us — every GPIO form of a RECONFIG_N pulse is refuted (Exps G/O/Q,
+ * plus maksidze's measurement that QN48 pin 48 never pulses at all), and a
+ * genuine power cycle leaves STATUS at 00039020.
+ *
+ * RELOAD is the third form: the same request as a command, over a bus we have
+ * PROVEN the part decodes (Exp J — four opcodes, four distinct replies).
+ *
+ * The send code at [0a] and the `reload_3c` field have existed since June, but
+ * the only way to reach them was the debug shell, which needs USB CDC (never
+ * enumerated on this unit) or RTT (impossible while RDP is set). There has never
+ * been a make target. So this test has never run on a validated readout — it is
+ * in the re-run backlog alongside the trailing-clock sweep and Exp H on stock.
+ *
+ * Built on FPGA_STOCK_FIDELITY so the only difference from the Exp F/R baseline
+ * is the 0x3C frame itself. Read ED: on the LCD overlay. */
+#ifndef FPGA_RELOAD_3C_BUILD
+#define FPGA_RELOAD_3C_BUILD  0
+#endif
+
 /* RECONFIG_N pulse candidate (2026-07-28, Experiment G).
  *
  * Exp F closed all five enumerable MCU-state differences and the wall held
@@ -2783,6 +2806,13 @@ void fpga_init(void)
          * since it adds CS frames before the config attempt. */
         .probe_idcode   = FPGA_IDCODE_PROBE,
         .cfg_trace      = FPGA_CFG_TRACE_BUILD,
+        /* Experiment S (2026-08-11): Gowin SSPI RELOAD (0x3C) before the
+         * prelude. The knob and its send code (see [0a]) have existed since June
+         * but were only ever reachable from the debug shell — which needs USB CDC
+         * (never enumerated on this unit) or RTT (impossible while RDP is set).
+         * So RELOAD has NEVER been run on a validated readout; it sits in the
+         * re-run backlog for exactly that reason. `make guest-reload`. */
+        .reload_3c      = FPGA_RELOAD_3C_BUILD,
     });
 #endif
 
