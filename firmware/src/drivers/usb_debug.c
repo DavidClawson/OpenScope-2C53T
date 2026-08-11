@@ -17,6 +17,7 @@
 #include "cdc_desc.h"
 #include "dfu_boot.h"
 #include "flash_fs.h"
+#include "rtt.h"
 #include "scope_trigger.h"
 #include "fpga.h"
 #include "ui.h"
@@ -119,9 +120,16 @@ bool usb_debug_connected(void)
 #endif
 }
 
-/* Send raw bytes over CDC, waiting for TX complete if needed */
+/* Send raw bytes to the console.
+ *
+ * Two transports, both optional: RTT over the SWD wires and USB CDC. Output
+ * goes to whichever is live. On the bench unit USB CDC has never enumerated
+ * (CLAUDE.local.md), so in practice this is the RTT path — but the CDC path is
+ * left intact so a unit with working USB behaves as before. */
 static void usb_send_bytes(const uint8_t *data, uint16_t len)
 {
+    rtt_write(data, len);
+
     if (!usb_debug_connected()) return;
 
     cdc_struct_type *pcdc = (cdc_struct_type *)usb_core_dev.class_handler->pdata;
@@ -2618,64 +2626,100 @@ static void dispatch_command(char *line)
 
 #define CMD_BUF_SIZE 128
 
+/* Line accumulator shared by both transports. `echo` is on for USB (a raw
+ * serial terminal shows nothing otherwise) and off for RTT, where the host
+ * telnet client is line-buffered and echoes locally — echoing there would
+ * double every character. */
+static char cmd_buf[CMD_BUF_SIZE];
+static int  cmd_pos = 0;
+
+static void shell_feed(const uint8_t *bytes, uint16_t len, bool echo)
+{
+    for (uint16_t i = 0; i < len; i++) {
+        char c = (char)bytes[i];
+
+        if (c == '\r' || c == '\n') {
+            if (echo) usb_send_str("\r\n");
+            cmd_buf[cmd_pos] = '\0';
+            if (cmd_pos > 0) {
+                dispatch_command(cmd_buf);
+            }
+            cmd_pos = 0;
+            usb_send_str("> ");
+        } else if (c == '\b' || c == 0x7F) {
+            if (cmd_pos > 0) {
+                cmd_pos--;
+                if (echo) usb_send_str("\b \b");
+            }
+        } else if (c >= ' ' && cmd_pos < CMD_BUF_SIZE - 1) {
+            cmd_buf[cmd_pos++] = c;
+            if (echo) usb_send_bytes((const uint8_t *)&c, 1);
+        }
+    }
+}
+
+static const char shell_banner[] =
+    "\r\n\r\n"
+    "+----------------------------------+\r\n"
+    "|  OpenScope 2C53T Debug Shell     |\r\n"
+    "|  Type 'help' for commands        |\r\n"
+    "+----------------------------------+\r\n"
+    "\r\n> ";
+
 static void vUsbDebugTask(void *pvParameters)
 {
     (void)pvParameters;
 
     uint8_t rx_buf[USBD_CDC_OUT_MAXPACKET_SIZE];
-    char cmd_buf[CMD_BUF_SIZE];
-    int cmd_pos = 0;
-    bool banner_sent = false;
+    uint8_t rtt_buf[64];
+    bool usb_banner_sent = false;
+    bool rtt_banner_sent = false;
+    uint32_t usb_settle = 0;
 
     for (;;) {
-        /* Wait for USB to be configured */
-        if (!usb_debug_connected()) {
-            banner_sent = false;
-            vTaskDelay(pdMS_TO_TICKS(100));
-            continue;
+        bool did_work = false;
+
+        /* ---- RTT (SWD) transport ---- */
+        if (!rtt_banner_sent && rtt_host_attached()) {
+            usb_send_str(shell_banner);
+            rtt_banner_sent = true;
         }
 
-        /* Send welcome banner once on connect */
-        if (!banner_sent) {
-            vTaskDelay(pdMS_TO_TICKS(500));  /* Let host enumerate */
-            usb_send_str("\r\n\r\n"
-                         "╔══════════════════════════════════╗\r\n"
-                         "║  OpenScope 2C53T Debug Shell     ║\r\n"
-                         "║  Type 'help' for commands        ║\r\n"
-                         "╚══════════════════════════════════╝\r\n"
-                         "\r\n> ");
-            banner_sent = true;
+        size_t rtt_len = rtt_read(rtt_buf, sizeof(rtt_buf));
+        if (rtt_len > 0) {
+            /* Attaching mid-session: the host may never have moved read_pos
+             * before typing, so print the banner on first input too. */
+            if (!rtt_banner_sent) {
+                usb_send_str(shell_banner);
+                rtt_banner_sent = true;
+            }
+            shell_feed(rtt_buf, (uint16_t)rtt_len, false);
+            did_work = true;
         }
 
-        /* Poll for received data */
-        uint16_t rx_len = usb_vcp_get_rxdata(&usb_core_dev, rx_buf);
-        if (rx_len > 0) {
-            for (uint16_t i = 0; i < rx_len; i++) {
-                char c = (char)rx_buf[i];
-
-                if (c == '\r' || c == '\n') {
-                    /* Execute command */
-                    usb_send_str("\r\n");
-                    cmd_buf[cmd_pos] = '\0';
-                    if (cmd_pos > 0) {
-                        dispatch_command(cmd_buf);
-                    }
-                    cmd_pos = 0;
-                    usb_send_str("> ");
-                } else if (c == '\b' || c == 0x7F) {
-                    /* Backspace */
-                    if (cmd_pos > 0) {
-                        cmd_pos--;
-                        usb_send_str("\b \b");
-                    }
-                } else if (c >= ' ' && cmd_pos < CMD_BUF_SIZE - 1) {
-                    /* Echo and accumulate */
-                    cmd_buf[cmd_pos++] = c;
-                    usb_send_bytes((const uint8_t *)&c, 1);
+        /* ---- USB CDC transport ---- */
+        if (usb_debug_connected()) {
+            if (!usb_banner_sent) {
+                /* Let the host finish enumerating before the first write. */
+                if (usb_settle < 50) {
+                    usb_settle++;
+                } else {
+                    usb_send_str(shell_banner);
+                    usb_banner_sent = true;
+                }
+            } else {
+                uint16_t rx_len = usb_vcp_get_rxdata(&usb_core_dev, rx_buf);
+                if (rx_len > 0) {
+                    shell_feed(rx_buf, rx_len, true);
+                    did_work = true;
                 }
             }
         } else {
-            /* No data — yield to other tasks */
+            usb_banner_sent = false;
+            usb_settle = 0;
+        }
+
+        if (!did_work) {
             vTaskDelay(pdMS_TO_TICKS(10));
         }
     }
