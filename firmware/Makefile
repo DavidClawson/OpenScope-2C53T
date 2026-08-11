@@ -400,6 +400,35 @@ guest-fidelity: CFLAGS += -DGUEST_BUILD -DFPGA_STOCK_FIDELITY=1 -DFPGA_USART_SIL
 guest-fidelity: LDSCRIPT = ld/at32f403a_guest.ld
 guest-fidelity: clean all
 
+# Experiment R (2026-08-11): the pins a LEVEL diff could not see.
+#
+# Exp F's "all five enumerables closed" was scoped to its method. It compared
+# stock-vs-ours output LEVELS (ODT), which cannot distinguish a pin stock drives
+# LOW from a pin we leave FLOATING — both report 0. Re-diffing the same Exp E
+# dumps on the CONFIG registers (CRL/CRH) finds ~20 differences, of which these
+# are open: PC1, PA6, PC11, PD2, PD3, PD6, PD13.
+#
+#   guest-pc1        fidelity + PC1 driven push-pull LOW. The clean single-pin
+#                    case: stock and ours have IDENTICAL ODT bit1, and differ
+#                    only in the CRL nibble (0x1 driven-low vs 0x4 floating).
+#                    PC1 is `Unknown` in HARDWARE_PINOUT.md and no build of ours
+#                    has ever driven it. Stock holds PC2 HIGH + PC1 LOW at
+#                    CONFIG_ENABLE (the ==3 arm of the selector at 0x0802C608);
+#                    Exp F matched PC2, so this closes the pair.
+#
+#   guest-fidelity2  fidelity + PC1 + the rest of the uncovered set. Excludes
+#                    the Exp C-refuted frontend bank, the button matrix (we need
+#                    SAVE/POWER), SPI2 AF pins, and PD12 (our EXMC owns it).
+#
+# Read ED: on the LCD overlay as usual. If either breaks the wall, bisect.
+guest-pc1: CFLAGS += -DGUEST_BUILD -DFPGA_STOCK_FIDELITY=1 -DFPGA_USART_SILENT_SCOPE=1 -DFPGA_FIDELITY_DRIVE_PC1=1
+guest-pc1: LDSCRIPT = ld/at32f403a_guest.ld
+guest-pc1: clean all
+
+guest-fidelity2: CFLAGS += -DGUEST_BUILD -DFPGA_STOCK_FIDELITY=1 -DFPGA_USART_SILENT_SCOPE=1 -DFPGA_FIDELITY_DRIVE_PC1=1 -DFPGA_FIDELITY_DRIVE_UNCOVERED=1
+guest-fidelity2: LDSCRIPT = ld/at32f403a_guest.ld
+guest-fidelity2: clean all
+
 # Experiment G (2026-07-28): RECONFIG_N pulse candidates. Exp F closed every
 # enumerable static MCU-state difference and the wall held, which sends us back
 # to apicula's answer (docs/CONFIG_ENTRY_REPLY_FROM_APICULA.md): a running GW1N
@@ -408,6 +437,12 @@ guest-fidelity: clean all
 # reads HIGH at the config-enable instant, exactly like one merely held HIGH.
 # PC2 and PB12 are the only pins stock drives that we float (outside the Exp
 # C-refuted frontend bank), so they are the candidates. Fidelity build + pulse.
+#   ^ CORRECTED 2026-08-11: that "only" was wrong, and it was wrong because the
+#     enumeration behind it compared output LEVELS. PC1, PA6, PC11, PD2, PD3,
+#     PD6 and PD13 are also driven by stock and floated by us — see guest-pc1 /
+#     guest-fidelity2 above. It does not affect Exp G's own result (PC2 and PB12
+#     were pulsed and refuted), only the claim that the candidate list was
+#     complete.
 guest-reconfig-pc2: CFLAGS += -DGUEST_BUILD -DFPGA_STOCK_FIDELITY=1 -DFPGA_USART_SILENT_SCOPE=1 -DFPGA_FIDELITY_RECONFIG_PORT=3 -DFPGA_FIDELITY_RECONFIG_PIN=2
 guest-reconfig-pc2: LDSCRIPT = ld/at32f403a_guest.ld
 guest-reconfig-pc2: clean all

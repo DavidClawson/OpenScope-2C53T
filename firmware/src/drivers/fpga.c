@@ -351,6 +351,28 @@ static void spi3_pump(const uint8_t *tx, volatile uint8_t *rx, uint32_t n)
 #define FPGA_FIDELITY_DRIVE_PB9  0
 #endif
 
+/* Experiment R (2026-08-11) — the pins a LEVEL diff could not see.
+ *
+ * Exp F closed five stock-vs-ours differences and CLAUDE.md concluded static
+ * MCU state was excluded. Re-diffing the Exp E dumps on the CONFIG registers
+ * (CRL/CRH) rather than the output levels (ODT) shows that conclusion was
+ * scoped to the method: a pin stock DRIVES LOW and a pin we leave FLOATING
+ * report the same ODT bit and were therefore invisible.
+ *
+ * `PC1` is the clean single-pin case and gets its own knob so it can be tested
+ * without confounds; `UNCOVERED` adds the remaining open pins at once.
+ * Both are layered on top of FPGA_STOCK_FIDELITY, which is left byte-identical
+ * to the Exp F build so the comparison stays valid.
+ *
+ * Build with `make guest-pc1` / `make guest-fidelity2`. */
+#ifndef FPGA_FIDELITY_DRIVE_PC1
+#define FPGA_FIDELITY_DRIVE_PC1  0
+#endif
+
+#ifndef FPGA_FIDELITY_DRIVE_UNCOVERED
+#define FPGA_FIDELITY_DRIVE_UNCOVERED  0
+#endif
+
 /* RECONFIG_N pulse candidate (2026-07-28, Experiment G).
  *
  * Exp F closed all five enumerable MCU-state differences and the wall held
@@ -2472,6 +2494,94 @@ void fpga_init(void)
     gpio_cfg.gpio_pins = GPIO_PINS_9;
     gpio_init(GPIOB, &gpio_cfg);
     GPIOB->scr = (1U << 9);
+#endif
+
+#if FPGA_FIDELITY_DRIVE_PC1
+    /* ── PC1: the pin Exp F's enumeration could not see ─────────────────
+     *
+     * Exp F closed five differences and CLAUDE.md concluded from it that
+     * "static MCU state is EXCLUDED". That conclusion was scoped to what the
+     * diff could detect, and the diff compared output LEVELS. PC1 is invisible
+     * to that method: at the CONFIG_ENABLE instant both firmwares read ODT
+     * bit1 = 0. The difference is entirely in the config nibble —
+     *
+     *   stock  GPIOC CRL nibble 1 = 0x1  -> output push-pull 10MHz, driven LOW
+     *   ours   GPIOC CRL nibble 1 = 0x4  -> floating input
+     *
+     * A driven-low output and a floating input whose ODT happens to read 0 are
+     * the same number in every level-based comparison, and different signals on
+     * the wire. (Re-derived 2026-08-11 by diffing swd_stock.txt against
+     * swd_ours.txt on CRL/CRH rather than ODT.)
+     *
+     * Stock reaches this state through the 4-way selector at 0x0802C608, which
+     * drives a 2-bit code onto PC2:PC1 from GPIOC BSRR/BRR:
+     *
+     *   [r9,#20]==0  neither pin touched
+     *   ==1  (0x0802C624)  BSRR=4, BSRR=2   -> PC2 H, PC1 H
+     *   ==2  (0x0802C64A)  BRR =4, BRR =2   -> PC2 L, PC1 L
+     *   ==3  (0x0802C632)  BSRR=4, BRR =2   -> PC2 H, PC1 L
+     *
+     * The Exp E dump pins stock to the ==3 arm (ODT bit2 set, bit1 clear), so
+     * PC2 HIGH + PC1 LOW is the code held when CONFIG_ENABLE goes out. Exp F
+     * already matched PC2; this closes the other half of the pair.
+     *
+     * Note this is NOT the "paired pulse" the session plan proposed. Both
+     * writes in the ==1 arm target BSRR, so no arm of the selector produces a
+     * low-then-high edge — stock never pulses these pins. The untested
+     * dimension is the HELD code, which is what this does. PC1 is `Unknown` in
+     * HARDWARE_PINOUT.md and our firmware has never driven it in any build.
+     *
+     * No contention risk: stock itself drives this pin push-pull both ways from
+     * eight sites in the image, so the net is MCU-owned. */
+    gpio_cfg.gpio_pins = GPIO_PINS_1;
+    gpio_init(GPIOC, &gpio_cfg);
+    GPIOC->clr = (1U << 1);    /* PC1 LOW — stock's level at CONFIG_ENABLE */
+#endif
+
+#if FPGA_FIDELITY_DRIVE_UNCOVERED
+    /* ── The rest of the pins stock drives and we leave floating ──────────
+     *
+     * From the same CRL/CRH diff. Every pin here is push-pull output in stock
+     * at the CONFIG_ENABLE instant and a floating input in ours, and none has a
+     * known function that would already exclude it:
+     *
+     *   PA6   AF-PP in stock, level not observable (AF output bypasses ODT).
+     *         Driven LOW here as a guess; CLAUDE.md lists it as undocumented
+     *         "analog frontend control".
+     *   PC11  meter MUX enable — known function, but stock holds it LOW here
+     *         and we float it, so it is still an open difference.
+     *   PD2 PD3 PD6 PD13   stock drives all four as plain GPIO. PD2/PD3 were
+     *         hunted in 2026-06 and called negative, but that was under the
+     *         unreadable-status regime (reads at /2), so neither has ever had a
+     *         valid test. PD13 appeared in the Exp P census as LOW-only.
+     *
+     * Deliberately NOT included:
+     *   PA15 PA10 PB10 PC12 PE4 PE5 PE6   analog frontend bank — Exp C refuted
+     *   PA7 PB0 PC5 PE2                   button matrix rows; we own these and
+     *                                     need them for the SAVE/POWER gates
+     *   PB13 PB14 PB15                    SPI2 AF; the clock gate is already
+     *                                     matched above and the peripheral is
+     *                                     unused by us
+     *   PD12                              diverges the other way (AF in ours,
+     *                                     GPIO in stock) — our EXMC uses it
+     *
+     * Safe because our EXMC leaves PD2/PD3/PD6/PD13 floating, so driving them
+     * cannot disturb the LCD — which is how the result gets read. */
+    gpio_cfg.gpio_pins = GPIO_PINS_6;
+    gpio_init(GPIOA, &gpio_cfg);
+    GPIOA->clr = (1U << 6);    /* PA6 LOW */
+
+    gpio_cfg.gpio_pins = GPIO_PINS_11;
+    gpio_init(GPIOC, &gpio_cfg);
+    GPIOC->clr = (1U << 11);   /* PC11 LOW */
+
+    gpio_cfg.gpio_pins = GPIO_PINS_2 | GPIO_PINS_13;
+    gpio_init(GPIOD, &gpio_cfg);
+    GPIOD->clr = (1U << 2) | (1U << 13);    /* PD2, PD13 LOW */
+
+    gpio_cfg.gpio_pins = GPIO_PINS_3 | GPIO_PINS_6;
+    gpio_init(GPIOD, &gpio_cfg);
+    GPIOD->scr = (1U << 3) | (1U << 6);     /* PD3, PD6 HIGH */
 #endif
 
     /* Stock sets APB1EN bit14 (SPI2) before the config sequence; we never did.
