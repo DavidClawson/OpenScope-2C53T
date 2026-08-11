@@ -1378,3 +1378,75 @@ apply to this board. That is the question already posted on issue #18.
 **Caveat against over-reading it:** Exp A also showed ablation kills the scope, so
 stock's scope genuinely depends on the SSPI upload. Any theory in which the config
 port is closed to *everyone* has to explain how stock succeeds through it.
+
+---
+
+## Experiment S (2026-08-11) — Gowin RELOAD (`0x3C`): NEGATIVE, and it closes the last documented route
+
+**Build:** `make guest-reload` = the Exp F fidelity base (`FPGA_STOCK_FIDELITY=1`,
+`FPGA_USART_SILENT_SCOPE=1`) plus `FPGA_RELOAD_3C_BUILD=1`. The send path is at
+`fpga.c` `[0a]`: `0x3C 0x00` at `/256` in its own CS frame, before the prelude,
+followed by a 50 ms settle. The `0x3C` frame is therefore the **only** difference
+from the Exp F/R images.
+
+**Result:**
+
+```
+ED:00039020   S1:0347   H2:Y
+```
+
+`S1:0347` confirms the fidelity base was intact (SPI3 CTRL1 BR=0, stock's `/2`),
+so this is a clean single-variable test. `ED` is bit-identical to every reading
+since June: bits 5 (MEMORY_ERASE), 12 (GOWIN_VLD), 15 (READY), 16 (POR),
+17 (FLASH_LOCK). **SYSTEM_EDIT_MODE (bit 7) still clear. No error bits.**
+
+RELOAD joins `0x05`, `0x12`, `0x15`, the 115,638-byte `0x3B` upload and `0x3A` on
+the list of config commands that do not move the status register by a single bit
+(Exp N), while every *read* opcode answers correctly on the same bus (Exp J).
+
+### Why this one mattered
+
+Gowin documents exactly three ways to make a running, auto-booted part accept a
+new configuration. As of tonight all three are refuted on this unit:
+
+| Route | Closed by |
+|---|---|
+| RECONFIG_N low pulse (≥25 ns) | Exps G/O/Q — 20 + 12 candidate pins, transient-aware, zero anchor failures. Plus maksidze's measurement that QN48 pin 48 sits always HIGH and never pulses |
+| Power cycle | **Exp R** — first genuine FPGA power cycle in the project (hold POWER → "Goodbye" → unplug USB → replug). Status unchanged |
+| **RELOAD command** | **Exp S — this experiment** |
+
+This had never been run on a validated readout. The knob and its send code have
+existed since June, but the only way to reach them was the debug shell, which
+needs USB CDC (never enumerated on this unit) or RTT (impossible while RDP is
+set). There was no make target. It sat in the re-run backlog for that reason
+alone, alongside the trailing-clock sweep and Exp H on stock.
+
+### What it leaves
+
+A sharper contradiction than we had this morning. Every documented route into
+configuration fails for us, while stock traverses one of them at every boot and
+its scope demonstrably depends on doing so (Exp A). Something in the model is
+wrong, and the candidates are no longer MCU-side — that class is closed by
+Exps E/F/R.
+
+The two live ones, in order:
+
+1. **Is the meter even the FPGA?** (§ "Open thread" above, posted on issue #18.)
+   If there is no resident NV design on our part, apicula's "a running auto-booted
+   part will not re-enter config" may not describe this board at all, and the
+   whole framing of the wall changes.
+2. **Is RECONFIG_N even connected to the MCU?** Asked on #18 2026-08-11. If pin 48
+   has no trace back to the MCU — strapped, or pulled up with nothing driving it —
+   then no firmware change could ever have worked, and Exps G/O/Q were unwinnable
+   by construction rather than merely unlucky.
+
+### Method note
+
+The bench also produced a reminder worth recording: **a visible scope trace is
+not evidence of success.** `scope_ui.c:334` renders real ADC samples when
+`fpga_data_ready()`, and falls back to a synthetic square wave (line 379) when no
+data has ever arrived. Since the FPGA never configures, the demo trace renders on
+every boot. There is a latch at `scope_ui.c:337` — the first real sample disables
+the fallback permanently for that boot — so the *disappearance* of the demo trace
+is a genuine success indicator. Its presence is not a failure indicator; it is
+the default state.

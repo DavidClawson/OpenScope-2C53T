@@ -101,6 +101,8 @@ Each of these is closed by a bench measurement, not by argument:
 | Paired PC1 + PC2, held at stock's exact 2-bit code | **Exp R** — `guest-pc1` and `guest-fidelity2`, both `00039020` |
 | A USART-borne "prepare for reconfig" command | **Exp R**, statically: stock clears UEN and never writes `0x40004404` before CONFIG_ENABLE |
 | A fresh FPGA power-on reopening the config port | **Exp R** — first true FPGA power cycle in the project; status unchanged |
+| **The Gowin RELOAD command (`0x3C`)** | **Exp S** — `guest-reload`, `ED:00039020`, inert like every other config command. **All three documented routes into config are now closed** |
+| **"The scope shows a trace, so something worked"** | `scope_ui.c:334/379` — the trace is a synthetic fallback rendered whenever no real ADC data has *ever* arrived. Its **disappearance** is the success signal, not its presence |
 
 ---
 
@@ -199,7 +201,19 @@ takes — a runtime question. Either park stock at `0x0802C618` over SWD and rea
 
 Read the result from the LCD overlay. **Do not attach SWD to read it.**
 
-### 1b. Experiment S — Gowin RELOAD (0x3C)  ⏱ built and staged, ~15 min bench
+### 1b. ~~Experiment S — Gowin RELOAD (0x3C)~~  ✅ DONE 2026-08-11, NEGATIVE
+
+**Result: `ED:00039020 S1:0347`.** Bit-identical; SYSTEM_EDIT_MODE still clear.
+`S1:0347` confirms the fidelity base was intact, so this was a clean
+single-variable test. RELOAD is inert, exactly like every other config command in
+Exp N.
+
+**This closes the last of the three documented routes into configuration** —
+RECONFIG_N pulse (Exps G/O/Q + maksidze's pin-48 measurement), power cycle
+(Exp R), and now RELOAD. All three fail for us; stock traverses one every boot.
+Writeup: `analysis_v120/expE_swd_state_diff_2026-07-28.md` § Experiment S.
+
+Original rationale kept below for context.
 
 **The highest-value single shot left, and the image is already built**
 (`make guest-reload`).
