@@ -42,13 +42,15 @@ These features are written in C, unit-tested, and integrated into the firmware b
 
 ## In Progress
 
-**FPGA SPI3 data acquisition** — This is the critical path. The FPGA sends ADC samples over SPI3 (PB3/PB4/PB5 at 60MHz), but getting it working requires:
-1. PB11 HIGH (active mode signal to FPGA)
-2. Full USART boot command sequence (commands 0x01-0x08)
-3. Queue-driven triggering (not polled)
-4. SysTick delays between boot phases
-
-Root cause is identified and documented in `reverse_engineering/analysis_v120/FPGA_TASK_ANALYSIS.md`. Implementation is next.
+**✅ FPGA config entry + data acquisition — SOLVED 2026-08-13.** The two-month blocker
+is broken: our firmware now brings the Gowin FPGA up from a cold boot (bit-bang SSPI
+loader, not the hardware-SPI peripheral), arms the capture engine, and reads live ADC
+data — a cold-boot-to-live-scope on open firmware. See the devlog
+`2026-08-13-cold-boot-to-scope.md`. **The current critical path is now a feature, not
+a wall: timebase control** — the build captures ~µs sweeps with no configurable sample
+rate, so it tracks slow signals but aliases audio-frequency ones. Next: send the FPGA
+timebase commands (`0x0F/0x10/0x11`), wire up the timebase buttons, and calibrate.
+Detail in `docs/bench_plan_2026-08-14.md`.
 
 ## Future Plans
 
@@ -83,7 +85,44 @@ Roughly ordered by priority. Not committed to timelines.
 
 ### Hardware mods (Phase 3)
 - **ESP32 WiFi co-processor** — $4 solder-in mod for phone display, remote control, data logging, OTA updates. Design doc at `docs/esp32_coprocessor.md`.
-- **Custom FPGA bitstream** — Gowin GW1N-UV2 has open-source toolchain (Yosys + nextpnr-gowin + Apicula). Could enable higher sample rates, custom triggers, hardware acceleration.
+
+### Stretch track: custom Gowin bitstreams ("gateware for the FPGA")
+
+Unblocked by the 2026-08-13 breakthrough. Now that our firmware can upload arbitrary
+bitstreams to the Gowin GW1N-UV2 from a cold boot, we can write **our own FPGA designs**
+— not just replay stock's — turning this from an open-firmware clone of the stock scope
+into a scope that does things the stock one can't.
+
+**Why it's realistic now (the prerequisites are already in hand):**
+- **Upload path solved** — the bit-bang SSPI loader configures the FPGA every boot.
+- **Open synthesis toolchain for this exact part** — `gw1n2-apicula` (Yosys → nextpnr →
+  Apicula) targets the GW1N-2 family = our GW1N-UV2. Same toolchain we used to sim the
+  netlist.
+- **The stock design is reverse-engineered** — the netlist trace (`gw1n2-apicula`
+  `tools/m_*.py`, `scope_unpacked.v`) mapped the pins, the ADC data bus into the BRAMs,
+  the capture counter, the SPI control register, and the readback mux. Not a black box.
+
+**What it could unlock:**
+- **Hardware decimation / configurable sample rate** — the elegant fix for the timebase
+  problem (custom fabric samples at any rate, instead of coaxing stock's opaque commands).
+- **Our own clean MCU↔FPGA protocol** — a real register map + streaming interface we
+  control, replacing stock's cryptic `0x04/0x05`.
+- **Logic-analyzer mode, in-fabric edge/pulse triggers, hardware protocol decoders** —
+  things stock's fabric simply doesn't do.
+
+**The hard parts (be honest):** replicating the **ADC interface + PLL clocking** (the
+250 MS/s DDR capture) is the real challenge — Apicula only partially decodes the rPLL —
+and Apicula's completeness for the specific primitives (BSRAM, rPLL, DDR I/O) is a
+wildcard.
+
+**Suggested incremental path:** (1) synthesize a *trivial* design (a register the MCU
+reads back over SPI) to prove "our bitstream runs and talks to us"; (2) **fork the stock
+netlist** we already unpacked — keep its working ADC/PLL front end, tweak buffer
+depth/trigger — rather than reinvent sampling; (3) then get ambitious.
+
+**⚠ Hard safety rule:** experiment freely with SRAM config (a bad bitstream just means no
+scope until reboot — zero brick risk), but **never write the FPGA's NV flash** — it holds
+the meter design and is the only copy.
 
 ## Reverse Engineering Status
 
