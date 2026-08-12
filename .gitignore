@@ -89,3 +89,6 @@ reverse_engineering/captures/export/
 /*.HEIC
 /*.heic
 /*.png
+
+# Bench signal-generator sketch (machine-specific, per-bench)
+/esp32_siggen/
