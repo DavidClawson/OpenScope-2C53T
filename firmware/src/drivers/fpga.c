@@ -23,6 +23,7 @@
 #include "fpga.h"
 #include "fpga_cal_table.h"
 #include "meter_data.h"
+#include "scope_trigger.h"
 #include "../ui/ui.h"
 #include "../ui/scope_state.h"
 #include "at32f403a_407.h"
@@ -266,7 +267,7 @@ static void spi3_pump(const uint8_t *tx, volatile uint8_t *rx, uint32_t n)
  * runtime command we haven't replayed). */
 #define SPI3_UPLOAD_BR  0u   /* /2 = 60MHz, matches stock */
 
-/* ─── WARM-HANDOFF EXPERIMENT (2026-06-13) ──────────────────────────────
+/* ─── WARM-HANDOFF EXPERIMENT (2026-06-13, reworked 2026-08-12) ─────────
  * Set to 1 to build a "read-only" firmware for the stock→ours warm-handoff
  * test. The premise: stock firmware successfully configures the FPGA's scope
  * design at boot; the GW1N holds that SRAM config as long as power is
@@ -274,15 +275,29 @@ static void spi3_pump(const uint8_t *tx, volatile uint8_t *rx, uint32_t n)
  * high). So if we boot stock (FPGA→scope-configured), then reflash to THIS
  * build via the stock IAP path WITHOUT cutting power, our firmware comes up in
  * front of an already-configured scope FPGA — letting us test our SPI3 read
- * path in isolation, before the FT232H/JTAG hardware arrives.
+ * path in isolation from the config-entry wall.
  *
- * When 1, fpga_init() sets up SPI3 + the two control pins (PC6 enable, PB11
- * active) to match stock's scope-run posture, but SKIPS everything that could
- * disturb the running config: the boot USART commands, the SSPI config
- * sequence (05/12/15/3B/3A), the meter-frontend relay routing, the meter USART
- * commands, and all auto-tasks. Read with the `spi3 acqread` shell command
- * (real 0x04/0x05 per-channel protocol). span>0 on CH1/CH2 = we read a live
- * waveform from a stock-configured FPGA = our downstream path works.
+ * 2026-08-12 rework, after Stlkv proved the recipe end-to-end on a second
+ * V1.4 unit (issue #18: live CH1 trace under rosenrot00's ported firmware):
+ *   1. DAC1 (PA4, trigger comparator reference) is armed to mid-scale at
+ *      init — the MCU reset zeroes it and every capture reads flat zeros
+ *      until it is restored. This was Stlkv's missing link, and it also
+ *      explains the June "one buffer then idle" result.
+ *   2. The readout is the LCD, not the (dead-on-this-unit) USB-CDC shell:
+ *      a dedicated PC0-gated acquisition task speaks the real 0x04/0x05
+ *      per-channel 1026-byte protocol and feeds the scope UI. The synthetic
+ *      demo trace disappearing = first real frame latched.
+ *   3. The build is read-only ON THE WIRE, enforced, not accidental: the
+ *      Makefile target pairs FPGA_USART_SILENT_SCOPE (USART2 UEN never set),
+ *      and every mode-entry/heartbeat path that transmits or re-postures the
+ *      frontend is compiled out below. Before the rework, main()'s
+ *      pre-scheduler fpga_enter_scope_mode() call was sending ~20 polled
+ *      USART2 frames (incl. FPGA_CMD_RESET) at boot in this very build.
+ *   ⚠ NEVER touch the Gowin config port here (0x11/0x41/0x05-prelude/0x12/
+ *     0x15/0x3B/0x3A/0x3C): a configured part's port is closed, and reading
+ *     it desynchronises acquisition (Exp L). The mandatory anchored-read
+ *     discipline does NOT apply in this build — it would destroy the state
+ *     being tested.
  *
  * Bench procedure: docs/fpga_warm_handoff_test.md. Revert to 0 for normal builds. */
 #ifndef FPGA_WARM_HANDOFF_TEST
@@ -1209,6 +1224,13 @@ void fpga_scope_refresh_acq_mode(void)
 
 void fpga_scope_heartbeat(void)
 {
+#if FPGA_WARM_HANDOFF_TEST
+    /* Warm-handoff: the FPGA free-runs whatever stock armed; there is nothing
+     * to re-arm, no dvom_TX task to drain the queue these sends would fill
+     * (each send would block the display task 100 ms once it's full), and
+     * fpga_trigger_scope_read feeds a queue whose consumer doesn't exist. */
+    return;
+#endif
     const scope_state_t *ss;
     uint8_t run_mode;
     uint8_t sample_depth;
@@ -1624,6 +1646,112 @@ static void fpga_acquisition_task(void *pv)
         fpga.spi3_probing = false;
     }
 }
+
+#if FPGA_WARM_HANDOFF_TEST
+/* ─── Warm-handoff acquisition (2026-08-12) ──────────────────────────
+ * The real per-channel read protocol from the issue-#18 stock capture,
+ * bench-proven on this board by Stlkv's port: PC0 data-ready (active LOW),
+ * then ONE 1026-byte CS-LOW window per channel — the opcode byte (0x04=CH1,
+ * 0x05=CH2) plus 2 more status bytes, then 1023 samples. Strictly read-only
+ * on the FPGA: scope-engine opcodes only, never the Gowin config port
+ * (0x11/0x41 there desynchronise a configured part — Exp L). Feeds the same
+ * buffers/flags the scope UI already consumes, so success shows on the LCD:
+ * the synthetic demo trace disappears on the first real frame (scope_ui.c
+ * latch), and spi3_ok_count drives redraws (main.c new-data detector).
+ *
+ * NOTE the 0x05 hazard: as a 2-byte CS frame, 0x05 would be byte-identical
+ * to the config prelude's ERASE_SRAM step. The 1026-byte frame shape is what
+ * makes it a CH2 read — do not "shorten" this window. */
+static uint8_t fpga_warmtest_read_channel(uint8_t opcode, volatile uint8_t *buf)
+{
+    SPI3_CS_ASSERT();
+    uint8_t s0 = spi3_xfer(opcode);        /* MISO during opcode: 0x80 marker
+                                              expected in the first window
+                                              after data-ready (Stlkv) */
+    (void)spi3_xfer(0xFF);                 /* status bytes 2 and 3 */
+    (void)spi3_xfer(0xFF);
+    if (opcode == 0x04)
+        fpga.spi3_first_byte = s0;         /* debug overlay "1:" field */
+
+    for (int i = 0; i < 1023; i++) {
+        uint8_t raw = spi3_xfer(0xFF);
+        if (i < 4) {
+            if (opcode == 0x04) fpga.diag_ch1_raw[i] = raw;
+            else                fpga.diag_ch2_raw[i] = raw;
+        }
+        int16_t cal = (int16_t)raw + (int16_t)FPGA_ADC_OFFSET;
+        if (cal < 0)   cal = 0;
+        if (cal > 255) cal = 255;
+        buf[i] = (uint8_t)cal;
+    }
+    buf[1023] = buf[1022];   /* frame carries 1023 samples; don't leave a
+                                stale byte for the overlay's min/max scan */
+    SPI3_CS_DEASSERT();
+    return s0;
+}
+
+static void fpga_warmtest_acq_task(void *pv)
+{
+    (void)pv;
+    for (;;) {
+        if (!fpga.initialized || fpga.bus_released) {
+            vTaskDelay(pdMS_TO_TICKS(100));
+            continue;
+        }
+
+        /* Wait for PC0 data-ready, active LOW (input pull-up set in
+         * fpga_init, so an undriven pin reads "not ready"). Stock polls it
+         * at ~1 kHz; do the same, bounded at 500 ms per attempt. */
+        bool ready = false;
+        for (int w = 0; w < 500; w++) {
+            if (!(GPIOC->idt & (1u << 0))) { ready = true; break; }
+            vTaskDelay(pdMS_TO_TICKS(1));
+        }
+        if (!ready) {
+            fpga.spi3_total_timeouts++;    /* overlay "TO:" — PC0 never armed
+                                              (also counts rejected frames,
+                                              see below) */
+            /* Defensive re-arm: the trigger reference is MCU-internal and
+             * read-only on the wire, so restoring it costs nothing. Covers
+             * any path that dropped DAC1 (the known ones are compiled out,
+             * but a dead reference is exactly the silent capture-killer this
+             * experiment must not misdiagnose). No-op while capture runs —
+             * this branch is only reached when PC0 stayed quiet for 500 ms. */
+            scope_trigger_dac_raw(2048);
+            continue;
+        }
+
+        uint8_t s1 = fpga_warmtest_read_channel(0x04, fpga.ch1_buf);
+        uint8_t s2 = fpga_warmtest_read_channel(0x05, fpga.ch2_buf);
+
+        /* Anchor the success flags on frame validity — a fully dead bus
+         * reads 0xFF everywhere (pull-up idle / spi3_xfer timeout), which
+         * after the -28 offset is a plausible flat 227, and one spurious
+         * PC0 glitch would otherwise latch the scope UI's demo-kill flag on
+         * garbage (the same unanchored-measurement trap as the /2 reads).
+         * Accept if either window carried the 0x80 data-ready marker, or the
+         * CH1 buffer is non-constant (the marker appears only in the FIRST
+         * window after data-ready per Stlkv, so a marker-only gate could
+         * false-negative; varying data is accepted on its own merits). */
+        bool marker = (s1 == 0x80) || (s2 == 0x80);
+        bool varies = false;
+        for (int i = 1; i < 1023; i++) {
+            if (fpga.ch1_buf[i] != fpga.ch1_buf[0]) { varies = true; break; }
+        }
+        if (marker || varies) {
+            fpga.spi3_ok_count++;
+            fpga.spi3_timeout_count = 0;
+            data_ready = true;
+        } else {
+            fpga.spi3_total_timeouts++;    /* rejected frame — shows in TO: */
+        }
+
+        /* Bound the read rate; the display redraws on spi3_ok_count change
+         * inside its own 50 ms frame loop. */
+        vTaskDelay(pdMS_TO_TICKS(30));
+    }
+}
+#endif /* FPGA_WARM_HANDOFF_TEST */
 
 /* ═══════════════════════════════════════════════════════════════════
  * SPI3 FPGA config handshake (shared by fpga_init and `fpga reinit`)
@@ -2456,7 +2584,10 @@ void fpga_init(void)
      * idle level, which makes every status byte we sample suspect. */
     gpio_cfg.gpio_pins = GPIO_PINS_4;
     gpio_cfg.gpio_mode = GPIO_MODE_INPUT;
-#if FPGA_STOCK_FIDELITY
+#if FPGA_STOCK_FIDELITY || FPGA_WARM_HANDOFF_TEST
+    /* Warm-handoff also wants stock's defined idle level: the acquisition
+     * loop samples MISO with no config-port anchor available (Exp L), so a
+     * floating input would make idle bytes unreadable noise. */
     gpio_cfg.gpio_pull = GPIO_PULL_UP;
 #else
     gpio_cfg.gpio_pull = GPIO_PULL_NONE;
@@ -2736,17 +2867,40 @@ void fpga_init(void)
 #elif FPGA_WARM_HANDOFF_TEST
     /* Warm-handoff test: the FPGA was already configured (scope) by stock
      * before the no-power-loss handoff. Do NOT run the SSPI config sequence —
-     * it would attempt a reconfig the running design ignores anyway, and we
-     * keep the wire quiet to be safe. Just arm PB11 (active mode) to match
-     * stock's scope-run posture (PC6 is already HIGH from above), mark init
-     * done, and bail before the meter-frontend routing + meter USART commands.
-     * Read with `spi3 acqread`. */
+     * the running design's config port is closed anyway, and reading it
+     * desynchronises acquisition (Exp L). Arm PB11 (active mode) to match
+     * stock's scope-run posture (PC6 is already HIGH from above), then set up
+     * the two things the acquisition task needs, mark init done, and bail
+     * before the meter-frontend routing + meter USART commands. */
     gpio_cfg.gpio_pins = GPIO_PINS_11;
     gpio_cfg.gpio_mode = GPIO_MODE_OUTPUT;
     gpio_cfg.gpio_out_type = GPIO_OUTPUT_PUSH_PULL;
     gpio_cfg.gpio_drive_strength = GPIO_DRIVE_STRENGTH_STRONGER;
     gpio_init(GPIOB, &gpio_cfg);
     GPIOB->scr = PB11_MASK;   /* PB11 HIGH — FPGA active (match stock scope) */
+
+    /* PC0 = FPGA data-ready, active LOW. Nothing else in the image ever
+     * configures this pin — every prior read relied on the reset-default
+     * floating input. Make it an explicit input with PULL-UP: undriven ⇒
+     * HIGH ⇒ "not ready", so a floating line on an unconfigured FPGA cannot
+     * fake a data-ready and poison the cold-boot negative control. A
+     * configured FPGA actively driving the line wins over the weak pull. */
+    gpio_cfg.gpio_pins = GPIO_PINS_0;
+    gpio_cfg.gpio_mode = GPIO_MODE_INPUT;
+    gpio_cfg.gpio_pull = GPIO_PULL_UP;
+    gpio_init(GPIOC, &gpio_cfg);
+    gpio_cfg.gpio_pull = GPIO_PULL_NONE;   /* restore shared struct default */
+
+    /* Trigger DAC — THE missing link (Stlkv, issue #18, 2026-08-12): the MCU
+     * reset zeroes DAC1 (PA4, DHR12R1 @ 0x40007408), the FPGA's trigger
+     * comparator loses its reference, and every capture reads flat zeros
+     * until it is restored. Arm mid-scale. Touches only MCU-internal state
+     * (CRM clocks, PA4 analog, DAC registers) — cannot disturb the FPGA.
+     * Ordering: main() ran dac_output_init() (siggen) before fpga_init(), so
+     * this write is not clobbered at boot; do NOT start siggen output in
+     * this build, it shares DAC1 and would drop the reference. */
+    scope_trigger_dac_raw(2048);
+
     fpga.initialized = true;
     return;
 #else
@@ -2990,11 +3144,13 @@ QueueHandle_t fpga_create_tasks(void)
      * external master and must not drive the bus or send USART traffic. */
     (void)tx_task_handle; (void)rx_task_handle; (void)acq_task_handle;
 #elif FPGA_WARM_HANDOFF_TEST
-    /* Warm-handoff test: create NO auto-tasks. The acquisition task uses the
-     * old 0x80|range read and would both disturb the FPGA and compete with the
-     * manual `spi3 acqread` probe; the meter poll/USART tasks could switch the
-     * FPGA out of scope mode. We drive everything from the debug shell. */
-    (void)tx_task_handle; (void)rx_task_handle; (void)acq_task_handle;
+    /* Warm-handoff test: ONE task — the PC0-gated read-only loop speaking
+     * the real 0x04/0x05 protocol (fpga_warmtest_acq_task above). No
+     * dvom_TX/dvom_RX/meter_poll: USART2 is dark (FPGA_USART_SILENT_SCOPE is
+     * paired by the Makefile target) and nothing may re-posture the FPGA out
+     * of the scope mode stock left it in. */
+    xTaskCreate(fpga_warmtest_acq_task, "fpga", 256, NULL, 3, &acq_task_handle);
+    (void)tx_task_handle; (void)rx_task_handle;
 #elif FPGA_USART_SILENT_SCOPE
     /* USART-silent scope test: create NO USART/meter tasks (dvom_TX/dvom_RX/
      * meter_poll) — they are the ongoing PA2/PA3 traffic we're eliminating — and
@@ -3147,6 +3303,12 @@ void fpga_bus_release(void)
 
 void fpga_scope_reinit(void)
 {
+#if FPGA_WARM_HANDOFF_TEST
+    /* Warm-handoff: never re-posture the FPGA (relays, PC11, USART scope
+     * sequence) and never clear data_ready — the stock-armed state IS the
+     * experiment. */
+    return;
+#endif
     const scope_state_t *ss;
 
     if (!fpga.initialized) return;
@@ -3184,6 +3346,13 @@ bool fpga_service_requests(void)
 
 void fpga_enter_scope_mode(void)
 {
+#if FPGA_WARM_HANDOFF_TEST
+    /* Warm-handoff: main() calls this PRE-SCHEDULER, where the timed-send
+     * fallback would transmit ~20 polled USART2 frames (incl. FPGA_CMD_RESET)
+     * straight onto the wire — the exact perturbation this build exists to
+     * avoid. The FPGA is already in scope mode; do nothing. */
+    return;
+#endif
     if (!fpga.initialized) return;
 
     /* Stop DAC output if signal gen was running */
@@ -3203,6 +3372,11 @@ void fpga_enter_scope_mode(void)
 
 void fpga_enter_siggen_mode(void)
 {
+#if FPGA_WARM_HANDOFF_TEST
+    /* Warm-handoff: siggen shares DAC1 with the trigger reference this build
+     * depends on; entering it would drop the reference and kill capture. */
+    return;
+#endif
     if (!fpga.initialized) return;
 
     /* Send signal generator init command sequence.
@@ -3334,6 +3508,12 @@ static void fpga_send_meter_mode_sequence(uint8_t submode)
 
 void fpga_set_meter_mode(uint8_t submode)
 {
+#if FPGA_WARM_HANDOFF_TEST
+    /* Warm-handoff: meter mode would re-posture PC11/relays and queue USART
+     * frames — leave the FPGA in the scope mode stock armed. */
+    (void)submode;
+    return;
+#endif
     if (!fpga.initialized) return;
 
     /* Stop DAC output if signal gen was running */
@@ -3350,6 +3530,10 @@ void fpga_set_meter_mode(uint8_t submode)
 
 void fpga_meter_reinit(uint8_t submode)
 {
+#if FPGA_WARM_HANDOFF_TEST
+    (void)submode;
+    return;
+#endif
     if (!fpga.initialized) return;
 
     fpga_send_meter_wake_preamble();
@@ -3360,6 +3544,9 @@ void fpga_meter_reinit(uint8_t submode)
 
 void fpga_scope_wake(void)
 {
+#if FPGA_WARM_HANDOFF_TEST
+    return;
+#endif
     if (!fpga.initialized) return;
 
     fpga_send_meter_wake_preamble();

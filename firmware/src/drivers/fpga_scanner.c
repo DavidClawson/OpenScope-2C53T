@@ -909,6 +909,15 @@ static void scan_draw_results(bool aborted)
 
 void fpga_scanner_run(void)
 {
+#if FPGA_WARM_HANDOFF_TEST
+    /* Read-only-on-the-wire build (warm handoff): the scanner sweeps Gowin
+     * config opcodes (tier0/1/6 incl. 0x3B/0x3A across all SPI modes) and
+     * pulses PC6/PB11 LOW — any of which desynchronises the stock-configured
+     * FPGA (Exp L) and destroys the state under test. It would also race the
+     * warmtest acquisition task on SPI3 (fpga.spi3_active has no readers).
+     * One stray OK press on Settings item 9 must not end the experiment. */
+    return;
+#endif
     /* Initialize state */
     memset(hits, 0, sizeof(hits));
     hit_count = 0;

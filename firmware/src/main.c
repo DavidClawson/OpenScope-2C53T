@@ -43,7 +43,13 @@ extern void system_clock_config(void);
  * Global State (extern'd via ui.h for UI modules)
  * ═══════════════════════════════════════════════════════════════════ */
 
+#if FPGA_WARM_HANDOFF_TEST
+/* Warm-handoff build: boot straight into scope mode — the LCD (scope screen +
+ * debug overlay) is the only readout on the bench unit (USB CDC dead). */
+volatile device_mode_t current_mode = MODE_OSCILLOSCOPE;
+#else
 volatile device_mode_t current_mode = MODE_MULTIMETER;
+#endif
 volatile uint32_t      uptime_seconds = 0;
 volatile int8_t        settings_selected = 0;
 volatile int8_t        settings_depth = 0;

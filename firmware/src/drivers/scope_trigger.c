@@ -14,7 +14,8 @@
 
 /* DAC_CTRL bit fields (channel 1) */
 #define DAC_D1EN     (1u << 0)   /* DAC1 enable */
-#define DAC_D1BOFF   (1u << 1)   /* CH1 output buffer disable (matches siggen) */
+#define DAC_D1BOFF   (1u << 1)   /* CH1 output buffer DISABLE — stock keeps it
+                                    CLEAR (buffer ON); do not set (see init) */
 #define DAC_D1TEN    (1u << 2)   /* CH1 trigger enable */
 #define DAC_D1TSEL_SW (7u << 3)  /* CH1 trigger source = software (0b111) */
 
@@ -54,11 +55,18 @@ void scope_trigger_dac_init(void)
     gpio_cfg.gpio_mode = GPIO_MODE_ANALOG;
     gpio_init(GPIOA, &gpio_cfg);
 
-    /* CH1: enable, buffer off, software-trigger source, trigger enabled.
+    /* CH1 control — stock's exact bring-up order (master_init +0x17F2,
+     * 0x0802C23C-0x0802C26A, decoded by the ripcord session 2026-08-12):
+     * TRSEL=software first, then TREN; wave-gen off, DMA off, and the output
+     * buffer ENABLED (stock bic #0x02 — the previous D1BOFF here was a
+     * faithfulness bug; stock's net CH1 CTRL is 0x3D, buffered). D1EN is set
+     * LAST, in its own write, so the first software trigger cannot latch
+     * against an unconfigured trigger select.
      * Preserve channel-2 bits (siggen / CH2 path may use them). */
     uint32_t ctrl = DAC_CTRL & 0xFFFF0000u;
-    ctrl |= DAC_D1EN | DAC_D1BOFF | DAC_D1TEN | DAC_D1TSEL_SW;
+    ctrl |= DAC_D1TSEL_SW | DAC_D1TEN;   /* trigger config, D1EN still clear */
     DAC_CTRL = ctrl;
+    DAC_CTRL = ctrl | DAC_D1EN;          /* enable last (stock order) — 0x3D */
 
     inited = 1;
 }

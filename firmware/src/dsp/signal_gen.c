@@ -266,6 +266,16 @@ static void siggen_update_dac(void)
 
 void siggen_enable(bool enable)
 {
+#if FPGA_WARM_HANDOFF_TEST
+    /* Warm-handoff build: siggen shares DAC1/PA4 with the scope trigger
+     * reference armed at fpga_init (scope_trigger_dac_raw(2048)), and the
+     * disable path's dac_output_stop() would clear D1EN and leave PA4
+     * high-impedance — silently killing capture for the rest of the boot,
+     * with the LCD symptom indistinguishable from a failed handoff. Keep the
+     * toggle fully inert (config flag too, so the UI never claims ON). */
+    (void)enable;
+    return;
+#else
     g_config.output_enabled = enable;
 #ifndef EMULATOR_BUILD
     if (enable) {
@@ -273,6 +283,7 @@ void siggen_enable(bool enable)
     } else {
         dac_output_stop();
     }
+#endif
 #endif
 }
 

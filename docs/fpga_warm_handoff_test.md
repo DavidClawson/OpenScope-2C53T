@@ -1,9 +1,21 @@
-# Warm-Handoff FPGA Read Test (no hardware required)
+# Warm-Handoff FPGA Read Test (no extra hardware required)
 
-**Goal:** test whether *our* firmware's SPI3 read path works against a
-scope-configured FPGA — **before** the FT232H/JTAG hardware arrives — by letting
-**stock** configure the FPGA, then handing off to our firmware **without cutting
-power** so the FPGA keeps its config.
+**Goal:** run **our firmware's full scope pipeline** (SPI3 reads → buffers →
+scope UI) against a scope-configured FPGA, by letting **stock** configure the
+FPGA at boot and then handing off to our firmware **without cutting power** so
+the FPGA keeps its SRAM config. This sidesteps the config-entry wall entirely
+and gives a ~2-min/iteration dev loop for real-waveform work.
+
+> **REWORKED 2026-08-12.** The original June procedure read via the USB-CDC
+> shell (dead on bench unit #1) and got exactly one buffer before capture went
+> idle — see the RESULTS sections at the bottom. **Stlkv's port (issue #18,
+> 2026-08-12) found the missing link: the MCU reset zeroes DAC1 (PA4, the
+> trigger comparator's reference, `DHR12R1 @ 0x40007408`), so the FPGA never
+> triggers a new capture and every read is flat zeros.** Restoring DAC1 to
+> mid-scale gave live, continuously-updating waveforms with PC0 pulsing. The
+> reworked `guest-warmtest` build arms DAC1 at init and replaces the shell
+> readout with the LCD: a PC0-gated acquisition task speaks the real
+> `0x04`/`0x05` protocol and feeds the scope UI directly.
 
 ## Why this works
 
@@ -13,92 +25,179 @@ power** so the FPGA keeps its config.
 - The GW1N holds its SRAM config **as long as VCC is maintained**. An MCU
   *soft-reset* (reflash + reboot) does **not** power-cycle the FPGA, and
   RECONFIG_N stays HIGH (maksidze confirmed). So the scope config survives a
-  firmware swap.
-- Our `FPGA_WARM_HANDOFF_TEST` build comes up **read-only**: it sets up SPI3 +
-  PC6 (enable) + PB11 (active) to match stock's scope-run posture, but skips the
-  SSPI config sequence, the boot/meter USART commands, the analog-frontend
-  relays, and all auto-tasks — i.e. it touches nothing that could knock the
-  FPGA out of scope mode. We then read manually with `spi3 acqread`.
+  firmware swap. (Corollary from Exp R: only unplugging USB after a POWER
+  shutdown actually drops the FPGA rail.)
+- Our `FPGA_WARM_HANDOFF_TEST` build comes up **read-only on the wire**:
+  - SPI3 + PC6 (enable) + PB11 (active) match stock's scope-run posture;
+    PB4/MISO gets stock's pull-up; PC0 (data-ready, active LOW) is configured
+    input pull-up so an undriven line can't fake "ready".
+  - **DAC1 armed to mid-scale (2048)** via the `scope_trigger` driver — the
+    Stlkv fix. MCU-internal only; cannot touch the FPGA.
+  - The SSPI config sequence, all USART2 traffic (UEN is never set —
+    `FPGA_USART_SILENT_SCOPE` is paired by the Makefile target), the frontend
+    relays, and every mode-entry/heartbeat transmit path are compiled out.
+    (Before 2026-08-12 this build silently sent ~20 polled USART2 frames from
+    `main()`'s pre-scheduler `fpga_enter_scope_mode()` call — fixed.)
+  - One task runs: `fpga_warmtest_acq_task` — poll PC0 (active LOW, ~1 kHz,
+    500 ms bound), then read CH1 (`0x04`) and CH2 (`0x05`) as single
+    1026-byte CS-LOW windows (opcode + 2 status bytes + 1023 samples), apply
+    the −28 ADC offset, fill `fpga.ch1_buf`/`ch2_buf`, set `data_ready`.
 
-If `spi3 acqread` returns live samples, **our downstream read path works** and
-the *only* remaining problem is config-entry (which JTAG will solve). If it
-doesn't, we learn whether the config survived the handoff vs. our read framing
-is wrong — both actionable.
+**⚠ Config-port quarantine.** Never add `0x11`/`0x41` (or any Gowin config
+opcode) reads to this build, including the otherwise-mandatory IDCODE anchor:
+a configured part's config port is closed (Exp L/M), reads return zeros, and
+**touching the port desynchronises acquisition** — it would destroy the state
+under test. The anchored-read rule applies to config-wall experiments, not
+here. Related hazard: a *short* CS frame containing `0x05` is byte-identical
+to the config prelude's ERASE_SRAM step; only the 1026-byte frame shape makes
+it a CH2 read. Don't shorten the windows.
 
 ## What you need
 
-- **Unit #2** (the "guest" unit: stock FNIRSI IAP bootloader at `0x08000000`,
-  app at `0x08007000`). The handoff relies on the stock IAP drive for a
-  no-power-loss reflash.
+- **Bench unit #1** (factory FNIRSI IAP bootloader at `0x08000000`, app slot
+  `0x08007000`). The handoff relies on the factory IAP drive for a
+  no-power-loss reflash. *(Historical note: the June runs called this "unit
+  #2"; the standard bench loop since 2026-07-27 is `make guest` + factory IAP
+  on bench unit #1. Do not run this on a unit with our HID bootloader — that
+  flash path is not the no-power-loss one.)*
 - The stock app binary: `archive/2C53T Firmware V1.2.0/APP_2C53T_V1.2.0_251015.bin`.
-- The serial debug shell (`scripts/serial_cmd.py` over the USB CDC port).
+- A signal source on the CH1 probe (device siggen output from *stock*, a
+  probe-comp square wave, or any known signal). Feed it **before** the
+  handoff so you can confirm stock's live trace first.
+- USB attached and the battery charged. **Power must never drop between the
+  stock boot and the end of the test** — a dropout reverts the FPGA to its NV
+  design and all reads go dead (that reversion is also the negative control,
+  step 6).
+
+No USB shell, no logic analyzer, no case opening. The LCD is the readout.
 
 ## Procedure
 
-**1. Put stock on the guest unit (configures the FPGA).**
-If the guest slot currently holds our firmware, flash stock back first:
+**1. Flash stock (it will configure the FPGA at its next real boot).**
 ```
 ! python3 scripts/iap_flash.py flash "archive/2C53T Firmware V1.2.0/APP_2C53T_V1.2.0_251015.bin"
 ```
 (MENU+Power → upgrade mode, then detect → pick → flash. Needs sudo for the raw
 disk write — run it yourself.)
 
-**2. Boot stock, confirm the FPGA is configured.**
-Let it boot fully (~5 s — stock uploads the bitstream at ~3.6 s automatically).
-Enter **scope mode** and confirm a live trace. That proves the FPGA is now
-running the scope design. **Leave the device powered on from here — do NOT
-unplug or power-cycle.**
+**2. Boot stock for real, confirm a live trace.**
+⚠ **Stock reboots into charge-display mode after an IAP flash** (Exp R:
+stock-only behavior) — that mode **skips FPGA init**. Press POWER for a real
+boot. Let it boot fully (~5 s; the bitstream upload happens ~3.6 s in), enter
+**scope mode**, and confirm a live trace on CH1 with your signal. That proves
+the FPGA is running the scope design. **From here on: no unplugging, no
+power-cycling, no POWER-button shutdown.**
 
-**3. Build the warm-handoff test firmware.**
+**3. Build the warm-handoff firmware (on the host, any time).**
 ```
 cd firmware && make guest-warmtest
 ```
 
-**4. Hand off to our firmware WITHOUT cutting power.**
-With the device still on, enter stock upgrade mode (**MENU+Power** → the `IAP`
-drive mounts — this is a *soft* reset, FPGA stays powered), then flash:
+**4. Hand off WITHOUT cutting power.**
+With the device still on, enter upgrade mode (**MENU+Power** → the `IAP` drive
+mounts — a *soft* reset; the FPGA stays powered), then:
 ```
 ! python3 scripts/iap_flash.py flash firmware/build/firmware.bin
 ```
-The device soft-reboots into our read-only test firmware. The FPGA never lost
-power, so its scope config is (hopefully) intact.
+Our builds **auto-boot straight into the app** after an IAP flash (Exp R) —
+no POWER press, which is exactly the clean straight-through boot that
+preserved the config in June's Round 3.
 
-**5. Read the FPGA.**
-Open the shell and run:
-```
-spi3 acqread
-```
-Optionally feed a known signal into CH1 first (siggen or a DC source) for an
-unambiguous result.
+**5. Read the LCD.** The build boots directly into scope mode. Watch for:
 
-## Reading the result
+| LCD observation | Meaning |
+|---|---|
+| **Synthetic demo trace disappears and a real waveform draws** | ✅ **WIN.** First real frame latched (`scope_ui` kills the demo permanently on genuine `data_ready` — and "genuine" is enforced: the acq task only accepts a frame carrying the `0x80` marker or non-constant CH1 data, so a dead bus reading flat `0xFF` cannot latch it). Our entire downstream path — PC0 gating, 0x04/0x05 reads, offset, buffers, rendering — works on our own firmware. |
+| Waveform **updates continuously** (and overlay `OK:` counts up) | ✅✅ Full Stlkv-equivalent result: DAC1 restore re-armed free-running capture. |
+| Demo trace disappears, **one frame, then frozen** (`OK:` stops) | Partial — June's one-buffer symptom persisting despite DAC1. Overlay `P0:` tells you whether PC0 ever pulses again. |
+| Demo trace **never disappears**, overlay `TO:` climbing, `P0:H` constant | PC0 never arms — no capture behind the port. Config may not have survived, or capture needs a nudge we removed (see fallback knob below). |
 
-`spi3 acqread` prints, per channel (0x04=CH1, 0x05=CH2): the 3 status bytes,
-PC0 before/after, the first 16 samples, and `min/max/mean/span`.
+Debug overlay (bottom strip, on in every build) fields that matter here:
+`OK:` = accepted CH1+CH2 read pairs; `TO:` = 500 ms PC0 timeouts **plus
+rejected frames** (frames failing the marker/non-constant validity gate); `1:`
+= MISO byte clocked during the CH1 opcode (Stlkv observed `0x80` in the first
+window after data-ready); `P0:` = live PC0 level (L = ready/active); `P6:`/`B:`
+= PC6/PB11 (should be H/H); `L`/`H` = min/max over the CH1 buffer (span > 0 =
+non-flat data). The config-sequence fields (`SS:`/`CL:`/`CFG:`/`ED:`)
+legitimately read zero in this build and `H2:` reads `N` — the config sequence
+never runs. Ignore the CFG line's `A0` subfield too: it is the zero-initialized
+anchor slot, not a validated "config port open" reading (the overlay legend's
+`A>=0` meaning does not apply here — no anchor read is ever taken).
 
-| Result | Meaning | Next |
-|---|---|---|
-| **status `?? ?? 01`, span > 0, sane samples** | ✅ **WIN** — our read path works on a configured FPGA. Config-entry is the only remaining problem. | Rewrite `fpga_acquisition_task` from the old `0x80\|range` to the real `0x04`/`0x05` protocol so the scope UI shows the trace. |
-| status sane (`?? ?? 01`) but **span = 0 / samples all `00`** | FPGA responds but buffer empty — configured, not capturing | May need a trigger/run nudge, or the design needs a USART arm we skipped. Try a single safe `spi3 xfer`/USART run cmd. |
-| **status `FF FF FF`, samples all `FF`** | FPGA mute / high-Z | Run `spi3 gowin` (reads Gowin STATUS/IDCODE). If it shows configured → pins/CS issue. If `FF`/zero → the config did **not** survive the handoff (the reset disturbed it) — this experiment can't work and we wait for JTAG. |
+Two render caveats while judging the table: (1) occasional single-frame
+horizontal tearing in a live trace is a known unsynchronized-buffer race
+between the acquisition and display tasks (inherited structure, cosmetic) —
+not a capture glitch; (2) **do not press OK in scope mode** — it toggles
+RUN/STOP, and STOP freezes the entire redraw including the overlay counters,
+which looks exactly like the "one frame, then frozen" failure row. If you did,
+press OK again.
 
-`spi3 gowin` is the disambiguator: it tells us whether the FPGA is still
-configured independent of the acq read framing.
+**6. Negative control (run once, at the end).**
+Hold POWER → "Goodbye" → **unplug USB** (device goes dark — this is the only
+sequence that actually drops the FPGA rail) → replug → boot the same
+`guest-warmtest` image cold. Expected: demo trace stays, `TO:` climbs, no
+real frames — because the FPGA reverted to its NV design and there is no scope
+capture to read. That proves the step-5 result came from the handoff, not
+from the build somehow working against an unconfigured part.
+(If the demo trace *does* disappear here, check `P0:` — an `L` reading means
+something on the cold FPGA actively drives data-ready and the control is
+inconclusive; the pull-up only defends against an undriven line. The `L`/`H`
+span disambiguates: flat garbage vs real variation.)
+
+## While the rig is warm (optional extras)
+
+- **Record CH2.** Stlkv's open question (#18): in the inherited state both
+  windows carried CH1 on his unit, CH2 never appeared. Note what our CH2
+  trace shows with a signal on CH2 — any difference is a data point for him.
+- **Siggen is safe to cycle past but useless**: `siggen_enable` is fully inert
+  in this build (guarded — its disable path would otherwise Hi-Z PA4 and kill
+  the trigger reference permanently). The acq task also re-arms DAC1 to
+  mid-scale on every PC0 timeout as defense in depth.
+- **Settings → "FPGA SPI Scanner" is guarded** (`fpga_scanner_run` no-ops in
+  this build — it would otherwise sweep every quarantined config opcode and
+  pulse PC6/PB11 LOW, ending the experiment in one press). **Settings →
+  "Firmware Update" is NOT guarded** — it soft-resets the MCU mid-run; that's
+  also how you *end* the session (it re-enters the flash path), just don't
+  press it by accident.
+
+## Fallback knob (only if PC0 never arms)
+
+Stlkv's port also sent stock's five post-config SPI3 writes (`01 08 / 02 03 /
+06 00 / 07 00 / 08 AD`; register `0x02` is an acquisition-mode selector where
+`03` = run) and reported SPI3 writes safe against the live design. (Per the
+ripcord session's stock decode, the `08 AD` payload is the *digital trigger
+level* in offset-binary — `0xAD = 0x2D ^ 0x80` — a second trigger quantity
+alongside the DAC1 analog reference; if DAC1 alone doesn't re-arm capture,
+this byte is the other half of the trigger state.) The reworked build
+deliberately sends nothing. If step 5 shows PC0 stuck HIGH,
+the next build variant is those five writes (each in its own CS frame,
+scope-engine opcodes only — extract from `fpga_spi3_config_sequence`, do NOT
+call it, it would send the forbidden prelude). Not implemented until the
+minimal build's bench result says it's needed.
 
 ## Notes / caveats
 
-- This is **guest-unit (#2) only** — it needs the stock IAP no-power-loss
-  reflash path. Don't try it on the HID-bootloader unit.
-- The scope UI will look idle in this build (no acquisition task by design) —
-  that's expected; read via the shell.
 - Revert to a normal build any time with `make guest` (the flag defaults to 0;
   normal builds are unchanged).
-- If acqread fails, it is **not** destructive — power-cycle and the FPGA reloads
-  its NV meter design as always.
+- Nothing here is destructive — power-cycle and the FPGA reloads its NV design
+  as always; reflash anything via the factory IAP.
+- MENU still cycles UI modes, but every FPGA-side mode transition
+  (`fpga_set_meter_mode`, `fpga_enter_siggen_mode`, `fpga_scope_reinit`,
+  heartbeat) is compiled out. ⚠ The meter screen falls back to its built-in
+  **DEMO readings** (canned plausible values — e.g. `13.82` V DCV, `4.700`
+  kOhm, from `meter_modes[]` in `meter_ui.c`). These are FAKE; do not read
+  them as evidence the meter path survived the handoff.
+- Build serially (`make guest-warmtest`, no `-j`): every guest target's
+  `clean all` prerequisite pair races under parallel make.
+- This build must **never** be flashed as a daily driver: its meter is dead by
+  design and its scope only works after a warm handoff.
 
 ---
 
 ## RESULTS (2026-06-13, Unit 2) — ✅ read path validated on real waveform data
+
+*(Historical — pre-DAC1 rework. "Unit 2" here is the factory-IAP bench unit,
+called bench unit #1 since July.)*
 
 Three rounds. Headline: **our `0x04`/`0x05` read path reads genuine scope
 samples from a stock-configured FPGA.** First time this firmware has ever pulled
@@ -136,7 +235,20 @@ connected). Unmistakably the captured waveform, read through our path.
    scope USART config, PB11/PC11 toggles) all failed to restart continuous
    capture.
 
+> **⬤ 2026-08-12 REINTERPRETATION.** Point 3's "run-state problem" now has a
+> concrete mechanism: **the MCU reset zeroed DAC1, the trigger comparator's
+> reference (Stlkv, issue #18).** With the reference at 0 V the comparator
+> never fires, so no new capture is ever triggered — which is why *no*
+> pin/register re-arm could work while the one thing nobody re-armed was the
+> DAC. The June "one buffer" was the capture stock had already taken before
+> the handoff. This also retires the JTAG framing below: the warm handoff CAN
+> yield continuous capture once DAC1 is restored.
+
 ### Implication for JTAG
+
+*(Historical framing — superseded by the 2026-08-12 reinterpretation above,
+and independently weakened by Exp J's finding that SSPI reaches the config
+engine fine.)*
 
 JTAG provides exactly what the warm-handoff can't: a **fresh** config
 (run-state established) + free-running capture + **no MCU reset afterward**. With
@@ -147,6 +259,10 @@ validated and ready for that bench session.
 ---
 
 ## RESULTS (2026-06-13, Round 4) — `spi3 armtest`: MCU-pin re-arm falsified
+
+*(Historical — the negative result stands, but its interpretation is updated
+by the 2026-08-12 note above: the re-arm failures are all explained by the
+zeroed trigger DAC, which none of these probes touched.)*
 
 Tested the netlist-derived runtime-arm hypothesis from
 `reverse_engineering/analysis_v120/mcu_fpga_boundary_reconcile_2026-06-13.md` §5:

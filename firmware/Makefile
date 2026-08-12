@@ -303,12 +303,17 @@ guest: CFLAGS += -DGUEST_BUILD
 guest: LDSCRIPT = ld/at32f403a_guest.ld
 guest: clean all
 
-# Warm-handoff experiment build (guest image). fpga_init() comes up read-only
-# against a FPGA already scope-configured by stock — skips the SSPI config
-# sequence, boot/meter USART, frontend relays, and auto-tasks. Read with the
-# `spi3 acqread` shell command. See fpga.c FPGA_WARM_HANDOFF_TEST and
-# docs/fpga_warm_handoff_test.md.
-guest-warmtest: CFLAGS += -DGUEST_BUILD -DFPGA_WARM_HANDOFF_TEST=1
+# Warm-handoff experiment build (guest image), reworked 2026-08-12 after
+# Stlkv's live-trace result (issue #18). Comes up READ-ONLY against an FPGA
+# already scope-configured by stock: skips the SSPI config sequence, arms the
+# trigger DAC (DAC1 mid-scale — the reset zeroes it and captures read flat
+# zeros until it is restored), and runs a PC0-gated acquisition task speaking
+# the real 0x04/0x05 per-channel protocol, feeding the scope UI. Success is
+# on the LCD: the synthetic demo trace disappears when the first real frame
+# lands (no USB needed — CDC is dead on the bench unit). Pairs
+# FPGA_USART_SILENT_SCOPE so USART2 stays electrically dark (UEN clear).
+# See fpga.c FPGA_WARM_HANDOFF_TEST and docs/fpga_warm_handoff_test.md.
+guest-warmtest: CFLAGS += -DGUEST_BUILD -DFPGA_WARM_HANDOFF_TEST=1 -DFPGA_USART_SILENT_SCOPE=1
 guest-warmtest: LDSCRIPT = ld/at32f403a_guest.ld
 guest-warmtest: clean all
 
