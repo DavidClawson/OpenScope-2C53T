@@ -133,6 +133,9 @@ void draw_splash(void);
 void draw_scope_grid(void);
 void draw_demo_waveform(uint32_t frame);
 void draw_scope_screen(uint32_t frame);
+void draw_scope_live_frame(void);  /* flicker-free trace-band update; falls
+                                      back to draw_scope_screen for popups/
+                                      cursors (see main.c scope branch) */
 void scope_show_popup(const char *text);
 bool scope_popup_active(void);
 #ifdef FEATURE_FFT

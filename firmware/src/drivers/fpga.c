@@ -1726,7 +1726,9 @@ static void fpga_warmtest_acq_task(void *pv)
              * but a dead reference is exactly the silent capture-killer this
              * experiment must not misdiagnose). */
             scope_trigger_dac_raw(2048);
-            vTaskDelay(pdMS_TO_TICKS(400)); /* probe cadence ~2 Hz */
+            vTaskDelay(pdMS_TO_TICKS(150)); /* probe cadence ~4 Hz — bench
+                                               run 6 felt "buffered" at the
+                                               original 400 ms */
         }
 
         uint8_t s1 = fpga_warmtest_read_channel(0x04, fpga.ch1_buf);
@@ -1754,9 +1756,10 @@ static void fpga_warmtest_acq_task(void *pv)
             fpga.spi3_total_timeouts++;    /* rejected frame — shows in TO: */
         }
 
-        /* Bound the read rate; the display redraws on spi3_ok_count change
-         * inside its own 50 ms frame loop. */
-        vTaskDelay(pdMS_TO_TICKS(30));
+        /* Bound the read rate lightly; the display's own 50 ms frame loop
+         * caps rendering, so reading faster than it draws only costs SPI
+         * time (~275 µs per CH1+CH2 pair at /2). */
+        vTaskDelay(pdMS_TO_TICKS(10));
     }
 }
 #endif /* FPGA_WARM_HANDOFF_TEST */

@@ -791,13 +791,40 @@ static void gpio_scan_update(void)
     gpio_scan_started = true;
 }
 
+/* Set by draw_scope_screen (whose full-area clear wipes 180-224) so the strip
+ * background is refilled exactly when needed; the live incremental path never
+ * dirties it, so per-frame text updates go straight over their own opaque
+ * cells with no blank state — that blank-then-text sequence at frame rate was
+ * half of the visible full-screen flashing. */
+static uint8_t scope_dbg_strip_dirty = 1;
+
+/* Pad to a fixed width so opaque redraw erases a previously-longer line
+ * (counters shrink after a reset; P0 flips H/L width-stable but SS does not). */
+static void dbg_pad(char *s, unsigned cap, unsigned width)
+{
+    unsigned l = 0;
+    while (s[l] != '\0') l++;
+    while (l < width && l + 1 < cap) s[l++] = ' ';
+    s[l] = '\0';
+}
+
 static void draw_scope_debug(const theme_t *th)
 {
     /* Update toggle masks */
     gpio_scan_update();
 
     /* Dark background strip */
+#if (defined(FPGA_PIN_SWEEP_BUILD) && FPGA_PIN_SWEEP_BUILD) || \
+    (defined(FPGA_CFG_TRACE_BUILD) && FPGA_CFG_TRACE_BUILD) || \
+    (defined(FPGA_IDCODE_PROBE) && FPGA_IDCODE_PROBE)
+    /* Variant overlays draw variable-length content — keep the full refill. */
     lcd_fill_rect(0, SCOPE_DBG_Y, LCD_WIDTH, SCOPE_DBG_H, 0x0000);
+#else
+    if (scope_dbg_strip_dirty) {
+        lcd_fill_rect(0, SCOPE_DBG_Y, LCD_WIDTH, SCOPE_DBG_H, 0x0000);
+        scope_dbg_strip_dirty = 0;
+    }
+#endif
 
     char buf[64];
 
@@ -954,6 +981,7 @@ static void draw_scope_debug(const theme_t *th)
              fpga.h2_close_status,
              fpga.diag_ch1_raw[0], fpga.diag_ch1_raw[1],
              fpga.diag_ch1_raw[2], fpga.diag_ch1_raw[3]);
+    dbg_pad(buf, sizeof(buf), 38);
     font_draw_string(2, SCOPE_DBG_Y + 2, buf,
                      0x07E0, 0x0000, &font_small);  /* green */
 
@@ -965,6 +993,7 @@ static void draw_scope_debug(const theme_t *th)
              (GPIOC->idt & (1 << 0)) ? 'H' : 'L',
              (GPIOC->odt & (1 << 6)) ? 'H' : 'L',
              (GPIOB->odt & (1 << 11)) ? 'H' : 'L');
+    dbg_pad(buf, sizeof(buf), 38);
     font_draw_string(2, SCOPE_DBG_Y + 15, buf,
                      0x07FF, 0x0000, &font_small);  /* cyan */
 
@@ -1014,6 +1043,7 @@ static void draw_scope_debug(const theme_t *th)
                  (int)fpga.probe_id_bit_close,
                  (unsigned)lo, (unsigned)hi);
     }
+    dbg_pad(buf, sizeof(buf), 38);
     font_draw_string(2, SCOPE_DBG_Y + 28, buf,
                      0xFFE0, 0x0000, &font_small);  /* yellow */
 
@@ -1035,6 +1065,7 @@ static void draw_scope_debug(const theme_t *th)
              fpga.edit_mode_status[0], fpga.edit_mode_status[1],
              fpga.edit_mode_status[2], fpga.edit_mode_status[3],
              fpga.h2_upload_done ? 'Y' : 'N');
+    dbg_pad(buf, sizeof(buf), 38);
     font_draw_string(2, SCOPE_DBG_Y + 41, buf,
                      0xF81F, 0x0000, &font_small);  /* magenta */
 }
@@ -1116,6 +1147,101 @@ void draw_scope_screen(uint32_t frame)
 
 #ifdef SCOPE_DEBUG_OVERLAY
     /* Layer 12: SPI3 debug overlay (bottom of screen) */
+    scope_dbg_strip_dirty = 1;   /* the :1050-style full clear wiped 180-224 */
+    draw_scope_debug(th);
+#endif
+}
+
+/* ═══════════════════════════════════════════════════════════════════
+ * Live incremental frame (2026-08-12 rendering pass)
+ *
+ * Flicker-free trace update for the real-data path: repaints the waveform
+ * band column-by-column, compositing each pixel's FINAL color (trace over
+ * trigger line over crosshair over grid over background) into one streamed
+ * window write per column — the screen never holds a blank state, unlike
+ * draw_scope_screen's clear-then-redraw, which is the visible flash. Grid
+ * pixels are re-plotted arithmetically (there is no framebuffer to restore
+ * from; pattern mirrors draw_scope_grid exactly). Cost: one lcd_set_window
+ * (~13 us) per column + streamed pixel writes ≈ 6-8 ms per frame — 20 fps
+ * capable, vs the full path's blank-flash at any rate.
+ *
+ * Decorations (badges, ground markers, cursors, popups, trigger arrow) are
+ * NOT drawn here. main.c falls back to draw_scope_screen whenever a popup
+ * is active or cursors are on, and button DCMDs still force full redraws,
+ * so those layers refresh exactly when they can change.
+ * ═══════════════════════════════════════════════════════════════════ */
+void draw_scope_live_frame(void)
+{
+    const theme_t *th = theme_get();
+    const scope_state_t *ss = scope_state_get();
+    const volatile uint8_t *b1 = fpga_get_ch1_buf();
+    const volatile uint8_t *b2 = fpga_get_ch2_buf();
+
+    if (!b1 || !b2) return;
+
+    /* The live band stops where fixed furniture begins: the debug strip
+     * (debug builds) or the measurement badge rows. Those regions repaint
+     * themselves; streaming over them would z-fight at frame rate. */
+#ifdef SCOPE_DEBUG_OVERLAY
+    const uint16_t band_bot = SCOPE_DBG_Y;
+#else
+    const uint16_t band_bot = BADGE_ROW2_Y;
+#endif
+    const uint16_t band_h = band_bot - SCOPE_TOP;
+
+    /* Trigger dotted line, exactly as draw_trigger_indicator places it. */
+    int16_t trig_y = SCOPE_MID_Y - ss->trigger.level;
+    if (trig_y < SCOPE_TOP + 2) trig_y = SCOPE_TOP + 2;
+    if (trig_y > SCOPE_BOT - 3) trig_y = SCOPE_BOT - 3;
+
+    const int16_t off1 = ss->ch1.position;
+    const int16_t off2 = ss->ch2.position;
+    const bool en1 = ss->ch1.enabled;
+    const bool en2 = ss->ch2.enabled;
+
+    int16_t p1 = 0, p2 = 0;  /* previous column's y — vertical continuity */
+
+    for (uint16_t x = 0; x < LCD_WIDTH; x++) {
+        /* Same y-transform as the full path (scope_ui.c real-data plot). */
+        int16_t y1 = SCOPE_MID_Y - (((int16_t)b1[x] - 128) * SCOPE_H / 256) - off1;
+        int16_t y2 = SCOPE_MID_Y - (((int16_t)b2[x] - 128) * SCOPE_H / 256) - off2;
+
+        /* 2-px dot plus a span to the previous sample, so steep edges draw
+         * as connected verticals instead of the full path's dotted gaps. */
+        int16_t lo1 = y1, hi1 = y1 + 1, lo2 = y2, hi2 = y2 + 1;
+        if (x > 0) {
+            if (p1 < lo1) lo1 = p1;
+            if (p1 > hi1) hi1 = p1;
+            if (p2 < lo2) lo2 = p2;
+            if (p2 > hi2) hi2 = p2;
+        }
+        p1 = y1;
+        p2 = y2;
+
+        lcd_set_window(x, SCOPE_TOP, 1, band_h);
+        for (uint16_t y = SCOPE_TOP; y < band_bot; y++) {
+            uint16_t c;
+            /* Z-order matches the full path: CH2 painted after CH1 there,
+             * so CH2 wins here; trace over trigger line over grid. */
+            if (en2 && (int16_t)y >= lo2 && (int16_t)y <= hi2)
+                c = th->ch2;
+            else if (en1 && (int16_t)y >= lo1 && (int16_t)y <= hi1)
+                c = th->ch1;
+            else if ((int16_t)y == trig_y && (x & 3u) == 0 && x < LCD_WIDTH - 6)
+                c = th->trigger;
+            else if (y == SCOPE_MID_Y || x == LCD_WIDTH / 2)
+                c = th->grid_center;
+            else if (((x & 31u) == 0 && (y & 1u) == 0) ||
+                     (((y - SCOPE_TOP) % 26u) == 0 && (x & 1u) == 0))
+                c = th->grid;
+            else
+                c = th->background;
+            lcd_write_data(c);
+        }
+    }
+
+#ifdef SCOPE_DEBUG_OVERLAY
+    /* Keep the counters moving; opaque fixed-width lines, no strip refill. */
     draw_scope_debug(th);
 #endif
 }

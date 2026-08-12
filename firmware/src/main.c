@@ -263,6 +263,19 @@ static void vDisplayTask(void *pvParameters)
                         draw_waterfall_screen();
                     else
 #endif
+#ifndef EMULATOR_BUILD
+                    /* Rendering pass (2026-08-12): once real acquisition is
+                     * flowing, use the flicker-free column compositor for
+                     * periodic updates. The full clear-then-redraw path
+                     * remains for popups (they overwrite the band and need
+                     * erasing afterward), cursors (drawn only by the full
+                     * path), the demo/pre-data state, and all button-driven
+                     * DCMD redraws (settings changes want a full repaint). */
+                    if (!scope_popup_active() && scope_acquisition_ready()
+                        && ss_anim->cursor.mode == CURSOR_OFF)
+                        draw_scope_live_frame();
+                    else
+#endif
                         draw_scope_screen(frame);
                     last_scope_frame = frame;
                 }

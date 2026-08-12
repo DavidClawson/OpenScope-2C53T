@@ -364,3 +364,11 @@ OpenScope firmware. Negative control passed. Run log:
 - CH2 not yet examined. Ripcord contract 38/39 predicts CH2's trigger
   reference is **TMR13 CH1 PWM (C1DT @ 0x40001C34)** — never programmed by
   our firmware — so expect CH2 dead until a TMR13 bring-up (the "v7").
+
+**Run 7 (same night) — rendering pass + cadence:** `draw_scope_live_frame()`
+column compositor (one streamed window write per column, final colors only —
+no blank state exists on screen) + opaque fixed-width debug-strip text + probe
+cadence 400→150 ms / post-read 30→10 ms. Bench: **"buttery smooth and super
+responsive"** — flashing gone entirely, sub-half-second latency. Full-repaint
+path retained for popups/cursors/button redraws. Follow-up: raise trace
+refresh further (engine-rate PC0 fast path), per-range offset cal.
