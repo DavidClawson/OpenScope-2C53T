@@ -1699,26 +1699,34 @@ static void fpga_warmtest_acq_task(void *pv)
             continue;
         }
 
-        /* Wait for PC0 data-ready, active LOW (input pull-up set in
-         * fpga_init, so an undriven pin reads "not ready"). Stock polls it
-         * at ~1 kHz; do the same, bounded at 500 ms per attempt. */
+        /* PC0 data-ready, active LOW (input pull-up set in fpga_init, so an
+         * undriven pin reads "not ready"). Poll at ~1 kHz like stock — but
+         * as a FAST-PATH HINT, not a hard gate. Bench run 1+2 (2026-08-12)
+         * against June's Rounds 1-4 showed why a hard gate deadlocks: a
+         * stopped engine (which is what a MENU+Power handoff leaves behind —
+         * stock's upgrade-entry code shuts capture down before resetting)
+         * never raises data-ready spontaneously; June saw PC0 respond
+         * AROUND unconditional reads, and got the stale buffer that way.
+         * So: wait briefly for a spontaneous ready (the free-running Stlkv
+         * state), else probe-read anyway at ~2 Hz and let the validity gate
+         * below decide. A probe read of a stopped engine returns the stale
+         * capture once (accepted, then frozen — diagnostic in itself). */
         bool ready = false;
-        for (int w = 0; w < 500; w++) {
+        for (int w = 0; w < 100; w++) {
             if (!(GPIOC->idt & (1u << 0))) { ready = true; break; }
             vTaskDelay(pdMS_TO_TICKS(1));
         }
         if (!ready) {
-            fpga.spi3_total_timeouts++;    /* overlay "TO:" — PC0 never armed
-                                              (also counts rejected frames,
-                                              see below) */
+            fpga.spi3_total_timeouts++;    /* overlay "TO:" — no spontaneous
+                                              ready (also counts rejected
+                                              frames, see below) */
             /* Defensive re-arm: the trigger reference is MCU-internal and
              * read-only on the wire, so restoring it costs nothing. Covers
              * any path that dropped DAC1 (the known ones are compiled out,
              * but a dead reference is exactly the silent capture-killer this
-             * experiment must not misdiagnose). No-op while capture runs —
-             * this branch is only reached when PC0 stayed quiet for 500 ms. */
+             * experiment must not misdiagnose). */
             scope_trigger_dac_raw(2048);
-            continue;
+            vTaskDelay(pdMS_TO_TICKS(400)); /* probe cadence ~2 Hz */
         }
 
         uint8_t s1 = fpga_warmtest_read_channel(0x04, fpga.ch1_buf);
@@ -2900,6 +2908,75 @@ void fpga_init(void)
      * this write is not clobbered at boot; do NOT start siggen output in
      * this build, it shares DAC1 and would drop the reference. */
     scope_trigger_dac_raw(2048);
+
+    /* Frontend relays — bench run 3 (2026-08-12, first live capture): the
+     * engine free-runs after a pinhole handoff, but the trace sat at the
+     * baseline and ignored a 4.2 V battery, because the MCU reset floats
+     * the relay bank (PC12/PE4/PE5/PE6/PA15/PA10/PB10) and the coils drop —
+     * input path disconnected. Configure the bank as outputs (Step 9
+     * normally does this but warmtest returns before it) and drive stock's
+     * scope posture for the UI's default range. Pure GPIO relay writes:
+     * Exp C proved these are signal relays, not config straps, so this
+     * cannot disturb the FPGA. (PA15 is free — SWJ_CFG remap ran above.) */
+    gpio_cfg.gpio_mode = GPIO_MODE_OUTPUT;
+    gpio_cfg.gpio_out_type = GPIO_OUTPUT_PUSH_PULL;
+    gpio_cfg.gpio_drive_strength = GPIO_DRIVE_STRENGTH_STRONGER;
+    gpio_cfg.gpio_pins = GPIO_PINS_12;
+    gpio_init(GPIOC, &gpio_cfg);
+    gpio_cfg.gpio_pins = GPIO_PINS_4 | GPIO_PINS_5 | GPIO_PINS_6;
+    gpio_init(GPIOE, &gpio_cfg);
+    gpio_cfg.gpio_pins = GPIO_PINS_15 | GPIO_PINS_10;
+    gpio_init(GPIOA, &gpio_cfg);
+    gpio_cfg.gpio_pins = GPIO_PINS_10;
+    gpio_init(GPIOB, &gpio_cfg);
+    fpga_set_scope_frontend_range(fpga_scope_primary_range(scope_state_get()));
+    /* PC12 override — BENCH-MEASURED 2026-08-12 (run 5, live A/B on the
+     * SAVE toggle): with PC12 LOW (what the approximate range table sets in
+     * every arm) the input path is AC-coupled — finger noise passes, a DC
+     * battery does nothing. PC12 HIGH passes DC; the battery steps the
+     * trace. So PC12 is the coupling/input-routing select, HIGH = DC, and
+     * the shared truth table's unconditional LOW is wrong for DC scope use
+     * (left as-is there pending a proper per-range re-derivation; this
+     * build wants DC). SAVE still toggles it live for A/B. */
+    GPIOC->scr = (1U << 12);
+
+    /* Scope-engine restart — the fallback knob, promoted to the main path
+     * after the first bench run (2026-08-12): with DAC1 restored but nothing
+     * else sent, PC0 stayed HIGH forever (OK:0, TO climbing) — the capture
+     * engine does not resume on its own after an MCU reset. Stock's runtime
+     * init sends these five writes ~600 ms after the 0x3A close; per Stlkv
+     * register 0x02 is the acquisition-mode selector (03 = run) and 0x08
+     * carries the digital trigger level (offset-binary, 0xAD = level 0x2D).
+     * These are SCOPE-ENGINE opcodes (0x01/0x02/0x06/0x07/0x08), each in its
+     * own CS frame — NOT Gowin config-port opcodes — and Stlkv bench-proved
+     * them safe against a live design. The 0x03 status read populates the
+     * overlay's SS: field (stock boot capture: 00 01 42 2E 2E; Stlkv's
+     * inherited state: 80 00 00 00). */
+#if FPGA_WARMTEST_SEND_CFG_WRITES
+    /* DISABLED BY DEFAULT after bench run 2 (2026-08-12): sending these did
+     * not move anything (SS: read back all zeros, PC0 still stuck HIGH), and
+     * Stlkv's issue-#18 report says that in HIS rig "after the five writes
+     * PC0 goes constant-high" — i.e. they may STALL a free-running engine
+     * rather than start a stopped one. His working capture never sent them
+     * at boot. Kept compilable behind this flag for a future variant. */
+    {
+        static const uint8_t warm_cfg[][2] = {
+            {0x01, 0x08}, {0x02, 0x03}, {0x06, 0x00}, {0x07, 0x00}, {0x08, 0xAD},
+        };
+        for (unsigned wi = 0; wi < sizeof(warm_cfg) / sizeof(warm_cfg[0]); wi++) {
+            SPI3_CS_ASSERT();
+            spi3_xfer(warm_cfg[wi][0]);
+            spi3_xfer(warm_cfg[wi][1]);
+            SPI3_CS_DEASSERT();
+            systick_delay_ms(2);
+        }
+        SPI3_CS_ASSERT();
+        spi3_xfer(0x03);
+        for (unsigned si = 0; si < 4; si++)
+            fpga.scope_status[si] = spi3_xfer(0xFF);
+        SPI3_CS_DEASSERT();
+    }
+#endif
 
     fpga.initialized = true;
     return;

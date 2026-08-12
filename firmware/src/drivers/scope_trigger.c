@@ -89,7 +89,14 @@ uint16_t scope_trigger_dac_compute(int range, int level)
 
 void scope_trigger_dac_raw(uint16_t code)
 {
-    if (!inited) scope_trigger_dac_init();
+    /* Re-init if the CH1 control bits are not ours — `inited` alone is a
+     * one-shot latch, so if anything (dac_output_start/stop, siggen) has
+     * re-owned DAC1 since, a bare DHR write would land on a channel that is
+     * no longer software-triggered/enabled. Checking the register makes
+     * every caller (incl. the warmtest timeout re-arm) self-healing. */
+    if (!inited || (DAC_CTRL & 0x0000FFFFu) !=
+                   (DAC_D1TSEL_SW | DAC_D1TEN | DAC_D1EN))
+        scope_trigger_dac_init();
     code &= 0x0FFF;
     /* Faithful to stock: preserve upper bits of DHR12R1, then software-trigger. */
     DAC_DHR12R1 = (DAC_DHR12R1 & 0xFFFFF000u) | code;

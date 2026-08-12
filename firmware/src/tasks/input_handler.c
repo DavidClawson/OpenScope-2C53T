@@ -298,6 +298,25 @@ uint8_t input_handle_button(button_id_t button, QueueHandle_t dq)
     /* -- Save (screenshot) ---------------------------------------- */
 
     case BTN_SAVE:
+#if defined(FPGA_WARM_HANDOFF_TEST) && FPGA_WARM_HANDOFF_TEST
+        /* Warm-handoff bench build: SAVE toggles the input-routing relay
+         * PC12 for a live A/B. Bench run 4 (2026-08-12) showed the input
+         * path connected but AC-coupled — finger noise passes, DC blocked —
+         * and PC12 (driven LOW by our approximate range table) is the
+         * suspected coupling/routing select. Pure GPIO relay write (Exp C:
+         * signal relay, not a config strap); costs nothing to flip live. */
+        if (current_mode == MODE_OSCILLOSCOPE) {
+            if (GPIOC->odt & (1U << 12)) {
+                GPIOC->clr = (1U << 12);
+                scope_show_popup("PC12: LOW");
+            } else {
+                GPIOC->scr = (1U << 12);
+                scope_show_popup("PC12: HIGH");
+            }
+            send_cmd(dq, cmd);
+            break;
+        }
+#endif
 #if defined(FPGA_PIN_SWEEP_BUILD) && FPGA_PIN_SWEEP_BUILD
         /* Bench build: SAVE runs the RECONFIG_N candidate pin sweep instead of
          * its normal action. Gated to a button and run from here — NOT from

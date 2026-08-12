@@ -303,3 +303,64 @@ fresh config means the baseline should free-run, not one-shot).
 > config engine — they returned all-`00` here, *unlike* the all-`FF`/valid-IDCODE
 > seen when only the NV meter design is loaded. All-`00` on gowin is therefore a
 > rough *positive* indicator that a user design has the port, not a failure.
+
+---
+
+## RESULTS (2026-08-12, bench unit #1) — ✅✅ LIVE SCOPE UNDER OPEN FIRMWARE
+
+Six build iterations in one evening (~2 min/flash via factory IAP), ending in
+a **live, continuously-updating, DC-responding trace rendered by our scope UI
+from real FPGA capture data** — the first working oscilloscope under
+OpenScope firmware. Negative control passed. Run log:
+
+| Run | Build | Handoff | Result |
+|---|---|---|---|
+| 1 | v3 base (DAC1 arm, PC0 hard gate, no writes) | MENU+**Power** | ✗ `OK:0 TO:↑ P0:H` — demo trace stays |
+| 2 | + five post-config writes + 0x03 read | MENU+**Power** | ✗ identical; `SS:` all **zeros** (actively driven — MISO is pulled up) |
+| 3 | v3': writes removed, PC0 = hint + ~2 Hz probe reads | MENU+**pinhole** | ✅ **live frames** — `OK:` climbing 1-2/s, demo trace gone, noise trace responds to finger |
+| 4 | v4: + frontend relay bank re-armed as outputs | MENU+pinhole | Path connected but **AC-coupled**: finger span ~22, battery = no DC response |
+| 5 | v5: + SAVE toggles PC12 live | MENU+pinhole | **PC12 HIGH ⇒ DC passes** — battery steps the trace. Coupling relay found |
+| 6 | v6: PC12 HIGH at boot | MENU+pinhole | ✅ DC response at boot, no button needed |
+| NC | v6, after true power cycle (POWER→Goodbye→unplug→replug) | — | ✅ **demo trace stays, `OK:0`** — the handoff is the enabler; the build cannot fake success |
+
+### What was established
+
+1. **THE HANDOFF METHOD DECIDES THE ENGINE STATE.** MENU+Power lets stock's
+   upgrade-entry code run before the reset — it stops the capture engine, and
+   nothing MCU-side restarts it (runs 1-2; also explains June's one-buffer
+   results and their failed re-arms). **MENU + pinhole reset (NRST) kills the
+   MCU instantly and the engine keeps free-running** — Stlkv's recipe, now
+   confirmed as the load-bearing detail on unit #1.
+2. **DAC1 restore is necessary but the engine state is separate.** With the
+   engine free-running + DAC1 at mid-scale (stock-faithful 0x3D bring-up:
+   buffered, enable-last — the old D1BOFF here was a real bug, caught by the
+   ripcord session's decode), capture just works.
+3. **The five post-config writes are NOT needed** for inherited capture, and
+   the 0x03 status read returned all zeros in the stopped-engine state
+   (actively driven low — not floating). Left compiled out
+   (`FPGA_WARMTEST_SEND_CFG_WRITES`).
+4. **PC0 is not a spontaneous strobe when the engine is stopped** — a hard
+   data-ready gate deadlocks (no read → no PC0 → no read). As a hint with
+   ~2 Hz unconditional probe reads + the frame-validity gate, both engine
+   states are handled.
+5. **PC12 is the input-routing/coupling relay: HIGH passes DC, LOW is
+   AC-coupled.** Bench-measured by live A/B on the SAVE toggle. The
+   approximate relay truth table in `fpga_set_scope_frontend_range()` drives
+   it LOW in every arm — wrong for DC scope work; overridden HIGH in the
+   warmtest build pending a per-range re-derivation.
+6. **The relay bank must be re-armed after any MCU reset** — the coils drop
+   and the input path disconnects (run 3 vs 4). Warmtest configures the bank
+   as outputs itself since it returns before fpga_init Step 9.
+
+### Known cosmetics / next tuning (not failures)
+
+- Full-screen repaint on every accepted frame → visible 2-3 Hz flash. The
+  known "rendering pass" TODO (per-component dirty tracking), now with real
+  data to justify it.
+- ~½-1 s display latency ("buffered" feel) from the 2 Hz probe cadence.
+  Tighten the probe interval / trust PC0 more when free-running.
+- Baseline sits at ~55, not ~100/mid — missing per-range offset cal (known;
+  the cal tables are placeholder full-scale linear).
+- CH2 not yet examined. Ripcord contract 38/39 predicts CH2's trigger
+  reference is **TMR13 CH1 PWM (C1DT @ 0x40001C34)** — never programmed by
+  our firmware — so expect CH2 dead until a TMR13 bring-up (the "v7").
