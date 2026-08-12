@@ -15,17 +15,53 @@ gitignored) — serial-controllable (`sine/square/tri/saw/dc/amp` @ 115200 on
 The blocker to displaying real waveforms: `guest-coldtrace` never sets the FPGA
 sample rate, so each 1024-sample sweep is ~µs long, refreshed ~34 Hz. Slow signals
 track as a moving level; >~15 Hz aliases.
-- Send the timebase commands (`0x0F` prescaler / `0x10` period / `0x11` mode — see
-  `fpga.h` FPGA_CMD_SCOPE_CFG_*) in the coldtrace/scope path to slow acquisition so
-  1024 samples span ms.
-- Decode stock's per-timebase values (ripcord: TMR3 is stock's pacer, 9-entry 1-2-5
-  PR table; but TMR3 is OURS for the 500 Hz button scan — resolve the conflict).
-- Wire the timebase up/down buttons (`scope_adjust_timebase` already exists) to
-  re-send the config.
-- **Validate with the ESP32:** drive a known 1 kHz square, confirm the period reads
-  correctly across timebase steps, and watch the wave stretch/compress. This is the
-  first real calibration opportunity.
-Deliverable: a `guest-coldtrace`-derived build that shows a stable multi-cycle sine.
+
+**What already exists (don't rebuild it):**
+- `timebase_table[]` (`scope_state.c`) — 21 timebases, 5 ns → 20 ms, with labels.
+- `scope_adjust_timebase()` + button handling — the UI selector works.
+- `fpga_scope_select_timing()` (`fpga.c:1142`) — maps a timebase to
+  `{run_mode, sample_depth, tb_prescaler, tb_period, tb_mode, acq_mode}` and
+  `fpga_send_scope_sequence()` sends the `0x0F/0x10/0x11` commands.
+
+**What's wrong / missing (the actual work):**
+- The mapping is only **3 coarse buckets** (idx ≤3, ≤9, >9) with **guessed**
+  prescaler/period values (0x20/0x80, 0x08/0x40, 0x04/0x20). 21 UI timebases → 3
+  real configs. Not per-timebase, not stock's values.
+- None of it is wired into the cold-boot (`guest-coldtrace`) path, and **it has
+  never been validated on hardware** — the scope was dead until 2026-08-13.
+
+**Step 0 — PROVE THE MECHANISM (the load-bearing unknown, do this first).**
+We do not actually know that `0x0F/0x10/0x11` change the effective sample rate. The
+netlist says the ADC sample clock is PLL-derived and free-runs, so the timebase most
+likely works by **decimation / capture-window**, not by changing the ADC clock —
+or possibly by MCU-side read pacing (ripcord: stock's per-timebase pacer is TMR3, a
+9-entry 1-2-5 PR table). Bench test: with the ESP32 driving a known 1 kHz square from
+the coldtrace path, send 2–3 *wildly* different `tb_prescaler`/`tb_period` values and
+watch whether the captured waveform **stretches/compresses**.
+  - Stretches → decimation-via-these-commands confirmed; proceed to Step 1.
+  - No change → timebase is elsewhere (MCU read pacing via TMR3, or roll mode);
+    investigate that before building on the wrong model.
+
+**Step 1 — wire the config into the cold-boot path.** Integrate the timebase block
+(`fpga_send_scope_sequence`) after config+arm in the `guest-coldtrace` path, coexisting
+with the 0x04/0x05 readout. (Mind the trigger-byte space — see the PR #13 review note
+about `acq_mode` values colliding with roll/fast-TB triggers.)
+
+**Step 2 — real per-timebase values.** Replace the 3-bucket placeholders. Sources:
+stock's `0x26/0x27/0x28` timebase block (`fpga.c:576`), ripcord's TMR3 table, and the
+June Saleae capture. Resolve the **TMR3 conflict** (stock's acquisition pacer vs our
+500 Hz button scan) if Step 0 shows MCU pacing matters. Handle **roll mode** for the
+slow end (stock scrolls slow timebases; `FPGA_ROLL_BUF_SIZE=300`).
+
+**Step 3 — wire the buttons.** `scope_adjust_timebase` → re-send config live; watch the
+ESP32 wave stretch/compress as you step the timebase.
+
+**Step 4 — calibrate (horizontal).** With the ESP32 at known frequencies, verify the
+on-screen period matches the timebase label. First real horizontal calibration.
+
+Deliverable: `guest-coldtrace`-derived build showing a **stable multi-cycle sine** whose
+period reads correctly across timebase steps. Bench aid: the ESP32 siggen (agent can
+drive it live).
 
 ## 2. Fold cold-boot-to-scope into the DEFAULT boot path (shippability)
 `guest-coldtrace` is a special build. Make cold config + arm + readout the default
