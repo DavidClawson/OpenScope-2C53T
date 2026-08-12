@@ -43,4 +43,22 @@ void scope_trigger_dac_raw(uint16_t code);
 /* Last value written to DAC1_DHR12R1 (for the debug shell echo). */
 uint16_t scope_trigger_dac_last(void);
 
+/* ── CH2 trigger reference: TMR13 CH1 PWM-DAC (ripcord contract 38) ──────────
+ * CH2's comparator reference is NOT a DAC channel — it's a PWM-DAC on TMR13
+ * channel 1, output on PA6 (TMR13_CH1, tmr13_mux=0 default — no remap). Stock
+ * computes the compare value (TMR13_C1DT @ 0x40001C34) with the SAME cal formula
+ * as DAC1 (gpio_mux_porta_portb / FUN_08008A58 Part 2), so the value path reuses
+ * scope_trigger_dac_compute(). Stock's TMR13 config, decoded from master_init
+ * (flash 0x0802B0FE..0x0802B34E): DIV(PSC)=0, PR(ARR)=4094 (0xFFE), CM1 OCM=PWM
+ * (0b111), CCTRL C1EN|C1P, CTRL1 CEN. Our firmware never programmed TMR13, which
+ * is why CH2 was predicted dead. This mirrors the DAC1 CH1 bring-up.
+ *
+ * ⚠ PA6 was "Unknown" in HARDWARE_PINOUT — identifying it as TMR13_CH1 is a new
+ * inference to CONFIRM on the bench (it was also loosely called an analog-frontend
+ * pin). Behind FPGA_CH2_TRIGGER; opt-in, layered onto the warm-handoff build. */
+void scope_trigger_ch2_init(void);
+void scope_trigger_ch2_raw(uint16_t code);   /* write TMR13_C1DT (0..4095 duty) */
+void scope_trigger_ch2_set(int range, int level);
+uint16_t scope_trigger_ch2_last(void);
+
 #endif /* SCOPE_TRIGGER_H */

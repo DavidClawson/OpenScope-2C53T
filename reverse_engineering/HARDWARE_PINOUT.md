@@ -33,7 +33,7 @@
 | PA3 | USART2 RX | Input | Floating | -- | `FPGA_BOOT_SEQUENCE.md` step 9; `usart2_isr` at 0x080277B4 | FPGA to MCU responses; same signal on debug UART RX pad |
 | PA4 | Unknown | -- | -- | -- | | Possible DAC1 output |
 | PA5 | Unknown | -- | -- | -- | | Possible DAC2 output |
-| PA6 | Unknown | -- | -- | -- | No references found | |
+| PA6 | CH2 trigger ref (TMR13_CH1 PWM-DAC) — **candidate, unconfirmed** | AF-PP | -- | -- | master_init TMR13 init flash 0x0802B0FE; C1DT write 0x08008C3A; ripcord contract 38 | TMR13_CH1 default pin (tmr13_mux=0, stock never remaps). PWM-DAC → RC → CH2 comparator ref, CH1-DAC1 analog. Confirm on bench (`guest-warmtest-ch2`) |
 | PA7 | Button matrix row | Input | Pull-up | -- | `peripheral_map.md`; `input_and_housekeeping` at 0x08039188 | CH2 button row pin |
 | PA8 | Button matrix row | Input | Pull-up | -- | `peripheral_map.md`; `input_and_housekeeping` | Right button row pin |
 | PA9 | USART1 TX | AF | -- | -- | Probed: dead (0 bytes) | Not used by stock firmware |

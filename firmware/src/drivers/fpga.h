@@ -400,6 +400,15 @@ typedef struct {
                                *     Known answer: IDCODE = 0x0120681B. Adds CS frames
                                *     ahead of the config attempt, so keep it off for
                                *     stock-faithful runs. */
+    uint8_t  prelude_reads;   /* Build A (2026-08-13): 1 = insert the maksidze/Stlkv
+                               *     V0.4 "richer prelude" reads 0x11 IDCODE / 0x13
+                               *     USERCODE / 0x41 STATUS at /256 in their own CS
+                               *     frames BETWEEN 0x05 ERASE_SRAM and 0x12 INIT_ADDR
+                               *     — i.e. immediately before CONFIG_ENABLE, the
+                               *     position Stlkv's working cold-start loader uses.
+                               *     Stores into probe_idcode/_user/_status and sets
+                               *     probe_id_bit (the anchor). Requires
+                               *     prelude_frame_mode 0 (split). See issue #18. */
 } fpga_cfg_seq_opts_t;
 
 /* Run the full SPI3 config handshake. Returns the 0x3A close status byte

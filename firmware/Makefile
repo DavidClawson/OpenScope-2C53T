@@ -317,6 +317,18 @@ guest-warmtest: CFLAGS += -DGUEST_BUILD -DFPGA_WARM_HANDOFF_TEST=1 -DFPGA_USART_
 guest-warmtest: LDSCRIPT = ld/at32f403a_guest.ld
 guest-warmtest: clean all
 
+# Warm handoff + CH2 trigger bring-up (bench plan item 5, 2026-08-13). Layers the
+# TMR13 CH1 PWM-DAC reference (PA6) onto the warm-handoff scope build so a live
+# CH2 trace can be validated — CH2 was predicted dead because our firmware never
+# programmed TMR13 (ripcord contract 38: CH2's comparator ref is TMR13_C1DT, same
+# cal formula as DAC1). Stock TMR13 config decoded from master_init: PSC=0,
+# ARR=4094, CH1 PWM, C1EN|C1P, CEN. ⚠ Drives PA6 as AF PWM — confirm on the bench
+# that PA6 is the CH2 reference (it was "Unknown" in HARDWARE_PINOUT). Watch for a
+# CH2 trace appearing the way CH1 did after the DAC1 fix. See scope_trigger.c.
+guest-warmtest-ch2: CFLAGS += -DGUEST_BUILD -DFPGA_WARM_HANDOFF_TEST=1 -DFPGA_USART_SILENT_SCOPE=1 -DFPGA_CH2_TRIGGER=1
+guest-warmtest-ch2: LDSCRIPT = ld/at32f403a_guest.ld
+guest-warmtest-ch2: clean all
+
 # USART-silent scope-boot experiment (guest image). Holds USART2 UEN CLEAR through
 # the whole boot, skips Step 3b + Step 8 USART traffic, creates no dvom/meter/acq
 # auto-tasks — so the SPI3 wire stays quiet and `fpga reinit`/`spi3 xfer` run
@@ -461,6 +473,60 @@ guest-fidelity2: clean all
 guest-reload: CFLAGS += -DGUEST_BUILD -DFPGA_STOCK_FIDELITY=1 -DFPGA_USART_SILENT_SCOPE=1 -DFPGA_RELOAD_3C_BUILD=1
 guest-reload: LDSCRIPT = ld/at32f403a_guest.ld
 guest-reload: clean all
+
+# Build A (2026-08-13): isolate the load-bearing variable behind Stlkv's #18
+# cold-start success. Stlkv drove OUR pins (PB6 CS) with OUR 115,638-byte payload
+# via a GPIO bit-bang loop and got DONE_FINAL set. That narrows the difference
+# from our two months of refusals to three candidates: (1) slow/gapped clocking
+# of the WHOLE sequence, (2) the richer prelude reads (0x11/0x13/0x41 before
+# CONFIG_ENABLE), (3) GPIO-mode vs hardware-SPI-AF pins.
+#
+# Build A tests (1)+(2) on our EXISTING hardware-SPI3 path WITHOUT bit-banging:
+# cmd_br AND upload_br both /256, plus prelude_reads before INIT_ADDR. If the
+# wall breaks here, the bit-bang (Build B) is unnecessary and this folds into
+# fpga_init as the default cold-boot path. If it holds, GPIO-vs-AF is the last
+# variable and Build B is next.
+#
+# NOTE the /256 upload takes ~2.0s (115638 x 8 x 256/120MHz); the splash->trace
+# gap is expected, not a hang. Read the LCD overlay: SUCCESS = CFG line shows D1
+# (DONE_FINAL) and S1:037F (both phases at /256 confirmed on-device). Built on
+# the USART-silent base so the only deltas from the Exp F/R fidelity baseline are
+# the three Build A knobs. See docs/bench_plan_2026-08-13.md and issue #18.
+guest-configA: CFLAGS += -DGUEST_BUILD -DFPGA_USART_SILENT_SCOPE=1 -DFPGA_CONFIG_A=1
+guest-configA: LDSCRIPT = ld/at32f403a_guest.ld
+guest-configA: clean all
+
+# Build B (2026-08-13): true bit-bang transplant of the maksidze/Stlkv V0.4
+# loader (ported byte-for-byte from Stlkv/OpenScope-2C23T-2C53T-port). Runs the
+# whole SSPI handshake on GPIO-mode PB3/4/5/6 instead of the SPI3 peripheral,
+# then restores SPI3 AF. Tested only if Build A's wall holds — it isolates the
+# LAST candidate, GPIO/bit-bang clocking vs hardware-SPI AF. If B breaks the wall
+# where A did not, GPIO-vs-AF is the answer. Same LCD verdict: CFG line D1 =
+# DONE_FINAL. See fpga_bitbang_config_sequence(), docs/build_a_config_entry_test.md.
+guest-configB: CFLAGS += -DGUEST_BUILD -DFPGA_USART_SILENT_SCOPE=1 -DFPGA_CONFIG_B=1
+guest-configB: LDSCRIPT = ld/at32f403a_guest.ld
+guest-configB: clean all
+
+# Build B + engine-arm (bench plan item 4, 2026-08-13). After the bit-bang config
+# breaks the wall (DONE_FINAL set) the capture engine is UNARMED. This layers
+# stock's post-config sequence (600ms -> five writes 01 08/02 03/06 00/07 00/08 AD
+# -> 0x03 status read) onto Build B. Read SS byte 1 (01 = armed candidate) and
+# watch the demo trace: it DISAPPEARS on first real sample = armed. See fpga.c
+# fpga_bitbang_config_sequence FPGA_CONFIG_B_ARM block.
+guest-configB-arm: CFLAGS += -DGUEST_BUILD -DFPGA_USART_SILENT_SCOPE=1 -DFPGA_CONFIG_B=1 -DFPGA_CONFIG_B_ARM=1
+guest-configB-arm: LDSCRIPT = ld/at32f403a_guest.ld
+guest-configB-arm: clean all
+
+# Cold-config + live-readout rig (bench plan item 4, 2026-08-13). The reliable
+# arm-test bench: the warmtest 0x04/0x05 read/render pipeline (which latches the
+# demo trace OFF on real data) with the bit-bang COLD config injected at boot
+# (Build B breaks the wall) plus the engine-arm writes. So config (DONE_FINAL) +
+# arm attempt + a TRUSTWORTHY trace signal in one image. SUCCESS = demo square
+# wave disappears -> real continuous capture = cold boot to live trace. If it
+# stays with OK: climbing, the readout works but the engine is still unarmed.
+guest-coldtrace: CFLAGS += -DGUEST_BUILD -DFPGA_WARM_HANDOFF_TEST=1 -DFPGA_USART_SILENT_SCOPE=1 -DFPGA_CONFIG_B=1 -DFPGA_CONFIG_B_ARM=1
+guest-coldtrace: LDSCRIPT = ld/at32f403a_guest.ld
+guest-coldtrace: clean all
 
 # Experiment G (2026-07-28): RECONFIG_N pulse candidates. Exp F closed every
 # enumerable static MCU-state difference and the wall held, which sends us back

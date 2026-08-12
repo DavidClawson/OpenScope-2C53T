@@ -457,6 +457,46 @@ static void spi3_pump(const uint8_t *tx, volatile uint8_t *rx, uint32_t n)
 #define FPGA_CFG_TRACE_BUILD  0
 #endif
 
+/* Build A (2026-08-13, `make guest-configA`) — isolate the load-bearing variable
+ * behind Stlkv's #18 cold-start success. Stlkv used OUR pins (PB6 CS) and OUR
+ * 115,638-byte payload via a GPIO bit-bang loop and got DONE_FINAL set; that
+ * narrowed the difference from our two months of refusals to three candidates:
+ * (1) slow/gapped clocking of the WHOLE sequence, (2) the richer prelude reads,
+ * (3) GPIO-mode vs hardware-SPI-AF pins. Build A tests (1)+(2) on our EXISTING
+ * hardware-SPI3 path — cmd_br AND upload_br both /256, plus the prelude reads
+ * before INIT_ADDR — WITHOUT bit-banging. If the wall breaks here, the bit-bang
+ * (Build B) is unnecessary and this folds into fpga_init as the default boot
+ * path (⇒ cold boot straight into OpenScope, the shippable route). If it holds,
+ * GPIO-mode vs AF is the remaining variable and Build B is next. See issue #18
+ * and docs/bench_plan_2026-08-13.md. Success = CFG line shows D1 (DONE_FINAL)
+ * and S1:037F (both phases confirmed at /256). */
+#ifndef FPGA_CONFIG_A
+#define FPGA_CONFIG_A  0
+#endif
+
+/* Build B (2026-08-13, `make guest-configB`) — true bit-bang transplant of the
+ * maksidze/Stlkv V0.4 loader (GPIO-mode PB3/4/5/6, not SPI3 AF). Tested only if
+ * Build A's wall holds: it isolates the LAST candidate, GPIO/bit-bang clocking
+ * vs hardware-SPI AF. See fpga_bitbang_config_sequence() and issue #18. */
+#ifndef FPGA_CONFIG_B
+#define FPGA_CONFIG_B  0
+#endif
+
+/* Bench plan item 5 (2026-08-13, `make guest-warmtest-ch2`) — bring up the CH2
+ * trigger reference (TMR13 CH1 PWM-DAC on PA6) alongside the warm-handoff DAC1
+ * arm, so a live CH2 trace can be validated. Layers onto guest-warmtest. See
+ * scope_trigger_ch2_init(). */
+#ifndef FPGA_CH2_TRIGGER
+#define FPGA_CH2_TRIGGER  0
+#endif
+
+/* Build B + engine-arm (`make guest-configB-arm`): after the bit-bang config
+ * breaks the wall, send stock's post-config five writes + 0x03 status read to
+ * try to ARM the capture engine. Bench plan item 4. */
+#ifndef FPGA_CONFIG_B_ARM
+#define FPGA_CONFIG_B_ARM  0
+#endif
+
 /* Button-gated RECONFIG_N candidate pin sweep (`make guest-sweep`). Runs from
  * the UI task, never from fpga_init — a bad pulse during init fails the boot,
  * and three failed boots latch the bootloader into SAFE MODE. */
@@ -2049,6 +2089,184 @@ void fpga_reconfig_pin_sweep(void)
 }
 #endif /* FPGA_PIN_SWEEP_BUILD */
 
+#if FPGA_CONFIG_B
+/* ═══════════════════════════════════════════════════════════════════
+ * Build B (2026-08-13, `make guest-configB`) — true bit-bang transplant
+ * of the maksidze/Stlkv 2C23T-V0.4 loader that cold-started the 2C53T FPGA
+ * on issue #18 (STATUS 0x00039020 → 0x0003F460, DONE_FINAL set, 4/4 boots).
+ *
+ * Ported byte-for-byte from Stlkv/OpenScope-2C23T-2C53T-port `2c53t-port`
+ * (src/fpga.c fpga53_v04_configure): GPIO-mode PB3/4/5/6 (NOT SPI3 AF),
+ * mode-3 MSB-first, and the V0.4 framing —
+ *   IDCODE(0x11) → USERCODE(0x13) → STATUS(0x41) → INIT_ADDR(0x12 00)
+ *   → CONFIG_ENABLE(0x15 00) → CS-LOW 0x3B + full payload → STATUS → 0x3A.
+ * NOTE the V0.4 sequence has NO 0x05 ERASE_SRAM prelude (unlike our
+ * hardware-SPI sequence) and NO reset pulse (the 2C53T reset pin maps to
+ * the POWER button). This is the last remaining variable after Build A:
+ * GPIO-mode/bit-bang clocking vs hardware-SPI AF. If A held and B breaks
+ * the wall, GPIO-vs-AF is the answer; if both hold, the difference is off
+ * our pins entirely. Reads land in the same fpga.* fields Build A uses, so
+ * the LCD overlay verdict is identical: CFG line D1 = DONE_FINAL.
+ * ═══════════════════════════════════════════════════════════════════ */
+#define BB_SCK   (1u << 3)   /* PB3 */
+#define BB_MISO  (1u << 4)   /* PB4 */
+#define BB_MOSI  (1u << 5)   /* PB5 */
+#define BB_CS    (1u << 6)   /* PB6 */
+
+/* One mode-3 byte: CLK falls, drive MOSI, CLK rises, sample MISO. MSB first.
+ * No explicit delay — the GPIO write latency IS the slow/gapped clock that
+ * distinguishes this from hardware SPI3 (the whole point of the A/B). */
+static uint8_t bb_xfer(uint8_t value)
+{
+    uint8_t result = 0;
+    for (uint8_t i = 0; i < 8u; ++i) {
+        GPIOB->clr = BB_SCK;
+        if (value & 0x80u) GPIOB->scr = BB_MOSI;
+        else               GPIOB->clr = BB_MOSI;
+        GPIOB->scr = BB_SCK;
+        result = (uint8_t)(result << 1);
+        value  = (uint8_t)(value << 1);
+        if (GPIOB->idt & BB_MISO) result |= 1u;
+    }
+    return result;
+}
+
+/* 32-bit register read: dummy byte (CS high), CS low, opcode + 3 pad, read 4,
+ * CS high. Stores the 4 bytes MSB-first into out4 (out4[0] = first byte). */
+static void bb_read_reg32(uint8_t opcode, uint8_t *out4)
+{
+    (void)bb_xfer(0);
+    GPIOB->clr = BB_CS;
+    (void)bb_xfer(opcode);
+    (void)bb_xfer(0);
+    (void)bb_xfer(0);
+    (void)bb_xfer(0);
+    for (uint8_t i = 0; i < 4u; ++i) out4[i] = bb_xfer(0);
+    GPIOB->scr = BB_CS;
+}
+
+/* 2-byte command: dummy byte (CS high), CS low, 2 bytes, CS high. */
+static void bb_cmd16(uint8_t hi, uint8_t lo)
+{
+    (void)bb_xfer(0);
+    GPIOB->clr = BB_CS;
+    (void)bb_xfer(hi);
+    (void)bb_xfer(lo);
+    GPIOB->scr = BB_CS;
+}
+
+uint8_t fpga_bitbang_config_sequence(void)
+{
+    gpio_init_type gpio_cfg;
+    gpio_default_para_init(&gpio_cfg);
+
+    fpga.probe_id_bit       = -1;
+    fpga.probe_id_bit_close = -1;
+    fpga.diag_spi_ctrl1     = 0xBBBBu;   /* S1 marker: this was the bit-bang build */
+
+    int sched_running = (xTaskGetSchedulerState() == taskSCHEDULER_RUNNING);
+    if (sched_running && acq_task_handle) vTaskSuspend(acq_task_handle);
+
+    /* Switch PB3(SCK)/PB5(MOSI)/PB6(CS) to GPIO push-pull outputs, PB4(MISO)
+     * to floating input — exactly Stlkv's setup. Pre-load idle levels first
+     * (CLK HIGH, CS HIGH, MOSI LOW = mode-3 idle) to avoid a config glitch. */
+    GPIOB->scr = BB_SCK | BB_CS;
+    GPIOB->clr = BB_MOSI;
+    gpio_cfg.gpio_pins = BB_SCK | BB_MOSI | BB_CS;
+    gpio_cfg.gpio_mode = GPIO_MODE_OUTPUT;
+    gpio_cfg.gpio_out_type = GPIO_OUTPUT_PUSH_PULL;
+    gpio_cfg.gpio_drive_strength = GPIO_DRIVE_STRENGTH_STRONGER;
+    gpio_init(GPIOB, &gpio_cfg);
+    gpio_cfg.gpio_pins = BB_MISO;
+    gpio_cfg.gpio_mode = GPIO_MODE_INPUT;
+    gpio_cfg.gpio_pull = GPIO_PULL_NONE;   /* floating, as Stlkv's transplant */
+    gpio_init(GPIOB, &gpio_cfg);
+
+    /* Prelude reads (populate the anchor + overlay). */
+    bb_read_reg32(0x11, (uint8_t *)fpga.probe_idcode);
+    bb_read_reg32(0x13, (uint8_t *)fpga.probe_user);
+    bb_read_reg32(0x41, (uint8_t *)fpga.probe_status);
+    /* Cleanly-framed 4-byte read: IDCODE is aligned at bit 0 when it matches. */
+    if (fpga.probe_idcode[0] == 0x01 && fpga.probe_idcode[1] == 0x20 &&
+        fpga.probe_idcode[2] == 0x68 && fpga.probe_idcode[3] == 0x1B)
+        fpga.probe_id_bit = 0;
+
+    bb_cmd16(0x12, 0x00);   /* INIT_ADDR */
+    bb_cmd16(0x15, 0x00);   /* CONFIG_ENABLE */
+
+    /* 0x3B + full payload in one CS-LOW frame. */
+    (void)bb_xfer(0);
+    GPIOB->clr = BB_CS;
+    (void)bb_xfer(0x3B);
+    for (uint32_t i = 0; i < FPGA_H2_CAL_TABLE_SIZE; ++i)
+        (void)bb_xfer(fpga_h2_cal_table[i]);
+    GPIOB->scr = BB_CS;
+    fpga.h2_bytes_sent  = FPGA_H2_CAL_TABLE_SIZE;
+    fpga.h2_upload_done = 1;
+
+    /* Post-upload STATUS — this drives CFG + the D (DONE_FINAL) overlay flag. */
+    bb_read_reg32(0x41, (uint8_t *)fpga.cfg_status_reg);
+    /* Post-config IDCODE anchor (Exp L: a configured part stops answering, so
+     * an all-zero / mismatched read here is the SUCCESS signature). */
+    bb_read_reg32(0x11, (uint8_t *)fpga.probe_idcode_close);
+    if (fpga.probe_idcode_close[0] == 0x01 && fpga.probe_idcode_close[1] == 0x20 &&
+        fpga.probe_idcode_close[2] == 0x68 && fpga.probe_idcode_close[3] == 0x1B)
+        fpga.probe_id_bit_close = 0;
+
+    bb_cmd16(0x3A, 0x00);   /* CONFIG_DISABLE */
+    fpga_scope_delay_ms(100);
+
+    /* Restore PB3/4/5 to SPI3 AF so the acquisition task can read 0x04/0x05
+     * over hardware SPI3 if config took. PB6 stays GPIO (software CS). */
+    gpio_cfg.gpio_pins = BB_SCK | BB_MOSI;
+    gpio_cfg.gpio_mode = GPIO_MODE_MUX;
+    gpio_cfg.gpio_out_type = GPIO_OUTPUT_PUSH_PULL;
+    gpio_cfg.gpio_drive_strength = GPIO_DRIVE_STRENGTH_STRONGER;
+    gpio_init(GPIOB, &gpio_cfg);
+    gpio_cfg.gpio_pins = BB_MISO;
+    gpio_cfg.gpio_mode = GPIO_MODE_INPUT;
+    gpio_cfg.gpio_pull = GPIO_PULL_NONE;
+    gpio_init(GPIOB, &gpio_cfg);
+    SPI3_CS_DEASSERT();
+
+#if FPGA_CONFIG_B_ARM
+    /* Engine-arm attempt (bench plan item 4) — Build B breaks the config wall
+     * (DONE_FINAL set) but the capture engine starts UNARMED (one buffer then
+     * halt). Replicate stock's post-config shape: ~600 ms gap, then the five
+     * runtime control writes, then a 0x03 status read. Per the #18 netlist
+     * answer the arm bit is committed by one of these addresses (candidate
+     * 0x08→0xAD); watch SS byte 1 for 01 = armed, and the demo trace for
+     * disappearance. Runs over hardware SPI3 (AF restored just above): a
+     * configured part's SSPI pins are now the user design's runtime control SPI.
+     * SSPI reads are valid only at a slow clock, so read 0x03 at /256. */
+    fpga_scope_delay_ms(600);
+    spi3_set_br(7);                      /* /256 */
+    {
+        static const uint8_t arm_cfg[][2] = {
+            { 0x01, 0x08 }, { 0x02, 0x03 }, { 0x06, 0x00 },
+            { 0x07, 0x00 }, { 0x08, 0xAD },
+        };
+        for (unsigned i = 0; i < 5; i++) {
+            SPI3_CS_ASSERT();
+            spi3_xfer(arm_cfg[i][0]);
+            spi3_xfer(arm_cfg[i][1]);
+            SPI3_CS_DEASSERT();
+            fpga_scope_delay_ms(2);
+        }
+        SPI3_CS_ASSERT();
+        spi3_xfer(0x03);
+        for (unsigned i = 0; i < 4; i++)
+            fpga.scope_status[i] = spi3_xfer(0xFF);
+        SPI3_CS_DEASSERT();
+    }
+    spi3_set_br(0);                      /* restore /2 for normal acquisition */
+#endif
+
+    if (sched_running && acq_task_handle) vTaskResume(acq_task_handle);
+    return fpga.cfg_status_reg[3];
+}
+#endif /* FPGA_CONFIG_B */
+
 uint8_t fpga_spi3_config_sequence(const fpga_cfg_seq_opts_t *opt)
 {
     gpio_init_type gpio_cfg;
@@ -2141,6 +2359,14 @@ uint8_t fpga_spi3_config_sequence(const fpga_cfg_seq_opts_t *opt)
      * function exit. */
     spi3_set_br(opt->cmd_br);
 
+    /* Re-capture SPI3 CTRL1 HERE, at the config-frame clock (S1 overlay field).
+     * fpga_init captured it at Step-4 init time (always the /2 default), so a
+     * cmd_br=7 build still read S1:0347 — misleading (the overlay legend claims
+     * S1 shows the config clock). Now S1 reflects the ACTUAL prelude/upload BR:
+     * 0347 = /2, 037F = /256. Bench 2026-08-13: Build A read S1:0347 pre-fix
+     * because of this capture-point bug, NOT because /256 failed to apply. */
+    fpga.diag_spi_ctrl1 = FPGA_SPI->ctrl1;
+
     /* [0-] Exp J (probe_idcode): ANCHORED opcode-discrimination probe, run on a
      * pristine bus BEFORE the prelude — the FPGA is running its NV design and we
      * have not yet touched it.
@@ -2230,6 +2456,22 @@ uint8_t fpga_spi3_config_sequence(const fpga_cfg_seq_opts_t *opt)
         SPI3_CS_DEASSERT();
         cfg_trace_capture(opt, 1);   /* T1: after ERASE_SRAM */
         fpga_scope_delay_ms(opt->prelude_gap_ms);
+
+        /* [1b] Build A (2026-08-13): the maksidze/Stlkv V0.4 "richer prelude"
+         * reads, positioned HERE — between ERASE_SRAM and INIT_ADDR, immediately
+         * before CONFIG_ENABLE, matching the order Stlkv's working cold-start
+         * loader uses (0x11 → 0x13 → 0x41 → 0x12 → 0x15). Our probe_idcode reads
+         * (if also on) sit far earlier, before the bare CS pulse; this tests
+         * whether reads *adjacent* to config-enable are the load-bearing bit.
+         * Forced to /256 (SSPI reads are garbage at /2); restores opt->cmd_br. */
+        if (opt->prelude_reads) {
+            spi3_set_br(7);
+            spi3_read_reg8(0x11, fpga.probe_idcode);
+            spi3_read_reg8(0x13, fpga.probe_user);
+            spi3_read_reg8(0x41, fpga.probe_status);
+            fpga.probe_id_bit = spi3_find_idcode(fpga.probe_idcode);
+            spi3_set_br(opt->cmd_br);
+        }
 
         /* [2] 12 00 */
         SPI3_CS_ASSERT();
@@ -2890,6 +3132,18 @@ void fpga_init(void)
     gpio_init(GPIOB, &gpio_cfg);
     GPIOB->scr = PB11_MASK;   /* PB11 HIGH — FPGA active (match stock scope) */
 
+#if FPGA_CONFIG_B
+    /* Cold-config + live-readout rig (2026-08-13): instead of relying on a stock
+     * pre-config (the plain warm handoff), DO the bit-bang cold config HERE, then
+     * fall through to the warmtest read/render pipeline. This is the reliable
+     * arm-test bench: real config (Build B breaks the wall, DONE_FINAL set) plus
+     * the fpga_warmtest_acq_task 0x04/0x05 readout that latches the demo trace off
+     * on real data. Runs AFTER PB11 (IOR1B) and with PC6 (IOB7B) already HIGH from
+     * Step 4, so the engine-arm co-enables are asserted when the FPGA_CONFIG_B_ARM
+     * writes fire inside the sequence. `make guest-coldtrace`. */
+    fpga_bitbang_config_sequence();
+#endif
+
     /* PC0 = FPGA data-ready, active LOW. Nothing else in the image ever
      * configures this pin — every prior read relied on the reset-default
      * floating input. Make it an explicit input with PULL-UP: undriven ⇒
@@ -2911,6 +3165,18 @@ void fpga_init(void)
      * this write is not clobbered at boot; do NOT start siggen output in
      * this build, it shares DAC1 and would drop the reference. */
     scope_trigger_dac_raw(2048);
+
+#if FPGA_CH2_TRIGGER
+    /* CH2 trigger reference — TMR13 CH1 PWM-DAC on PA6, the CH2 analog of the
+     * DAC1 arm above (ripcord contract 38; bench plan item 5, 2026-08-13). Our
+     * firmware never programmed TMR13, so CH2's comparator had no reference and
+     * was predicted dead. Bring TMR13 up (stock config, decoded from master_init)
+     * and arm mid-scale. Like the DAC1 write this is MCU-internal (CRM/PA6/TMR13)
+     * and cannot disturb the FPGA. ⚠ Drives PA6 as AF PWM — confirm on the bench
+     * that PA6 is really the CH2 reference and not a conflicting frontend line. */
+    scope_trigger_ch2_init();
+    scope_trigger_ch2_raw(2048);
+#endif
 
     /* Frontend relays — bench run 3 (2026-08-12, first live capture): the
      * engine free-runs after a pinhole handoff, but the trace sat at the
@@ -2983,9 +3249,25 @@ void fpga_init(void)
 
     fpga.initialized = true;
     return;
+#elif FPGA_CONFIG_B
+    /* Build B: the bit-bang transplant runs INSTEAD of the hardware-SPI
+     * sequence (it owns PB3/4/5/6 as GPIO for the handshake, then restores
+     * SPI3 AF). Everything else in fpga_init is identical. */
+    fpga_bitbang_config_sequence();
 #else
     fpga_spi3_config_sequence(&(fpga_cfg_seq_opts_t){
+#if FPGA_CONFIG_A
+        /* Build A: both phases at /256 (NOT just the reads). upload_br=7 makes
+         * the 115,638-byte 0x3B payload clock at /256 too — ≈115638×8×256/120MHz
+         * ≈ 2.0s, which the bench plan accepts. cmd_br takes the /256 branch
+         * below (this is not a fidelity build). prelude_reads inserts the V0.4
+         * reads before INIT_ADDR; probe_edit reads the wall (ED) after 0x15. */
+        .upload_br      = 7,
+        .prelude_reads  = 1,
+        .probe_edit     = 1,
+#else
         .upload_br      = SPI3_UPLOAD_BR,
+#endif
         .prelude_gap_ms = 100,
         .post_close_ms  = 600,
         .arm_pb11       = 1,

@@ -113,3 +113,70 @@ uint16_t scope_trigger_dac_last(void)
 {
     return last_code;
 }
+
+/* ── CH2 trigger reference: TMR13 CH1 PWM-DAC ────────────────────────────────
+ * TMR13 base 0x40001C00 (register offsets confirmed against at32f403a_407_tmr.h).
+ * Values from stock master_init 0x0802B0FE..0x0802B34E; see scope_trigger.h. */
+#define TMR13_CTRL1  (*(volatile uint32_t *)0x40001C00)  /* CEN = bit0 */
+#define TMR13_SWEVT  (*(volatile uint32_t *)0x40001C14)  /* OVFSWTR/UG = bit0 */
+#define TMR13_CM1    (*(volatile uint32_t *)0x40001C18)  /* CH1 mode: OCM[6:4] */
+#define TMR13_CCTRL  (*(volatile uint32_t *)0x40001C20)  /* C1EN=bit0, C1P=bit1 */
+#define TMR13_DIV    (*(volatile uint32_t *)0x40001C28)  /* prescaler */
+#define TMR13_PR     (*(volatile uint32_t *)0x40001C2C)  /* period / ARR */
+#define TMR13_C1DT   (*(volatile uint32_t *)0x40001C34)  /* CH1 compare (duty) */
+
+#define TMR13_ARR       4094u    /* stock 0xFFE — 4095-count period */
+#define TMR13_OCM_PWM   0x70u    /* CM1[6:4] = 0b111 (stock orr #0x70) */
+#define TMR13_CC_EN_P   0x03u    /* CCTRL C1EN|C1P (stock orr #3) */
+
+static volatile uint16_t ch2_last_code = 0;
+static volatile uint8_t  ch2_inited = 0;
+
+void scope_trigger_ch2_init(void)
+{
+    crm_periph_clock_enable(CRM_TMR13_PERIPH_CLOCK, TRUE);
+    crm_periph_clock_enable(CRM_GPIOA_PERIPH_CLOCK, TRUE);
+
+    /* PA6 = TMR13_CH1 output, AF push-pull. tmr13_mux left 0 (stock never writes
+     * IOMUX remap2 — verified: no 0x4001001C literal in the image). */
+    gpio_init_type gpio_cfg;
+    gpio_default_para_init(&gpio_cfg);
+    gpio_cfg.gpio_pins = GPIO_PINS_6;
+    gpio_cfg.gpio_mode = GPIO_MODE_MUX;
+    gpio_cfg.gpio_out_type = GPIO_OUTPUT_PUSH_PULL;
+    gpio_cfg.gpio_drive_strength = GPIO_DRIVE_STRENGTH_STRONGER;
+    gpio_init(GPIOA, &gpio_cfg);
+
+    /* Timebase: PSC=0 (÷1), ARR=4094. PWM freq = TMR13clk / (ARR+1). */
+    TMR13_DIV = 0;
+    TMR13_PR  = TMR13_ARR;
+    /* CH1 as PWM output: OCM=0b111, CC1S=00 (output). Preserve other bits. */
+    TMR13_CM1 = (TMR13_CM1 & ~0x7Fu) | TMR13_OCM_PWM;
+    /* Channel output enable + polarity (stock: active-low). */
+    TMR13_CCTRL = (TMR13_CCTRL & ~0x3u) | TMR13_CC_EN_P;
+    /* Latch PSC/ARR via an update event, then run the counter. */
+    TMR13_SWEVT |= 1u;
+    TMR13_CTRL1 |= 1u;
+
+    ch2_inited = 1;
+}
+
+void scope_trigger_ch2_raw(uint16_t code)
+{
+    if (!ch2_inited || (TMR13_CTRL1 & 1u) == 0u)
+        scope_trigger_ch2_init();
+    code &= 0x0FFF;                 /* same 0..4095 domain as DAC1 */
+    TMR13_C1DT = code;             /* duty = code / (ARR+1) */
+    ch2_last_code = code;
+}
+
+void scope_trigger_ch2_set(int range, int level)
+{
+    /* Same cal formula as CH1 (ripcord contract 38). */
+    scope_trigger_ch2_raw(scope_trigger_dac_compute(range, level));
+}
+
+uint16_t scope_trigger_ch2_last(void)
+{
+    return ch2_last_code;
+}
