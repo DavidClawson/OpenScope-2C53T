@@ -479,6 +479,48 @@ guest-reconfig-pb12: CFLAGS += -DGUEST_BUILD -DFPGA_STOCK_FIDELITY=1 -DFPGA_USAR
 guest-reconfig-pb12: LDSCRIPT = ld/at32f403a_guest.ld
 guest-reconfig-pb12: clean all
 
+# Experiment T (2026-08-11): RECONFIG_N candidate PC9 — the pin every previous
+# search excluded by construction.
+#
+# Two independent leads point here:
+#
+# 1. rosenrot00/OpenScope-2C23T (independent 2C23T firmware whose scope WORKS)
+#    pulses PC9 LOW 10ms -> HIGH 1ms immediately before its bitstream on the HW3
+#    path, and PC8 on HW4. Same silicon family, same opcodes, same 160-byte
+#    frame structure as our blob. Its HW3 loader also reads PC8 back as DONE.
+#
+# 2. Stock 2C53T does the same thing. Every PC9 access in V1.2.0:
+#      0x0802AAB2  master_init +0x62   gpio_init(GPIOC, {pins=0x200})
+#      0x0802AAB6  master_init +0x66   GPIOC->BRR  = 0x200   => PC9 LOW
+#      0x0802B412  master_init +0x9C2  GPIOC->BSRR = 0x200   => PC9 HIGH
+#      0x08029D3A  housekeeping/IWDG   GPIOC->BRR  = 0x200   => LOW (shutdown)
+#    CONFIG_ENABLE is at 0x0802DA42 = master_init +0x2FF2, i.e. AFTER both.
+#    Bases resolved by hand (r7 = movw #0x1014 + movt #0x4001 = GPIOC_BRR;
+#    r2 = 0x40011000, [r2,#16] = BSRR) — find_gpio_pulses.py reports the
+#    0x0802AAB6 mask as unresolved and so never surfaced this pin.
+#
+# WHY IT WAS NEVER TESTED: fpga.c's sweep table excludes PC9 by name ("power
+# hold — driving it low kills the device"), so Exps O/Q swept twelve pins that
+# could not contain the answer. And Exp E/F/R's static diffs all read PC9 as
+# output+HIGH in BOTH firmwares (GPIOC CRH nibble 1 vs 3, ODR bit9 set in both)
+# because stock raises it 9.8KB of code before the park point — the transition
+# blind spot Exp G warned about, hit exactly.
+#
+# SAFETY: run this with USB ATTACHED. Exp R established that releasing the PC9
+# hold does not power the device down while VBUS is present (that is why a
+# POWER-button shutdown on USB hangs on "Goodbye" instead of going dark). Stock
+# gets away with the same low period because the user's finger is still on POWER.
+#
+# CAVEAT: the static evidence has two readings and does not separate them —
+# (A) a RECONFIG_N assert released before config, or (B) ordinary power-hold
+# sequencing (don't latch the rail until the firmware has decided to boot).
+# This build is what separates them. Read ED: on the LCD overlay; the anchor
+# (0x11 -> 0x0120681B) still applies, and the real success signal is Exp L/M's
+# open/closed test — a configured part STOPS answering 0x11.
+guest-reconfig-pc9: CFLAGS += -DGUEST_BUILD -DFPGA_STOCK_FIDELITY=1 -DFPGA_USART_SILENT_SCOPE=1 -DFPGA_FIDELITY_RECONFIG_PORT=3 -DFPGA_FIDELITY_RECONFIG_PIN=9
+guest-reconfig-pc9: LDSCRIPT = ld/at32f403a_guest.ld
+guest-reconfig-pc9: clean all
+
 # Experiment J (2026-07-28): ANCHORED opcode-discrimination probe.
 # Exp I established that every FPGA status number this project has recorded was
 # a phase-slice of the free-running 0xC8100001 MISO pattern, not a register read

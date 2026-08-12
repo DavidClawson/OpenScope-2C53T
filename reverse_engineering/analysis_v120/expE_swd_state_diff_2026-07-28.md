@@ -1450,3 +1450,124 @@ every boot. There is a latch at `scope_ui.c:337` — the first real sample disab
 the fallback permanently for that boot — so the *disappearance* of the demo trace
 is a genuine success indicator. Its presence is not a failure indicator; it is
 the default state.
+
+---
+
+## Experiment T (2026-08-11) — RECONFIG_N candidate PC9: NEGATIVE, and the reason it was never tested
+
+**Result first: `ED:00039020 S1:0347`.** Bit-identical to Exps F/R/S. `S1:0347`
+confirms the fidelity base was intact (BR=0, `/2`), so the STATUS read is valid.
+A PC9 LOW→HIGH pulse immediately before the prelude does **not** open config
+entry. PC9 joins PC2 and PB12 (Exp G) on the refuted list.
+
+### Where the candidate came from
+
+Two independent leads, neither of which existed when Exps O/Q chose their pins.
+
+**1. `rosenrot00/OpenScope-2C23T`.** Independent custom firmware for the sibling
+2C23T whose scope *works*. Its `src/fpga.c` has two hardware paths and both open
+the config sequence with a reset-pin pulse:
+
+```c
+/* HW3 */
+gpio_clear(GPIOC_BASE, 1u << 9);    /* PC9 LOW  */
+delay_ms(10);
+gpio_set(GPIOC_BASE, 1u << 9);      /* PC9 HIGH */
+delay_ms(1);
+/* ...bitstream... */
+fpga_ready_flag = gpio_read(GPIOC_BASE, 1u << 8) ? 1u : 0u;   /* PC8 = DONE */
+
+/* HW4.0 — FPGA_HW4_RESET_PIN = 1u << 8 (PC8) */
+gpio_clear(GPIOC_BASE, FPGA_HW4_RESET_PIN);  delay_ms(10);
+gpio_set(GPIOC_BASE, FPGA_HW4_RESET_PIN);    delay_ms(1);
+```
+
+On FNIRSI's own boards, across two revisions, PC8 and PC9 are FPGA
+config-control lines that swap roles between revisions.
+
+**2. Stock 2C53T does the same shape.** Every PC9 access in V1.2.0:
+
+| Address | Where | Effect |
+|---|---|---|
+| `0x0802AAB2` | `master_init` +0x62 | `gpio_init(GPIOC, {pins=0x200})` |
+| `0x0802AAB6` | `master_init` +0x66 | `GPIOC->BRR = 0x200` → **PC9 LOW** |
+| `0x0802B412` | `master_init` +0x9C2 | `GPIOC->BSRR = 0x200` → **PC9 HIGH** |
+| `0x08029D3A` | housekeeping/IWDG | `GPIOC->BRR = 0x200` → LOW (shutdown) |
+
+CONFIG_ENABLE is `0x0802DA42` = `master_init` +0x2FF2, after both. Bases
+resolved by hand: `r7 = movw #0x1014 + movt #0x4001 = 0x40011014 = GPIOC_BRR`
+(set at `0x0802AA82`/`0x0802AA9C`, both callee-saved across the `bl` at
+`0x0802AAB2`); `r2 = 0x40011000` with `[r2,#16]` = BSRR.
+
+### Why no previous experiment could have found this pin
+
+Three separate mechanisms excluded it, which is the part worth keeping:
+
+1. **The sweep table excludes it by name.** `fpga.c:1764`: *"PC9 is power hold and
+   is excluded — driving it low kills the device."* Exps O and Q swept 20 then 12
+   pins; the candidate set could not contain the answer.
+2. **`find_gpio_pulses.py` reports the `0x0802AAB6` mask as unresolved** (`pins ?`),
+   because `r4` is loaded far from the store and across a call. Exp P's census
+   therefore never listed this site, and PC9's presence in the "driven both ways"
+   list came only from the shutdown-path LOW at `0x08029D3A`.
+3. **Every static diff reads PC9 as identical.** From the Exp E parked dumps,
+   `GPIOC` CRL/CRH/IDR/ODR:
+
+   | | CRH nibble PC9 | ODR bit9 |
+   |---|---|---|
+   | stock (`swd_stock.txt`, CRH `0x48811218`, ODR `0x000063ec`) | `0x1` output PP 10MHz | 1 (HIGH) |
+   | ours (`swd_ours.txt`, CRH `0x44844138`, ODR `0x00002360`) | `0x3` output PP 50MHz | 1 (HIGH) |
+
+   Stock raises PC9 9.8 KB of code before the park point, so it reads HIGH there —
+   exactly the transition blind spot Exp G recorded and we then failed to apply.
+   PC8 is input-with-pull-up in both (CRH nibble `0x8`, ODR bit8 set), so unlike
+   the 2C23T HW3 it carries no DONE signal on this board.
+
+### Build
+
+`make guest-reconfig-pc9` — the Exp F fidelity base plus
+`FPGA_FIDELITY_RECONFIG_PORT=3` / `_PIN=9`, driving the pre-existing
+`reset_port`/`reset_pin` machinery at `fpga.c:1940` (whose comment already cited
+rosenrot00; Exp G used it for PC2/PB12, so only the pin is new). Verified before
+flashing: macros resolve to PORT=3 (GPIOC) / PIN=9, the guard accepts them, and
+the image differs from `guest-fidelity` by **133 bytes** of pulse code.
+
+Run with USB attached. Exp R established that releasing the PC9 hold does not
+power the device down while VBUS is present — that is why a POWER-button shutdown
+on USB hangs on "Goodbye" instead of going dark. Stock survives the same low
+period because the user's finger is still on POWER. The device stayed up
+throughout, confirming the safety argument.
+
+### What this does and does not refute
+
+It refutes **"a PC9 pulse immediately before the prelude opens config entry."**
+
+It does **not** refute the RECONFIG_N reading of stock's PC9 low, because the
+*position* differs: stock asserts at +0x66 and releases at +0x9C2, ~9.8 KB of
+code before CONFIG_ENABLE, while this build pulsed a few instructions before the
+prelude. Per the 2026-07-29 Ghidra review (§ "Exp B2 does not bound the
+trigger→config-enable interval"), nothing in this project constrains that gap.
+
+Two readings of stock's PC9 low remain open and the static evidence does not
+separate them — the low is immediately preceded by a `gpio_init` on the same pin:
+
+- **(A)** a RECONFIG_N assert released before configuration (the 2C23T pattern);
+- **(B)** ordinary power-hold sequencing — do not latch the rail until the
+  firmware has decided to boot, since the POWER button holds it meanwhile.
+
+### Method note — boot mode is not a reset detector
+
+This build came up in multimeter mode, which is **not** a symptom of the pulse:
+`main.c:46` initialises `current_mode = MODE_MULTIMETER` and the only other
+assignment in the tree is the mode-cycle button at `input_handler.c:215`. Every
+cold boot starts in DMM. It also means startup mode cannot be used to detect a
+brownout-and-restart, since a reset would land in the same place.
+
+### Next
+
+1. **The #18 continuity measurement now decides whether to continue this line.**
+   If MCU PC9 has no path to the GW1N-2's RECONFIG_N, reading (B) is confirmed and
+   PC9 closes for good. If it does, the position variant below becomes the test.
+2. **Position variant** (only if 1 is positive): pulse PC9 at stock's position —
+   right after the clock enable at the top of init — and let the remaining init
+   run before the handshake, rather than pulsing immediately pre-prelude.
