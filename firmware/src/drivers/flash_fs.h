@@ -54,7 +54,7 @@ flash_fs_error_t flash_fs_raw_read_bytes(uint32_t addr, void *buf, uint32_t len)
  * Automated writers must NOT call these. Use the region layer in
  * flash_regions.h, which enforces read-only ranges by address, bounds-checks
  * every operation, never erases implicitly, and verifies what it wrote.
- */
+ *
  * Byte-exact from stock: WREN/RDSR-wait/sector-erase/page-program/page-loop/
  * smart-block-write (FUN_0802f344/f11c/ee9c/f36c/f2ac/f16c). THESE MODIFY FLASH.
  * The W25Q128 holds UI assets + screenshots in two FAT volumes — writing outside
