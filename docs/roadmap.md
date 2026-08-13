@@ -68,6 +68,55 @@ Roughly ordered by priority. Not committed to timelines.
 - **Segmented memory** — trigger-only capture, skip dead time
 - **Waveform reference library** — known-good overlays on SPI flash
 
+### Memory and resource headroom
+
+Enabling work for everything below — modules especially. Baseline measured
+2026-08-13 on `make guest`, gcc 13.2.1.
+
+**The shape of the problem: flash is abundant, RAM is not.**
+
+| Resource | Used | Free |
+|---|---:|---:|
+| Internal flash (996 KB app slot) | 496,136 B (48.6%) | ~512 KB |
+| — of which actual code (`.text`) | 107,020 B | |
+| — of which `.rodata` | 388,720 B | |
+| SRAM (224 KB) | see below | **24,272 B** after the waterfall move |
+| External SPI flash via `.spim` | **0 B** | 16 MB, mapped at `0x08400000` |
+
+Only ~107 KB of the flash is logic. Two data blobs dominate `.rodata`: the FPGA
+bitstream (115,638 B) and the CMSIS-DSP FFT twiddle/bit-reversal tables
+(~101,700 B). RAM is where features actually compete — three buffers held 90%
+of it before the move below.
+
+- **✅ Waterfall history → shared pool** *(done, `935d020`)* — 20,480 B of `.bss`
+  became a sub-tenant of the FFT pool region. Free SRAM 3,792 → 24,272 B. Also
+  surfaced that `SHMEM_NEED_FFT` (90112) understates the radix-2 layout, which
+  really needs 98304; now pinned by a `_Static_assert` in `fft.c`.
+- **FPGA bitstream → external SPI flash** — frees ~115 KB of internal flash, the
+  single largest item. It is already streamed to the FPGA byte-by-byte, so there
+  is no reason it must be compiled in. Adds a W25Q dependency to the boot path,
+  so this should wait until cold-boot config entry is fully settled; a failed
+  read must fall back cleanly rather than leaving the FPGA unconfigured.
+- **Prove the `.spim` XIP path** — the linker script already maps 16 MB at
+  `0x08400000` with a `.spim` output section, and it is currently **0 bytes**:
+  plumbed but never exercised on hardware. Needs a bring-up test (place one
+  function there, call it, confirm it executes) before anything depends on it.
+  This is the unlock for shipping modules as loadable assets rather than
+  compiled-in data.
+- **FFT twiddle tables → SPIM** — ~101 KB of internal flash, read-only and
+  latency-tolerant. Only worth doing if internal flash gets tight; blocked on
+  the item above.
+- **Streaming screenshot → shrink the pool** — screenshot is the sole reason the
+  pool is 150 KB (`SHMEM_NEED_SCREENSHOT` = 153,600). If it captured in row
+  bands straight to SPI flash or USB, the pool could drop to the FFT need and
+  free ~44 KB outright. PR #13 shrinks it to 96 KB by simply disabling
+  screenshot, which is the same trade taken bluntly.
+
+**Budgeting rule for new features:** anything needing large *transient* memory
+should claim the pool (`SHMEM_OWNER_MODULE` already exists for this). Anything
+needing large *persistent* memory is competing for ~24 KB and needs a design
+conversation first.
+
 ### Automotive suite
 - **Relative compression test** — cranking current analysis, per-cylinder bar chart
 - **Alternator ripple test** — FFT of battery voltage, diode fault detection
