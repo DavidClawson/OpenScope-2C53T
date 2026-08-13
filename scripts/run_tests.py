@@ -35,6 +35,7 @@ SCRIPTS = Path(__file__).resolve().parent
 # Suites in rough order of how much they protect: flash safety first.
 SUITES = (
     "test_iap_erase_guard.py",
+    "test_flash_regions.py",
     "test_flash_switcher.py",
     "test_flash_preflight.py",
     "test_bootloader_updater.py",

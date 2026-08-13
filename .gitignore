@@ -37,6 +37,7 @@ firmware/tests/test_decode_kline
 firmware/tests/test_decode_noisy
 firmware/tests/test_esp_comm
 firmware/tests/test_fft
+firmware/tests/test_flash_regions
 firmware/tests/test_font
 firmware/tests/test_math_measure
 firmware/tests/test_persistence
