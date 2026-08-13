@@ -1441,11 +1441,21 @@ void draw_split_screen(uint32_t frame)
     draw_fft_region(divider_y + 1, SCOPE_H / 2 - 2);
 }
 
-/* Waterfall */
-#define WATERFALL_ROWS  64
-#define WATERFALL_COLS  320
-static uint8_t waterfall_buf[WATERFALL_ROWS][WATERFALL_COLS];
+/* Waterfall
+ *
+ * The 20 KB history buffer lives in the shared pool as a sub-tenant of the
+ * FFT region (see SHMEM_FFT_WATERFALL_OFFSET) rather than in .bss. It cannot
+ * be a pool owner of its own: this function calls fft_process(), so it only
+ * ever runs while SHMEM_OWNER_FFT holds the pool, and claiming it separately
+ * would evict the FFT it depends on.
+ *
+ * Only waterfall_row_idx and the generation counter stay static — 5 bytes
+ * instead of 20,480.
+ */
+#define WATERFALL_ROWS  SHMEM_FFT_WATERFALL_ROWS
+#define WATERFALL_COLS  SHMEM_FFT_WATERFALL_COLS
 static uint8_t waterfall_row_idx = 0;
+static uint32_t waterfall_pool_generation = 0;
 
 static uint16_t intensity_to_color(uint8_t intensity)
 {
@@ -1467,6 +1477,25 @@ void draw_waterfall_screen(void)
                          FFT_SIZE, cfg->sample_rate_hz,
                          1000.0f, 0.0f, 0.8f);
     fft_process(sbuf, FFT_SIZE, &fft_result);
+
+    /* Resolve the history buffer out of the FFT's pool tenancy. Returns NULL
+     * if FFT no longer owns the pool, in which case there is nothing valid to
+     * draw into — bail rather than scribble over another owner's data. This is
+     * a stricter check than the fft_get_sample_buf() guard above, which only
+     * proves the FFT was initialised at some point. */
+    uint8_t *wf_pool = shared_mem_get(SHMEM_OWNER_FFT);
+    if (!wf_pool) return;
+    uint8_t (*waterfall_buf)[WATERFALL_COLS] =
+        (uint8_t (*)[WATERFALL_COLS])(wf_pool + SHMEM_FFT_WATERFALL_OFFSET);
+
+    /* shared_mem_acquire() zeroes the pool whenever the owner changes, so a
+     * round trip through screenshot/persistence wipes the history. Detect that
+     * and restart from row 0 instead of scrolling through a zeroed tail. */
+    uint32_t pool_generation = shared_mem_transition_count();
+    if (pool_generation != waterfall_pool_generation) {
+        waterfall_pool_generation = pool_generation;
+        waterfall_row_idx = 0;
+    }
 
     const float *draw_data = (fft_result.avg_db != NULL)
                              ? fft_result.avg_db : fft_result.magnitude_db;

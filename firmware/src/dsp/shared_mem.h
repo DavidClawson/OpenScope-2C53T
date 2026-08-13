@@ -44,6 +44,46 @@ typedef enum {
 #define SHMEM_NEED_COMPONENT    8192    /* 8 KB */
 #define SHMEM_NEED_BODE         4096    /* 4 KB */
 
+/* ── FFT sub-tenants ────────────────────────────────────────────────
+ *
+ * The waterfall is not a pool owner in its own right: draw_waterfall_screen()
+ * calls fft_process(), so it can only ever run while SHMEM_OWNER_FFT holds
+ * the pool. Claiming it separately would evict the very FFT it depends on.
+ * Instead its history buffer is a sub-tenant of the FFT region, placed above
+ * everything fft_setup_pointers() lays down.
+ *
+ * ⚠ The offset is NOT SHMEM_NEED_FFT. That constant says 90112 (88 KB), but
+ * the radix-2 layout actually runs to 98304 (96 KB):
+ *
+ *     CMSIS   : FFT_SIZE*14 + FFT_BINS*12 = 81920
+ *     radix-2 : FFT_SIZE*18 + FFT_BINS*12 = 98304   <-- the real high-water mark
+ *
+ * SHMEM_NEED_FFT understating the radix-2 path is a pre-existing inaccuracy;
+ * it is harmless today only because every build defines USE_CMSIS_DSP. Placing
+ * the waterfall at 90112 would have silently overlapped the twiddle and sample
+ * buffers the moment anyone built the radix-2 path. fft.c carries a
+ * _Static_assert tying its real layout to this offset so the build breaks
+ * instead of corrupting, e.g. if FFT_SIZE is ever raised.
+ *
+ * Lifetime rules for a sub-tenant:
+ *   - only valid while shared_mem_owner() == SHMEM_OWNER_FFT;
+ *   - shared_mem_acquire() zeroes the pool on an owner *change*, so history
+ *     is wiped automatically after an eviction — callers must notice via
+ *     shared_mem_transition_count() and reset their own indices.
+ */
+#define SHMEM_FFT_WATERFALL_OFFSET  98304
+#define SHMEM_FFT_WATERFALL_ROWS    64
+#define SHMEM_FFT_WATERFALL_COLS    320
+#define SHMEM_FFT_WATERFALL_SIZE    (SHMEM_FFT_WATERFALL_ROWS * SHMEM_FFT_WATERFALL_COLS)
+
+/* Total the FFT owner actually occupies, including sub-tenants. This is the
+ * figure the About/health screens should report, not SHMEM_NEED_FFT. */
+#define SHMEM_NEED_FFT_TOTAL \
+    (SHMEM_FFT_WATERFALL_OFFSET + SHMEM_FFT_WATERFALL_SIZE)
+
+_Static_assert(SHMEM_NEED_FFT_TOTAL <= SHMEM_POOL_SIZE,
+               "FFT region + waterfall sub-tenant overflows the shared pool");
+
 /* ═══════════════════════════════════════════════════════════════════
  * Core API
  * ═══════════════════════════════════════════════════════════════════ */
