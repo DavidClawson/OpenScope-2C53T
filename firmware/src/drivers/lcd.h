@@ -182,6 +182,19 @@ void lcd_set_pixel(uint16_t x, uint16_t y, uint16_t color);
 void lcd_fill_rect(uint16_t x, uint16_t y, uint16_t w, uint16_t h, uint16_t color);
 void lcd_clear(uint16_t color);
 
+/*
+ * Bulk pixel push into the window most recently set by lcd_set_window().
+ *
+ * Every lcd_fill_rect() carries a full lcd_set_window() with it — 3 commands
+ * and 8 byte-writes, each followed by lcd_bus_delay(). For anything drawn as
+ * many small rects that all live inside one rectangle (a waterfall row, a
+ * bitmap, a scan-converted image) that setup dominates: call lcd_set_window()
+ * once for the whole area, then stream the pixels with this. Data is written
+ * left-to-right, top-to-bottom and wraps at the window edges, so callers must
+ * supply exactly w*h pixels to fill a window.
+ */
+void lcd_write_pixels(const uint16_t *pixels, uint32_t count);
+
 /* Text rendering (using embedded 8x16 font) */
 void lcd_draw_char(uint16_t x, uint16_t y, char c, uint16_t fg, uint16_t bg);
 void lcd_draw_string(uint16_t x, uint16_t y, const char *str, uint16_t fg, uint16_t bg);

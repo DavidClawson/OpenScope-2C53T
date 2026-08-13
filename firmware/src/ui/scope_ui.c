@@ -1450,13 +1450,29 @@ void draw_split_screen(uint32_t frame)
  * ever runs while SHMEM_OWNER_FFT holds the pool, and claiming it separately
  * would evict the FFT it depends on.
  *
- * Only waterfall_row_idx and the generation counter stay static — 5 bytes
- * instead of 20,480.
+ * Only waterfall_row_idx, the generation counter and one assembled screen
+ * line stay static — 645 bytes instead of 20,480.
  */
 #define WATERFALL_ROWS  SHMEM_FFT_WATERFALL_ROWS
 #define WATERFALL_COLS  SHMEM_FFT_WATERFALL_COLS
 static uint8_t waterfall_row_idx = 0;
 static uint32_t waterfall_pool_generation = 0;
+
+/* The row blit below sets one window across the full plot width per history
+ * row and streams into it, so a history row must be exactly one screen line
+ * wide. */
+_Static_assert(WATERFALL_COLS == LCD_WIDTH,
+               "waterfall row blit assumes one history column per screen pixel");
+
+/*
+ * One assembled screen line, 640 bytes. Colours are converted once per
+ * history row and pushed row_height times, instead of being recomputed for
+ * every sub-row. It is deliberately NOT the 20 KB history buffer's problem:
+ * that lives in the shared pool (see shared_mem.h) precisely because it is
+ * large, whereas one line is small enough that the pool's ownership
+ * lifetime rules would cost more than they save.
+ */
+static uint16_t waterfall_line[WATERFALL_COLS];
 
 static uint16_t intensity_to_color(uint8_t intensity)
 {
@@ -1528,18 +1544,69 @@ void draw_waterfall_screen(void)
     uint8_t newest_row = waterfall_row_idx;
     waterfall_row_idx = (uint8_t)((waterfall_row_idx + 1) % WATERFALL_ROWS);
 
-    lcd_fill_rect(0, SCOPE_TOP, LCD_WIDTH, SCOPE_H, COLOR_BLACK);
-
+    /* ── Blit ───────────────────────────────────────────────────────
+     *
+     * This used to clear the whole plot and then draw every pixel column as
+     * its own 1 x row_height lcd_fill_rect: 20,481 fill_rects and therefore
+     * 20,481 lcd_set_window() calls per frame, each one 3 commands + 8 byte
+     * writes with a bus delay after every single one — ~225,000 delayed bus
+     * transactions to paint 61,440 pixels. Bench 2026-08-13: the plot
+     * visibly rastered left-to-right, top-to-bottom over seconds.
+     *
+     * Now: one window per history row, and each row is converted once into
+     * waterfall_line and streamed row_height times. 65 set_windows and 192
+     * lcd_write_pixels() calls per frame, with the same pixels at the same
+     * coordinates.
+     *
+     * One window for the WHOLE block would cost 2 set_windows instead of 65,
+     * but the window is global driver state and vInputTask runs at priority 4
+     * against the display task's 1: its power-off countdown overlay
+     * (input_handler.c) calls lcd_fill_rect() and so re-points the window
+     * from under a stream in progress. Per-row windows bound that to one
+     * corrupted row for one frame — the same blast radius the per-column
+     * version had — for ~700 extra bus transactions out of 66,000.
+     *
+     * The clear is gone too: the block covers every pixel it draws over, so
+     * the only part of the plot that still needs clearing is the residual
+     * strip left when SCOPE_H is not a multiple of WATERFALL_ROWS (14 rows
+     * at the current 206/64). That halves the pixel writes as well.
+     *
+     * Why not scroll-and-append, which would be O(1 row)? The history
+     * scrolls by exactly one row per frame, so 63 of 64 rows are unchanged
+     * in CONTENT — but they all MOVE, and with no framebuffer on this side
+     * of the bus there is nothing to shift; the ST7789's own vertical
+     * scroll works on panel rows, which MADCTL = 0xA0 (MV = 1) maps to
+     * screen COLUMNS, i.e. it would scroll the waterfall sideways. An
+     * O(1)-per-frame waterfall needs either a RAM framebuffer (the shared
+     * pool is already spoken for by the FFT here) or a different history
+     * layout that lets the newest row wrap in place instead of the image
+     * scrolling — which changes what is drawn, so it is a design decision,
+     * not a speedup. */
     uint16_t row_height = SCOPE_H / WATERFALL_ROWS;
     if (row_height < 1) row_height = 1;
 
-    uint8_t r;
-    for (r = 0; r < WATERFALL_ROWS; r++) {
-        uint8_t buf_row = (uint8_t)((newest_row + WATERFALL_ROWS - r) % WATERFALL_ROWS);
-        uint16_t y = (uint16_t)(SCOPE_TOP + r * row_height);
-        if (y + row_height > SCOPE_BOT) break;
+    uint16_t rows_drawn = WATERFALL_ROWS;
+    if ((uint32_t)rows_drawn * row_height > SCOPE_H)
+        rows_drawn = (uint16_t)(SCOPE_H / row_height);
+    uint16_t block_h = (uint16_t)(rows_drawn * row_height);
+
+    if (block_h < SCOPE_H)
+        lcd_fill_rect(0, (uint16_t)(SCOPE_TOP + block_h), LCD_WIDTH,
+                      (uint16_t)(SCOPE_H - block_h), COLOR_BLACK);
+
+    uint16_t r;
+    for (r = 0; r < rows_drawn; r++) {
+        const uint8_t *src =
+            waterfall_buf[(newest_row + WATERFALL_ROWS - r) % WATERFALL_ROWS];
         for (x = 0; x < WATERFALL_COLS; x++)
-            lcd_fill_rect(x, y, 1, row_height, intensity_to_color(waterfall_buf[buf_row][x]));
+            waterfall_line[x] = intensity_to_color(src[x]);
+
+        lcd_set_window(0, (uint16_t)(SCOPE_TOP + r * row_height),
+                       WATERFALL_COLS, row_height);
+
+        uint16_t rep;
+        for (rep = 0; rep < row_height; rep++)
+            lcd_write_pixels(waterfall_line, WATERFALL_COLS);
     }
 
     font_draw_string(4, SCOPE_TOP + 2, "WFALL", COLOR_WHITE, COLOR_WHITE, &font_small);

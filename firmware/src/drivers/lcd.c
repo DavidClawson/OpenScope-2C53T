@@ -477,6 +477,15 @@ void lcd_fill_rect(uint16_t x, uint16_t y, uint16_t w, uint16_t h, uint16_t colo
     }
 }
 
+void lcd_write_pixels(const uint16_t *pixels, uint32_t count)
+{
+    /* No window setup here by design — the caller owns the window, which is
+     * the entire point (see lcd.h). Writes go straight at the EXMC data
+     * address with no bus delay, exactly like the lcd_fill_rect() inner loop. */
+    while (count--)
+        *LCD_DATA_ADDR = *pixels++;
+}
+
 void lcd_clear(uint16_t color)
 {
     lcd_fill_rect(0, 0, LCD_WIDTH, LCD_HEIGHT, color);
