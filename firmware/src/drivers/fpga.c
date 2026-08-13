@@ -2359,6 +2359,18 @@ static uint8_t fpga_post_h2_trigger_diag_index(uint8_t trigger_byte)
     }
 }
 
+static uint8_t fpga_post_h2_stock_wire_byte(uint8_t trigger_byte)
+{
+    switch (trigger_byte) {
+    case FPGA_POST_H2_TRIGGER_FAST_TB:   return FPGA_ACQ_FAST_TB + 1;
+    case FPGA_POST_H2_TRIGGER_ROLL:      return FPGA_ACQ_ROLL + 1;
+    case FPGA_POST_H2_TRIGGER_METER_ADC: return FPGA_ACQ_METER_ADC + 1;
+    case FPGA_POST_H2_TRIGGER_SIGGEN:    return FPGA_ACQ_SIGGEN + 1;
+    case FPGA_POST_H2_TRIGGER_STATUS:    return FPGA_ACQ_STATUS + 1;
+    default:                             return 0xFF;
+    }
+}
+
 static void fpga_post_h2_diag_begin(uint8_t idx, uint8_t trigger_byte)
 {
     if (idx >= FPGA_POST_H2_TRIGGER_HISTORY) return;
@@ -2388,7 +2400,8 @@ static void fpga_run_stock_post_h2_spi3_trigger(uint8_t trigger_byte)
      * Post-H2 stock sequence equivalent uses private queue tags so normal
      * acquisition trigger bytes cannot collide with boot choreography.
      * (0x08026DCE..0x08026E2A). The consumer at 0x080374B2 first writes the
-     * queued byte itself to SPI3, then dispatches on the queue value.
+     * queued stock byte itself to SPI3, then dispatches on that value. Locally
+     * the queue tag is private, but the SPI3 wire byte remains stock-compatible.
      *
      * The local state bytes used below are the open-firmware equivalents of
      * stock scope bytes (`ms[0x2D]`, `ms[0x16]`, `ms[0x18]`). They are not DMM
@@ -2396,10 +2409,11 @@ static void fpga_run_stock_post_h2_spi3_trigger(uint8_t trigger_byte)
      * decide whether this boot choreography is sufficient.
      */
     uint8_t diag_idx = fpga_post_h2_trigger_diag_index(trigger_byte);
+    uint8_t wire_byte = fpga_post_h2_stock_wire_byte(trigger_byte);
     fpga.spi3_probing = true;
     fpga_post_h2_diag_begin(diag_idx, trigger_byte);
     SPI3_CS_ASSERT();
-    fpga_post_h2_diag_rx(diag_idx, spi3_xfer(trigger_byte));
+    fpga_post_h2_diag_rx(diag_idx, spi3_xfer(wire_byte));
 
     switch (trigger_byte) {
     case FPGA_POST_H2_TRIGGER_FAST_TB:
