@@ -422,6 +422,14 @@ uint8_t input_handle_button(button_id_t button, QueueHandle_t dq)
             else if (f < 25000.0f) f = 25000.0f;
             else f = 1.0f;
             siggen_set_frequency(f);
+            /* DCMD_DRAW_SIGGEN, not the default DCMD_REDRAW_ALL: the
+             * generator panel owns rows 16..223 and repaints them itself,
+             * so a full-screen clear + status/info bar repaint on every
+             * adjustment was pure flicker. The display task also gates
+             * DCMD_DRAW_SIGGEN on the settings actually moving, which
+             * REDRAW_ALL cannot be gated on (it is the hard invalidate —
+             * see main.c). Applies to all seven siggen adjustments. */
+            cmd = DCMD_DRAW_SIGGEN;
             send_cmd(dq, cmd);
         }
         break;
@@ -435,6 +443,7 @@ uint8_t input_handle_button(button_id_t button, QueueHandle_t dq)
 #endif
         if (current_mode == MODE_SIGNAL_GEN) {
             siggen_cycle_waveform();
+            cmd = DCMD_DRAW_SIGGEN;
             send_cmd(dq, cmd);
         } else if (current_mode == MODE_MULTIMETER) {
             if (meter_layout == METER_LAYOUT_FUSE) {
@@ -506,6 +515,7 @@ uint8_t input_handle_button(button_id_t button, QueueHandle_t dq)
         }
         else if (current_mode == MODE_SIGNAL_GEN) {
             siggen_amplitude_up();
+            cmd = DCMD_DRAW_SIGGEN;
             send_cmd(dq, cmd);
         }
         break;
@@ -555,6 +565,7 @@ uint8_t input_handle_button(button_id_t button, QueueHandle_t dq)
         }
         else if (current_mode == MODE_SIGNAL_GEN) {
             siggen_amplitude_down();
+            cmd = DCMD_DRAW_SIGGEN;
             send_cmd(dq, cmd);
         }
         break;
@@ -611,6 +622,7 @@ uint8_t input_handle_button(button_id_t button, QueueHandle_t dq)
 #endif
         else if (current_mode == MODE_SIGNAL_GEN) {
             siggen_duty_cycle_down();
+            cmd = DCMD_DRAW_SIGGEN;
             send_cmd(dq, cmd);
         }
         else if (current_mode == MODE_OSCILLOSCOPE) {
@@ -668,6 +680,7 @@ uint8_t input_handle_button(button_id_t button, QueueHandle_t dq)
 #endif
         else if (current_mode == MODE_SIGNAL_GEN) {
             siggen_duty_cycle_up();
+            cmd = DCMD_DRAW_SIGGEN;
             send_cmd(dq, cmd);
         }
         else if (current_mode == MODE_OSCILLOSCOPE) {
@@ -687,6 +700,7 @@ uint8_t input_handle_button(button_id_t button, QueueHandle_t dq)
         } else if (current_mode == MODE_SIGNAL_GEN) {
             const siggen_config_t *sc = siggen_get_config();
             siggen_enable(!sc->output_enabled);
+            cmd = DCMD_DRAW_SIGGEN;
             send_cmd(dq, cmd);
         } else if (current_mode == MODE_MULTIMETER) {
             meter_layout = (meter_layout + 1) % METER_LAYOUT_COUNT;

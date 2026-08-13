@@ -41,6 +41,7 @@ extern void system_clock_config(void);
 #include "usb_debug.h"
 #include "rtt.h"
 #include "fault.h"
+#include "redraw_gate.h"
 
 /* ═══════════════════════════════════════════════════════════════════
  * Global State (extern'd via ui.h for UI modules)
@@ -198,6 +199,187 @@ void delay_ms(uint32_t ms)
 }
 
 /* ═══════════════════════════════════════════════════════════════════
+ * Redraw gating for the scope and signal-generator screens
+ *
+ * The multimeter was fixed on 2026-04-04 by refusing to repaint unless
+ * its reading counter had moved. Scope and siggen kept the old
+ * behaviour: the scope repainted on an unconditional 1 s tick whether or
+ * not anything had changed, and took the clear-and-repaint path at the
+ * capture rate whenever cursors were on or the view was FFT/waterfall;
+ * siggen full-cleared the whole 320x240 on every button press, including
+ * presses that hit a clamp and changed nothing.
+ *
+ * The gate itself is in ui/redraw_gate.h (pure C, host-tested). This
+ * file supplies the two "epochs" — hashes over exactly the state each
+ * screen renders. Equal epoch + no new samples => the next draw would
+ * produce identical pixels.
+ *
+ * Cadences below are in display-task ticks (50 ms each).
+ * ═══════════════════════════════════════════════════════════════════ */
+
+/* Floor between data-driven FULL repaints. The live compositor
+ * (draw_scope_live_frame) is exempt — it never blanks — so this only
+ * throttles the paths that do clear: FFT, split, waterfall, cursors-on,
+ * and the pre-data demo state. 4 ticks = 5 Hz. */
+#define SCOPE_FULL_MIN_FRAMES   4
+
+/* Cadence while the screen is genuinely a function of `frame`: the
+ * synthetic demo waveform before the first real sample, and the
+ * persistence overlay (which decays once per draw). Unchanged from the
+ * pre-B2 tick so the demo animation looks the same. */
+#define SCOPE_ANIM_TICK_FRAMES  20
+
+/* Idle heartbeat, split by whether the heartbeat blanks the screen.
+ *
+ * Something must still tick over when nothing changes, because the
+ * SCOPE_DEBUG_OVERLAY strip (compiled into every build today, Makefile
+ * C_DEFS) shows SPI3 timeout and status counters that move without
+ * touching anything the epoch can see — and that strip is the only
+ * instrument on bench unit #1.
+ *
+ * draw_scope_live_frame() redraws that strip as opaque fixed-width text
+ * with no refill (scope_ui.c), so when the compositor is available the
+ * heartbeat costs no blank and can stay at the pre-B2 1 s. When it is
+ * not available the heartbeat is a full clear-and-repaint, and that is
+ * the one that was flashing a settled screen once a second forever. */
+#define SCOPE_IDLE_LIVE_FRAMES  20    /* 1 s, flicker-free */
+#define SCOPE_IDLE_FULL_FRAMES  100   /* 5 s, blanks — back it off */
+
+/* Draw accounting. Non-static on purpose: these are the evidence that
+ * the gate works, and they need to be reachable from a debugger or a
+ * future overlay without recompiling. */
+volatile uint32_t ui_scope_full_draws  = 0;
+volatile uint32_t ui_scope_live_draws  = 0;
+volatile uint32_t ui_scope_skipped     = 0;
+volatile uint32_t ui_siggen_full_draws = 0;
+volatile uint32_t ui_siggen_skipped    = 0;
+
+static redraw_gate_t scope_gate  = { 0, 0, 0, false, false };
+static redraw_gate_t siggen_gate = { 0, 0, 0, false, false };
+
+/* Hash of everything draw_scope_screen()/draw_fft_screen()/
+ * draw_waterfall_screen() read out of program state. Sample data is NOT
+ * hashed — that is what the new_data term is for — so this stays valid
+ * as the FFT/waterfall/measurement-badge inputs get rewired to real
+ * capture. */
+static uint32_t scope_ui_epoch(const scope_state_t *s)
+{
+    uint32_t h = REDRAW_EPOCH_SEED;
+
+    h = redraw_epoch_mix(h, (uint32_t)theme_get_id());
+    h = redraw_epoch_mix(h, (uint32_t)active_channel);
+    h = redraw_epoch_mix(h, (uint32_t)s->timebase_idx
+                            | ((uint32_t)s->running << 8));
+
+    h = redraw_epoch_mix(h, (uint32_t)s->ch1.enabled
+                            | ((uint32_t)s->ch1.vdiv_idx << 1)
+                            | ((uint32_t)s->ch1.coupling << 8)
+                            | ((uint32_t)s->ch1.probe    << 12)
+                            | ((uint32_t)s->ch1.bw_limit << 16));
+    h = redraw_epoch_mix(h, (uint32_t)(uint16_t)s->ch1.position);
+    h = redraw_epoch_mix(h, (uint32_t)s->ch2.enabled
+                            | ((uint32_t)s->ch2.vdiv_idx << 1)
+                            | ((uint32_t)s->ch2.coupling << 8)
+                            | ((uint32_t)s->ch2.probe    << 12)
+                            | ((uint32_t)s->ch2.bw_limit << 16));
+    h = redraw_epoch_mix(h, (uint32_t)(uint16_t)s->ch2.position);
+
+    h = redraw_epoch_mix(h, (uint32_t)s->trigger.mode
+                            | ((uint32_t)s->trigger.edge   << 4)
+                            | ((uint32_t)s->trigger.source << 8));
+    h = redraw_epoch_mix(h, (uint32_t)(uint16_t)s->trigger.level);
+
+    h = redraw_epoch_mix(h, (uint32_t)s->cursor.mode
+                            | ((uint32_t)s->cursor.active << 4));
+    h = redraw_epoch_mix(h, ((uint32_t)s->cursor.v1_x << 16) | s->cursor.v2_x);
+    h = redraw_epoch_mix(h, ((uint32_t)s->cursor.h1_y << 16) | s->cursor.h2_y);
+
+    h = redraw_epoch_mix(h, (uint32_t)math_enabled
+                            | ((uint32_t)math_op         << 1)
+                            | ((uint32_t)persist_enabled << 8));
+
+#ifdef FEATURE_FFT
+    h = redraw_epoch_mix(h, (uint32_t)scope_view);
+    {
+        const fft_config_t *fc = fft_get_config();
+        if (fc != NULL) {
+            h = redraw_epoch_mix_f(h, fc->ref_level_db);
+            h = redraw_epoch_mix_f(h, fc->db_range);
+            h = redraw_epoch_mix_f(h, fc->sample_rate_hz);
+            h = redraw_epoch_mix(h, (uint32_t)fc->window
+                                    | ((uint32_t)fc->peak_count << 8)
+                                    | ((uint32_t)fc->avg_count  << 16)
+                                    | ((uint32_t)fc->max_hold   << 24));
+            h = redraw_epoch_mix(h, ((uint32_t)fc->zoom_start_bin << 16)
+                                    | fc->zoom_end_bin);
+        }
+    }
+#endif
+    return h;
+}
+
+/* Hash of everything draw_siggen_screen() renders. */
+static uint32_t siggen_ui_epoch(void)
+{
+    uint32_t h = REDRAW_EPOCH_SEED;
+    const siggen_config_t *c = siggen_get_config();
+
+    h = redraw_epoch_mix(h, (uint32_t)theme_get_id());
+    if (c == NULL) return h;
+
+    h = redraw_epoch_mix(h, (uint32_t)c->waveform
+                            | ((uint32_t)c->duty_cycle_pct << 8)
+                            | ((uint32_t)c->output_enabled << 16));
+    h = redraw_epoch_mix_f(h, c->frequency_hz);
+    h = redraw_epoch_mix_f(h, c->amplitude_vpp);
+    h = redraw_epoch_mix_f(h, c->offset_v);
+    return h;
+}
+
+/* Can this frame be served by the flicker-free column compositor?
+ * It draws the trace band only, so anything living outside that band or
+ * layered on top (popup, cursors) forces the full path. */
+static bool scope_incremental_available(const scope_state_t *s)
+{
+#ifdef EMULATOR_BUILD
+    (void)s;
+    return false;   /* draw_scope_live_frame reads FPGA buffers */
+#else
+#ifdef FEATURE_FFT
+    if (scope_view != SCOPE_VIEW_TIME) return false;
+#endif
+    return !scope_popup_active()
+           && scope_acquisition_ready()
+           && s->cursor.mode == CURSOR_OFF;
+#endif
+}
+
+/* Single scope render entry point, shared by the queue commands and the
+ * periodic path so both always pick the same renderer for a given view. */
+static void scope_render(uint32_t frame, redraw_action_t action)
+{
+    (void)action;
+
+#ifdef FEATURE_FFT
+    if (scope_view == SCOPE_VIEW_FFT)       { ui_scope_full_draws++;
+                                              draw_fft_screen();        return; }
+    if (scope_view == SCOPE_VIEW_SPLIT)     { ui_scope_full_draws++;
+                                              draw_split_screen(frame); return; }
+    if (scope_view == SCOPE_VIEW_WATERFALL) { ui_scope_full_draws++;
+                                              draw_waterfall_screen();  return; }
+#endif
+#ifndef EMULATOR_BUILD
+    if (action == REDRAW_INCREMENTAL) {
+        ui_scope_live_draws++;
+        draw_scope_live_frame();
+        return;
+    }
+#endif
+    ui_scope_full_draws++;
+    draw_scope_screen(frame);
+}
+
+/* ═══════════════════════════════════════════════════════════════════
  * FreeRTOS Tasks
  * ═══════════════════════════════════════════════════════════════════ */
 
@@ -228,6 +410,22 @@ static void vDisplayTask(void *pvParameters)
     }
 
     for (;;) {
+        /* Track mode transitions: for SPI3 acquisition warmup, and to
+         * invalidate both redraw gates. Entering a screen must always
+         * repaint it, even when that screen's own state is unchanged
+         * from the last time it was visible. Hoisted above the queue
+         * handling (2026-08-13) so a DCMD arriving on the same tick as a
+         * mode switch sees an already-invalidated gate. */
+        static device_mode_t last_rendered_mode = (device_mode_t)0xFF;
+        static uint32_t scope_entered_frame = 0;
+        if (current_mode != last_rendered_mode) {
+            if (current_mode == MODE_OSCILLOSCOPE)
+                scope_entered_frame = frame;
+            redraw_gate_invalidate(&scope_gate);
+            redraw_gate_invalidate(&siggen_gate);
+            last_rendered_mode = current_mode;
+        }
+
         /* Check for commands (non-blocking with short timeout for animation) */
         if (xQueueReceive(xDisplayQueue, &cmd, pdMS_TO_TICKS(50)) == pdTRUE) {
             switch (cmd) {
@@ -235,50 +433,62 @@ static void vDisplayTask(void *pvParameters)
                 draw_splash();
                 break;
             case DCMD_REDRAW_ALL:
+                /* NEVER GATED, deliberately. This is the hard invalidate,
+                 * and some of its senders have already scribbled on the
+                 * LCD from outside this task — BTN_POWER paints its
+                 * "Hold to power off" overlay inline (input_handler.c) and
+                 * relies on REDRAW_ALL to erase it on release. An epoch
+                 * comparison cannot see that, so gating here would strand
+                 * the overlay on screen. Screens that want cheap,
+                 * gate-able repaints send their own DCMD_DRAW_* instead. */
                 lcd_clear(COLOR_BLACK);
                 status_bar_invalidate();
                 draw_status_bar();
                 draw_info_bar();
                 /* Draw current mode's screen */
                 if (current_mode == MODE_OSCILLOSCOPE) {
-#ifdef FEATURE_FFT
-                    if (scope_view == SCOPE_VIEW_FFT)
-                        draw_fft_screen();
-                    else if (scope_view == SCOPE_VIEW_SPLIT)
-                        draw_split_screen(frame);
-                    else if (scope_view == SCOPE_VIEW_WATERFALL)
-                        draw_waterfall_screen();
-                    else
-#endif
-                        draw_scope_screen(frame);
+                    scope_render(frame, REDRAW_FULL);
+                    redraw_gate_mark(&scope_gate,
+                                     scope_ui_epoch(scope_state_get()),
+                                     frame, REDRAW_FULL);
                 } else if (current_mode == MODE_MULTIMETER) {
                     meter_screen_invalidate();
                     draw_meter_screen();
                 } else if (current_mode == MODE_SIGNAL_GEN) {
+                    ui_siggen_full_draws++;
                     draw_siggen_screen(frame);
+                    redraw_gate_mark(&siggen_gate, siggen_ui_epoch(),
+                                     frame, REDRAW_FULL);
                 } else if (current_mode == MODE_SETTINGS) {
                     draw_settings_screen();
                 }
                 break;
             case DCMD_DRAW_SCOPE:
+                /* Always honoured: the sender changed scope state or
+                 * raised a popup. Marking the gate stops the periodic
+                 * path from immediately repeating the same paint. */
                 if (current_mode == MODE_OSCILLOSCOPE) {
-#ifdef FEATURE_FFT
-                    if (scope_view == SCOPE_VIEW_FFT)
-                        draw_fft_screen();
-                    else if (scope_view == SCOPE_VIEW_SPLIT)
-                        draw_split_screen(frame);
-                    else if (scope_view == SCOPE_VIEW_WATERFALL)
-                        draw_waterfall_screen();
-                    else
-#endif
-                        draw_scope_screen(frame);
+                    scope_render(frame, REDRAW_FULL);
+                    redraw_gate_mark(&scope_gate,
+                                     scope_ui_epoch(scope_state_get()),
+                                     frame, REDRAW_FULL);
                 }
                 break;
             case DCMD_DRAW_METER:
                 if (current_mode == MODE_MULTIMETER) draw_meter_screen();
                 break;
             case DCMD_DRAW_SIGGEN:
-                if (current_mode == MODE_SIGNAL_GEN) draw_siggen_screen(frame);
+                if (current_mode == MODE_SIGNAL_GEN) {
+                    if (siggen_gate.primed &&
+                        siggen_ui_epoch() == siggen_gate.drawn_epoch) {
+                        ui_siggen_skipped++;
+                        break;
+                    }
+                    ui_siggen_full_draws++;
+                    draw_siggen_screen(frame);
+                    redraw_gate_mark(&siggen_gate, siggen_ui_epoch(),
+                                     frame, REDRAW_FULL);
+                }
                 break;
             case DCMD_DRAW_SETTINGS:
                 if (current_mode == MODE_SETTINGS) draw_settings_screen();
@@ -288,8 +498,13 @@ static void vDisplayTask(void *pvParameters)
                 break;
 #ifdef FEATURE_FFT
             case DCMD_DRAW_FFT:
-                if (current_mode == MODE_OSCILLOSCOPE)
+                if (current_mode == MODE_OSCILLOSCOPE) {
+                    ui_scope_full_draws++;
                     draw_fft_screen();
+                    redraw_gate_mark(&scope_gate,
+                                     scope_ui_epoch(scope_state_get()),
+                                     frame, REDRAW_FULL);
+                }
                 break;
 #endif
             default:
@@ -299,15 +514,6 @@ static void vDisplayTask(void *pvParameters)
 
         /* Check in with health monitor */
         health_checkin(health_slot_display);
-
-        /* Track mode transitions for SPI3 acquisition warmup */
-        static device_mode_t last_rendered_mode = (device_mode_t)0xFF;
-        static uint32_t scope_entered_frame = 0;
-        if (current_mode != last_rendered_mode) {
-            if (current_mode == MODE_OSCILLOSCOPE)
-                scope_entered_frame = frame;
-            last_rendered_mode = current_mode;
-        }
 
 #ifndef EMULATOR_BUILD
         if (fpga_service_requests()) {
@@ -325,7 +531,9 @@ static void vDisplayTask(void *pvParameters)
          * Before the meter fix (2026-04-04), scope and siggen both
          * redrew unconditionally every 50ms tick, causing visible
          * flicker from the full-area lcd_fill_rect + repaint sequence.
-         * Now all three data modes are gated the same way. */
+         * The meter was gated then; scope and siggen were gated on
+         * 2026-08-13 (B2) via redraw_gate.h — see the epoch functions
+         * above. All three data modes are now gated the same way. */
         if (current_mode == MODE_OSCILLOSCOPE) {
             const scope_state_t *ss_anim = scope_state_get();
             if (ss_anim->running) {
@@ -342,45 +550,56 @@ static void vDisplayTask(void *pvParameters)
                 }
 #endif
 
-                /* Redraw when: popup counting down, new SPI3 data arrived,
-                 * or ~1s safety tick for time-based UI elements. */
-                static uint32_t last_scope_frame = 0;
+                /* Redraw decision (B2, 2026-08-13).
+                 *
+                 * Previously: popup OR new SPI3 data OR an unconditional
+                 * 1 s tick. The 1 s arm repainted a settled screen once a
+                 * second forever, and the data arm ran the full
+                 * clear-and-repaint at the capture rate in every view the
+                 * live compositor cannot serve — the flash observed on
+                 * the bench 2026-08-12.
+                 *
+                 * Now: redraw_gate_step() picks between skipping, the
+                 * flicker-free compositor (unthrottled, so the live trace
+                 * still updates at the capture rate) and a rate-capped
+                 * full repaint, using an epoch over everything the screen
+                 * renders. Rendering pass note (2026-08-12) still holds:
+                 * the full clear-then-redraw path stays for popups (they
+                 * overwrite the band and need erasing afterward), cursors
+                 * (drawn only by the full path), the demo/pre-data state,
+                 * and all button-driven DCMD redraws. */
                 static uint16_t last_spi3_ok = 0;
-                bool new_data = (fpga.spi3_ok_count != last_spi3_ok);
-                if (new_data) last_spi3_ok = fpga.spi3_ok_count;
+                uint16_t spi3_now = fpga.spi3_ok_count;
+                bool new_data = (spi3_now != last_spi3_ok);
+                last_spi3_ok = spi3_now;
 
-                if (scope_popup_active() || new_data
-                    || (frame - last_scope_frame) >= 20) {
-#ifdef FEATURE_FFT
-                    if (scope_view == SCOPE_VIEW_FFT)
-                        draw_fft_screen();
-                    else if (scope_view == SCOPE_VIEW_SPLIT)
-                        draw_split_screen(frame);
-                    else if (scope_view == SCOPE_VIEW_WATERFALL)
-                        draw_waterfall_screen();
-                    else
-#endif
-#ifndef EMULATOR_BUILD
-                    /* Rendering pass (2026-08-12): once real acquisition is
-                     * flowing, use the flicker-free column compositor for
-                     * periodic updates. The full clear-then-redraw path
-                     * remains for popups (they overwrite the band and need
-                     * erasing afterward), cursors (drawn only by the full
-                     * path), the demo/pre-data state, and all button-driven
-                     * DCMD redraws (settings changes want a full repaint). */
-                    if (!scope_popup_active() && scope_acquisition_ready()
-                        && ss_anim->cursor.mode == CURSOR_OFF)
-                        draw_scope_live_frame();
-                    else
-#endif
-                        draw_scope_screen(frame);
-                    last_scope_frame = frame;
-                }
+                redraw_query_t q;
+                q.frame            = frame;
+                q.epoch            = scope_ui_epoch(ss_anim);
+                q.new_data         = new_data;
+                q.force            = scope_popup_active();
+                q.incremental_ok   = scope_incremental_available(ss_anim);
+                /* Both of these genuinely produce new pixels every tick
+                 * from `frame` alone: the synthetic demo waveform (only
+                 * drawn before the first real sample) and the
+                 * persistence overlay (which decays once per draw). */
+                q.animating        = !scope_acquisition_ready() || persist_enabled;
+                q.full_min_frames  = SCOPE_FULL_MIN_FRAMES;
+                q.anim_tick_frames = SCOPE_ANIM_TICK_FRAMES;
+                q.idle_tick_frames = q.incremental_ok ? SCOPE_IDLE_LIVE_FRAMES
+                                                      : SCOPE_IDLE_FULL_FRAMES;
+
+                redraw_action_t act = redraw_gate_step(&scope_gate, &q);
+                if (act == REDRAW_SKIP)
+                    ui_scope_skipped++;
+                else
+                    scope_render(frame, act);
             }
         } else if (current_mode == MODE_SIGNAL_GEN) {
-            /* Siggen UI is static — redraws only on parameter changes
-             * via DCMD_DRAW_SIGGEN queue commands from input_handler.
-             * No continuous animation needed. */
+            /* Siggen UI is static: no animation, no live data. It is
+             * drawn only from queue commands, and those are gated on the
+             * siggen epoch above, so a settled generator screen costs
+             * zero LCD writes per tick. */
         } else if (current_mode == MODE_MULTIMETER) {
             /* Redraw the meter when the visible reading changes, when the
              * submode changes, or when a debug/animated panel explicitly
