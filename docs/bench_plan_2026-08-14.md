@@ -60,6 +60,27 @@ cheap: with the ESP32 driving a known 1 kHz square from the coldtrace path, send
   - Stretches → the netlist reading is wrong somewhere; stop and reconcile before
     building on either model.
 
+**Step 0b — SPI READ-OPCODE SWEEP (new, 2026-08-13; cheap and possibly decisive).**
+Follow-up netlist work (progress log M9) identified what BSRAM_1/2 are, and they
+may hold the slow timebase. Unlike the scope buffers (BSRAM_0=CH1, BSRAM_3=CH2,
+fed *exclusively* through the IDDR/DDR path, one channel each, 8-bit address),
+**BSRAM_1+2 are fed from the same ADC pins through a separate non-DDR (SDR) path,
+see BOTH channels, sit behind deep combinational logic (so they store something
+computed, not raw samples), share one enable flop and one 10-bit address counter
+(= a single 1024-word record two blocks wide), on a different clock spine (GB40
+vs the scope buffers' GB20), with verified read-modify-write feedback (BSRAM_1's
+DO1 routes back into its own DIA8/DIA9 = accumulate-in-place).** That is the
+shape of a decimated / min-max peak-detect **roll buffer** — i.e. plausibly the
+slow-timebase path, in a buffer we have never read. All four blocks feed the same
+readout mux (→ SPI SO + DRDY), so the MCU *can* read it, under some opcode other
+than `0x04`/`0x05`.
+
+Test: with `guest-coldtrace` running, sweep SPI3 read opcodes beyond the known
+`0x03/0x04/0x05` and log reply length + content; look for one returning ≥1024
+words whose content tracks a slow input from the ESP32. Not simulable (SPI
+address decode needs the real clock tree), so it has to be bench — but it is
+minutes on the existing rig, and a hit would hand us the slow timebase directly.
+
 **Step 1 — wire the config into the cold-boot path.** Integrate the timebase block
 (`fpga_send_scope_sequence`) after config+arm in the `guest-coldtrace` path, coexisting
 with the 0x04/0x05 readout. (Mind the trigger-byte space — see the PR #13 review note
