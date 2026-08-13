@@ -320,71 +320,6 @@ static uint8_t spi3_xfer(uint8_t tx_byte)
     return (uint8_t)FPGA_SPI->dt;
 }
 
-/* Double-buffered SPI3 pump (per GitHub issue #11, Lanchon).
- *
- * spi3_xfer()'s order — wait TDBE, write, wait RDBF, read — only queues
- * the NEXT tx byte after the current byte's RX has landed, by which point
- * the shift register has already drained. That underruns the transmitter
- * and clock-stretches the SPI bus between every byte; an interrupt landing
- * in the RDBF busy-wait widens the gap arbitrarily. Over the 115KB H2
- * upload that is tens of thousands of stalls.
- *
- * This pump primes the tx buffer one byte ahead: the moment TDBE frees it
- * writes tx[i], THEN blocks on RDBF for tx[i-1]. The shift register is
- * reloaded back-to-back so the clock runs continuously, and the pump
- * tolerates any interrupt shorter than one byte-time.
- *
- *   tx: bytes to send, or NULL to clock out 0xFF filler (read-only)
- *   rx: receive buffer, or NULL to discard (write-only)
- *   n:  byte count. Caller manages CS.
- *
- * Timeout-guarded like spi3_xfer so a misconfigured peripheral can't hang
- * the boot; on timeout the byte is treated as 0xFF and we keep going.
- */
-static void spi3_pump(const uint8_t *tx, volatile uint8_t *rx, uint32_t n)
-{
-    if (n == 0)
-        return;
-
-    volatile uint32_t timeout;
-    uint32_t i = 0;
-
-    /* Prime the first byte. */
-    timeout = 100000;
-    while (!(FPGA_SPI->sts & SPI_I2S_TDBE_FLAG)) {
-        if (--timeout == 0) break;
-    }
-    FPGA_SPI->dt = tx ? tx[0] : 0xFF;
-
-    while (++i < n) {
-        /* Queue the next tx byte the instant the buffer frees — BEFORE
-         * blocking on RX. This is what keeps the shift register fed. */
-        timeout = 100000;
-        while (!(FPGA_SPI->sts & SPI_I2S_TDBE_FLAG)) {
-            if (--timeout == 0) break;
-        }
-        FPGA_SPI->dt = tx ? tx[i] : 0xFF;
-
-        /* Collect the previous byte's RX. */
-        timeout = 100000;
-        while (!(FPGA_SPI->sts & SPI_I2S_RDBF_FLAG)) {
-            if (--timeout == 0) break;
-        }
-        uint8_t r = (timeout == 0) ? 0xFF : (uint8_t)FPGA_SPI->dt;
-        if (rx)
-            rx[i - 1] = r;
-    }
-
-    /* Drain the final byte's RX. */
-    timeout = 100000;
-    while (!(FPGA_SPI->sts & SPI_I2S_RDBF_FLAG)) {
-        if (--timeout == 0) break;
-    }
-    uint8_t rlast = (timeout == 0) ? 0xFF : (uint8_t)FPGA_SPI->dt;
-    if (rx)
-        rx[n - 1] = rlast;
-}
-
 static void fpga_h2_record_body_rx(uint8_t rx_byte)
 {
     if (rx_byte == 0x00U) {
@@ -405,6 +340,30 @@ static void fpga_h2_record_close_rx(uint8_t rx_byte)
     }
 }
 
+/* Double-buffered SPI3 pump for the H2 upload (per GitHub issue #11, Lanchon).
+ *
+ * spi3_xfer()'s order — wait TDBE, write, wait RDBF, read — only queues
+ * the NEXT tx byte after the current byte's RX has landed, by which point
+ * the shift register has already drained. That underruns the transmitter
+ * and clock-stretches the SPI bus between every byte; an interrupt landing
+ * in the RDBF busy-wait widens the gap arbitrarily. Over the 115KB H2
+ * upload that is tens of thousands of stalls.
+ *
+ * This pump primes the tx buffer one byte ahead: the moment TDBE frees it
+ * writes tx[i], THEN blocks on RDBF for tx[i-1]. The shift register is
+ * reloaded back-to-back so the clock runs continuously, and the pump
+ * tolerates any interrupt shorter than one byte-time.
+ *
+ *   tx: bytes to send. n: byte count. Caller manages CS.
+ *
+ * RX is not returned to the caller — it is folded into the h2 diagnostic
+ * counters via fpga_h2_record_body_rx() as it arrives, since the upload has
+ * no per-byte reply worth buffering (stock's own upload reads all-FF; see
+ * the issue-#18 capture).
+ *
+ * Timeout-guarded like spi3_xfer so a misconfigured peripheral can't hang
+ * the boot; on timeout the byte is treated as 0xFF and we keep going.
+ */
 static void spi3_pump_h2_record(const uint8_t *tx, uint32_t n)
 {
     if (n == 0)
@@ -4169,7 +4128,7 @@ void fpga_init(void)
      *
      * Every stock byte is a full-duplex polled exchange (wait TXE →
      * write → wait RXNE → read); spi3_xfer matches that exactly, and
-     * spi3_pump is the gap-free equivalent for the bulk stream.
+     * spi3_pump_h2_record is the gap-free equivalent for the bulk stream.
      * --------------------------------------------------------------- */
 
     /* The full PB11-arm → prelude → bitstream upload → close → scope-config
