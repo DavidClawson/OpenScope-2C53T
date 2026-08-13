@@ -81,7 +81,32 @@ Enabling work for everything below — modules especially. Baseline measured
 | — of which actual code (`.text`) | 107,020 B | |
 | — of which `.rodata` | 388,720 B | |
 | SRAM (224 KB) | see below | **24,272 B** after the waterfall move |
-| External SPI flash via `.spim` | **0 B** | 16 MB, mapped at `0x08400000` |
+| W25Q128 SPI flash (SPI2, streamed) | UI assets / system files | 16 MB, not memory-mapped |
+
+**⚠ The `.spim` region in `at32f403a_guest.ld` is dead and always will be — do
+not plan against it.** `0x08400000` is `FLASH_SPIM_START_ADDR`, the AT32's XIP
+window for memory-mapping an external SPI NOR chip into code space. It is an
+MCU feature, not spare on-chip memory (the part has 1 MB internal flash), and
+it cannot reach our Winbond: the W25Q128 sits on **SPI2 (PB12 CS / PB13 SCK /
+PB14 MISO / PB15 MOSI)**, an ordinary SPI peripheral with no XIP path. The
+SPIM peripheral has exactly two fixed pin maps, and every pin in both is
+already committed on this board:
+
+| SPIM signal | `GMUX_1000` | `GMUX_1001` | Conflict on 2C53T |
+|---|---|---|---|
+| SCK | PB1 | PB1 | battery sense (ADC1 ch9) |
+| CS | PA8 | PA8 | button matrix |
+| IO0/IO1 | PA11/PA12 | PB10/PB11 | **USB D−/D+** / analog mux + FPGA active |
+| IO2/SIO3 | PB7/PB6 | PB7/PB6 | PRM button / FPGA SPI3 CS |
+
+Enabling SPIM would cost USB — the entire closed-case update channel. The
+`.spim` output section is inherited Artery boilerplate; it is 0 bytes and
+should stay that way.
+
+**What this does not rule out:** the W25Q is still 16 MB of usable storage,
+just *streamed over SPI2* rather than executed in place. Anything that can be
+read into RAM on demand — bitstreams, tables, module assets — can live there.
+Anything needing to be executed directly from external flash cannot.
 
 Only ~107 KB of the flash is logic. Two data blobs dominate `.rodata`: the FPGA
 bitstream (115,638 B) and the CMSIS-DSP FFT twiddle/bit-reversal tables
@@ -97,15 +122,15 @@ of it before the move below.
   is no reason it must be compiled in. Adds a W25Q dependency to the boot path,
   so this should wait until cold-boot config entry is fully settled; a failed
   read must fall back cleanly rather than leaving the FPGA unconfigured.
-- **Prove the `.spim` XIP path** — the linker script already maps 16 MB at
-  `0x08400000` with a `.spim` output section, and it is currently **0 bytes**:
-  plumbed but never exercised on hardware. Needs a bring-up test (place one
-  function there, call it, confirm it executes) before anything depends on it.
-  This is the unlock for shipping modules as loadable assets rather than
-  compiled-in data.
-- **FFT twiddle tables → SPIM** — ~101 KB of internal flash, read-only and
-  latency-tolerant. Only worth doing if internal flash gets tight; blocked on
-  the item above.
+- **Modules as streamed assets on the W25Q** — the practical version of
+  "loadable modules" on this hardware. JSON procedure files and lookup tables
+  read over SPI2 into the pool on demand, which needs no XIP and no new pins.
+  Executable module *code* is out of reach (see the SPIM note above); design
+  modules as data + a firmware-side interpreter, not as loadable binaries.
+- **FFT twiddle tables → W25Q** — ~101 KB of internal flash, read-only. Would
+  have to be *loaded into the pool* at `fft_init()` rather than XIP'd, so it
+  trades 101 KB of flash for pool space and a boot-time read. Only worth it if
+  internal flash ever gets tight, which at 48.6% used it is not.
 - **Streaming screenshot → shrink the pool** — screenshot is the sole reason the
   pool is 150 KB (`SHMEM_NEED_SCREENSHOT` = 153,600). If it captured in row
   bands straight to SPI flash or USB, the pool could drop to the FFT need and
