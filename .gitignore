@@ -94,3 +94,4 @@ reverse_engineering/captures/export/
 
 # Bench signal-generator sketch (machine-specific, per-bench)
 /esp32_siggen/
+.claude/worktrees/
