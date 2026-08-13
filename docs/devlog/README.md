@@ -18,6 +18,7 @@ instead.
 | Date | Title | Short version |
 |---|---|---|
 | 2026-08-13 | [Cold boot to a live scope](2026-08-13-cold-boot-to-scope.md) | The wall came down. It wasn't the bytes — it was that we drove config over hardware SPI instead of bit-banging GPIO. Cold-boot to a live, probe-responsive scope on open firmware. |
+| 2026-08-12 | [The wall came down, and it wasn't us who pushed it](2026-08-12-the-wall-came-down.md) | The four-month arc, the six theories that died on the way, and the two contributors — Stlkv and maksidze — who actually solved it. Plus the first live trace, via warm handoff. |
 | 2026-08-11 | [The pins the diff couldn't see](2026-08-11-invisible-pins.md) | We'd ruled out a whole class of hardware difference using a comparison that couldn't detect it. |
 | 2026-08-11 | [Flash read protection, and why the debugger kept killing the device](2026-08-11-read-protection.md) | Attaching SWD disables the flash array. The CPU executes from flash. Every "mysterious hang" for two months was us. |
 | 2026-07-28 | [The FPGA was listening the whole time](2026-07-28-the-fpga-was-listening.md) | Six weeks of conclusions rested on reading a register at the wrong clock speed. |

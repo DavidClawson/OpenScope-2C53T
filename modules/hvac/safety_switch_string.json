@@ -1,0 +1,97 @@
+{
+  "schema_version": "0.1-provisional",
+  "id": "hvac/safety_switch_string",
+  "name": "Safety Switch String — Finding the Open Switch",
+  "category": "HVAC",
+  "version": "1.0.0",
+  "summary": "Isolate which switch in a series safety chain is open, one switch at a time, without chasing the whole string with a voltmeter.",
+
+  "setup": {
+    "mode": "multimeter",
+    "meter_submode": "Continuity",
+    "firmware_build": "make guest",
+    "requires": [
+      "Probe leads with alligator clips",
+      "The equipment's wiring diagram, usually inside the blower door",
+      "A voltage tester rated for line voltage — NOT this instrument"
+    ]
+  },
+
+  "safety": [
+    "Kill power at the disconnect and at the breaker, lock out and tag out. Verify absence of line voltage with a properly rated tester. This device is NOT a CAT-rated mains meter.",
+    "Never ohm a live circuit. If the string is energised your readings are wrong and you can damage the control board.",
+    "A rollout switch that has tripped is telling you flame has escaped the heat exchanger. Do NOT simply reset it and leave. Find and fix the cause — this is a carbon monoxide hazard.",
+    "A cracked heat exchanger, blocked flue or failed inducer are life-safety faults. If you are not qualified to condemn or repair combustion equipment, stop and call someone who is.",
+    "Do not jumper out a safety switch to make the equipment run, even briefly for testing. Every one of these switches exists because somebody was hurt."
+  ],
+
+  "trust": {
+    "quantitative": true,
+    "notes": [
+      "Continuity and resistance are trustworthy on this firmware. A closed switch reads near zero, an open switch reads OL, and both results are dependable.",
+      "Zero the leads with REL (AUTO button) before measuring closed switches — you want to distinguish a genuinely low-resistance contact from a pitted one.",
+      "Use the Chart layout (OK cycles Full > Chart > Stats) when checking a switch that is suspected of being intermittent, so a momentary open is visible after the fact.",
+      "The continuity beeper gives you a hands-free result while you are working inside a cabinet."
+    ]
+  },
+
+  "instructions": [
+    { "step": 1,
+      "text": "Find the safety string on the wiring diagram and list every switch in it, in order. Typically: door interlock, high limit, rollout switch or switches, blocked-vent (spill) switch, pressure switch, and on cooling equipment the condensate float switch.",
+      "expect": "A written list. You are going to check each one individually." },
+    { "step": 2,
+      "text": "Kill power, lock out, and verify absence of line voltage in the cabinet with a rated tester.",
+      "expect": "De-energised." },
+    { "step": 3,
+      "text": "Select Continuity with LEFT/RIGHT. Touch the probes together and press AUTO to zero the leads.",
+      "expect": "Beeper sounds, display near 0.00 ohm." },
+    { "step": 4,
+      "text": "Disconnect ONE lead from the first switch in the list, so you are measuring that switch alone and not the rest of the string.",
+      "expect": "The switch is electrically isolated." },
+    { "step": 5,
+      "text": "Measure across the switch terminals. Record closed (near zero, beeper sounds) or open (OL).",
+      "expect": "A definite result, not a marginal one." },
+    { "step": 6,
+      "text": "Reconnect and move to the next switch. Work through the whole list before drawing a conclusion — more than one switch can be open.",
+      "expect": "Every switch in the string characterised." },
+    { "step": 7,
+      "text": "Interpret against what each switch is SUPPOSED to do at rest. This is where most people go wrong: some of these switches are normally open when the equipment is off, and finding them open is not a fault. See the knowledge base.",
+      "expect": "You know which open readings are normal and which are not." },
+    { "step": 8,
+      "text": "For any switch that is genuinely open when it should be closed, find the cause before resetting or replacing anything.",
+      "expect": "A physical explanation: a blocked drain, a dirty filter, a failed inducer, a plugged flue, a heat exchanger problem." },
+    { "step": 9,
+      "text": "For a switch that reads closed but with noticeable resistance, look at the contacts and the terminals. A limit switch that reads a couple of ohms is on its way out.",
+      "expect": "Clean, tight, low-resistance connections." }
+  ],
+
+  "measurements": [
+    { "id": "closed_switch", "label": "A switch that should be closed", "type": "meter_resistance",
+      "unit": "ohm", "max": 1,
+      "fail": "OL means that switch is open — it is either tripped or failed. Above about 1 ohm means pitted contacts or a corroded terminal; it may still pass current now and fail under load later." },
+    { "id": "open_at_rest", "label": "A switch that is normally open at rest", "type": "observation",
+      "expect": "OL, and that is CORRECT. The pressure switch and any similar draft-proving switch is open until the inducer creates draft.",
+      "fail": "A normally-open switch reading closed at rest is stuck closed — a serious fault, because the control is being told there is draft when there is none." },
+    { "id": "float_switch", "label": "Condensate float switch", "type": "observation",
+      "expect": "Closed (continuity) when the pan is empty and the float is down.",
+      "fail": "Open with a dry pan means a failed switch or a stuck float. Open with a wet pan means the drain is blocked — clear the drain, do not blame the switch." },
+    { "id": "rollout_switch", "label": "Rollout switch", "type": "observation",
+      "expect": "Closed.",
+      "fail": "Open means flame rolled out of the burner compartment. This is a combustion fault and a carbon monoxide hazard. Most rollout switches are manual reset specifically so that a technician has to look at the equipment before it runs again. Find the cause." },
+    { "id": "high_limit", "label": "High limit switch", "type": "observation",
+      "expect": "Closed on a cold furnace.",
+      "fail": "Open on a cold furnace means the switch has failed. Repeatedly tripping when hot means restricted airflow — dirty filter, closed registers, undersized return, or a failing blower. Replacing the limit without fixing airflow just moves the failure." },
+    { "id": "door_switch", "label": "Blower door interlock", "type": "observation",
+      "expect": "Closed when the plunger is depressed.",
+      "fail": "An intermittent door switch produces a furnace that works while you are standing there with the door off and dies when you put it back on. It is a genuinely common and genuinely annoying fault." }
+  ],
+
+  "knowledge_base": {
+    "why_one_switch_at_a_time": "A series safety string with one open switch reads open end to end, and every switch downstream of the open one has no voltage across it. Chasing that with a voltmeter means walking the string looking for where the voltage disappears, on a live circuit, inside a cabinet with line voltage in it. Ohming each switch individually, dead, is faster, safer and unambiguous.",
+    "the_pressure_switch_trap": "The single most common misdiagnosis in this whole procedure is condemning a pressure switch because it reads open with the equipment off. It is SUPPOSED to be open. It is a normally-open switch that closes only when the inducer motor pulls enough negative pressure. If the equipment fails on pressure switch, the fault is far more often the inducer, a blocked flue or intake, a cracked or disconnected hose, a plugged pressure port, or water in the condensate trap of a high-efficiency unit. Check those before you order a switch.",
+    "why_a_switch_opened": "These switches are sensors, not consumables. A tripped limit means the furnace got too hot, which almost always means airflow. A tripped rollout means combustion products came out of the burner box, which means a blockage, a cracked heat exchanger, or a venting problem. A tripped float means water backed up. Replacing a tripped safety without finding the cause is how equipment ends up hurting somebody.",
+    "manual_vs_auto_reset": "Auto-reset switches close again when they cool, so a furnace with an airflow problem short-cycles. Manual-reset switches — most rollouts, some limits — stay open deliberately. If you find a manual-reset switch tripped, someone has to press it, and that someone should have already found out why.",
+    "marginal_contacts": "A switch reading a couple of ohms instead of near zero is carrying current through a small, pitted contact area. Under load it heats, its resistance rises further, and eventually it drops out — usually on the coldest night of the year. Zeroing your leads first is what lets you see the difference between 0.1 ohm and 2 ohms.",
+    "related_modules": "If the safety string is intact and the equipment still will not run, check the thermostat cable next — see hvac/thermostat_wiring_check."
+  }
+}

@@ -1,0 +1,94 @@
+{
+  "schema_version": "0.1-provisional",
+  "id": "hvac/run_capacitor_test",
+  "name": "Motor Run and Start Capacitor Test",
+  "category": "HVAC",
+  "version": "1.0.0",
+  "summary": "Safely discharge, isolate and measure a single or dual motor run capacitor, and decide whether it is within tolerance, weak, open, or shorted.",
+
+  "setup": {
+    "mode": "multimeter",
+    "meter_submode": "Capacitance",
+    "firmware_build": "make guest",
+    "requires": [
+      "A 20 kilohm, 5 watt (or larger) resistor with insulated leads, for discharging",
+      "Insulated gloves and eye protection",
+      "A voltage tester rated for the equipment's line voltage — NOT this instrument",
+      "A known-value capacitor to sanity-check the meter's range before you rely on it"
+    ]
+  },
+
+  "safety": [
+    "A motor run capacitor holds a lethal charge after power is removed. People have been killed by capacitors in condensing units. Treat every capacitor as charged until you have discharged it and verified it.",
+    "Kill power at the disconnect AND at the breaker. Lock out and tag out. Verify absence of line voltage with a properly rated tester — this device is NOT a CAT-rated mains meter and must never be used to prove a circuit is dead.",
+    "Discharge through a 20 kilohm 5 W resistor held across the terminals for about 10 seconds, then verify. Do NOT short a capacitor with a screwdriver: the arc can weld, spatter metal, damage the capacitor, and injure you.",
+    "On a dual run capacitor, discharge all three pairs: HERM to C, FAN to C, and HERM to FAN.",
+    "A bulging top, a split case, or leaked oil means replace it — do not measure it, do not reinstall it.",
+    "Capacitors can self-recover a residual charge after discharging (dielectric absorption). Re-check before handling."
+  ],
+
+  "trust": {
+    "quantitative": false,
+    "notes": [
+      "The capacitance function is implemented in this firmware but has NEVER been bench-verified. Before you rely on a reading, measure a capacitor of known value and confirm the display agrees.",
+      "The meter UI's capacitance range is labelled in nanofarads and its full-scale bar is set for 200 nF. Motor run capacitors are typically 2.5 to 70 MICROfarads — three orders of magnitude larger. There is a real chance this instrument cannot read a run capacitor at all and will show OL or an implausible value.",
+      "Because of the two points above, the go/no-go outcome of this module is: either your unit reads the known-value cap correctly and you can proceed, or it does not and you must use a dedicated capacitor tester.",
+      "The resistance checks in this procedure (short-to-case, open winding) ARE trustworthy on this firmware regardless of how the capacitance function behaves."
+    ]
+  },
+
+  "instructions": [
+    { "step": 1,
+      "text": "Before going to the job: measure a capacitor of known value with this instrument and confirm the reading. If it cannot read a capacitor in the microfarad range, stop — use a dedicated capacitor tester for this task and use this module only for the safety and resistance steps.",
+      "expect": "Reading matches the known capacitor's marked value within its tolerance." },
+    { "step": 2,
+      "text": "At the equipment: shut off at the thermostat, then the unit disconnect, then the breaker. Lock out and tag out.",
+      "expect": "Equipment is de-energised and cannot be re-energised by anyone else." },
+    { "step": 3,
+      "text": "Open the electrical panel. Verify absence of line voltage with a properly rated tester.",
+      "expect": "No line voltage present." },
+    { "step": 4,
+      "text": "Discharge the capacitor with the 20 kilohm resistor across each terminal pair for about 10 seconds. On a dual cap that is HERM-C, FAN-C and HERM-FAN.",
+      "expect": "All pairs discharged. Verify with your rated tester." },
+    { "step": 5,
+      "text": "Photograph or note the wiring, then disconnect at least one lead from every terminal you intend to measure. A capacitor still connected to the motor windings reads the whole circuit, not the capacitor.",
+      "expect": "Capacitor electrically isolated." },
+    { "step": 6,
+      "text": "Read the nameplate: rated microfarads, tolerance, and voltage rating. Write it down before you measure so the reading cannot bias you.",
+      "expect": "You know what the part is supposed to be." },
+    { "step": 7,
+      "text": "Select Capacitance with LEFT/RIGHT. Measure HERM to C, then FAN to C. Allow the reading to settle.",
+      "expect": "Each section within its marked tolerance — typically plus or minus 6% for a motor run capacitor." },
+    { "step": 8,
+      "text": "Switch to Resistance and measure each terminal to the capacitor case.",
+      "expect": "OL. Any continuity to the case means the capacitor has failed internally." },
+    { "step": 9,
+      "text": "If you replace the capacitor, match microfarads exactly and match or exceed the voltage rating. Never fit a lower voltage rating.",
+      "expect": "Correct replacement fitted, wiring restored to your photograph." }
+  ],
+
+  "measurements": [
+    { "id": "known_cap_sanity", "label": "Known-value capacitor sanity check", "type": "observation",
+      "expect": "The instrument reads a capacitor of known value correctly.",
+      "fail": "If it reads OL or an obviously wrong value on a known part, this instrument's capacitance function cannot be used for this job. This is a real possibility — the function has never been bench-verified." },
+    { "id": "run_cap_section", "label": "Run capacitor section vs nameplate", "type": "observation",
+      "expect": "Within the marked tolerance of the nameplate value; motor run capacitors are commonly plus or minus 6%.",
+      "fail": "Reading low = the capacitor is weak. A weak run capacitor makes a motor draw more current, run hot, start hard and fail early — it is one of the most common HVAC service calls. Reading OL = open. Reading near zero ohms in resistance mode = shorted." },
+    { "id": "case_isolation", "label": "Terminal to case", "type": "observation",
+      "expect": "OL on every terminal.",
+      "fail": "Continuity from any terminal to the case is a failed capacitor regardless of what the capacitance reads. Replace." },
+    { "id": "physical", "label": "Physical condition", "type": "observation",
+      "expect": "Flat top, no bulge, dry case, no rust at the terminals.",
+      "fail": "A bulging or leaking capacitor is failed even if it measures within tolerance. Replace it and look for the reason — a capacitor that cooked usually had help from high head pressure, low voltage, or a hot compartment." }
+  ],
+
+  "knowledge_base": {
+    "run_vs_start": "A motor RUN capacitor stays in circuit continuously, is typically 2.5 to 70 microfarads, is rated for continuous AC duty (usually 370 or 440 VAC), and is normally held to about plus or minus 6%. A START capacitor is in circuit only for the first fraction of a second, is typically 60 to 600 microfarads, is an electrolytic type with a much looser tolerance (often plus or minus 20%), and is switched out by a relay. Fitting a start capacitor where a run capacitor belongs destroys it in minutes.",
+    "dual_capacitor_terminals": "A dual run capacitor is two capacitors in one can sharing a common terminal. C is common, HERM feeds the compressor, FAN feeds the condenser fan motor. Measure HERM-to-C and FAN-to-C separately: the two sections fail independently, and a unit whose fan runs but whose compressor hums is a classic failed HERM section.",
+    "why_isolation_matters": "Left connected, the capacitor is in parallel with motor windings and start components. The meter's capacitance measurement charges and discharges through whatever else is connected, and the reading becomes meaningless. Disconnecting one lead per measured terminal is not optional.",
+    "the_screwdriver_myth": "Shorting a capacitor with a screwdriver is still common practice and is still a bad idea. The energy goes somewhere: an arc that welds the blade, molten metal at eye height, and internal damage to a capacitor you may have wanted to keep as a known-good spare. A 20 kilohm 5 W resistor costs almost nothing and takes ten seconds.",
+    "what_a_weak_cap_looks_like_in_the_field": "Compressor or fan hums but will not start. Motor starts only when spun by hand or nudged. Unit trips on overload after running a while. Amp draw higher than nameplate. All of these are also symptoms of other faults, which is why measuring the capacitor rather than guessing is worth the trouble.",
+    "voltage_rating": "The voltage rating is a maximum, not a target. A 440 VAC capacitor is a valid replacement for a 370 VAC one; the reverse is not. Never fit a DC-rated capacitor in an AC motor circuit.",
+    "instrument_honesty": "This module is deliberately written so that the trustworthy parts (isolation procedure, resistance checks, physical inspection, replacement rules) stand on their own even if this firmware's capacitance function turns out to be unusable for run-capacitor values. Verify against a known part first, and do not let an unverified number send you to a parts store."
+  }
+}

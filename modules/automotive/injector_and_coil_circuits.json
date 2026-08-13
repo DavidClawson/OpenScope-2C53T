@@ -1,0 +1,97 @@
+{
+  "schema_version": "0.1-provisional",
+  "id": "automotive/injector_and_coil_circuits",
+  "name": "Fuel Injector and Ignition Coil Winding Checks (Resistance)",
+  "category": "Automotive",
+  "version": "1.0.0",
+  "summary": "Screen a set of port fuel injectors and ignition coils for open, shorted or leaking windings by comparing them against each other, using resistance and insulation measurements.",
+
+  "setup": {
+    "mode": "multimeter",
+    "meter_submode": "Resistance",
+    "firmware_build": "make guest",
+    "requires": [
+      "Probe leads, preferably with fine tips or alligator clips",
+      "OEM resistance specification for the engine, if you can get it",
+      "Something to write readings on — this procedure is about comparing a set"
+    ]
+  },
+
+  "safety": [
+    "Ignition OFF and the connector unplugged before every measurement. Never ohm an energised circuit.",
+    "Measure cold. Copper resistance rises roughly 0.39% per degree C, so a hot engine will shift every reading and can make a good part look marginal.",
+    "Ignition coils store energy. Do not handle coil secondary terminals with the engine running or cranking — coil-on-plug secondaries reach tens of kilovolts.",
+    "This procedure covers PORT injection only. Gasoline direct injection (GDI) injectors are driven at 65 to 200 V by a dedicated boost circuit. Do not probe a GDI injector circuit with this instrument, and do not scope it.",
+    "Relieve fuel pressure and observe fuel-handling precautions before disturbing injector connectors on a hot engine."
+  ],
+
+  "trust": {
+    "quantitative": true,
+    "notes": [
+      "Resistance is trustworthy on this firmware. Zero the leads with REL (AUTO) before low-ohm work — peak-and-hold injectors and coil primaries are in the 0.5 to 3 ohm range where lead resistance is a large fraction of the reading.",
+      "The strongest result here is not the absolute number, it is the SPREAD across a matched set. That comparison stays valid even if your unit's calibration factor is slightly off.",
+      "Insulation checks (winding to body) rely on the meter reading a genuine open. Confirm your unit shows OL with the probes apart before trusting an OL result."
+    ]
+  },
+
+  "instructions": [
+    { "step": 1,
+      "text": "Engine cold, ignition off, key out. Select Resistance and zero the leads with AUTO (REL).",
+      "expect": "0.00 ohm with the probe tips touching." },
+    { "step": 2,
+      "text": "Unplug the first injector. Measure across its two terminals. Record the value.",
+      "expect": "A stable reading, typically 12-16 ohms for a high-impedance (saturated) injector or roughly 0.5-3 ohms for a low-impedance (peak-and-hold) one." },
+    { "step": 3,
+      "text": "Repeat for every injector on the engine, recording each. Do not stop at the first one that looks plausible.",
+      "expect": "All injectors within a few percent of each other." },
+    { "step": 4,
+      "text": "For each injector, measure from either terminal to the injector body or to engine ground.",
+      "expect": "OL. Any measurable resistance is a winding leaking to the body." },
+    { "step": 5,
+      "text": "Unplug an ignition coil. For a distributor-type coil, measure the primary across the two low-voltage terminals, then the secondary from a low-voltage terminal to the high-tension tower.",
+      "expect": "Primary typically 0.4-2 ohms; secondary typically 6-15 kilohms." },
+    { "step": 6,
+      "text": "For coil-on-plug units, measure primary resistance across the appropriate connector pins and compare across the set. Do not attempt to interpret secondary resistance on a COP coil with an integrated igniter.",
+      "expect": "Primary readings tightly grouped across all coils." },
+    { "step": 7,
+      "text": "Measure each coil from its windings to the coil body or mounting bracket.",
+      "expect": "OL." },
+    { "step": 8,
+      "text": "Sort your recorded values. Look for the outlier, not for a number you like.",
+      "expect": "Either everything groups tightly (windings are not your fault), or one part stands clearly apart." }
+  ],
+
+  "measurements": [
+    { "id": "injector_saturated", "label": "High-impedance (saturated) injector coil", "type": "meter_resistance",
+      "unit": "ohm", "nominal": 14, "min": 11, "max": 18,
+      "fail": "OL = open winding, the injector will never fire. Near 0 = shorted winding, which can also destroy the driver in the ECM — check the driver before fitting a new injector." },
+    { "id": "injector_peak_hold", "label": "Low-impedance (peak-and-hold) injector coil", "type": "meter_resistance",
+      "unit": "ohm", "nominal": 2, "min": 0.4, "max": 3.5,
+      "fail": "OL = open winding. At these values lead resistance matters — if you did not zero the leads, your reading is high by a few tenths of an ohm." },
+    { "id": "injector_spread", "label": "Spread across the injector set", "type": "observation",
+      "expect": "All injectors within a few percent of one another.",
+      "fail": "One injector clearly off the group is the suspect, even when its absolute value is inside the published range." },
+    { "id": "injector_insulation", "label": "Injector winding to body", "type": "observation",
+      "expect": "OL.",
+      "fail": "Any continuity to the body means the winding insulation has failed. Replace." },
+    { "id": "coil_primary", "label": "Ignition coil primary winding", "type": "meter_resistance",
+      "unit": "ohm", "nominal": 1.0, "min": 0.3, "max": 2.5,
+      "fail": "OL = open primary, no spark from that coil. Well below the group = shorted turns, which usually shows as a weak spark under load rather than no spark at all." },
+    { "id": "coil_secondary", "label": "Ignition coil secondary winding (distributor-type only)", "type": "meter_resistance",
+      "unit": "ohm", "nominal": 10000, "min": 5000, "max": 16000,
+      "fail": "OL = open secondary. Do not apply this check to coil-on-plug units with an integrated igniter — the reading is meaningless there and an OL is normal." },
+    { "id": "coil_insulation", "label": "Coil winding to body", "type": "observation",
+      "expect": "OL.",
+      "fail": "Continuity to the coil body or bracket is a failed coil regardless of what the winding resistances read." }
+  ],
+
+  "knowledge_base": {
+    "the_real_value_is_the_comparison": "Published injector and coil resistance specs vary widely by manufacturer and are often not available. What is always available is the rest of the set on the same engine. Parts from the same production batch, at the same temperature, on the same engine, should read almost identically. The outlier is the fault. This reasoning survives an imperfectly calibrated meter, which is exactly why it is the primary method here.",
+    "resistance_does_not_prove_good": "An injector can read perfectly and still be clogged, stuck, or leaking. A coil can read perfectly and break down only under compression, at operating temperature. Resistance finds hard electrical failures — opens, shorts, and insulation breakdown. It does not find mechanical or high-voltage-under-load failures. Treat a passing set as 'not electrically open', not as 'good'.",
+    "high_vs_low_impedance": "Saturated (high-impedance) injectors, typically 12-16 ohms, are driven by a simple on/off low-side driver. Peak-and-hold (low-impedance) injectors, roughly 0.5-3 ohms, need a current-limiting driver that hits them hard to open and then holds at a lower current. Fitting the wrong type is a way to destroy an ECM driver. If the reading does not match the type the vehicle expects, somebody has already fitted the wrong part.",
+    "temperature_effect": "Copper's resistance rises about 0.39% per degree C. A coil at 90 C reads roughly 27% higher than the same coil at 20 C. This alone can push a good part outside a published spec, which is why 'measure cold' is a real instruction and not boilerplate.",
+    "why_no_scope_here": "The classic injector diagnostic is the current or voltage waveform — pulse width, the pintle bump, and the flyback spike. That test needs a calibrated time axis and a trustworthy amplitude, and this firmware currently has neither: the scope's timebase selector does not set a known sweep rate and the auto-measure badges are placeholder text. Also, saturated-injector flyback spikes commonly reach 60 V or more, which requires a 10X probe and careful attention to input limits. The waveform test is a good candidate for a future module once scope calibration lands.",
+    "gdi_warning": "Gasoline direct injection injectors are driven from a boost supply in the 65-200 V range. Do not probe or scope those circuits with this instrument. GDI injector coil resistance is also low (roughly 1-2 ohms), so a low reading there is normal and does not indicate a fault.",
+    "check_the_driver_too": "If you find a shorted injector or coil primary, check the ECM driver before fitting the new part — a short can take the driver with it, and the replacement part will appear dead on arrival."
+  }
+}

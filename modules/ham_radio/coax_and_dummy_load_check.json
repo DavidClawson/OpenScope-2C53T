@@ -1,0 +1,97 @@
+{
+  "schema_version": "0.1-provisional",
+  "id": "ham_radio/coax_and_dummy_load_check",
+  "name": "Coax Jumper and Dummy Load DC Check",
+  "category": "Ham Radio",
+  "version": "1.0.0",
+  "summary": "Prove a coax jumper and a 50 ohm dummy load at DC before you trust either of them in a feedline, and catch the connector faults that produce mystery SWR readings.",
+
+  "setup": {
+    "mode": "multimeter",
+    "meter_submode": "Resistance",
+    "firmware_build": "make guest",
+    "requires": [
+      "Probe leads, ideally with fine tips that reach a PL-259 or N centre pin",
+      "The jumpers, loads and adapters you want to check",
+      "Optional: a short piece of wire to make a known short for the far end"
+    ]
+  },
+
+  "safety": [
+    "Disconnect the feedline from the transceiver and from the antenna before measuring. Never connect an instrument to a feedline that could be keyed.",
+    "Do not work on an antenna system with a storm anywhere nearby. A feedline can carry a dangerous charge from a storm that is still miles away.",
+    "An outdoor feedline can hold a static charge in dry or windy weather. Short the centre to the shield briefly before probing.",
+    "Never key a transmitter into an instrument. This device has no RF input protection and is not an RF measuring instrument."
+  ],
+
+  "trust": {
+    "quantitative": true,
+    "notes": [
+      "Resistance and continuity are trustworthy on this firmware, which makes this one of the best-matched tasks in the whole module set.",
+      "Zero the leads with REL (AUTO button) before checking jumper conductors. A 6 foot jumper reads a small fraction of an ohm and lead resistance would swamp it.",
+      "This is a DC test. It says nothing about the load's RF behaviour, the cable's loss, or its characteristic impedance. See the knowledge base for what DC can and cannot tell you.",
+      "Use the Chart layout (OK cycles Full > Chart > Stats) while flexing a connector — an intermittent shows up as a spike in the strip chart even if you miss it on the main display."
+    ]
+  },
+
+  "instructions": [
+    { "step": 1,
+      "text": "Select Resistance, touch the probe tips together, press AUTO to zero the leads.",
+      "expect": "0.00 ohm." },
+    { "step": 2,
+      "text": "DUMMY LOAD. Measure between the centre pin and the shell of the dummy load's connector.",
+      "expect": "About 50 ohms for a normal non-reactive resistive load." },
+    { "step": 3,
+      "text": "JUMPER, CENTRE CONDUCTOR. With nothing attached to the far end, measure from the centre pin of one connector to the centre pin of the other.",
+      "expect": "Well under 1 ohm after zeroing." },
+    { "step": 4,
+      "text": "JUMPER, SHIELD. Measure shell to shell.",
+      "expect": "Well under 1 ohm." },
+    { "step": 5,
+      "text": "JUMPER, ISOLATION. Measure centre pin to shell at one end, with the far end open.",
+      "expect": "OL. This is the reading that catches the classic solder blob bridging a PL-259." },
+    { "step": 6,
+      "text": "FLEX TEST. Repeat steps 3 to 5 while flexing the cable hard right at the back of each connector, where the braid is soldered.",
+      "expect": "Nothing changes. Any jump in the reading condemns the connector — that spot is where jumpers fail." },
+    { "step": 7,
+      "text": "ADAPTERS AND SWITCHES. Check each barrel, adapter, coax switch position and lightning arrestor the same way: centre to centre, shell to shell, centre to shell.",
+      "expect": "Continuity where it belongs, isolation where it belongs. Test every position of a coax switch, including the ones you never use." },
+    { "step": 8,
+      "text": "INSTALLED FEEDLINE. With the antenna end disconnected and the far end open, measure centre to shield at the shack end.",
+      "expect": "OL for a dry cable. See the knowledge base — a partial reading is the interesting result here." },
+    { "step": 9,
+      "text": "If you want to prove an installed run end to end, short the centre to the shield at the far end with a short piece of wire, then measure at the shack end.",
+      "expect": "A low resistance equal to the loop resistance of the run. Remember to remove the short." }
+  ],
+
+  "measurements": [
+    { "id": "dummy_load", "label": "50 ohm dummy load, DC resistance", "type": "meter_resistance",
+      "unit": "ohm", "nominal": 50, "min": 45, "max": 55,
+      "fail": "OL means the resistive element is open — the load will present a massive mismatch and can damage a transmitter. Near zero means it is shorted. A value well away from 50 ohms means the element has drifted, usually from being cooked. Note that a load with a built-in DC block, or one with a directional coupler or SWR bridge in front of it, will read something else entirely — know what you are measuring into." },
+    { "id": "jumper_centre", "label": "Jumper centre conductor, end to end", "type": "meter_resistance",
+      "unit": "ohm", "max": 1,
+      "fail": "OL means a broken centre conductor or, far more often, a centre pin that was never soldered. A reading of several ohms means a cold joint." },
+    { "id": "jumper_shield", "label": "Jumper shield, end to end", "type": "meter_resistance",
+      "unit": "ohm", "max": 1,
+      "fail": "OL or a high reading means the braid is not properly bonded to the connector body. On a PL-259 this is the solder-hole joint that everyone struggles with, and a poor one produces intermittent SWR and RF in the shack." },
+    { "id": "jumper_isolation", "label": "Jumper centre to shield, far end open", "type": "observation",
+      "expect": "OL.",
+      "fail": "Any continuity is a short. On a PL-259 it is usually solder that has flowed inside the connector; on an N connector it is a mis-assembled centre pin. Either way the transmitter sees a dead short and will fold back or fail." },
+    { "id": "installed_feedline_isolation", "label": "Installed feedline, centre to shield", "type": "observation",
+      "expect": "OL for a dry cable with the antenna disconnected.",
+      "fail": "A reading of a few hundred kilohms to a few megohms — not a short, not an open — is the signature of water in the cable or a wet connector. It is an early warning: the cable is still usable but it is deteriorating, and it will get worse. This is the single most useful thing a DC check tells you about an installed run." },
+    { "id": "flex_stability", "label": "Reading while flexing each connector", "type": "observation",
+      "expect": "Stable.",
+      "fail": "An intermittent at the connector. Replace the connector; do not try to reflow it in place." }
+  ],
+
+  "knowledge_base": {
+    "what_dc_can_and_cannot_tell_you": "A DC check proves the conductors are continuous, the connectors are made up correctly, and nothing is shorted or wet. It says nothing about characteristic impedance, cable loss, velocity factor, or how the system behaves at your operating frequency. A cable can pass every test here and still be lossy. What DC does do is catch the hard faults quickly, cheaply, and with a number you can trust — and hard faults are the majority of real feedline problems.",
+    "why_50_ohms_at_dc": "A conventional dummy load is a single non-inductive resistor of about 50 ohms, so it reads close to 50 ohms at DC. That is a coincidence of construction, not a general rule about 50 ohm systems: a length of 50 ohm coax has a CHARACTERISTIC impedance of 50 ohms but its DC resistance is nothing like 50 ohms. Do not expect a cable to read 50 ohms and do not be alarmed when it does not.",
+    "antenna_feedpoint_dc": "Never condemn an antenna because of its DC reading. Many perfectly normal designs read a dead short at DC: folded dipoles, DC-grounded verticals, gamma-matched and beta-matched yagis, and anything with a shunt-fed matching network or a static bleed choke. Others read open: a plain dipole with a current balun, most end-fed designs. The DC reading tells you about the antenna's construction, not its health. Know what your antenna is supposed to read BEFORE you measure it, or the measurement will mislead you.",
+    "pl259_soldering": "The braid-to-body solder holes on a PL-259 are where most jumper faults live. A joint that looks fine can be a cold joint that reads open, or intermittent under flex. This is exactly why steps 4 and 6 exist. If you are making your own jumpers, test every one before it goes into service — it takes thirty seconds and saves an afternoon.",
+    "coax_switches": "Test every position, including the unused ones. A coax switch with a failed position that grounds the antenna port is a common cause of 'my SWR went crazy on one band'. Also check that the unselected ports are grounded or open as the switch's documentation says they should be — the two designs behave very differently with a nearby transmitter.",
+    "static_and_lightning": "Shorting the centre to the shield before probing is not superstition. An antenna in wind or dry snow accumulates a real charge, and an arrestor that has done its job may itself be shorted. If an arrestor reads short between centre and shield, check its documentation — gas-tube types are open at DC and DC-grounded types are not.",
+    "before_you_blame_the_radio": "When SWR readings change with the weather, change when you wiggle something, or differ between two supposedly identical jumpers, this procedure finds the cause more often than any RF instrument does. It is the cheapest half hour in station maintenance."
+  }
+}

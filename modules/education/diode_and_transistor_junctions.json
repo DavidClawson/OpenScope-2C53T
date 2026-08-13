@@ -1,0 +1,111 @@
+{
+  "schema_version": "0.1-provisional",
+  "id": "education/diode_and_transistor_junctions",
+  "name": "Lab 2 — Diodes, LEDs and the Two-Diode Transistor Model",
+  "category": "Education",
+  "version": "1.0.0",
+  "summary": "Use the meter's diode function to identify semiconductor types by their forward voltage, find the pins of an unmarked part, and test a bipolar transistor as if it were two diodes.",
+
+  "setup": {
+    "mode": "multimeter",
+    "meter_submode": "Diode",
+    "firmware_build": "make guest",
+    "requires": [
+      "A silicon small-signal diode (1N4148) and a silicon rectifier (1N4001 or similar)",
+      "A Schottky diode (1N5819, BAT85 or similar)",
+      "A red LED and, if available, a green and a blue one",
+      "An NPN transistor (2N3904 or similar) and a PNP (2N3906 or similar)",
+      "Optional: a bridge rectifier module, and a germanium diode (1N34A) if your lab has one"
+    ]
+  },
+
+  "safety": [
+    "Nothing in this lab is energised beyond the meter's own small test current. There is no shock hazard.",
+    "Never use the diode function on a powered circuit.",
+    "Component leads are sharp; eye protection when clipping is sensible.",
+    "Do not stare into an LED at close range, particularly a blue or white one, even at the low brightness the meter produces."
+  ],
+
+  "trust": {
+    "quantitative": true,
+    "notes": [
+      "The diode function is trustworthy on this firmware and reads in volts.",
+      "IMPORTANT LIMIT: the meter's diode display is scaled for a full-scale of about 2 V. Silicon, Schottky, germanium and red LEDs all fall inside that. Green, blue and white LEDs have forward voltages above it and will read OL or off-scale. That is an instrument limit, not a bad LED — and telling the two apart is part of the lesson.",
+      "The exact forward voltage a meter reports depends on its test current, which is typically around a milliamp. A diode measured at 1 mA reads lower than the same diode conducting an amp. Numbers here are for meter-scale currents."
+    ]
+  },
+
+  "instructions": [
+    { "step": 1,
+      "text": "Select Diode with LEFT/RIGHT. With the probes apart, confirm the display shows OL.",
+      "expect": "OL. This is your open-circuit reference." },
+    { "step": 2,
+      "text": "Put the red probe on the anode and the black probe on the cathode of the 1N4148. The cathode is the banded end.",
+      "expect": "About 0.55 to 0.75 V. The diode is conducting." },
+    { "step": 3,
+      "text": "Reverse the probes.",
+      "expect": "OL. A diode conducts in one direction only — that is its entire purpose." },
+    { "step": 4,
+      "text": "Repeat forward and reverse for the silicon rectifier, the Schottky, and the germanium diode if you have one. Record every value.",
+      "expect": "Silicon around 0.5 to 0.8 V, Schottky around 0.15 to 0.45 V, germanium around 0.2 to 0.4 V." },
+    { "step": 5,
+      "text": "Measure the red LED forward and reverse.",
+      "expect": "Roughly 1.6 to 2.0 V forward, OL reverse. In a dim room you may see it glow faintly — the meter is supplying enough current to light it." },
+    { "step": 6,
+      "text": "Try a green and a blue LED.",
+      "expect": "Green is marginal and may or may not read; blue and white will read OL because their forward voltage exceeds this meter's diode range. Predict this before measuring, then confirm it." },
+    { "step": 7,
+      "text": "UNMARKED DIODE. Take a diode whose banding you have covered with tape. Find which lead is the cathode using only the meter.",
+      "expect": "The orientation that reads a forward voltage has the black probe on the cathode. Uncover the tape and check yourself." },
+    { "step": 8,
+      "text": "NPN TRANSISTOR. Put the red probe on the base of the 2N3904 and the black probe on the emitter, then on the collector.",
+      "expect": "A forward-diode reading, around 0.6 to 0.8 V, on BOTH. The base-emitter junction usually reads slightly higher than the base-collector one." },
+    { "step": 9,
+      "text": "Reverse: black probe on the base, red on emitter then collector.",
+      "expect": "OL both times." },
+    { "step": 10,
+      "text": "Measure collector to emitter, both ways round, without touching the base.",
+      "expect": "OL in both directions. A transistor is not simply two diodes back to back, but for this test it behaves like one." },
+    { "step": 11,
+      "text": "Repeat steps 8 to 10 on the PNP transistor.",
+      "expect": "The mirror image: forward readings with the BLACK probe on the base, OL with the red probe on the base." },
+    { "step": 12,
+      "text": "UNKNOWN TRANSISTOR. Given a transistor with unknown pinout, find the base and determine whether it is NPN or PNP using only these tests. Write down your method before you start.",
+      "expect": "The base is the only pin that gives a forward reading to both of the others in the same probe orientation. If that orientation is red-on-base it is NPN; if black-on-base it is PNP." }
+  ],
+
+  "measurements": [
+    { "id": "silicon_small_signal", "label": "Silicon small-signal diode, forward", "type": "meter_diode",
+      "unit": "V", "nominal": 0.65, "min": 0.5, "max": 0.8,
+      "fail": "OL in both directions = open diode. A low reading in both directions = shorted diode. Either way the part is dead." },
+    { "id": "schottky", "label": "Schottky diode, forward", "type": "meter_diode",
+      "unit": "V", "nominal": 0.3, "min": 0.12, "max": 0.45,
+      "fail": "A Schottky reading like a silicon diode means it is not a Schottky. The low forward drop is the whole reason Schottky diodes exist — it is why they are used in power supplies where the loss matters." },
+    { "id": "silicon_reverse", "label": "Any silicon diode, reverse", "type": "observation",
+      "expect": "OL.",
+      "fail": "Any reading in reverse means the junction is leaking or shorted. A diode that conducts both ways is not a diode any more." },
+    { "id": "red_led", "label": "Red LED, forward", "type": "meter_diode",
+      "unit": "V", "nominal": 1.8, "min": 1.5, "max": 2.1,
+      "fail": "OL both ways means an open LED — or reversed probes, so try both orientations before condemning it." },
+    { "id": "blue_led", "label": "Blue or white LED, forward", "type": "observation",
+      "expect": "OL — the forward voltage is above this meter's diode range.",
+      "fail": "Nothing to fix. This is a deliberate demonstration of an instrument limit. A reading here would actually be the surprising result." },
+    { "id": "npn_base_junctions", "label": "NPN: red on base, black on emitter and on collector", "type": "meter_diode",
+      "unit": "V", "nominal": 0.7, "min": 0.5, "max": 0.85,
+      "fail": "OL on one junction means that junction is open. A near-zero reading means it is shorted. Both are fatal to the transistor." },
+    { "id": "collector_emitter", "label": "Collector to emitter, both directions, base untouched", "type": "observation",
+      "expect": "OL both ways.",
+      "fail": "Continuity from collector to emitter is the classic shorted-transistor failure, and it is what you find after a transistor has been run beyond its ratings." }
+  ],
+
+  "knowledge_base": {
+    "what_the_diode_function_actually_does": "It pushes a small constant current, typically around a milliamp, through whatever is between the probes and displays the resulting voltage. It is not measuring resistance — a diode does not have a meaningful resistance, because the current through it is exponentially related to the voltage across it. That exponential relationship is why the forward voltage is nearly constant over a wide range of currents, and why it can be used to identify what a device is made of.",
+    "forward_voltage_by_material": "The forward drop is characteristic of the junction: germanium about 0.2 to 0.4 V, Schottky (a metal-semiconductor junction rather than a PN junction) about 0.15 to 0.45 V, silicon about 0.5 to 0.8 V. LEDs are made from wider-bandgap materials and the forward voltage rises as the light gets bluer: red about 1.6 to 2.0 V, green about 1.9 to 2.4 V, blue and white about 2.7 to 3.5 V. This is not a coincidence — the photon energy and the forward voltage are two views of the same bandgap, which is a genuinely deep result to point at in an introductory lab.",
+    "why_blue_leds_read_ol": "This meter's diode range tops out around 2 V, so it cannot develop enough voltage to turn on a blue or white LED. The device is behaving correctly and the LED is fine. Instrument limits producing results that look like faults is one of the most valuable things a student can learn early, and it applies to every instrument they will ever use.",
+    "current_dependence": "A 1N4001 measured on a meter at 1 mA reads around 0.55 V. The same diode carrying 1 A in a power supply drops closer to 1 V. Datasheets give a forward-voltage curve against current for exactly this reason. When a student's measured value does not match a datasheet headline figure, the test current is usually why.",
+    "the_two_diode_model": "A bipolar transistor really is two PN junctions sharing a base region, and for a static test it behaves like two diodes with their anodes joined (NPN) or their cathodes joined (PNP). That model is enough to find the base, determine the polarity, and detect a shorted or open device. It is NOT enough to explain how a transistor amplifies — that requires the two junctions to be close enough for carriers injected by one to be collected by the other, which no meter test can show. Say this explicitly, or students will over-trust the model.",
+    "finding_an_unknown_pinout": "The base is the unique pin that reads a forward voltage to both of the other two with the probes in the same orientation. Once you know which pin that is, the orientation tells you the type. Distinguishing collector from emitter is harder with a plain meter: the base-emitter junction usually reads a slightly higher forward voltage than the base-collector one, and the emitter junction has a much lower reverse breakdown voltage, but neither is reliable enough to bet a circuit on. Use the datasheet.",
+    "bridge_rectifiers": "A bridge rectifier module has four diodes and usually marks its AC inputs and its plus and minus outputs. You can verify all four junctions from the outside: each AC terminal should read forward to the plus terminal and forward from the minus terminal, and OL the other way. It is a good exercise in mapping an internal circuit from the outside using only a two-probe instrument.",
+    "what_this_cannot_test": "Forward voltage says nothing about a diode's reverse breakdown voltage or its current rating, and nothing about a transistor's gain. A part can pass every test here and still be entirely wrong for the circuit. Static testing detects hard failures; it does not qualify a component."
+  }
+}

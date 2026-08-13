@@ -1,0 +1,113 @@
+{
+  "schema_version": "0.1-provisional",
+  "id": "education/scope_first_signals",
+  "name": "Lab 4 — Reading an Uncalibrated Oscilloscope",
+  "category": "Education",
+  "version": "1.0.0",
+  "summary": "Get real signals onto the screen using only a phone, a battery and your own finger, and learn what a scope tells you about shape and behaviour even before anybody has calibrated its axes.",
+
+  "setup": {
+    "mode": "oscilloscope",
+    "firmware_build": "make guest-coldtrace",
+    "requires": [
+      "A phone or laptop that can play a tone, and a 3.5 mm headphone breakout or a cheap sacrificial headphone cable",
+      "A 9 V or AA battery",
+      "A scope probe on CH1",
+      "Optional: a second probe on CH2"
+    ],
+    "channels": {
+      "ch1": { "label": "Signal under test", "probe": "1X", "coupling": "DC", "volts_div": "500mV" }
+    },
+    "timebase": "1ms",
+    "trigger": { "source": "ch1", "mode": "Auto", "edge": "Rising" }
+  },
+
+  "safety": [
+    "Everything in this lab is battery or headphone-output level. There is no shock hazard from the signals themselves.",
+    "Do NOT connect this instrument to mains wiring, to a mains-powered appliance's internals, or to anything derived from the wall. CH1 and CH2 share one ground return, and with USB connected to a mains-powered computer that ground is earth referenced. This is not an isolated scope.",
+    "Run the device on battery with USB unplugged for this lab.",
+    "Start the phone's volume at minimum and bring it up. A headphone output at full volume into a high-impedance input is a few volts, which is harmless here, but starting quiet is the habit you want."
+  ],
+
+  "trust": {
+    "quantitative": false,
+    "notes": [
+      "THIS LAB TEACHES SHAPE, NOT NUMBERS, AND THAT IS DELIBERATE. In this firmware the scope's on-screen Freq/Vpp/Vrms/Duty/Period badges are hardcoded placeholder strings. They are not computed from your signal and they will not change when the signal does.",
+      "The cursors are equally unreliable right now: their time-per-pixel and volts-per-pixel scaling are fixed constants, not derived from the timebase or volts-per-division you selected.",
+      "The vertical scale is placeholder-calibrated and the timebase selector does not yet set a known sweep rate. Both selectors do something real to the hardware — the volts-per-division control switches the analogue front end — but the labels are not yet trustworthy units.",
+      "In the guest-coldtrace build the multimeter and the signal generator are both inactive, and the input is held DC-coupled.",
+      "The firmware draws a synthetic demo square wave whenever no real sample has arrived. When that demo trace disappears, you are seeing real data. Step 2 exists to establish that."
+    ]
+  },
+
+  "instructions": [
+    { "step": 1,
+      "text": "Flash guest-coldtrace, power the device on with USB unplugged, and switch to oscilloscope mode with MENU.",
+      "expect": "A trace on screen. It may be the synthetic demo square wave — that is the default, not a signal." },
+    { "step": 2,
+      "text": "Touch the probe tip with your finger and watch the screen. Note the moment the demo square wave disappears and the trace starts responding to you.",
+      "expect": "A wobbling, roughly sinusoidal trace that changes when you move. You are acting as an antenna, picking up the mains field in the room. From this point on the display is real data." },
+    { "step": 3,
+      "text": "Step the timebase with LEFT and RIGHT until the mains pickup shows a few complete cycles.",
+      "expect": "A repeating waveform. Note which timebase setting made it legible, but do not treat the label as a calibrated time-per-division." },
+    { "step": 4,
+      "text": "Let go of the probe and clip the ground lead to the probe tip.",
+      "expect": "The trace collapses to a flat line. That flat line is your zero reference and it is the most important thing on the screen." },
+    { "step": 5,
+      "text": "BATTERY STEP. Touch the probe tip to the positive terminal of a battery with the ground clip on the negative terminal, then remove it.",
+      "expect": "The trace jumps to a new flat level and returns. A DC voltage on a scope is a horizontal line at a height proportional to the voltage. Increase the volts-per-division with UP if the trace runs off the top." },
+    { "step": 6,
+      "text": "Reverse the battery.",
+      "expect": "The trace jumps the other way. A scope shows polarity; a display like this is why an oscilloscope is a voltmeter that plots against time." },
+    { "step": 7,
+      "text": "AUDIO TONE. Play a steady 1 kHz sine tone on the phone at low volume and connect the headphone output to the probe: signal to the tip, ground clip to the sleeve.",
+      "expect": "A sine wave. Raise the volume slowly and watch the height of the trace grow." },
+    { "step": 8,
+      "text": "Turn the volume up until the trace stops growing and the tops and bottoms go flat.",
+      "expect": "Clipping. This is what distortion looks like, and seeing it is far more instructive than reading about it. Back the volume off until the peaks are round again." },
+    { "step": 9,
+      "text": "Change the tone: try a square wave, a sawtooth, and different frequencies. Adjust the timebase each time.",
+      "expect": "Each waveform is visually distinct. A scope tells you the SHAPE of a signal, which no meter can." },
+    { "step": 10,
+      "text": "Play a piece of music instead of a tone.",
+      "expect": "A complicated, constantly changing trace. Real signals are not textbook waveforms." },
+    { "step": 11,
+      "text": "TRIGGERING. With a steady tone playing, use MOVE to switch the trigger edge between rising and falling, and watch what happens to where the waveform sits on screen.",
+      "expect": "The displayed waveform shifts. The trigger decides which point in the signal gets drawn at the same place each sweep, which is what makes a repeating signal appear to stand still." },
+    { "step": 12,
+      "text": "Press OK to stop acquisition, then again to run.",
+      "expect": "The trace freezes and resumes. Stopping to study a captured trace is a basic scope skill." }
+  ],
+
+  "measurements": [
+    { "id": "real_data_confirmed", "label": "Demo trace has disappeared", "type": "observation",
+      "expect": "The synthetic square wave is gone and the trace responds to what you touch.",
+      "fail": "If the demo pattern persists no matter what you do, capture is not running. Confirm you flashed guest-coldtrace and power-cycled properly." },
+    { "id": "zero_reference", "label": "Grounded probe gives a flat line", "type": "observation",
+      "expect": "A steady horizontal line.",
+      "fail": "Noise on a shorted probe means a grounding problem, a damaged probe, or a bad ground clip connection." },
+    { "id": "dc_step", "label": "Battery produces a level shift", "type": "observation",
+      "expect": "The trace moves to a new flat level and stays there, and moves the opposite way when the battery is reversed.",
+      "fail": "No response means the probe is not connected, the ground clip is not on the battery negative, or the volts-per-division is set so coarse that the step is a fraction of a pixel." },
+    { "id": "sine_shape", "label": "A pure tone looks like a sine wave", "type": "observation",
+      "expect": "Smooth, symmetrical, rounded peaks.",
+      "fail": "Flat tops and bottoms mean clipping somewhere — most likely the phone's output, not the scope. Turn it down." },
+    { "id": "clipping_demonstration", "label": "Clipping appears as the volume rises", "type": "observation",
+      "expect": "The peaks flatten while the middle of the waveform keeps its shape.",
+      "fail": "If nothing flattens, the source cannot drive hard enough to clip — which is fine, and worth noting as a property of that source." },
+    { "id": "shape_discrimination", "label": "Different waveform types are visually distinct", "type": "observation",
+      "expect": "Sine, square and sawtooth are immediately distinguishable on screen.",
+      "fail": "If everything looks the same, the timebase is far off — step through it until individual cycles resolve." }
+  ],
+
+  "knowledge_base": {
+    "why_an_uncalibrated_scope_is_still_useful": "A large fraction of real scope work is qualitative. Is there a signal at all? Is it the right shape? Is it clipping, ringing, oscillating, or dropping out? Do these two signals change together? None of those questions need a calibrated axis. This lab is built entirely on that class of question, which is why it can be run honestly on this firmware today. When calibration lands, the same setup answers quantitative questions too — the technique does not change, only what you are allowed to claim.",
+    "what_you_must_not_read_off_this_screen": "The Freq, Vpp, Vrms, Duty and Period badges are placeholder strings in the current firmware. The function that would compute them exists but is never called. The cursor readouts have the same problem — their scaling constants are not connected to the timebase or volts-per-division you selected. Teach students to notice that a number which does not change when the signal changes is not a measurement. That scepticism is a more valuable habit than any single reading.",
+    "the_finger_antenna": "Touching a high-impedance scope input couples the mains field in the room through your body's capacitance to the wiring. It is the cheapest signal source in existence, it always works, and it makes an excellent first trace. It also demonstrates why a scope probe left unconnected shows noise, and why circuits with high-impedance nodes need shielding.",
+    "the_ground_clip": "The ground clip is not optional decoration. It establishes the reference the scope measures against. With no ground connection you are measuring between the probe tip and whatever the instrument happens to be referenced to, which is why an ungrounded probe shows noise. It is also the source of the single most dangerous scope mistake: clipping the ground lead to a point that is not at ground potential, which shorts that point through the scope. With this instrument, both channel grounds are the same node, so you cannot make two independent ground-referenced measurements at once.",
+    "why_triggering_exists": "The scope sweeps repeatedly. If each sweep starts at a random point in the signal, successive traces land in different places and the display is a blur. The trigger says 'start drawing when the signal crosses this level going this way', so every sweep starts at the same point in the waveform and the image stands still. A signal that will not stand still is telling you something — either it is not repetitive, or it is not repeating at a stable rate. In this firmware the trigger edge is selectable with MOVE and the mode in Settings; there is no numeric level control, and the comparator sits at mid-scale.",
+    "phone_as_a_signal_source": "A phone playing a tone through a headphone breakout is a genuinely good laboratory signal source: it is available everywhere, it produces clean sine, square and swept waveforms via free tone-generator apps, its amplitude is adjustable, and it cannot hurt anybody. It is the practical substitute for the built-in signal generator, which is inert in the guest-coldtrace build because it shares the DAC with the scope's trigger reference.",
+    "volts_per_division_does_something_real": "Even though the label is not yet a calibrated unit, the volts-per-division control switches the analogue front end, so it genuinely changes the instrument's sensitivity. Use it the way you would on any scope: increase it until the whole signal fits on screen, then decrease it until the signal fills as much of the screen as it can without clipping. That habit gives the best resolution, and it will still be the right habit after calibration lands.",
+    "what_to_do_next": "education/rc_time_constant covers the same ideas about circuits changing over time using the meter, where the numbers ARE trustworthy. Running the two labs together makes the point that you choose the instrument to match the question and the confidence you need."
+  }
+}

@@ -1,0 +1,98 @@
+{
+  "schema_version": "0.1-provisional",
+  "id": "ham_radio/station_bonding_check",
+  "name": "Station Bonding Continuity Check",
+  "category": "Ham Radio",
+  "version": "1.0.0",
+  "summary": "Verify that every chassis, coax shield and ground conductor in the station is actually bonded to the single-point ground, using continuity — and understand what this test explicitly cannot tell you.",
+
+  "setup": {
+    "mode": "multimeter",
+    "meter_submode": "Resistance",
+    "firmware_build": "make guest",
+    "requires": [
+      "Long probe leads or a long test lead with clips — you need to reach from the entry panel to each piece of equipment",
+      "A photograph or sketch of the station's grounding arrangement",
+      "A known 1 ohm resistor, to confirm your instrument really resolves low values"
+    ]
+  },
+
+  "safety": [
+    "Unplug every piece of equipment from mains power and from the antenna system before measuring. You are measuring conductors that are supposed to be at ground potential; if one is not, you want to find that out with everything de-energised.",
+    "Do NOT rely on this instrument to determine whether a conductor is safe to touch. It is not a CAT-rated mains meter. Use a properly rated tester for that.",
+    "Never work on outdoor grounding, an entry panel or a tower with a storm anywhere in the area.",
+    "If you find that an equipment chassis is NOT bonded, do not simply add a wire and move on — an unbonded chassis in a station that has RF and mains in the same rack is a sign the installation needs review by someone competent in the applicable electrical code.",
+    "Bonding for lightning and bonding for RF are related but not identical problems, and neither substitutes for compliance with your local electrical code. This module is a continuity check, not a code inspection."
+  ],
+
+  "trust": {
+    "quantitative": true,
+    "notes": [
+      "Continuity and low-range resistance are trustworthy on this firmware, which is what this test needs.",
+      "Zero the leads with REL (AUTO) before every measurement. You are looking for tenths of an ohm and your leads are worth more than that.",
+      "Verify your instrument against a known 1 ohm resistor first. A bonding test whose instrument cannot distinguish 0.2 ohms from 2 ohms is worthless.",
+      "THIS TEST CANNOT MEASURE EARTH RESISTANCE. Measuring the resistance from a ground rod to actual earth requires a three-point fall-of-potential tester. Do not attempt it with a DMM and do not report a DMM number as a ground resistance."
+    ]
+  },
+
+  "instructions": [
+    { "step": 1,
+      "text": "Draw the station's grounding arrangement: the single-point ground or entry panel, each ground conductor leaving it, and each piece of equipment.",
+      "expect": "A sketch you can tick off as you measure." },
+    { "step": 2,
+      "text": "Power everything down and unplug it. Disconnect antenna feedlines at the equipment.",
+      "expect": "Station fully de-energised and disconnected." },
+    { "step": 3,
+      "text": "Select Resistance. Confirm your instrument against a known 1 ohm resistor, then zero your leads with AUTO.",
+      "expect": "1 ohm resistor reads about 1 ohm; leads zeroed to 0.00." },
+    { "step": 4,
+      "text": "Clip one lead permanently to the single-point ground bus. Everything else is measured back to this one reference.",
+      "expect": "A fixed reference point for the whole survey." },
+    { "step": 5,
+      "text": "Measure to each equipment chassis in turn — transceiver, amplifier, tuner, power supply, rotator controller, computer case.",
+      "expect": "A fraction of an ohm to each. Record every value; you are building a table, not looking for a beep." },
+    { "step": 6,
+      "text": "Measure to the shell of each coax connector at the entry panel, and to the shell at the equipment end of each feedline.",
+      "expect": "Low resistance, confirming the shield is bonded at the entry point." },
+    { "step": 7,
+      "text": "Measure to each arrestor body and to the mounting plate they share.",
+      "expect": "Low resistance. An arrestor bonded only through its own mounting screw into painted metal is a common finding." },
+    { "step": 8,
+      "text": "Measure across each individual bonding strap, from one end to the other, rather than through the whole path.",
+      "expect": "Essentially zero. This isolates which segment holds the resistance when the end-to-end reading is poor." },
+    { "step": 9,
+      "text": "For anything that reads high, inspect the joint: paint or anodising under a lug, a screw into a painted chassis, a corroded outdoor connection, or a lug crimped onto insulation.",
+      "expect": "A physical explanation for every high reading." },
+    { "step": 10,
+      "text": "Record your table and date it. Re-run it annually and after any station change.",
+      "expect": "A baseline you can compare against next year — a joint that has gone from 0.1 to 1.5 ohms is corroding." }
+  ],
+
+  "measurements": [
+    { "id": "chassis_bond", "label": "Equipment chassis to single-point ground", "type": "meter_resistance",
+      "unit": "ohm", "max": 0.5,
+      "fail": "Above about half an ohm, look at the joint rather than the wire. Paint and anodising are insulators, and a star washer that has not bitten through the finish gives exactly this reading. OL means the chassis is not bonded at all." },
+    { "id": "coax_shield_bond", "label": "Coax shield to single-point ground at the entry panel", "type": "meter_resistance",
+      "unit": "ohm", "max": 0.5,
+      "fail": "A high or open reading means the feedline shield is not bonded where it enters the building. That is both a lightning path problem and a common source of RF in the shack." },
+    { "id": "arrestor_bond", "label": "Arrestor body to the ground bus", "type": "meter_resistance",
+      "unit": "ohm", "max": 0.5,
+      "fail": "An arrestor is only as good as its bond. One mounted to a painted plate, or to a plate that is itself poorly bonded, provides very little protection while looking correct in a photograph." },
+    { "id": "strap_integrity", "label": "End to end across a single bonding strap", "type": "meter_resistance",
+      "unit": "ohm", "max": 0.1,
+      "fail": "Any measurable resistance across a short strap means a bad crimp or a corroded lug. Copper strap itself is essentially zero over these lengths, so the reading is entirely about the terminations." },
+    { "id": "consistency_over_time", "label": "Comparison against last year's table", "type": "observation",
+      "expect": "Readings unchanged.",
+      "fail": "A joint whose resistance has risen since the last survey is corroding. Outdoor joints do this. Catching it in a table is much easier than catching it as an intermittent noise problem." }
+  ],
+
+  "knowledge_base": {
+    "what_this_test_does_not_measure": "It does not measure the resistance from your ground system to earth. That requires a three-point fall-of-potential tester driving current into the soil through auxiliary electrodes, and it is a genuinely different measurement. A DMM between a ground rod and anything else in your station is measuring the copper between them, not the soil. Reporting such a number as an earth resistance is a common and misleading error.",
+    "why_continuity_is_the_right_test_here": "The failures that actually occur in station bonding are mechanical: a lug on paint, a screw that was never tightened, a crimp on insulation, a corroded outdoor joint. Every one of those shows up as resistance between two points you can reach with probes. That makes this a continuity problem, and continuity is exactly what this instrument does well.",
+    "single_point_ground": "The principle is that every conductor entering the station — every coax shield, rotator cable, control line and the mains ground — is bonded together at one place, so that a surge raises everything together rather than driving current through the equipment between two different grounds. This test verifies the 'bonded together' half of that principle. It cannot verify the 'one place' half; that is a matter of how the station is laid out, which you check by looking.",
+    "rf_in_the_shack": "Poor bonding shows up long before lightning arrives. RF getting into audio, a tuner that will not repeat a setting, a computer that resets on transmit, and a microphone that picks up your own signal are all classic symptoms of shield and chassis bonds that are electrically present but resistive. The fix is usually a joint, not more wire.",
+    "why_zero_your_leads": "A pair of test leads is easily 0.2 to 0.5 ohms. That is the entire budget for a good bond. Without zeroing, every reading in this survey is dominated by your own leads and the table is meaningless.",
+    "strap_vs_wire": "Wide flat strap is preferred over round wire for RF bonding because of its lower inductance at high frequencies. A DC continuity test cannot see that difference — strap and wire will read the same here. This is a real limit of the test: it proves the bond exists, not that it is effective at 28 MHz.",
+    "keep_the_table": "The single most valuable output of this procedure is the dated table of readings. Absolute values tell you about obvious faults; changes over time tell you about corrosion, and corrosion is what actually degrades a station's bonding between one storm season and the next."
+  }
+}

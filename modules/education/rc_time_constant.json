@@ -1,0 +1,104 @@
+{
+  "schema_version": "0.1-provisional",
+  "id": "education/rc_time_constant",
+  "name": "Lab 3 — The RC Time Constant, Measured Slowly",
+  "category": "Education",
+  "version": "1.0.0",
+  "summary": "Watch a capacitor charge and discharge through a resistor over tens of seconds, and confirm that it reaches 63.2% of its final value in exactly one time constant — using a 9 V battery and the meter's strip chart.",
+
+  "setup": {
+    "mode": "multimeter",
+    "meter_submode": "DC Voltage",
+    "firmware_build": "make guest",
+    "requires": [
+      "A 9 V battery and a clip or holder",
+      "A 100 kilohm resistor",
+      "A 100 microfarad electrolytic capacitor, 16 V or higher",
+      "A stopwatch, or a phone",
+      "A solderless breadboard and a piece of wire to act as a switch"
+    ]
+  },
+
+  "safety": [
+    "A 9 V battery is not a shock hazard, but it will get hot and can rupture if short circuited. Do not short it across the leads.",
+    "Electrolytic capacitors are POLARISED. The marked negative stripe goes to the battery negative. Reversing an electrolytic can make it vent or burst — this is one of the few genuinely explosive failures a student can produce on a breadboard.",
+    "Never exceed the capacitor's voltage rating. A 9 V battery on a 16 V capacitor is comfortable.",
+    "Discharge the capacitor before rebuilding the circuit."
+  ],
+
+  "trust": {
+    "quantitative": true,
+    "notes": [
+      "This lab was designed specifically around what this firmware measures well. Every voltage in it is under 10 V, which is the range where the meter is accurate. Resistance and capacitance are measured up front so the prediction uses real values.",
+      "A fresh alkaline 9 V battery often reads 9.4 to 9.6 V. That is still inside the trustworthy range, but it is close to the ~10 V boundary above which this firmware's decimal point can latch wrongly — if a reading ever looks like it moved by a factor of ten, that is the reason.",
+      "The capacitance function has never been bench-verified on this firmware. Measure the capacitor if you can, but be ready to fall back on the marked value.",
+      "The time constant here is about ten seconds precisely so that a human with a stopwatch is a good enough timing instrument. The scope is NOT used in this lab, because this firmware's timebase is not yet calibrated."
+    ]
+  },
+
+  "instructions": [
+    { "step": 1,
+      "text": "Measure the resistor with the meter's Resistance function and write down the actual value. Then measure the capacitor with the Capacitance function if it will read it.",
+      "expect": "Resistor within 5% of 100 kilohms. Electrolytics are loosely specified — many are rated -20%/+80%, so do not be surprised by a large deviation." },
+    { "step": 2,
+      "text": "Calculate the predicted time constant: tau equals R times C, using your MEASURED values, in ohms and farads. Write the prediction down before you build anything.",
+      "expect": "About 10 seconds for 100 kilohms and 100 microfarads. If you used the measured capacitance and it was well off nominal, your prediction should reflect that." },
+    { "step": 3,
+      "text": "Measure the battery voltage with DC Voltage and record it. This is your final value V0.",
+      "expect": "Between about 8.5 and 9.6 V depending on chemistry and age." },
+    { "step": 4,
+      "text": "Build the circuit: battery positive, through the resistor, to the capacitor positive. Capacitor negative to battery negative. Leave the wire from the battery positive to the resistor DISCONNECTED — that is your switch.",
+      "expect": "A series RC circuit with one end open." },
+    { "step": 5,
+      "text": "Connect the meter across the CAPACITOR. Select DC Voltage and press OK until you reach the Chart layout, which draws a scrolling strip chart of the reading.",
+      "expect": "Chart showing a flat line near zero. If the capacitor holds a residual charge, short it briefly first." },
+    { "step": 6,
+      "text": "Start the stopwatch at the same instant you connect the switch wire. Record the capacitor voltage at 5, 10, 20, 30 and 50 seconds.",
+      "expect": "A rising curve that is steep at first and flattens out. The chart shows the shape; the stopwatch readings give you the numbers." },
+    { "step": 7,
+      "text": "Compare the reading at one time constant against 63.2% of V0.",
+      "expect": "For a 9.0 V battery and tau of 10 seconds, about 5.69 V at t = 10 s. This is the headline result of the lab." },
+    { "step": 8,
+      "text": "Check the later points against the table in the knowledge base: 86.5% at 2 tau, 95.0% at 3 tau, 99.3% at 5 tau.",
+      "expect": "Good agreement. Note that after five time constants the capacitor is, for practical purposes, fully charged — that is where the common rule of thumb comes from." },
+    { "step": 9,
+      "text": "DISCHARGE. Disconnect the battery and connect a wire from the resistor's free end to the battery negative rail, so the capacitor discharges through the same resistor. Time it again.",
+      "expect": "A falling curve with the same time constant: 36.8% of V0 at 1 tau, 13.5% at 2 tau, 5.0% at 3 tau." },
+    { "step": 10,
+      "text": "Disconnect everything and leave the discharged capacitor alone for a minute, then measure it again.",
+      "expect": "A few hundred millivolts have reappeared out of nowhere. This is dielectric absorption — see the knowledge base. It is real, it surprises everybody, and it is why large capacitors in equipment must be discharged twice." }
+  ],
+
+  "measurements": [
+    { "id": "measured_r", "label": "Resistor, measured", "type": "meter_resistance",
+      "unit": "ohm", "nominal": 100000, "min": 95000, "max": 105000,
+      "fail": "Outside 5%, check the colour bands. Brown-black-yellow-gold is 100 kilohms." },
+    { "id": "battery_v0", "label": "Battery voltage (V0)", "type": "meter_dcv",
+      "unit": "V", "nominal": 9.0, "min": 7.5, "max": 9.7,
+      "fail": "Below about 7.5 V the battery is too tired for a clean lab — the final value will sag while you are measuring, which distorts the curve." },
+    { "id": "v_at_1_tau", "label": "Capacitor voltage at t = 1 tau (charging)", "type": "meter_dcv",
+      "unit": "V", "nominal": 5.69,
+      "fail": "Expected value is 0.632 times YOUR measured V0. A reading well below prediction usually means the capacitance is larger than marked (electrolytics often are), which makes tau longer. A reading well above usually means tau is shorter than you calculated — measure the capacitor again." },
+    { "id": "v_at_5_tau", "label": "Capacitor voltage at t = 5 tau", "type": "meter_dcv",
+      "unit": "V",
+      "fail": "Should be within about 1% of V0. If it plateaus noticeably below V0, current is leaking somewhere — a dirty breadboard, a leaky capacitor, or the meter's own input resistance in parallel with the capacitor." },
+    { "id": "discharge_at_1_tau", "label": "Capacitor voltage at t = 1 tau (discharging)", "type": "meter_dcv",
+      "unit": "V",
+      "fail": "Expected value is 0.368 times the starting voltage. Charging and discharging must give the same tau, because it is the same R and the same C. If they differ, something in the circuit changed between the two runs." },
+    { "id": "recovery", "label": "Voltage reappearing after discharge", "type": "observation",
+      "expect": "A few hundred millivolts recover over a minute or two on an electrolytic.",
+      "fail": "No recovery at all is perfectly fine on a film or ceramic capacitor — the effect is much smaller in those dielectrics. Seeing it on the electrolytic is the point." }
+  ],
+
+  "knowledge_base": {
+    "the_equations": "Charging from zero toward V0 through R into C: v(t) = V0 * (1 - exp(-t/RC)). Discharging from V0: v(t) = V0 * exp(-t/RC). The product RC has units of seconds and is called the time constant, tau. It is the single number that describes how fast the circuit responds.",
+    "the_percentage_table": "Charging: 63.2% of final at 1 tau, 86.5% at 2 tau, 95.0% at 3 tau, 98.2% at 4 tau, 99.3% at 5 tau. Discharging: 36.8% remaining at 1 tau, 13.5% at 2 tau, 5.0% at 3 tau, 1.8% at 4 tau, 0.7% at 5 tau. The 'five time constants means settled' rule of thumb used throughout electronics comes straight out of this table.",
+    "where_63_2_percent_comes_from": "It is 1 - 1/e. At t = tau the exponent is exactly -1, so the remaining fraction is 1/e = 0.368 and the achieved fraction is 0.632. There is nothing arbitrary about it, and students who see that connection stop treating 63% as a number to memorise.",
+    "why_a_ten_second_time_constant": "Because it makes the experiment measurable with a stopwatch and a meter, and because this firmware's scope timebase is not yet calibrated. The same physics happens in microseconds in a real circuit, but measuring it there needs a calibrated time axis. Choosing the component values so that the instrument you have can do the job honestly is itself a lesson worth pointing out.",
+    "meter_loading": "The meter is connected across the capacitor throughout, and it has a finite input resistance — typically around 10 megohms. That resistance is in parallel with the capacitor and slowly bleeds charge away, so the capacitor never quite reaches V0 and the effective discharge tau is slightly shorter than R times C. With R at 100 kilohms the effect is around 1% and is worth calculating as an exercise rather than ignoring. If the lab used a 10 megohm resistor instead, meter loading would dominate completely — which is exactly why component values in a lab are chosen, not picked at random.",
+    "electrolytic_tolerance": "Aluminium electrolytic capacitors are the loosest-tolerance passive component in common use. Many are specified -20% to +80% of the marked value. A '100 microfarad' capacitor reading 130 microfarads is entirely within specification, and it will make the observed tau 30% longer than the nominal calculation. This is why the procedure has you measure the parts first and predict from measured values.",
+    "dielectric_absorption": "After a capacitor is discharged, some charge trapped in the dielectric slowly redistributes and a fraction of the voltage reappears. It is largest in electrolytics and paper capacitors, small in film, tiny in NP0 ceramics. It is not a fault. In practice it is why the safety procedure for large capacitors in equipment is to discharge, wait, and discharge again — and it is why sample-and-hold and integrator circuits use dielectrics chosen specifically for low absorption.",
+    "polarity": "Electrolytic capacitors have an internal oxide layer formed by the applied voltage, and reversing them breaks it down. The result is heat, gas, and sometimes a burst can. The stripe marks the negative lead, and on a radial part the shorter lead is negative. Check twice before applying power; this is the one step in the lab that can actually go bang.",
+    "what_to_do_next": "The natural follow-on is the same circuit driven by a square wave at a frequency where its period is a few time constants, viewed on a scope. That lab is not yet writable on this instrument: the signal generator and live scope capture cannot run in the same firmware build today, and the timebase is uncalibrated. It becomes a good module once those land."
+  }
+}

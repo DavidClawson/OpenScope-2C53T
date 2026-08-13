@@ -1,0 +1,91 @@
+{
+  "schema_version": "0.1-provisional",
+  "id": "automotive/can_bus_waveform",
+  "name": "CAN Bus Signal Quality (Scope, Qualitative)",
+  "category": "Automotive",
+  "version": "1.0.0",
+  "summary": "Confirm a high-speed CAN bus is actually switching, and that CAN High and CAN Low are mirroring each other, using the two scope channels for shape comparison only.",
+
+  "setup": {
+    "mode": "oscilloscope",
+    "firmware_build": "make guest-coldtrace",
+    "requires": [
+      "Two scope probes, 1X",
+      "OBD-II breakout or back-probe pins",
+      "The resistance results from automotive/can_bus_wiring_ohms — do that first"
+    ],
+    "channels": {
+      "ch1": { "label": "CAN High (DLC pin 6)", "probe": "1X", "coupling": "DC", "volts_div": "500mV" },
+      "ch2": { "label": "CAN Low (DLC pin 14)", "probe": "1X", "coupling": "DC", "volts_div": "500mV" }
+    },
+    "timebase": "5us",
+    "trigger": { "source": "ch1", "mode": "Auto", "edge": "Rising" }
+  },
+
+  "safety": [
+    "Ground clip goes to DLC pin 4 (chassis ground) or pin 5 (signal ground) and nowhere else. Both scope channels share one ground return — this is not an isolated scope.",
+    "Run the device on battery with USB unplugged. With USB connected to a mains-powered computer the scope ground is earth referenced.",
+    "Ignition on for bus traffic means the engine may crank or start. Vehicle in park, parking brake set, keep clear of the fan and belts.",
+    "Do not back-probe SRS, high-voltage hybrid (orange) or airbag circuits with this instrument."
+  ],
+
+  "trust": {
+    "quantitative": false,
+    "notes": [
+      "This firmware's scope has NO trustworthy numeric readout. The on-screen Freq/Vpp/Vrms/Duty/Period badges are hardcoded placeholder strings, and the cursor dt/dV scaling is a fixed constant not derived from the timebase.",
+      "The timebase selector does not yet set a known sweep rate, so the horizontal axis is relative. Sweep through the settings until the bus traffic is legible; the label on screen is not a time-per-division you can rely on.",
+      "Vertical scale is placeholder-calibrated. Judge the two channels against each other, never against an absolute voltage.",
+      "In guest-coldtrace the multimeter is inactive (USART2 is held dark) — you cannot do the resistance module from this build. Flash guest for that.",
+      "In guest-coldtrace the input is held DC-coupled (PC12 forced HIGH), which is what CAN needs. The AC/GND coupling selector does not reach the hardware in this build; SAVE toggles PC12 live as a bench experiment.",
+      "The firmware ships a synthetic demo square wave as a fallback. When the demo trace disappears you are looking at real samples — that is your only reliable 'capture is live' signal."
+    ]
+  },
+
+  "instructions": [
+    { "step": 1,
+      "text": "Do automotive/can_bus_wiring_ohms first. If termination is not near 60 ohms, fix that before interpreting anything here.",
+      "expect": "Termination approximately 60 ohms, no shorts to power or ground." },
+    { "step": 2,
+      "text": "Ground clip to DLC pin 4. CH1 probe to pin 6 (CAN High), CH2 probe to pin 14 (CAN Low). Enable both channels.",
+      "expect": "Two traces on screen." },
+    { "step": 3,
+      "text": "Key on. Confirm the synthetic demo square wave has disappeared — that is how you know you are seeing real ADC data and not the fallback pattern.",
+      "expect": "Demo square wave gone, traces respond when you move a probe." },
+    { "step": 4,
+      "text": "Step the timebase with LEFT/RIGHT until you can see individual bus bits rather than a solid band. Start around 5us and work outward.",
+      "expect": "Discrete switching activity, not a featureless block." },
+    { "step": 5,
+      "text": "Compare the two traces. Every time CAN High goes up, CAN Low should go down by a similar amount, at the same instant.",
+      "expect": "Clean mirror image. This is the core observation of the whole procedure." },
+    { "step": 6,
+      "text": "Look at the edges. Note any overshoot, ringing or a slow return to the idle level.",
+      "expect": "Crisp transitions, both lines settling back to the same idle level between frames." },
+    { "step": 7,
+      "text": "Wiggle the harness and watch for the traces dropping out or the mirroring breaking.",
+      "expect": "Nothing changes. A drop-out under wiggle is your fault, found." }
+  ],
+
+  "measurements": [
+    { "id": "activity", "label": "Bus is switching", "type": "observation",
+      "expect": "Both channels show frequent, irregular digital activity — CAN traffic is bursty, not a steady clock.",
+      "fail": "Both lines flat at the same level = bus asleep, gateway not passing traffic, or no power to the transceivers. One line flat while the other switches = open or shorted line on the flat one." },
+    { "id": "mirror", "label": "CANH / CANL mirror symmetry", "type": "observation",
+      "expect": "CH1 and CH2 deflect in opposite directions, by a similar amount, simultaneously.",
+      "fail": "Both moving the same direction = the two wires are shorted together or swapped somewhere. One line with a much smaller swing = a partially shorted line or a failing transceiver." },
+    { "id": "idle_level", "label": "Common idle level", "type": "observation",
+      "expect": "Between frames both traces sit at the same level as each other (the recessive state, where both lines are biased to the same voltage).",
+      "fail": "The two lines idling at clearly different levels points at a short to power or ground on one of them, or a missing bias." },
+    { "id": "ringing", "label": "Edge quality", "type": "observation",
+      "expect": "Transitions look square-ish with little overshoot.",
+      "fail": "Heavy ringing or a long tail after each edge is the classic look of missing or extra termination. Cross-check against the 60 ohm reading from the resistance module — that measurement is the trustworthy one." }
+  ],
+
+  "knowledge_base": {
+    "what_the_levels_should_be": "For reference, ISO 11898-2 high-speed CAN idles recessive with both lines near 2.5 V and a differential of approximately 0 V, and drives dominant with CAN High near 3.5 V and CAN Low near 1.5 V, giving roughly 2 V differential. Those are the numbers you would verify on a calibrated scope. On this firmware you cannot yet confirm them — the vertical scale is placeholder. Use them to understand what you are looking at, not as a pass criterion.",
+    "bit_timing": "500 kbit/s (most powertrain buses) is a 2 microsecond bit time. 250 kbit/s (common on J1939 commercial vehicles) is 4 microseconds, 125 kbit/s is 8 microseconds. Again: this firmware's timebase is uncalibrated, so you cannot measure the bit rate here. Get it from the wiring diagram.",
+    "math_channel": "Settings > Math / Persist > Math Channel > A-B displays the differential, which is what a CAN receiver actually sees. It is a useful view for spotting a line that is not swinging, but it inherits the same uncalibrated vertical scale.",
+    "no_decoder_yet": "The repository contains a CAN protocol decoder (firmware/src/decode/decode_can.c), but it is not wired into any UI screen, so you cannot decode frames on the device today. Do not plan a diagnostic around reading IDs off this instrument.",
+    "when_the_scope_helps": "Resistance finds hard faults. The scope finds the ones ohms cannot: a bus that is correctly terminated but not communicating, one transceiver dragging the bus, and intermittents that only appear when you flex the harness. If ohms are good and the vehicle still will not communicate, this is the next step.",
+    "demo_trace_caveat": "A visible trace is not proof of capture. scope_ui.c renders a synthetic square wave whenever no real sample has arrived. The first real sample latches that fallback off permanently, so the DISAPPEARANCE of the demo trace is the success signal — its presence is just the default state."
+  }
+}

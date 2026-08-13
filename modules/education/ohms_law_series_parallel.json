@@ -1,0 +1,97 @@
+{
+  "schema_version": "0.1-provisional",
+  "id": "education/ohms_law_series_parallel",
+  "name": "Lab 1 — Series and Parallel Resistance",
+  "category": "Education",
+  "version": "1.0.0",
+  "summary": "Measure resistors individually, then in series and in parallel, and check the results against the formulas — including why the answer is never exactly what the formula says.",
+
+  "setup": {
+    "mode": "multimeter",
+    "meter_submode": "Resistance",
+    "firmware_build": "make guest",
+    "requires": [
+      "A 1.0 kilohm resistor and a 2.2 kilohm resistor, 5% tolerance (any two clearly different values in the kilohm range will work)",
+      "A solderless breadboard, or just twisted leads",
+      "Probe leads with clips, so your hands are free",
+      "Paper for recording — this lab is about comparing numbers you wrote down"
+    ]
+  },
+
+  "safety": [
+    "Nothing in this lab is energised. There is no shock hazard.",
+    "Never measure resistance in a circuit that has power applied. It gives wrong answers and can damage the meter.",
+    "Resistor leads are sharp. Eye protection is sensible when clipping leads."
+  ],
+
+  "trust": {
+    "quantitative": true,
+    "notes": [
+      "Resistance is this firmware's most trustworthy function, which makes it the right place to start a lab course on this instrument.",
+      "The low-ohm calibration factor is currently per-device. If your school has a known 1% reference resistor, check the instrument against it once and note the result.",
+      "Zero the leads with REL (AUTO button) before starting. On kilohm resistors this barely matters, and demonstrating that it barely matters is itself part of the lesson."
+    ]
+  },
+
+  "instructions": [
+    { "step": 1,
+      "text": "Read the colour bands on each resistor and write down the value and tolerance they claim. The device has a colour band calculator built in: Settings > Component Tester > Resistor Calculator.",
+      "expect": "Brown-black-red-gold = 1.0 kilohm plus or minus 5%. Red-red-red-gold = 2.2 kilohm plus or minus 5%." },
+    { "step": 2,
+      "text": "Select Resistance with LEFT/RIGHT. Touch the probe tips together and press AUTO to zero the leads. Note what the reading was before you zeroed.",
+      "expect": "A few tenths of an ohm before zeroing, 0.00 after. Write the lead resistance down — you will use it in the discussion." },
+    { "step": 3,
+      "text": "Measure each resistor on its own. Record both values.",
+      "expect": "Each within its tolerance band: 950 to 1050 ohms, and 2090 to 2310 ohms." },
+    { "step": 4,
+      "text": "Connect the two resistors in SERIES — end to end — and measure across the whole chain.",
+      "expect": "About 3.2 kilohms. Compare against the sum of your two MEASURED values, not against the marked values." },
+    { "step": 5,
+      "text": "Connect the two resistors in PARALLEL — both ends joined — and measure across the pair.",
+      "expect": "About 688 ohms. Compare against the parallel formula applied to your two measured values." },
+    { "step": 6,
+      "text": "Predict, then measure: what happens if you put a third resistor in parallel? Write the prediction down BEFORE you measure it.",
+      "expect": "The total falls further. Adding a parallel path always reduces total resistance, no matter what value you add." },
+    { "step": 7,
+      "text": "Now hold one probe tip in each hand, with the resistors disconnected, and read the display.",
+      "expect": "Somewhere between tens of kilohms and several megohms, varying with how hard you press and how dry your skin is. You are a resistor." },
+    { "step": 8,
+      "text": "Measure the 2.2 kilohm resistor again while pinching both probe tips and both resistor leads between your fingers.",
+      "expect": "A slightly lower reading. Your body is now in parallel with the resistor. This is why you hold the probes by their insulated bodies, and why the effect gets worse the higher the resistance you are measuring." },
+    { "step": 9,
+      "text": "Write up: predicted values, measured values, and the percentage difference for each.",
+      "expect": "Differences of a few percent, all explainable by component tolerance." }
+  ],
+
+  "measurements": [
+    { "id": "r1", "label": "R1 alone (marked 1.0 kilohm, 5%)", "type": "meter_resistance",
+      "unit": "ohm", "nominal": 1000, "min": 950, "max": 1050,
+      "fail": "Outside the tolerance band means either the resistor is not what its bands say, or the instrument needs checking against a reference." },
+    { "id": "r2", "label": "R2 alone (marked 2.2 kilohm, 5%)", "type": "meter_resistance",
+      "unit": "ohm", "nominal": 2200, "min": 2090, "max": 2310,
+      "fail": "As above. Check the colour bands again — red and orange are easy to confuse under poor light, and that is a factor of ten." },
+    { "id": "series", "label": "R1 and R2 in series", "type": "meter_resistance",
+      "unit": "ohm", "nominal": 3200, "min": 3040, "max": 3360,
+      "fail": "A reading close to one of the individual resistors means the chain is not actually connected — check the joint. A reading far above the sum means a poor connection is adding resistance of its own." },
+    { "id": "parallel", "label": "R1 and R2 in parallel", "type": "meter_resistance",
+      "unit": "ohm", "nominal": 688, "min": 653, "max": 723,
+      "fail": "A reading larger than the smaller resistor means the parallel connection is not made at both ends. The parallel total is ALWAYS less than the smallest individual resistor — that is a useful sanity check to teach." },
+    { "id": "series_vs_prediction", "label": "Series measurement vs sum of measured parts", "type": "observation",
+      "expect": "Agreement to well under 1%.",
+      "fail": "A discrepancy larger than your connection quality can explain means something is wrong with the circuit, not with the formula." },
+    { "id": "body_resistance", "label": "Hand to hand resistance", "type": "observation",
+      "expect": "A finite value, typically tens of kilohms to a few megohms, that changes with grip pressure and skin moisture.",
+      "fail": "No reading at all means poor contact — press harder or moisten your fingertips. Getting a reading is the point of the exercise." }
+  ],
+
+  "knowledge_base": {
+    "the_formulas": "Series: R_total = R1 + R2 + R3 ... Resistances in series simply add. Parallel: 1/R_total = 1/R1 + 1/R2 + 1/R3 ..., which for exactly two resistors simplifies to R_total = (R1 * R2) / (R1 + R2). For 1.0 k and 2.2 k that is (1000 * 2200) / 3200 = 687.5 ohms.",
+    "why_the_answer_is_never_exact": "A 5% resistor marked 1.0 kilohm is guaranteed only to be somewhere between 950 and 1050 ohms. The manufacturer is not being careless; tighter tolerance costs more, and most circuits do not need it. This is the most important idea in the lab: the formula is exact, the components are not, and engineering is about knowing how much that matters. Compare your series and parallel measurements against your MEASURED individual values, not against the marked ones — the agreement will be far better, which proves the formula was never the source of the error.",
+    "tolerance_bands": "The fourth band gives tolerance: gold = 5%, silver = 10%, brown = 1%, red = 2%. No fourth band traditionally meant 20%. A five-band resistor has three significant digits and is usually 1% or better. The device's built-in calculator (Settings > Component Tester > Resistor Calculator) will do the arithmetic and compare against a measurement for you.",
+    "parallel_is_always_smaller": "Adding a parallel path gives current another route, so the total resistance must fall. The total is always less than the smallest resistor in the group. Two equal resistors in parallel give exactly half. This is worth internalising as a sanity check: if a parallel calculation comes out larger than the smallest part, the arithmetic is wrong.",
+    "lead_resistance": "Your probe leads have resistance of their own, typically a few tenths of an ohm. Against a 1000 ohm resistor that is 0.03% and invisible. Against a 1 ohm resistor it would be 30% and would dominate the reading. That is why the REL zeroing function exists and why it is the first thing you do when measuring low values. Have students measure a low-value resistor with and without zeroing to see the difference for themselves.",
+    "in_circuit_measurement": "A resistor soldered into a circuit board cannot be measured accurately in place, because every other path between the same two points is in parallel with it. The reading will always be lower than the true value, and sometimes dramatically so. To measure a component, at least one lead must be lifted.",
+    "you_are_a_resistor": "Step 7 makes a point that saves students from a class of confusing results later: the human body conducts, and the meter cannot tell the difference between the resistor and your fingers. Body resistance is highly variable — dry skin is megohms, damp skin is tens of kilohms — which is also why the same voltage can be harmless or lethal depending on conditions. Worth saying out loud in a first lab.",
+    "what_to_do_next": "education/diode_and_transistor_junctions extends the same measure-and-compare method to semiconductors, where the parts do not follow Ohm's law at all."
+  }
+}

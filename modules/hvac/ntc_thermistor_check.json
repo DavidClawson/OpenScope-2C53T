@@ -1,0 +1,91 @@
+{
+  "schema_version": "0.1-provisional",
+  "id": "hvac/ntc_thermistor_check",
+  "name": "10k NTC Temperature Sensor Check",
+  "category": "HVAC",
+  "version": "1.0.0",
+  "summary": "Verify a 10 kilohm NTC thermistor against its resistance-temperature curve, using an ice bath as a free and accurate reference point.",
+
+  "setup": {
+    "mode": "multimeter",
+    "meter_submode": "Resistance",
+    "firmware_build": "make guest",
+    "requires": [
+      "Probe leads with alligator clips",
+      "A cup of crushed ice and water, for the 0 C reference point",
+      "A thermometer you trust, for the ambient comparison",
+      "The equipment's sensor specification — you need to know WHICH 10k curve it uses"
+    ]
+  },
+
+  "safety": [
+    "Kill power at the disconnect and lock out before opening any cabinet. Verify absence of line voltage with a properly rated tester — this device is NOT a CAT-rated mains meter.",
+    "Never ohm a sensor while it is connected to a powered control board. You will read the board's pull-up network, not the sensor, and you can damage the input.",
+    "Sensors in a duct or on a refrigerant line may be hot or below freezing. Let them come to a temperature you can handle.",
+    "Do not immerse a sensor in water unless it is rated for it. The ice-bath reference is for the sensing tip only, kept dry inside a sealed bag or a thin tube if the sensor is not sealed."
+  ],
+
+  "trust": {
+    "quantitative": true,
+    "notes": [
+      "Resistance is trustworthy on this firmware, and this procedure sits in the 1 kilohm to 60 kilohm range where lead resistance is irrelevant.",
+      "The dominant uncertainty here is NOT the instrument — it is which 10k curve the sensor uses. Different manufacturers ship different beta values, and 10K Type II and 10K Type III are common and are NOT interchangeable. Get the manufacturer's table if you can.",
+      "The comparison methods in this module (ice bath, two-sensor cross-check) are far more reliable than any single reading against a generic table, and they work even if you cannot identify the curve."
+    ]
+  },
+
+  "instructions": [
+    { "step": 1,
+      "text": "Kill power, lock out, verify absence of line voltage.",
+      "expect": "De-energised." },
+    { "step": 2,
+      "text": "Disconnect at least one sensor lead from the control board. A thermistor measured in circuit reads in parallel with the board's pull-up resistor and will always read low.",
+      "expect": "Sensor isolated." },
+    { "step": 3,
+      "text": "Select Resistance. Let the sensor sit in still air near your thermometer for several minutes so both are at the same temperature.",
+      "expect": "A settled reading." },
+    { "step": 4,
+      "text": "Read the ambient temperature from your thermometer and look up the expected resistance in the table below. Compare.",
+      "expect": "Reading within roughly 10% of the table value, allowing for sensor tolerance and the curve uncertainty." },
+    { "step": 5,
+      "text": "ICE BATH REFERENCE. Fill a cup with crushed ice, add just enough water to fill the gaps, and stir. Put the sensing tip in — keeping it dry if the sensor is not sealed — and wait for the reading to stop falling.",
+      "expect": "About 33.6 kilohms for a 10k NTC with a beta near 3950. A properly made ice bath is 0 C to within a fraction of a degree, which makes this the most accurate reference point you can get without instruments." },
+    { "step": 6,
+      "text": "CROSS-CHECK. If the equipment has two or more sensors of the same type, put them side by side in the same air and compare.",
+      "expect": "They agree closely. Two identical sensors at the same temperature must read nearly the same resistance, whatever curve they use." },
+    { "step": 7,
+      "text": "Warm the sensor in your closed hand and watch the reading.",
+      "expect": "Resistance FALLS as temperature rises. That is what 'negative temperature coefficient' means. A sensor whose resistance rises with heat is either a PTC device or wired to something else." },
+    { "step": 8,
+      "text": "Inspect the sensor leads and connector for corrosion, and flex them while watching the reading.",
+      "expect": "Stable reading. A drifting or jumping value under flex is a broken conductor inside the insulation, which is common on duct-mounted sensors." }
+  ],
+
+  "measurements": [
+    { "id": "ice_bath", "label": "Resistance in an ice bath (0 C / 32 F)", "type": "meter_resistance",
+      "unit": "ohm", "nominal": 33620, "min": 29000, "max": 36000,
+      "fail": "Outside this band, and the sensor is either a different curve than assumed or it has drifted. Confirm the curve before condemning. The wide band here reflects real differences between 10k curves, not instrument uncertainty." },
+    { "id": "ambient", "label": "Resistance at measured ambient", "type": "observation",
+      "expect": "Within roughly 10% of the table value for your measured room temperature.",
+      "fail": "A reading far off the table, with an ice bath that also fails, is a drifted or failed sensor. A reading far off the table with a GOOD ice bath usually means you have the wrong curve, not a bad sensor." },
+    { "id": "open_or_short", "label": "Gross failure check", "type": "observation",
+      "expect": "A finite resistance in the kilohm range.",
+      "fail": "OL means an open sensor or an open lead — the control will typically report the lowest possible temperature or a sensor fault. Near zero means a shorted sensor or a shorted lead, usually reported as the highest possible temperature." },
+    { "id": "direction", "label": "Response direction", "type": "observation",
+      "expect": "Resistance falls when the sensor is warmed.",
+      "fail": "If resistance rises with temperature the device is not an NTC. Check the equipment documentation before assuming the part is wrong." },
+    { "id": "twin_agreement", "label": "Two same-type sensors, same air", "type": "observation",
+      "expect": "Readings within a few percent of each other.",
+      "fail": "A clear disagreement identifies the drifted one without needing any table at all. This is the strongest test in the module." }
+  ],
+
+  "knowledge_base": {
+    "resistance_temperature_table": "For a 10 kilohm NTC with beta(25/85) of approximately 3950 K, computed from R = 10000 * exp(B * (1/T - 1/298.15)) with T in kelvin: -10 C (14 F) = 58.3 k; 0 C (32 F) = 33.6 k; 10 C (50 F) = 20.2 k; 20 C (68 F) = 12.5 k; 25 C (77 F) = 10.0 k; 30 C (86 F) = 8.0 k; 40 C (104 F) = 5.3 k; 50 C (122 F) = 3.6 k; 60 C (140 F) = 2.5 k; 70 C (158 F) = 1.8 k. Treat these as indicative. A sensor with a different beta will follow a different curve and can be perfectly good while reading well off this table.",
+    "the_beta_equation": "R(T) = R25 * exp(B * (1/T - 1/T25)), with temperatures in kelvin, T25 = 298.15 K, and R25 = 10000 ohms for a 10k sensor. B is the material constant, published by the sensor manufacturer, commonly between about 3380 and 3990 for 10k HVAC sensors. If you know B for your sensor, you can compute the expected resistance at any temperature and stop guessing.",
+    "type_ii_vs_type_iii": "10K Type II and 10K Type III are both nominally 10 kilohms at 25 C and both are common in HVAC controls, but they follow different curves and diverge substantially away from 25 C. They are not interchangeable, and fitting the wrong one produces a control that is correct at room temperature and progressively wrong everywhere else — a genuinely difficult fault to chase. Identify the type from the equipment documentation, not from the fact that it reads 10k on the bench.",
+    "why_the_ice_bath": "A mixture of crushed ice and water, well stirred, sits at 0 C to within about a tenth of a degree as long as ice is still present. That is better than most field thermometers, it costs nothing, and it gives you a fixed point far enough from 25 C that curve differences are large and obvious. Use plenty of ice and only enough water to fill the voids — a cup of cold water with a couple of ice cubes floating in it is not an ice bath.",
+    "in_circuit_readings": "Control boards read a thermistor by putting it in a voltage divider with a fixed pull-up resistor, often 10 kilohms. Measured in circuit, your meter sees the sensor in parallel with that pull-up plus whatever else the input network contains. The reading will be lower than the true sensor value and will change depending on whether the board is powered. Disconnect one lead. Always.",
+    "self_heating": "The meter's test current warms the thermistor slightly. It is small enough to ignore for HVAC work, but if a reading creeps steadily downward over tens of seconds with the sensor in still air, that is self-heating rather than a fault.",
+    "what_a_drifted_sensor_costs": "A sensor reading a few degrees off does not usually throw a fault code. It just makes the equipment control to the wrong setpoint — a discharge air sensor reading low will let a furnace run hotter than intended, a return air sensor reading high will shorten cycles. These show up as comfort and efficiency complaints, not as failures, which is why checking the sensors is worth doing on a system that 'works but is not right'."
+  }
+}

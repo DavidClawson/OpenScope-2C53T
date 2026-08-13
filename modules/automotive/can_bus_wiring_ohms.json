@@ -1,0 +1,84 @@
+{
+  "schema_version": "0.1-provisional",
+  "id": "automotive/can_bus_wiring_ohms",
+  "name": "CAN Bus Wiring and Termination Check (Resistance)",
+  "category": "Automotive",
+  "version": "1.0.0",
+  "summary": "Find open, shorted or mis-terminated high-speed CAN wiring with resistance measurements at the OBD-II connector, before touching a scope.",
+
+  "setup": {
+    "mode": "multimeter",
+    "meter_submode": "Resistance",
+    "firmware_build": "make guest",
+    "requires": [
+      "Standard probe leads",
+      "OBD-II breakout box, or back-probe pins that fit the DLC without spreading the terminals",
+      "Vehicle wiring diagram for the bus you are testing"
+    ]
+  },
+
+  "safety": [
+    "Ignition OFF, key out. Never measure resistance on a live circuit — the reading will be wrong and you can damage modules.",
+    "On vehicles with airbags, disconnect the battery negative and wait at least 10 minutes before probing anywhere near SRS wiring. Never probe a yellow connector.",
+    "Do not force probes into DLC terminals. A spread terminal creates the intermittent you will spend the next two hours chasing.",
+    "Disconnecting the battery clears learned adaptations and radio/security codes on many vehicles. Know what you are about to lose."
+  ],
+
+  "trust": {
+    "quantitative": true,
+    "notes": [
+      "Resistance is this firmware's most trustworthy function — decode is accurate within a few percent on the bench unit.",
+      "The low-ohm calibration factor is currently per-device and hardcoded to bench unit #1. Confirm your unit against a known 1% resistor once, then trust it.",
+      "Zero your leads first with REL (AUTO button). Lead resistance is a few tenths of an ohm and matters at 60 ohms.",
+      "Do NOT use this instrument to check pin 16 for battery voltage — meter DC volts above ~10 V is unreliable in this firmware."
+    ]
+  },
+
+  "instructions": [
+    { "step": 1,
+      "text": "Ignition off, key out. Wait for the bus to sleep — on many vehicles modules stay awake for 30 s to several minutes after the door closes and can bias the bus.",
+      "expect": "Interior lights out, no relay clicking, nothing cycling." },
+    { "step": 2,
+      "text": "Select Resistance with LEFT/RIGHT. Touch the two probe tips together and press AUTO to zero the lead resistance (REL).",
+      "expect": "Display settles near 0.00 ohm and the REL indicator is on." },
+    { "step": 3,
+      "text": "Measure between OBD-II pin 6 (CAN High) and pin 14 (CAN Low).",
+      "expect": "Approximately 60 ohms. This is the headline reading." },
+    { "step": 4,
+      "text": "Measure pin 6 to pin 4 (chassis ground), then pin 14 to pin 4.",
+      "expect": "High resistance — typically tens of kilohms to open. A low reading means that line is shorted to ground." },
+    { "step": 5,
+      "text": "Measure pin 6 to pin 16 (battery positive) and pin 14 to pin 16.",
+      "expect": "Open / OL. A low reading means the line is shorted to power, which usually takes the whole bus down." },
+    { "step": 6,
+      "text": "If step 3 read about 120 ohms, unplug modules one at a time and repeat. You are looking for the segment where the second terminator lives.",
+      "expect": "The reading stays at 120 ohms until you disconnect the branch containing the break." },
+    { "step": 7,
+      "text": "Reconnect everything you disconnected, reconnect the battery, and verify the vehicle starts and the fault behaviour is unchanged before you go further.",
+      "expect": "No new faults introduced by your own probing." }
+  ],
+
+  "measurements": [
+    { "id": "termination", "label": "CANH-to-CANL termination", "type": "meter_resistance",
+      "unit": "ohm", "nominal": 60, "min": 54, "max": 66,
+      "fail": "About 120 ohm = one terminator missing or the bus is open between the two terminators. About 40 ohm = an extra terminator, often a wrongly-configured aftermarket or replacement module. OL = open CANH or CANL. Near 0 = CANH shorted to CANL." },
+    { "id": "canh_to_gnd", "label": "CAN High to chassis ground", "type": "meter_resistance",
+      "unit": "ohm", "min": 1000,
+      "fail": "A low reading is CAN High shorted to ground — chafed harness, water in a connector, or a failed transceiver." },
+    { "id": "canl_to_gnd", "label": "CAN Low to chassis ground", "type": "meter_resistance",
+      "unit": "ohm", "min": 1000,
+      "fail": "A low reading is CAN Low shorted to ground. Same causes." },
+    { "id": "canh_to_batt", "label": "CAN High to battery positive", "type": "observation",
+      "expect": "OL / open circuit.",
+      "fail": "Any continuity here is a short to power. Find it before reconnecting the battery." }
+  ],
+
+  "knowledge_base": {
+    "why_60_ohms": "ISO 11898-2 high-speed CAN is terminated with a 120 ohm resistor at each physical end of the bus. Measured across the pair with the bus unpowered, those two appear in parallel: 120 || 120 = 60 ohms. Anything else is a wiring or termination fault, and this single reading catches a large fraction of real CAN complaints.",
+    "obd_pinout": "OBD-II (SAE J1962) pin 4 = chassis ground, pin 5 = signal ground, pin 6 = CAN High, pin 14 = CAN Low, pin 16 = battery positive (always hot). Pin 1 is manufacturer-defined and on GM is single-wire CAN (GMLAN, 33.3 kbit/s), which has no 60 ohm termination — do not condemn it for reading open.",
+    "not_all_buses_reach_the_dlc": "Pins 6 and 14 expose the diagnostic bus only. Many vehicles run several CAN segments behind a gateway module, and a chassis or body bus fault will not show up at the DLC at all. Get the wiring diagram and measure at the segment you actually suspect.",
+    "terminator_location": "Terminators are usually inside two modules rather than being discrete resistors — commonly the ECM at one end and the instrument cluster or gateway at the other. Which two is vehicle-specific. This matters when you are hunting a 120 ohm reading: disconnecting a terminating module is itself enough to produce 120 ohms, so verify against the diagram before you condemn wiring.",
+    "why_ohms_before_scope": "A resistance measurement gives you an absolute, defensible number. This firmware's scope amplitude is not calibrated yet, so the scope tells you about shape and activity but cannot tell you a voltage. Do the ohm work first; go to the scope only for what ohms cannot see — bit-level signal quality and intermittent bus traffic. See the sibling module automotive/can_bus_waveform.",
+    "common_misread": "Measuring with the bus awake. Transceivers bias the lines toward 2.5 V and the meter's test current fights that, giving readings that drift or sit somewhere between 60 and 120 ohms. If the number will not settle, the bus is not asleep."
+  }
+}

@@ -1,0 +1,93 @@
+{
+  "schema_version": "0.1-provisional",
+  "id": "ham_radio/connector_pin_mapping",
+  "name": "Microphone and Accessory Connector Pin Mapping",
+  "category": "Ham Radio",
+  "version": "1.0.0",
+  "summary": "Map an unknown microphone, key or accessory cable pin by pin with continuity, so you can adapt or repair it without guessing and without damaging a radio.",
+
+  "setup": {
+    "mode": "multimeter",
+    "meter_submode": "Continuity",
+    "firmware_build": "make guest",
+    "requires": [
+      "Probe leads with fine tips, or a set of test hooks",
+      "Paper and pen, or the drawing you are working to",
+      "The pinout documentation for BOTH ends if you have it — the radio manual is usually the best source"
+    ]
+  },
+
+  "safety": [
+    "Everything disconnected from the radio and from power before you start. Never ohm a cable that is plugged into a powered radio.",
+    "Never plug a microphone wired for one manufacturer into another manufacturer's radio. The 5 V or 8 V microphone bias, the PTT line and the audio line land on different pins between brands, and the result is a repair bill.",
+    "Some accessory jacks carry supply voltage. Confirm what a pin does before you connect anything to it.",
+    "If a cable has been anywhere near a transmitter output, treat it as potentially charged and short it before probing."
+  ],
+
+  "trust": {
+    "quantitative": true,
+    "notes": [
+      "Continuity is trustworthy on this firmware, and the beeper makes this a hands-free job.",
+      "Zero the leads with REL (AUTO) if you also want to see conductor resistance rather than just a beep.",
+      "This procedure produces a drawing, not a number. Its value is in being systematic — the failure mode is skipping a pin and assuming."
+    ]
+  },
+
+  "instructions": [
+    { "step": 1,
+      "text": "Draw both connectors on paper, looking at them from a defined side, and number every pin. Write down which view you drew — 'looking into the plug' and 'looking at the solder cups' are mirror images of each other, and confusing them is the most common error in this whole job.",
+      "expect": "Two labelled drawings with the viewing direction written on them." },
+    { "step": 2,
+      "text": "Select Continuity with LEFT/RIGHT. Touch the probes together and confirm the beeper sounds.",
+      "expect": "Beep, and a reading near 0 ohm." },
+    { "step": 3,
+      "text": "Clip one probe to pin 1 of the first connector. Walk the other probe across every pin of the far connector in order, including the shell or shield.",
+      "expect": "Exactly one beep, at the pin that pin 1 connects to. Record it." },
+    { "step": 4,
+      "text": "Repeat for every pin. Do not stop when you have found what you were looking for — you are also looking for pins that connect to nothing and pins that connect to more than one thing.",
+      "expect": "A complete map." },
+    { "step": 5,
+      "text": "Check every pin against the shell or shield of its own connector.",
+      "expect": "Only the pin that is supposed to be grounded reads continuity to the shell. Anything else is a short you need to find." },
+    { "step": 6,
+      "text": "Check for shorts between adjacent pins at each connector individually, with the other end of the cable disconnected from everything.",
+      "expect": "OL between every pair. Multi-conductor mic cable is thin and a strand that escaped a solder cup is easy to miss." },
+    { "step": 7,
+      "text": "FLEX TEST. Flex the cable hard where it enters each connector, and where it passes over the operating desk edge, while watching a known-good conductor.",
+      "expect": "No dropouts. Use the Chart layout so you can see a momentary break after it happens." },
+    { "step": 8,
+      "text": "For a microphone with an element and a PTT switch, verify the PTT: probe the two pins your map says are PTT and ground, then press the button.",
+      "expect": "Open with the button released, continuity with it pressed. Press and release it twenty times looking for a missed contact." },
+    { "step": 9,
+      "text": "Only after the map is complete and clean, cross-reference it against the radio's documented pinout before plugging anything in.",
+      "expect": "Every pin accounted for and matched, or a deliberate decision about what to rewire." }
+  ],
+
+  "measurements": [
+    { "id": "pin_map", "label": "Complete pin-to-pin map", "type": "observation",
+      "expect": "Every pin at one end traced to exactly one pin at the other, or explicitly recorded as not connected.",
+      "fail": "A pin with no connection is either an unused conductor or a broken one — the flex test tells you which. A pin connecting to two others is a short." },
+    { "id": "shield_isolation", "label": "Pins to connector shell", "type": "observation",
+      "expect": "Only the designated ground pin reads continuity to the shell.",
+      "fail": "An unintended pin-to-shell short usually means a stray strand or a solder bridge inside the connector, and it can put the microphone bias supply to ground the moment you plug in." },
+    { "id": "adjacent_shorts", "label": "Pin to adjacent pin", "type": "observation",
+      "expect": "OL between all pairs.",
+      "fail": "A short between the bias pin and the audio pin, or between PTT and ground, is the specific failure that keys a radio the instant it is plugged in." },
+    { "id": "ptt_switch", "label": "PTT switch action", "type": "observation",
+      "expect": "Open at rest, solid continuity when pressed, repeatable over many presses.",
+      "fail": "Intermittent continuity is a worn or dirty switch. A PTT that occasionally stays closed transmits without you noticing, which is both an interference problem and a good way to overheat a finals stage." },
+    { "id": "flex_stability", "label": "Continuity while flexing", "type": "observation",
+      "expect": "Stable on every conductor.",
+      "fail": "Mic cables fail at the strain relief. An intermittent there produces audio that comes and goes, or a radio that keys itself, and it is almost always cheaper to replace the cable than to chase it." }
+  ],
+
+  "knowledge_base": {
+    "why_not_just_look_up_the_pinout": "Because pinouts differ between manufacturers AND between models from the same manufacturer, because cables get modified by previous owners, and because an adapter in the chain may already be rearranging things. A published pinout tells you what the radio expects. Continuity tells you what the cable actually does. You need both, and only one of them can be measured.",
+    "the_mirror_image_trap": "Connector drawings are published from different viewpoints — some looking into the mating face of the plug, some at the rear solder cups, some at the socket on the radio. These are mirror images. Writing the viewing direction on your own drawing, before you start, prevents a wiring job that is perfectly executed and completely backwards.",
+    "common_connector_families": "Eight-pin round (Foster-type) connectors are still used for hand microphones on many HF radios. RJ-45 modular plugs are used on most modern mobile and some HF radios. Both families are used by several manufacturers with incompatible pinouts. The physical connector fitting is not evidence that the wiring matches.",
+    "microphone_bias": "Most electret microphones need a DC bias supplied by the radio on the audio pin, typically through a series resistor. That means the audio pin is not at ground potential, and shorting it to ground while the radio is powered is not harmless. It is also why you cannot assume a dynamic microphone and an electret microphone are interchangeable on the same connector.",
+    "ptt_conventions": "PTT is usually a simple contact closure to ground, but the current and voltage on that line vary, and some radios put a low-level logic signal there rather than a switched supply. If you are building an interface with a transistor or optocoupler, confirm the polarity and the level before wiring it.",
+    "cw_keys_and_paddles": "The same procedure maps a key or paddle cable: on a 3.5 mm stereo plug for iambic paddles, expect tip and ring as the two paddle contacts and sleeve as common. Verify rather than assume — a straight key wired to tip and sleeve plugged into a paddle jack behaves in ways that will make you doubt your keyer.",
+    "make_the_drawing_permanent": "Once you have mapped a cable, write the map on a label and put it on the cable. The second time you need it will be at a field day site in the dark."
+  }
+}

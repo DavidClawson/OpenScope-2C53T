@@ -1,0 +1,90 @@
+{
+  "schema_version": "0.1-provisional",
+  "id": "automotive/voltage_drop_test",
+  "name": "Circuit Voltage Drop Test (Grounds, Connections, Switches)",
+  "category": "Automotive",
+  "version": "1.0.0",
+  "summary": "Find high-resistance connections that a resistance test cannot see, by measuring the voltage lost across each part of a circuit while it is carrying its normal load.",
+
+  "setup": {
+    "mode": "multimeter",
+    "meter_submode": "DC Voltage",
+    "firmware_build": "make guest",
+    "requires": [
+      "Long probe leads, or a pair of extension leads — you often need to reach from a battery post to a component",
+      "A way to make the circuit draw its normal current (headlights on, blower on high, starter cranking)",
+      "Wiring diagram for the circuit under test"
+    ]
+  },
+
+  "safety": [
+    "This test is performed on a LIVE circuit. Keep leads clear of moving parts and hot surfaces, and never let a probe bridge to a different circuit or to ground.",
+    "Vehicle in park, parking brake set. If the test involves cranking, make sure nobody is near the fan, belts or drive wheels.",
+    "Do not perform a voltage drop test on airbag/SRS circuits, or on hybrid/EV high-voltage (orange) cabling. This instrument is not rated for that work.",
+    "Remove rings, watches and metal bracelets before working around a battery. A dropped wrench across a battery terminal is the most common serious injury in this job."
+  ],
+
+  "trust": {
+    "quantitative": true,
+    "notes": [
+      "This procedure lives entirely below 1 V, which is comfortably inside the range where this firmware's DC volts function is accurate. That is exactly why it was chosen.",
+      "Do NOT use this instrument to read battery or charging system voltage. Meter DC volts above about 10 V is unreliable in this firmware (decimal-point latch bug) — use a meter you trust for those.",
+      "Zeroing is not needed for voltage measurement, but do confirm the meter reads near 0.00 V with both probes on the same battery post before starting.",
+      "REL (AUTO button) is useful here: zero on a known-good connection, then walk the circuit and read deviations directly."
+    ]
+  },
+
+  "instructions": [
+    { "step": 1,
+      "text": "Select DC Voltage with LEFT/RIGHT. With both probes on the same battery post, confirm the display reads essentially zero.",
+      "expect": "Near 0.00 V. If it does not, your leads or the meter need attention before you interpret anything." },
+    { "step": 2,
+      "text": "Turn on the load you are testing. This test only works with current flowing — a bad connection reads perfectly with the circuit off.",
+      "expect": "The circuit is doing its normal job at its normal current." },
+    { "step": 3,
+      "text": "GROUND SIDE FIRST. Put the black probe on the battery negative post and the red probe on the metal case or ground terminal of the component. Read the drop.",
+      "expect": "0.1 V or less for a good ground path. This single reading finds an enormous share of real electrical faults." },
+    { "step": 4,
+      "text": "If the ground path drop is high, walk it. Probe from the battery negative to the ground strap end, then to the body, then to the component, narrowing down which segment holds the drop.",
+      "expect": "The drop appears across one specific joint. That joint is your fault." },
+    { "step": 5,
+      "text": "POWER SIDE. Black probe on the component's positive terminal, red probe on the battery positive post. Read the drop across the entire supply path.",
+      "expect": "Under about 0.5 V for the whole feed on a typical accessory circuit." },
+    { "step": 6,
+      "text": "Narrow the power side the same way: across the fuse and its holder, across each connector, across the relay or switch contacts.",
+      "expect": "Roughly 0.1 V or less per plain connection, up to about 0.2 V across a switch or relay contact." },
+    { "step": 7,
+      "text": "Wiggle each connector while watching the reading. An intermittent shows up here as a reading that jumps.",
+      "expect": "Steady reading. Use the meter's Chart layout (press OK to cycle Full > Chart > Stats) so a momentary jump leaves a visible trace." },
+    { "step": 8,
+      "text": "Repair the joint that holds the drop, then repeat the measurement to confirm.",
+      "expect": "The drop is gone and the circuit works. Confirming the repair with the same measurement is the whole point of using a number." }
+  ],
+
+  "measurements": [
+    { "id": "ground_path", "label": "Total ground path drop (battery negative to component body)", "type": "meter_dcv",
+      "unit": "V", "max": 0.1,
+      "fail": "Above 0.1 V means a resistive ground. Corroded strap, paint under a ground bolt, or a loose eyelet. Bad grounds cause symptoms that look like anything — dim lights, slow motors, phantom module faults, communication errors." },
+    { "id": "plain_connection", "label": "Drop across a single connector or crimp", "type": "meter_dcv",
+      "unit": "V", "max": 0.1,
+      "fail": "Above 0.1 V across one connection is a spread terminal, corrosion, or a crimp that was never right. Repair rather than cleaning if the terminal has lost tension." },
+    { "id": "switch_or_relay", "label": "Drop across a switch or relay contact", "type": "meter_dcv",
+      "unit": "V", "max": 0.2,
+      "fail": "Above 0.2 V across contacts means they are pitted or burned. Relays commonly fail this way after years of switching an inductive load." },
+    { "id": "total_feed", "label": "Total drop, battery positive to component positive", "type": "meter_dcv",
+      "unit": "V", "max": 0.5,
+      "fail": "Above about 0.5 V on the whole feed means the circuit is losing voltage somewhere upstream of the component. Split the path in half and re-measure to find which half holds it." },
+    { "id": "starter_circuit", "label": "Starter cable drop while cranking", "type": "meter_dcv",
+      "unit": "V", "max": 0.5,
+      "fail": "A starter circuit carries hundreds of amps, so a joint that measures fine at low current can lose a volt or more under crank. A high drop here explains a slow-crank complaint that a battery test does not." }
+  ],
+
+  "knowledge_base": {
+    "why_not_just_measure_resistance": "A resistance test uses the meter's own tiny test current. A connection with a small contact area, or one with a thin corrosion film, can read a fraction of an ohm and still be unable to carry the circuit's real current. Voltage drop tests the connection at the current it actually has to pass, which is why it finds faults ohms cannot. This is the single most useful electrical diagnostic technique in automotive work, and it happens to fall entirely inside the voltage range this firmware handles well.",
+    "rule_of_thumb_limits": "The widely used industry guidance is: 0.1 V maximum across any single connection or ground, 0.2 V across a switch or relay contact, 0.3 V maximum for a complete ground path, and 0.5 V maximum for a complete circuit. Different manufacturers publish slightly different figures — where an OEM spec exists, use it.",
+    "it_must_be_under_load": "A voltage drop test with the circuit off always reads zero, because no current flows and therefore no voltage is lost. If your readings are all zero, check that the load is actually on. This is the most common way the test is done wrong.",
+    "grounds_first": "Roughly half of the intermittent electrical complaints on an older vehicle come back to a ground. Ground faults produce symptoms that make no sense — a fault in one system caused by a bad ground shared with another. Always measure the ground side first; it is one probe placement and it is the highest-yield reading in the whole procedure.",
+    "meter_polarity": "For the ground-side test the reading is small and its sign depends on which way round your probes are. This firmware displays a negative sign for reverse polarity in DC voltage mode; the magnitude is what matters.",
+    "why_this_module_avoids_battery_voltage": "Every automotive electrical procedure normally starts with 'check battery voltage: 12.6 V at rest, 13.5-14.7 V charging'. This firmware cannot be trusted to read those. Use a known-good meter for the state-of-charge and charging checks, and use this instrument for the drop measurements, which is where it is genuinely strong."
+  }
+}

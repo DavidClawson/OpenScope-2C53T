@@ -1,0 +1,97 @@
+{
+  "schema_version": "0.1-provisional",
+  "id": "automotive/crank_cam_sensor",
+  "name": "Crankshaft and Camshaft Position Sensor Check",
+  "category": "Automotive",
+  "version": "1.0.0",
+  "summary": "Identify the sensor type, verify its winding or supply with the meter, then confirm it is producing a repeating pattern with the missing-tooth reference visible.",
+
+  "setup": {
+    "mode": "multimeter",
+    "meter_submode": "Resistance",
+    "firmware_build": "make guest",
+    "requires": [
+      "Probe leads",
+      "Wiring diagram — you need to know whether the sensor is 2-wire or 3-wire and which pin is which",
+      "For the optional scope stage: a second flash to guest-coldtrace and two 10X probes"
+    ]
+  },
+
+  "safety": [
+    "The scope stage requires the engine to be cranking or running. Vehicle in park, parking brake on, keep hands, tools, probe leads and clothing clear of the fan, belts and pulleys.",
+    "The cooling fan on many vehicles can start with the ignition off. Treat it as live at all times.",
+    "Exhaust components are hot and stay hot. Route probe leads away from the manifold.",
+    "Ignition OFF and connector unplugged for every resistance measurement.",
+    "Variable-reluctance sensors generate their own output and can reach tens of volts at high engine speed. Use a 10X probe if you scope one, and do not rev the engine while probing."
+  ],
+
+  "trust": {
+    "quantitative": true,
+    "notes": [
+      "The resistance stage (steps 1-5) is trustworthy and runs under make guest.",
+      "The scope stage (steps 6-9) is QUALITATIVE ONLY and runs under guest-coldtrace, where the meter is inactive. You cannot do both stages in one boot.",
+      "Do not read frequency, period or duty cycle off the scope screen. Those badges are hardcoded placeholder strings, and the cursor scaling is a fixed constant unrelated to the timebase setting.",
+      "The scope stage answers exactly one question: is there a clean, repeating pattern with a visible reference feature? That is a shape judgement and it is real."
+    ]
+  },
+
+  "instructions": [
+    { "step": 1,
+      "text": "Identify the sensor type from the wiring diagram and the connector. Two wires means a variable-reluctance (magnetic, inductive) sensor. Three wires means a Hall-effect sensor with supply, ground and signal.",
+      "expect": "You know which of the two branches below applies before you measure anything." },
+    { "step": 2,
+      "text": "VARIABLE RELUCTANCE: ignition off, unplug the sensor, measure across its two terminals. Zero the leads with AUTO (REL) first.",
+      "expect": "A stable reading, commonly 200-2500 ohms. Check the OEM figure if you have it." },
+    { "step": 3,
+      "text": "VARIABLE RELUCTANCE: measure from each terminal to the sensor body and to engine ground.",
+      "expect": "OL, unless the diagram shows a shielded or intentionally grounded design." },
+    { "step": 4,
+      "text": "HALL EFFECT: with the sensor unplugged and the ignition on, check that the harness is supplying the sensor. Do this with a meter you trust if the supply is 12 V — this firmware's DC volts function is unreliable above about 10 V. A 5 V supply is inside the trustworthy range.",
+      "expect": "Correct supply present and a good ground. A Hall sensor with no supply is dead for reasons that have nothing to do with the sensor." },
+    { "step": 5,
+      "text": "Check the sensor tip and the reluctor wheel: metal debris on a magnetic sensor tip, a cracked tone ring, or a wrong air gap will produce a clean-looking electrical test and no usable signal. Typical VR air gap is around 0.5-1.5 mm; check the OEM figure.",
+      "expect": "Clean tip, intact tone ring, correct gap." },
+    { "step": 6,
+      "text": "OPTIONAL SCOPE STAGE. Flash guest-coldtrace. Reconnect the sensor and back-probe the signal wire on CH1 with a 10X probe. Ground clip to engine ground. If you are also checking cam-to-crank sync, put the cam signal on CH2.",
+      "expect": "Two traces available." },
+    { "step": 7,
+      "text": "Crank the engine. Confirm the synthetic demo square wave has disappeared, which is your signal that real samples are arriving.",
+      "expect": "Demo pattern gone, trace responds to cranking." },
+    { "step": 8,
+      "text": "Step the timebase with LEFT/RIGHT until the repeating tooth pattern is legible. The horizontal axis is not calibrated in this firmware, so this is trial and error rather than a calculation.",
+      "expect": "A regular repeating pattern with an obvious interruption once per crankshaft revolution — that interruption is the missing-tooth reference." },
+    { "step": 9,
+      "text": "Watch several revolutions. The pattern should repeat identically, and the reference gap should appear at the same point every time.",
+      "expect": "Stable, consistent repetition." }
+  ],
+
+  "measurements": [
+    { "id": "vr_winding", "label": "VR sensor winding resistance", "type": "meter_resistance",
+      "unit": "ohm", "nominal": 800, "min": 150, "max": 2600,
+      "fail": "OL = open winding, sensor is dead. Near 0 = shorted winding. A reading well outside the OEM figure, in either direction, condemns the sensor. This is a wide range because designs vary — the OEM number beats this one." },
+    { "id": "vr_insulation", "label": "VR winding to sensor body / engine ground", "type": "observation",
+      "expect": "OL.",
+      "fail": "Continuity to the body is a failed sensor, and it often shows up as an intermittent that only appears hot." },
+    { "id": "pattern_present", "label": "Repeating pattern during cranking", "type": "observation",
+      "expect": "A regular, repeating series of pulses.",
+      "fail": "Flat line = no output. On a VR sensor with good winding resistance, suspect the air gap, a contaminated tip or a damaged tone ring. On a Hall sensor, re-check supply and ground first." },
+    { "id": "reference_gap", "label": "Missing-tooth reference visible", "type": "observation",
+      "expect": "One obvious interruption in the otherwise even pattern, occurring once per crankshaft revolution.",
+      "fail": "No visible gap means the ECM has no sync reference. Check for a cracked or slipped reluctor ring before replacing the sensor." },
+    { "id": "consistency", "label": "Pattern repeats identically", "type": "observation",
+      "expect": "Every revolution looks like the last one.",
+      "fail": "Pulses that vary in size or vanish intermittently point at a loose sensor mount, a wobbling reluctor, or a chafed harness. Wiggle-test the harness while watching." },
+    { "id": "cam_crank_relationship", "label": "Cam signal relative to crank signal (CH2 vs CH1)", "type": "observation",
+      "expect": "On a four-stroke engine the cam signal repeats once for every two crankshaft revolutions, and its position relative to the crank reference stays fixed.",
+      "fail": "A cam signal that drifts relative to the crank reference points at timing chain stretch or a jumped tooth. A cam signal missing entirely gives no cylinder identification." }
+  ],
+
+  "knowledge_base": {
+    "60_minus_2": "The most common crank trigger wheel is 60-2: sixty evenly spaced tooth positions with two teeth removed to create a reference gap. The ECM counts teeth and uses the gap to know where the crankshaft is. Some engines use 36-1, 24-2 or other patterns. Whatever the count, the diagnostic feature is the same: an even pattern with one deliberate interruption per revolution.",
+    "vr_vs_hall": "A variable-reluctance sensor is a coil and a magnet. It generates its own AC output whose amplitude rises with engine speed — weak at cranking, large at high rpm — and it needs no supply. A Hall-effect sensor is a powered semiconductor that outputs a clean square wave of constant amplitude at any speed. If you are unsure which you have, the resistance test settles it: a VR sensor reads a few hundred to a couple of thousand ohms across two pins; a Hall sensor does not.",
+    "why_amplitude_is_not_the_test_here": "On a properly calibrated scope you would also check that a VR sensor's cranking output reaches a usable amplitude. This firmware's vertical scale is placeholder-calibrated, so an absolute amplitude judgement is not available. What survives is the pattern: presence, evenness, the reference gap, and repeatability. Those are the observations this module is built on.",
+    "no_signal_with_good_resistance": "This is the common case that trips people up. A VR sensor can have a textbook winding resistance and still produce nothing, because the fault is mechanical: air gap too large, iron debris bridging the tip, a cracked tone ring, or a reluctor that has spun on its hub. Always inspect before condemning.",
+    "back_probing": "Back-probe at the connector rather than piercing insulation. A pierced wire under the hood becomes a corrosion site and a future intermittent. If you must pierce, seal it afterwards.",
+    "build_switching": "The resistance stage needs make guest; the scope stage needs make guest-coldtrace, which holds USART2 dark and therefore has no multimeter. Plan the job in two passes rather than expecting to switch functions on the fly."
+  }
+}

@@ -1,0 +1,95 @@
+{
+  "schema_version": "0.1-provisional",
+  "id": "hvac/thermostat_wiring_check",
+  "name": "Thermostat Cable Continuity and Insulation Check",
+  "category": "HVAC",
+  "version": "1.0.0",
+  "summary": "Prove a thermostat cable run end to end: which conductor is which, whether any is broken, and whether any pair is shorted together or to ground.",
+
+  "setup": {
+    "mode": "multimeter",
+    "meter_submode": "Resistance",
+    "firmware_build": "make guest",
+    "requires": [
+      "Probe leads with alligator clips",
+      "A short jumper wire for the far-end loop test",
+      "Labels or tape for marking conductors",
+      "A voltage tester rated for line voltage — NOT this instrument"
+    ]
+  },
+
+  "safety": [
+    "The 24 V control circuit is low voltage, but the air handler, furnace and condenser cabinets all contain 120/240 VAC. Kill the unit disconnect and the furnace service switch, and lock out.",
+    "Verify absence of line voltage with a properly rated tester before working inside any cabinet. This device is NOT a CAT-rated mains meter and must never be used to prove a circuit is dead.",
+    "Never perform a resistance test on an energised circuit. Disconnect the thermostat cable at BOTH ends before measuring.",
+    "Shorting R to C on a live system blows the control transformer fuse, and on some equipment the transformer itself. Confirm power is off before any conductor touches another.",
+    "In an attic or crawlspace, watch for the actual hazards: heat, fibreglass, and stepping between joists."
+  ],
+
+  "trust": {
+    "quantitative": true,
+    "notes": [
+      "Resistance and continuity are this firmware's most trustworthy functions.",
+      "Zero the leads with REL (AUTO button) before the loop test. Thermostat cable runs read well under an ohm, so lead resistance is a meaningful part of the number.",
+      "The insulation test relies on the meter genuinely reading open. Confirm the display shows OL with the probes apart before trusting an OL result.",
+      "Use the Chart layout (OK cycles Full > Chart > Stats) when flexing a cable to look for intermittents — a momentary break leaves a visible spike in the strip chart."
+    ]
+  },
+
+  "instructions": [
+    { "step": 1,
+      "text": "Kill the disconnect and the furnace service switch, lock out, and verify absence of line voltage in each cabinet with a rated tester.",
+      "expect": "Equipment de-energised." },
+    { "step": 2,
+      "text": "Photograph both terminal blocks before disturbing anything. Then disconnect every thermostat conductor at BOTH the thermostat and the equipment end.",
+      "expect": "Cable fully isolated at both ends. Nothing else is connected to it." },
+    { "step": 3,
+      "text": "Select Resistance, touch the probe tips together, press AUTO to zero the leads.",
+      "expect": "0.00 ohm." },
+    { "step": 4,
+      "text": "IDENTIFY. At the far end, jumper one conductor to a second conductor. At the near end, find the pair that now reads a short. That identifies both conductors. Repeat until every conductor is mapped, and label as you go.",
+      "expect": "Each conductor positively identified at both ends. Do not trust colour alone." },
+    { "step": 5,
+      "text": "CONTINUITY. With the far-end jumper in place on a pair, read the resistance at the near end. That value is the round-trip resistance of two conductors.",
+      "expect": "Well under 3 ohms for a typical residential run. See the knowledge base for the arithmetic." },
+    { "step": 6,
+      "text": "Repeat the loop test for every pair, so every conductor is proven end to end.",
+      "expect": "All pairs read similarly. A conductor that reads OL in every pairing is the broken one." },
+    { "step": 7,
+      "text": "INSULATION. Remove all far-end jumpers. Measure between every pair of conductors.",
+      "expect": "OL on every combination." },
+    { "step": 8,
+      "text": "Measure from each conductor to the equipment chassis or a known ground.",
+      "expect": "OL on every conductor." },
+    { "step": 9,
+      "text": "If anything failed, walk the visible cable route looking for staples driven through the jacket, rodent damage, crushed cable behind a panel, and water at the outdoor entry point.",
+      "expect": "You find physical damage that matches the electrical fault." },
+    { "step": 10,
+      "text": "Reconnect using your photographs, restore power, and confirm each call works.",
+      "expect": "Heat, cool and fan all respond." }
+  ],
+
+  "measurements": [
+    { "id": "loop_resistance", "label": "Round-trip resistance of a conductor pair", "type": "meter_resistance",
+      "unit": "ohm", "max": 3,
+      "fail": "OL means one of the two conductors in that pair is broken. A reading much higher than the other pairs on the same cable means a partial break, a corroded splice, or a poor terminal — thermostat cable is solid conductor and work-hardens where it has been flexed repeatedly at a terminal." },
+    { "id": "conductor_isolation", "label": "Conductor to conductor", "type": "observation",
+      "expect": "OL between every pair.",
+      "fail": "A short between conductors is most often a staple driven through the jacket. R shorted to C blows the transformer fuse. R shorted to W, Y or G produces a call the thermostat never made — the classic 'equipment runs with the thermostat off' complaint." },
+    { "id": "ground_isolation", "label": "Conductor to ground", "type": "observation",
+      "expect": "OL on every conductor.",
+      "fail": "A conductor shorted to ground behaves like a permanent call on the common side, or drags the transformer down. Water intrusion at an outdoor whip is a common cause and often reads as a few hundred kilohms rather than a dead short — which is why you should look at the actual number, not just listen for a beep." },
+    { "id": "intermittent", "label": "Behaviour while the cable is flexed", "type": "observation",
+      "expect": "Reading stays stable while you flex the cable at each terminal and at any visible bend.",
+      "fail": "A reading that jumps under flexing is an intermittent break. These produce the worst service calls — the system works while you are there and fails after you leave." }
+  ],
+
+  "knowledge_base": {
+    "conventional_colours": "The usual residential convention is R = 24 V hot from the transformer, C = common (the other side of the transformer secondary), W = heat call, Y = cool / compressor call, G = fan call, and O or B for the heat pump reversing valve. These are conventions, not standards. Cables get re-purposed, extended and re-terminated by whoever came before you. The far-end jumper method in step 4 identifies conductors by measurement, which is why it is in this procedure instead of 'check the colours'.",
+    "expected_resistance_arithmetic": "Thermostat cable is normally 18 AWG solid copper, which is about 6.4 ohms per 1000 feet at 20 C. A 75 foot run is therefore about 0.48 ohms one way, and the far-end loop test measures two conductors, so about 0.96 ohms. Even a long 150 foot run should come in under about 2 ohms round trip. Anything much above 3 ohms on a residential run is telling you something. Zero your leads first or you will add a few tenths of an ohm of your own.",
+    "why_disconnect_both_ends": "Left connected, the cable is in parallel with the thermostat's internal circuitry and the equipment's control board. A resistance reading then measures the whole loop, and a 'short' you find may just be a relay coil. Both ends off, or the test proves nothing.",
+    "the_c_wire_question": "Modern smart thermostats need a C conductor for continuous power. If the existing cable has an unused conductor, this procedure identifies and proves it, which is the whole job. If it does not, the answer is a new cable or an add-a-wire adapter — not borrowing G, which produces intermittent fan operation.",
+    "what_this_does_not_test": "Continuity and insulation prove the cable. They do not prove the thermostat, the control board, the transformer, or any of the loads. If the cable passes cleanly, the fault is at one end or the other. See the sibling module hvac/safety_switch_string for the next place to look on a no-heat call.",
+    "staples": "The single most common thermostat cable fault found in the field is a staple driven through the jacket during construction, which shorts two conductors together or one to a stud plate. It may take years to develop as the insulation cold-flows around the staple. When the insulation test fails, look for staples first."
+  }
+}

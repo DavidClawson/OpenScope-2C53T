@@ -1,0 +1,102 @@
+{
+  "schema_version": "0.1-provisional",
+  "id": "ham_radio/dc_power_path_check",
+  "name": "Station 12 V DC Power Path Check",
+  "category": "Ham Radio",
+  "version": "1.0.0",
+  "summary": "Find the bad crimp, tired fuse holder or undersized cable that makes a transceiver reset, hum or fold back on transmit, by measuring voltage lost across each part of the DC path while the rig is keyed into a dummy load.",
+
+  "setup": {
+    "mode": "multimeter",
+    "meter_submode": "DC Voltage",
+    "firmware_build": "make guest",
+    "requires": [
+      "A dummy load rated for your transmitter's output and duty cycle",
+      "Long probe leads with clips",
+      "The rig's DC cable, fuses and any distribution panel in the path",
+      "Optional: a known-good voltmeter for the supply voltage itself"
+    ]
+  },
+
+  "safety": [
+    "Transmit into a DUMMY LOAD, never an antenna, while probing. Keep test leads short and away from the load and the feedline.",
+    "A 12 V station supply can deliver enormous fault current. A dropped probe across the supply terminals will vaporise metal and start a fire. Remove rings and watches, and work with one hand where you can.",
+    "Never measure resistance on an energised circuit. The continuity half of this procedure is done with the supply off and the rig disconnected.",
+    "Battery-powered stations: a LiFePO4 or lead-acid battery has no current limit worth speaking of. Fuse both the positive AND, in a vehicle installation, consider the negative path too.",
+    "Do not key a transmitter with an instrument connected directly across an RF path. This device has no RF input protection."
+  ],
+
+  "trust": {
+    "quantitative": true,
+    "notes": [
+      "This procedure is built entirely on measurements below about 1 V, which is comfortably inside the range where this firmware's DC volts function is accurate. That is why it is structured as a drop test rather than a voltage test.",
+      "Do NOT use this instrument to read the supply voltage itself. Meter DC volts above about 10 V is unreliable in this firmware — use a meter you trust for the 13.8 V reading.",
+      "The resistance and continuity portions are trustworthy. Zero the leads with REL (AUTO) before low-ohm work.",
+      "Use the Chart layout (OK cycles Full > Chart > Stats) while keying, so a transient drop is visible after the fact rather than something you have to catch by eye."
+    ]
+  },
+
+  "instructions": [
+    { "step": 1,
+      "text": "DEAD CHECKS FIRST. Supply off, rig disconnected. Select Resistance and zero the leads with AUTO.",
+      "expect": "0.00 ohm." },
+    { "step": 2,
+      "text": "Measure end to end along the positive conductor of the DC cable, then along the negative conductor.",
+      "expect": "A fraction of an ohm on each. Record both — they should be similar." },
+    { "step": 3,
+      "text": "Measure across each fuse in its holder, then across each Powerpole or other connector pair, individually.",
+      "expect": "Essentially zero across each. Anything measurable at this stage will be much worse under load." },
+    { "step": 4,
+      "text": "Measure positive to negative with the rig disconnected.",
+      "expect": "OL, or the distribution panel's own bleed path if it has one. A low reading here is a short you must find before applying power." },
+    { "step": 5,
+      "text": "LIVE DROP TEST. Reconnect everything. Connect the transmitter to a dummy load. Switch to DC Voltage.",
+      "expect": "Ready to key." },
+    { "step": 6,
+      "text": "With both probes on the SAME supply terminal, confirm the meter reads essentially zero.",
+      "expect": "Near 0.00 V. This proves your leads and the meter before you interpret any drop." },
+    { "step": 7,
+      "text": "Put the black probe on the supply positive terminal and the red probe on the rig's positive input. Key the transmitter at full power for a few seconds and read the drop.",
+      "expect": "Well under 0.5 V for the whole positive feed." },
+    { "step": 8,
+      "text": "Repeat on the negative side: black probe on the supply negative terminal, red probe on the rig's negative input.",
+      "expect": "Well under 0.5 V. The negative side is the one people forget, and it fails just as often." },
+    { "step": 9,
+      "text": "Narrow it down. Measure across each fuse holder, each connector pair and each cable run individually, while keyed.",
+      "expect": "Roughly 0.1 V or less per connection. The one that holds most of the total drop is your fault." },
+    { "step": 10,
+      "text": "Repair the offending joint and repeat the measurement to confirm.",
+      "expect": "The drop is gone. A repair you can confirm with the same measurement is a repair you can trust." }
+  ],
+
+  "measurements": [
+    { "id": "cable_continuity", "label": "DC cable conductor, end to end (supply off)", "type": "meter_resistance",
+      "unit": "ohm", "max": 0.1,
+      "fail": "OL means a broken conductor, almost always inside a crimp. A reading of several tenths of an ohm on a short cable means the crimp is barely holding — it will read fine at rest and collapse under 20 A." },
+    { "id": "fuse_holder_dead", "label": "Across a fuse in its holder (supply off)", "type": "meter_resistance",
+      "unit": "ohm", "max": 0.05,
+      "fail": "Any measurable resistance across a fuse holder is a corroded or slack clip. Automotive blade-fuse holders are a very common weak point in ham DC wiring." },
+    { "id": "total_positive_drop", "label": "Supply positive to rig positive, keyed at full power", "type": "meter_dcv",
+      "unit": "V", "max": 0.5,
+      "fail": "Above about 0.5 V, the rig is not getting the voltage the supply is producing. On a 100 W HF rig this shows up as ALC problems, distorted audio reports, reduced output, or the radio resetting mid-transmission." },
+    { "id": "total_negative_drop", "label": "Supply negative to rig negative, keyed at full power", "type": "meter_dcv",
+      "unit": "V", "max": 0.5,
+      "fail": "The same fault on the return path. It is measured separately because a good positive side tells you nothing about the negative side, and because a resistive negative connection also creates a ground offset that can put hum on your transmit audio." },
+    { "id": "per_connection_drop", "label": "Drop across a single connector or fuse, keyed", "type": "meter_dcv",
+      "unit": "V", "max": 0.1,
+      "fail": "Above about 0.1 V across one connection under load. Powerpole contacts that have been mated hundreds of times lose spring tension; that is the classic finding here." },
+    { "id": "drop_stability", "label": "Behaviour over a long key-down", "type": "observation",
+      "expect": "Drop stays constant through a 30 second key-down.",
+      "fail": "A drop that grows during transmission is a joint heating up. Its resistance rises with temperature, which makes it hotter, which raises it further. This is how DC connections start fires. Fix it immediately." }
+  ],
+
+  "knowledge_base": {
+    "why_drop_and_not_voltage": "Measuring the supply's output voltage tells you what the supply is doing. Measuring the voltage at the rig tells you the combined result. Neither tells you WHERE the loss is. A drop measurement — probes on the two ends of one specific piece of the path, with current flowing — points directly at the offending joint, and it does it with a number small enough that this firmware can be trusted to read it.",
+    "it_must_be_under_load": "With the rig receiving, current is an amp or two and nearly every fault reads fine. A 100 W HF transceiver draws roughly 20 A on transmit. That factor of ten is what turns an invisible bad crimp into a measurable half a volt. If all your drop readings are near zero, check that you are actually keyed and into a load.",
+    "rule_of_thumb_limits": "Aim for 0.1 V or less across any single connection or fuse holder, and under 0.5 V total on each side of the feed. These mirror the long-standing automotive guidance and for the same physical reason. If you want a target rather than a limit, a well-built station measures a small fraction of these values.",
+    "why_rigs_reset": "Most HF transceivers specify a minimum supply voltage around 11.5 V and will misbehave below it. Start at 13.8 V, lose half a volt on the positive side, half a volt on the negative side, and add the supply's own sag under a 20 A load, and a marginal installation lands right at the edge — which is why the symptom appears only on SSB peaks or on a long CW key-down and never during a quiet test.",
+    "powerpole_reality": "Anderson Powerpole contacts are excellent and are also the most-handled part of a typical station. They lose contact pressure with repeated mating, and a crimp made with pliers instead of the correct tool may never have been sound. They are cheap. If one measures badly, replace the contact rather than trying to rescue it.",
+    "the_negative_side": "Half of the DC path is the return, and it is the half that gets shared with the chassis, the bonding system, and sometimes a vehicle body. A resistive negative connection creates a voltage offset between the rig's ground and the rest of the station, and that offset ends up in your transmit audio as hum or as RF feedback. Measure it separately, every time.",
+    "related_modules": "The same technique applied to a vehicle is automotive/voltage_drop_test, which has more detail on grounds and switch contacts. If your rig also has RF-in-the-shack symptoms, check ham_radio/station_bonding_check — resistive DC returns and poor bonding often turn out to be the same joint."
+  }
+}
