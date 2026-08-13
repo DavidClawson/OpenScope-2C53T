@@ -48,6 +48,7 @@ C_SOURCES += src/drivers/flash_fs.c
 C_SOURCES += src/drivers/esp_comm.c
 C_SOURCES += src/drivers/watchdog.c
 C_SOURCES += src/drivers/button_scan.c
+C_SOURCES += src/drivers/continuity_buzzer.c
 C_SOURCES += src/drivers/dfu_boot.c
 C_SOURCES += src/drivers/battery.c
 C_SOURCES += src/drivers/fpga.c

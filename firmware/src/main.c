@@ -30,6 +30,7 @@ extern void system_clock_config(void);
 #include "component_test.h"
 #include "persistence.h"
 #include "button_scan.h"
+#include "continuity_buzzer.h"
 #include "dfu_boot.h"
 #include "battery.h"
 #include "fpga.h"
@@ -422,6 +423,7 @@ static void vDisplayTask(void *pvParameters)
 static void vInputTask(void *pvParameters)
 {
     (void)pvParameters;
+    button_scan_start();
 
     for (;;) {
         button_id_t pressed;
@@ -673,6 +675,8 @@ int main(void)
     xDisplayQueue = xQueueCreate(20, sizeof(uint8_t));
     xInputQueue   = xQueueCreate(15, sizeof(button_id_t));
 
+    continuity_buzzer_init();
+
     /* Initialize button matrix scan driver (TMR3 ISR at 500Hz).
      * This replaces the old passive GPIO reads that didn't work on hardware.
      * The driver handles all GPIO config for the 4x3 matrix + 3 passive pins. */
@@ -694,6 +698,7 @@ int main(void)
     /* Create USB debug shell task (CDC virtual serial port).
      * Priority 2 — above display (1) but below input (4) and FPGA tasks. */
     usb_debug_create_task();
+    continuity_buzzer_create_task();
     meter_autoselect_create_task();
 
     if (current_mode == MODE_MULTIMETER) {

@@ -5,6 +5,7 @@ from pathlib import Path
 import contextlib
 import io
 import importlib.util
+from unittest import mock
 import tempfile
 import unittest
 import zlib
@@ -47,6 +48,44 @@ class FakeSerial:
 
     def read_until_prompt(self, timeout: float) -> bytes:
         return self.trailer
+
+
+class DiscoveryTests(unittest.TestCase):
+    @mock.patch.object(openscope_live_debug.glob, "glob")
+    @mock.patch.object(openscope_live_debug, "linux_tty_vid_pid")
+    def test_discover_ports_rejects_non_openscope_tty_acm(self, mock_vid_pid, mock_glob) -> None:
+        def fake_glob(pattern: str) -> list[str]:
+            return ["/dev/ttyACM0"] if pattern == "/dev/ttyACM*" else []
+
+        mock_glob.side_effect = fake_glob
+        mock_vid_pid.return_value = ("239a", "8029")
+
+        self.assertEqual(openscope_live_debug.discover_ports(), [])
+        mock_vid_pid.assert_called_with("/dev/ttyACM0")
+
+    @mock.patch.object(openscope_live_debug.glob, "glob")
+    @mock.patch.object(openscope_live_debug, "linux_tty_vid_pid")
+    def test_discover_ports_accepts_openscope_cdc_vid_pid(self, mock_vid_pid, mock_glob) -> None:
+        def fake_glob(pattern: str) -> list[str]:
+            return ["/dev/ttyACM1"] if pattern == "/dev/ttyACM*" else []
+
+        mock_glob.side_effect = fake_glob
+        mock_vid_pid.return_value = ("2e3c", "5740")
+
+        self.assertEqual(openscope_live_debug.discover_ports(), ["/dev/ttyACM1"])
+
+    @mock.patch.object(openscope_live_debug.glob, "glob")
+    @mock.patch.object(openscope_live_debug, "linux_tty_vid_pid")
+    def test_choose_port_fails_closed_when_only_other_cdc_device_exists(self, mock_vid_pid, mock_glob) -> None:
+        def fake_glob(pattern: str) -> list[str]:
+            return ["/dev/ttyACM0"] if pattern == "/dev/ttyACM*" else []
+
+        mock_glob.side_effect = fake_glob
+        mock_vid_pid.return_value = ("239a", "8029")
+
+        with self.assertRaisesRegex(openscope_live_debug.SerialError,
+                                    "no candidate USB CDC serial ports found"):
+            openscope_live_debug.choose_port(None)
 
 
 def make_trace_text(submode: int, *, reject: int = 0, valid: int = 1,

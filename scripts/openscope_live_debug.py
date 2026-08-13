@@ -38,6 +38,8 @@ import zlib
 DEFAULT_BAUD = 115200
 DEFAULT_COMMAND = "meter dump"
 DEFAULT_TIMEOUT = 2.0
+OPENSCOPE_CDC_VID = "2e3c"
+OPENSCOPE_CDC_PID = "5740"
 PROMPT_SUFFIXES = (b"\n> ", b"\r\n> ", b"> ")
 SHADOW_PALETTE_RGB565 = (
     0x0000,
@@ -209,6 +211,37 @@ def _baud_attr(baud: int) -> int:
     return value
 
 
+def linux_tty_vid_pid(path: str) -> tuple[str | None, str | None]:
+    name = os.path.basename(os.path.realpath(path))
+    uevent = Path("/sys/class/tty") / name / "device" / "uevent"
+    try:
+        text = uevent.read_text(encoding="ascii", errors="ignore")
+    except OSError:
+        return None, None
+
+    vid = pid = None
+    for line in text.splitlines():
+        if line.startswith("PRODUCT="):
+            parts = line.split("=", 1)[1].split("/")
+            if len(parts) >= 2:
+                vid = parts[0].lower().zfill(4)
+                pid = parts[1].lower().zfill(4)
+                break
+    return vid, pid
+
+
+def is_openscope_cdc_port(path: str) -> bool:
+    vid, pid = linux_tty_vid_pid(path)
+    if vid is not None or pid is not None:
+        return vid == OPENSCOPE_CDC_VID and pid == OPENSCOPE_CDC_PID
+
+    basename = os.path.basename(path).lower()
+    lowered = path.lower()
+    if basename.startswith(("cu.usbmodem", "tty.usbmodem")):
+        return True
+    return any(token in lowered for token in ("openscope", "fnirsi", "2c53t"))
+
+
 def discover_ports() -> list[str]:
     patterns = [
         "/dev/cu.usbmodem*",
@@ -225,7 +258,7 @@ def discover_ports() -> list[str]:
     for pattern in patterns:
         for raw_path in glob.glob(pattern):
             path = str(Path(raw_path))
-            if path not in seen:
+            if path not in seen and is_openscope_cdc_port(path):
                 ports.append(path)
                 seen.add(path)
     return sorted(ports)

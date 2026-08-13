@@ -18,6 +18,7 @@
 #include "dfu_boot.h"
 #include "flash_fs.h"
 #include "rtt.h"
+#include "continuity_buzzer.h"
 
 /* On the bench unit USB CDC never enumerates (error -71, unsolved), yet
  * usbd_connect_state_get() still reports CONFIGURED — so usb_send_bytes()
@@ -514,6 +515,7 @@ static void cmd_help(void)
         "  e.g.: gpio set B11 1\r\n"
         "gpio read <port><pin>           Read GPIO pin\r\n"
         "gpio scan                       Scan FPGA-related pins\r\n"
+        "buzzer test [ms]                Force continuity buzzer briefly\r\n"
         "mem read <addr> [count]         Read 32-bit words\r\n"
         "  e.g.: mem read 0x40021000 4\r\n"
         "mem write <addr> <value>        Write 32-bit word\r\n"
@@ -954,6 +956,31 @@ static void cmd_gpio_set(const char *args)
                      (int)('A' + ((uint32_t)port - (uint32_t)GPIOA) / 0x400),
                      __builtin_ctz(pin),
                      val ? "HIGH" : "LOW");
+}
+
+static void cmd_buzzer_test(const char *args)
+{
+    uint32_t duration = 750;
+    bool started = false;
+    bool active = false;
+    uint32_t toggles = 0;
+    uint32_t create_failures = 0;
+
+    if (args && *args) {
+        if (parse_int(args, &duration) != 0 || duration > 5000U) {
+            usb_send_str("Usage: buzzer test [ms<=5000]\r\n");
+            return;
+        }
+    }
+
+    continuity_buzzer_force_ms(duration);
+    continuity_buzzer_snapshot(&started, &active, &toggles, &create_failures);
+    usb_debug_printf("buzzer forced_ms=%lu task=%u active=%u toggles=%lu create_fail=%lu\r\n",
+                     duration,
+                     started ? 1U : 0U,
+                     active ? 1U : 0U,
+                     toggles,
+                     create_failures);
 }
 
 static void cmd_gpio_read(const char *args)
@@ -4635,6 +4662,10 @@ static void dispatch_command(char *line)
         cmd_gpio_read(line + 10);
     } else if (strcmp(line, "gpio scan") == 0) {
         cmd_gpio_scan();
+    } else if (strcmp(line, "buzzer test") == 0) {
+        cmd_buzzer_test("");
+    } else if (strncmp(line, "buzzer test ", 12) == 0) {
+        cmd_buzzer_test(line + 12);
     } else if (strncmp(line, "mem read ", 9) == 0) {
         cmd_mem_read(line + 9);
     } else if (strncmp(line, "mem write ", 10) == 0) {

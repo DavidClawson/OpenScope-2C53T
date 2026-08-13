@@ -721,14 +721,52 @@ static void draw_buzzer_indicator(uint16_t x, uint16_t y, const theme_t *th,
                                   int is_short)
 {
     if (is_short) {
-        /* Large prominent BEEP badge with green background */
+        /* Large prominent continuity badge with green background. */
         uint16_t badge_w = 100;
         uint16_t badge_h = 28;
         lcd_fill_rect(x - 4, y - 2, badge_w, badge_h, th->success);
-        font_draw_string(x + 10, y, "BEEP", th->background, th->success, &font_large);
+        font_draw_string(x + 4, y, "SHORT", th->background, th->success, &font_large);
     } else {
         font_draw_string(x, y, "OPEN", th->text_secondary, th->background, &font_large);
     }
+}
+
+static bool meter_continuity_short_active(const meter_reading_t *reading,
+                                          bool has_live_reading,
+                                          float current_val)
+{
+    static uint8_t continuity_latch_frames;
+
+    if (!has_live_reading) {
+        continuity_latch_frames = 0;
+        return false;
+    }
+
+    if (reading->continuity_beep ||
+        reading->result_class == METER_RESULT_CONTINUITY) {
+        continuity_latch_frames = 8;
+        return true;
+    }
+
+    if (reading->result_class == METER_RESULT_OVERLOAD ||
+        reading->result_class == METER_RESULT_BLANK ||
+        reading->result_class == METER_RESULT_NONE) {
+        continuity_latch_frames = 0;
+        return false;
+    }
+
+    /* The live meter sometimes emits one continuity marker followed by a few
+     * invalid/ERR frames while settling. Let those coast an already-confirmed
+     * short briefly, but never let ERR start or hold the green state forever. */
+    if (reading->result_class == METER_RESULT_INVALID &&
+        continuity_latch_frames > 0) {
+        continuity_latch_frames--;
+        return true;
+    }
+
+    continuity_latch_frames = 0;
+    (void)current_val;
+    return false;
 }
 
 static void draw_diode_indicator(uint16_t x, uint16_t y, const theme_t *th)
@@ -804,7 +842,8 @@ bool meter_screen_needs_periodic_redraw(void)
 static void draw_meter_full(const meter_mode_info_t *m, uint8_t mode,
                             const meter_reading_t *reading,
                             float current_val, const char *value_str,
-                            float bar_pct, bool force_redraw)
+                            float bar_pct, bool has_live_reading,
+                            bool force_redraw)
 {
     const theme_t *th = theme_get();
     const char *unit_str = live_unit(m, reading, mode);
@@ -813,9 +852,11 @@ static void draw_meter_full(const meter_mode_info_t *m, uint8_t mode,
 
     /* Special indicators for continuity and diode modes */
     if (mode == 7) {
-        /* Continuity: BEEP only for a real short (small positive resistance).
-         * Value = 0 usually means no connection (meter IC idle), not a short. */
-        int is_short = (current_val > 0.01f && current_val < 50.0f);
+        /* Continuity: parser-confirmed continuity/zero-short frames can carry
+         * an exact 0.0 value, so do not treat zero as open once the frame is
+         * live and classified. */
+        int is_short = meter_continuity_short_active(reading, has_live_reading,
+                                                     current_val);
         draw_buzzer_indicator(170, SECONDARY_Y + 44, th, is_short);
     } else if (mode == 8) {
         draw_diode_indicator(170, SECONDARY_Y + 44, th);
@@ -1264,10 +1305,10 @@ void draw_meter_screen(void)
      * This helps in noisy environments where the buzzer can't be heard. */
     bool continuity_flash = false;
     if (mode == 7) {
-        /* Flash green only for real short (exclude 0, which means open) */
-        continuity_flash = has_live_reading &&
-                           ((current_val > 0.01f && current_val < 50.0f) ||
-                            reading.continuity_beep);
+        /* Flash green for parser-confirmed continuity/zero-short frames. */
+        continuity_flash = meter_continuity_short_active(&reading,
+                                                         has_live_reading,
+                                                         current_val);
     }
     uint8_t continuity_flash_u = continuity_flash ? 1U : 0U;
 
@@ -1356,7 +1397,7 @@ void draw_meter_screen(void)
         break;
     default:
         draw_meter_full(m, mode, &reading, current_val, value_str, bar_pct,
-                        full_clear);
+                        has_live_reading, full_clear);
         break;
     }
 
