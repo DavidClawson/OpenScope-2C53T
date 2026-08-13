@@ -794,7 +794,7 @@ void meter_mode_handler(uint8_t *rx_frame) {
     //           else:
     //               check bit3 -> range change
     //
-    //   case 3: check status_byte bit2 (AC/DC flag)
+    //   case 3: check status_byte bit2 (status/decimal helper, not recovered as AC-present confidence)
     //           check flags_byte bit6 (hold flag)
     //           set cal_coeff, advance state
     //

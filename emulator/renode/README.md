@@ -39,6 +39,27 @@ The firmware binary must be present at:
 (monitor) include @run_2c53t.resc
 ```
 
+### Stock DMM Trace Oracle
+
+For DMM reverse engineering, prefer the trace-only stock runner before any
+hardware-in-loop proxy attempt:
+
+```bash
+cd emulator/renode
+renode --disable-gui run_stock_dmm_trace.resc
+```
+
+`run_stock_dmm_trace.resc` loads the archived stock V1.2.0 app from the repo,
+hooks the recovered DMM selector/mux/formatter entry points, and logs USART2 TX
+frames plus the stock RAM bytes around `ms[0x02]`, `ms[0x03]`,
+`DAT_20001025`, and adjacent formatter state. `stock_dmm_trace.py` only returns
+generic ACK/status transport responses; it does not inject synthetic measured
+voltages and is not evidence that the analog FPGA/DMM frontend is modeled.
+
+Do not connect this runner directly to the real FPGA/ASIC buses. A live proxy
+would need an interposer or another proven way to guarantee that only one
+master drives USART2, SPI3, and the frontend GPIO lines.
+
 ## What to Expect
 
 The emulation will boot the firmware. Since many peripherals (FPGA via USART2,
@@ -49,6 +70,19 @@ will likely stall waiting for hardware responses. This is expected and useful fo
 - Observing register access patterns
 - Understanding the boot sequence before peripheral communication begins
 - Identifying which peripherals the firmware probes first
+
+## DVOM and DMM Waveform Limits
+
+`fpga_dvom_sim.py` is a USART2 protocol responder for the numeric DVOM frame
+path. It can help with boot and meter-frame smoke tests, but it does not model
+the SPI3 acquisition case 5 `METER_ADC_READ` byte that the DMM voltage waveform
+overlay samples.
+
+For the voltage waveform feature, use native unit tests for the waveform math
+and rendering-window logic. Renode can still be used for boot/UI smoke, but it
+is not evidence that SPI3 samples are coming from the real COM + V/Ω/C DMM
+frontend. That proof requires either a future custom SPI3 peripheral model in
+Renode or hardware validation with the DMM leads connected to the voltage jacks.
 
 ## Debugging Tips
 

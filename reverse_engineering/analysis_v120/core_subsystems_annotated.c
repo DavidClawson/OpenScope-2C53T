@@ -257,8 +257,8 @@
  *   and from system_init (initial hardware setup).
  *
  * KEY STATE FIELDS:
- *   state[0x02]  meter_function (uint8) — selects voltage range for CH1
- *   state[0x03]  meter_range (uint8)    — selects voltage range for CH2
+ *   state[0x02]  scope_ch1_mux_range (uint8) — selects scope/siggen range for CH1
+ *   state[0x03]  scope_ch2_mux_range (uint8) — selects scope/siggen range for CH2
  *   state[0x04]  ch1_adc_offset (int8)  — signed DC offset
  *   state[0x05]  ch2_adc_offset (int8)  — signed DC offset
  *   state[0x14]  voltage_range (uint8)  — overall range setting
@@ -277,12 +277,12 @@
  *
  *   gpio_mux_portc_porte (FUN_080018a4):
  *     Controls PC12 (input routing), PE4/PE5/PE6 (range/attenuation)
- *     Called with: meter_function index (voltage range)
+ *     Called with: scope channel mux-range index
  *     Sets relay states based on range selection
  *
  *   gpio_mux_porta_portb (FUN_08001a58):
  *     Controls PA15, PA10, PB10 (gain resistors)
- *     Called with: meter_function index
+ *     Called with: scope channel mux-range index
  *     Sets gain path based on range selection
  *
  * RELAY TRUTH TABLE (from CLAUDE.md + hardware analysis):

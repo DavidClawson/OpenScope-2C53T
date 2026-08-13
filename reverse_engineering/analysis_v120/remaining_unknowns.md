@@ -364,11 +364,11 @@ wrong.** A grep of the full decomp for any write to addresses
   (cmd_hi, cmd_lo). No per-command parameter bytes.
 - The 5 zero bytes between cmd and checksum are pure timing/sync
   padding for the FPGA's USART receiver.
-- Multi-byte protocols like the 411-byte boot cal (cmds 0x3B/0x3A)
-  must be a **stream of separate single-command frames**, not a
-  single frame with embedded params. 411 bytes = 411 frames if
-  each frame carries 1 byte of cal data — this is consistent with
-  the boot-time SysTick delays described in `FPGA_BOOT_SEQUENCE.md`.
+- The old 411-byte boot-cal hypothesis is superseded. Later H2 work
+  resolved the stock exchange as a 115,638-byte SPI3 table at
+  `0x08051D19`, bracketed by `0x3B`/`0x3A`. That exchange is not a
+  stream of USART frames. The remaining unknown is FPGA acceptance/apply
+  semantics and actual DMM calibration effect.
 
 **Our firmware (`firmware/src/drivers/fpga.c:260-265`) already
 matches stock exactly:** it writes `[2]=cmd_hi`, `[3]=cmd_lo`,

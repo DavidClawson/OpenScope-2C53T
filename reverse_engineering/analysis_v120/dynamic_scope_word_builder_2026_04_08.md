@@ -17,9 +17,17 @@ Primary references:
 
 ## Executive Summary
 
-This pass confirms that the dynamic CH1/CH2-flavored raw UART word family is
-owned by the helper at `0x08006120`, not by the normalized display table and
-not by the older high-flash `0x080BB3FC` meter-table path.
+2026-06-06 correction: the stock bytes are now guarded from
+`scripts/test_stock_meter_literals.py` as the `dynamic raw-word helper guard`.
+The helper at `0x08006120` is a digital selector/raw-word path adjacent to the
+runtime mode-init cluster.  It should not be treated as a scope-only proof, as
+an analog DMM mux/range writer, or as a calibration source.  It confirms a real
+`0x20002D74` raw-word side channel tied to `DAT_20001025`/`DAT_2000102E`; the
+missing runtime analog writer for `ms[0x02]`/`ms[0x03]` remains open.
+
+This pass confirms that the dynamic raw UART word family is owned by the helper
+at `0x08006120`, not by the normalized display table and not by the older
+high-flash `0x080BB3FC` meter-table path.
 
 The important facts are:
 
@@ -99,6 +107,23 @@ The choice within each pair depends on `DAT_2000102e`:
 
 This is the cleanest static confirmation yet that the recovered low-byte family
 is real firmware behavior, not an artifact of older partial notes.
+
+Binary-guarded stock slices now pin the exact offsets:
+
+```text
+0x08006060 / 0x080060CA:
+  selector seed pairs plus fixed `0x0501` raw-word emission.
+
+0x08006120 / 0x08006194 / 0x0800626A / 0x08006288:
+  `ms[0xF68] == 1` dynamic path, `bRam20001055` blocker clear, mask `0xC6`,
+  low-byte pairs `0x0C/0x0D`, `0x0E/0x17`, `0x11/0x16`, `0x10/0x15`,
+  formatter call, `0x0500` OR, raw-word queue `0x20002D74`, display byte
+  `0x1B`.
+
+0x080062F8:
+  reverse/partner gate that updates state/display bytes rather than emitting
+  the dynamic `0x05xx` word.
+```
 
 ### `DAT_20001060 == 2`
 

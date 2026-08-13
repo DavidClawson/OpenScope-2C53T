@@ -1,14 +1,14 @@
 /*
  * Shared Memory Pool — Lifecycle-Managed
  *
- * 150KB buffer in BSS, shared between on-demand features.
+ * Lifecycle-managed BSS buffer shared between on-demand features.
  * Tracks ownership, transition count, and provides diagnostics.
  */
 
 #include "shared_mem.h"
 #include <string.h>
 
-/* The shared buffer — 150KB in .bss */
+/* The shared buffer lives in .bss. */
 static uint8_t pool[SHMEM_POOL_SIZE] __attribute__((aligned(4)));
 static shmem_owner_t current_owner = SHMEM_OWNER_NONE;
 static uint32_t transitions = 0;
@@ -23,6 +23,7 @@ static const char *owner_names[SHMEM_OWNER_COUNT] = {
     "Component",
     "Bode",
     "Module",
+    "Display",
 };
 
 /* RAM needs per owner */
@@ -35,6 +36,7 @@ static const uint32_t owner_needs[SHMEM_OWNER_COUNT] = {
     SHMEM_NEED_COMPONENT,
     SHMEM_NEED_BODE,
     0, /* Module — variable, not known at compile time */
+    SHMEM_NEED_DISPLAY,
 };
 
 /* ═══════════════════════════════════════════════════════════════════

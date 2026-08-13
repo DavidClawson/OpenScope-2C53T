@@ -6,7 +6,8 @@
  * Created 2026-04-04 as a companion to core_subsystems_annotated.c.
  *
  * Contents:
- *   1. Mode Init Dispatcher (FUN_0800b908, 512B) — boot-time FPGA config
+ *   1. Mode Init Dispatcher (FUN_0800b908, 512B) — stock mode-init
+ *      command-bank dispatcher
  *   2. USART2 ISR (0x080277B4, 304B) — complete RX state machine
  *   3. Meter Data Pipeline — BCD extraction through calibrated display
  *   4. All 9 SPI3 Acquisition Modes — byte-level protocol per mode
@@ -14,7 +15,11 @@
  *
  * KEY CORRECTIONS TO PREVIOUS ANALYSIS:
  *   - The "5 command builder functions" are 10 cases of ONE switch in FUN_0800b908
- *   - FUN_0800b908 runs ONCE at boot, not at runtime
+ *   - 2026-06-06 correction: FUN_0800b908 is not boot-only.  The boot restore
+ *     path uses it, and runtime state/latch helpers at 0x08006418,
+ *     0x0800644E, 0x080064E0, 0x08006548, 0x08006578, 0x08006592, and
+ *     0x080065B2 also tail-call it after mutating ms[0xF68] and neighboring
+ *     mode-init bytes.
  *   - It queues 1-byte cmd codes to usart_cmd_queue, NOT [param,cmd] pairs
  *   - Parameter encoding happens downstream in dispatch handlers
  *   - Previous function names were wrong (see Section 1 corrections table)
@@ -33,9 +38,12 @@
  *  1. MODE INIT DISPATCHER — FUN_0800b908 (512 bytes)
  *
  *  ARCHITECTURAL CORRECTION: This is NOT 5 independent "command builder"
- *  functions. It is a SINGLE function with a 10-case TBH switch, called
- *  ONCE at boot from system_init (FUN_08023A50). Ghidra split the cases
- *  into separate functions because it couldn't recover the jump table.
+ *  functions. It is a SINGLE function with a 10-case TBH switch.  Ghidra
+ *  split the cases into separate functions because it couldn't recover the
+ *  jump table.  The boot path calls it through system init, and later runtime
+ *  helpers can re-enter it after staging ms[0xF68]; see
+ *  dmm_mode_state_f68_boundary_2026_06_06.md and
+ *  meter_mode_command_table_2026_06_05.md.
  *
  *  Purpose: Initialize FPGA to the last-saved operating mode at power-on.
  *  Input: state[0xF68] = current_mode (0-9)
@@ -46,7 +54,7 @@
 /*
  * DATA FLOW:
  *
- *   FUN_0800b908 (boot, runs once)
+ *   FUN_0800b908 (boot restore and runtime mode-init re-entry)
  *       |
  *       | Queues 1-byte FPGA command codes
  *       v
@@ -140,8 +148,12 @@
  * fpga_cmd_set_timebase                | Mode 5 init
  * fpga_cmd_set_probe_atten             | Meter variant mode init (case 9)
  *
- * ALL sends use portMAX_DELAY (blocking), not just the final one.
- * The function is boot-time only — runtime mode changes use different paths.
+ * ALL sends use portMAX_DELAY (blocking), not just the final one.  The
+ * runtime correction above is important for DMM work: B908's byte-command
+ * banks are stock mode-init sequencing evidence, but they still do not prove
+ * analog ms[0x02]/ms[0x03] range writers, low-DCV correction words, or H2
+ * acceptance.  The raw DMM wire-word path remains the separate 0x20002D74
+ * queue guarded in meter_mode_command_table_2026_06_05.md.
  */
 
 
@@ -233,9 +245,9 @@
  * [7] 0xAA  (integrity marker, MUST match)
  * [8-9] Response data
  *
- * STATUS BYTE (rx[7]) BIT FIELDS:
+ * DATA-FRAME STATUS BYTE (rx[7]) BIT FIELDS:
  *   Bit 0: Polarity / calibration coefficient select
- *   Bit 2: AC flag
+ *   Bit 2: status/decimal helper; not recovered as AC-present confidence
  *   Bit 3: Range change indicator
  *
  * FLAGS BYTE (rx[6]) BIT FIELDS:
@@ -294,7 +306,7 @@
  *   Display task reads formatted result
  *
  *
- * CUSTOM FIRMWARE PIPELINE (MISSING COMPONENTS):
+ * CUSTOM FIRMWARE PIPELINE (HISTORICAL 2026-04-04 SNAPSHOT):
  *
  *   USART2 ISR → fpga.rx_frame
  *       |
@@ -305,6 +317,21 @@
  *       | raw_bcd / pow(10, 4-decimal_pos)    ← MISSING calibration division
  *       v
  *   Display (no auto-range feedback)          ← MISSING 0x1B/0x1C/0x1E commands
+ */
+
+/*
+ * 2026-06-05 LOCAL PORT STATUS UPDATE:
+ *
+ * The current custom firmware no longer uses only a static decimal lookup for
+ * voltage/current/passive display. It has a stock-style parser state layer and
+ * a DCV range table keyed by the stock-analysis frame bits:
+ *   frame[8].7, frame[3].4, frame[4].4, frame[5].4, then default.
+ *
+ * This distinction matters because low-DCV frames for a 1.5 V input report
+ * about 4977 BCD counts with frame[2].3 and frame[8].7 set. Stock extends the
+ * raw value to 14977, selects class 4 from frame[8].7, and divides by 10^4 to
+ * render about 1.4977 V. A one-point low-voltage coefficient was a local
+ * misread and is not stock-only evidence.
  */
 
 /*
@@ -322,20 +349,20 @@
  */
 
 /*
- * STOCK FIRMWARE CALIBRATION (what custom firmware is missing):
+ * STOCK FIRMWARE DECIMAL/RANGE PIPELINE:
  *
- * Step 1: Convert BCD to double with exponent
- *   value = (double)meter_digits_raw * pow(10.0, (double)meter_exponent)
+ * Step 1: Convert BCD to an extended raw value
+ *   raw = meter_digits_raw + ((frame[2] & 0x08) ? 10000 : 0)
  *
  * Step 2: Iterative decimal adjustment (up to 4x)
  *   While |value| < 10000.0 and iterations < 4:
  *       value *= 10.0
  *       decimal_pos++
  *
- * Step 3: Apply factory calibration coefficients
- *   Coefficients stored at state[+0x29C..+0x34E], loaded from SPI flash at boot
- *   Factory defaults: ~0x0CB0-0x0CCE range (approximately 3248-3278 decimal)
- *   Reference constant: 494.0 (literal pool at 0x080373DC)
+ * Step 3: Select the stock decimal class
+ *   frame[8].7 → class 4, frame[3].4 → class 3, frame[4].4 → class 2,
+ *   frame[5].4 → class 1, otherwise class 0. Display value is
+ *   extended_raw / 10^class.
  *
  * Step 4: Auto-range selection
  *   |value| >= 1000.0 → range = 1
@@ -343,12 +370,11 @@
  *   |value| >= 10.0   → range = 3
  *   Sends FPGA commands 0x1B, 0x1C, 0x1E to configure next measurement cycle
  *
- * THE 3.7x ERROR EXPLAINED:
- *   For a 1.5V battery on DCV (submode 0):
- *   - Meter IC outputs raw BCD count ≈ 5600
- *   - Custom firmware: 5600 / 1000.0 = 5.6V (wrong — treats as direct voltage)
- *   - Stock firmware: 5600 / calibration_coeff ≈ 5600 / 3.73 ≈ 1501 → 1.501V
- *   - The ~3.73 factor = calibration coefficient / reference = ~3264 / ~875
+ * SUPERSEDED 3.7x ERROR THEORY:
+ *   Earlier notes guessed a physical factory coefficient from one 1.5 V capture.
+ *   Stock V1.2.0 evidence instead shows the missing frame[2].3 raw extension plus
+ *   the class-4 decimal exponent path. Treat factory calibration as unresolved
+ *   unless recovered from stock xrefs, W25Q/system-file data, or SPI bulk tables.
  *
  * METER MODE HANDLER FSM (0x080371B0, 504B):
  *   8 states: IDLE → POLARITY → OVERLOAD → AC/DC → RANGE → AUTO_RANGE → STANDBY → STANDBY
@@ -358,10 +384,10 @@
  *   Custom firmware has NONE of this — uses static lookup table for decimal position
  *
  * TO FIX THE CUSTOM FIRMWARE:
- *   1. Implement meter_mode_handler FSM (parse frame[6]/[7] status bits)
- *   2. Use dynamic decimal position from FSM instead of static lookup
- *   3. Apply calibration coefficients (load from SPI flash or use factory defaults)
- *   4. Add auto-range feedback loop (send cmds 0x1B/0x1C/0x1E after each measurement)
+ *   1. Implement/track the stock parser state where it is evidenced.
+ *   2. Use stock class bits and frame[2].3 extension for DCV numeric scaling.
+ *   3. Keep factory calibration unresolved until a stock data source is recovered.
+ *   4. Add auto-range feedback loop only after the command/state path is proven.
  */
 
 
@@ -557,7 +583,7 @@
  *
  * STARTUP (from system_init):
  *   1. fpga_sem1 given (available), fpga_sem2 taken (blocked)
- *   2. Boot commands 0x01-0x08 sent via usart_tx_queue
+ *   2. Post-H2 trigger bytes 1,2,6,7,8 queued to spi3_data_queue
  *   3. Mode command sent to usart_cmd_queue → dispatches to set_acquisition_mode
  *   4. Trigger byte (1) sent to spi3_data_queue → wakes spi3_acquisition_task
  *

@@ -20,7 +20,7 @@ Address range: `0x08036934` - `0x08039870` (11,580 bytes)
 | 7 | `0x08039050-0x08039188` | 312B | `spi3_init_and_setup` | SPI3 GPIO config (PB3/4/5/6), Mode 3 (CPOL=1 CPHA=1), /2 prescaler, initial FPGA handshake |
 | 8 | `0x08039188-0x080396C6` | 1342B | `input_and_housekeeping` | 15-button debounce, watchdog, timers, frequency measurement, acquisition trigger monitoring |
 | 9 | `0x080396C8-0x08039734` | 108B | `probe_change_handler` | Probe connect/disconnect detection; auto power-off (15min/30min/1hr thresholds) |
-| 10 | `0x08039734-0x08039870` | 316B | `usart_tx_config_writer` | 7-type command writer: scope CH1/CH2 config, trigger, timebase, meter range, siggen freq/wave |
+| 10 | `0x08039734-0x08039870` | 316B | `usart_tx_config_writer` / config bitfield writer | 7-type bitfield writer. The type-4 arm is meter-case-shaped, but visible direct callers are TIM5/TIM2 init; do not treat it as normal DMM runtime range proof without a recovered runtime caller/trace. |
 
 ---
 
@@ -261,7 +261,10 @@ Checksum = (cmd_item + CMD_HI) & 0xFF
 
 ### Known USART Command Codes
 
-From `FPGA_PROTOCOL.md` and `usart_tx_config_writer` analysis:
+From `FPGA_PROTOCOL.md` and older `usart_tx_config_writer` analysis, with the
+2026-06-06 caveat that `FUN_08039734`'s visible direct callers are TIM5/TIM2
+init. The Type-4 rows below mean "meter-case-shaped bitfield writer arm"; they
+are not proof that normal DMM runtime range switching feeds this function.
 
 | Code | Mode | Purpose | Config Writer Type |
 |------|------|---------|-------------------|
@@ -272,14 +275,14 @@ From `FPGA_PROTOCOL.md` and `usart_tx_config_writer` analysis:
 | `0x04` | Siggen | Setup | — |
 | `0x05` | Siggen | Setup | — |
 | `0x06` | Siggen | Setup | — |
-| `0x07` | Meter | Probe detected (PC7 HIGH) | Type 4 (range) |
-| `0x08` | Meter | Configure | Type 4 (range) |
+| `0x07` | Meter | Probe detected (PC7 HIGH) | Type 4-shaped bitfield, runtime caller unresolved |
+| `0x08` | Meter | Configure | Type 4-shaped bitfield, runtime caller unresolved |
 | `0x09` | Meter | Start measurement | — |
 | `0x0A` | Meter | No probe detected | — |
 | `0x0B-0x11` | Scope | Channel/trigger/timebase | Types 0-3 |
-| `0x12-0x14` | Meter | Variant setup | Type 4 |
+| `0x12-0x14` | Meter | Variant setup | Type 4-shaped bitfield, runtime caller unresolved |
 | `0x15` | Standalone | Mode 7 | — |
-| `0x16-0x1E` | Meter | Range configurations | Type 4 |
+| `0x16-0x1E` | Meter | Command-bank/setup bytes; physical range meaning unresolved | Type 4-shaped bitfield, runtime caller unresolved |
 | `0x1F-0x21` | Mode 4 | Unknown configs | — |
 | `0x25-0x28` | Mode 5 | Unknown configs | — |
 | `0x29` | Mode 6 | Standalone | — |
@@ -341,7 +344,8 @@ State 2 (OVERLOAD/RANGE):
     Else: check bit 3 for range change
 
 State 3 (AC/DC):
-    rx[7] bit 2 = AC flag
+    rx[7] bit 2 participates in stock status/decimal helper branches
+      (not recovered as AC-present confidence)
     rx[6] bit 6 = hold flag
 
 State 4 (RANGE INDICATOR):
@@ -412,7 +416,10 @@ The hardcoded VFP constant `s16 = -28.0` reveals the FPGA ADC has a DC offset of
 ### 2. Dual-Interface FPGA Communication
 
 The FPGA uses TWO independent interfaces simultaneously:
-- **USART2** (9600 baud): Low-bandwidth command/control channel. 10-byte commands, 12-byte responses. Timer-driven (TMR3), not interrupt-driven.
+- **USART2** (9600 baud): Low-bandwidth command/status channel. The MCU
+  sends 10-byte command frames; RX includes both 10-byte echo frames and
+  12-byte data frames, including DMM/meter frames in meter modes. Current
+  firmware handles USART2 RX from the USART2 interrupt path.
 - **SPI3** (60 MHz): High-bandwidth data channel. Raw ADC samples at full speed. Software CS on PB6.
 
 ### 3. Button Input via GPIO Scanning (NOT FPGA)
@@ -483,7 +490,7 @@ vTaskDelay(10);
 
 Our test firmware was missing:
 1. The **PB11 HIGH** signal (FPGA active mode — set in mode_switch handler)
-2. The **full USART boot command sequence** (commands 0x01-0x08 sent before SPI3)
+2. The post-H2 SPI3 trigger queue sequence (`1,2,6,7,8` queued to `0x20002D78`, not sent as USART)
 3. The **correct trigger mechanism**: data reads are initiated by queue events from `input_and_housekeeping`, not by polling
 4. The **SysTick delay timing** between boot phases
 

@@ -1,0 +1,1319 @@
+#!/usr/bin/env python3
+"""
+Host-side USB debug helper for OpenScope 2C53T live DMM validation.
+
+Examples:
+    python3 scripts/openscope_live_debug.py list
+    python3 scripts/openscope_live_debug.py command "status"
+    python3 scripts/openscope_live_debug.py command "meter wave" --timeout 4
+    python3 scripts/openscope_live_debug.py meter-dump --interval 0.25 --count 20
+    python3 scripts/openscope_live_debug.py meter-mux-stream --count 32 --delay-ms 250
+    python3 scripts/openscope_live_debug.py meter-adc-snapshot
+    python3 scripts/openscope_live_debug.py poll "meter wave" --duration 10 --log tmp/meter-wave.log
+
+Except for list/help, commands open the selected USB CDC serial port. The meter
+frontend, mux stream, ADC snapshot, dump, and poll helpers are read-only; modes
+that intentionally change device state should be run through the generic
+command path so the command text is explicit.
+"""
+
+from __future__ import annotations
+
+import argparse
+from contextlib import contextmanager, nullcontext
+import fcntl
+import glob
+import json
+import os
+from pathlib import Path
+import re
+import select
+import sys
+import termios
+import time
+from typing import Iterable, TextIO
+import zlib
+
+
+DEFAULT_BAUD = 115200
+DEFAULT_COMMAND = "meter dump"
+DEFAULT_TIMEOUT = 2.0
+OPENSCOPE_CDC_VID = "2e3c"
+OPENSCOPE_CDC_PID = "5740"
+PROMPT_SUFFIXES = (b"\n> ", b"\r\n> ", b"> ")
+SHADOW_PALETTE_RGB565 = (
+    0x0000,
+    0xFFFF,
+    0xF800,
+    0x07E0,
+    0x001F,
+    0xFFE0,
+    0x07FF,
+    0xF81F,
+    0x2104,
+    0x8410,
+    0xFCA0,
+    0x055F,
+    0x2945,
+    0x18C3,
+    0x3186,
+    0x6BB0,
+)
+
+
+class SerialError(RuntimeError):
+    """Raised for serial setup and communication failures."""
+
+
+@contextmanager
+def serial_device_lock(port: str) -> Iterable[None]:
+    lock_dir = Path(os.environ.get("OPENSCOPE_LOCK_DIR", "/tmp"))
+    real_port = os.path.realpath(port)
+    lock_name = "openscope-" + "".join(
+        ch if ch.isalnum() or ch in "._-" else "_" for ch in real_port
+    ) + ".lock"
+    lock_path = lock_dir / lock_name
+    with lock_path.open("w") as lock_file:
+        fcntl.flock(lock_file.fileno(), fcntl.LOCK_EX)
+        try:
+            yield
+        finally:
+            fcntl.flock(lock_file.fileno(), fcntl.LOCK_UN)
+
+
+class PosixSerial:
+    """Small USB CDC serial wrapper using only Python's standard library."""
+
+    def __init__(self, port: str, baud: int, read_timeout: float) -> None:
+        self.port = port
+        self.read_timeout = read_timeout
+        self._rx_buffer = bytearray()
+        try:
+            self.fd = os.open(port, os.O_RDWR | os.O_NOCTTY | os.O_NONBLOCK)
+        except OSError as exc:
+            raise SerialError(f"failed to open {port}: {exc}") from exc
+
+        try:
+            self._configure(baud)
+        except Exception:
+            os.close(self.fd)
+            raise
+
+    def _configure(self, baud: int) -> None:
+        baud_attr = _baud_attr(baud)
+        try:
+            attrs = termios.tcgetattr(self.fd)
+            attrs[0] = 0
+            attrs[1] = 0
+            attrs[2] = termios.CLOCAL | termios.CREAD | termios.CS8
+            attrs[3] = 0
+            attrs[4] = baud_attr
+            attrs[5] = baud_attr
+            attrs[6][termios.VMIN] = 0
+            attrs[6][termios.VTIME] = 0
+            termios.tcsetattr(self.fd, termios.TCSANOW, attrs)
+            termios.tcflush(self.fd, termios.TCIOFLUSH)
+        except termios.error as exc:
+            raise SerialError(f"failed to configure {self.port}: {exc}") from exc
+
+    def write_line(self, text: str) -> None:
+        data = (text.rstrip("\r\n") + "\r").encode("utf-8")
+        offset = 0
+        deadline = time.monotonic() + self.read_timeout
+        while offset < len(data):
+            if time.monotonic() >= deadline:
+                raise SerialError(f"write timeout on {self.port}")
+            _, writable, _ = select.select([], [self.fd], [], 0.05)
+            if not writable:
+                continue
+            offset += os.write(self.fd, data[offset:])
+
+    def _read_to_buffer(self, deadline: float) -> None:
+        remaining = max(0.0, deadline - time.monotonic())
+        readable, _, _ = select.select([self.fd], [], [], min(0.05, remaining))
+        if not readable:
+            return
+        try:
+            chunk = os.read(self.fd, 4096)
+        except BlockingIOError:
+            return
+        if chunk:
+            self._rx_buffer.extend(chunk)
+
+    def read_until_prompt(self, timeout: float) -> bytes:
+        response = bytearray(self._rx_buffer)
+        self._rx_buffer.clear()
+        deadline = time.monotonic() + timeout
+        while time.monotonic() < deadline:
+            if any(response.endswith(suffix) for suffix in PROMPT_SUFFIXES):
+                return bytes(response)
+            self._read_to_buffer(deadline)
+            if self._rx_buffer:
+                response.extend(self._rx_buffer)
+                self._rx_buffer.clear()
+        raise TimeoutError(f"no prompt from {self.port} within {timeout:.1f}s")
+
+    def read_line(self, timeout: float) -> bytes:
+        deadline = time.monotonic() + timeout
+        while time.monotonic() < deadline:
+            newline = self._rx_buffer.find(b"\n")
+            if newline >= 0:
+                line = bytes(self._rx_buffer[: newline + 1])
+                del self._rx_buffer[: newline + 1]
+                return line
+            self._read_to_buffer(deadline)
+        raise TimeoutError(f"no line from {self.port} within {timeout:.1f}s")
+
+    def read_exact(self, length: int, timeout: float) -> bytes:
+        deadline = time.monotonic() + timeout
+        while len(self._rx_buffer) < length and time.monotonic() < deadline:
+            self._read_to_buffer(deadline)
+        if len(self._rx_buffer) < length:
+            raise TimeoutError(
+                f"only read {len(self._rx_buffer)} of {length} payload bytes from {self.port}"
+            )
+        data = bytes(self._rx_buffer[:length])
+        del self._rx_buffer[:length]
+        return data
+
+    def drain(self, quiet_window: float = 0.15, max_wait: float = 1.0) -> bytes:
+        response = bytearray()
+        deadline = time.monotonic() + max_wait
+        quiet_deadline = time.monotonic() + quiet_window
+        while time.monotonic() < deadline and time.monotonic() < quiet_deadline:
+            readable, _, _ = select.select([self.fd], [], [], 0.05)
+            if not readable:
+                continue
+            try:
+                chunk = os.read(self.fd, 4096)
+            except BlockingIOError:
+                continue
+            if chunk:
+                response.extend(chunk)
+                quiet_deadline = time.monotonic() + quiet_window
+        return bytes(response)
+
+    def close(self) -> None:
+        os.close(self.fd)
+
+    def __enter__(self) -> "PosixSerial":
+        return self
+
+    def __exit__(self, *_exc: object) -> None:
+        self.close()
+
+
+def _baud_attr(baud: int) -> int:
+    name = f"B{baud}"
+    value = getattr(termios, name, None)
+    if value is None:
+        raise SerialError(f"unsupported baud rate for termios: {baud}")
+    return value
+
+
+def linux_tty_vid_pid(path: str) -> tuple[str | None, str | None]:
+    name = os.path.basename(os.path.realpath(path))
+    uevent = Path("/sys/class/tty") / name / "device" / "uevent"
+    try:
+        text = uevent.read_text(encoding="ascii", errors="ignore")
+    except OSError:
+        return None, None
+
+    vid = pid = None
+    for line in text.splitlines():
+        if line.startswith("PRODUCT="):
+            parts = line.split("=", 1)[1].split("/")
+            if len(parts) >= 2:
+                vid = parts[0].lower().zfill(4)
+                pid = parts[1].lower().zfill(4)
+                break
+    return vid, pid
+
+
+def is_openscope_cdc_port(path: str) -> bool:
+    vid, pid = linux_tty_vid_pid(path)
+    if vid is not None or pid is not None:
+        return vid == OPENSCOPE_CDC_VID and pid == OPENSCOPE_CDC_PID
+
+    basename = os.path.basename(path).lower()
+    lowered = path.lower()
+    if basename.startswith(("cu.usbmodem", "tty.usbmodem")):
+        return True
+    return any(token in lowered for token in ("openscope", "fnirsi", "2c53t"))
+
+
+def discover_ports() -> list[str]:
+    patterns = [
+        "/dev/cu.usbmodem*",
+        "/dev/tty.usbmodem*",
+        "/dev/ttyACM*",
+        "/dev/ttyUSB*",
+        "/dev/serial/by-id/*OpenScope*",
+        "/dev/serial/by-id/*FNIRSI*",
+        "/dev/serial/by-id/*2C53T*",
+        "/dev/serial/by-id/*usbmodem*",
+    ]
+    ports: list[str] = []
+    seen: set[str] = set()
+    for pattern in patterns:
+        for raw_path in glob.glob(pattern):
+            path = str(Path(raw_path))
+            if path not in seen and is_openscope_cdc_port(path):
+                ports.append(path)
+                seen.add(path)
+    return sorted(ports)
+
+
+def choose_port(port: str | None) -> str:
+    if port:
+        return port
+    ports = discover_ports()
+    if not ports:
+        raise SerialError("no candidate USB CDC serial ports found")
+    if len(ports) > 1:
+        formatted = "\n".join(f"  {item}" for item in ports)
+        raise SerialError(
+            "multiple candidate ports found; pass --port explicitly:\n" + formatted
+        )
+    return ports[0]
+
+
+def clean_response(command: str, data: bytes) -> str:
+    text = data.decode("utf-8", errors="replace").replace("\r\n", "\n").replace("\r", "\n")
+    marker = "\n" + command
+    marker_pos = text.find(marker)
+    if marker_pos >= 0:
+        text = text[marker_pos + 1 :]
+    elif text.startswith(command):
+        pass
+
+    cleaned: list[str] = []
+    echo_removed = False
+    for line in text.split("\n"):
+        stripped = line.strip()
+        if not echo_removed and stripped == command:
+            echo_removed = True
+            continue
+        if stripped == ">":
+            continue
+        if stripped.endswith(">") and stripped[:-1].strip() == "":
+            continue
+        cleaned.append(line.rstrip())
+    return "\n".join(cleaned).strip()
+
+
+def run_command(port: str, baud: int, command: str, timeout: float) -> str:
+    with PosixSerial(port, baud, timeout) as serial:
+        serial.drain()
+        return run_command_on_serial(serial, command, timeout)
+
+
+def run_command_on_serial(serial: PosixSerial, command: str, timeout: float) -> str:
+    serial.write_line(command)
+    return clean_response(command, serial.read_until_prompt(timeout))
+
+
+def _parse_int_token(value: str) -> int | str:
+    if re.fullmatch(r"-?\d+", value):
+        return int(value, 10)
+    return value
+
+
+WIRE_HEX_KEYS = {
+    "config",
+    "selector",
+    "apply",
+    "probe",
+    "start",
+    "extra",
+    "planned_gpio",
+    "actual_gpio",
+}
+
+
+def _parse_kv_line(line: str, preserve_hex_keys: set[str] | None = None) -> dict[str, int | str]:
+    preserve = preserve_hex_keys or set()
+    return {
+        key: value.upper() if key in preserve else _parse_int_token(value)
+        for key, value in re.findall(r"([A-Za-z0-9_]+)=([^\s]+)", line)
+    }
+
+
+def _parse_frame_bytes(text: str) -> list[int]:
+    parts = [item for item in text.strip().split() if item]
+    if len(parts) != 12:
+        raise ValueError(f"DMM frame must contain 12 bytes, got {len(parts)}: {text!r}")
+    return [int(item, 16) for item in parts]
+
+
+def _parse_hex_bytes(text: str, expected: int) -> list[int]:
+    parts = [item for item in text.strip().split() if item]
+    if len(parts) != expected:
+        raise ValueError(f"expected {expected} hex bytes, got {len(parts)}: {text!r}")
+    return [int(item, 16) for item in parts]
+
+
+def _frame_record(frame: list[int]) -> dict[str, object]:
+    return {
+        "hex": " ".join(f"{byte:02X}" for byte in frame),
+        "bytes": frame,
+    }
+
+
+def parse_meter_dump_text(text: str) -> dict[str, object]:
+    """Parse the firmware `meter dump` debug surface mechanically.
+
+    This is deliberately a state readback parser. It records the firmware's
+    current mode, decoded result, flags, and frame bytes; it does not infer a
+    measurement from LCD pixels, magnitude shape, or a guessed coefficient.
+    """
+    if "=== DMM State ===" not in text:
+        raise ValueError("meter dump response has no DMM State header")
+
+    result: dict[str, object] = {
+        "raw_text": text,
+        "history": [],
+    }
+    for raw_line in text.splitlines():
+        line = raw_line.strip()
+        if not line or line == "=== DMM State ===":
+            continue
+        if line.startswith("mode="):
+            result["context"] = _parse_kv_line(line)
+        elif line.startswith("valid="):
+            result["reading"] = _parse_kv_line(line)
+        elif line.startswith("bcd_value="):
+            result["bcd"] = _parse_kv_line(line)
+        elif line.startswith("flags "):
+            result["flags"] = _parse_kv_line(line)
+        elif line.startswith("stock_fsm "):
+            result["stock_fsm"] = _parse_kv_line(line)
+        elif line.startswith("frame_family "):
+            result["frame_family"] = _parse_kv_line(line)
+        elif line.startswith("frame="):
+            result["frame"] = _frame_record(_parse_frame_bytes(line.split("=", 1)[1]))
+        elif line.startswith("nibbles="):
+            nibble_text, raw_text = line.split(" raw_digits=", 1)
+            result["nibbles"] = [
+                int(item, 16) for item in nibble_text.split("=", 1)[1].split()
+            ]
+            result["raw_digits"] = [int(item, 16) for item in raw_text.split()]
+        elif line.startswith("#"):
+            result["history"].append(_parse_kv_line(line))
+
+    for key in ("context", "reading", "flags", "frame_family", "frame"):
+        if key not in result:
+            raise ValueError(f"meter dump missing {key}")
+    return result
+
+
+def parse_meter_trace_text(text: str) -> dict[str, object]:
+    """Parse the read-only firmware `meter trace` response into JSON data.
+
+    The parser is intentionally mechanical: it records firmware-selected
+    mode/range/mux state, producer-frame bytes, and decoded stock-visible
+    fields without inferring a correction.  This gives the live low-DCV failure
+    a machine-readable trace record while keeping OCR, one-point coefficients,
+    and magnitude-derived range decisions out of the host harness.
+    """
+    if "=== DMM Trace ===" not in text:
+        raise ValueError("meter trace response has no DMM Trace header")
+
+    result: dict[str, object] = {
+        "raw_measurement_source": "USART2_DMM_12_BYTE_PRODUCER_FRAME",
+        "raw_text": text,
+        "transition_history": [],
+        "producer_history": [],
+        "rx_raw": [],
+        "tx_history": [],
+        "tx_control_history": [],
+        "h2_post_rx": [],
+    }
+
+    for raw_line in text.splitlines():
+        line = raw_line.strip()
+        if not line or line == "=== DMM Trace ===":
+            continue
+
+        if line.startswith("trace "):
+            data = _parse_kv_line(line)
+            result["trace_version"] = data.get("v")
+            result["snapshot"] = data.get("snapshot")
+        elif line.startswith("mux_arms "):
+            result["mux_arms"] = _parse_kv_line(line, WIRE_HEX_KEYS)
+        elif line.startswith("context "):
+            result["context"] = _parse_kv_line(line)
+        elif line.startswith("producer counts "):
+            result["producer_counts"] = _parse_kv_line(line)
+        elif line.startswith("producer_last_rx "):
+            result["producer_last_rx"] = _parse_kv_line(line)
+        elif line.startswith("rx_sync "):
+            result["rx_sync"] = _parse_kv_line(line)
+        elif line.startswith("plan "):
+            result["plan"] = _parse_kv_line(line)
+        elif line.startswith("wire "):
+            result["wire"] = _parse_kv_line(line, WIRE_HEX_KEYS)
+        elif line.startswith("last_sequence "):
+            result["last_sequence"] = _parse_kv_line(line, WIRE_HEX_KEYS)
+        elif line.startswith("decoded "):
+            decoded = _parse_kv_line(line, WIRE_HEX_KEYS)
+            family = decoded.pop("family", None)
+            if isinstance(family, str) and "/" in family:
+                expected, observed = family.split("/", 1)
+                decoded["family_expected"] = int(expected, 10)
+                decoded["family_observed"] = int(observed, 10)
+            result["decoded"] = decoded
+        elif line.startswith("stock_fsm "):
+            result["stock_fsm"] = _parse_kv_line(line)
+        elif line.startswith("transition "):
+            result["transition"] = _parse_kv_line(line)
+        elif line.startswith("producer_frame="):
+            frame = _parse_frame_bytes(line.split("=", 1)[1])
+            result["producer_frame"] = _frame_record(frame)
+        elif line.startswith("parsed_frame="):
+            frame = _parse_frame_bytes(line.split("=", 1)[1])
+            result["parsed_frame"] = _frame_record(frame)
+        elif line.startswith("first_transition_rx "):
+            prefix, frame_text = line.split(" frame=", 1)
+            record = _parse_kv_line(prefix, WIRE_HEX_KEYS)
+            record["frame"] = _frame_record(_parse_frame_bytes(frame_text))
+            result["first_transition_rx"] = record
+        elif line.startswith("last_echo_frame="):
+            frame = _parse_hex_bytes(line.split("=", 1)[1], 10)
+            result["last_echo_frame"] = _frame_record(frame)
+        elif line.startswith("rxraw "):
+            record = _parse_kv_line(line, {"byte"})
+            cast = result["rx_raw"]
+            assert isinstance(cast, list)
+            cast.append(record)
+        elif line.startswith("mth "):
+            record = _parse_kv_line(line, WIRE_HEX_KEYS)
+            for key in ("tx", "data"):
+                value = record.pop(key, None)
+                if isinstance(value, str) and ".." in value:
+                    start, end = value.split("..", 1)
+                    record[f"{key}_before"] = int(start, 10)
+                    record[f"{key}_after"] = int(end, 10)
+            cast = result["transition_history"]
+            assert isinstance(cast, list)
+            cast.append(record)
+        elif line.startswith("rxh "):
+            prefix, frame_text = line.split(" frame=", 1)
+            record = _parse_kv_line(prefix)
+            record["frame"] = _frame_record(_parse_frame_bytes(frame_text))
+            cast = result["producer_history"]
+            assert isinstance(cast, list)
+            cast.append(record)
+        elif line.startswith("txh "):
+            prefix, frame_text = line.split(" frame=", 1)
+            record = _parse_kv_line(prefix)
+            record["frame"] = _frame_record(_parse_hex_bytes(frame_text, 10))
+            cast = result["tx_history"]
+            assert isinstance(cast, list)
+            cast.append(record)
+        elif line.startswith("txc "):
+            prefix, frame_text = line.split(" frame=", 1)
+            record = _parse_kv_line(prefix)
+            record["frame"] = _frame_record(_parse_hex_bytes(frame_text, 10))
+            cast = result["tx_control_history"]
+            assert isinstance(cast, list)
+            cast.append(record)
+        elif line.startswith("gpio control "):
+            result["gpio_control"] = _parse_kv_line(line)
+        elif line.startswith("gpio_frontend "):
+            result["gpio_frontend"] = _parse_kv_line(line)
+        elif line.startswith("h2 bytes="):
+            result["calibration_state"] = _parse_kv_line(line)
+        elif line.startswith("factory_cal "):
+            result["factory_cal"] = _parse_kv_line(line)
+        elif line.startswith("h2_close_rx bytes="):
+            result["h2_close_rx"] = [
+                int(item, 16) for item in line.split("=", 1)[1].split()
+            ]
+        elif line.startswith("h2_post_rx "):
+            prefix, bytes_text = line.split(" bytes=", 1)
+            record = _parse_kv_line(prefix)
+            record["bytes"] = [
+                int(item, 16) for item in bytes_text.replace("...", "").split()
+            ]
+            cast = result["h2_post_rx"]
+            assert isinstance(cast, list)
+            cast.append(record)
+
+    for key in ("context", "plan", "wire", "decoded", "producer_frame", "gpio_frontend"):
+        if key not in result:
+            raise ValueError(f"meter trace missing {key}")
+    return result
+
+
+SHORTED_PROBE_SUBMODES = tuple(range(11))
+METER_SUBMODE_NAMES = {
+    0: "DC Voltage",
+    1: "AC Voltage",
+    2: "DC mA",
+    3: "DC A",
+    4: "AC mA",
+    5: "AC A",
+    6: "Resistance",
+    7: "Continuity",
+    8: "Diode",
+    9: "Capacitance",
+    10: "Temperature",
+}
+
+
+def _number_from_trace(trace: dict[str, object]) -> float | None:
+    decoded = trace.get("decoded")
+    if not isinstance(decoded, dict):
+        return None
+    value = decoded.get("value_i10000")
+    if isinstance(value, int):
+        return value / 10000.0
+    return None
+
+
+def evaluate_shorted_probe_record(record: dict[str, object], zero_limit: float) -> tuple[bool, str]:
+    submode = int(record["submode"])
+    trace = record["trace"]
+    dump = record["dump"]
+    assert isinstance(trace, dict)
+    assert isinstance(dump, dict)
+    context = trace.get("context", {})
+    decoded = trace.get("decoded", {})
+    dump_reading = dump.get("reading", {})
+    dump_flags = dump.get("flags", {})
+    dump_frame_family = dump.get("frame_family", {})
+    if not isinstance(context, dict) or not isinstance(decoded, dict):
+        return False, "trace missing decoded context"
+    if not isinstance(dump_reading, dict) or not isinstance(dump_flags, dict):
+        return False, "dump missing reading/flags"
+    if not isinstance(dump_frame_family, dict):
+        return False, "dump missing frame-family state"
+
+    ui_sub = context.get("ui_sub")
+    reading_sub = context.get("reading_sub")
+    if ui_sub != submode or reading_sub != submode:
+        return False, f"stale submode ui={ui_sub} reading={reading_sub}"
+
+    display = str(decoded.get("display", ""))
+    reject = decoded.get("reject")
+    family_expected = decoded.get("family_expected")
+    family_observed = decoded.get("family_observed")
+    result_class = dump_reading.get("class")
+    dump_valid = dump_reading.get("valid")
+    unit = str(dump_reading.get("unit", ""))
+
+    if submode == 0:
+        value = _number_from_trace(trace)
+        if dump_valid != 1 or unit != "V" or value is None:
+            return False, "DCV short did not produce a live voltage reading"
+        if abs(value) > zero_limit:
+            return False, f"DCV short is {value:.5g} V, outside +/-{zero_limit:g} V"
+        return True, "DCV near zero"
+
+    if submode == 1:
+        if reject == 3:
+            return True, "ACV rejected missing AC evidence"
+        return False, "ACV short rendered without missing-AC-evidence reject"
+
+    if submode in (2, 3, 4, 5):
+        return True, "current-mode numeric assertion skipped: no current-jack fixture"
+
+    if submode == 6:
+        if reject == 4:
+            return True, "low-ohm resistance failed closed on unresolved calibration"
+        value = _number_from_trace(trace)
+        if dump_valid == 1 and unit in ("Ohm", "kOhm") and value is not None and abs(value) <= 1.0:
+            return True, "resistance near short"
+        return False, "resistance short was neither near zero nor unresolved-calibration reject"
+
+    if submode == 7:
+        if result_class == 7 and dump_flags.get("beep") == 1:
+            return True, "continuity beep on"
+        return False, "continuity short did not produce continuity/beep"
+
+    if submode == 8:
+        if family_expected == family_observed and dump_frame_family.get("reject") == 0:
+            return True, "diode stayed in active diode family"
+        return False, "diode short produced stale or foreign frame family"
+
+    if submode in (9, 10):
+        if family_expected == family_observed and dump_frame_family.get("reject") == 0:
+            return True, "extended mode stayed in active family"
+        return False, "extended mode produced stale or foreign frame family"
+
+    return False, "unknown submode"
+
+
+def run_shorted_probes_sweep(
+    port: str,
+    baud: int,
+    timeout: float,
+    settle_ms: int,
+    samples: int,
+    zero_limit: float,
+) -> dict[str, object]:
+    results = []
+    with PosixSerial(port, baud, timeout) as serial:
+        serial.drain()
+        for submode in SHORTED_PROBE_SUBMODES:
+            mode_command = f"mode meter {submode} 0"
+            mode_response = run_command_on_serial(serial, mode_command, timeout)
+            serial.drain()
+            time.sleep(settle_ms / 1000.0)
+            trace_samples = []
+            dump_samples = []
+            for _sample in range(samples):
+                trace_text = run_command_on_serial(serial, "meter trace", timeout)
+                dump_text = run_command_on_serial(serial, "meter dump", timeout)
+                trace_samples.append(parse_meter_trace_text(trace_text))
+                dump_samples.append(parse_meter_dump_text(dump_text))
+                serial.drain()
+                time.sleep(0.05)
+            record = {
+                "submode": submode,
+                "name": METER_SUBMODE_NAMES.get(submode, f"submode {submode}"),
+                "mode_command": mode_command,
+                "mode_response": mode_response,
+                "trace": trace_samples[-1],
+                "dump": dump_samples[-1],
+                "trace_samples": trace_samples,
+                "dump_samples": dump_samples,
+            }
+            passed, reason = evaluate_shorted_probe_record(record, zero_limit)
+            record["passed"] = passed
+            record["reason"] = reason
+            results.append(record)
+    return {
+        "fixture": "shorted-probes",
+        "settle_ms": settle_ms,
+        "samples": samples,
+        "zero_limit_v": zero_limit,
+        "passed": all(bool(item["passed"]) for item in results),
+        "results": results,
+    }
+
+
+def print_shorted_probes_summary(sweep: dict[str, object]) -> None:
+    print(
+        f"shorted-probes sweep settle_ms={sweep['settle_ms']} "
+        f"samples={sweep['samples']} passed={1 if sweep['passed'] else 0}"
+    )
+    for item in sweep["results"]:
+        assert isinstance(item, dict)
+        trace = item["trace"]
+        assert isinstance(trace, dict)
+        decoded = trace.get("decoded", {})
+        wire = trace.get("wire", {})
+        frame = trace.get("producer_frame", {})
+        assert isinstance(decoded, dict)
+        assert isinstance(wire, dict)
+        assert isinstance(frame, dict)
+        verdict = "PASS" if item["passed"] else "FAIL"
+        print(
+            f"{verdict} sub={item['submode']} {item['name']}: {item['reason']} "
+            f"display={decoded.get('display')} reject={decoded.get('reject')} "
+            f"family={decoded.get('family_expected')}/{decoded.get('family_observed')} "
+            f"selector={wire.get('selector')} apply={wire.get('apply')} "
+            f"frame={frame.get('hex')}"
+        )
+
+
+def rgb565_to_rgb888(pixel: int) -> tuple[int, int, int]:
+    r5 = (pixel >> 11) & 0x1F
+    g6 = (pixel >> 5) & 0x3F
+    b5 = pixel & 0x1F
+    return ((r5 << 3) | (r5 >> 2), (g6 << 2) | (g6 >> 4), (b5 << 3) | (b5 >> 2))
+
+
+def parse_screen_dump(text: str) -> tuple[int, int, int, int, str, list[list[int]]]:
+    header = None
+    rows: list[list[int]] = []
+    dump_format = "rgb565"
+
+    for line in text.splitlines():
+        if line.startswith("SCREENDUMP "):
+            header = line
+
+    if header is None:
+        raise ValueError("screen dump response has no SCREENDUMP header")
+
+    fields: dict[str, str] = {}
+    for item in header.split()[1:]:
+        if "=" in item:
+            key, value = item.split("=", 1)
+            fields[key] = value
+
+    try:
+        x = int(fields["x"], 10)
+        y = int(fields["y"], 10)
+        w = int(fields["w"], 10)
+        h = int(fields["h"], 10)
+        dump_format = fields.get("format", "rgb565")
+    except KeyError as exc:
+        raise ValueError(f"screen dump header missing {exc.args[0]!r}") from exc
+
+    rows = []
+    for line in text.splitlines():
+        if not line.startswith("ROW "):
+            continue
+        parts = line.split(" ", 2)
+        if len(parts) != 3:
+            raise ValueError(f"bad ROW line: {line[:80]!r}")
+        row_index = int(parts[1], 10)
+        payload = parts[2].strip()
+        if row_index != len(rows):
+            raise ValueError(f"expected ROW {len(rows)}, got ROW {row_index}")
+
+        if dump_format == "rgb565":
+            if len(payload) % 4 != 0:
+                raise ValueError(f"ROW {row_index} has odd RGB565 hex length")
+            pixels = [int(payload[i : i + 4], 16) for i in range(0, len(payload), 4)]
+        elif dump_format in ("rgb565-rle", "rgb888-rle565", "rgb888h-rle565"):
+            pixels = []
+            if payload:
+                for item in payload.split():
+                    if len(item) != 9 or item[4] != ":":
+                        raise ValueError(f"bad RLE item in ROW {row_index}: {item!r}")
+                    count = int(item[:4], 16)
+                    color = int(item[5:], 16)
+                    pixels.extend([color] * count)
+        elif dump_format == "mono1":
+            pixels = []
+            for item in payload:
+                if item == "0":
+                    pixels.append(0x0000)
+                elif item == "1":
+                    pixels.append(0xFFFF)
+                else:
+                    raise ValueError(f"bad mono1 bit in ROW {row_index}: {item!r}")
+        elif dump_format == "indexed4":
+            pixels = []
+            for item in payload:
+                try:
+                    pixels.append(SHADOW_PALETTE_RGB565[int(item, 16)])
+                except (ValueError, IndexError) as exc:
+                    raise ValueError(f"bad indexed4 nibble in ROW {row_index}: {item!r}") from exc
+        else:
+            raise ValueError(f"unsupported screen dump format: {dump_format}")
+        rows.append(pixels)
+
+    if len(rows) != h:
+        raise ValueError(f"expected {h} rows, got {len(rows)}")
+    for row_index, row in enumerate(rows):
+        if len(row) != w:
+            raise ValueError(f"ROW {row_index} expected {w} pixels, got {len(row)}")
+    return x, y, w, h, dump_format, rows
+
+
+def parse_screenbin_header(line: bytes) -> tuple[int, int, int, int, str, int, int]:
+    text = line.decode("ascii", errors="replace").strip()
+    if not text.startswith("SCREENBIN "):
+        raise ValueError(f"screen dumpbin response has no SCREENBIN header: {text[:80]!r}")
+
+    fields: dict[str, str] = {}
+    for item in text.split()[1:]:
+        if "=" in item:
+            key, value = item.split("=", 1)
+            fields[key] = value
+
+    try:
+        x = int(fields["x"], 10)
+        y = int(fields["y"], 10)
+        w = int(fields["w"], 10)
+        h = int(fields["h"], 10)
+        dump_format = fields["format"]
+        payload_len = int(fields["len"], 10)
+        crc32 = int(fields["crc32"], 16)
+    except KeyError as exc:
+        raise ValueError(f"screen dumpbin header missing {exc.args[0]!r}") from exc
+
+    if dump_format != "indexed4":
+        raise ValueError(f"unsupported screen dumpbin format: {dump_format}")
+    expected_len = ((w + 1) // 2) * h
+    if payload_len != expected_len:
+        raise ValueError(f"screen dumpbin len {payload_len} does not match expected {expected_len}")
+    return x, y, w, h, dump_format, payload_len, crc32
+
+
+def unpack_indexed4_payload(width: int, height: int, payload: bytes) -> list[list[int]]:
+    row_len = (width + 1) // 2
+    if len(payload) != row_len * height:
+        raise ValueError(f"indexed4 payload size {len(payload)} does not match {width}x{height}")
+
+    rows: list[list[int]] = []
+    for row_index in range(height):
+        row_bytes = payload[row_index * row_len : (row_index + 1) * row_len]
+        row: list[int] = []
+        for byte in row_bytes:
+            row.append(SHADOW_PALETTE_RGB565[byte >> 4])
+            if len(row) < width:
+                row.append(SHADOW_PALETTE_RGB565[byte & 0x0F])
+        rows.append(row)
+    return rows
+
+
+def run_screen_dumpbin(
+    port: str,
+    baud: int,
+    command: str,
+    timeout: float,
+) -> tuple[int, int, int, int, str, list[list[int]]]:
+    with PosixSerial(port, baud, timeout) as serial:
+        serial.drain()
+        serial.write_line(command)
+        header = None
+        while header is None:
+            line = serial.read_line(timeout)
+            if line.strip().startswith(b"SCREENBIN "):
+                header = line
+                break
+            if line.strip().startswith((b"Usage:", b"ERR", b"Unknown command:")):
+                raise ValueError(line.decode("utf-8", errors="replace").strip())
+
+        x, y, w, h, dump_format, payload_len, expected_crc = parse_screenbin_header(header)
+        payload = serial.read_exact(payload_len, timeout)
+        actual_crc = zlib.crc32(payload) & 0xFFFFFFFF
+        if actual_crc != expected_crc:
+            raise ValueError(
+                f"screen dumpbin CRC mismatch: got {actual_crc:08X}, expected {expected_crc:08X}"
+            )
+
+        trailer = serial.read_until_prompt(timeout)
+        if b"SCREENBIN END" not in trailer:
+            raise ValueError("screen dumpbin trailer missing SCREENBIN END")
+
+    rows = unpack_indexed4_payload(w, h, payload)
+    return x, y, w, h, dump_format, rows
+
+
+def write_bmp_rgb565(path: Path, width: int, height: int, rows: list[list[int]]) -> None:
+    row_stride = ((width * 3 + 3) // 4) * 4
+    pixel_bytes = row_stride * height
+    file_size = 14 + 40 + pixel_bytes
+
+    path.parent.mkdir(parents=True, exist_ok=True)
+    with path.open("wb") as f:
+        f.write(b"BM")
+        f.write(file_size.to_bytes(4, "little"))
+        f.write((0).to_bytes(4, "little"))
+        f.write((14 + 40).to_bytes(4, "little"))
+
+        f.write((40).to_bytes(4, "little"))
+        f.write(width.to_bytes(4, "little"))
+        f.write(height.to_bytes(4, "little"))
+        f.write((1).to_bytes(2, "little"))
+        f.write((24).to_bytes(2, "little"))
+        f.write((0).to_bytes(4, "little"))
+        f.write(pixel_bytes.to_bytes(4, "little"))
+        f.write((0).to_bytes(4, "little"))
+        f.write((0).to_bytes(4, "little"))
+        f.write((0).to_bytes(4, "little"))
+        f.write((0).to_bytes(4, "little"))
+
+        padding = b"\x00" * (row_stride - width * 3)
+        for row in reversed(rows):
+            for pixel in row:
+                r, g, b = rgb565_to_rgb888(pixel)
+                f.write(bytes((b, g, r)))
+            f.write(padding)
+
+
+def capture_screen(
+    port: str,
+    baud: int,
+    timeout: float,
+    output: Path,
+    region: tuple[int, int, int, int] | None,
+    use_rle: bool,
+) -> str:
+    if use_rle:
+        raise ValueError(
+            "--rle-shadow is disabled because it mutates LCD shadow state and "
+            "switches meter mode; use the default read-only screen dumpbin path"
+        )
+
+    prefix = "screen dumpbin"
+    if region is None:
+        command = prefix
+    else:
+        command = "%s %u %u %u %u" % ((prefix,) + region)
+    try:
+        x, y, w, h, dump_format, rows = run_screen_dumpbin(port, baud, command, timeout)
+    except TimeoutError as exc:
+        text_prefix = "screen dump"
+        if region is None:
+            text_command = text_prefix
+        else:
+            text_command = "%s %u %u %u %u" % ((text_prefix,) + region)
+        response = run_command(port, baud, text_command, timeout)
+        x, y, w, h, dump_format, rows = parse_screen_dump(response)
+        dump_format = f"{dump_format} text-fallback after dumpbin failure: {exc}"
+    except ValueError as exc:
+        if not any(marker in str(exc) for marker in ("Unknown command", "Usage: screen dumpbin")):
+            raise
+        text_prefix = "screen dump"
+        if region is None:
+            text_command = text_prefix
+        else:
+            text_command = "%s %u %u %u %u" % ((text_prefix,) + region)
+        response = run_command(port, baud, text_command, timeout)
+        x, y, w, h, dump_format, rows = parse_screen_dump(response)
+        dump_format = f"{dump_format} text-fallback after dumpbin unsupported: {exc}"
+    write_bmp_rgb565(output, w, h, rows)
+    return f"saved {output} from screen region x={x} y={y} w={w} h={h} format={dump_format}"
+
+
+def write_log_line(log_file: TextIO | None, line: str) -> None:
+    if log_file is None:
+        return
+    log_file.write(line + "\n")
+    log_file.flush()
+
+
+def poll_command(
+    port: str,
+    baud: int,
+    command: str,
+    timeout: float,
+    interval: float,
+    count: int | None,
+    duration: float | None,
+    log_file: TextIO | None,
+) -> int:
+    started = time.monotonic()
+    iteration = 0
+    with PosixSerial(port, baud, timeout) as serial:
+        serial.drain()
+        while True:
+            if count is not None and iteration >= count:
+                return 0
+            if duration is not None and time.monotonic() - started >= duration:
+                return 0
+
+            iteration += 1
+            stamp = time.strftime("%Y-%m-%d %H:%M:%S")
+            try:
+                serial.write_line(command)
+                response = clean_response(command, serial.read_until_prompt(timeout))
+                header = f"[{stamp}] poll={iteration} command={command!r}"
+                print(header)
+                print(response if response else "(empty response)")
+                write_log_line(log_file, header)
+                write_log_line(log_file, response if response else "(empty response)")
+            except TimeoutError as exc:
+                line = f"[{stamp}] poll={iteration} timeout: {exc}"
+                print(line, file=sys.stderr)
+                write_log_line(log_file, line)
+                return 3
+            except SerialError as exc:
+                line = f"[{stamp}] poll={iteration} serial error: {exc}"
+                print(line, file=sys.stderr)
+                write_log_line(log_file, line)
+                return 2
+
+            if count is not None and iteration >= count:
+                return 0
+            if duration is not None and time.monotonic() - started >= duration:
+                return 0
+            time.sleep(max(0.0, interval))
+
+
+def add_common_serial_args(parser: argparse.ArgumentParser) -> None:
+    parser.add_argument("--port", help="USB CDC serial port. Omit only when discovery finds exactly one candidate.")
+    parser.add_argument("--baud", type=int, default=DEFAULT_BAUD, help=f"serial baud rate, default {DEFAULT_BAUD}")
+    parser.add_argument("--timeout", type=float, default=DEFAULT_TIMEOUT, help=f"per-command timeout in seconds, default {DEFAULT_TIMEOUT}")
+
+
+def build_parser() -> argparse.ArgumentParser:
+    parser = argparse.ArgumentParser(
+        description="OpenScope 2C53T host-side USB debug helper for live DMM checks."
+    )
+    subparsers = parser.add_subparsers(dest="mode", required=True)
+
+    list_parser = subparsers.add_parser("list", help="list candidate serial ports without opening them")
+    list_parser.add_argument("--plain", action="store_true", help="print only device paths")
+
+    command_parser = subparsers.add_parser("command", help="send one debug-shell command and print the response")
+    add_common_serial_args(command_parser)
+    command_parser.add_argument("command", help='debug-shell command, for example "status", "meter wave", or "mode meter 1 0"')
+
+    poll_parser = subparsers.add_parser("poll", help="send one command repeatedly")
+    add_common_serial_args(poll_parser)
+    poll_parser.add_argument("command", help='debug-shell command to poll, for example "meter wave" or "meter frontend"')
+    add_poll_args(poll_parser)
+
+    meter_parser = subparsers.add_parser("meter-dump", help='poll the live DMM dump command, default "meter dump"')
+    add_common_serial_args(meter_parser)
+    meter_parser.add_argument("--command", default=DEFAULT_COMMAND, help=f"DMM dump command, default {DEFAULT_COMMAND!r}")
+    add_poll_args(meter_parser)
+
+    frontend_parser = subparsers.add_parser("meter-frontend", help="read current DMM analog frontend GPIO state")
+    add_common_serial_args(frontend_parser)
+    frontend_parser.add_argument("--log", type=Path, help="optional log file for the single frontend response")
+
+    trace_parser = subparsers.add_parser("meter-trace", help="read one machine-readable DMM producer trace")
+    add_common_serial_args(trace_parser)
+    trace_parser.add_argument("--log", type=Path, help="optional log file for the single trace response")
+    trace_parser.add_argument("--json", action="store_true", help="emit parsed trace JSON instead of raw trace text")
+
+    shorted_parser = subparsers.add_parser(
+        "shorted-probes-sweep",
+        help="switch through DMM modes and validate a physical shorted-probes fixture",
+    )
+    add_common_serial_args(shorted_parser)
+    shorted_parser.add_argument("--settle-ms", type=int, default=700, help="settle delay per mode, default 700")
+    shorted_parser.add_argument("--samples", type=int, default=3, help="trace/dump samples per mode, default 3")
+    shorted_parser.add_argument("--zero-limit-v", type=float, default=0.02, help="DCV zero tolerance, default 0.02 V")
+    shorted_parser.add_argument("--json", action="store_true", help="emit full machine-readable sweep JSON")
+    shorted_parser.add_argument("--log", type=Path, help="optional log file for the full sweep JSON")
+
+    stream_parser = subparsers.add_parser("meter-stream", help='run firmware-side compact stream, default "meter stream"')
+    add_common_serial_args(stream_parser)
+    stream_parser.add_argument("--count", type=int, default=32, help="firmware stream count, default 32")
+    stream_parser.add_argument("--delay-ms", type=int, default=250, help="firmware stream delay in milliseconds, default 250")
+    stream_parser.add_argument("--log", type=Path, help="optional log file for the single stream response")
+
+    mux_stream_parser = subparsers.add_parser(
+        "meter-mux-stream",
+        help="run firmware-side stream with DMM frame and frontend GPIO state",
+    )
+    add_common_serial_args(mux_stream_parser)
+    mux_stream_parser.add_argument("--count", type=int, default=32, help="firmware stream count, default 32")
+    mux_stream_parser.add_argument("--delay-ms", type=int, default=250, help="firmware stream delay in milliseconds, default 250")
+    mux_stream_parser.add_argument("--log", type=Path, help="optional log file for the single stream response")
+
+    mux_arms_parser = subparsers.add_parser(
+        "meter-mux-arms",
+        help="apply explicit DMM stock mux arms, poll once, and read a producer trace",
+    )
+    add_common_serial_args(mux_arms_parser)
+    mux_arms_parser.add_argument("portc_porte", type=int, help="stock Port C/E mux arm, 0..9")
+    mux_arms_parser.add_argument("porta_portb", type=int, help="stock Port A/B mux arm, 0..9")
+    mux_arms_parser.add_argument("--settle-ms", type=int, default=300, help="settle delay before poll, default 300")
+    mux_arms_parser.add_argument("--log", type=Path, help="optional log file for the single trace response")
+    mux_arms_parser.add_argument("--json", action="store_true", help="emit parsed trace JSON instead of raw trace text")
+
+    adc_parser = subparsers.add_parser("meter-adc-snapshot", help="read DMM voltage waveform sampler state")
+    add_common_serial_args(adc_parser)
+    adc_parser.add_argument("--log", type=Path, help="optional log file for the single ADC snapshot response")
+
+    screen_parser = subparsers.add_parser("screen-capture", help="save current read-only LCD shadow as a BMP file")
+    add_common_serial_args(screen_parser)
+    screen_parser.add_argument("--output", type=Path, default=Path("tmp/screen.bmp"), help="output BMP path, default tmp/screen.bmp")
+    screen_parser.add_argument("--region", nargs=4, type=int, metavar=("X", "Y", "W", "H"), help="optional capture rectangle")
+    screen_parser.add_argument("--no-rle", action="store_false", dest="use_rle", help="deprecated no-op: binary indexed4 is the default")
+    screen_parser.add_argument(
+        "--rle-shadow",
+        action="store_true",
+        dest="use_rle",
+        help="disabled deprecated debug path; default dumpbin capture is read-only",
+    )
+    screen_parser.set_defaults(use_rle=False)
+
+    return parser
+
+
+def add_poll_args(parser: argparse.ArgumentParser) -> None:
+    parser.add_argument("--interval", type=float, default=0.5, help="delay between polls in seconds, default 0.5")
+    parser.add_argument("--count", type=int, help="stop after this many polls")
+    parser.add_argument("--duration", type=float, help="stop after this many seconds")
+    parser.add_argument("--log", type=Path, help="optional log file for timestamped responses")
+
+
+def open_log(path: Path | None) -> TextIO | None:
+    if path is None:
+        return None
+    path.parent.mkdir(parents=True, exist_ok=True)
+    return path.open("a", encoding="utf-8")
+
+
+def log_context(path: Path | None):
+    if path is None:
+        return nullcontext(None)
+    return open_log(path)
+
+
+def print_ports(ports: Iterable[str], plain: bool) -> int:
+    ports = list(ports)
+    if plain:
+        for port in ports:
+            print(port)
+        return 0 if ports else 1
+    if not ports:
+        print("No candidate OpenScope USB CDC serial ports found.")
+        return 1
+    print("Candidate OpenScope USB CDC serial ports:")
+    for port in ports:
+        print(f"  {port}")
+    return 0
+
+
+def validate_stream_args(count: int, delay_ms: int) -> None:
+    if not 0 <= count <= 200:
+        raise ValueError("stream count must be between 0 and 200")
+    if not 0 <= delay_ms <= 5000:
+        raise ValueError("stream delay must be between 0 and 5000 ms")
+
+
+def validate_mux_arm_args(portc_porte: int, porta_portb: int, settle_ms: int) -> None:
+    if not 0 <= portc_porte <= 9:
+        raise ValueError("Port C/E mux arm must be between 0 and 9")
+    if not 0 <= porta_portb <= 9:
+        raise ValueError("Port A/B mux arm must be between 0 and 9")
+    if not 0 <= settle_ms <= 5000:
+        raise ValueError("mux-arm settle delay must be between 0 and 5000 ms")
+
+
+def validate_shorted_sweep_args(settle_ms: int, samples: int, zero_limit: float) -> None:
+    if not 0 <= settle_ms <= 5000:
+        raise ValueError("shorted-probes settle delay must be between 0 and 5000 ms")
+    if not 1 <= samples <= 10:
+        raise ValueError("shorted-probes samples must be between 1 and 10")
+    if not 0.0 < zero_limit <= 1.0:
+        raise ValueError("shorted-probes zero limit must be between 0 and 1 V")
+
+
+def main(argv: list[str] | None = None) -> int:
+    args = build_parser().parse_args(argv)
+
+    if args.mode == "list":
+        return print_ports(discover_ports(), args.plain)
+
+    try:
+        if args.mode in ("meter-stream", "meter-mux-stream"):
+            validate_stream_args(args.count, args.delay_ms)
+        if args.mode == "meter-mux-arms":
+            validate_mux_arm_args(args.portc_porte, args.porta_portb, args.settle_ms)
+        if args.mode == "shorted-probes-sweep":
+            validate_shorted_sweep_args(args.settle_ms, args.samples, args.zero_limit_v)
+        port = choose_port(args.port)
+        with serial_device_lock(port):
+            if args.mode == "command":
+                print(run_command(port, args.baud, args.command, args.timeout))
+                return 0
+
+            if args.mode == "poll":
+                with log_context(args.log) as log_file:
+                    return poll_command(
+                        port,
+                        args.baud,
+                        args.command,
+                        args.timeout,
+                        args.interval,
+                        args.count,
+                        args.duration,
+                        log_file,
+                    )
+
+            if args.mode == "meter-dump":
+                with log_context(args.log) as log_file:
+                    return poll_command(
+                        port,
+                        args.baud,
+                        args.command,
+                        args.timeout,
+                        args.interval,
+                        args.count,
+                        args.duration,
+                        log_file,
+                    )
+
+            if args.mode == "meter-frontend":
+                response = run_command(port, args.baud, "meter frontend", args.timeout)
+                print(response)
+                with log_context(args.log) as log_file:
+                    write_log_line(log_file, response)
+                return 0
+
+            if args.mode == "meter-trace":
+                response = run_command(port, args.baud, "meter trace", args.timeout)
+                if args.json:
+                    print(json.dumps(parse_meter_trace_text(response), indent=2, sort_keys=True))
+                else:
+                    print(response)
+                with log_context(args.log) as log_file:
+                    write_log_line(log_file, response)
+                return 0
+
+            if args.mode == "shorted-probes-sweep":
+                timeout = max(args.timeout, (args.settle_ms / 1000.0) + 3.0)
+                sweep = run_shorted_probes_sweep(
+                    port,
+                    args.baud,
+                    timeout,
+                    args.settle_ms,
+                    args.samples,
+                    args.zero_limit_v,
+                )
+                sweep_text = json.dumps(sweep, indent=2, sort_keys=True)
+                if args.json:
+                    print(sweep_text)
+                else:
+                    print_shorted_probes_summary(sweep)
+                with log_context(args.log) as log_file:
+                    write_log_line(log_file, sweep_text)
+                return 0 if sweep["passed"] else 5
+
+            if args.mode == "meter-stream":
+                command = f"meter stream {args.count} {args.delay_ms}"
+                timeout = max(args.timeout, (args.count * args.delay_ms / 1000.0) + 2.0)
+                response = run_command(port, args.baud, command, timeout)
+                print(response)
+                with log_context(args.log) as log_file:
+                    write_log_line(log_file, response)
+                return 0
+
+            if args.mode == "meter-mux-stream":
+                command = f"meter mux-stream {args.count} {args.delay_ms}"
+                timeout = max(args.timeout, (args.count * args.delay_ms / 1000.0) + 2.0)
+                response = run_command(port, args.baud, command, timeout)
+                print(response)
+                with log_context(args.log) as log_file:
+                    write_log_line(log_file, response)
+                return 0
+
+            if args.mode == "meter-mux-arms":
+                command = f"meter mux-arms {args.portc_porte} {args.porta_portb} {args.settle_ms}"
+                timeout = max(args.timeout, (args.settle_ms / 1000.0) + 3.0)
+                response = run_command(port, args.baud, command, timeout)
+                if args.json:
+                    print(json.dumps(parse_meter_trace_text(response), indent=2, sort_keys=True))
+                else:
+                    print(response)
+                with log_context(args.log) as log_file:
+                    write_log_line(log_file, response)
+                return 0
+
+            if args.mode == "meter-adc-snapshot":
+                response = run_command(port, args.baud, "meter adc-snapshot", args.timeout)
+                print(response)
+                with log_context(args.log) as log_file:
+                    write_log_line(log_file, response)
+                return 0
+
+            if args.mode == "screen-capture":
+                region = tuple(args.region) if args.region is not None else None
+                timeout = max(args.timeout, 4.0)
+                print(capture_screen(port, args.baud, timeout, args.output, region, args.use_rle))
+                return 0
+
+    except TimeoutError as exc:
+        print(f"timeout: {exc}", file=sys.stderr)
+        return 3
+    except ValueError as exc:
+        print(f"parse error: {exc}", file=sys.stderr)
+        return 4
+    except SerialError as exc:
+        print(f"serial error: {exc}", file=sys.stderr)
+        return 2
+    except KeyboardInterrupt:
+        print("interrupted", file=sys.stderr)
+        return 130
+
+    print(f"unsupported mode: {args.mode}", file=sys.stderr)
+    return 2
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

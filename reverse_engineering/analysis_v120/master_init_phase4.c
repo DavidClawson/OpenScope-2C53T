@@ -799,14 +799,16 @@ config_done:
         *(uint16_t *)(ms + 0x2FE) = 0x0637;
 
         /*
-         * METER CALIBRATION DEFAULTS (ms[0x29C..0x2D6] and ms[0x314..0x34E]):
-         * Higher range values for meter mode, using ~0x0C00 range values.
-         * These are the factory-default calibration for the multimeter IC.
+         * SAVED-CONFIG DEFAULT CONTINUATION (ms[0x29C..0x2D6] and
+         * ms[0x310..0x34E]):
+         * The default table continues with higher ~0x0C00 values in the same
+         * RAM span.  Earlier notes labeled these as DMM/multimeter
+         * calibration, but current stock xrefs only prove a persistent/default
+         * calibration-like table boundary.  Do not use these words as
+         * BCD-meter coefficients unless a DMM-owned consumer xref or runtime
+         * trace is recovered.
          *
-         * These calibration values convert BCD-coded meter IC readings
-         * to displayable voltage/current/resistance values.
-         *
-         *   ms[0x29C] = 0x0CCE   ms[0x314] = 0x0CC7/0x0CB4
+         *   ms[0x29C] = 0x0CCE   ms[0x310] = 0x0CC7/0x0CB4
          *   ms[0x29E] = 0x0CC4   ms[0x316] = pair
          *   ms[0x2A0] = 0x0CBC   ms[0x318] = 0x0CA7
          *   ms[0x2A2] = 0x0CBA   ms[0x31A] = 0x0CA5/0x0CA3
@@ -831,7 +833,7 @@ config_done:
         *(uint32_t *)(ms + 0x2BA) = 0x0CCB;
         /* ... etc (continues through 0x2D6) ... */
 
-        /* Meter offset defaults */
+        /* Continuation/default second-bank values */
         *(uint32_t *)(ms + 0x310) = 0x0CB40CC7;
         *(uint16_t *)(ms + 0x318) = 0x0CA7;
         *(uint32_t *)(ms + 0x31A) = 0x0CA30CA5;

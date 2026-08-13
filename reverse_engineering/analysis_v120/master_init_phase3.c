@@ -773,9 +773,10 @@ void master_init_phase3(void) {
     });
 
     // --- PC6 = FPGA SPI enable (set HIGH) ---
-    // 0x080265BA-0x080265CA: Write 0x40 to GPIOC_BOP (bit 6)
-    // r4 = 0x40011000 (GPIOC base), offset 0xFC10 from r4
-    // Actually: 0x40011000 + 0xFFFFFC10 = 0x40010C10 = GPIOC_BOP
+    // 2026-06-06 byte guard: SPI3 SPE is set at 0x08026604, GPIOC clock/config
+    // follows, and PC6 is set at 0x08026638..0x0802663C by writing 0x40 to
+    // GPIOC_BOP (0x40011010). Older notes that place this at 0x080265BA or
+    // resolve the write to GPIOB are stale.
     GPIOC_BOP = (1 << 6);            // Set PC6 HIGH — enable FPGA SPI3
 
 

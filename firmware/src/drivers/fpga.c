@@ -7,12 +7,13 @@
  * Boot sequence follows FPGA_BOOT_SEQUENCE.md (53 steps):
  *   1. AFIO remap to free PB3/4/5 from JTAG
  *   2. USART2 init at 9600 baud
- *   3. Send boot commands (0x01, 0x02, 0x06, 0x07, 0x08)
- *   4. SPI3 init (Mode 3, /2 prescaler = 60MHz)
- *   5. PC6 HIGH (FPGA SPI enable)
+ *   3. USART2 init; stock post-H2 boot bytes are SPI3 queue triggers
+ *   4. SPI3 init and enable (Mode 3, /2 prescaler = 60MHz)
+ *   5. PC6 HIGH after SPI3 is enabled (FPGA SPI enable)
  *   6. SysTick delays for FPGA timing
- *   7. SPI3 handshake (command 0x05)
- *   8. PB11 HIGH (FPGA active mode)
+ *   7. SPI3 handshake + H2 table upload
+ *   8. Queue stock post-H2 SPI3 triggers
+ *   9. Apply DCV frontend projection, driving PB11 HIGH before meter activation
  *
  * Runtime architecture (3 FreeRTOS tasks):
  *   - fpga_usart_tx_task: Sends 10-byte command frames via USART2
@@ -22,10 +23,12 @@
 
 #include "fpga.h"
 #include "fpga_cal_table.h"
+#include "fpga_meter_plan.h"
 #include "meter_data.h"
 #include "scope_trigger.h"
 #include "../ui/ui.h"
 #include "../ui/scope_state.h"
+#include "../ui/meter_voltage_wave.h"
 #include "at32f403a_407.h"
 #include "FreeRTOS.h"
 #include "task.h"
@@ -48,6 +51,7 @@
 /* USART ctrl1 bit masks (AT32 HAL uses MAKE_VALUE macros, we need raw bits) */
 #define USART_CTRL1_RDBFIEN   (1 << 5)   /* RX buffer full interrupt enable */
 #define USART_CTRL1_TDBEIEN   (1 << 7)   /* TX buffer empty interrupt enable */
+#define USART_CTRL1_UEN       (1 << 13)  /* USART enable */
 
 /* GPIO bit operations */
 #define PB6_MASK        (1 << 6)   /* SPI3 CS */
@@ -58,16 +62,53 @@
 #define SPI3_CS_ASSERT()    (GPIOB->clr = PB6_MASK)   /* PB6 LOW */
 #define SPI3_CS_DEASSERT()  (GPIOB->scr = PB6_MASK)   /* PB6 HIGH */
 
+static void fpga_send_meter_mode_sequence(uint8_t submode);
+
 /* ═══════════════════════════════════════════════════════════════════
  * Global State
  * ═══════════════════════════════════════════════════════════════════ */
 
 fpga_state_t fpga;
 
+volatile bool     fpga_meter_adc_sampler_enabled;
+volatile bool     fpga_meter_adc_use_preacq;
+volatile int16_t  fpga_meter_adc_selector_override = -1;
+volatile int16_t  fpga_meter_adc_preacq_override = -1;
+volatile int16_t  fpga_meter_probe_tail_override = -1;
+volatile uint32_t fpga_meter_adc_enqueue_attempts;
+volatile uint32_t fpga_meter_adc_enqueue_success;
+volatile uint32_t fpga_meter_adc_enqueue_drops;
+volatile uint32_t fpga_meter_adc_samples;
+volatile uint32_t fpga_meter_adc_ff_samples;
+volatile uint32_t fpga_meter_adc_zero_samples;
+volatile uint32_t fpga_meter_adc_transition_skips;
+volatile uint32_t fpga_meter_adc_not_voltage_skips;
+volatile uint32_t fpga_meter_adc_reset_generation;
+volatile uint32_t fpga_meter_adc_last_reset_generation;
+volatile uint8_t  fpga_meter_adc_last_preacq;
+volatile uint8_t  fpga_meter_adc_last_preacq_rx;
+volatile uint8_t  fpga_meter_adc_last_selector;
+volatile uint8_t  fpga_meter_adc_last_sample;
+volatile uint8_t  fpga_meter_adc_first_sample_after_reset;
+volatile uint8_t  fpga_meter_adc_min_sample = 255;
+volatile uint8_t  fpga_meter_adc_max_sample;
+
 /* FreeRTOS handles */
 static QueueHandle_t     usart_tx_queue  = NULL;  /* 2-byte items: cmd_hi|cmd_lo */
 static QueueHandle_t     spi3_acq_queue  = NULL;  /* 1-byte trigger mode */
-static SemaphoreHandle_t meter_sem       = NULL;  /* Signals meter RX frame ready */
+
+typedef struct {
+    uint8_t frame[FPGA_RX_FRAME_SIZE];
+    uint32_t frame_count;
+    uint32_t tx_count;
+    uint32_t echo_count;
+    uint32_t mode_sequence_count;
+    uint8_t mode_sequence_submode;
+    uint8_t discard_remaining;
+    uint8_t transition_busy;
+} fpga_meter_rx_event_t;
+
+static QueueHandle_t meter_rx_queue = NULL;  /* Complete immutable 12-byte data frames */
 
 static TaskHandle_t      acq_task_handle = NULL;
 static TaskHandle_t      tx_task_handle  = NULL;
@@ -76,6 +117,98 @@ static TaskHandle_t      rx_task_handle  = NULL;
 /* Track whether we've received at least one valid acquisition */
 static volatile bool data_ready = false;
 static volatile bool scope_reinit_pending = false;
+static volatile bool meter_transition_busy = false;
+volatile uint8_t meter_frame_discard_count;
+volatile uint32_t meter_transition_frame_skip_count;
+
+static void fpga_scope_delay_ms(uint32_t ms);
+static uint8_t fpga_probe_cmd_byte(void);
+
+void fpga_meter_adc_diag_reset(void)
+{
+    fpga_meter_adc_enqueue_attempts = 0;
+    fpga_meter_adc_enqueue_success = 0;
+    fpga_meter_adc_enqueue_drops = 0;
+    fpga_meter_adc_samples = 0;
+    fpga_meter_adc_ff_samples = 0;
+    fpga_meter_adc_zero_samples = 0;
+    fpga_meter_adc_transition_skips = 0;
+    fpga_meter_adc_not_voltage_skips = 0;
+    fpga_meter_adc_reset_generation++;
+    fpga_meter_adc_last_reset_generation = 0;
+    fpga_meter_adc_last_preacq = 0;
+    fpga_meter_adc_last_preacq_rx = 0;
+    fpga_meter_adc_last_selector = 0;
+    fpga_meter_adc_last_sample = 0;
+    fpga_meter_adc_first_sample_after_reset = 0;
+    fpga_meter_adc_min_sample = 255;
+    fpga_meter_adc_max_sample = 0;
+}
+
+bool fpga_meter_transition_busy(void)
+{
+    return meter_transition_busy;
+}
+
+static void fpga_meter_discard_next_frames(uint8_t count)
+{
+    meter_frame_discard_count = count;
+}
+
+static void fpga_meter_reset_transport(void)
+{
+    uint32_t ctrl1;
+
+    if (xTaskGetSchedulerState() != taskSCHEDULER_RUNNING) return;
+
+    /*
+     * DMM transition drain/reset.
+     *
+     * Stock evidence in analysis_v120/usart2_isr_state_machine.md shows two
+     * USART2 frame families on one stream: 12-byte 0x5A/0xA5 meter data and
+     * 10-byte 0xAA/0x55 command echoes. The meter-mode command-table note also
+     * tracks the stock PC11 meter-MUX gate and the separate Port C/E and
+     * Port A/B frontend writers. During a local mode switch we therefore stop
+     * RX/TX IRQs, suspend both DVOM transport tasks, reset pending queues and
+     * byte indices, drop PC11, then re-enable USART2 before resuming the DVOM
+     * tasks and sending the new stock 0x05xx selector sequence.  Stock runtime
+     * mode switching at 0x0800741A clears CTRL1 bit 0x2000 (UEN) while it
+     * suspends `dvom_TX`/`dvom_RX`, resets 0x20002D7C and 0x20002D74, and
+     * clears PC11; the enable tail at 0x08007360 sets UEN again before task
+     * resume and PC11 assertion.  The exact 20 ms quiet window and later
+     * two-frame discard are conservative local policy, not recovered stock
+     * constants; the values are exported through `meter frontend`/`meter
+     * mux-stream` so future stock traces can replace them instead of hiding a
+     * guess here.
+     */
+    ctrl1 = USART2->ctrl1;
+    USART2->ctrl1 = ctrl1 & ~(USART_CTRL1_UEN |
+                              USART_CTRL1_RDBFIEN |
+                              USART_CTRL1_TDBEIEN);
+
+    if (tx_task_handle != NULL) vTaskSuspend(tx_task_handle);
+    if (rx_task_handle != NULL) vTaskSuspend(rx_task_handle);
+
+    if (usart_tx_queue != NULL) xQueueReset(usart_tx_queue);
+    if (meter_rx_queue != NULL) xQueueReset(meter_rx_queue);
+    if (spi3_acq_queue != NULL) xQueueReset(spi3_acq_queue);
+    fpga_meter_adc_reset_generation++;
+
+    fpga.tx_index = 0;
+    fpga.rx_index = 0;
+    fpga.rx_frame_valid = false;
+    (void)USART2->sts;
+    (void)USART2->dt;
+
+    GPIOC->clr = (1U << 11);
+    fpga_scope_delay_ms(20);
+
+    USART2->ctrl1 = (ctrl1 | USART_CTRL1_UEN | USART_CTRL1_RDBFIEN) &
+                    ~USART_CTRL1_TDBEIEN;
+
+    if (rx_task_handle != NULL) vTaskResume(rx_task_handle);
+    if (tx_task_handle != NULL) vTaskResume(tx_task_handle);
+}
 
 /* ═══════════════════════════════════════════════════════════════════
  * Stock-State Bench Shadow
@@ -187,7 +320,27 @@ static uint8_t spi3_xfer(uint8_t tx_byte)
     return (uint8_t)FPGA_SPI->dt;
 }
 
-/* Double-buffered SPI3 pump (per GitHub issue #11, Lanchon).
+static void fpga_h2_record_body_rx(uint8_t rx_byte)
+{
+    if (rx_byte == 0x00U) {
+        fpga.h2_rx_00_count++;
+    } else if (rx_byte == 0xFFU) {
+        fpga.h2_rx_ff_count++;
+    } else {
+        fpga.h2_rx_other_count++;
+    }
+}
+
+static void fpga_h2_record_close_rx(uint8_t rx_byte)
+{
+    uint8_t len = fpga.h2_close_rx_len;
+    if (len < sizeof(fpga.h2_close_rx)) {
+        fpga.h2_close_rx[len] = rx_byte;
+        fpga.h2_close_rx_len = (uint8_t)(len + 1U);
+    }
+}
+
+/* Double-buffered SPI3 pump for the H2 upload (per GitHub issue #11, Lanchon).
  *
  * spi3_xfer()'s order — wait TDBE, write, wait RDBF, read — only queues
  * the NEXT tx byte after the current byte's RX has landed, by which point
@@ -201,14 +354,17 @@ static uint8_t spi3_xfer(uint8_t tx_byte)
  * reloaded back-to-back so the clock runs continuously, and the pump
  * tolerates any interrupt shorter than one byte-time.
  *
- *   tx: bytes to send, or NULL to clock out 0xFF filler (read-only)
- *   rx: receive buffer, or NULL to discard (write-only)
- *   n:  byte count. Caller manages CS.
+ *   tx: bytes to send. n: byte count. Caller manages CS.
+ *
+ * RX is not returned to the caller — it is folded into the h2 diagnostic
+ * counters via fpga_h2_record_body_rx() as it arrives, since the upload has
+ * no per-byte reply worth buffering (stock's own upload reads all-FF; see
+ * the issue-#18 capture).
  *
  * Timeout-guarded like spi3_xfer so a misconfigured peripheral can't hang
  * the boot; on timeout the byte is treated as 0xFF and we keep going.
  */
-static void spi3_pump(const uint8_t *tx, volatile uint8_t *rx, uint32_t n)
+static void spi3_pump_h2_record(const uint8_t *tx, uint32_t n)
 {
     if (n == 0)
         return;
@@ -216,40 +372,31 @@ static void spi3_pump(const uint8_t *tx, volatile uint8_t *rx, uint32_t n)
     volatile uint32_t timeout;
     uint32_t i = 0;
 
-    /* Prime the first byte. */
     timeout = 100000;
     while (!(FPGA_SPI->sts & SPI_I2S_TDBE_FLAG)) {
         if (--timeout == 0) break;
     }
-    FPGA_SPI->dt = tx ? tx[0] : 0xFF;
+    FPGA_SPI->dt = tx[0];
 
     while (++i < n) {
-        /* Queue the next tx byte the instant the buffer frees — BEFORE
-         * blocking on RX. This is what keeps the shift register fed. */
         timeout = 100000;
         while (!(FPGA_SPI->sts & SPI_I2S_TDBE_FLAG)) {
             if (--timeout == 0) break;
         }
-        FPGA_SPI->dt = tx ? tx[i] : 0xFF;
+        FPGA_SPI->dt = tx[i];
 
-        /* Collect the previous byte's RX. */
         timeout = 100000;
         while (!(FPGA_SPI->sts & SPI_I2S_RDBF_FLAG)) {
             if (--timeout == 0) break;
         }
-        uint8_t r = (timeout == 0) ? 0xFF : (uint8_t)FPGA_SPI->dt;
-        if (rx)
-            rx[i - 1] = r;
+        fpga_h2_record_body_rx((timeout == 0) ? 0xFF : (uint8_t)FPGA_SPI->dt);
     }
 
-    /* Drain the final byte's RX. */
     timeout = 100000;
     while (!(FPGA_SPI->sts & SPI_I2S_RDBF_FLAG)) {
         if (--timeout == 0) break;
     }
-    uint8_t rlast = (timeout == 0) ? 0xFF : (uint8_t)FPGA_SPI->dt;
-    if (rx)
-        rx[n - 1] = rlast;
+    fpga_h2_record_body_rx((timeout == 0) ? 0xFF : (uint8_t)FPGA_SPI->dt);
 }
 
 /* Set the SPI3 baud-rate divider (CTRL1 bits [5:3]) on the fly. Requires
@@ -553,6 +700,238 @@ static void usart2_send_frame(const uint8_t *frame)
     }
 }
 
+static void fpga_record_tx_cmd(uint8_t cmd_hi, uint8_t cmd_lo)
+{
+    uint8_t idx = fpga.tx_cmd_history_head & 0x0F;
+
+    fpga.tx_cmd_hi_history[idx] = cmd_hi;
+    fpga.tx_cmd_lo_history[idx] = cmd_lo;
+    fpga.tx_cmd_history_head = (uint8_t)((idx + 1U) & 0x0F);
+    if (fpga.tx_cmd_history_count < 16U) {
+        fpga.tx_cmd_history_count++;
+    }
+}
+
+static void fpga_record_tx_frame(const uint8_t *frame)
+{
+    uint8_t idx = fpga.tx_frame_history_head;
+
+    memcpy((void *)fpga.last_tx_frame, frame, FPGA_TX_FRAME_SIZE);
+    memcpy((void *)fpga.tx_frame_history[idx], frame, FPGA_TX_FRAME_SIZE);
+    fpga.tx_frame_history_tx_count[idx] = fpga.tx_count;
+    fpga.tx_frame_history_head =
+        (uint8_t)((idx + 1U) % FPGA_TX_FRAME_HISTORY);
+    if (fpga.tx_frame_history_count < FPGA_TX_FRAME_HISTORY) {
+        fpga.tx_frame_history_count++;
+    }
+
+    /*
+     * Control TX ring.
+     *
+     * The meter poll task emits 0x0509 continuously, so the ordinary TX ring can
+     * be all poll frames by the time a settled DMM trace is captured. Keep a
+     * second diagnostic-only ring for non-poll frames so low-DCV/live experiments
+     * can still see the last selector/apply/setup commands that preceded the
+     * wrong producer frame. This must not feed range decisions.
+     */
+    if (frame[2] != 0x05U || frame[3] != FPGA_CMD_METER_START) {
+        idx = fpga.tx_control_frame_history_head;
+        memcpy((void *)fpga.tx_control_frame_history[idx], frame,
+               FPGA_TX_FRAME_SIZE);
+        fpga.tx_control_frame_history_tx_count[idx] = fpga.tx_count;
+        fpga.tx_control_frame_history_head =
+            (uint8_t)((idx + 1U) % FPGA_TX_FRAME_HISTORY);
+        if (fpga.tx_control_frame_history_count < FPGA_TX_FRAME_HISTORY) {
+            fpga.tx_control_frame_history_count++;
+        }
+    }
+}
+
+static void fpga_record_rx_raw_byte(uint8_t byte, uint8_t rx_index_before)
+{
+    uint8_t idx = fpga.rx_raw_history_head;
+
+    fpga.rx_raw_history[idx] = byte;
+    fpga.rx_raw_history_tx_count[idx] = fpga.tx_count;
+    fpga.rx_raw_history_tx_index[idx] = fpga.tx_index;
+    fpga.rx_raw_history_rx_index[idx] = rx_index_before;
+    fpga.rx_raw_history_head =
+        (uint8_t)((idx + 1U) % FPGA_RX_RAW_HISTORY);
+    if (fpga.rx_raw_history_count < FPGA_RX_RAW_HISTORY) {
+        fpga.rx_raw_history_count++;
+    }
+}
+
+static void fpga_record_rx_data_frame(void)
+{
+    uint8_t idx = fpga.rx_frame_history_head;
+
+    /*
+     * Producer-side RX ring.
+     *
+     * This records every complete 0x5A/0xA5 data frame as it crosses from the
+     * FPGA USART stream into firmware ownership, including frames later ignored
+     * by transition/discard logic. It is deliberately diagnostic-only: the ring
+     * proves where the low-DCV mismatch appears, not selector decisions or
+     * value-shaped correction factors.
+     */
+    memcpy((void *)fpga.rx_frame_history[idx], (const void *)fpga.rx_frame,
+           FPGA_RX_FRAME_SIZE);
+    fpga.rx_history_frame_count[idx] = fpga.last_rx_frame_count;
+    fpga.rx_history_tx_count[idx] = fpga.last_rx_tx_count;
+    fpga.rx_history_echo_count[idx] = fpga.last_rx_echo_count;
+    fpga.rx_history_sequence_count[idx] = fpga.last_rx_mode_sequence_count;
+    fpga.rx_history_sequence_submode[idx] = fpga.last_rx_mode_sequence_submode;
+    fpga.rx_history_discard_remaining[idx] = fpga.last_rx_discard_remaining;
+    fpga.rx_history_transition_busy[idx] = fpga.last_rx_transition_busy;
+    fpga.rx_frame_history_head =
+        (uint8_t)((idx + 1U) % FPGA_RX_FRAME_HISTORY);
+    if (fpga.rx_frame_history_count < FPGA_RX_FRAME_HISTORY) {
+        fpga.rx_frame_history_count++;
+    }
+}
+
+static uint16_t fpga_meter_mux_gpio_mask_from_state(
+    const fpga_meter_mux_gpio_state_t *state)
+{
+    uint16_t mask = 0;
+
+    if (state->pc12) mask |= (1U << 0);
+    if (state->pe4)  mask |= (1U << 1);
+    if (state->pe5)  mask |= (1U << 2);
+    if (state->pe6)  mask |= (1U << 3);
+    if (state->pa15) mask |= (1U << 4);
+    if (state->pa10) mask |= (1U << 5);
+    if (state->pb10) mask |= (1U << 6);
+    if (state->pb11) mask |= (1U << 7);
+    if (state->pb9)  mask |= (1U << 8);
+    if (state->pa6)  mask |= (1U << 9);
+    return mask;
+}
+
+static uint16_t fpga_meter_mux_gpio_mask_live(void)
+{
+    uint16_t mask = 0;
+
+    if (GPIOC->idt & (1U << 12)) mask |= (1U << 0);
+    if (GPIOE->idt & (1U << 4))  mask |= (1U << 1);
+    if (GPIOE->idt & (1U << 5))  mask |= (1U << 2);
+    if (GPIOE->idt & (1U << 6))  mask |= (1U << 3);
+    if (GPIOA->idt & (1U << 15)) mask |= (1U << 4);
+    if (GPIOA->idt & (1U << 10)) mask |= (1U << 5);
+    if (GPIOB->idt & (1U << 10)) mask |= (1U << 6);
+    if (GPIOB->idt & PB11_MASK)  mask |= (1U << 7);
+    if (GPIOB->idt & (1U << 9))  mask |= (1U << 8);
+    if (GPIOA->idt & (1U << 6))  mask |= (1U << 9);
+    return mask;
+}
+
+static void fpga_record_meter_transition_snapshot(
+    uint8_t submode,
+    const fpga_meter_transition_plan_t *plan,
+    uint16_t planned_gpio,
+    uint16_t actual_gpio,
+    uint16_t tx_before,
+    uint16_t frame_before)
+{
+    uint8_t idx = fpga.meter_transition_history_head;
+
+    /*
+     * DMM transition/apply trace.
+     *
+     * Capture the planned mux projection and the actual GPIO levels observed
+     * immediately after the frontend writer, then pair them with the selector
+     * words and producer counters surrounding the USART sequence. This is the
+     * runtime evidence bridge between the stock-like writer/apply path and the
+     * later producer RX frames; it must never drive value/range decisions.
+     */
+    fpga.meter_transition_history_submode[idx] = submode;
+    fpga.meter_transition_history_config[idx] =
+        plan->has_config_word ? plan->config_word : 0;
+    fpga.meter_transition_history_selector[idx] = plan->selector_word;
+    fpga.meter_transition_history_apply[idx] =
+        plan->has_apply_word ? plan->apply_word : 0;
+    fpga.meter_transition_history_bank[idx] =
+        plan->has_command_bank_prefix ? 1U : 0U;
+    fpga.meter_transition_history_bank_first[idx] =
+        plan->has_command_bank_prefix ? plan->command_bank_first : 0U;
+    fpga.meter_transition_history_bank_second[idx] =
+        plan->has_command_bank_prefix ? plan->command_bank_second : 0U;
+    fpga.meter_transition_history_probe[idx] =
+        plan->has_probe_detect ?
+        (uint16_t)((GPIOC->idt & (1U << 7)) ? 0x0507U : 0x050AU) : 0;
+    fpga.meter_transition_history_start[idx] = plan->start_word;
+    fpga.meter_transition_history_sequence_count[idx] =
+        fpga.meter_mode_sequence_count;
+    fpga.meter_transition_history_tx_before[idx] = tx_before;
+    fpga.meter_transition_history_tx_after[idx] = fpga.tx_count;
+    fpga.meter_transition_history_frame_before[idx] = frame_before;
+    fpga.meter_transition_history_frame_after[idx] = fpga.frame_count;
+    fpga.meter_transition_history_planned_gpio[idx] = planned_gpio;
+    fpga.meter_transition_history_actual_gpio[idx] = actual_gpio;
+    fpga.meter_transition_history_head =
+        (uint8_t)((idx + 1U) % FPGA_METER_TRANSITION_HISTORY);
+    if (fpga.meter_transition_history_count < FPGA_METER_TRANSITION_HISTORY) {
+        fpga.meter_transition_history_count++;
+    }
+}
+
+static void fpga_arm_meter_first_rx_latch(
+    uint8_t submode,
+    const fpga_meter_transition_plan_t *plan,
+    uint16_t planned_gpio,
+    uint16_t actual_gpio)
+{
+    /*
+     * Arm a one-shot producer latch at the transition/apply boundary.
+     *
+     * Low-DCV failures are visible in the 12-byte DMM frame before display
+     * formatting. Freezing the first producer frame after a transition lets the
+     * bench trace say whether the wrong digits appeared immediately after the
+     * selected mux/command/H2 state, without turning the trace into a
+     * value-shaped correction loop.
+     */
+    fpga.meter_first_rx_after_transition_valid = 0;
+    fpga.meter_first_rx_after_transition_submode = submode;
+    fpga.meter_first_rx_after_transition_seq = fpga.meter_mode_sequence_count;
+    fpga.meter_first_rx_after_transition_config =
+        plan->has_config_word ? plan->config_word : 0;
+    fpga.meter_first_rx_after_transition_selector = plan->selector_word;
+    fpga.meter_first_rx_after_transition_apply =
+        plan->has_apply_word ? plan->apply_word : 0;
+    fpga.meter_first_rx_after_transition_probe =
+        plan->has_probe_detect ?
+        (uint16_t)(0x0500U | fpga_probe_cmd_byte()) : 0;
+    fpga.meter_first_rx_after_transition_start = plan->start_word;
+    fpga.meter_first_rx_after_transition_planned_gpio = planned_gpio;
+    fpga.meter_first_rx_after_transition_actual_gpio = actual_gpio;
+    fpga.meter_first_rx_after_transition_h2_bytes = fpga.h2_bytes_sent;
+    fpga.meter_first_rx_after_transition_h2_done = fpga.h2_upload_done;
+    fpga.meter_first_rx_after_transition_h2_post_run_count =
+        fpga.post_h2_spi3_boot_run_count;
+    fpga.meter_first_rx_after_transition_h2_post_mask =
+        fpga.post_h2_spi3_boot_mask;
+    fpga.meter_first_rx_after_transition_armed = 1;
+}
+
+static void fpga_capture_meter_first_rx_latch(void)
+{
+    if (fpga.meter_first_rx_after_transition_armed == 0) {
+        return;
+    }
+
+    memcpy((void *)fpga.meter_first_rx_after_transition_frame,
+           (const void *)fpga.rx_frame, FPGA_RX_FRAME_SIZE);
+    fpga.meter_first_rx_after_transition_data = fpga.last_rx_frame_count;
+    fpga.meter_first_rx_after_transition_tx = fpga.last_rx_tx_count;
+    fpga.meter_first_rx_after_transition_echo = fpga.last_rx_echo_count;
+    fpga.meter_first_rx_after_transition_busy = fpga.last_rx_transition_busy;
+    fpga.meter_first_rx_after_transition_discard =
+        fpga.last_rx_discard_remaining;
+    fpga.meter_first_rx_after_transition_valid = 1;
+    fpga.meter_first_rx_after_transition_armed = 0;
+}
+
 /*
  * Build and send a USART command frame (10 bytes).
  * Format: [0][1] [cmd_hi][cmd_lo] [0..0] [checksum]
@@ -561,6 +940,8 @@ static void usart2_send_frame(const uint8_t *frame)
 static void usart2_send_cmd(uint8_t cmd_hi, uint8_t cmd_lo)
 {
     uint8_t frame[FPGA_TX_FRAME_SIZE] = {0};
+    fpga_record_tx_cmd(cmd_hi, cmd_lo);
+    fpga.tx_count++;
     frame[2] = cmd_hi;
     frame[3] = cmd_lo;
     /* NOTE: byte[8] was previously 0xAA based on protocol doc, but the
@@ -569,6 +950,7 @@ static void usart2_send_cmd(uint8_t cmd_hi, uint8_t cmd_lo)
      * causing checksum validation failures on the FPGA side, explaining
      * zero echo frames. Now matches stock: bytes[4-8] = 0 for basic cmds. */
     frame[9] = (cmd_lo + cmd_hi) & 0xFF;
+    fpga_record_tx_frame(frame);
     usart2_send_frame(frame);
 }
 
@@ -1026,42 +1408,267 @@ static void fpga_set_scope_frontend_range(uint8_t range_idx)
 
 static uint8_t fpga_probe_cmd_byte(void)
 {
+    /*
+     * Stock probe-command branch, not DMM range/calibration state.
+     *
+     * In V1.2.0 `FUN_0800B908`, the meter-basic arm at 0x0800B9D6, the extended
+     * arm at 0x0800BACE, and the variant arm at 0x0800BC32 all materialize
+     * GPIOC IDR (`0x40011008`), shift PC7 into the sign bit, and choose command
+     * tail 0x07 when PC7 is high or 0x0A when PC7 is low.  That is digital
+     * probe/tail sequencing for the USART2 command path.  It is not a recovered
+     * analog mux/range writer, low-DCV correction, or factory calibration
+     * coefficient; the physical "probe present" label remains a hardware
+     * interpretation layered on top of the stock branch polarity.
+     */
+    if (fpga_meter_probe_tail_override == 0x07 ||
+        fpga_meter_probe_tail_override == FPGA_CMD_METER_NOPROBE) {
+        return (uint8_t)fpga_meter_probe_tail_override;
+    }
     return (GPIOC->idt & (1U << 7)) ? 0x07 : FPGA_CMD_METER_NOPROBE;
 }
 
-static void fpga_set_meter_frontend_baseline(void)
+fpga_meter_selector_t fpga_meter_expected_selectors(uint8_t submode)
 {
-    /* Restore the known-good meter posture from boot init so shell-driven
-     * meter recovery doesn't depend on whichever scope range ran last. */
-    GPIOB->scr = PB11_MASK;   /* FPGA active */
-    GPIOC->scr = PC6_MASK;    /* SPI path enabled */
-    GPIOC->scr = (1U << 11);  /* Meter MUX on */
-    GPIOC->scr = (1U << 12);  /* Route probe to meter path */
+    fpga_meter_transition_plan_t plan =
+        fpga_meter_transition_plan_for_submode(submode);
+    fpga_meter_selector_t selectors;
 
-    GPIOE->scr = (1U << 4);
-    GPIOE->clr = (1U << 5);
-    GPIOE->scr = (1U << 6);
+    selectors.function_selector = plan.stock_mode;
+    selectors.range_selector =
+        (plan.selector_word != FPGA_METER_INVALID_SELECTOR_WORD) ?
+        (uint8_t)(plan.selector_word & 0x00FFU) : 0U;
+    selectors.voltage_function_axis = plan.voltage_function_axis;
+    return selectors;
+}
 
-    GPIOB->scr = (1U << 9);
-    GPIOA->scr = (1U << 6);
-    GPIOA->scr = (1U << 15);
-    GPIOA->scr = (1U << 10);
-    GPIOB->clr = (1U << 10);
+static void fpga_gpio_write_level(gpio_type *gpio, uint32_t mask, uint8_t high)
+{
+    if (high) {
+        gpio->scr = mask;
+    } else {
+        gpio->clr = mask;
+    }
+}
+
+static void fpga_apply_meter_mux_gpio_state(const fpga_meter_mux_gpio_state_t *state)
+{
+    /*
+     * Analog frontend mux projection. The recovered stock GPIO writers
+     * FUN_080018a4 and FUN_08001a58 consume ms[0x02]/ms[0x03] and write
+     * PC12/PE4/PE5/PE6 plus PA15/PA10/PB10/PB11. The open firmware applies the
+     * tested fpga_meter_plan projection directly so production writes cannot
+     * drift away from the state-machine table. This is not a recovered stock
+     * runtime DMM mux writer: the guarded saved-config default ms[0x02]=5 /
+     * ms[0x03]=5 is persistence evidence only, and the stock APP has no static
+     * literal/function-pointer refs to either mux writer beyond guarded direct
+     * callsites. The low-DCV mismatch still
+     * needs a new writer, trace, H2/apply proof, or factory-calibration source.
+     * PB9/PA6 remain low because stock currently proves output configuration
+     * only, not mode-specific assertion.
+     */
+    fpga_gpio_write_level(GPIOC, (1U << 12), state->pc12);
+    fpga_gpio_write_level(GPIOE, (1U << 4), state->pe4);
+    fpga_gpio_write_level(GPIOE, (1U << 5), state->pe5);
+    fpga_gpio_write_level(GPIOE, (1U << 6), state->pe6);
+    fpga_gpio_write_level(GPIOA, (1U << 15), state->pa15);
+    fpga_gpio_write_level(GPIOA, (1U << 10), state->pa10);
+    fpga_gpio_write_level(GPIOB, (1U << 10), state->pb10);
+    fpga_gpio_write_level(GPIOB, PB11_MASK, state->pb11);
+    fpga_gpio_write_level(GPIOB, (1U << 9), state->pb9);
+    fpga_gpio_write_level(GPIOA, (1U << 6), state->pa6);
+}
+
+bool fpga_debug_apply_meter_mux_arms(uint8_t portc_porte_mux,
+                                     uint8_t porta_portb_mux,
+                                     uint16_t *planned_gpio,
+                                     uint16_t *actual_gpio)
+{
+    fpga_meter_mux_gpio_state_t mux_state;
+
+    if (!fpga_meter_mux_gpio_state_for_stock_mux_arms(portc_porte_mux,
+                                                       porta_portb_mux,
+                                                       &mux_state)) {
+        return false;
+    }
+
+    /*
+     * Debug-only mux-arm apply.
+     *
+     * The unresolved low-DCV failure is upstream of stock-visible decimal
+     * decoding. This hook lets the USB shell apply explicit stock mux-writer
+     * arms and immediately compare the resulting producer frame against the
+     * planned/live GPIO masks. Keeping this as an explicit diagnostic prevents
+     * a live sweep from becoming an unreviewed production range heuristic.
+     */
+    GPIOB->scr = PB11_MASK;
+    GPIOC->scr = PC6_MASK;
+    GPIOC->scr = (1U << 11);
+    if (planned_gpio != 0) {
+        *planned_gpio = fpga_meter_mux_gpio_mask_from_state(&mux_state);
+    }
+    fpga_apply_meter_mux_gpio_state(&mux_state);
+    if (actual_gpio != 0) {
+        *actual_gpio = fpga_meter_mux_gpio_mask_live();
+    }
+    return true;
+}
+
+static void fpga_set_meter_frontend_for_submode(uint8_t submode)
+{
+    fpga_meter_mux_gpio_state_t mux_state;
+
+    GPIOB->scr = PB11_MASK;
+    GPIOC->scr = PC6_MASK;
+    GPIOC->scr = (1U << 11);
+
+    /*
+     * Invalid local submodes still apply the baseline state returned by the
+     * model, then emit no selector/apply word in the transition path. That
+     * keeps the hardware side fail-closed instead of falling through to a
+     * fabricated frontend split.
+     */
+    (void)fpga_meter_mux_gpio_state_for_submode(submode, &mux_state);
+    fpga_apply_meter_mux_gpio_state(&mux_state);
 }
 
 static void fpga_send_meter_wake_preamble(void)
 {
     uint8_t probe_cmd = fpga_probe_cmd_byte();
 
-    fpga_set_meter_frontend_baseline();
+    fpga_set_meter_frontend_for_submode(0);
     fpga_scope_delay_ms(20);
 
-    /* Boot-time meter bring-up uses cmd_hi=0x05 for this block. Keep that
-     * path available as a live experiment before scope mode re-entry. */
+    /*
+     * Boot-time meter bring-up uses cmd_hi=0x05 for this block. Stock
+     * V1.2.0 has binary-guarded raw-word materializers for the configure
+     * word 0x0508 at 0x080033CA, the start/poll word 0x0509 at 0x08003BA4,
+     * and the variant/setup word 0x0514 at 0x08005B7A. The probe word is the
+     * same 0x0507/0x050A GPIOC bit-7 branch guarded in FUN_0800B908; see
+     * fpga_probe_cmd_byte() for the stock polarity and evidence boundary.
+     *
+     * That is stock command sequencing evidence only. It is not a recovered
+     * analog range writer, low-DCV correction, or factory calibration source.
+     */
     fpga_timed_send_cmd(0x05, 0x08, 10);
     fpga_timed_send_cmd(0x05, FPGA_CMD_METER_START, 10);
     fpga_timed_send_cmd(0x05, probe_cmd, 10);
     fpga_timed_send_cmd(0x05, FPGA_CMD_METER_VAR_14, 20);
+}
+
+bool fpga_debug_send_meter_boot_order(uint8_t submode, uint32_t delay_ms,
+                                      uint16_t *planned_gpio,
+                                      uint16_t *actual_gpio)
+{
+    fpga_meter_transition_plan_t plan;
+    fpga_meter_mux_gpio_state_t mux_state;
+    uint8_t probe_cmd;
+
+    if (!fpga.initialized || !fpga_meter_submode_is_valid(submode)) {
+        return false;
+    }
+    if (delay_ms > 5000U) {
+        delay_ms = 5000U;
+    }
+
+    plan = fpga_meter_transition_plan_for_submode(submode);
+    if (!fpga_meter_mux_gpio_state_for_submode(submode, &mux_state)) {
+        return false;
+    }
+    probe_cmd = fpga_probe_cmd_byte();
+
+    meter_data_invalidate(submode);
+    fpga_meter_reset_transport();
+    fpga_set_meter_frontend_for_submode(submode);
+    if (planned_gpio != 0) {
+        *planned_gpio = fpga_meter_mux_gpio_mask_from_state(&mux_state);
+    }
+    if (actual_gpio != 0) {
+        *actual_gpio = fpga_meter_mux_gpio_mask_live();
+    }
+
+    /*
+     * Replay the stock boot/wake word order against the selected runtime
+     * frontend. A previous direct-word live check only proved that adding
+     * 0x0508 before the selector was insufficient; this hook tests the exact
+     * boot order without rewriting the production transition path.
+     */
+    fpga.meter_mode_sequence_count++;
+    fpga.meter_mode_sequence_submode = submode;
+    fpga.meter_mode_selector_word = plan.selector_word;
+    fpga.meter_mode_apply_word = 0x0508U;
+    fpga.meter_mode_probe_word = (uint16_t)(0x0500U | probe_cmd);
+    fpga.meter_mode_start_word = 0x0509U;
+
+    fpga_timed_send_cmd(0x05, 0x08, 10);
+    fpga_timed_send_cmd(0x05, FPGA_CMD_METER_START, 10);
+    fpga_timed_send_cmd(0x05, probe_cmd, 10);
+    fpga_wire_send_word(plan.selector_word, delay_ms);
+    fpga_meter_discard_next_frames(plan.discard_frames);
+
+    return true;
+}
+
+bool fpga_debug_send_meter_pc11_timing(uint8_t submode,
+                                       uint32_t low_ms,
+                                       uint32_t high_ms,
+                                       uint16_t *planned_gpio,
+                                       uint16_t *actual_gpio)
+{
+    fpga_meter_transition_plan_t plan;
+    fpga_meter_mux_gpio_state_t mux_state;
+
+    if (!fpga.initialized || !fpga_meter_submode_is_valid(submode)) {
+        return false;
+    }
+    if (low_ms > 5000U || high_ms > 5000U) {
+        return false;
+    }
+
+    plan = fpga_meter_transition_plan_for_submode(submode);
+    if (!fpga_meter_mux_gpio_state_for_submode(submode, &mux_state)) {
+        return false;
+    }
+
+    /*
+     * PC11 timing probe.
+     *
+     * Stock runtime drain clears PC11 while the DMM USART/tasks/queues are
+     * drained, and the enable path asserts PC11 before entering the mode-init
+     * tail. The normal open transition already has correct-looking settled
+     * selector/GPIO snapshots, but shorted probes still produce OL/special
+     * frames. This diagnostic keeps PC11 low during mux projection, then raises
+     * it with an explicit delay before sending the existing stock-like command
+     * plan unchanged. A useful result must change the producer frames; this path
+     * is not a numeric correction and is intentionally not used by production
+     * fpga_set_meter_mode().
+     */
+    meter_data_invalidate(submode);
+    fpga_meter_reset_transport();
+
+    GPIOC->clr = (1U << 11);
+    GPIOB->scr = PB11_MASK;
+    GPIOC->scr = PC6_MASK;
+    fpga_apply_meter_mux_gpio_state(&mux_state);
+    GPIOC->clr = (1U << 11);
+
+    if (planned_gpio != 0) {
+        *planned_gpio = fpga_meter_mux_gpio_mask_from_state(&mux_state);
+    }
+    fpga_scope_delay_ms(low_ms);
+
+    GPIOC->scr = (1U << 11);
+    fpga_scope_delay_ms(high_ms);
+
+    if (actual_gpio != 0) {
+        *actual_gpio = fpga_meter_mux_gpio_mask_live();
+    }
+
+    fpga_send_meter_mode_sequence(submode);
+    fpga_arm_meter_first_rx_latch(submode, &plan,
+                                  planned_gpio != 0 ? *planned_gpio : 0,
+                                  actual_gpio != 0 ? *actual_gpio : 0);
+    fpga_meter_discard_next_frames(plan.discard_frames);
+    return true;
 }
 
 static uint8_t fpga_scope_trigger_lsb(const scope_state_t *ss)
@@ -1131,10 +1738,11 @@ static uint8_t fpga_scope_coupling_param(const scope_state_t *ss)
 
 static void fpga_send_scope_range_block(const scope_state_t *ss)
 {
-    /* Stock range/coupling updates dispatch a channel-bank prefix followed by
-     * 0x1A..0x1E. We still do not have the original state-packer that filled
-     * bytes[4..8], so keep this as a best-effort projection of live UI state
-     * into the single-byte hi params our current queue transport supports. */
+    /* Scope-only range/coupling projection. Stock scope paths use the 0x1A..0x1E
+     * command family for channel gain/offset/coupling. DMM boot notes also show
+     * those byte values entering the 0x20002D6C dispatcher, but that is not the
+     * raw 0x20002D74 DVOM wire queue and not DMM range proof. Keep this helper
+     * scoped to scope UI state until a stock DMM materializer is recovered. */
     fpga_timed_send_cmd(0x00, fpga_scope_prefix_cmd(ss), 10);
     fpga_timed_send_cmd(fpga_scope_gain_param(&ss->ch1), FPGA_CMD_CH1_GAIN, 10);
     fpga_timed_send_cmd(fpga_scope_offset_param(&ss->ch1), FPGA_CMD_CH1_OFFSET, 10);
@@ -1211,9 +1819,10 @@ static void fpga_send_scope_sequence(const scope_state_t *ss)
     fpga_timed_send_cmd(0x02, FPGA_CMD_SCOPE_CFG_10, 15);
     fpga_timed_send_cmd(0x01, FPGA_CMD_SCOPE_CFG_11, 20);
 
-    /* Stock scope setup also pushes a channel range/coupling block via
-     * 0x07/0x0A + 0x1A..0x1E when the frontend changes. Re-apply that here
-     * so scope entry does not rely only on local relay writes. */
+    /* Stock scope setup also pushes a channel range/coupling block via the
+     * scope command family. This is deliberately separate from DMM setup: the
+     * DMM-visible 0x1A..0x1E bytes are dispatcher inputs, not recovered raw
+     * range words. */
     fpga_send_scope_range_block(ss);
 
     /* Runtime acquisition and timebase config. */
@@ -1320,21 +1929,46 @@ void USART2_IRQHandler(void)
     if (USART2->sts & USART_RDBF_FLAG) {
         fpga.rx_byte_count++;
         uint8_t byte = (uint8_t)USART2->dt;
+        uint8_t rx_index_before = fpga.rx_index;
+
+        /*
+         * Raw USART2 byte trace, before header filtering.
+         *
+         * Stock V1.2.0 proves 12-byte `5A A5` data frames and 10-byte `AA 55`
+         * echo frames share this RX stream. Live DMM runs currently show
+         * `echo_start=0`; this ring answers whether 0xAA is absent on the wire or
+         * merely lost to our sync state. It is diagnostic only and must not feed
+         * decoder math, mode selection, or calibration.
+         */
+        fpga_record_rx_raw_byte(byte, rx_index_before);
 
         if (fpga.rx_index == 0) {
             /* Looking for frame header first byte */
             if (byte == FPGA_RX_DATA_HDR_0 || byte == FPGA_RX_ECHO_HDR_0) {
+                if (byte == FPGA_RX_DATA_HDR_0) {
+                    fpga.rx_sync_data_start_count++;
+                } else {
+                    fpga.rx_sync_echo_start_count++;
+                }
                 fpga.rx_buf[0] = byte;
                 fpga.rx_index = 1;
+            } else {
+                fpga.rx_sync_stray_count++;
             }
         } else if (fpga.rx_index == 1) {
             /* Validate header second byte */
             if ((fpga.rx_buf[0] == FPGA_RX_DATA_HDR_0 && byte == FPGA_RX_DATA_HDR_1) ||
                 (fpga.rx_buf[0] == FPGA_RX_ECHO_HDR_0 && byte == FPGA_RX_ECHO_HDR_1)) {
+                if (fpga.rx_buf[0] == FPGA_RX_DATA_HDR_0) {
+                    fpga.rx_sync_data_header_count++;
+                } else {
+                    fpga.rx_sync_echo_header_count++;
+                }
                 fpga.rx_buf[1] = byte;
                 fpga.rx_index = 2;
             } else {
                 /* Invalid header — restart */
+                fpga.rx_sync_bad_second_count++;
                 fpga.rx_index = 0;
             }
         } else {
@@ -1343,24 +1977,92 @@ void USART2_IRQHandler(void)
             /* Check for complete frame */
             if (fpga.rx_buf[0] == FPGA_RX_DATA_HDR_0 &&
                 fpga.rx_index >= FPGA_RX_FRAME_SIZE) {
-                /* Complete data frame (12 bytes): copy to stable buffer */
+                /*
+                 * Stock USART2 RX does not release a 12-byte DMM data frame to
+                 * dvom_RX while the 10-byte TX pump is still active. The
+                 * decompiled ISR gate is `usart2_tx_byte_index == 10` plus the
+                 * UI exchange lock. The open firmware has no equivalent display
+                 * lock, but it does have the same TX byte index. Dropping data
+                 * frames that arrive before the command frame finished prevents
+                 * command-overlap bytes from becoming plausible voltage/current
+                 * readings during DMM mode/range churn; it is producer hygiene,
+                 * not a value or range correction.
+                 */
+                if (fpga.tx_index < FPGA_TX_FRAME_SIZE) {
+                    fpga.rx_data_tx_busy_drop_count++;
+                    fpga.rx_index = 0;
+                    return;
+                }
+
+                /* Complete data frame (12 bytes): copy to diagnostic buffer and
+                 * enqueue an immutable event for dvom_RX. A binary semaphore over
+                 * fpga.rx_frame let later ISR frames overwrite the bytes before
+                 * the task parsed them, which made stale/wrong-family DMM frames
+                 * indistinguishable from legitimate active-mode data. */
+                fpga_meter_rx_event_t event;
                 memcpy((void *)fpga.rx_frame, (const void *)fpga.rx_buf,
+                       FPGA_RX_FRAME_SIZE);
+                memcpy(event.frame, (const void *)fpga.rx_buf,
                        FPGA_RX_FRAME_SIZE);
                 fpga.rx_frame_valid = true;
                 fpga.frame_count++;
+                /*
+                 * Producer-side DMM trace anchor.
+                 *
+                 * The low-DCV blocker is upstream of display formatting: the
+                 * 12-byte stock-visible frame already contains the wrong
+                 * digits. Capture the transport/selector state at the exact
+                 * point that data frame becomes firmware-owned, before the
+                 * dvom_RX task parses or rejects it. This is diagnostic only;
+                 * it must not feed range decisions or value-shaped fixes.
+                 */
+                fpga.last_rx_frame_count = fpga.frame_count;
+                fpga.last_rx_tx_count = fpga.tx_count;
+                fpga.last_rx_echo_count = fpga.echo_count;
+                fpga.last_rx_mode_sequence_count = fpga.meter_mode_sequence_count;
+                fpga.last_rx_mode_sequence_submode = fpga.meter_mode_sequence_submode;
+                fpga.last_rx_discard_remaining = meter_frame_discard_count;
+                fpga.last_rx_transition_busy = meter_transition_busy ? 1U : 0U;
+                event.frame_count = fpga.last_rx_frame_count;
+                event.tx_count = fpga.last_rx_tx_count;
+                event.echo_count = fpga.last_rx_echo_count;
+                event.mode_sequence_count = fpga.last_rx_mode_sequence_count;
+                event.mode_sequence_submode = fpga.last_rx_mode_sequence_submode;
+                event.discard_remaining = fpga.last_rx_discard_remaining;
+                event.transition_busy = fpga.last_rx_transition_busy;
+                fpga_record_rx_data_frame();
+                fpga_capture_meter_first_rx_latch();
                 fpga.rx_index = 0;
 
-                /* Signal meter processing task (only if RTOS is running) */
-                if (meter_sem != NULL && xTaskGetSchedulerState() == taskSCHEDULER_RUNNING) {
+                /* Hand complete frame ownership to dvom_RX (only if RTOS is running). */
+                if (meter_rx_queue != NULL &&
+                    xTaskGetSchedulerState() == taskSCHEDULER_RUNNING) {
                     BaseType_t xHigherPriorityTaskWoken = pdFALSE;
-                    xSemaphoreGiveFromISR(meter_sem, &xHigherPriorityTaskWoken);
+                    (void)xQueueSendFromISR(meter_rx_queue, &event,
+                                            &xHigherPriorityTaskWoken);
                     portYIELD_FROM_ISR(xHigherPriorityTaskWoken);
                 }
 
             } else if (fpga.rx_buf[0] == FPGA_RX_ECHO_HDR_0 &&
-                       fpga.rx_index >= 10) {
-                /* Complete echo frame (10 bytes): just acknowledge */
-                fpga.echo_count++;
+                       fpga.rx_index >= FPGA_RX_ECHO_FRAME_SIZE) {
+                /*
+                 * Complete echo frame (10 bytes).
+                 *
+                 * Stock validates byte[3] against the just-sent command low byte
+                 * and byte[7] against the fixed 0xAA integrity marker. Keep the
+                 * same validation as diagnostics so a bad echo cannot be treated
+                 * as transport confidence while debugging wrong DMM producer
+                 * frames. Data frames are still handled independently above.
+                 */
+                memcpy((void *)fpga.last_rx_echo_frame, (const void *)fpga.rx_buf,
+                       FPGA_RX_ECHO_FRAME_SIZE);
+                if (fpga.rx_buf[3] == fpga.last_tx_frame[3] &&
+                    fpga.rx_buf[7] == 0xAAU) {
+                    fpga.rx_echo_valid_count++;
+                    fpga.echo_count++;
+                } else {
+                    fpga.rx_echo_bad_count++;
+                }
                 fpga.rx_index = 0;
             }
         }
@@ -1411,11 +2113,13 @@ static void fpga_usart_tx_task(void *pv)
          * We previously hardcoded byte[8]=0xAA based on protocol doc,
          * but this likely caused checksum failures (zero echo frames). */
         fpga.tx_count++;
+        fpga_record_tx_cmd(cmd_hi, cmd_lo);
         fpga.tx_index = 0;
         memset((void *)fpga.tx_frame, 0, FPGA_TX_FRAME_SIZE);
         fpga.tx_frame[2] = cmd_hi;
         fpga.tx_frame[3] = cmd_lo;
         fpga.tx_frame[9] = (cmd_lo + cmd_hi) & 0xFF;
+        fpga_record_tx_frame((const uint8_t *)fpga.tx_frame);
 
         /* Enable TX interrupt — ISR pumps all 10 bytes */
         USART2->ctrl1 |= USART_CTRL1_TDBEIEN;
@@ -1427,44 +2131,65 @@ static void fpga_usart_tx_task(void *pv)
 
 /*
  * USART RX Processing Task (dvom_RX equivalent)
- * Wakes on meter_sem when a complete data frame arrives.
+ * Wakes on meter_rx_queue when a complete data frame arrives.
  * Parses BCD meter readings and updates the global meter_reading.
  *
- * After parsing, sends auto-range feedback commands (0x1B, 0x1C, 0x1E)
- * to keep the FPGA meter IC properly configured. Without these, the
- * meter IC operates with wrong gain/reference settings.
- * See: fpga_state_update (0x080028E0) in stock firmware.
+ * Stock note: the decompiled FUN_080028e0 path queues dispatcher indices
+ * 0x1B/0x1C/0x1E after formatter state changes. Those are not raw USART2
+ * bytes, so the RX task must not emit value-shaped "range fixes" from the
+ * decoded number. The poll task below keeps the active stock selector/config
+ * words alive through the already recovered raw 0x05xx materializers instead.
  */
 static void fpga_usart_rx_task(void *pv)
 {
     (void)pv;
 
     for (;;) {
-        /* Block until USART ISR signals a complete data frame */
-        xSemaphoreTake(meter_sem, portMAX_DELAY);
+        fpga_meter_rx_event_t event;
+
+        /* Block until USART ISR owns a complete data frame. */
+        xQueueReceive(meter_rx_queue, &event, portMAX_DELAY);
 
         /* Parse the meter data from the RX frame.
          * meter_submode is the global from main.c (via ui.h extern). */
         extern volatile uint8_t meter_submode;
-        meter_data_process_frame(fpga.rx_frame, meter_submode);
+        if (!fpga_meter_rx_frame_should_parse(event.transition_busy != 0U,
+                                              &meter_frame_discard_count,
+                                              &meter_transition_frame_skip_count)) {
+            continue;
+        }
 
-        /* Auto-range feedback commands (0x1B, 0x1C, 0x1E) DISABLED.
+        uint8_t parse_submode = meter_submode;
+        if (fpga_meter_submode_is_valid(event.mode_sequence_submode)) {
+            parse_submode = event.mode_sequence_submode;
+        }
+        /*
+         * H2/SPI3 readback remains diagnostics, not an acceptance gate.
          *
-         * 2026-04-04 findings: Sending these at runtime causes the FPGA
-         * meter IC to auto-range internally, but the MCU's analog frontend
-         * relays don't track the range changes. Result: correct readings
-         * only in the ~2-10V sweet spot, wildly wrong outside it.
+         * Stock V1.2.0 evidence proves the H2 TX geometry and the post-H2 SPI3
+         * trigger bytes, but no recovered compare/store/branch says "all 0xFF
+         * MISO means DMM frames must be killed". Earlier OpenScope code added
+         * that global gate while chasing the low-DCV bug; it hid the real USART2
+         * producer frames and turned an unresolved H2/apply question into a fake
+         * display fix. Let meter_data_process_frame() enforce the stock-visible
+         * frame family/range rules, and keep H2/MISO counts in status/trace for
+         * the still-unresolved calibration/frontend investigation.
+         */
+        meter_data_process_frame(event.frame, parse_submode);
+
+        /*
+         * Range feedback is intentionally not driven from the parsed number.
          *
-         * With these disabled and boot commands 0x1A-0x1E (param=0), the
-         * meter IC stays on a fixed 10V range: accurate 1-10V DCV readings,
-         * BCD wraps above 10V. A relay click at ~0.7V suggests the FPGA
-         * controls some analog switching internally.
-         *
-         * TODO: Implement MCU-side auto-ranging with relay switching:
-         *   1. Detect BCD overflow (>9500) → send higher range params
-         *   2. Detect BCD underflow (<100) → send lower range params
-         *   3. Switch relays via gpio_mux_portc_porte/porta_portb
-         *   4. Need to discover param values for 600mV, 60V, 600V ranges
+         * Early bring-up notes speculated about sending 0x1B/0x1C/0x1E after
+         * BCD overflow/underflow. That is now a known-bad direction for this
+         * DMM port: stock-visible voltage scaling comes from frame metadata
+         * (`frame[8].7`, `frame[3].4`, `frame[4].4`, `frame[5].4`) and the
+         * active stock-like selector state, while the analog frontend must be
+         * set by recovered mux/range writers or safe live traces. Do not infer
+         * a new relay/range command from the decoded number here. The current
+         * unresolved low-DCV case (`0.200 V` visual vs `0.4366 V` CDC) is a
+         * frontend/H2/acceptance evidence problem, not an excuse for a
+         * value-shaped feedback loop.
          */
     }
 }
@@ -1489,15 +2214,293 @@ static void fpga_usart_rx_task(void *pv)
  *
  * Root-cause analysis: reverse_engineering/analysis_v120/usart2_isr_state_machine.md
  */
+static void fpga_send_meter_poll_sequence(uint8_t submode)
+{
+    fpga_meter_transition_plan_t plan =
+        fpga_meter_transition_plan_for_submode(submode);
+
+    if (!fpga_meter_submode_is_valid(submode) ||
+        plan.selector_word == FPGA_METER_INVALID_SELECTOR_WORD ||
+        plan.start_word == 0) {
+        return;
+    }
+
+    /*
+     * Poll only the stock start word after the transition sequence has
+     * selected the mode. Re-sending selector/config/probe words every 250 ms
+     * keeps the producer in setup traffic and can hold low-DCV auto/range
+     * settling in status-20 transitional frames. Selector/config/apply words
+     * belong to fpga_send_meter_mode_sequence(), not to the sample cadence.
+     */
+    (void)fpga_send_cmd((uint8_t)(plan.start_word >> 8),
+                        (uint8_t)(plan.start_word & 0x00FFU));
+}
+
 static void fpga_meter_poll_task(void *pv)
 {
     (void)pv;
     extern volatile device_mode_t current_mode;  /* from ui.h via main.c */
+    extern volatile uint8_t meter_submode;
 
     for (;;) {
         vTaskDelay(pdMS_TO_TICKS(250));  /* ~4 Hz */
-        if (fpga.initialized && current_mode == MODE_MULTIMETER) {
-            fpga_send_cmd(0x00, 0x09);  /* Meter: start measurement */
+        if (fpga.initialized && current_mode == MODE_MULTIMETER &&
+            !meter_transition_busy) {
+            fpga_send_meter_poll_sequence(meter_submode);
+        }
+    }
+}
+
+static uint8_t fpga_meter_adc_select_byte(void)
+{
+    if (fpga_meter_adc_selector_override >= 0 &&
+        fpga_meter_adc_selector_override <= 255) {
+        return (uint8_t)fpga_meter_adc_selector_override;
+    }
+
+    /* Stock case 5 sends ms[0x16], annotated as active_channel in the
+     * recovered state. Whether this can expose a useful DMM-probe waveform is
+     * still experimental; live probes currently show 0xFF when not armed by the
+     * right FPGA state. */
+    return active_channel & 0x01;
+}
+
+static uint8_t fpga_preacq_command_byte(void)
+{
+    if (fpga_meter_adc_preacq_override >= 0 &&
+        fpga_meter_adc_preacq_override <= 255) {
+        return (uint8_t)fpga_meter_adc_preacq_override;
+    }
+
+    const scope_state_t *ss = scope_state_get();
+    uint8_t voltage_range = fpga_scope_primary_range(ss) & 0x7F;
+    return (uint8_t)(0x80 | voltage_range);
+}
+
+/* Private post-H2 boot queue tags.
+ * These values intentionally do not overlap with normal acquisition trigger bytes
+ * (FPGA_ACQ_* + 1) so public acquisition cannot collide with boot choreography.
+ */
+enum {
+    FPGA_POST_H2_TRIGGER_FAST_TB = 0xF1u,
+    FPGA_POST_H2_TRIGGER_ROLL = 0xF2u,
+    FPGA_POST_H2_TRIGGER_METER_ADC = 0xF3u,
+    FPGA_POST_H2_TRIGGER_SIGGEN = 0xF4u,
+    FPGA_POST_H2_TRIGGER_STATUS = 0xF5u,
+};
+
+static bool fpga_is_stock_post_h2_spi3_trigger(uint8_t trigger)
+{
+    return trigger == FPGA_POST_H2_TRIGGER_FAST_TB ||
+           trigger == FPGA_POST_H2_TRIGGER_ROLL ||
+           trigger == FPGA_POST_H2_TRIGGER_METER_ADC ||
+           trigger == FPGA_POST_H2_TRIGGER_SIGGEN ||
+           trigger == FPGA_POST_H2_TRIGGER_STATUS;
+}
+
+static uint8_t fpga_stock_timebase_byte(void)
+{
+    const scope_state_t *ss = scope_state_get();
+    return ss->timebase_idx;
+}
+
+static uint8_t fpga_stock_trigger_edge_byte(void)
+{
+    const scope_state_t *ss = scope_state_get();
+    return (uint8_t)ss->trigger.edge;
+}
+
+static uint8_t fpga_post_h2_trigger_diag_index(uint8_t trigger_byte)
+{
+    switch (trigger_byte) {
+    case FPGA_POST_H2_TRIGGER_FAST_TB:   return 0;
+    case FPGA_POST_H2_TRIGGER_ROLL:      return 1;
+    case FPGA_POST_H2_TRIGGER_METER_ADC: return 2;
+    case FPGA_POST_H2_TRIGGER_SIGGEN:    return 3;
+    case FPGA_POST_H2_TRIGGER_STATUS:    return 4;
+    default:                     return 0xFF;
+    }
+}
+
+static uint8_t fpga_post_h2_stock_wire_byte(uint8_t trigger_byte)
+{
+    switch (trigger_byte) {
+    case FPGA_POST_H2_TRIGGER_FAST_TB:   return FPGA_ACQ_FAST_TB + 1;
+    case FPGA_POST_H2_TRIGGER_ROLL:      return FPGA_ACQ_ROLL + 1;
+    case FPGA_POST_H2_TRIGGER_METER_ADC: return FPGA_ACQ_METER_ADC + 1;
+    case FPGA_POST_H2_TRIGGER_SIGGEN:    return FPGA_ACQ_SIGGEN + 1;
+    case FPGA_POST_H2_TRIGGER_STATUS:    return FPGA_ACQ_STATUS + 1;
+    default:                             return 0xFF;
+    }
+}
+
+static void fpga_post_h2_diag_begin(uint8_t idx, uint8_t trigger_byte)
+{
+    if (idx >= FPGA_POST_H2_TRIGGER_HISTORY) return;
+
+    fpga.post_h2_spi3_trigger[idx] = trigger_byte;
+    fpga.post_h2_spi3_rx_len[idx] = 0;
+    memset((void *)fpga.post_h2_spi3_rx[idx], 0,
+           sizeof(fpga.post_h2_spi3_rx[idx]));
+}
+
+static void fpga_post_h2_diag_rx(uint8_t idx, uint8_t rx_byte)
+{
+    if (idx >= FPGA_POST_H2_TRIGGER_HISTORY) return;
+
+    uint8_t len = fpga.post_h2_spi3_rx_len[idx];
+    if (len < FPGA_POST_H2_RX_HISTORY) {
+        fpga.post_h2_spi3_rx[idx][len] = rx_byte;
+    }
+    if (len < 0xFF) {
+        fpga.post_h2_spi3_rx_len[idx] = (uint8_t)(len + 1U);
+    }
+}
+
+static void fpga_run_stock_post_h2_spi3_trigger(uint8_t trigger_byte)
+{
+    /*
+     * Post-H2 stock sequence equivalent uses private queue tags so normal
+     * acquisition trigger bytes cannot collide with boot choreography.
+     * (0x08026DCE..0x08026E2A). The consumer at 0x080374B2 first writes the
+     * queued stock byte itself to SPI3, then dispatches on that value. Locally
+     * the queue tag is private, but the SPI3 wire byte remains stock-compatible.
+     *
+     * The local state bytes used below are the open-firmware equivalents of
+     * stock scope bytes (`ms[0x2D]`, `ms[0x16]`, `ms[0x18]`). They are not DMM
+     * coefficients and they are not a recovered H2 ACK; live DMM frames still
+     * decide whether this boot choreography is sufficient.
+     */
+    uint8_t diag_idx = fpga_post_h2_trigger_diag_index(trigger_byte);
+    uint8_t wire_byte = fpga_post_h2_stock_wire_byte(trigger_byte);
+    fpga.spi3_probing = true;
+    fpga_post_h2_diag_begin(diag_idx, trigger_byte);
+    SPI3_CS_ASSERT();
+    fpga_post_h2_diag_rx(diag_idx, spi3_xfer(wire_byte));
+
+    switch (trigger_byte) {
+    case FPGA_POST_H2_TRIGGER_FAST_TB:
+        fpga_post_h2_diag_rx(diag_idx, spi3_xfer(fpga_stock_timebase_byte()));
+        break;
+
+    case FPGA_POST_H2_TRIGGER_ROLL:
+        for (unsigned i = 0; i < 5; i++) {
+            fpga_post_h2_diag_rx(diag_idx, spi3_xfer(0xFF));
+        }
+        break;
+
+    case FPGA_POST_H2_TRIGGER_METER_ADC:
+        fpga_post_h2_diag_rx(diag_idx, spi3_xfer(fpga_meter_adc_select_byte()));
+        break;
+
+    case FPGA_POST_H2_TRIGGER_SIGGEN:
+        fpga_post_h2_diag_rx(diag_idx, spi3_xfer(fpga_stock_trigger_edge_byte()));
+        break;
+
+    case FPGA_POST_H2_TRIGGER_STATUS:
+        /*
+         * Stock TBH map at 0x0803753A sends public trigger byte 8 to
+         * 0x08037760, not to the 0x08037800 two-phase calibration readback.
+         * The common pre-dispatch path has already written the trigger byte to
+         * SPI3; this case writes the transformed pre-acquisition/status command
+         * and discards the response. Trigger byte 9 is the calibration path and
+         * is not part of the recovered post-H2 boot queue.
+         */
+        fpga.spi3_first_byte = spi3_xfer(fpga_preacq_command_byte());
+        fpga_post_h2_diag_rx(diag_idx, fpga.spi3_first_byte);
+        break;
+
+    default:
+        break;
+    }
+
+    SPI3_CS_DEASSERT();
+    fpga.spi3_probing = false;
+    fpga.post_h2_spi3_boot_run_count++;
+}
+
+static void fpga_enqueue_stock_post_h2_spi3_boot_triggers(void)
+{
+    static const uint8_t stock_triggers[] = {
+        FPGA_POST_H2_TRIGGER_FAST_TB,
+        FPGA_POST_H2_TRIGGER_ROLL,
+        FPGA_POST_H2_TRIGGER_METER_ADC,
+        FPGA_POST_H2_TRIGGER_SIGGEN,
+        FPGA_POST_H2_TRIGGER_STATUS,
+    };
+
+    for (unsigned i = 0; i < sizeof(stock_triggers); i++) {
+        uint8_t trigger = stock_triggers[i];
+        fpga.post_h2_spi3_boot_enqueued++;
+        if (xQueueSend(spi3_acq_queue, &trigger, 0) == pdTRUE) {
+            fpga.post_h2_spi3_boot_mask |= (uint8_t)(1u << i);
+        } else {
+            fpga.post_h2_spi3_boot_dropped++;
+        }
+    }
+}
+
+/*
+ * Meter ADC Waveform Sampler
+ *
+ * The decoded DMM value arrives over USART2 at a few hertz. Stock RE also
+ * shows SPI3 acquisition case 5: a single raw meter-path ADC byte. Poll this
+ * experimental path only in voltage modes; the UI treats all-0xFF results as
+ * "not armed" rather than a valid DMM waveform.
+ */
+static void fpga_meter_adc_sampler_task(void *pv)
+{
+    (void)pv;
+    extern volatile device_mode_t current_mode;
+    extern volatile uint8_t meter_submode;
+    uint8_t last_submode = 0xFF;
+    bool was_voltage_mode = false;
+
+    for (;;) {
+        uint8_t trigger = FPGA_ACQ_DIAG_METER_ADC_TRIGGER;
+        bool voltage_mode;
+
+        if (!fpga_meter_adc_sampler_enabled) {
+            if (was_voltage_mode) {
+                meter_voltage_wave_reset();
+                was_voltage_mode = false;
+                last_submode = 0xFF;
+            }
+            vTaskDelay(pdMS_TO_TICKS(100));
+            continue;
+        }
+
+        vTaskDelay(pdMS_TO_TICKS(1));  /* ~1 ksample/s with a 1 kHz tick. */
+        if (!fpga.initialized) continue;
+        if (meter_transition_busy) {
+            fpga_meter_adc_transition_skips++;
+            continue;
+        }
+
+        voltage_mode = (current_mode == MODE_MULTIMETER) &&
+                       (meter_submode == 0 || meter_submode == 1);
+
+        if (!voltage_mode) {
+            if (was_voltage_mode) {
+                meter_voltage_wave_reset();
+                was_voltage_mode = false;
+                last_submode = 0xFF;
+            }
+            fpga_meter_adc_not_voltage_skips++;
+            continue;
+        }
+
+        if (!was_voltage_mode || meter_submode != last_submode) {
+            meter_voltage_wave_reset();
+            last_submode = meter_submode;
+            was_voltage_mode = true;
+        }
+
+        fpga_meter_adc_enqueue_attempts++;
+        if (xQueueSend(spi3_acq_queue, &trigger, 0) == pdTRUE) {
+            fpga_meter_adc_enqueue_success++;
+        } else {
+            fpga_meter_adc_enqueue_drops++;
         }
     }
 }
@@ -1541,6 +2544,51 @@ static void fpga_acquisition_task(void *pv)
          * off SPI3 entirely to avoid contention with the ESP32. */
         if (fpga.bus_released) continue;
 
+        if (trigger_byte == FPGA_ACQ_DIAG_METER_ADC_TRIGGER) {
+            uint8_t sample;
+            uint8_t preacq_rx = 0;
+            uint8_t selector = fpga_meter_adc_select_byte();
+            uint8_t preacq = fpga_preacq_command_byte();
+            uint32_t reset_generation = fpga_meter_adc_reset_generation;
+
+            fpga.spi3_probing = true;
+            fpga_meter_adc_last_preacq = preacq;
+            fpga_meter_adc_last_selector = selector;
+
+            if (fpga_meter_adc_use_preacq) {
+                SPI3_CS_ASSERT();
+                preacq_rx = spi3_xfer(preacq);
+                SPI3_CS_DEASSERT();
+
+                for (volatile int d = 0; d < 100; d++) {}
+            }
+            fpga_meter_adc_last_preacq_rx = preacq_rx;
+
+            SPI3_CS_ASSERT();
+            /* Stock case 5 is a single-byte DMM ADC read. */
+            sample = spi3_xfer(selector);
+            SPI3_CS_DEASSERT();
+
+            meter_voltage_wave_add_sample(sample);
+            fpga_meter_adc_last_sample = sample;
+            if (fpga_meter_adc_last_reset_generation != reset_generation) {
+                fpga_meter_adc_last_reset_generation = reset_generation;
+                fpga_meter_adc_first_sample_after_reset = sample;
+            }
+            fpga_meter_adc_samples++;
+            if (sample == 0xFF) fpga_meter_adc_ff_samples++;
+            if (sample == 0x00) fpga_meter_adc_zero_samples++;
+            if (sample < fpga_meter_adc_min_sample) fpga_meter_adc_min_sample = sample;
+            if (sample > fpga_meter_adc_max_sample) fpga_meter_adc_max_sample = sample;
+            fpga.spi3_probing = false;
+            continue;
+        }
+
+        if (fpga_is_stock_post_h2_spi3_trigger(trigger_byte)) {
+            fpga_run_stock_post_h2_spi3_trigger(trigger_byte);
+            continue;
+        }
+
         /* Backoff: if we've timed out too many times, pause */
         if (fpga.spi3_timeout_count >= SPI3_BACKOFF_THRESHOLD) {
             fpga.spi3_timeout_count = 0;  /* Reset for next round */
@@ -1571,11 +2619,7 @@ static void fpga_acquisition_task(void *pv)
 
         /* Transaction 1: Pre-acquisition command */
         SPI3_CS_ASSERT();
-        {
-            const scope_state_t *ss = scope_state_get();
-            uint8_t voltage_range = fpga_scope_primary_range(ss) & 0x7F;
-            spi3_xfer(0x80 | voltage_range);
-        }
+        spi3_xfer(fpga_preacq_command_byte());
         SPI3_CS_DEASSERT();
 
         /* Brief pause between transactions (stock firmware has a few cycles) */
@@ -2549,7 +3593,12 @@ uint8_t fpga_spi3_config_sequence(const fpga_cfg_seq_opts_t *opt)
     if (opt->prelude_frame_mode != 2) SPI3_CS_ASSERT();
     fpga.init_hs[10] = spi3_xfer(0x3B);  /* open upload */
     spi3_set_br(opt->upload_br);
-    spi3_pump(fpga_h2_cal_table, NULL, FPGA_H2_CAL_TABLE_SIZE);
+    fpga.h2_rx_00_count = 0;
+    fpga.h2_rx_ff_count = 0;
+    fpga.h2_rx_other_count = 0;
+    fpga.h2_close_rx_len = 0;
+    memset((void *)fpga.h2_close_rx, 0, sizeof(fpga.h2_close_rx));
+    spi3_pump_h2_record(fpga_h2_cal_table, FPGA_H2_CAL_TABLE_SIZE);
     spi3_set_br(opt->cmd_br);            /* back to command clock for close/status */
     /* Trailing clocks: Gowin runs the CRC-check / DONE / wakeup on CCLK cycles
      * AFTER the last config byte. Our sequence sent none; rosenrot00's working
@@ -2564,14 +3613,15 @@ uint8_t fpga_spi3_config_sequence(const fpga_cfg_seq_opts_t *opt)
 
     /* [5] 3A 00 — close/commit in its own CS-LOW frame. Stock → 0xF8. */
     SPI3_CS_ASSERT();
-    spi3_xfer(0x3A);
+    fpga_h2_record_close_rx(spi3_xfer(0x3A));
     fpga.h2_close_status = spi3_xfer(0x00);
+    fpga_h2_record_close_rx(fpga.h2_close_status);
     SPI3_CS_DEASSERT();
     cfg_trace_capture(opt, 5);   /* T5: after CONFIG_DISABLE / close */
 
     /* [6] single 0x00 byte, CS LOW (stock flush frame at t=4.4484). */
     SPI3_CS_ASSERT();
-    spi3_xfer(0x00);
+    fpga_h2_record_close_rx(spi3_xfer(0x00));
     SPI3_CS_DEASSERT();
 
     /* [6b] Gowin STATUS_REGISTER read (opcode 0x41) — the authoritative config
@@ -2686,18 +3736,7 @@ void fpga_init(void)
      * - Clear bit [28] = 0 (SPI3 on PB3/PB4/PB5)
      * Stock firmware: (reg & ~0xF000) | 0x2000 at AFIO+0x08 per CLAUDE.md,
      * but the actual SWJ_CFG is at bits [26:24] of offset 0x04. */
-    /* AT32F403A requires BOTH legacy remap AND GMUX configuration.
-     * Unlike STM32F1, the AT32 GMUX system OVERRIDES the legacy remap.
-     * GMUX=0000 (default) means SPI3 is NOT connected to any pins!
-     *
-     * Required settings:
-     *   1. SWJTAG_GMUX_010: Disable JTAG-DP, keep SW-DP (frees PB3/PB4/PB5)
-     *   2. SPI3_GMUX_0010:  Route SPI3 to PB3(SCK)/PB4(MISO)/PB5(MOSI)
-     *
-     * From AT32 example: spi/halfduplex_dma_jtagpin/src/main.c lines 173-174.
-     * The AT32 HAL gpio_pin_remap_config() handles both legacy and GMUX regs.
-     */
-    /* AT32F403A pin remapping — need BOTH legacy AND GMUX for JTAG disable.
+    /* AT32F403A pin remapping: keep legacy SWJ_CFG and SWJTAG_GMUX aligned.
      *
      * The legacy SWJ_CFG in IOMUX->remap (offset 0x04) defaults to 000
      * (full JTAG enabled) on reset. PB3=JTDO, PB4=NJTRST in that state.
@@ -2705,8 +3744,8 @@ void fpga_init(void)
      * Both must be set to free PB3/PB4 for SPI3 use.
      *
      * Legacy: SWJ_CFG bits [26:24] = 010 → JTAG off, SWD on
-     *         Do NOT touch bit 28 (SPI3_MUX) — let GMUX handle SPI3 routing
-     * GMUX:  SWJTAG = 010, SPI3 = 0010 (PB3/PB4/PB5)
+     *         Do NOT touch bit 28 (SPI3_MUX), stock leaves SPI3 on PB3/PB4/PB5.
+     * GMUX:  SWJTAG = 010 only; leave SPI3_GMUX cleared like stock/scopediag.
      */
     /* Legacy JTAG disable — write-only bits, only modify SWJ_CFG [26:24] */
     {
@@ -2716,23 +3755,17 @@ void fpga_init(void)
         IOMUX->remap = remap;
     }
 
-    /* GMUX remap — AT32-specific pin routing fabric.
+    /*
+     * GMUX remap (AT32-specific).
      *
-     * CRITICAL: on AT32 the GMUX overrides the legacy remap and its
-     * SPI3 default routes SPI3 to PC10/11/12, NOT PB3/4/5. The legacy
-     * SWJ_CFG=010 write above frees the JTAG pins but does NOT by itself
-     * connect SPI3 to them. We MUST call SPI3_GMUX_0010 to route
-     * SPI3 → PB3(SCK)/PB4(MISO)/PB5(MOSI)/PB6.
-     *
-     * Do NOT remove this based on "the stock decompilation never writes
-     * SPI3_GMUX." Stock is a GD32 binary; the AT32 GMUX register block
-     * does not exist in its world, so it CANNOT contain such a write —
-     * its absence proves nothing about the AT32's needs. Bench-confirmed
-     * 2026-04-06: SCK does not toggle on PB3 without this call. The HAL's
-     * own JTAG-pin SPI3 example writes both SWJTAG_GMUX_010 and
-     * SPI3_GMUX_0010. See memory feedback_at32_gmux + GitHub issue #11. */
+     * Stock V1.2.0 proves only the JTAG/SWD remap plus PB3/PB4/PB5 GPIO
+     * configuration. It does not write SPI3_GMUX/remap5. B1 fix intentionally
+     * keeps SPI3_GMUX_0010 set TRUE to preserve the default AT32 pin route.
+     * This does not prove DMM calibration/range semantics by itself; it is a
+     * routing-level correction only.
+     */
     gpio_pin_remap_config(SWJTAG_GMUX_010, TRUE);
-    gpio_pin_remap_config(SPI3_GMUX_0010, TRUE);  /* route SPI3 → PB3/PB4/PB5/PB6 */
+    gpio_pin_remap_config(SPI3_GMUX_0010, TRUE);
 
     /* ---------------------------------------------------------------
      * Step 2: USART2 init — 9600 baud, 8N1, TX+RX with interrupts
@@ -2773,7 +3806,7 @@ void fpga_init(void)
 #endif
 
     /* ---------------------------------------------------------------
-     * Step 3: Wait for FPGA to finish booting
+     * Step 3: USART init only, then wait for FPGA to finish booting
      *
      * The stock firmware does ~2-3 seconds of LCD init, boot screen
      * animation (including a power-button-release wait loop), SPI flash
@@ -2787,6 +3820,11 @@ void fpga_init(void)
      *
      * Add an explicit delay to match the stock firmware's implicit
      * boot time. Try 2000ms as a conservative starting point.
+     *
+     * Stock xQueueSend sites at 0x08026DCE..0x08026E2A target the SPI3 trigger
+     * queue at 0x20002D78, not the USART/DVOM wire queue. The local queue does
+     * not exist until fpga_create_tasks(), so those bytes are queued there after
+     * the SPI3 task queue is created.
      * --------------------------------------------------------------- */
 #if FPGA_WARM_HANDOFF_TEST
     /* FPGA is already configured by stock — don't wait 2s (that long float
@@ -2796,28 +3834,6 @@ void fpga_init(void)
 #else
     systick_delay_ms(2000);
 #endif
-
-    /* ---------------------------------------------------------------
-     * Step 3b: USART boot commands — sent BEFORE the SPI3 phase
-     *
-     * Stock-validated order: master init Phase 4 (inline USART cmds at
-     * 0x08025D96) precedes the SPI3 phase (0x08026540). Moved here
-     * 2026-06-10 after the framed-upload-only experiment left PC0
-     * unarmed; the prior after-upload order came from the debunked
-     * FUN_08027a50 reading (see docs/fpga_bitstream_replay_plan.md).
-     * --------------------------------------------------------------- */
-#if !FPGA_WARM_HANDOFF_TEST && !FPGA_USART_SILENT_SCOPE
-    usart2_send_cmd(0x00, FPGA_CMD_INIT_01);  /* 0x01: Channel init */
-    systick_delay_ms(50);
-    usart2_send_cmd(0x00, FPGA_CMD_INIT_02);  /* 0x02: Signal gen setup */
-    systick_delay_ms(50);
-    usart2_send_cmd(0x00, FPGA_CMD_INIT_06);  /* 0x06: Signal gen setup */
-    systick_delay_ms(50);
-    usart2_send_cmd(0x00, FPGA_CMD_INIT_07);  /* 0x07: Meter probe detect */
-    systick_delay_ms(50);
-    usart2_send_cmd(0x00, FPGA_CMD_INIT_08);  /* 0x08: Meter configure */
-    systick_delay_ms(100);
-#endif  /* skip: would disturb stock-loaded config / perturb config-entry */
 
     /* ---------------------------------------------------------------
      * Step 4: SPI3 peripheral init — Mode 3, Master, /2 prescaler
@@ -2876,13 +3892,6 @@ void fpga_init(void)
     SPI3_CS_DEASSERT();
 
     /* PC6 = FPGA SPI enable: output push-pull, set HIGH */
-    gpio_cfg.gpio_pins = GPIO_PINS_6;
-    gpio_cfg.gpio_mode = GPIO_MODE_OUTPUT;
-    gpio_cfg.gpio_out_type = GPIO_OUTPUT_PUSH_PULL;
-    gpio_cfg.gpio_drive_strength = GPIO_DRIVE_STRENGTH_STRONGER;
-    gpio_init(GPIOC, &gpio_cfg);
-    GPIOC->scr = PC6_MASK;  /* PC6 HIGH — FPGA SPI enable (match stock) */
-
 #if FPGA_STOCK_FIDELITY
     /* Experiment F: the two pins stock drives that Exp C never covered.
      * At the CONFIG_ENABLE instant the Exp E dump measured stock as
@@ -3020,7 +4029,8 @@ void fpga_init(void)
      * SPI slave interface on PB11, this would explain MISO stuck at
      * 0xFF and zero USART echo frames.
      *
-     * PB11 gpio_init + set HIGH is deferred to Step 9b below. */
+     * PB11 gpio_init + set HIGH is deferred until the post-H2 meter
+     * frontend projection, before the meter activation command block. */
 
     /*
      * SPI3 register configuration (direct, matching stock firmware):
@@ -3066,9 +4076,27 @@ void fpga_init(void)
      * FPGA may expect it. Stub handler below clears any pending flags. */
     NVIC_EnableIRQ(SPI3_I2S3EXT_IRQn);
 
+    /*
+     * PC6 = FPGA SPI enable.
+     *
+     * Stock V1.2.0 enables/configures SPI3 first, then configures GPIOC.6 and
+     * drives it high before the 100 ms pre-handshake delay. The previous open
+     * firmware raised PC6 before SPI3 CTRL1/CTRL2/SPE were programmed, which
+     * could expose an unready SPI master to the FPGA. Keep this ordering close
+     * to the stock boot trace instead of treating PC6 as a harmless early GPIO.
+     * This is still not H2 acceptance proof; live low-DCV validation decides
+     * whether the FPGA actually applied the table.
+     */
+    gpio_cfg.gpio_pins = GPIO_PINS_6;
+    gpio_cfg.gpio_mode = GPIO_MODE_OUTPUT;
+    gpio_cfg.gpio_out_type = GPIO_OUTPUT_PUSH_PULL;
+    gpio_cfg.gpio_drive_strength = GPIO_DRIVE_STRENGTH_STRONGER;
+    gpio_init(GPIOC, &gpio_cfg);
+    GPIOC->scr = PC6_MASK;
+
     /* Capture register state for diagnostics */
-    fpga.diag_remap5 = IOMUX->remap;   /* STM32-compatible remap (offset 0x04) */
-    fpga.diag_remap7 = IOMUX->remap5;  /* GMUX remap5 (spi3_gmux) */
+    fpga.diag_remap5 = IOMUX->remap;   /* STM32-compatible remap */
+    fpga.diag_remap7 = IOMUX->remap5;  /* AT32 GMUX remap5: spi3_gmux lives here */
     fpga.diag_spi_ctrl1 = FPGA_SPI->ctrl1;
     fpga.diag_spi_sts = FPGA_SPI->sts;
 
@@ -3110,7 +4138,7 @@ void fpga_init(void)
      *
      * Every stock byte is a full-duplex polled exchange (wait TXE →
      * write → wait RXNE → read); spi3_xfer matches that exactly, and
-     * spi3_pump is the gap-free equivalent for the bulk stream.
+     * spi3_pump_h2_record is the gap-free equivalent for the bulk stream.
      * --------------------------------------------------------------- */
 
     /* The full PB11-arm → prelude → bitstream upload → close → scope-config
@@ -3363,8 +4391,23 @@ void fpga_init(void)
     });
 #endif
 
-    /* USART boot commands (0x01,0x02,0x06,0x07,0x08) now sent in
-     * Step 3b, BEFORE the SPI3 phase — stock-validated Phase 4 order. */
+    /* Post-H2 stock boot bytes 1/2/6/7/8 are SPI3 trigger-queue items, not
+     * USART frames. They are queued after spi3_acq_queue exists in
+     * fpga_create_tasks(). */
+
+    /*
+     * PC4 post-H2 stock boundary, deliberately unresolved in open firmware.
+     *
+     * Stock V1.2.0 at 0x08026E2E..0x08026E8A has just queued SPI3 triggers
+     * 1/2/6/7/8,
+     * enables/configures GPIOC.4, then reads DAT_2000010f / ms[0x17].  The
+     * STATE_STRUCTURE note identifies that byte as scope trigger_run_mode.  PC4
+     * is set only when the byte equals 2; otherwise stock clears PC4.
+     * That makes PC4 a post-H2 scope-state boundary, not DMM ms[0x02]/ms[0x03],
+     * not an H2 ACK/apply signal, and not a low-DCV correction.  Leave it
+     * alone until a stock .data default, trace, or
+     * measured multi-mode effect proves what the open firmware should drive.
+     */
 
     /* ---------------------------------------------------------------
      * Step 8: Analog frontend + Meter IC activation
@@ -3375,62 +4418,45 @@ void fpga_init(void)
      * --------------------------------------------------------------- */
 
     /* ---------------------------------------------------------------
-     * Step 9: Analog frontend relay control
-     * Decoded from stock firmware gpio_mux_portc_porte (FUN_080018A4).
-     * These GPIO pins control physical relays that route the probe
-     * signal to the meter IC's sigma-delta ADC.
+     * Step 9: Analog frontend relay/gain control.
      *
-     * DC Voltage mode: PC12=HIGH, PE4=HIGH, PE5=LOW, PE6=HIGH
-     * Without these, the meter IC has no analog input.
+     * The stock mux writer bodies are recovered as FUN_080018A4
+     * (PC12/PE4/PE5/PE6) and FUN_08001A58 (PA15/PA10/PB10/PB11).
+     * Configure the hardware pins here, then apply the same
+     * fpga_meter_plan table used by runtime mode transitions. This keeps boot
+     * DCV from becoming a second handwritten frontend state.
      * --------------------------------------------------------------- */
-
-    /* Configure relay control pins as push-pull outputs */
     gpio_cfg.gpio_mode = GPIO_MODE_OUTPUT;
     gpio_cfg.gpio_out_type = GPIO_OUTPUT_PUSH_PULL;
     gpio_cfg.gpio_drive_strength = GPIO_DRIVE_STRENGTH_STRONGER;
 
-    /* PC12 — input routing relay */
+    /* Port C/E relay pins and PC11 meter analog MUX enable. */
     gpio_cfg.gpio_pins = GPIO_PINS_12;
     gpio_init(GPIOC, &gpio_cfg);
-
-    /* PE4, PE5, PE6 — range/attenuation select */
     gpio_cfg.gpio_pins = GPIO_PINS_4 | GPIO_PINS_5 | GPIO_PINS_6;
     gpio_init(GPIOE, &gpio_cfg);
-
-    /* Set DC Voltage relay pattern */
-    GPIOC->scr = (1U << 12);  /* PC12 HIGH — route probe to meter IC */
-    GPIOE->scr = (1U << 4);   /* PE4 HIGH  — range select bit 0 */
-    GPIOE->clr = (1U << 5);   /* PE5 LOW   — range select bit 1 */
-    GPIOE->scr = (1U << 6);   /* PE6 HIGH  — attenuation/coupling */
-
-    /* PB9, PA6 — additional analog frontend pins (from Phase 1 RE) */
-    gpio_cfg.gpio_pins = GPIO_PINS_9;
-    gpio_init(GPIOB, &gpio_cfg);
-    GPIOB->scr = (1U << 9);
-
-    gpio_cfg.gpio_pins = GPIO_PINS_6;
-    gpio_init(GPIOA, &gpio_cfg);
-    GPIOA->scr = (1U << 6);
-
-    /* Gain resistor configuration — gpio_mux_porta_portb for DCV mode.
-     * PA15, PA10 = gain select, PB10 = gain select, PB11 already set.
-     * Without these, meter IC has wrong input gain → no measurement. */
-    gpio_cfg.gpio_pins = GPIO_PINS_15 | GPIO_PINS_10;
-    gpio_init(GPIOA, &gpio_cfg);
-    GPIOA->scr = (1U << 15);  /* PA15 HIGH — gain bit */
-    GPIOA->scr = (1U << 10);  /* PA10 HIGH — gain bit */
-
-    gpio_cfg.gpio_pins = GPIO_PINS_10;
-    gpio_init(GPIOB, &gpio_cfg);
-    GPIOB->clr = (1U << 10);  /* PB10 LOW — gain bit */
-
-    /* PC11 — meter analog MUX enable.
-     * Compliance audit (2026-04-06): was missing gpio_init() — PC11
-     * defaults to floating input on reset, so the scr write was silently
-     * ignored. The meter MUX was never actually enabled. */
     gpio_cfg.gpio_pins = GPIO_PINS_11;
     gpio_init(GPIOC, &gpio_cfg);
-    GPIOC->scr = (1U << 11);
+
+    /*
+     * PB9/PA6 auxiliary AFE pins: stock init configures them as outputs but
+     * no stock BOP/BCR level write has been recovered.  Keep them low rather
+     * than applying the old bench-inferred high level. PB11 is configured only
+     * after SPI3/H2, then driven by the same mux projection as runtime DMM
+     * transitions before the meter activation command block.
+     */
+    gpio_cfg.gpio_pins = GPIO_PINS_9;
+    gpio_init(GPIOB, &gpio_cfg);
+    gpio_cfg.gpio_pins = GPIO_PINS_6;
+    gpio_init(GPIOA, &gpio_cfg);
+
+    /* Gain resistor / FPGA active-mode pins from gpio_mux_porta_portb. */
+    gpio_cfg.gpio_pins = GPIO_PINS_15 | GPIO_PINS_10;
+    gpio_init(GPIOA, &gpio_cfg);
+    gpio_cfg.gpio_pins = GPIO_PINS_10 | GPIO_PINS_11;
+    gpio_init(GPIOB, &gpio_cfg);
+
+    fpga_set_meter_frontend_for_submode(0);
 
     systick_delay_ms(50);  /* Let relays settle */
 
@@ -3443,45 +4469,27 @@ void fpga_init(void)
     usart2_send_cmd(0x05, 0x09);  /* Meter: start measurement */
     systick_delay_ms(10);
 
-    /* Probe detect: read PC7 */
+    /* Stock PC7 command tail: high -> 0x07, low -> 0x0A. */
     if (GPIOC->idt & (1U << 7)) {
-        usart2_send_cmd(0x05, 0x07);  /* Probe detected */
+        usart2_send_cmd(0x05, 0x07);
     } else {
-        usart2_send_cmd(0x05, 0x0A);  /* No probe */
+        usart2_send_cmd(0x05, 0x0A);
     }
     systick_delay_ms(10);
 
     usart2_send_cmd(0x05, 0x14);  /* Meter variant setup */
     systick_delay_ms(50);
 
-    /* Meter channel gain/offset/coupling initialization (0x1A-0x1E).
-     * Stock firmware meter_basic mode (case 1 in FUN_0800b908) sends these
-     * at boot to configure the FPGA meter IC.
-     *
-     * Discovered 2026-04-04:
-     *   param=0 → 10V range (1-10V accurate, BCD wraps at 10000 counts)
-     *   param=1 → same as param=0 (no range change observed)
-     *   Relay click heard at ~0.7V — FPGA controls some analog switching
-     *   Below ~1V: readings incorrect (meter IC internal range mismatch)
-     *   Above 10V: BCD wraps (11V→0.99, 12V→2, 13V→3)
-     *
-     * TODO: Find params for other ranges (600mV, 60V, 600V) to enable
-     *       full auto-ranging. May require different command codes or
-     *       MCU-side relay switching via gpio_mux functions. */
-    usart2_send_cmd(0x00, FPGA_CMD_CH1_GAIN);    /* 0x1A: CH1 gain */
-    systick_delay_ms(10);
-    usart2_send_cmd(0x00, FPGA_CMD_CH1_OFFSET);  /* 0x1B: CH1 offset */
-    systick_delay_ms(10);
-    usart2_send_cmd(0x00, FPGA_CMD_CH2_GAIN);    /* 0x1C: CH2 gain */
-    systick_delay_ms(10);
-    usart2_send_cmd(0x00, FPGA_CMD_CH2_OFFSET);  /* 0x1D: CH2 offset */
-    systick_delay_ms(10);
-    usart2_send_cmd(0x00, FPGA_CMD_COUPLING);    /* 0x1E: coupling/BW */
-    systick_delay_ms(50);
+    /*
+     * Do not replay the FUN_0800B908 `0x1A..0x1E` meter-basic bank as raw
+     * USART words here. Stock queues those one-byte selectors through
+     * 0x20002D6C; the recovered raw FPGA/DVOM path is the separate 0x20002D74
+     * halfword queue used by 0x05xx materializers such as 0x0508, 0x0509, and
+     * 0x0514. Sending zero-parameter 0x1A..0x1E UART frames during DMM boot
+     * was a guessed bridge from scope command families, not a stock-proven
+     * DMM range/calibration step.
+     */
 #endif  /* !FPGA_USART_SILENT_SCOPE — keep the wire quiet for the config test */
-
-    /* Step 9b removed: PB11 is now armed immediately before the SPI3
-     * handshake (stock-captured order, issue-#18 capture). */
 
     /* ---------------------------------------------------------------
      * Step 10: Post-init SPI3 probe
@@ -3501,9 +4509,9 @@ void fpga_init(void)
 
     systick_delay_ms(10);
 
-    /* Bit-bang test REMOVED — it was disrupting the GMUX pin connection.
-     * The GMUX fix (SPI3_GMUX_0010) was the real issue, not the protocol.
-     * See project_spi3_miso_dead.md for the bit-bang test results. */
+    /* Bit-bang test removed: direct GPIO probing can disturb the live SPI3
+     * path. GMUX forcing is not accepted as a DMM/H2 fix; stock/scopediag keep
+     * SPI3_GMUX clear and live DMM evidence is still judged from actual frames. */
 
     fpga.initialized = true;
     fpga.acq_mode = FPGA_ACQ_NORMAL + 1;  /* Default to normal scope mode */
@@ -3525,7 +4533,7 @@ QueueHandle_t fpga_create_tasks(void)
     /* Create queues */
     usart_tx_queue = xQueueCreate(10, sizeof(uint16_t));
     spi3_acq_queue = xQueueCreate(15, sizeof(uint8_t));
-    meter_sem      = xSemaphoreCreateBinary();
+    meter_rx_queue = xQueueCreate(8, sizeof(fpga_meter_rx_event_t));
 
 #if FPGA_BUS_RELEASED_BOOT
     /* Bus-released boot: create NO auto-tasks — the MCU has handed SPI3 to an
@@ -3551,7 +4559,10 @@ QueueHandle_t fpga_create_tasks(void)
     xTaskCreate(fpga_usart_rx_task,    "dvom_RX",   128, NULL, 3, &rx_task_handle);
     xTaskCreate(fpga_acquisition_task, "fpga",      256, NULL, 3, &acq_task_handle);
     xTaskCreate(fpga_meter_poll_task,  "meter_poll", 64, NULL, 2, NULL);
+    xTaskCreate(fpga_meter_adc_sampler_task, "mtr_wave", 64, NULL, 2, NULL);
 #endif
+
+    fpga_enqueue_stock_post_h2_spi3_boot_triggers();
 
     return spi3_acq_queue;
 }
@@ -3773,24 +4784,25 @@ void fpga_enter_siggen_mode(void)
      * Then falls through to case 9 tail: 0x14, 0x09, [0x07/0x0A]
      *
      * 0x02-0x06 = siggen setup (freq, wave, amplitude, offset, duty)
-     * 0x08 = meter configure range (shared)
+     * 0x08 = shared meter configure/setup byte; not a recovered DMM range
+     *        selector or low-DCV correction source
      * 0x14 = meter variant setup
      * 0x09 = meter start measurement
-     * 0x07/0x0A = probe detect */
+     * 0x07/0x0A = stock PC7 command tail, not a DMM range state */
     fpga_send_cmd(0x00, 0x02);  /* Siggen: frequency */
     fpga_send_cmd(0x00, 0x03);  /* Siggen: waveform */
     fpga_send_cmd(0x00, 0x04);  /* Siggen: amplitude */
     fpga_send_cmd(0x00, 0x05);  /* Siggen: offset */
     fpga_send_cmd(0x00, 0x06);  /* Siggen: duty cycle */
-    fpga_send_cmd(0x00, 0x08);  /* Meter: configure range */
+    fpga_send_cmd(0x00, 0x08);  /* Shared meter configure/setup byte */
 
-    /* Case 9 tail: meter variant + probe detect */
+    /* Case 9 tail: meter variant + stock PC7 command tail */
     fpga_send_cmd(0x00, 0x14);
     fpga_send_cmd(0x00, FPGA_CMD_METER_START);
 
-    /* Probe detect: read PC7 */
+    /* Stock PC7 command tail: high -> 0x07, low -> 0x0A. */
     if (GPIOC->idt & (1U << 7)) {
-        fpga_send_cmd(0x00, 0x07);  /* Probe detected */
+        fpga_send_cmd(0x00, 0x07);
     } else {
         fpga_send_cmd(0x00, FPGA_CMD_METER_NOPROBE);
     }
@@ -3806,92 +4818,114 @@ void fpga_enter_siggen_mode(void)
     GPIOE->clr = (1U << 6);   /* PE6 LOW */
 }
 
-/* Helper: send probe detect command (shared by meter modes) */
-static void fpga_send_probe_detect(void)
+/* Helper: send the stock PC7-gated command tail (shared by meter modes). */
+static void fpga_timed_send_probe_detect(uint32_t delay_ms)
 {
-    if (fpga_probe_cmd_byte() == 0x07) {
-        fpga_send_cmd(0x00, 0x07);  /* PC7 HIGH: probe detected */
-    } else {
-        fpga_send_cmd(0x00, FPGA_CMD_METER_NOPROBE);
-    }
+    fpga_timed_send_cmd(0x05, fpga_probe_cmd_byte(), delay_ms);
 }
 
 static void fpga_send_meter_mode_sequence(uint8_t submode)
 {
-    if (submode >= METER_SUBMODE_COUNT) submode = 0;
+    fpga_meter_transition_plan_t plan =
+        fpga_meter_transition_plan_for_submode(submode);
+    uint16_t probe_word = (uint16_t)(0x0500U | fpga_probe_cmd_byte());
 
-    /* Send mode-specific FPGA command sequence.
-     * Mapping from RE analysis of mode init dispatcher (FUN_0800b908):
-     *
-     * Submodes 0-4 (DCV, ACV, DCA, ACA, unused) → system_mode 1 (basic meter)
-     * Submode 5 (Frequency)                      → system_mode 4 (freq counter)
-     * Submode 6 (Resistance)                     → system_mode 9 (meter variant)
-     * Submode 7 (Continuity)                     → system_mode 8 (cont/diode)
-     * Submode 8 (Diode)                          → system_mode 8 (cont/diode)
-     * Submode 9 (Capacitance)                    → system_mode 3 (extended meter)
-     */
-    switch (submode) {
-
-    case 0: /* DCV */
-    case 1: /* ACV */
-    case 2: /* DCA */
-    case 3: /* ACA */
-    case 4: /* (unused) */
-    default:
-        /* System mode 1: basic meter.
-         * Commands: 0x00, 0x09, probe, 0x1A-0x1E */
-        fpga_send_cmd(0x00, FPGA_CMD_RESET);
-        fpga_send_cmd(0x00, FPGA_CMD_METER_START);
-        fpga_send_probe_detect();
-        fpga_send_cmd(0x00, FPGA_CMD_CH1_GAIN);
-        fpga_send_cmd(0x00, FPGA_CMD_CH1_OFFSET);
-        fpga_send_cmd(0x00, FPGA_CMD_CH2_GAIN);
-        fpga_send_cmd(0x00, FPGA_CMD_CH2_OFFSET);
-        fpga_send_cmd(0x00, FPGA_CMD_COUPLING);
-        break;
-
-    case 5: /* Frequency */
-        /* System mode 4: frequency counter.
-         * Commands: 0x00, 0x1F, 0x09, 0x20, 0x21 */
-        fpga_send_cmd(0x00, FPGA_CMD_RESET);
-        fpga_send_cmd(0x00, FPGA_CMD_FREQ_CFG);
-        fpga_send_cmd(0x00, FPGA_CMD_METER_START);
-        fpga_send_cmd(0x00, FPGA_CMD_FREQ_20);
-        fpga_send_cmd(0x00, FPGA_CMD_FREQ_21);
-        break;
-
-    case 6: /* Resistance */
-        /* System mode 9: meter variant.
-         * Commands: 0x00, 0x12, 0x13, 0x14, 0x09, probe */
-        fpga_send_cmd(0x00, FPGA_CMD_RESET);
-        fpga_send_cmd(0x00, FPGA_CMD_METER_VAR_12);
-        fpga_send_cmd(0x00, FPGA_CMD_METER_VAR_13);
-        fpga_send_cmd(0x00, FPGA_CMD_METER_VAR_14);
-        fpga_send_cmd(0x00, FPGA_CMD_METER_START);
-        fpga_send_probe_detect();
-        break;
-
-    case 7: /* Continuity */
-    case 8: /* Diode */
-        /* System mode 8: continuity/diode.
-         * Commands: 0x00, 0x2C */
-        fpga_send_cmd(0x00, FPGA_CMD_RESET);
-        fpga_send_cmd(0x00, FPGA_CMD_CONT_DIODE);
-        break;
-
-    case 9: /* Capacitance */
-        /* System mode 3: extended meter.
-         * Commands: 0x00, 0x08, 0x09, probe, 0x16-0x19 */
-        fpga_send_cmd(0x00, FPGA_CMD_RESET);
-        fpga_send_cmd(0x00, 0x08);
-        fpga_send_cmd(0x00, FPGA_CMD_METER_START);
-        fpga_send_probe_detect();
-        fpga_send_cmd(0x00, 0x16);
-        fpga_send_cmd(0x00, 0x17);
-        fpga_send_cmd(0x00, 0x18);
-        fpga_send_cmd(0x00, 0x19);
-        break;
+    if (!fpga_meter_submode_is_valid(submode)) {
+        fpga.meter_mode_sequence_count++;
+        fpga.meter_mode_sequence_submode = submode;
+        fpga.meter_mode_config_word = 0;
+        fpga.meter_mode_selector_word = FPGA_METER_INVALID_SELECTOR_WORD;
+        fpga.meter_mode_apply_word = 0;
+        fpga.meter_mode_probe_word = 0;
+        fpga.meter_mode_start_word = 0;
+        return;
     }
+
+    fpga.meter_mode_sequence_count++;
+    fpga.meter_mode_sequence_submode = submode;
+    fpga.meter_mode_config_word = 0;
+    fpga.meter_mode_selector_word = plan.selector_word;
+    fpga.meter_mode_apply_word = 0;
+    fpga.meter_mode_probe_word = plan.has_probe_detect ? probe_word : 0;
+    fpga.meter_mode_start_word = plan.start_word;
+    /*
+     * USART2 selector/start sequence.
+     * Stock evidence proves raw meter command words in the 0x05xx family and
+     * 10-tick command pacing. The guarded basic materializers are 0x0508
+     * (0x080033CA), 0x0509 (0x08003BA4), and 0x0514 (0x08005B7A); selector and
+     * apply words are separate digital state-machine evidence. This does not
+     * prove that every local submode owns a unique physical selector. The
+     * optional apply word mirrors recovered family-switch words (ACV, DCA,
+     * continuity, diode). The fixed settle/discard constants are conservative
+     * local policy and are reported in debug output instead of being hidden as
+     * stock fact.
+     */
+    if (plan.has_command_bank_prefix) {
+        fpga_timed_send_cmd(0x00, plan.command_bank_first, plan.settle_ms);
+        fpga_timed_send_cmd(0x00, plan.command_bank_second, plan.settle_ms);
+    }
+    if (plan.has_config_word) {
+        fpga.meter_mode_config_word = plan.config_word;
+        fpga_wire_send_word(plan.config_word, plan.settle_ms);
+    }
+    fpga_wire_send_word(plan.selector_word, plan.settle_ms);
+    if (plan.has_apply_word) {
+        fpga.meter_mode_apply_word = plan.apply_word;
+        fpga_wire_send_word(plan.apply_word, plan.settle_ms);
+    }
+    if (plan.has_probe_detect) {
+        fpga_timed_send_probe_detect(10);
+    }
+    fpga_timed_send_cmd((uint8_t)(plan.start_word >> 8),
+                        (uint8_t)(plan.start_word & 0x00FFU),
+                        plan.settle_ms);
+}
+
+static void fpga_apply_meter_transition(uint8_t submode, bool wake_preamble)
+{
+    fpga_meter_transition_plan_t plan =
+        fpga_meter_transition_plan_for_submode(submode);
+    fpga_meter_mux_gpio_state_t planned_mux;
+    uint16_t planned_gpio;
+    uint16_t actual_gpio;
+    uint16_t tx_before;
+    uint16_t frame_before;
+
+    meter_transition_busy = true;
+
+    meter_data_invalidate(submode);
+    if (!fpga_meter_submode_is_valid(submode)) {
+        meter_transition_busy = false;
+        return;
+    }
+
+    /*
+     * Single production DMM transition path.
+     *
+     * Stock evidence proves pause/drain/resume transport shape, selector/apply
+     * 0x05xx words, probe/start tail, and saved-state mux writer bodies. Exact
+     * settle/discard counts and the runtime analog range writer remain open,
+     * so both normal mode switches and reinit use the same conservative local
+     * ordering here instead of carrying two handwritten sequences that can
+     * diverge around the missing evidence boundary.
+     */
+    fpga_meter_reset_transport();
+    if (wake_preamble) {
+        fpga_send_meter_wake_preamble();
+    }
+    (void)fpga_meter_mux_gpio_state_for_submode(submode, &planned_mux);
+    planned_gpio = fpga_meter_mux_gpio_mask_from_state(&planned_mux);
+    tx_before = fpga.tx_count;
+    frame_before = fpga.frame_count;
+    fpga_set_meter_frontend_for_submode(submode);
+    actual_gpio = fpga_meter_mux_gpio_mask_live();
+    fpga_scope_delay_ms(plan.settle_ms);
+    fpga_send_meter_mode_sequence(submode);
+    fpga_record_meter_transition_snapshot(submode, &plan, planned_gpio,
+                                          actual_gpio, tx_before, frame_before);
+    fpga_arm_meter_first_rx_latch(submode, &plan, planned_gpio, actual_gpio);
+    fpga_meter_discard_next_frames(plan.discard_frames);
+    meter_transition_busy = false;
 }
 
 void fpga_set_meter_mode(uint8_t submode)
@@ -3911,9 +4945,7 @@ void fpga_set_meter_mode(uint8_t submode)
         if (dac_output_is_running()) dac_output_stop();
     }
 
-    fpga_set_meter_frontend_baseline();
-    fpga_scope_delay_ms(10);
-    fpga_send_meter_mode_sequence(submode);
+    fpga_apply_meter_transition(submode, false);
 }
 
 void fpga_meter_reinit(uint8_t submode)
@@ -3923,11 +4955,7 @@ void fpga_meter_reinit(uint8_t submode)
     return;
 #endif
     if (!fpga.initialized) return;
-
-    fpga_send_meter_wake_preamble();
-    fpga_scope_delay_ms(10);
-    fpga_send_meter_mode_sequence(submode);
-    fpga_timed_send_cmd(0x00, FPGA_CMD_METER_START, 20);
+    fpga_apply_meter_transition(submode, true);
 }
 
 void fpga_scope_wake(void)
@@ -3944,5 +4972,6 @@ void fpga_scope_wake(void)
 
 void fpga_send_raw_frame(const uint8_t *frame)
 {
+    fpga_record_tx_frame(frame);
     usart2_send_frame(frame);
 }

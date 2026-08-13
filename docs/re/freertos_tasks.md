@@ -59,14 +59,21 @@ Hardware Interrupts
                    ──→ Timer2 (1000 tick) → auto-off countdown, measurement refresh
 ```
 
-## Key Architectural Insight: External DVOM Chip
+## Key Architectural Insight: FPGA-Side Meter Subsystem
 
-The **dvom_TX** and **dvom_RX** tasks reveal that the multimeter function uses a **dedicated external digital voltmeter chip** communicating over UART (at 0x4000440C = USART2). This means:
+The **dvom_TX** and **dvom_RX** tasks use USART2 (0x4000440C), but later
+protocol analysis shows this is the MCU <-> FPGA low-bandwidth command/status
+link, not a direct MCU UART to a separately proven DVOM chip. This means:
 
-- The USART2 port talks to the **DVOM chip**, not the FPGA (correcting our earlier assumption)
-- The FPGA communication likely happens via **SPI or parallel GPIO** (the fpga task accesses 0x40003C08 which is in the SPI region)
-- The multimeter measurements are done by dedicated hardware, not the MCU's internal ADC
-- The DVOM chip handles voltage, current, resistance, continuity, etc.
+- The MCU sends 10-byte command frames to the FPGA over USART2.
+- The FPGA returns 10-byte echo frames and, in meter modes, 12-byte
+  DMM/meter data frames.
+- The multimeter measurements are handled by a dedicated FPGA-side meter
+  subsystem, not the MCU's internal ADC.
+- The DMM payload uses meter/7-segment-style encoding for voltage, current,
+  resistance, continuity, capacitance, temperature, and related modes.
+- Whether that meter subsystem is logic inside the FPGA or a discrete meter IC
+  behind the FPGA is not proven by this document.
 
 ## Identified FreeRTOS API Functions
 

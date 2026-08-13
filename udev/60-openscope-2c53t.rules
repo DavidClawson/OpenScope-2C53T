@@ -1,0 +1,4 @@
+# OpenScope/FNIRSI 2C53T Artery AT32 bootloader and debug interfaces
+SUBSYSTEM=="hidraw", ATTRS{idVendor}=="2e3c", ATTRS{idProduct}=="af01", MODE="0660", GROUP="plugdev", TAG+="uaccess"
+SUBSYSTEM=="usb", ATTR{idVendor}=="2e3c", ATTR{idProduct}=="df11", MODE="0666", GROUP="plugdev", TAG+="uaccess"
+SUBSYSTEM=="tty", ATTRS{idVendor}=="2e3c", ATTRS{idProduct}=="5740", MODE="0660", GROUP="dialout", TAG+="uaccess"

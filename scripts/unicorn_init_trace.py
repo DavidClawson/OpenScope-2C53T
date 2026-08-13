@@ -16,9 +16,11 @@ Usage:
 Part of the SPI3 compliance audit escalation (2026-04-06).
 """
 
+import argparse
 import struct
 import sys
 from collections import OrderedDict
+from pathlib import Path
 from unicorn import *
 from unicorn.arm_const import *
 
@@ -451,10 +453,23 @@ class InitTracer:
         print(f"\nCSV: {csv_path}")
 
 
+def default_stock_binary_path():
+    return (Path(__file__).resolve().parents[1] /
+            "archive" / "2C53T Firmware V1.2.0" /
+            "APP_2C53T_V1.2.0_251015.bin")
+
+
 def main():
-    binary_path = "/Users/david/Desktop/osc/archive/2C53T Firmware V1.2.0/APP_2C53T_V1.2.0_251015.bin"
-    if len(sys.argv) > 1:
-        binary_path = sys.argv[1]
+    parser = argparse.ArgumentParser(
+        description="Trace stock V1.2.0 init MMIO writes in Unicorn")
+    parser.add_argument(
+        "binary",
+        nargs="?",
+        default=str(default_stock_binary_path()),
+        help="stock APP binary path")
+    args = parser.parse_args()
+
+    binary_path = args.binary
 
     tracer = InitTracer(binary_path)
     tracer.setup()

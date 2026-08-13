@@ -1,17 +1,20 @@
 /*
  * Shared Memory Pool — Lifecycle-Managed
  *
- * 150KB buffer shared between features that never run simultaneously.
+ * 96KB buffer shared between features that never run simultaneously.
  * Features must explicitly claim the pool before use and release it
  * when done. The lifecycle manager tracks what's loaded and provides
  * diagnostic info (for the About screen and health monitoring).
  *
  * Design rules:
- *   1. Core features (scope time-domain, meter, siggen) never need the pool.
+ *   1. Core signal paths (scope time-domain, DMM sampling, siggen) do not
+ *      depend on the pool.
  *   2. On-demand features (FFT, persistence, screenshot, decode) claim it.
- *   3. Only one feature holds the pool at a time.
- *   4. Claiming auto-releases the previous holder (with notification).
- *   5. Screenshot is a brief claim-use-release cycle (~500ms).
+ *   3. Display code may opportunistically claim it for an off-screen tile, but
+ *      must fall back to direct drawing when another feature owns the pool.
+ *   4. Only one feature holds the pool at a time.
+ *   5. Claiming auto-releases the previous holder (with notification).
+ *   6. Screenshot is a brief claim-use-release cycle (~500ms).
  */
 
 #ifndef SHARED_MEM_H
@@ -35,11 +38,16 @@ typedef enum {
     SHMEM_OWNER_COMPONENT,
     SHMEM_OWNER_BODE,
     SHMEM_OWNER_MODULE,      /* External loaded module */
+    SHMEM_OWNER_DISPLAY,
     SHMEM_OWNER_COUNT
 } shmem_owner_t;
 
-/* Size of the shared pool (largest consumer = screenshot at 150KB) */
-#define SHMEM_POOL_SIZE  153600
+/* Size of the shared pool. Keep this above the largest enabled consumer.
+ * The old RGB565 screenshot utility needs 150KB and must fail closed unless
+ * this pool is deliberately restored to that size. */
+#ifndef SHMEM_POOL_SIZE
+#define SHMEM_POOL_SIZE  118784
+#endif
 
 /* RAM sizes each feature actually needs (for diagnostics/budgeting) */
 
@@ -63,10 +71,11 @@ typedef enum {
 #define SHMEM_NEED_FFT          (FFT_SIZE * 18 + FFT_BINS * 12)   /* 96 KB */
 #endif
 #define SHMEM_NEED_PERSISTENCE  65920   /* 320 * 206 = 64.4 KB */
-#define SHMEM_NEED_SCREENSHOT   153600  /* 320 * 240 * 2 = 150 KB */
+#define SHMEM_NEED_SCREENSHOT   153600  /* legacy RGB565 screenshot */
 #define SHMEM_NEED_DECODE       32768   /* 32 KB */
 #define SHMEM_NEED_COMPONENT    8192    /* 8 KB */
 #define SHMEM_NEED_BODE         4096    /* 4 KB */
+#define SHMEM_NEED_DISPLAY      44400   /* Meter waveform panel: 300 * 74 * RGB565 */
 
 /* ── FFT sub-tenants ────────────────────────────────────────────────
  *

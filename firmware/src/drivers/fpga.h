@@ -19,6 +19,7 @@
 
 #include <stdint.h>
 #include <stdbool.h>
+#include "fpga_meter_plan.h"
 #include "FreeRTOS.h"
 #include "queue.h"
 
@@ -35,30 +36,32 @@
 
 #define FPGA_USART_BAUD       9600
 #define FPGA_TX_FRAME_SIZE    10
+#define FPGA_TX_FRAME_HISTORY 16
 #define FPGA_RX_FRAME_SIZE    12
+#define FPGA_RX_FRAME_HISTORY 8
+#define FPGA_RX_RAW_HISTORY   32
+#define FPGA_METER_TRANSITION_HISTORY 4
+#define FPGA_POST_H2_TRIGGER_HISTORY 5
+#define FPGA_POST_H2_RX_HISTORY 8
 
 /* RX frame headers */
 #define FPGA_RX_DATA_HDR_0    0x5A   /* Data frame: 0x5A 0xA5 */
 #define FPGA_RX_DATA_HDR_1    0xA5
 #define FPGA_RX_ECHO_HDR_0    0xAA   /* Echo frame: 0xAA 0x55 */
 #define FPGA_RX_ECHO_HDR_1    0x55
+#define FPGA_RX_ECHO_FRAME_SIZE 10
 
 /* ═══════════════════════════════════════════════════════════════════
  * FPGA Command Codes (USART TX)
  * ═══════════════════════════════════════════════════════════════════ */
 
-/* Boot sequence commands (sent during init, before SPI3 activation) */
-#define FPGA_CMD_INIT_01      0x01   /* Channel init */
-#define FPGA_CMD_INIT_02      0x02   /* Signal gen setup */
-#define FPGA_CMD_INIT_06      0x06   /* Signal gen setup */
-#define FPGA_CMD_INIT_07      0x07   /* Meter probe detect */
-#define FPGA_CMD_INIT_08      0x08   /* Meter configure */
+/* Bytes 1/2/6/7/8 are stock post-H2 SPI3 trigger bytes, not USART commands. */
 
 /* Runtime commands */
 #define FPGA_CMD_RESET        0x00
 #define FPGA_CMD_SCOPE_CH     0x01   /* Scope channel config */
 #define FPGA_CMD_METER_START  0x09   /* Start meter measurement */
-#define FPGA_CMD_METER_NOPROBE 0x0A  /* No probe detected */
+#define FPGA_CMD_METER_NOPROBE 0x0A  /* Meter PC7-low command tail */
 
 /* Scope configuration commands (case 0 of mode init dispatcher FUN_0800b908).
  * Sent as a sequence when entering oscilloscope mode: 0x0B-0x11.
@@ -77,12 +80,17 @@
 #define FPGA_CMD_METER_VAR_13 0x13   /* Meter variant config */
 #define FPGA_CMD_METER_VAR_14 0x14   /* Meter variant config */
 
-/* Channel gain/offset/coupling (sent at boot + runtime auto-range) */
-#define FPGA_CMD_CH1_GAIN     0x1A   /* CH1 gain setting */
-#define FPGA_CMD_CH1_OFFSET   0x1B   /* CH1 offset setting */
-#define FPGA_CMD_CH2_GAIN     0x1C   /* CH2 gain setting */
-#define FPGA_CMD_CH2_OFFSET   0x1D   /* CH2 offset setting */
-#define FPGA_CMD_COUPLING     0x1E   /* Coupling / bandwidth limit */
+/* Scope channel command family 0x1A..0x1E. Stock scope xrefs use these as
+ * channel gain/offset/coupling commands. The DMM boot dispatcher also queues
+ * the same byte values through 0x20002D6C, but that is a byte-dispatch surface,
+ * not the raw 0x20002D74 DVOM wire queue. That proves command sequencing only;
+ * it is not a recovered DMM range-selector, low-DCV calibration source, or
+ * runtime ms[0x02]/ms[0x03] mux writer. */
+#define FPGA_CMD_CH1_GAIN     0x1A   /* CH1 gain / stock command-bank byte */
+#define FPGA_CMD_CH1_OFFSET   0x1B   /* CH1 offset / stock command-bank byte */
+#define FPGA_CMD_CH2_GAIN     0x1C   /* CH2 gain / stock command-bank byte */
+#define FPGA_CMD_CH2_OFFSET   0x1D   /* CH2 offset / stock command-bank byte */
+#define FPGA_CMD_COUPLING     0x1E   /* Coupling/BW / stock command-bank byte */
 
 /* Frequency counter (system_mode 4) */
 #define FPGA_CMD_FREQ_CFG     0x1F   /* Freq counter config */
@@ -104,9 +112,19 @@ typedef enum {
     FPGA_ACQ_EXTENDED    = 4,  /* Extended command only */
     FPGA_ACQ_METER_ADC   = 5,  /* Meter ADC read */
     FPGA_ACQ_SIGGEN      = 6,  /* Signal gen feedback */
-    FPGA_ACQ_CALIBRATE   = 7,  /* Calibration readback */
-    FPGA_ACQ_SELF_TEST   = 8,  /* Self test */
+    FPGA_ACQ_STATUS      = 7,  /* Status/pre-acquisition command exchange */
+    FPGA_ACQ_CALIBRATE   = 8,  /* Calibration readback */
 } fpga_acq_mode_t;
+
+/*
+ * Diagnostic-only DMM waveform sampler trigger.
+ *
+ * Stock V1.2.0 uses public trigger byte 6 for SPI3 case 5
+ * (`trigger_byte - 1 == FPGA_ACQ_METER_ADC`) during the post-H2 queue block at
+ * 0x08026DCE..0x08026E2A. Keep the debug sampler on a private byte so it cannot
+ * steal stock trigger semantics.
+ */
+#define FPGA_ACQ_DIAG_METER_ADC_TRIGGER 0xF0u
 
 /* ═══════════════════════════════════════════════════════════════════
  * Stock-State Bench Shadow
@@ -167,6 +185,109 @@ typedef struct {
     volatile uint16_t echo_count;     /* Echo frame counter (0xAA 0x55) */
     volatile uint16_t tx_count;       /* TX commands sent */
     volatile uint16_t rx_byte_count;  /* Raw RX bytes received */
+    volatile uint16_t rx_sync_data_start_count; /* Saw 0x5A as RX frame byte 0 */
+    volatile uint16_t rx_sync_echo_start_count; /* Saw 0xAA as RX frame byte 0 */
+    volatile uint16_t rx_sync_data_header_count; /* Completed 0x5A 0xA5 header */
+    volatile uint16_t rx_sync_echo_header_count; /* Completed 0xAA 0x55 header */
+    volatile uint16_t rx_sync_bad_second_count; /* Header byte 1 rejected */
+    volatile uint16_t rx_sync_stray_count;      /* Byte ignored while unsynced */
+    volatile uint16_t rx_data_tx_busy_drop_count; /* Data frames dropped before TX byte pump completed */
+    volatile uint16_t rx_echo_valid_count;      /* Echo frames passing stock byte[3]/byte[7] checks */
+    volatile uint16_t rx_echo_bad_count;        /* Echo frames failing stock byte[3]/byte[7] checks */
+    volatile uint8_t  rx_raw_history[FPGA_RX_RAW_HISTORY];
+    volatile uint16_t rx_raw_history_tx_count[FPGA_RX_RAW_HISTORY];
+    volatile uint8_t  rx_raw_history_tx_index[FPGA_RX_RAW_HISTORY];
+    volatile uint8_t  rx_raw_history_rx_index[FPGA_RX_RAW_HISTORY];
+    volatile uint8_t  rx_raw_history_head;
+    volatile uint8_t  rx_raw_history_count;
+    volatile uint16_t last_rx_frame_count; /* Data-frame count when latest frame arrived */
+    volatile uint16_t last_rx_tx_count;    /* TX count visible at latest data-frame arrival */
+    volatile uint16_t last_rx_echo_count;  /* Echo count visible at latest data-frame arrival */
+    volatile uint16_t last_rx_mode_sequence_count; /* DMM selector sequence visible at RX arrival */
+    volatile uint8_t  last_rx_mode_sequence_submode; /* DMM sequence submode visible at RX arrival */
+    volatile uint8_t  last_rx_discard_remaining; /* Transition discard budget at RX arrival */
+    volatile uint8_t  last_rx_transition_busy;   /* Meter transition gate state at RX arrival */
+    volatile uint8_t  rx_frame_history[FPGA_RX_FRAME_HISTORY][FPGA_RX_FRAME_SIZE];
+    volatile uint16_t rx_history_frame_count[FPGA_RX_FRAME_HISTORY];
+    volatile uint16_t rx_history_tx_count[FPGA_RX_FRAME_HISTORY];
+    volatile uint16_t rx_history_echo_count[FPGA_RX_FRAME_HISTORY];
+    volatile uint16_t rx_history_sequence_count[FPGA_RX_FRAME_HISTORY];
+    volatile uint8_t  rx_history_sequence_submode[FPGA_RX_FRAME_HISTORY];
+    volatile uint8_t  rx_history_discard_remaining[FPGA_RX_FRAME_HISTORY];
+    volatile uint8_t  rx_history_transition_busy[FPGA_RX_FRAME_HISTORY];
+    volatile uint8_t  rx_frame_history_head;
+    volatile uint8_t  rx_frame_history_count;
+    volatile uint8_t  last_rx_echo_frame[FPGA_RX_ECHO_FRAME_SIZE];
+    volatile uint8_t  tx_cmd_hi_history[16]; /* Last sent USART command high bytes */
+    volatile uint8_t  tx_cmd_lo_history[16]; /* Last sent USART command low bytes */
+    volatile uint8_t  tx_cmd_history_head;   /* Next history slot */
+    volatile uint8_t  tx_cmd_history_count;  /* Valid history entries */
+    volatile uint8_t  last_tx_frame[FPGA_TX_FRAME_SIZE]; /* Last full 10-byte USART frame sent */
+    volatile uint8_t  tx_frame_history[FPGA_TX_FRAME_HISTORY][FPGA_TX_FRAME_SIZE];
+    volatile uint16_t tx_frame_history_tx_count[FPGA_TX_FRAME_HISTORY];
+    volatile uint8_t  tx_frame_history_head;
+    volatile uint8_t  tx_frame_history_count;
+    volatile uint8_t  tx_control_frame_history[FPGA_TX_FRAME_HISTORY][FPGA_TX_FRAME_SIZE];
+    volatile uint16_t tx_control_frame_history_tx_count[FPGA_TX_FRAME_HISTORY];
+    volatile uint8_t  tx_control_frame_history_head;
+    volatile uint8_t  tx_control_frame_history_count;
+
+    /* DMM mode-sequence diagnostics. Polling quickly overwrites tx_recent
+     * with 0x0509, so keep the last explicit mode switch separately. */
+    volatile uint16_t meter_mode_sequence_count;
+    volatile uint8_t  meter_mode_sequence_submode;
+    volatile uint16_t meter_mode_config_word;
+    volatile uint16_t meter_mode_selector_word;
+    volatile uint16_t meter_mode_apply_word;
+    volatile uint16_t meter_mode_probe_word;
+    volatile uint16_t meter_mode_start_word;
+    volatile uint8_t  meter_transition_history_submode[FPGA_METER_TRANSITION_HISTORY];
+    volatile uint16_t meter_transition_history_config[FPGA_METER_TRANSITION_HISTORY];
+    volatile uint16_t meter_transition_history_selector[FPGA_METER_TRANSITION_HISTORY];
+    volatile uint16_t meter_transition_history_apply[FPGA_METER_TRANSITION_HISTORY];
+    volatile uint8_t  meter_transition_history_bank[FPGA_METER_TRANSITION_HISTORY];
+    volatile uint8_t  meter_transition_history_bank_first[FPGA_METER_TRANSITION_HISTORY];
+    volatile uint8_t  meter_transition_history_bank_second[FPGA_METER_TRANSITION_HISTORY];
+    volatile uint16_t meter_transition_history_probe[FPGA_METER_TRANSITION_HISTORY];
+    volatile uint16_t meter_transition_history_start[FPGA_METER_TRANSITION_HISTORY];
+    volatile uint16_t meter_transition_history_sequence_count[FPGA_METER_TRANSITION_HISTORY];
+    volatile uint16_t meter_transition_history_tx_before[FPGA_METER_TRANSITION_HISTORY];
+    volatile uint16_t meter_transition_history_tx_after[FPGA_METER_TRANSITION_HISTORY];
+    volatile uint16_t meter_transition_history_frame_before[FPGA_METER_TRANSITION_HISTORY];
+    volatile uint16_t meter_transition_history_frame_after[FPGA_METER_TRANSITION_HISTORY];
+    volatile uint16_t meter_transition_history_planned_gpio[FPGA_METER_TRANSITION_HISTORY];
+    volatile uint16_t meter_transition_history_actual_gpio[FPGA_METER_TRANSITION_HISTORY];
+    volatile uint8_t  meter_transition_history_head;
+    volatile uint8_t  meter_transition_history_count;
+
+    /* First producer frame after the latest DMM transition.
+     *
+     * This is a frozen diagnostic record for the low-DCV producer fault: it
+     * captures the first stock-visible 12-byte DMM frame after the frontend and
+     * USART sequence were applied. It must not feed decoder math, range
+     * selection, or calibration decisions.
+     */
+    volatile uint8_t  meter_first_rx_after_transition_armed;
+    volatile uint8_t  meter_first_rx_after_transition_valid;
+    volatile uint8_t  meter_first_rx_after_transition_submode;
+    volatile uint16_t meter_first_rx_after_transition_seq;
+    volatile uint16_t meter_first_rx_after_transition_config;
+    volatile uint16_t meter_first_rx_after_transition_selector;
+    volatile uint16_t meter_first_rx_after_transition_apply;
+    volatile uint16_t meter_first_rx_after_transition_probe;
+    volatile uint16_t meter_first_rx_after_transition_start;
+    volatile uint16_t meter_first_rx_after_transition_planned_gpio;
+    volatile uint16_t meter_first_rx_after_transition_actual_gpio;
+    volatile uint16_t meter_first_rx_after_transition_data;
+    volatile uint16_t meter_first_rx_after_transition_tx;
+    volatile uint16_t meter_first_rx_after_transition_echo;
+    volatile uint8_t  meter_first_rx_after_transition_busy;
+    volatile uint8_t  meter_first_rx_after_transition_discard;
+    volatile uint8_t  meter_first_rx_after_transition_frame[FPGA_RX_FRAME_SIZE];
+    volatile uint32_t meter_first_rx_after_transition_h2_bytes;
+    volatile uint8_t  meter_first_rx_after_transition_h2_done;
+    volatile uint8_t  meter_first_rx_after_transition_h2_post_run_count;
+    volatile uint8_t  meter_first_rx_after_transition_h2_post_mask;
 
     /* Acquisition mode (set by mode switch, read by acq task) */
     volatile uint8_t acq_mode;         /* fpga_acq_mode_t */
@@ -211,9 +332,12 @@ typedef struct {
     volatile uint32_t diag_spi_ctrl1;      /* SPI3 CTRL1 after init */
     volatile uint32_t diag_spi_sts;        /* SPI3 STS after init */
 
-    /* H2 bitstream upload diagnostic */
+    /* H2 SPI3 bitstream upload diagnostics. h2_bytes_sent/upload_done prove only
+     * that local firmware streamed the stock 115638-byte table; the FPGA has no
+     * recovered ACK/apply signal, so this is not proof the table was accepted,
+     * applied, or a DMM calibration source. */
     volatile uint32_t h2_bytes_sent;       /* Bytes uploaded (should be 115638) */
-    volatile uint8_t  h2_upload_done;      /* 1 = upload completed without error */
+    volatile uint8_t  h2_upload_done;      /* 1 = TX completed without error */
     volatile uint8_t  h2_close_status;     /* MISO byte after 0x3A close (stock: 0xF8) */
     volatile uint8_t  scope_status[4];     /* MISO from post-upload 0x03 read
                                             * (stock boot: 00 01 42 2E — issue-#18 capture) */
@@ -335,6 +459,22 @@ typedef struct {
                                          * not distinguish these: it took a single
                                          * snapshot at a fixed +1ms and would have
                                          * missed a transient entirely. */
+
+    /* Stock post-H2 SPI3 queue diagnostics. These counters prove only local
+     * enqueue/execution of the stock trigger bytes; they are not FPGA ACK or
+     * DMM calibration acceptance evidence. */
+    volatile uint32_t h2_rx_00_count;
+    volatile uint32_t h2_rx_ff_count;
+    volatile uint32_t h2_rx_other_count;
+    volatile uint8_t  h2_close_rx_len;
+    volatile uint8_t  h2_close_rx[6];
+    volatile uint8_t  post_h2_spi3_boot_enqueued;
+    volatile uint8_t  post_h2_spi3_boot_run_count;
+    volatile uint8_t  post_h2_spi3_boot_dropped;
+    volatile uint8_t  post_h2_spi3_boot_mask;
+    volatile uint8_t  post_h2_spi3_trigger[FPGA_POST_H2_TRIGGER_HISTORY];
+    volatile uint8_t  post_h2_spi3_rx_len[FPGA_POST_H2_TRIGGER_HISTORY];
+    volatile uint8_t  post_h2_spi3_rx[FPGA_POST_H2_TRIGGER_HISTORY][FPGA_POST_H2_RX_HISTORY];
 
     /* Experimental stock runtime shadow for scope-mode bench work.
      * These are NOT the original firmware RAM locations. They are a small
@@ -511,6 +651,34 @@ bool fpga_data_ready(void);
 const volatile uint8_t *fpga_get_ch1_buf(void);
 const volatile uint8_t *fpga_get_ch2_buf(void);
 
+extern volatile bool     fpga_meter_adc_sampler_enabled;
+extern volatile bool     fpga_meter_adc_use_preacq;
+extern volatile int16_t  fpga_meter_adc_selector_override;
+extern volatile int16_t  fpga_meter_adc_preacq_override;
+extern volatile int16_t  fpga_meter_probe_tail_override;
+extern volatile uint32_t fpga_meter_adc_enqueue_attempts;
+extern volatile uint32_t fpga_meter_adc_enqueue_success;
+extern volatile uint32_t fpga_meter_adc_enqueue_drops;
+extern volatile uint32_t fpga_meter_adc_samples;
+extern volatile uint32_t fpga_meter_adc_ff_samples;
+extern volatile uint32_t fpga_meter_adc_zero_samples;
+extern volatile uint32_t fpga_meter_adc_transition_skips;
+extern volatile uint32_t fpga_meter_adc_not_voltage_skips;
+extern volatile uint32_t fpga_meter_adc_reset_generation;
+extern volatile uint32_t fpga_meter_adc_last_reset_generation;
+extern volatile uint8_t  fpga_meter_adc_last_preacq;
+extern volatile uint8_t  fpga_meter_adc_last_preacq_rx;
+extern volatile uint8_t  fpga_meter_adc_last_selector;
+extern volatile uint8_t  fpga_meter_adc_last_sample;
+extern volatile uint8_t  fpga_meter_adc_first_sample_after_reset;
+extern volatile uint8_t  fpga_meter_adc_min_sample;
+extern volatile uint8_t  fpga_meter_adc_max_sample;
+extern volatile uint8_t  meter_frame_discard_count;
+extern volatile uint32_t meter_transition_frame_skip_count;
+
+void fpga_meter_adc_diag_reset(void);
+bool fpga_meter_transition_busy(void);
+
 /*
  * Set FPGA active mode (PB11).
  * Must be HIGH during oscilloscope/meter operation.
@@ -571,16 +739,19 @@ void fpga_enter_siggen_mode(void);
 
 /*
  * Configure FPGA for a specific meter submode.
- * Sends the appropriate FPGA init command sequence:
- *   - DCV/ACV (0,1): system_mode 1 → 0x00, 0x09, probe, 0x1A-0x1E
- *   - Resistance (6): system_mode 9 → 0x00, 0x12-0x14, 0x09, probe
- *   - Continuity (7): system_mode 8 → 0x00, 0x2C
- *   - Diode (8): system_mode 8 → 0x00, 0x2C
- *   - Frequency (5): system_mode 4 → 0x00, 0x1F, 0x09, 0x20, 0x21
+ * Sends the stock DMM raw UART word selected from the recovered
+ * 0x080BB3FC meter-mode table, then re-arms measurement polling.
  *
  * Call when the meter submode changes (LEFT/RIGHT buttons).
  */
 void fpga_set_meter_mode(uint8_t submode);
+
+/*
+ * Return the stock DMM raw-command selector that fpga_set_meter_mode() applies.
+ * This is read-only debug metadata for USB harnesses and tests; it does not
+ * touch GPIO or send FPGA commands.
+ */
+fpga_meter_selector_t fpga_meter_expected_selectors(uint8_t submode);
 
 /*
  * Re-apply the known-good meter frontend baseline and meter command
@@ -588,6 +759,45 @@ void fpga_set_meter_mode(uint8_t submode);
  * from the USB debug shell after scope experiments.
  */
 void fpga_meter_reinit(uint8_t submode);
+
+/*
+ * Diagnostic-only DMM mux-arm override.
+ *
+ * Applies a recovered stock FUN_080018A4/FUN_08001A58 GPIO projection for
+ * explicit ms[0x02]/ms[0x03] candidates and reports planned/actual GPIO masks.
+ * This is for controlled live tracing of the unresolved low-DCV producer-frame
+ * fault. It is not a production range selector and must not feed decoder math.
+ */
+bool fpga_debug_apply_meter_mux_arms(uint8_t portc_porte_mux,
+                                     uint8_t porta_portb_mux,
+                                     uint16_t *planned_gpio,
+                                     uint16_t *actual_gpio);
+
+/*
+ * Diagnostic-only DMM boot-order replay.
+ *
+ * Applies the current submode frontend, then sends the stock boot/wake command
+ * order 0x0508, 0x0509, 0x0507/0x050A, selector. This is a controlled
+ * producer-path probe for the unresolved low-DCV frame fault, not a production
+ * mode transition or a decoder correction.
+ */
+bool fpga_debug_send_meter_boot_order(uint8_t submode, uint32_t delay_ms,
+                                      uint16_t *planned_gpio,
+                                      uint16_t *actual_gpio);
+
+/*
+ * Diagnostic-only PC11 meter-MUX timing probe.
+ *
+ * Holds PC11 low while applying the planned submode mux projection, waits,
+ * raises PC11, waits again, then sends the unchanged stock-like submode command
+ * sequence. This probes analog gate timing around the producer-frame fault; it
+ * must not become a decoder/multiplier or production range heuristic.
+ */
+bool fpga_debug_send_meter_pc11_timing(uint8_t submode,
+                                       uint32_t low_ms,
+                                       uint32_t high_ms,
+                                       uint16_t *planned_gpio,
+                                       uint16_t *actual_gpio);
 
 /*
  * Send the stock-like meter wake preamble, then re-apply the current

@@ -11,8 +11,8 @@
  *   Passive: PC8 (POWER), PB7 (PRM), PC13 (UP)
  *
  * Usage:
- *   button_scan_init(queue_handle);  // call once, before starting scheduler
- *   // TMR3 ISR runs automatically, sends button_id_t to the queue
+ *   button_scan_init(queue_handle);  // configure before starting scheduler
+ *   button_scan_start();             // enable TMR3 ISR from a task
  */
 
 #ifndef BUTTON_SCAN_H
@@ -29,6 +29,7 @@
  * provided FreeRTOS queue.
  */
 void button_scan_init(QueueHandle_t button_queue);
+void button_scan_start(void);
 
 /*
  * Get the raw 15-bit scan state (for debug display).

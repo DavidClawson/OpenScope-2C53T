@@ -17,6 +17,8 @@
 
 #include "lcd.h"
 
+#include <stdbool.h>
+
 /* ========================================================================
  * Embedded 8x16 ASCII font (chars 0x20-0x7E)
  *
@@ -133,6 +135,124 @@ static inline void lcd_bus_delay(void) {
     while (i--) __asm volatile("nop");
 }
 
+static uint8_t lcd_shadow[LCD_SHADOW_HEIGHT][LCD_SHADOW_STRIDE];
+static uint16_t lcd_shadow_page;
+static uint16_t lcd_shadow_x;
+static uint16_t lcd_shadow_y;
+static uint16_t lcd_shadow_w;
+static uint16_t lcd_shadow_h;
+static uint32_t lcd_shadow_pos;
+static uint16_t lcd_shadow_last_color;
+static uint8_t lcd_shadow_last_index;
+static bool lcd_shadow_last_valid;
+
+static const uint16_t lcd_shadow_palette[16] = {
+    COLOR_BLACK,
+    COLOR_WHITE,
+    COLOR_RED,
+    COLOR_GREEN,
+    COLOR_BLUE,
+    COLOR_YELLOW,
+    COLOR_CYAN,
+    COLOR_MAGENTA,
+    COLOR_DARK_GRAY,
+    COLOR_GRAY,
+    COLOR_ORANGE,
+    COLOR_UI_TEXT,
+    COLOR_SELECTED_BG,
+    COLOR_GRID,
+    COLOR_GRID_CENTER,
+    COLOR_UI_BG,
+};
+
+static uint8_t lcd_shadow_palette_index(uint16_t color)
+{
+    if (lcd_shadow_last_valid && color == lcd_shadow_last_color) {
+        return lcd_shadow_last_index;
+    }
+
+    uint8_t best = 0;
+    uint32_t best_dist = 0xFFFFFFFFu;
+    int32_t r = (int32_t)((color >> 11) & 0x1F);
+    int32_t g = (int32_t)((color >> 5) & 0x3F);
+    int32_t b = (int32_t)(color & 0x1F);
+
+    for (uint8_t i = 0; i < 16; i++) {
+        uint16_t p = lcd_shadow_palette[i];
+        int32_t pr = (int32_t)((p >> 11) & 0x1F);
+        int32_t pg = (int32_t)((p >> 5) & 0x3F);
+        int32_t pb = (int32_t)(p & 0x1F);
+        int32_t dr = r - pr;
+        int32_t dg = g - pg;
+        int32_t db = b - pb;
+        uint32_t dist = (uint32_t)(dr * dr * 4 + dg * dg + db * db * 4);
+
+        if (dist < best_dist) {
+            best_dist = dist;
+            best = i;
+            if (dist == 0) break;
+        }
+    }
+    lcd_shadow_last_color = color;
+    lcd_shadow_last_index = best;
+    lcd_shadow_last_valid = true;
+    return best;
+}
+
+static void lcd_shadow_write_pixel(uint16_t color)
+{
+    if (lcd_shadow_w == 0 || lcd_shadow_h == 0) return;
+    if (lcd_shadow_pos >= (uint32_t)lcd_shadow_w * lcd_shadow_h) return;
+
+    uint16_t x = lcd_shadow_x + (uint16_t)(lcd_shadow_pos % lcd_shadow_w);
+    uint16_t y = lcd_shadow_y + (uint16_t)(lcd_shadow_pos / lcd_shadow_w);
+    lcd_shadow_pos++;
+
+    if (x >= LCD_WIDTH || y < lcd_shadow_page ||
+        y >= (uint16_t)(lcd_shadow_page + LCD_SHADOW_HEIGHT)) {
+        return;
+    }
+
+    uint16_t shadow_y = (uint16_t)(y - lcd_shadow_page);
+    uint8_t idx = lcd_shadow_palette_index(color);
+    uint8_t *cell = &lcd_shadow[shadow_y][x >> 1];
+
+    if ((x & 1U) == 0) {
+        *cell = (uint8_t)((*cell & 0x0FU) | (idx << 4));
+    } else {
+        *cell = (uint8_t)((*cell & 0xF0U) | idx);
+    }
+}
+
+const uint8_t *lcd_shadow_bits(void)
+{
+    return &lcd_shadow[0][0];
+}
+
+void lcd_shadow_clear(void)
+{
+    for (uint32_t y = 0; y < LCD_SHADOW_HEIGHT; y++) {
+        for (uint32_t x = 0; x < LCD_SHADOW_STRIDE; x++) {
+            lcd_shadow[y][x] = 0;
+        }
+    }
+    lcd_shadow_last_color = 0;
+    lcd_shadow_last_index = 0;
+    lcd_shadow_last_valid = false;
+}
+
+void lcd_shadow_set_page(uint16_t y)
+{
+    (void)y;
+    lcd_shadow_page = 0;
+    lcd_shadow_clear();
+}
+
+uint16_t lcd_shadow_page_y(void)
+{
+    return lcd_shadow_page;
+}
+
 void lcd_write_cmd(uint8_t cmd)
 {
     *LCD_CMD_ADDR = (uint16_t)cmd;
@@ -142,6 +262,7 @@ void lcd_write_cmd(uint8_t cmd)
 void lcd_write_data(uint16_t data)
 {
     *LCD_DATA_ADDR = data;
+    lcd_shadow_write_pixel(data);
 }
 
 void lcd_write_data8(uint8_t data)
@@ -450,6 +571,12 @@ void lcd_set_window(uint16_t x, uint16_t y, uint16_t w, uint16_t h)
 
     /* Memory Write (0x2C): subsequent data writes go to framebuffer */
     lcd_write_cmd(ST7789_RAMWR);
+
+    lcd_shadow_x = x;
+    lcd_shadow_y = y;
+    lcd_shadow_w = w;
+    lcd_shadow_h = h;
+    lcd_shadow_pos = 0;
 }
 
 /* ========================================================================
@@ -463,11 +590,31 @@ void lcd_set_pixel(uint16_t x, uint16_t y, uint16_t color)
     lcd_write_data(color);
 }
 
+void lcd_blit_rect(uint16_t x, uint16_t y, uint16_t w, uint16_t h, const uint16_t *pixels)
+{
+    if (pixels == 0) return;
+    if (w == 0 || h == 0) return;
+    if (x >= LCD_WIDTH || y >= LCD_HEIGHT) return;
+    uint16_t src_w = w;
+    if (w > LCD_WIDTH - x) w = LCD_WIDTH - x;
+    if (h > LCD_HEIGHT - y) h = LCD_HEIGHT - y;
+    if (w == 0 || h == 0) return;
+
+    lcd_set_window(x, y, w, h);
+
+    for (uint16_t row = 0; row < h; row++) {
+        const uint16_t *src = pixels + (uint32_t)row * src_w;
+        for (uint16_t col = 0; col < w; col++) {
+            lcd_write_data(src[col]);
+        }
+    }
+}
+
 void lcd_fill_rect(uint16_t x, uint16_t y, uint16_t w, uint16_t h, uint16_t color)
 {
     if (x >= LCD_WIDTH || y >= LCD_HEIGHT) return;
-    if (x + w > LCD_WIDTH) w = LCD_WIDTH - x;
-    if (y + h > LCD_HEIGHT) h = LCD_HEIGHT - y;
+    if (w > LCD_WIDTH - x) w = LCD_WIDTH - x;
+    if (h > LCD_HEIGHT - y) h = LCD_HEIGHT - y;
 
     lcd_set_window(x, y, w, h);
 

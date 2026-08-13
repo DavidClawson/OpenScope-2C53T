@@ -22,6 +22,20 @@
 > now most likely the 411-byte FPGA internal cal exchange (cmds
 > 0x3B/0x3A). See `fpga_411_byte_cal.md` for the current leading
 > hypothesis.
+>
+> **Update 2026-06-05:** The "411-byte" H2 size above was later
+> disproven. The stock SPI3 boot exchange is a byte-verified
+> **115,638-byte** transfer at `0x08051D19` (`38,546 × 3-byte`
+> records), documented in `spi3_bulk_cal_resolved.md` and
+> `h2_extracted/FINDINGS.md`. Treat the body below as historical
+> hypothesis archaeology except where it identifies what is *not*
+> meter calibration.
+>
+> **Update 2026-06-06:** The DAC1 boundary was re-audited against
+> `full_decompile.c` after the low-DCV work. See
+> `meter_dac1_scope_boundary_2026_06_06.md`: DAC1 (`0x40007408`) writes
+> are scope trigger/comparator evidence, not a DMM calibration path.
+> Do not resurrect the H1 "meter DAC reference" fix.
 
 **Status:** The claim in `CLAUDE.md` that stock firmware loads
 "301-byte cal data from SPI flash per channel" for meter calibration
@@ -134,10 +148,11 @@ submode. Either:
       at boot (unlikely — meter UI clearly switches modes), OR
   (b) there's a different call path for meter mode re-calibration
       that uses a different function, OR
-  (c) `DAT_20000128 & 0xf` at line 7421 is actually the meter range
-      variable in some contexts, and the scope-auto-range code path
-      is shared with meter range changes via a common range-index
-      byte
+  (c) older hypothesis, now ruled out by the 2026-06-06
+      scope-submode mux call guard: `DAT_20000128 & 0xf` at the
+      inspected mux callsites is scope sub-mode/runtime reconfiguration,
+      not the recovered DMM range writer. A DMM runtime writer may still
+      exist elsewhere, but this scope path is not it.
 
 **Our firmware**: `fpga.c:737-779` hardcodes the DCV GPIO pattern
 for all meter modes and never writes to `0x40007408` (the DAC1
@@ -164,25 +179,21 @@ fix path.
 
 ### H2: The FPGA needs a boot-time cal exchange we aren't sending
 
-`CLAUDE.md` mentions a 411-byte cal exchange (137 entries × 3 bytes)
-sent via commands `0x3B`/`0x3A` during boot from a table at
-`0x08051D19` in the V1.2.0 binary. This is **FPGA-side** cal — it
-configures the FPGA meter IC's internal correction tables.
+> Superseded detail: this section predates the later extraction that proved
+> the exchange is 115,638 bytes, not 411 bytes. The high-level idea that a
+> missing FPGA-side boot exchange may carry calibration state remains plausible;
+> the size/framing/test plan below is historical.
 
-Our boot sequence (`fpga.c`, the `usart2_send_cmd(0x00, FPGA_CMD_INIT_*)`
-calls) does **not** send this exchange. If the FPGA has sensible
-defaults for most ranges but relies on the 411-byte table for low-Ω
-correction, that would produce exactly the symptom we see.
+The later H2 extraction proved a 115,638-byte SPI3 table at `0x08051D19`
+in the V1.2.0 binary, bracketed by SPI3 opcodes `0x3B`/`0x3A`. This is
+not USART2, and it is not 411 bytes. The table may carry FPGA-side meter
+pipeline state, but stock also ignores/drains MISO, so a custom replay's
+byte count is only TX evidence.
 
-**Test**: extract the 411-byte table from the stock binary, replay it
-over USART2 at boot via cmds 0x3B/0x3A, and re-bench.
-
-**Decomp target**: trace where `FPGA_CMD_INIT_3B` / `0x3B` is sent,
-and how the 411 bytes are paged out via the 2-byte TX frame payload.
-Given our confirmed TX frame layout (only cmd_hi/cmd_lo carry
-payload), sending 411 bytes requires 411 separate 10-byte frames,
-~43 seconds at 9600 baud. That's consistent with the long "boot
-pause" we observe on stock.
+**Current test target**: prove FPGA acceptance/apply semantics or bench
+the replay across multiple DMM modes/ranges. Do not treat a complete
+115,638-byte upload as proof that low-Ω, low-DCV, or current ranges are
+calibrated.
 
 ### H3: Stock firmware applies an MCU-side post-decode scale factor
 
@@ -211,9 +222,9 @@ LCD string formatter.
    scope trigger comparator, which has no role in meter accuracy.
    Stock does not re-call it at runtime in meter mode.
 
-2. **H2 (now the leading hypothesis)**: Extract the 411-byte table
-   and add the boot-time cal exchange. This is FPGA-side cal that
-   directly configures the meter IC's internal correction tables.
+2. **H2 (now the leading hypothesis)**: The 115,638-byte SPI3 table is
+   extracted and replayable; the remaining work is ACK/apply evidence
+   or broad bench proof across DMM modes/ranges.
 
 3. **H3**: Trace the stock display path only if H2 fails.
 
@@ -273,15 +284,16 @@ exists because the same function preloads some shared state, but
 the downstream consumer (trigger comparator) is only active in
 scope mode.
 
-## Corrections needed to other docs
+## Correction Status
 
-- **`CLAUDE.md`**: (1) Remove the claim that "301-byte cal data
-  loaded from SPI flash per channel." (2) Remove the recently-added
-  "Meter DAC reference calibration" note — that was H1 and is wrong.
-- **`gap_functions_annotated.c:530`**: The "calibration_loader" label
-  on FUN_08001830 is speculative. Rename to `roll_buffer_preload` or
-  similar, and note the uncertainty.
-- **`meter_frame_capture_log.md`**: The "factory cal load" note in
-  the Calibration Issue section should point to H2 (411-byte FPGA
-  exchange) rather than a non-existent 301-byte MCU blob or
-  DAC reference cal.
+- **Applied 2026-06-06:** `gap_functions_annotated.c` now calls
+  `FUN_08001830` `roll_buffer_preload_or_transform`, not
+  `calibration_loader`, and the stock literal guard pins its body plus the
+  two master-init callers at `0x080271A8..0x080271DC`.
+- **Applied 2026-06-06:** `meter_frame_capture_log.md` now treats low-Ohm
+  as an unresolved stock/factory range/calibration boundary and explicitly
+  rejects wiring invented 301-byte W25Q files into `meter_data.c`.
+- **Remaining external/documentation hygiene:** any future `CLAUDE.md` or
+  copied handoff note must keep the same boundary: the 301-byte regions are
+  roll-buffer state, DAC1 is scope trigger/comparator evidence, and meter
+  factory calibration remains unrecovered.

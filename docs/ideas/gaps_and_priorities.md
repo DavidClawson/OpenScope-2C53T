@@ -46,19 +46,25 @@ The oscilloscope analog signals never touch the MCU directly — all high-speed 
 
 ## Multimeter Gaps
 
-The original has **10 multimeter sub-modes** (device_mode 5-14). We have 1 static demo screen. Biggest gap but mostly hardware-dependent on FPGA/ADC routing.
+The custom firmware exposes **11 local multimeter sub-modes** mapped onto the
+eight recovered stock DMM selector slots. Voltage and several passive-mode
+frames are decoded; current range entries, the capacitance/temperature split,
+and higher resistance bands remain hardware/front-end validation gaps. DC
+mA/DC A share stock current slot 2 with display-side formatter evidence; AC mA
+maps to stock current slot 3; AC A and uA remain local/experimental policy
+until a stock writer or bench trace proves the corresponding hardware state.
 
 | Feature | Original | Ours | Status |
 |---------|----------|------|--------|
-| DC Voltage | Yes | Demo screen only | **Gap** |
-| AC Voltage | Yes | No | **Gap** |
-| DC Current (small/large) | Yes (2 ranges) | No | **Gap** |
-| AC Current (small/large) | Yes (2 ranges) | No | **Gap** |
-| Resistance | Yes | No | **Gap** |
-| Continuity (with buzzer) | Yes | No | **Gap** |
-| Diode | Yes | No | **Gap** |
-| Capacitance | Yes | No | **Gap** |
-| Temperature | Yes | No | **Gap** |
+| DC Voltage | Yes | Decoder + UI, bench 5V sane | Needs broader range/cal proof |
+| AC Voltage | Yes | Decoder + UI, frequency evidence path | Needs broader mains/low-voltage AC proof |
+| DC Current (small/large) | Yes (2 ranges) | UI/decoder scaffold | Needs jack/series-load validation |
+| AC Current (small/large) | Yes | AC mA scaffold; AC A local policy | Needs stock A-range evidence plus jack/series-load validation |
+| Resistance | Yes | Decoder + calibrated low/kOhm bands | Higher bands need characterization |
+| Continuity (with buzzer) | Yes | Decoder + UI indicator | Buzzer hardware path needs validation |
+| Diode | Yes | UI/decoder scaffold | Needs real diode frame validation |
+| Capacitance | Yes | UI/decoder scaffold | Needs real capacitor frame validation |
+| Temperature | Yes | UI/decoder scaffold | Needs real temperature probe/frame validation |
 | Min/Max/Avg with reset | No (community complaint) | UI drawn, no reset | **Opportunity** |
 | Auto-ranging | Yes | Label only | **Gap** |
 
@@ -151,7 +157,7 @@ The original has **10 multimeter sub-modes** (device_mode 5-14). We have 1 stati
 
 1. **Oscilloscope channel controls** — trigger, coupling, probe, timebase, v/div. Bread-and-butter scope controls.
 2. **Settings sub-menus** — nested menus for osc settings, channel config, trigger config.
-3. **Multimeter sub-modes** — 10 modes. Mostly hardware-dependent, but UI scaffolding can be built now.
+3. **Multimeter sub-modes** — 11 local submodes mapped onto recovered stock selector families. Several ranges remain hardware-dependent, so keep UI scaffolding distinct from physically validated behavior.
 4. **Signal generator missing waveforms** — full-wave, half-wave, pulse, Lorentz.
 5. **Wire remaining buttons** — CH1, CH2, MOVE, TRIGGER, SAVE handlers.
 6. **Connect backend features to UI** — persistence, roll mode, XY mode, trend plot, cursor, auto-measurement, component tester, Bode, mask test.

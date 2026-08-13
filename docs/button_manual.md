@@ -93,14 +93,15 @@ Note: Entering an FFT view claims the shared memory pool (88KB). Returning to ti
 | **TRIGGER** | Toggle auto-hold (HOLD) — freezes display when reading stabilizes |
 | **SELECT** | Reset min/max/avg tracking (also resets chart and histogram) |
 
-### 10 Sub-modes
+### 11 Sub-modes
 
 ```
-0: DC Voltage       5: AC Current (A)
-1: AC Voltage       6: Resistance
-2: DC Current (mA)  7: Continuity
-3: DC Current (A)   8: Diode Test
-4: AC Current (mA)  9: Capacitance
+0: DC Voltage       6: Resistance
+1: AC Voltage       7: Continuity
+2: DC Current (mA)  8: Diode Test
+3: DC Current (A)   9: Capacitance
+4: AC Current (mA) 10: Temperature
+5: AC Current (A)
 ```
 
 ### 3 Display Layouts
@@ -140,7 +141,7 @@ Sine -> Square -> Triangle -> Sawtooth -> Full-Rect Sine -> Half-Rect Sine -> Pu
 
 ## Settings Mode
 
-### Top-Level Menu (9 items)
+### Top-Level Menu
 
 ```
 > Oscilloscope Settings    [sub-menu]
@@ -149,8 +150,11 @@ Sine -> Square -> Triangle -> Sawtooth -> Full-Rect Sine -> Half-Rect Sine -> Pu
   Display Mode             [cycles theme]
   Math / Persist           [sub-menu]
   Component Tester         [sub-menu]
+  Bode Plot                [sub-menu]
   Startup on Boot
   About                    [info screen]
+  FPGA SPI Scanner
+  Firmware Update          [USB HID bootloader]
   Factory Reset
 ```
 
@@ -168,6 +172,16 @@ Sine -> Square -> Triangle -> Sawtooth -> Full-Rect Sine -> Half-Rect Sine -> Pu
 ```
 Dark Blue -> Classic Green -> High Contrast -> Night Red -> Dark Blue
 ```
+
+### Startup on Boot (OK/LEFT/RIGHT to cycle)
+
+```
+Scope <-> Meter
+```
+
+Fresh or erased settings default to `Meter`: the application starts in
+Multimeter mode and configures the DMM frontend immediately after FPGA
+initialization. Selecting `Scope` keeps the normal oscilloscope startup path.
 
 ### Oscilloscope Settings Sub-menu (depth 1)
 

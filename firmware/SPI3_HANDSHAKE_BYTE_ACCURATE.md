@@ -29,7 +29,7 @@ cleanup). It touches USBFS, FLASH, TMR10/11, and GPIOC — zero SPI3.
 
 The actual SPI3 code lives in `FUN_08027a50` (0x08027A50–0x0802B842),
 a 15,346-byte / 452-basic-block system init function. SPI3 register
-accesses span **0x0802A5E8–0x0802ADC6**.
+accesses span **0x080265E8–0x08026DC6**.
 
 ## Register Setup
 
@@ -83,10 +83,10 @@ Each SPI3 byte exchange follows this exact instruction sequence:
 
 | # | Insn addr  | `movs` value | TX byte | Notes |
 |---|-----------|-------------|---------|-------|
-| 1 | 0x0802A790 | `movs r0, #0`  | **0x00** | Sync/reset |
-| 2 | 0x0802A7D4 | `movs r0, #5`  | **0x05** | Command: unknown (mode select?) |
-| 3 | 0x0802A810 | `movs r0, #0`  | **0x00** | Padding/ack |
-| 4 | 0x0802A854 | `movs r0, #0`  | **0x00** | Padding/ack |
+| 1 | 0x08026790 | `movs r0, #0`  | **0x00** | Sync/reset |
+| 2 | 0x080267D4 | `movs r0, #5`  | **0x05** | Command: unknown (mode select?) |
+| 3 | 0x08026810 | `movs r0, #0`  | **0x00** | Padding/ack |
+| 4 | 0x08026854 | `movs r0, #0`  | **0x00** | Padding/ack |
 
 #### ~100ms SysTick delay (countdown from 100 in steps of 50)
 
@@ -94,9 +94,9 @@ Each SPI3 byte exchange follows this exact instruction sequence:
 
 | # | Insn addr  | `movs` value | TX byte | Notes |
 |---|-----------|-------------|---------|-------|
-| 5 | 0x0802A90C | `movs r0, #18` | **0x12** | Command: 18 decimal |
-| 6 | 0x0802A948 | `movs r0, #0`  | **0x00** | Padding |
-| 7 | 0x0802A98C | `movs r0, #0`  | **0x00** | Padding |
+| 5 | 0x0802690C | `movs r0, #18` | **0x12** | Command: 18 decimal |
+| 6 | 0x08026948 | `movs r0, #0`  | **0x00** | Padding |
+| 7 | 0x0802698C | `movs r0, #0`  | **0x00** | Padding |
 
 #### Calibrated SysTick delay (uses `DAT_20002b20` system clock divisor)
 
@@ -104,20 +104,24 @@ Each SPI3 byte exchange follows this exact instruction sequence:
 
 | # | Insn addr  | `movs` value | TX byte | Notes |
 |---|-----------|-------------|---------|-------|
-|  8 | 0x0802AA44 | `movs r0, #21` | **0x15** | Command: 21 decimal |
-|  9 | 0x0802AA80 | `movs r0, #0`  | **0x00** | Padding |
-| 10 | 0x0802AAC4 | `movs r0, #0`  | **0x00** | Padding |
-| 11 | 0x0802AB08 | `movs r0, #59` | **0x3B** | Command: 59 decimal (= length marker?) |
+|  8 | 0x08026A44 | `movs r0, #21` | **0x15** | Command: 21 decimal |
+|  9 | 0x08026A80 | `movs r0, #0`  | **0x00** | Padding |
+| 10 | 0x08026AC4 | `movs r0, #0`  | **0x00** | Padding |
+| 11 | 0x08026B08 | `movs r0, #59` | **0x3B** | Command: 59 decimal (= H2 start opcode) |
 
-### Summary: handshake TX bytes
+### Summary: handshake TX bytes and CS framing
 
 ```
-Group 1:  00  05  00  00
+Group 1:  CS_HI 00; CS_LO 05 00; CS_HI 00
           ~~delay~~
-Group 2:  12  00  00
+Group 2:  CS_LO 12 00; CS_HI 00
           ~~delay~~
-Group 3:  15  00  00  3B
+Group 3:  CS_LO 15 00; CS_HI 00; CS_LO 3B
 ```
+
+The stock-visible PB6 CS edges are guarded by
+`scripts/test_stock_h2_table.py`. A single continuous CS-low transaction across
+all 11 pre-upload bytes is not stock-equivalent.
 
 **Non-zero command bytes: 0x05, 0x12, 0x15, 0x3B** — these are likely
 FPGA SPI slave commands. The zeros are either padding, acknowledgement
@@ -126,45 +130,45 @@ slots, or clock-only exchanges where the RX response is what matters.
 ## Bulk Upload Loop (38,546 iterations)
 
 ```arm
-; Loop entry at 0x0802AB74
+; Loop entry at 0x08026B74
 ; r0 = byte offset (0, 3, 6, ..., 0x1C3B3)
-; r1 = flash base (&DAT_08051d1b)
+; r1 = flash base (&DAT_08051d19)
 ; r2 = terminal count (0x1C3B6 = 115,638)
 ; r6 = &SPI3_STS (0x40003C08)
 
-0x0802AB74:  adds  r0, #3            ; offset += 3
-0x0802AB76:  ldr   r3, [r6, #4]      ; DT READ: response from prev iteration byte 2
-0x0802AB78:  cmp   r0, r2            ; if offset == 115638: exit
-0x0802AB7A:  beq.n exit_loop
-0x0802AB7C:  ldrb  r3, [r1, r0]      ; r3 = flash[offset+0]  (byte 0)
+0x08026B74:  adds  r0, #3            ; offset += 3
+0x08026B76:  ldr   r3, [r6, #4]      ; DT READ: response from prev iteration byte 2
+0x08026B78:  cmp   r0, r2            ; if offset == 115638: exit
+0x08026B7A:  beq.n exit_loop
+0x08026B7C:  ldrb  r3, [r1, r0]      ; r3 = flash[offset+0]  (byte 0)
 
              ; ... TXE poll ...
-0x0802AB9A:  str   r3, [r6, #4]      ; DT WRITE: send byte 0
+0x08026B9A:  str   r3, [r6, #4]      ; DT WRITE: send byte 0
 
              ; ... RXNE poll ...
-0x0802ABB6:  ldr   r3, [r6, #4]      ; DT READ: response to byte 0
+0x08026BB6:  ldr   r3, [r6, #4]      ; DT READ: response to byte 0
 
-0x0802ABB8:  adds  r3, r0, r1        ; r3 = &flash[offset]
-0x0802ABBA:  ldrb  r7, [r3, #1]      ; r7 = flash[offset+1]  (byte 1)
+0x08026BB8:  adds  r3, r0, r1        ; r3 = &flash[offset]
+0x08026BBA:  ldrb  r7, [r3, #1]      ; r7 = flash[offset+1]  (byte 1)
 
              ; ... TXE poll ...
-0x0802ABD8:  str   r7, [r6, #4]      ; DT WRITE: send byte 1
+0x08026BD8:  str   r7, [r6, #4]      ; DT WRITE: send byte 1
 
              ; ... RXNE poll ...
-0x0802ABF6:  ldr   r7, [r6, #4]      ; DT READ: response to byte 1
+0x08026BF6:  ldr   r7, [r6, #4]      ; DT READ: response to byte 1
 
-0x0802ABF4:  ldrb  r3, [r3, #2]      ; r3 = flash[offset+2]  (byte 2)
+0x08026BF4:  ldrb  r3, [r3, #2]      ; r3 = flash[offset+2]  (byte 2)
 
              ; ... TXE poll ...
-0x0802AC14:  str   r3, [r6, #4]      ; DT WRITE: send byte 2
+0x08026C14:  str   r3, [r6, #4]      ; DT WRITE: send byte 2
 
-             ; ... RXNE poll → branch to 0x0802AB74 ...
+             ; ... RXNE poll -> branch to 0x08026B74 ...
 ```
 
 **Each iteration sends 3 consecutive bytes from flash.** Full-duplex:
 after each TX, the firmware reads back the RX byte (even if it discards
 it). Total data: 38,546 iterations x 3 bytes = **115,638 bytes** from
-flash address `0x08051D1B`.
+flash address `0x08051D19`.
 
 ## Post-Upload Cleanup (6 exchanges + CS toggles)
 
@@ -173,38 +177,41 @@ SPI3 transfers:
 
 | Step | GPIO | SPI3 TX | Insn addr |
 |------|------|---------|-----------|
-| 1 | **CS assert** (PB6 LOW) | — | 0x0802AC34 |
-| 2 | — | TX **0x00** → RX | 0x0802AC54 |
-| 3 | **CS deassert** (PB6 HIGH) | — | 0x0802AC76 |
-| 4 | — | TX **0x3A** → RX | 0x0802AC98 |
-| 5 | — | TX **0x00** → RX | 0x0802ACD4 |
-| 6 | **CS assert** (PB6 LOW) | — | 0x0802ACF6 |
-| 7 | — | TX **0x00** → RX | 0x0802AD18 |
-| 8 | **CS deassert** (PB6 HIGH) | — | 0x0802AD3A |
-| 9 | — | TX **0x00** → RX | 0x0802AD5C |
-| 10 | **CS assert** (PB6 LOW) | — | 0x0802AD7E |
-| 11 | — | TX **0x00** (flush) → RX | 0x0802ADA8 |
+| 1 | **CS deassert** (PB6 HIGH) | — | 0x08026C32 |
+| 2 | — | TX **0x00** → RX | 0x08026C54 |
+| 3 | **CS assert** (PB6 LOW) | — | 0x08026C76 |
+| 4 | — | TX **0x3A** → RX | 0x08026C98 |
+| 5 | — | TX **0x00** → RX | 0x08026CD4 |
+| 6 | **CS deassert** (PB6 HIGH) | — | 0x08026CF6 |
+| 7 | — | TX **0x00** → RX | 0x08026D18 |
+| 8 | **CS assert** (PB6 LOW) | — | 0x08026D3A |
+| 9 | — | TX **0x00** → RX | 0x08026D5C |
+| 10 | **CS deassert** (PB6 HIGH) | — | 0x08026D7E |
+| 11 | — | TX **0x00** (flush) → RX | 0x08026DA8 |
 
-Post-upload TX bytes: `CS_LO → 0x00 → CS_HI → 0x3A, 0x00 → CS_LO → 0x00 → CS_HI → 0x00 → CS_LO → 0x00`
+Post-upload TX bytes: `CS_HI → 0x00 → CS_LO → 0x3A, 0x00 → CS_HI → 0x00 → CS_LO → 0x00 → CS_HI → 0x00`
 
 **Non-zero post-upload byte: 0x3A** — likely a "transfer complete"
-command to the FPGA. The CS toggles suggest framing: each CS
-assert/deassert pair delimits a command word.
+command to the FPGA. Stock sends it while PB6 CS is asserted LOW at
+`0x08026C76..0x08026C98`; the older "0x3A after CS deassert" reading
+was a stale address/polarity error.
 
-## Then: USART2 Boot Commands
+## Then: SPI3 Queue Boot Triggers
 
-Immediately after the SPI3 cleanup, the firmware queues USART2
-commands via `FUN_0803ecf0` (xQueueSend):
+Immediately after the SPI3 cleanup, the firmware queues SPI3 acquisition
+triggers via `FUN_0803ecf0` (xQueueSend) to queue `0x20002D78`:
 
 ```
-command 1  → FPGA_CMD_INIT_01 (channel init)
-command 2  → FPGA_CMD_INIT_02 (siggen setup)
-command 6  → FPGA_CMD_INIT_06 (siggen setup)
-command 7  → FPGA_CMD_INIT_07 (meter probe detect)
-command 8  → FPGA_CMD_INIT_08 (meter configure)
+trigger 1  → SPI3 acquisition task item
+trigger 2  → SPI3 acquisition task item
+trigger 6  → SPI3 acquisition task item
+trigger 7  → SPI3 acquisition task item
+trigger 8  → SPI3 acquisition task item
 ```
 
-These match the definitions in `fpga.h`.
+These are not USART2/DVOM wire commands and they are not proof that H2 was
+accepted or applied. They are stock-visible post-H2 SPI3 task triggers guarded
+by `scripts/test_stock_h2_table.py`.
 
 ## What the Custom Firmware Should Do Differently
 
@@ -251,9 +258,10 @@ uses CS edges as command delimiters.
 
 ### 4. The 0x3A completion byte (CHECK)
 
-The post-upload sends 0x3A between the first CS deassert and the
-second CS assert. This may be a "verify" or "commit" command. If it's
-missing, the FPGA might not latch the uploaded data.
+The post-upload sends 0x3A after the `0x08026C76` PB6 CS assert and
+before the `0x08026CF6` PB6 CS deassert. This may be a "verify" or
+"commit" command. If it's missing or sent with CS high, the FPGA might
+not latch the uploaded data.
 
 ## Raw Data: All 20 DT WRITE Instructions
 
@@ -261,26 +269,26 @@ For verification, every SPI3_DT write in the function:
 
 ```
 ADDR        INSTRUCTION          VALUE  PHASE
-0x0802A790  movs r0, #0;  str   0x00   handshake group 1
-0x0802A7D4  movs r0, #5;  str   0x05   handshake group 1
-0x0802A810  movs r0, #0;  str   0x00   handshake group 1
-0x0802A854  movs r0, #0;  str   0x00   handshake group 1
-0x0802A90C  movs r0, #18; str   0x12   handshake group 2
-0x0802A948  movs r0, #0;  str   0x00   handshake group 2
-0x0802A98C  movs r0, #0;  str   0x00   handshake group 2
-0x0802AA44  movs r0, #21; str   0x15   handshake group 3
-0x0802AA80  movs r0, #0;  str   0x00   handshake group 3
-0x0802AAC4  movs r0, #0;  str   0x00   handshake group 3
-0x0802AB08  movs r0, #59; str   0x3B   handshake group 3
-0x0802AB9A  str r3 (ldrb [r1,r0])      bulk loop: flash[offset+0]
-0x0802ABD8  str r7 (ldrb [r3,#1])      bulk loop: flash[offset+1]
-0x0802AC14  str r3 (ldrb [r3,#2])      bulk loop: flash[offset+2]
-0x0802AC54  movs r0, #0;  str   0x00   post-upload (after CS assert)
-0x0802AC98  movs r0, #58; str   0x3A   post-upload (after CS deassert)
-0x0802ACD4  movs r0, #0;  str   0x00   post-upload
-0x0802AD18  movs r0, #0;  str   0x00   post-upload (after CS assert)
-0x0802AD5C  movs r0, #0;  str   0x00   post-upload (after CS deassert)
-0x0802ADA8  movs r0, #0;  str   0x00   post-upload flush (CS assert)
+0x08026790  movs r0, #0;  str   0x00   handshake group 1
+0x080267D4  movs r0, #5;  str   0x05   handshake group 1
+0x08026810  movs r0, #0;  str   0x00   handshake group 1
+0x08026854  movs r0, #0;  str   0x00   handshake group 1
+0x0802690C  movs r0, #18; str   0x12   handshake group 2
+0x08026948  movs r0, #0;  str   0x00   handshake group 2
+0x0802698C  movs r0, #0;  str   0x00   handshake group 2
+0x08026A44  movs r0, #21; str   0x15   handshake group 3
+0x08026A80  movs r0, #0;  str   0x00   handshake group 3
+0x08026AC4  movs r0, #0;  str   0x00   handshake group 3
+0x08026B08  movs r0, #59; str   0x3B   handshake group 3
+0x08026B9A  str r3 (ldrb [r1,r0])      bulk loop: flash[offset+0]
+0x08026BD8  str r7 (ldrb [r3,#1])      bulk loop: flash[offset+1]
+0x08026C14  str r3 (ldrb [r3,#2])      bulk loop: flash[offset+2]
+0x08026C54  movs r0, #0;  str   0x00   post-upload (after CS deassert)
+0x08026C98  movs r0, #58; str   0x3A   post-upload (after CS assert)
+0x08026CD4  movs r0, #0;  str   0x00   post-upload
+0x08026D18  movs r0, #0;  str   0x00   post-upload (after CS deassert)
+0x08026D5C  movs r0, #0;  str   0x00   post-upload (after CS assert)
+0x08026DA8  movs r0, #0;  str   0x00   post-upload flush (CS deassert)
 ```
 
 ## Method Notes

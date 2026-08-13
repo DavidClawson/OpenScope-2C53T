@@ -18,7 +18,8 @@
  *
  * Hardware interfaces:
  *   SPI3  (0x40003C00): PB3=SCK, PB4=MISO, PB5=MOSI, PB6=CS (GPIO)
- *   USART2 (0x40004400): PA2=TX, PA3=RX, 9600 baud, 10-byte TX / 12-byte RX
+ *   USART2 (0x40004400): PA2=TX, PA3=RX, 9600 baud, 10-byte TX commands,
+ *                        10-byte echo RX, and 12-byte data/meter RX frames
  *   GPIOB BOP/BCR: 0x40010C10/0x40010C14
  *   GPIOC IDR: 0x40011008
  *   TMR3 (0x40000400): drives USART2 exchange cycle
@@ -149,7 +150,7 @@
  * +0xF34 : uint8_t meter_result_class  - Result classification (1=normal,2=under,3=over,4=invalid)
  * +0xF35 : uint8_t meter_data_valid    - Meter data validity flag
  * +0xF36 : uint8_t meter_overload_flag - Overload detection state
- * +0xF37 : uint8_t meter_cal_coeff     - Calibration coefficient selector
+ * +0xF37 : uint8_t meter_decimal_shift - DAT_2000102f formatter/decimal state
  * +0xF38 : uint8_t meter_range_ff      - Range marker (0xFF = unset)
  * +0xF39 : uint8_t auto_range_flag     - Auto-range enable flag
  * +0xF3A : uint16_t meter_extra_data   - Extra meter data from RX frame bytes 10-11
@@ -424,12 +425,19 @@ void meter_data_processor(void) {
 
 calibration_path:
         /*
-         * Heavy floating-point calibration section.
+         * Heavy floating-point display-scaling section.
+         *
+         * Historical warning: older annotations called this calibration because
+         * of the VFP/EABI math. Later stock literal/decompile guards identify
+         * ms[0xF37] as DAT_2000102f, the formatter/decimal state feeding
+         * DAT_20001030. This block is display classification/scaling evidence,
+         * not a recovered DMM physical coefficient, low-DCV correction, or
+         * current-range source.
          *
          * For each measurement channel (up to 4 iterations):
          *   1. Check polarity via __aeabi_dcmplt
-         *   2. Convert calibration coefficient to double: __aeabi_ui2d(cal_coeff)
-         *   3. Divide reference by coefficient: __aeabi_ddiv(d8_ref, divisor)
+         *   2. Convert the formatter/decimal selector to double
+         *   3. Divide reference by the formatter divisor
          *   4. Multiply by accumulated scale: __aeabi_dmul(quotient, d10_accum)
          *   5. Convert to int: __aeabi_d2iz(result)
          *
@@ -498,11 +506,13 @@ void meter_mode_handler(void) {
             ms[0xF2D] = 0;
             break;
         }
-        /* Check status bits for AC mode, auto-range */
+        /* Check status bits that stock maps to formatter/decimal state.
+         * AC-present confidence and physical range control are not recovered
+         * from this display-side state machine. */
         if (status_byte & (1 << 5)) {
-            /* Bit 5 set: enter AC mode path */
+            /* Bit 5 set: enter display-format branch */
             ms[0xF36] = 0;             /* Clear overload flag */
-            /* Extract bit 6 of flags_byte as cal_coeff */
+            /* Extract bit 6 of flags_byte as a decimal-format selector bit */
             ms[0xF37] = (flags_byte >> 6) & 1;
             ms[0xF2F] = 3;             /* Advance to state 3 */
             break;
@@ -521,9 +531,9 @@ void meter_mode_handler(void) {
             ms[0xF2F] = 1;
             break;
         }
-        /* Normal: check bit 3 for auto-range trigger */
+        /* Normal: check bit 3 for stock formatter-state transition */
         if (status_byte & (1 << 3)) {
-            /* Auto-range path */
+            /* Display-state transition path */
             ms[0xF36] = 2;
             ms[0xF37] = (flags_byte >> 6) & 1;
             ms[0xF2F] = 2;
@@ -534,13 +544,13 @@ void meter_mode_handler(void) {
 
     case 1: /* POLARITY CHECK */
         if (status_byte & 1) {
-            ms[0xF37] = 0;   /* Clear cal coefficient */
+            ms[0xF37] = 0;   /* formatter decimal selector */
         } else {
-            ms[0xF37] = 1;   /* Set cal coefficient */
+            ms[0xF37] = 1;   /* formatter decimal selector */
         }
         break;
 
-    case 2: /* OVERLOAD / RANGE CHANGE */
+    case 2: /* OVERLOAD / DISPLAY-STATE CHANGE */
         if (ms[0xF36] == 1) {
             if (status_byte & 1) {
                 /* Overload confirmed */
@@ -551,32 +561,32 @@ void meter_mode_handler(void) {
                 ms[0xF2D] = 2;
             }
         } else {
-            /* Check bit 3 for range change */
+            /* Check bit 3 for display-state change */
             if (status_byte & (1 << 3)) {
-                /* Range change path */
+                /* Display-state transition path */
             }
             ms[0xF2D] = 2;
         }
         break;
 
-    case 3: /* AC/DC FLAG CHECK */
+    case 3: /* STATUS/DECIMAL HELPER CHECK */
         if (status_byte & (1 << 2)) {
-            /* AC mode detected */
+            /* Formatter branch value; not AC-present confidence by itself */
             ms[0xF37] = 2;
             ms[0xF2D] = 3;
         } else {
-            /* Check hold flag (flags_byte bit 6) */
+            /* Check flags_byte bit 6 as a formatter selector bit */
             ms[0xF37] = (flags_byte >> 6) & 1;
             ms[0xF2D] = 3;
         }
         break;
 
-    case 4: /* RANGE INDICATOR CHECK */
+    case 4: /* FORMAT SELECTOR CHECK */
         if (flags_byte & (1 << 5)) {
-            ms[0xF37] = 0;   /* Range indicator 1 */
+            ms[0xF37] = 0;   /* formatter selector value */
             ms[0xF2D] = 4;
         } else if (flags_byte & (1 << 4)) {
-            ms[0xF37] = 1;   /* Range indicator 2 */
+            ms[0xF37] = 1;   /* formatter selector value */
             ms[0xF2D] = 4;
         } else {
             /* Check status_byte bit 0 for state selection */
@@ -1381,9 +1391,11 @@ power_off:
  * FUNCTION 10: usart_tx_config_writer
  * Address: 0x08039734 - 0x08039870  (316 bytes)
  *
- * Writes FPGA configuration parameters into the USART TX frame based on
- * command type. Called by scope/meter/siggen mode handlers to set up
- * the FPGA for the desired operating mode.
+ * Writes config bitfields based on command type. Earlier notes called this a
+ * USART TX config writer for scope/meter/siggen mode handlers, but the
+ * currently visible direct callers in FUN_08023A50 pass TIM5/TIM2 base
+ * addresses during master init. Treat the type names below as bitfield-shape
+ * labels until a stock runtime caller ties them to FPGA/DMM command payloads.
  *
  * 7 command types (TBB switch at 0x0803973E):
  *
@@ -1409,8 +1421,13 @@ power_off:
  *   Type 3: TIMEBASE CONFIGURATION
  *     - Direct register writes for sample rate / timebase
  *
- *   Type 4: METER RANGE CONFIGURATION
- *     - Meter measurement range selection
+ *   Type 4: METER-CASE-SHAPED BITFIELD CONFIGURATION
+ *     - params[1].0 -> config[0x20] bit 9
+ *     - params[1].1 -> config[0x20] bit 11
+ *     - params[2].0..1 -> config[0x1C] bits 0..1
+ *     - params[3].0..3 -> config[0x1C] bits 4..7
+ *     - update mask = 0x0100
+ *     - Not proof of normal runtime DMM range switching by itself.
  *
  *   Type 5: SIGNAL GENERATOR FREQUENCY
  *     - Frequency register configuration for DAC output
@@ -1478,8 +1495,9 @@ void usart_tx_config_writer(uint8_t *config_base, uint8_t *params) {
         /* Direct register writes */
         break;
 
-    case 4: /* Meter range config */
-        /* Range selection */
+    case 4: /* Type-4-shaped FPGA config arm */
+        /* Bitfield-shaped config evidence only. Current stock guards have no
+         * normal runtime DMM caller tying this arm to physical range selection. */
         break;
 
     case 5: /* Siggen frequency */

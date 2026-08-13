@@ -44,7 +44,12 @@
  *   All offsets below are BYTE offsets from that base.
  *
  *   +0xF2C (0x20001024) = reserved / cleared each frame
- *   +0xF2D (0x20001025) = meter_mode         uint8  0-8: DCV,ACV,Ω,Cont,Diode,Cap,Freq,Period,Duty
+ *   +0xF2D (0x20001025) = stock meter/display mode uint8.
+ *                                      The recovered raw selector table has
+ *                                      eight slots; the open firmware's eleven
+ *                                      UI submodes are a porting map layered
+ *                                      onto those slots, not proof that stock
+ *                                      exposes eleven separate front-end modes.
  *   +0xF2E (0x20001026) = meter_display_cmd  uint8  FPGA command code for next TX
  *   +0xF2F (0x20001027) = meter_sub_mode     uint8  sub-mode within meter_mode
  *   +0xF30 (0x20001028) = meter_raw_value    float  raw BCD count as float, updated each frame
@@ -433,32 +438,31 @@ void dvom_rx_task(void)
         ms[0xF34] = result_class;
 
         /*
-         * Decimal scaling application:
-         *   scale = pow(10.0, scale_exp)   — computed via FUN_0803C8E0 with d0=10.0 (d9)
-         *   result = raw_f_double + scale   — via FUN_0803E124 (dadd)
+         * Decimal scaling application, corrected 2026-06-05:
          *
-         * IMPORTANT: FUN_0803E124 is __aeabi_dadd (double ADD), NOT division.
-         * In this path the scale (1.0, 10.0, 100.0, or 1000.0) is ADDED to raw_bcd.
-         * This shifts the value UP by one range-step's worth of counts.
+         *   scale = pow(10.0, scale_exp)   -- computed via FUN_0803C8E0 with d0=10.0
+         *   displayed value = extended_raw / scale
          *
-         * For the common DCV low-range case (scale_exp=0.0, scale=1.0):
-         *   result = raw_bcd + 1.0   (negligible change for display purposes)
+         * Earlier notes misread the nearby __aeabi_dadd helper as proof that the
+         * stock value should be adjusted upward by adding pow(10, class). The
+         * V1.2.0 disassembly/literal-pool path and live low-DCV frames instead
+         * show a decimal-exponent class. A 1.5 V bench cell produced:
          *
-         * For the kΩ range (scale_exp=3.0, scale=1000.0):
-         *   result = raw_bcd + 1000.0  (shifts display by one kΩ step)
+         *   5A A5 4E CE 8F 8A 0A 00 82 00 01 7F
+         *   digits=4977, frame[2].3=1, frame[8].7=1
          *
-         * The purpose is analogous to the decimal-shift-add loop in fpga_state_update:
-         * it adjusts the visible digit window to the correct decade.
-         *
-         * After the dadd, d2f converts back to float and stores to meter_raw_value.
-         * A polarity check (frame[2] bit 4) then optionally negates the float.
+         * Stock first extends the raw value to 14977 via frame[2].3, then class
+         * 4 divides by 10^4 and renders about 1.4977 V. There is no stock-only
+         * evidence here for a one-point low-voltage coefficient; any real
+         * per-device factory calibration remains unresolved until recovered from
+         * stock xrefs, W25Q/system-file data, or SPI bulk initialization tables.
          */
         double scale = pow(10.0, scale_exp);   /* pow(d9=10.0, scale_exp) */
         double raw_d = (double)raw_f;          /* __aeabi_f2d */
-        double adjusted = raw_d + scale;       /* __aeabi_dadd = FUN_0803E124 */
-        float final_val = (float)adjusted;     /* __aeabi_d2iz then d2f = FUN_0803DF48 */
+        double adjusted = raw_d / scale;       /* stock-visible decimal class */
+        float final_val = (float)adjusted;     /* stored for the display path */
 
-        /* Store adjusted value back to meter_raw_value */
+        /* Store scaled value back to meter_raw_value */
         *(float *)&ms[0xF30] = final_val;
 
         /* Negate if frame[2] bit 4 is set (polarity flag) */
@@ -570,7 +574,8 @@ meter_mode_handler:
  *     Else: read frame[7] bits
  *       frame[7] bit 5 (lsls r0, #0x1A, MI): if set → probe_type = 2, dp_source = 0
  *         Also checks frame[7] bit 4 and frame[2] bit 1 for sub-conditions
- *       frame[7] bit 2 (AC/DC flag for DCV): sets probe_type
+ *       frame[7] bit 2: status/decimal helper branch; it can set probe_type
+ *         in this stock FSM slice but is not recovered as AC-present confidence
  *       frame[7] bit 0 (polarity):
  *         if 0 → probe_type = 2
  *         if 1 → probe_type = 1
@@ -766,6 +771,11 @@ void fpga_state_update(void)
      * Each case sets meter_display_cmd (+0xF2E) and meter_unit_index (+0xF38).
      * meter_unit_index = meter_decimal_pos + <constant> (mode-specific offset).
      *
+     * Case labels below are stock display/FSM slots, not the open firmware's
+     * local UI submode numbers. For the current local-to-stock porting map and
+     * the evidence boundaries around current/cap/temp splits, see
+     * meter_mode_command_table_2026_06_05.md.
+     *
      * Case 0 (DCV):   sub-TBB on meter_sub_mode (0-3)
      *   sub_mode 0: display_cmd = 0,  unit_index = 0xFF
      *   sub_mode 1: display_cmd = probe_type (1 or 2),  unit_index = decimal_pos
@@ -875,37 +885,55 @@ void fpga_state_update(void)
  *   Result: dp=1, unit="V", value=5.008V ✓
  *
  * ============================================================================
- * SECTION 5: 3.7x ERROR DIAGNOSIS
+ * SECTION 5: VOLTAGE/RESISTANCE CALIBRATION ERROR DIAGNOSIS
  * ============================================================================
  *
  * HISTORICAL CONTEXT (from CLAUDE.md, 2026-04-03):
  *   "LIVE VOLTAGE READINGS FROM METER IC — first achieved 2026-04-03.
  *    Reads ~3.7x high (5.6V for 1.5V) — calibration/gain tuning needed."
  *
- * CURRENT STATUS (2026-04-04 hardware captures):
- *   5V DC → 5.008 V  ✓ CORRECT (0.16% error, within resistor/meter tolerance)
- *   DCV range: WORKING CORRECTLY
+ * CURRENT STATUS:
+ *   2026-04-04:
+ *     5V DC → 5.008 V  ✓ via the decimal-position/frame[6] fix.
+ *     Low Ω (147 Ω resistor) → 48.36 Ω  ✗ before the resistance band override.
+ *     kΩ range (3.3 kΩ → 3.230 kΩ, 10 kΩ → 9.840 kΩ) ✓ within bench tolerance.
  *
- *   Low Ω (147 Ω resistor) → 48.36 Ω  ✗ WRONG (~3.04x low)
- *   kΩ range (3.3 kΩ → 3.230 kΩ, 10 kΩ → 9.840 kΩ) ✓ CORRECT (within 2%)
+ *   2026-06-05:
+ *     5V DC → about 4.994 V ✓ via stock-analysis range hint frame[3].4.
+ *     32V DC → about 31.96..31.98 V ✓ via range hint frame[4].4.
+	 *     1.5V DC → about 1.497..1.500 V ✓ via frame[2].3 raw extension and
+	 *               stock class-4 decimal exponent frame[8].7.
  *
- * THE 3.7x ERROR IS NOW RESOLVED FOR DCV:
- *   The initial 3.7x error on 2026-04-03 was caused by incorrect decimal_pos handling
- *   before the frame[6] decoder was implemented. With frame[6]=0x0F → dp=1, the
- *   DCV path correctly divides raw_bcd by 1000 (= 10^(4-1)) to get voltage in V.
+ * VOLTAGE ROOT CAUSE UPDATE:
+ *   The original 5V error was largely decimal-position handling. That was not
+	 *   the whole voltage story. A later low-DCV capture showed a 1.5 V input with
+	 *   about 4977 BCD counts, frame[2].3 set, and frame[8].7 set. Mapping class 4
+	 *   to decimal position 0 produced about 4977 V. Stock instead extends the raw
+	 *   count to 14977 and divides by 10^class selected from the range bits:
+	 *
+	 *     frame[8].7 → class 4, multiplier 0.0001
+	 *     frame[3].4 → class 3, multiplier 0.001
+	 *     frame[4].4 → class 2, multiplier 0.01
+	 *     frame[5].4 → class 1, multiplier 0.1
+	 *     none       → class 0, multiplier 1.0
+	 *
+	 *   Factory calibration remains empirical/unresolved until a stock data source
+	 *   for it is recovered; the local decoder must not invent physical
+	 *   coefficients from one observed voltage.
  *
- * REMAINING ERROR: Low-Ω calibration (~3x low)
+	 * REMAINING/EMPIRICAL ERROR: Low-Ω calibration and unresolved factory data
  *
  *   SYMPTOM: 147 Ω reads as 48.36 Ω (ratio ≈ 0.329, or ~3.04x low)
  *   AFFECTED RANGE: low-Ω band (frame[6]=0x07, "Ohm" unit, dp=2)
  *   NOT AFFECTED: kΩ range (frame[6]=0x4B/0x4D, "kOhm" unit)
  *
- *   ROOT CAUSE: Missing factory calibration coefficients from SPI flash.
- *   The stock firmware loads per-range gain coefficients at boot from SPI flash
- *   ("3:System file/" filesystem). These are stored in meter_state[0x29C..0x34E]
- *   (120 bytes for scope, plus additional meter-specific cal).
- *   Our firmware has a stub: flash_fs_load_factory_cal() in src/drivers/flash_fs.c
- *   at line 199 that allocates but doesn't populate the 301-byte cal region.
+ *   ROOT CAUSE: Missing factory calibration coefficients from SPI flash or the
+ *   FPGA-side initialization/calibration exchange. The exact stock source for
+ *   resistance/current factory coefficients is still unresolved. Custom
+ *   firmware now rejects low-Ω normal frames with
+ *   METER_REJECT_UNRESOLVED_CALIBRATION instead of applying a one-unit bench
+ *   coefficient. The low-DCV path was later corrected to stock raw extension
+ *   plus decimal class, not a physical coefficient.
  *
  *   WHY kΩ RANGE IS FINE:
  *   The kΩ sub-ranges (0x4B, 0x4D) use frame[3] or frame[4] range bits to shift
@@ -915,22 +943,24 @@ void fpga_state_update(void)
  *   RAW COUNTS from the FPGA are calibration-dependent and require a per-range
  *   gain multiplier that only lives in the SPI flash cal table.
  *
- *   HYPOTHESIS (HIGH CONFIDENCE, from fpga_comms_deep_dive.c):
- *   Stock firmware divides low-Ω raw counts by factory_cal_coeff[low_ohm_range]
- *   before display. Our firmware skips this division, reading the raw count directly.
- *   The factory coefficient for the low-Ω range is approximately 3.04 (from hardware data).
- *   This coefficient varies per device (factory calibrated) so a hardcoded 3.04 is wrong.
+ *   HYPOTHESIS (UNRESOLVED):
+ *   Stock firmware or the FPGA meter path applies a per-range low-Ω factory
+ *   coefficient before display. The source may be W25Q/system-file data or an
+ *   FPGA-side state table. Until that source is recovered, a hardcoded
+ *   coefficient is wrong even if it matches one resistor on one device.
  *
  *   WHAT TO CHANGE IN CUSTOM FIRMWARE (do NOT modify code, just note):
- *   File: firmware/src/drivers/flash_fs.c  function: flash_fs_load_factory_cal()
- *   Currently: allocates buffer but returns without reading SPI flash
- *   Fix needed: read from SPI flash at the "3:System file/" path, parse the binary
- *               cal table, store per-range gain coefficients into the meter state.
+ *   File: firmware/src/drivers/flash_fs.c
+ *   Fix needed: recover and load the stock factory calibration source, then
+ *               replace any remaining empirical resistance/current
+ *               coefficients. Do not invent a low-DCV coefficient; stock
+ *               evidence uses frame[2].3 +10000 and class bits.
  *
- *   File: firmware/src/drivers/meter_data.c  function: format_reading()
- *   Currently: uses raw_bcd / 10^(4-decimal_pos) as the value
- *   Fix needed: multiply the result by the appropriate per-range cal coefficient
- *               BEFORE dividing by the decimal divisor.
+ *   File: firmware/src/drivers/meter_data.c
+ *   Current local port: uses stock frame/mode metadata to select DCV decimal
+ *                       class, with live fixtures for low-DCV, 5V, 32V,
+ *                       mains-class frames, low-Ω fail-closed behavior, and
+ *                       kΩ unit normalization.
  *
  *   LIKELIHOOD RANKING:
  *   1. (95%) Missing SPI flash cal load → explains ~3x error on low-Ω

@@ -12,9 +12,20 @@
 
 2. **DAT_2000102e (unit_variant) is written in 4 places**, all within the FSM at lines 30425-30464. It's not pre-computed; it's set **only in DCV (case 0)** and persists across frames as a multi-frame state machine flag.
 
-3. **No "range feedback function" was found**. The stock firmware sends display commands (0x1B, 0x1C, 0x1E) to a queue but does not implement auto-ranging. The function at 0x080028E0 (**FUN_080028e0**) is the **display-side formatter and meter-mode dispatcher**, not a range controller. True auto-range is not implemented in stock firmware.
+3. **Range-command boundary corrected 2026-06-06.** No magnitude-derived
+   range feedback function was found in `FUN_080028E0`: that function is the
+   display-side formatter and meter-mode dispatcher, not a range controller.
+   Newer stock guards do prove DMM boot/runtime mode-init command banks
+   (`0x1A..0x1E`, `0x16..0x19`, `0x12/0x13/0x14`) and runtime dispatcher
+   callers into `FUN_0800B908`; what remains missing is the DMM-owned runtime
+   analog range writer for `ms[0x02]`/`ms[0x03]`. Do not turn this into a claim
+   that stock sends no meter range commands at all.
 
-4. **Unit strings live in flash at 0x804c40c** (12-entry table, 4 bytes per entry = 48 bytes total). Indexed by `DAT_20001026` which is set by the display formatter. Strings in our firmware should follow the unit_variant table in meter_data.c (already correct).
+4. **Unit lookup boundary corrected again 2026-08-13.** The stock renderer
+   computes a lookup address from `DAT_20001026` at `0x08009AE4`. That lookup
+   base is the stock-runtime literal `0x0804C40C`, but the APP image is linked
+   at `0x08007000`, so the file offset is `0x4540C`, not `0x4C40C`. The corrected
+   offset contains the recovered 12-entry unit-string pointer table.
 
 5. **DCV sub-state machine (DAT_20001027) persists across frames**. It has 4 states (0, 1, 2, 3) and is reset to 0 only on valid digit frames. The complexity comes from conditional transitions based on frame[6] and frame[7] bit patterns.
 
@@ -49,7 +60,7 @@
 | 30472, 30483, 30529, 30552 | `(rx_integrity_marker & 1) == 0` | bit 0 direct | test polarity bit (0x01 mask) |
 | 30494 | `(int)((uint)rx_integrity_marker << 0x1c) < 0` | bit 4 (0x10 mask) | DCA case 2: range indicator |
 | 30495 | `(-1 < (int)((uint)rx_integrity_marker << 0x1d))` | bit 2 inverted | secondary range rule |
-| 30507 | `(int)((uint)rx_integrity_marker << 0x1d) < 0` | bit 2 (0x04 mask) | ACA case 3: decimal selector |
+| 30507 | `(int)((uint)rx_integrity_marker << 0x1d) < 0` | bit 2 (0x04 mask) | ACA case 3: decimal/status selector |
 
 **Quoted frame validation (USART2 ISR):**
 
@@ -67,7 +78,7 @@ Evidence chain:
 2. Frame format per meter_data.c line 8-14: bytes [0-1] = header (0x5A, 0xA5), [2-6] = BCD, **[7] = status flags**, [8-11] = extra data.
 3. Lines 30433-30507 extract individual bits from it to control decimal position — exactly matches meter_data.c "meter_mode_handler" comments (line 158-162):
    - **bit 0 (0x01)**: polarity / decimal state selector (lines 30466, 30472, 30483, etc.)
-   - **bit 2 (0x04)**: AC flag / decimal helper (lines 30437, 30452, 30495, 30507)
+   - **bit 2 (0x04)**: status/decimal helper (lines 30437, 30452, 30495, 30507); not recovered as AC-present confidence
    - **bit 4 (0x10)**: range indicator (lines 30449, 30494)
    - **bit 5 (0x20)**: DCV sub-state entry flag (line 30434 tests `<< 0x1a`)
 
@@ -137,7 +148,11 @@ Key facts:
    - **1**: mV (millivolt) range — set when entering lower range (line 30445)
    - **2**: special state or overload variant (lines 30451, 30464)
 
-4. **Display formatter uses it** to pick correct unit string. Line 2900: `DAT_20001026 = DAT_2000102e` copies it directly, then line 3781 indexes into flash table at `0x804c40c + DAT_20001026 * 4`.
+4. **Display formatter uses it** as stock unit-index state. Line 2900:
+   `DAT_20001026 = DAT_2000102e` copies it directly, then line 3781 computes
+   the renderer lookup address `0x804c40c + DAT_20001026 * 4`. Newer binary
+   guards show that lookup region is zero-filled in this APP image, so this is
+   display-state evidence, not recovered stock suffix-string evidence.
 
 5. **Submodes 1-7 DO NOT write DAT_2000102e**. They only read the display formatter's copy via DAT_20001026. This means **DCV range switching is tracked per-frame in the FSM, but other submodes rely on static unit tables** (DCA/ACA always mA or A, Ohm always Ω, etc.).
 
@@ -268,12 +283,19 @@ Why:
 *     bit 3 (0x08) — range-change / auto-range-in-progress
 ```
 
-So the **stock firmware reads range feedback FROM the FPGA** (in frame[7] bit 3), but **does not send range commands back**. The display just shows what range the FPGA is currently in.
+So this formatter path reads display/status bits from the FPGA and queues
+display-task commands, but it is not the recovered runtime analog range writer.
+Newer binary guards recover DMM mode-init command banks and dispatcher callers;
+they still do not recover the DMM-owned runtime writer for `ms[0x02]` /
+`ms[0x03]` or justify magnitude-derived range control.
 
 ### Uncertainty
 
 - **Why is this called "state_update" in CLAUDE.md notes?** The comment in CLAUDE.md says *"fpga_state_update sets ms[0xF2E] based on meter_mode..."* but 0xF2E is the display state (DAT_20001026). This suggests CLAUDE.md conflated the display formatter with a range controller.
-- **Does FPGA auto-range exist?** The stock firmware has no code to command FPGA range changes. If auto-ranging works in the stock meter, it's **in the FPGA itself**, not firmware-controlled.
+- **Does FPGA auto-range exist?** This formatter path does not prove it either
+  way. Stock has guarded meter command banks and dispatcher callers, but the
+  DMM-owned runtime analog range writer remains unrecovered. Treat auto-range
+  semantics as open until a stock runtime caller/trace proves the state source.
 - **Can we implement firmware-driven auto-range?** Yes, but we would need to add FPGA commands (likely via USART2 TX) to switch ranges, which the current stock firmware does not do.
 
 ---
@@ -332,11 +354,19 @@ Index mapping (from write patterns):
 | 10 | Frequency | 1 | kHz |
 | 11 | Frequency | 2 | MHz |
 
-**Flash table location:** `0x804c40c + index * 4 = 48-byte table`
+**Corrected 2026-08-13:** the draw path computes the stock-runtime address
+`0x0804C40C + index * 4`. Since the stock APP is linked at `0x08007000`, the
+table lives at file offset `0x4540C`; the previous `0x4C40C` read was the same
+off-by-0x7000 mistake class as the H2 extraction bug. The corrected table
+contains 12 stock pointers resolving to unit strings including `Ω`, `kΩ`, `MΩ`,
+`mF`, `nF`, and `uF`.
+
+**Flash table location claimed by the decompile:** `0x804c40c + index * 4`
 
 Formula: `flash_addr = 0x804c40c + DAT_20001026 * 4`
 
-Each entry is a 4-byte pointer to a string in flash.
+Older wording said each entry is a 4-byte pointer to a string in flash. That is
+now treated as an overclaim for this downloaded APP image.
 
 **Access pattern:** Only read at line 3781 inside a drawing function. Each entry is dereferenced as a pointer to a UI element definition (likely font/color/position data plus the string itself).
 
@@ -693,11 +723,19 @@ where per_submode_offset is:
 
 1. **Exact bit-to-segment mapping in meter IC.** The BCD lookup table (our meter_data.c line 62–79) decodes FPGA nibbles to digit codes, but the underlying 7-segment LCD drive encoding remains undocumented in the decomp.
 
-2. **Flash string table contents** (0x804c40c). The decomp references the address but not the actual strings. We are relying on inference and our own meter_data.c table.
+2. **Unit suffix language/encoding beyond the recovered table.** The decomp
+   references stock-runtime `0x0804C40C`, and current binary guards now resolve
+   that through the stock-app base to the live pointer table at file `0x4540C`.
+   The stock suffix pointers are recovered; remaining uncertainty is how far
+   localized strings and LCD segment rendering share this table.
 
 3. **func_0x08033ef8 source code.** It's called but not defined in the decomp. Likely a jump table (TBB/TBH) in the original binary, collapsed into an external symbol by Ghidra.
 
-4. **FPGA range-selection commands.** The stock firmware reads frame[7] bit 3 (auto-range feedback) but never sends range commands back. If FPGA auto-ranging exists, it's autonomous and not firmware-controlled.
+4. **DMM-owned runtime range writer.** This note did not recover the runtime
+   writer for `ms[0x02]`/`ms[0x03]`. Newer guards recover mode-init command
+   banks and dispatcher callers, so the old "never sends range commands"
+   conclusion is too strong; the open gap is the DMM runtime state source and
+   any stock trace tying it to analog mux/range changes.
 
 5. **Full range indices for all submodes.** We see DAT_2000102e variants for DCV (0, 1, 2) but submodes 1–7 don't set it — they rely on hardcoded display dispatch. Unclear which index is used for, e.g., ACA 10A range vs ACA mA range.
 
@@ -731,9 +769,14 @@ where per_submode_offset is:
 
 ### For display strings:
 
-1. **Our meter_data.c unit_suffix_table is correct.** Verified against display formatter logic (lines 2889–2963).
+1. **Our meter_data.c unit_suffix_table follows recovered stock unit slots.** It
+   is attached to stock formatter indices from lines 2889–2963 and now matches
+   the corrected stock pointer table for the resolved unit suffixes.
 
-2. **DAT_20001026 to string lookup** goes through flash table 0x804c40c. We supply our own ASCII table at boot — no dependency on stock flash.
+2. **DAT_20001026 to renderer lookup** goes through the stock arithmetic using
+   runtime `0x0804C40C`. Always translate that runtime literal with stock APP
+   base `0x08007000` before inspecting bytes; reading file `0x4C40C` reopens the
+   stale zero-region bug.
 
 ---
 
@@ -768,4 +811,3 @@ where per_submode_offset is:
 **Decomp Source:** decompiled_2C53T_v2.c (38,837 lines)  
 **Methodology:** Verbatim quote + bit-shift translation + multi-site cross-reference  
 **Confidence:** High on Q1, Q2, Q4, Q6, Q7 (direct quotes). Medium on Q3 (function purpose inferred). Medium-low on Q5 (state mapping unverified).
-

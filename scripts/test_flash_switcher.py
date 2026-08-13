@@ -181,6 +181,35 @@ class FlashSafetyTests(unittest.TestCase):
         self.assertIn("--keep-splash", text)
 
     def test_inspect_reports_stock_and_openscope_do_not_fit_together(self) -> None:
+        """Budget arithmetic, pinned with synthetic images of realistic size.
+
+        This deliberately does NOT read firmware/build/firmware.bin. That path
+        holds whatever target was built last: an `emu` image (~226 KB) DOES fit
+        alongside stock, an app image (~538 KB) does not. Asserting a fixed
+        verdict against an ambient artifact makes the result depend on build
+        order rather than on the code under test -- the same failure family
+        run_tests.py exists to surface, one layer down.
+        """
+        with tempfile.TemporaryDirectory() as td:
+            stock = Path(td) / "stock.bin"
+            openscope = Path(td) / "firmware.bin"
+            stock.write_bytes(
+                image(0x20036F90, 0x08007311, b"stock", size=751232))
+            openscope.write_bytes(
+                image(0x20037FE0, 0x08014C61, b"OpenScope 2C53T", size=538068))
+
+            out = io.StringIO()
+            args = type("Args", (), {"stock": stock, "openscope": openscope})()
+            with contextlib.redirect_stdout(out):
+                rc = switch_firmware.cmd_inspect(args)
+
+            self.assertEqual(rc, 0)
+            self.assertIn("stock + openscope fits: 0", out.getvalue())
+
+    def test_inspect_budget_matches_real_image_sizes(self) -> None:
+        """Same tool, real artifacts -- but assert self-consistency rather than
+        a fixed verdict, so this keeps exercising the real binaries without
+        silently depending on which make target ran last."""
         stock = switch_firmware.DEFAULT_STOCK
         openscope = switch_firmware.DEFAULT_OPENSCOPE
         if not stock.exists() or not openscope.exists():
@@ -190,9 +219,13 @@ class FlashSafetyTests(unittest.TestCase):
         args = type("Args", (), {"stock": stock, "openscope": openscope})()
         with contextlib.redirect_stdout(out):
             rc = switch_firmware.cmd_inspect(args)
+        text = out.getvalue()
 
         self.assertEqual(rc, 0)
-        self.assertIn("stock + openscope fits: 0", out.getvalue())
+        total = stock.stat().st_size + openscope.stat().st_size
+        expected_fits = 1 if total <= switch_firmware.INTERNAL_FLASH_BYTES else 0
+        self.assertIn(f"stock + openscope: {total} bytes", text)
+        self.assertIn(f"stock + openscope fits: {expected_fits}", text)
 
     def test_openscope_build_flag_runs_make_before_preflight(self) -> None:
         with tempfile.TemporaryDirectory() as td:

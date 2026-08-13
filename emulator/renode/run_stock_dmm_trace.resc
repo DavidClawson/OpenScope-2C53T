@@ -1,0 +1,82 @@
+# FNIRSI 2C53T stock V1.2.0 DMM command/mux trace.
+#
+# Usage from this directory:
+#   renode --disable-gui run_stock_dmm_trace.resc
+#
+# This is a trace-only oracle for stock firmware. It does not proxy to real
+# FPGA/ASIC hardware and it does not model low-DCV analog behavior.
+
+mach create "FNIRSI_2C53T_stock_dmm_trace"
+machine LoadPlatformDescription @gd32f307_2c53t.repl
+
+machine PyDevFromFile @rcu_peripheral.py 0x40021000 0x400 True "rcu"
+machine PyDevFromFile @fmc_peripheral.py 0x40022000 0x400 True "fmc"
+machine PyDevFromFile @adc_peripheral.py 0x40012400 0x100 True "adc0"
+machine PyDevFromFile @adc_peripheral.py 0x40012800 0x100 True "adc1"
+
+macro reset
+"""
+    sysbus LoadBinary @../../archive/2C53T\ Firmware\ V1.2.0/APP_2C53T_V1.2.0_251015.bin 0x08007000
+    sysbus LoadBinary @../../archive/2C53T\ Firmware\ V1.2.0/APP_2C53T_V1.2.0_251015.bin 0x00007000
+    cpu VectorTableOffset 0x08007000
+    cpu PerformanceInMips 1
+"""
+runMacro $reset
+
+# Stock app uses a 0x08007000 runtime offset in this Renode setup. The raw RE
+# notes quote app-relative addresses such as 0x080018A4; hooks below add 0x7000.
+
+set i2c0_status_hook
+"""
+from Antmicro.Renode.Peripherals.CPU import RegisterValue
+cpu.SetRegister(0, RegisterValue.Create(1, 32))
+cpu.PC = cpu.LR
+"""
+cpu AddHook 0x0803D83C $i2c0_status_hook
+
+set skip_sysreset_hook
+"""
+lr = cpu.GetRegister(14).RawValue
+cpu.InfoLog("[STOCK_DMM_TRACE] skip SYSRESETREQ LR=0x{0:X}", lr)
+cpu.PC = lr
+"""
+cpu AddHook 0x0803B070 $skip_sysreset_hook
+
+set dmm_state_hook
+"""
+def rb(addr):
+    try:
+        return sysbus.ReadByte(addr) & 0xff
+    except Exception:
+        return -1
+r0 = cpu.GetRegister(0).RawValue
+r1 = cpu.GetRegister(1).RawValue
+r2 = cpu.GetRegister(2).RawValue
+r3 = cpu.GetRegister(3).RawValue
+pc = cpu.PC
+lr = cpu.GetRegister(14).RawValue
+cpu.InfoLog("[STOCK_DMM_TRACE] hook PC=0x{0:X} LR=0x{1:X} r0=0x{2:X} r1=0x{3:X} r2=0x{4:X} r3=0x{5:X} ms02/fa={6:X2} ms03/fb={7:X2} sel={8:X2} unit={9:X2} var={10:X2} fmt={11:X2} dc={12:X2} shift={13:X2}",
+    pc, lr, r0, r1, r2, r3,
+    rb(0x200000FA), rb(0x200000FB), rb(0x20001025), rb(0x20001026),
+    rb(0x2000102E), rb(0x20001030), rb(0x20001027), rb(0x2000102F))
+"""
+
+# Saved mux-state apply sites.
+cpu AddHook 0x0802C544 $dmm_state_hook
+cpu AddHook 0x0802E23E $dmm_state_hook
+
+# GPIO mux projection functions: FUN_080018A4 and FUN_08001A58 plus 0x7000.
+cpu AddHook 0x080088A4 $dmm_state_hook
+cpu AddHook 0x08008A58 $dmm_state_hook
+
+# Selector table consumers and formatter/RX/TX entry points.
+cpu AddHook 0x0800B2E2 $dmm_state_hook
+cpu AddHook 0x0800B8BA $dmm_state_hook
+cpu AddHook 0x080098E0 $dmm_state_hook
+cpu AddHook 0x0803DAC0 $dmm_state_hook
+cpu AddHook 0x0803E3F4 $dmm_state_hook
+
+python "execfile('stock_dmm_trace.py')"
+
+logLevel 3
+start

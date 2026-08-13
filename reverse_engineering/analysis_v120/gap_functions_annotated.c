@@ -527,43 +527,39 @@ void fpga_cmd_set_trigger(int8_t *trigger_params) {
 
 
 /*============================================================================
- * FUNCTION: calibration_loader
+ * FUNCTION: roll_buffer_preload_or_transform
  * Address: 0x08001830
  * Size: ~100 bytes
  * Priority: P1
  *
- * Loads 301 bytes (0x12D) of per-channel calibration data.
+ * Preloads/transforms 301 bytes (0x12D) of per-channel roll-buffer state.
  * Called twice from system_init:
  *
- *   Call 1: calibration_loader(state + 0x356, 0x12D, state[4] ^ 0x80)
- *           → Loads CH1 calibration into state[0x356..0x482]
+ *   Call 1: roll_buffer_preload_or_transform(state + 0x356, 0x12D, state[4] ^ 0x80)
+ *           → writes CH1 roll-buffer region state[0x356..0x482]
  *
- *   Call 2: calibration_loader(state + 0x483, 0x12D, state[5] ^ 0x80)
- *           → Loads CH2 calibration into state[0x483..0x5AF]
+ *   Call 2: roll_buffer_preload_or_transform(state + 0x483, 0x12D, state[5] ^ 0x80)
+ *           → writes CH2 roll-buffer region state[0x483..0x5AF]
  *
  * From the disassembly at 0x080271A8:
  *   r0 = sl + 0x356  (destination buffer)
  *   r1 = 0x12D       (301 bytes)
  *   r2 = state[4] ^ 0x80  (XOR with 0x80 converts signed↔unsigned offset)
  *
- * The XOR 0x80 operation converts the stored signed ADC offset into an
- * unsigned lookup index. The calibration data is a 301-entry table that
- * maps raw ADC values to calibrated values, accounting for gain and
- * offset errors in the analog frontend.
- *
- * 301 = 0x12D bytes covers the usable ADC range. The data likely comes
- * from SPI flash (loaded during the FPGA calibration exchange at boot).
+ * The older "301-byte per-channel meter calibration" interpretation was
+ * disproven.  State offsets 0x356 and 0x483 are oscilloscope roll/stream
+ * buffers in the current state map, not a recovered DMM calibration source.
+ * Treat this function as roll-buffer preload/transform evidence until a
+ * tighter stock xref proves otherwise.
  *
  * Called from: system_init (FUN_08023A50) — init-only function
  *============================================================================*/
-void calibration_loader(uint8_t *dest, uint16_t count, uint8_t offset_key) {
-    /* Loads 'count' bytes of calibration data into 'dest'.
-     * The offset_key selects which calibration set to load
-     * (derived from the per-channel ADC offset XOR'd with 0x80).
-     *
-     * Internal implementation likely reads from a calibration table
-     * in RAM that was previously loaded from SPI flash during the
-     * 411-byte calibration exchange (commands 0x3B/0x3A). */
+void roll_buffer_preload_or_transform(uint8_t *dest, uint16_t count, uint8_t offset_key) {
+    /* Writes 'count' bytes into a roll-buffer region. The offset_key is
+     * derived from the per-channel offset XOR'd with 0x80, but no current
+     * stock evidence ties this output to DMM factory calibration. H2/SPI3
+     * remains a separate 115,638-byte upload whose acceptance/apply
+     * semantics are unresolved. */
     for (uint16_t i = 0; i < count; i++) {
         dest[i] = cal_table_lookup(offset_key, i);
     }
@@ -865,7 +861,7 @@ void adc_prescaler_init(void *config_a, void *config_b) {
  * suggesting it's the default/init entry in that table.
  *
  * Context from the disassembly:
- *   - Called after calibration_loader (both CH1 and CH2 cal data loaded)
+ *   - Called after roll_buffer_preload_or_transform (CH1/CH2 roll buffers)
  *   - Called after checking state[0x23A] (some feature flag)
  *   - Followed by relay/GPIO configuration based on state[0x14]
  *     (acquisition mode: 1=scope1ch, 2=scope2ch, 3=meter)
@@ -959,7 +955,7 @@ void probe_mode_init(void) {
  *    Multiple acquisition modes (normal, dual, roll, bulk) with
  *    per-sample VFP calibration and trigger detection.
  *
- *  The init-only functions (calibration_loader, analog_input_init,
+ *  The init-only functions (roll_buffer_preload_or_transform, analog_input_init,
  *  probe_mode_init) set up the initial state that these runtime
  *  layers operate on.
  *

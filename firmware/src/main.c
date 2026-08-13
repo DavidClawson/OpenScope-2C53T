@@ -30,10 +30,13 @@ extern void system_clock_config(void);
 #include "component_test.h"
 #include "persistence.h"
 #include "button_scan.h"
+#include "continuity_buzzer.h"
 #include "dfu_boot.h"
 #include "battery.h"
 #include "fpga.h"
+#include "meter_autoselect.h"
 #include "meter_data.h"
+#include "meter_voltage_wave.h"
 #include "flash_fs.h"
 #include "usb_debug.h"
 #include "rtt.h"
@@ -50,13 +53,14 @@ volatile device_mode_t current_mode = MODE_OSCILLOSCOPE;
 #else
 volatile device_mode_t current_mode = MODE_MULTIMETER;
 #endif
+volatile startup_mode_t startup_mode = STARTUP_METER;
 volatile uint32_t      uptime_seconds = 0;
 volatile int8_t        settings_selected = 0;
 volatile int8_t        settings_depth = 0;
 volatile int8_t        settings_sub_selected = 0;
 volatile uint8_t       active_channel = 0;  /* 0=CH1, 1=CH2 */
-volatile uint8_t       meter_submode = 0;   /* 0-9: current meter sub-mode */
-volatile uint8_t       meter_layout = 0;   /* 0=full, 1=chart, 2=stats */
+volatile uint8_t       meter_submode = 0;   /* 0-10: current meter sub-mode */
+volatile uint8_t       meter_layout = 0;   /* 0=full, 1=chart, 2=stats, 3=fuse */
 volatile bool          meter_rel_enabled = false;  /* Relative/delta mode */
 volatile float         meter_rel_reference = 0.0f;
 volatile bool          meter_hold_enabled = false;  /* Auto-hold mode */
@@ -73,6 +77,94 @@ volatile float         fuse_scan_threshold_mv = 0.5f; /* Pass/fail threshold */
 volatile bool          math_enabled = false;
 volatile uint8_t       math_op = 0;        /* MATH_ADD */
 volatile bool          persist_enabled = false;
+
+#define STARTUP_SETTINGS_ADDR     0x080FF800u
+#define STARTUP_SETTINGS_MAGIC    0x3243534Fu  /* "OSC2", little-endian */
+#define STARTUP_SETTINGS_VERSION  1u
+
+typedef struct {
+    uint32_t magic;
+    uint32_t version;
+    uint32_t mode;
+    uint32_t checksum;
+} startup_settings_record_t;
+
+static uint32_t startup_settings_checksum(uint32_t mode)
+{
+    return STARTUP_SETTINGS_MAGIC ^ STARTUP_SETTINGS_VERSION ^ mode ^ 0x5A5AA5A5u;
+}
+
+static void startup_mode_load(void)
+{
+#ifndef EMULATOR_BUILD
+    const startup_settings_record_t *rec =
+        (const startup_settings_record_t *)STARTUP_SETTINGS_ADDR;
+
+    if (rec->magic == STARTUP_SETTINGS_MAGIC &&
+        rec->version == STARTUP_SETTINGS_VERSION &&
+        rec->mode < STARTUP_COUNT &&
+        rec->checksum == startup_settings_checksum(rec->mode)) {
+        startup_mode = (startup_mode_t)rec->mode;
+    }
+#endif
+}
+
+static void startup_mode_save(void)
+{
+#ifndef EMULATOR_BUILD
+    startup_settings_record_t rec;
+    rec.magic = STARTUP_SETTINGS_MAGIC;
+    rec.version = STARTUP_SETTINGS_VERSION;
+    rec.mode = (uint32_t)startup_mode;
+    rec.checksum = startup_settings_checksum(rec.mode);
+
+    flash_unlock();
+    if (flash_sector_erase(STARTUP_SETTINGS_ADDR) == FLASH_OPERATE_DONE) {
+        const uint32_t *words = (const uint32_t *)&rec;
+        uint32_t addr = STARTUP_SETTINGS_ADDR;
+        for (uint32_t i = 0; i < sizeof(rec) / sizeof(uint32_t); i++, addr += 4) {
+            if (flash_word_program(addr, words[i]) != FLASH_OPERATE_DONE) {
+                break;
+            }
+        }
+    }
+    flash_lock();
+#endif
+}
+
+const char *startup_mode_name(startup_mode_t mode)
+{
+    switch (mode) {
+    case STARTUP_SCOPE: return "Scope";
+    case STARTUP_METER: return "Meter";
+    default:            return "?";
+    }
+}
+
+void startup_mode_set(startup_mode_t mode)
+{
+    if (mode >= STARTUP_COUNT || startup_mode == mode) return;
+    startup_mode = mode;
+    startup_mode_save();
+}
+
+void startup_mode_adjust(int dir)
+{
+    int next = (int)startup_mode + dir;
+    while (next < 0) next += STARTUP_COUNT;
+    startup_mode_set((startup_mode_t)(next % STARTUP_COUNT));
+}
+
+static device_mode_t startup_target_mode(void)
+{
+    switch (startup_mode) {
+    case STARTUP_METER:
+        return MODE_MULTIMETER;
+    case STARTUP_SCOPE:
+    default:
+        return MODE_OSCILLOSCOPE;
+    }
+}
 
 #ifdef FEATURE_FFT
 volatile scope_view_t scope_view = SCOPE_VIEW_TIME;
@@ -129,7 +221,11 @@ static void vDisplayTask(void *pvParameters)
     lcd_clear(COLOR_BLACK);
     draw_status_bar();
     draw_info_bar();
-    draw_scope_screen(0);
+    if (current_mode == MODE_MULTIMETER) {
+        draw_meter_screen();
+    } else {
+        draw_scope_screen(0);
+    }
 
     for (;;) {
         /* Check for commands (non-blocking with short timeout for animation) */
@@ -156,6 +252,7 @@ static void vDisplayTask(void *pvParameters)
 #endif
                         draw_scope_screen(frame);
                 } else if (current_mode == MODE_MULTIMETER) {
+                    meter_screen_invalidate();
                     draw_meter_screen();
                 } else if (current_mode == MODE_SIGNAL_GEN) {
                     draw_siggen_screen(frame);
@@ -285,22 +382,26 @@ static void vDisplayTask(void *pvParameters)
              * via DCMD_DRAW_SIGGEN queue commands from input_handler.
              * No continuous animation needed. */
         } else if (current_mode == MODE_MULTIMETER) {
-            /* Only redraw the meter when new FPGA data has arrived, or
-             * every second as a safety tick for time-based UI elements
-             * (HOLD indicator animations, REL clock, etc.). The display
-             * loop runs at 20 Hz but the FPGA meter poll task only
-             * produces data at ~4 Hz — drawing every loop iteration
-             * caused visible flicker from the content-area clear +
-             * redraw sequence. Settings doesn't flicker because it has
-             * no unconditional redraw branch; meter now matches that
-             * pattern, gated on the meter_reading.update_count field. */
+            /* Redraw the meter when the visible reading changes, when the
+             * submode changes, or when a debug/animated panel explicitly
+             * needs a heartbeat. Rejected frames still advance raw counters,
+             * but they must not clear/repaint the LCD. */
             static uint32_t last_meter_update = 0xFFFFFFFFu;
             static uint32_t last_meter_frame  = 0;
-            uint32_t uc = meter_reading.update_count;
-            if (uc != last_meter_update || (frame - last_meter_frame) >= 20) {
+            static uint8_t  last_meter_submode = 0xFFu;
+            uint32_t uc = meter_reading.display_update_count;
+            bool auto_select_running = meter_autoselect_is_running();
+            bool submode_changed = (meter_submode != last_meter_submode);
+            bool enough_time = (frame - last_meter_frame) >= 5;  /* 20Hz loop -> max 4Hz redraw */
+            bool periodic_due = meter_screen_needs_periodic_redraw() &&
+                                ((frame - last_meter_frame) >= 20);
+            if (!auto_select_running &&
+                (submode_changed || ((uc != last_meter_update) && enough_time) ||
+                 periodic_due)) {
                 draw_meter_screen();
-                last_meter_update = uc;
+                last_meter_update = meter_screen_last_reading_display_update;
                 last_meter_frame  = frame;
+                last_meter_submode = meter_submode;
             }
         }
 
@@ -322,6 +423,7 @@ static void vDisplayTask(void *pvParameters)
 static void vInputTask(void *pvParameters)
 {
     (void)pvParameters;
+    button_scan_start();
 
     for (;;) {
         button_id_t pressed;
@@ -537,12 +639,19 @@ int main(void)
 
     /* Initialize meter data parser */
     meter_data_init();
+    meter_voltage_wave_init();
+    startup_mode_load();
+#if FPGA_WARM_HANDOFF_TEST
+    current_mode = MODE_OSCILLOSCOPE;
+#else
+    current_mode = startup_target_mode();
+#endif
 
-    /* Factory calibration stub: initializes the flash_fs mutex and
-     * attempts to load per-channel cal blobs from SPI flash into the
-     * RAM mirror. Currently a no-op read (real SPI flash driver is not
-     * yet wired) — meter/scope paths still use built-in defaults.
-     * Phase 3 will apply the loaded coefficients. */
+    /* Factory calibration boundary: initialize the W25Q wrapper, then
+     * leave the calibration mirror unloaded. Stock evidence has not
+     * recovered a host-readable DMM factory-calibration file or H2/SPI3
+     * apply proof, so this path deliberately fails closed instead of
+     * consuming invented filenames or low-voltage coefficients. */
     (void)flash_fs_init();
     (void)flash_fs_load_factory_cal();
 
@@ -566,6 +675,8 @@ int main(void)
     xDisplayQueue = xQueueCreate(20, sizeof(uint8_t));
     xInputQueue   = xQueueCreate(15, sizeof(button_id_t));
 
+    continuity_buzzer_init();
+
     /* Initialize button matrix scan driver (TMR3 ISR at 500Hz).
      * This replaces the old passive GPIO reads that didn't work on hardware.
      * The driver handles all GPIO config for the 4x3 matrix + 3 passive pins. */
@@ -587,11 +698,14 @@ int main(void)
     /* Create USB debug shell task (CDC virtual serial port).
      * Priority 2 — above display (1) but below input (4) and FPGA tasks. */
     usb_debug_create_task();
+    continuity_buzzer_create_task();
+    meter_autoselect_create_task();
 
-    /* Device boots into oscilloscope mode — send scope FPGA commands and
-     * queue initial SPI3 acquisition triggers. The triggers will be waiting
-     * in the queue when vTaskStartScheduler() kicks off the acq task. */
-    fpga_enter_scope_mode();
+    if (current_mode == MODE_MULTIMETER) {
+        fpga_set_meter_mode(meter_submode);
+    } else {
+        fpga_enter_scope_mode();
+    }
 #endif
 
     /* Create 1-second timer for uptime/status updates */

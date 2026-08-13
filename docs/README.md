@@ -18,6 +18,7 @@ Architecture, technical specs, and system design documents.
 
 - [Peripheral Map](design/peripheral_map.md) — Memory-mapped peripherals, GPIO assignments, interrupt vectors
 - [FFT Design](design/fft_design.md) — Windowing, amplitude scaling, spectrum display architecture
+- [DMM Voltage Waveform](design/dmm_voltage_waveform.md) — Multimeter voltage-mode waveform overlay using the DMM probe path
 - [FPGA Future Possibilities](design/fpga_future.md) — Gowin GW1N-UV2 resources and enhancement opportunities
 - [FPGA Gateware Plan](design/fpga_gateware_plan.md) — Custom bitstream track: trigger engine design, Tang Nano 20K testbench discipline, three-leg verification, runtime protocol
 - [ESP32 Coprocessor](design/esp32_coprocessor.md) — ESP32 UART bridge for WiFi/BLE connectivity (future mod)

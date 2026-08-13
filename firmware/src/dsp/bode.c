@@ -231,7 +231,6 @@ void bode_render_gain(const bode_result_t *result,
 
         /* Connect to previous point with simple line approximation */
         if (i > 0) {
-            uint16_t px_prev = x_off + (uint16_t)((float)(i - 1) / (float)(result->num_points - 1) * (float)(width - 1));
             int16_t py_prev = map_range(result->points[i - 1].gain_db, g_min, g_max,
                                          (int16_t)(y_off + height - 1), (int16_t)y_off);
             /* Bresenham-style vertical fill between prev and current */
@@ -265,7 +264,6 @@ void bode_render_phase(const bode_result_t *result,
         }
 
         if (i > 0) {
-            uint16_t px_prev = x_off + (uint16_t)((float)(i - 1) / (float)(result->num_points - 1) * (float)(width - 1));
             int16_t py_prev = map_range(result->points[i - 1].phase_deg, p_min, p_max,
                                          (int16_t)(y_off + height - 1), (int16_t)y_off);
             int16_t y_start = py_prev < py ? py_prev : py;

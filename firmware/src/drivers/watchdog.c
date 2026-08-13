@@ -17,6 +17,7 @@
 #include "watchdog.h"
 #include "lcd.h"
 #include <string.h>
+#include <stdio.h>
 
 #ifndef EMULATOR_BUILD
 #include "at32f403a_407_wdt.h"
@@ -171,4 +172,29 @@ void fault_display(const char *title, const char *detail)
     while (count--) {
         __asm volatile("nop");
     }
+}
+
+void fault_assert(const char *file, int line)
+{
+    char detail[64];
+    const char *base = file;
+    const char *p = file;
+
+    while (p != NULL && *p != '\0') {
+        if (*p == '/' || *p == '\\') {
+            base = p + 1;
+        }
+        p++;
+    }
+
+    snprintf(detail, sizeof(detail), "%s:%d", base, line);
+    fault_display("ASSERT FAIL", detail);
+#ifndef EMULATOR_BUILD
+    /* Reset rather than hang forever on the red screen (PR #13). The emulator
+     * build has no CMSIS core header and therefore no NVIC_SystemReset; halting
+     * there is also more useful than resetting, since the assert text stays on
+     * screen for inspection. */
+    NVIC_SystemReset();
+#endif
+    for (;;) { }
 }

@@ -205,7 +205,7 @@ void scope_main_fsm(void) {
          *
          * If max > 0xD9 (217) or min < 0x27 (39):
          *   → Signal is clipping. Check if we can increase the range.
-         *   → If meter_function[channel] < 9: increment range and reconfigure
+         *   → If scope mux range[channel] < 9: increment range and reconfigure
          *     relays via gpio_mux_portc_porte / gpio_mux_porta_portb
          *
          * The min/max algorithm is aggressively unrolled — it checks 16
@@ -233,8 +233,8 @@ void scope_main_fsm(void) {
 
                 if (max > 0xD9 || min < 0x27) {
                     /* Signal is clipping — try to increase range */
-                    if (state[0x02 + ch] < 9) {  /* meter_function < 9 */
-                        state[0x02 + ch]++;       /* Increment range */
+                    if (state[0x02 + ch] < 9) {  /* scope channel mux range < 9 */
+                        state[0x02 + ch]++;       /* Increment scope range */
                         if (ch == 0)
                             gpio_mux_portc_porte(state[0x02]);
                         else
@@ -434,7 +434,7 @@ void scope_main_fsm(void) {
             dc_offset_calibrate(sub);
         }
         else if (sub == 0x10) {
-            /* Post-calibration: restore relay settings */
+            /* Post-calibration: restore scope submode relay settings */
             gpio_mux_portc_porte(state[0x30] & 0x0F);
             gpio_mux_porta_portb(state[0x30] & 0x0F);
             state[0x30] = 0x00;  /* Return to normal operation */
@@ -559,10 +559,10 @@ exit_epilog:
  *
  *  These thresholds provide ~15% headroom on each side of the ADC range.
  *  The "too large" case triggers a range increase by incrementing
- *  meter_function (state[0x02] for CH1, state[0x03] for CH2).
+ *  scope mux range (state[0x02] for CH1, state[0x03] for CH2).
  *
  *  Range change actions:
- *    1. Increment meter_function for the affected channel
+ *    1. Increment the mux range for the affected scope channel
  *    2. Call gpio_mux to switch the analog frontend relays
  *    3. Send command 4 to USART queue (reconfigure FPGA)
  *    4. Reset acquisition counter
@@ -689,7 +689,7 @@ exit_epilog:
  *                             range  time   wait
  *
  *  Range change during auto-range:
- *    Stays in phase 1, increments meter_function, resets counter
+ *    Stays in phase 1, increments scope mux range, resets counter
  *
  *  Mode change (via external command):
  *    acquisition_phase → 0xFF → (wait 200 cycles) → siggen_configure

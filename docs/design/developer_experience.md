@@ -33,7 +33,15 @@ How to flash:
   5. Disconnect USB, power cycle the device
 
 To restore stock firmware:
-  Same process using the original APP_2C53T_*.bin file
+  Use only a recovery path proven for the stock boot chain. Do not flash a stock
+  APP_2C53T_*.bin through the OpenScope custom HID app-slot updater as a quick
+  A/B test; the stock app may depend on vendor bootloader, option-byte,
+  external-flash, filesystem, and reset-state assumptions that the custom
+  updater does not provide.
+  The common Makefile flash targets and `scripts/hid_flash.py` run executable
+  preflight checks before opening a flash transport. HID IAP is for OpenScope
+  app-slot images only; ROM DFU is the recovery path for app-slot restore at
+  0x08004000.
 
 Known issues:
   - DMM auto-range not yet implemented

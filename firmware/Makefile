@@ -11,6 +11,7 @@ CP      = $(PREFIX)objcopy
 SZ      = $(PREFIX)size
 OBJDUMP = $(PREFIX)objdump
 NANO_SPECS := $(shell f="$(shell $(CC) -print-file-name=nano.specs 2>/dev/null)"; test "$$f" != "nano.specs" -a -f "$$f" && printf '%s' '-specs=nano.specs')
+HOST_CC ?= gcc
 
 ######################################################################
 # Project paths
@@ -49,13 +50,17 @@ C_SOURCES += src/drivers/flash_regions_w25q.c
 C_SOURCES += src/drivers/esp_comm.c
 C_SOURCES += src/drivers/watchdog.c
 C_SOURCES += src/drivers/button_scan.c
+C_SOURCES += src/drivers/continuity_buzzer.c
 C_SOURCES += src/drivers/dfu_boot.c
 C_SOURCES += src/drivers/battery.c
 C_SOURCES += src/drivers/fpga.c
+C_SOURCES += src/drivers/fpga_meter_plan.c
 C_SOURCES += src/drivers/fpga_scanner.c
 C_SOURCES += src/drivers/dac_output.c
 C_SOURCES += src/drivers/scope_trigger.c
 C_SOURCES += src/drivers/meter_data.c
+C_SOURCES += src/drivers/meter_auto.c
+C_SOURCES += src/drivers/meter_autoselect.c
 C_SOURCES += src/drivers/usb_debug.c
 C_SOURCES += src/drivers/rtt.c
 C_SOURCES += src/drivers/fault.c
@@ -66,6 +71,7 @@ C_SOURCES += src/ui/theme.c
 C_SOURCES += src/ui/xy_mode.c
 C_SOURCES += src/ui/roll_mode.c
 C_SOURCES += src/ui/trend_plot.c
+C_SOURCES += src/ui/meter_voltage_wave.c
 C_SOURCES += src/dsp/math_channel.c
 C_SOURCES += src/dsp/bode.c
 C_SOURCES += src/tasks/component_test.c
@@ -413,7 +419,36 @@ soak-test: emu
 soak-quick: emu
 	python3 ../scripts/soak_test.py --no-build --duration 30 --seed $(SOAK_SEED) --verbose
 
-.PHONY: all clean disasm size renode soak-test soak-quick flash flash-dfu bootloader flash-bootloader flash-all guest guest-warmtest guest-usart-silent emu
+$(BUILD_DIR)/test_meter_data: tests/test_meter_data.c src/drivers/meter_data.c src/drivers/meter_data.h src/drivers/fpga_meter_plan.c src/drivers/fpga_meter_plan.h | $(BUILD_DIR)
+	$(HOST_CC) -std=gnu11 -Wall -Wextra -DMETER_DATA_HOST_TESTS -Isrc/drivers $< src/drivers/meter_data.c src/drivers/fpga_meter_plan.c -lm -pthread -o $@
+
+test-meter-data: $(BUILD_DIR)/test_meter_data
+	$<
+
+$(BUILD_DIR)/test_meter_auto: tests/test_meter_auto.c src/drivers/meter_auto.c src/drivers/meter_auto.h src/drivers/meter_data.h src/drivers/fpga_meter_plan.c src/drivers/fpga_meter_plan.h | $(BUILD_DIR)
+	$(HOST_CC) -std=gnu11 -Wall -Wextra -Isrc/drivers $< src/drivers/meter_auto.c src/drivers/fpga_meter_plan.c -lm -o $@
+
+test-meter-auto: $(BUILD_DIR)/test_meter_auto
+	$<
+
+$(BUILD_DIR)/test_meter_voltage_wave: tests/test_meter_voltage_wave.c src/ui/meter_voltage_wave.c src/ui/meter_voltage_wave.h | $(BUILD_DIR)
+	$(HOST_CC) -std=gnu11 -Wall -Wextra -Isrc/ui $< src/ui/meter_voltage_wave.c -lm -o $@
+
+test-meter-voltage-wave: $(BUILD_DIR)/test_meter_voltage_wave
+	$<
+
+$(BUILD_DIR)/test_fpga_meter_plan: tests/test_fpga_meter_plan.c src/drivers/fpga_meter_plan.c src/drivers/fpga_meter_plan.h | $(BUILD_DIR)
+	$(HOST_CC) -std=gnu11 -Wall -Wextra -Isrc/drivers $< src/drivers/fpga_meter_plan.c -o $@
+
+test-fpga-meter-plan: $(BUILD_DIR)/test_fpga_meter_plan
+	$<
+
+test-stock-meter-literals:
+	python3 ../scripts/test_stock_meter_literals.py
+
+test-meter: test-meter-data test-meter-auto test-meter-voltage-wave test-fpga-meter-plan test-stock-meter-literals
+
+.PHONY: all clean disasm size renode soak-test soak-quick flash flash-dfu bootloader flash-bootloader flash-all guest guest-warmtest guest-usart-silent emu test-meter-data test-meter-auto test-meter-voltage-wave test-fpga-meter-plan test-stock-meter-literals test-meter
 
 # ═══════════════════════════════════════════════════════════════════════════
 # BENCH / EXPERIMENT IMAGE INDEX                          (index added 2026-08-13)

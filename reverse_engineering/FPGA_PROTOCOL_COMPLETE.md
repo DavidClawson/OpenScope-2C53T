@@ -444,24 +444,30 @@ USART commands flow through a multi-level system:
 
 | Code | Direction | Purpose | Config Writer Type | Blocking |
 |------|-----------|---------|-------------------|----------|
-| `0x07` | TX | Probe detected (PC7 HIGH) | Type 4 (range) | No |
-| `0x08` | TX | Meter: configure range | Type 4 (range) | No |
+| `0x07` | TX | Probe/tail byte (PC7 HIGH branch) | Type-4-shaped bitfield | No |
+| `0x08` | TX | Meter command-bank byte | Type-4-shaped bitfield | No |
 | `0x09` | TX | Meter: start measurement | -- | No |
 | `0x0A` | TX | No probe detected (PC7 LOW) | -- | No |
 | `0x12` | TX | Meter variant setup | Type 4 | No |
 | `0x13` | TX | Meter variant setup | Type 4 | No |
 | `0x14` | TX | Meter variant setup | Type 4 | No |
-| `0x16` | TX | Meter range config | Type 4 | No |
-| `0x17` | TX | Meter range config | Type 4 | No |
-| `0x18` | TX | Meter range config | Type 4 | No |
-| `0x19` | TX | Meter range config | Type 4 | No |
-| `0x1A` | TX | Meter range config | Type 4 | No |
-| `0x1B` | TX | Meter range config | Type 4 | No |
-| `0x1C` | TX | Meter range config | Type 4 | No |
-| `0x1D` | TX | Meter range config | Type 4 | No |
-| `0x1E` | TX | Meter range config | Type 4 | No |
+| `0x16` | TX | Meter command-bank byte | Type-4-shaped bitfield | No |
+| `0x17` | TX | Meter command-bank byte | Type-4-shaped bitfield | No |
+| `0x18` | TX | Meter command-bank byte | Type-4-shaped bitfield | No |
+| `0x19` | TX | Meter command-bank byte | Type-4-shaped bitfield | No |
+| `0x1A` | TX | Meter command-bank byte | Type-4-shaped bitfield | No |
+| `0x1B` | TX | Meter display/update byte | Type-4-shaped bitfield | No |
+| `0x1C` | TX | Meter command-bank byte | Type-4-shaped bitfield | No |
+| `0x1D` | TX | Meter display/update byte | Type-4-shaped bitfield | No |
+| `0x1E` | TX | Meter command-bank byte | Type-4-shaped bitfield | No |
 
-**Note:** Command codes `0x16`-`0x1E` are shared between oscilloscope trigger/channel configuration and meter range configuration. The interpretation depends on the current operating mode. In scope mode they configure trigger and channel ranges; in meter mode they configure measurement ranges.
+**Legacy correction (2026-06-06):** the Type-4-shaped arm and command-bank
+bytes above are not proof of normal DMM runtime range configuration. Current
+stock guards recover boot/runtime mode-init command banks, selector raw words,
+and transport reset/resume/drain behavior, but still do not recover a
+DMM-owned runtime analog writer for `ms[0x02]`/`ms[0x03]`, exact settle/discard
+timing, or a low-DCV calibration source. Do not use this legacy command table
+to derive magnitude-based relay/range feedback.
 
 #### Signal Generator
 
@@ -916,13 +922,17 @@ int d3 = (digit3 >= 0x10) ? (digit3 - 0x10) : digit3;
 int raw_value = d0 * 1000 + d1 * 100 + d2 * 10 + d3;
 ```
 
-### Calibration (Double Precision)
+### Display Decimal/Formatter Pipeline (Double Precision)
 
-The meter uses ARM EABI soft-float double-precision calls for calibration:
+The meter uses ARM EABI soft-float double-precision calls while preparing the
+display value and decimal/formatter state. Older notes called `ms[0xF37]` a
+calibration coefficient; current stock evidence identifies it as
+`DAT_2000102f`, the display decimal-shift state. This block is not a recovered
+factory calibration coefficient source.
 
 ```c
 // For each measurement channel (up to 4 iterations):
-double divisor  = (double)cal_coeff;               // __aeabi_ui2d
+double divisor  = (double)display_decimal_shift;   // __aeabi_ui2d
 double quotient = ref_value / divisor;              // __aeabi_ddiv
 double result   = quotient * accumulated_scale;     // __aeabi_dmul
 int    final    = (int)result;                      // __aeabi_d2iz
@@ -975,21 +985,21 @@ The EXTI3 ISR reads `ms[0xF5D]` to drive the piezo buzzer. Values: `0xB0` = buzz
 The `meter_mode_handler` (`0x080371B0`, 504 bytes) processes RX frame status bits to track the meter operating state. State variable: `ms[0xF2D]`.
 
 **Input bits from RX frame:**
-- `rx[7]` (status byte): bit 0 = polarity, bit 1 = overload type 1, bit 2 = AC flag, bit 3 = auto-range, bit 5 = AC mode path
-- `rx[6]` (flags byte): bit 4 = range indicator 2 / standby, bit 5 = range indicator 1, bit 6 = hold flag / cal coefficient
+- `rx[7]` (status byte): bit 0 participates in ACV display formatting, bit 1 = overload type 1, bit 2 remains a status/decimal helper and is not recovered as AC-present confidence, bit 3 = stock FSM status, bit 5 = ACV format path
+- `rx[6]` (flags byte): bits 4/5 participate in stock FSM/display-state branches, bit 6 = hold/status helper; these are not recovered factory calibration coefficients
 
 **State transitions:**
 
 | State | Name | Entry Condition | Key Checks | Outputs |
 |-------|------|-----------------|------------|---------|
 | 0 | IDLE/INIT | Default | rx[7] bits 5,1,0,3 | Transitions to 1-5 |
-| 1 | POLARITY | Overload detected | rx[7] bit 0 | Sets cal_coeff 0/1 |
-| 2 | OVERLOAD/RANGE | Range change | ms[0xF36], rx[7] bits 0,3 | Updates range state |
-| 3 | AC/DC | AC mode detected | rx[7] bit 2, rx[6] bit 6 | Sets cal_coeff 2 |
-| 4 | RANGE INDICATOR | Range readback | rx[6] bits 4,5, rx[7] bit 0 | Sets cal_coeff 0-3 |
-| 5 | AUTO-RANGE | Auto-range active | ms[0xF39] flag | Sets cal_coeff 0/4 |
-| 6 | STANDBY | Idle/wait | rx[6] bit 4 | Sets cal_coeff 0-2 |
-| 7 | STANDBY | Idle/wait | rx[6] bit 4 | Sets cal_coeff 0-2 |
+| 1 | POLARITY/FORMAT | Overload/display branch | rx[7] bit 0 | Updates formatter/display state |
+| 2 | OVERLOAD/RANGE-STATUS | Range/status branch | ms[0xF36], rx[7] bits 0,3 | Updates FSM/display state |
+| 3 | AC/DC STATUS | Status branch | rx[7] bit 2, rx[6] bit 6 | Updates formatter/display state |
+| 4 | RANGE-STATUS INDICATOR | Range/status readback | rx[6] bits 4,5, rx[7] bit 0 | Updates formatter/display state |
+| 5 | AUTO-RANGE STATUS | Auto-range status active | ms[0xF39] flag | Updates formatter/display state |
+| 6 | STANDBY | Idle/wait | rx[6] bit 4 | Updates formatter/display state |
+| 7 | STANDBY | Idle/wait | rx[6] bit 4 | Updates formatter/display state |
 
 Post-processing: if `overload_flag == 2`, extracts big-endian 16-bit value from `rx[10..11]` into `ms[0xF3A]`.
 
@@ -1176,7 +1186,7 @@ Key fields at offsets from `meter_state` base (`0x200000F8`):
 | `+0xF34` | uint8 | `meter_result_class` | 1=normal, 2=under, 3=over, 4=invalid |
 | `+0xF35` | uint8 | `meter_data_valid` | Meter data validity flag |
 | `+0xF36` | uint8 | `meter_overload_flag` | Overload state |
-| `+0xF37` | uint8 | `meter_cal_coeff` | Calibration coefficient selector |
+| `+0xF37` | uint8 | `display_decimal_shift` (`DAT_2000102f`) | Display decimal/formatter state, not factory calibration |
 | `+0xF39` | uint8 | `auto_range_flag` | Auto-range enable |
 | `+0xF3A` | uint16 | `meter_extra_data` | Extra from RX bytes [10:11] |
 | `+0xF3C` | uint16 | `exchange_lock` | USART exchange lock (0=unlocked) |

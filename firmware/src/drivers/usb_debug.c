@@ -18,6 +18,7 @@
 #include "dfu_boot.h"
 #include "flash_fs.h"
 #include "rtt.h"
+#include "continuity_buzzer.h"
 
 /* On the bench unit USB CDC never enumerates (error -71, unsolved), yet
  * usbd_connect_state_get() still reports CONFIGURED — so usb_send_bytes()
@@ -36,8 +37,13 @@
 #endif
 #include "scope_trigger.h"
 #include "fpga.h"
+#include "lcd.h"
+#include "meter_auto.h"
+#include "meter_autoselect.h"
+#include "meter_data.h"
 #include "ui.h"
 #include "../ui/scope_state.h"
+#include "../ui/meter_voltage_wave.h"
 
 #include "fpga_cal_table.h"
 #include "FreeRTOS.h"
@@ -395,6 +401,35 @@ static void fpga_diag_print_delta(const fpga_diag_snapshot_t *before)
     }
 }
 
+static void usb_print_last_tx_frame(void)
+{
+    usb_send_str("last_tx_frame:");
+    for (int i = 0; i < FPGA_TX_FRAME_SIZE; i++) {
+        usb_debug_printf(" %02X", (unsigned)fpga.last_tx_frame[i]);
+    }
+    usb_send_str("\r\n");
+}
+
+static void usb_print_recent_tx_frames(void)
+{
+    uint8_t count = fpga.tx_frame_history_count;
+
+    usb_send_str("tx_frames_recent:");
+    for (uint8_t i = 0; i < count; i++) {
+        uint8_t idx = (uint8_t)((fpga.tx_frame_history_head +
+                                 FPGA_TX_FRAME_HISTORY - count + i) %
+                                FPGA_TX_FRAME_HISTORY);
+        usb_send_str(" [");
+        for (int j = 0; j < FPGA_TX_FRAME_SIZE; j++) {
+            usb_debug_printf("%s%02X",
+                             j == 0 ? "" : " ",
+                             (unsigned)fpga.tx_frame_history[idx][j]);
+        }
+        usb_send_str("]");
+    }
+    usb_send_str("\r\n");
+}
+
 static void fpga_diag_clear(void)
 {
     taskENTER_CRITICAL();
@@ -402,11 +437,76 @@ static void fpga_diag_clear(void)
     fpga.rx_byte_count = 0;
     fpga.frame_count = 0;
     fpga.echo_count = 0;
+    fpga.rx_sync_data_start_count = 0;
+    fpga.rx_sync_echo_start_count = 0;
+    fpga.rx_sync_data_header_count = 0;
+    fpga.rx_sync_echo_header_count = 0;
+    fpga.rx_sync_bad_second_count = 0;
+    fpga.rx_sync_stray_count = 0;
+    fpga.rx_data_tx_busy_drop_count = 0;
+    fpga.rx_echo_valid_count = 0;
+    fpga.rx_echo_bad_count = 0;
+    memset((void *)fpga.rx_raw_history, 0, sizeof(fpga.rx_raw_history));
+    memset((void *)fpga.rx_raw_history_tx_count, 0,
+           sizeof(fpga.rx_raw_history_tx_count));
+    memset((void *)fpga.rx_raw_history_tx_index, 0,
+           sizeof(fpga.rx_raw_history_tx_index));
+    memset((void *)fpga.rx_raw_history_rx_index, 0,
+           sizeof(fpga.rx_raw_history_rx_index));
+    fpga.rx_raw_history_head = 0;
+    fpga.rx_raw_history_count = 0;
+    fpga_meter_probe_tail_override = -1;
     fpga.spi3_ok_count = 0;
     fpga.spi3_timeout_count = 0;
     fpga.spi3_total_timeouts = 0;
+    fpga.h2_rx_00_count = 0;
+    fpga.h2_rx_ff_count = 0;
+    fpga.h2_rx_other_count = 0;
+    fpga.h2_close_rx_len = 0;
+    memset((void *)fpga.h2_close_rx, 0, sizeof(fpga.h2_close_rx));
     fpga.rx_frame_valid = false;
     memset((void *)fpga.rx_frame, 0, sizeof(fpga.rx_frame));
+    memset((void *)fpga.last_rx_echo_frame, 0, sizeof(fpga.last_rx_echo_frame));
+    memset((void *)fpga.last_tx_frame, 0, sizeof(fpga.last_tx_frame));
+    memset((void *)fpga.tx_frame_history, 0, sizeof(fpga.tx_frame_history));
+    memset((void *)fpga.tx_frame_history_tx_count, 0,
+           sizeof(fpga.tx_frame_history_tx_count));
+    fpga.tx_frame_history_head = 0;
+    fpga.tx_frame_history_count = 0;
+    memset((void *)fpga.tx_control_frame_history, 0,
+           sizeof(fpga.tx_control_frame_history));
+    memset((void *)fpga.tx_control_frame_history_tx_count, 0,
+           sizeof(fpga.tx_control_frame_history_tx_count));
+    fpga.tx_control_frame_history_head = 0;
+    fpga.tx_control_frame_history_count = 0;
+    memset((void *)fpga.rx_frame_history, 0, sizeof(fpga.rx_frame_history));
+    memset((void *)fpga.rx_history_frame_count, 0, sizeof(fpga.rx_history_frame_count));
+    memset((void *)fpga.rx_history_tx_count, 0, sizeof(fpga.rx_history_tx_count));
+    memset((void *)fpga.rx_history_echo_count, 0, sizeof(fpga.rx_history_echo_count));
+    memset((void *)fpga.rx_history_sequence_count, 0, sizeof(fpga.rx_history_sequence_count));
+    memset((void *)fpga.rx_history_sequence_submode, 0, sizeof(fpga.rx_history_sequence_submode));
+    memset((void *)fpga.rx_history_discard_remaining, 0, sizeof(fpga.rx_history_discard_remaining));
+    memset((void *)fpga.rx_history_transition_busy, 0, sizeof(fpga.rx_history_transition_busy));
+    fpga.rx_frame_history_head = 0;
+    fpga.rx_frame_history_count = 0;
+    memset((void *)fpga.meter_transition_history_submode, 0, sizeof(fpga.meter_transition_history_submode));
+    memset((void *)fpga.meter_transition_history_config, 0, sizeof(fpga.meter_transition_history_config));
+    memset((void *)fpga.meter_transition_history_selector, 0, sizeof(fpga.meter_transition_history_selector));
+    memset((void *)fpga.meter_transition_history_apply, 0, sizeof(fpga.meter_transition_history_apply));
+    memset((void *)fpga.meter_transition_history_bank, 0, sizeof(fpga.meter_transition_history_bank));
+    memset((void *)fpga.meter_transition_history_bank_first, 0, sizeof(fpga.meter_transition_history_bank_first));
+    memset((void *)fpga.meter_transition_history_bank_second, 0, sizeof(fpga.meter_transition_history_bank_second));
+    memset((void *)fpga.meter_transition_history_probe, 0, sizeof(fpga.meter_transition_history_probe));
+    memset((void *)fpga.meter_transition_history_start, 0, sizeof(fpga.meter_transition_history_start));
+    memset((void *)fpga.meter_transition_history_sequence_count, 0, sizeof(fpga.meter_transition_history_sequence_count));
+    memset((void *)fpga.meter_transition_history_tx_before, 0, sizeof(fpga.meter_transition_history_tx_before));
+    memset((void *)fpga.meter_transition_history_tx_after, 0, sizeof(fpga.meter_transition_history_tx_after));
+    memset((void *)fpga.meter_transition_history_frame_before, 0, sizeof(fpga.meter_transition_history_frame_before));
+    memset((void *)fpga.meter_transition_history_frame_after, 0, sizeof(fpga.meter_transition_history_frame_after));
+    memset((void *)fpga.meter_transition_history_planned_gpio, 0, sizeof(fpga.meter_transition_history_planned_gpio));
+    memset((void *)fpga.meter_transition_history_actual_gpio, 0, sizeof(fpga.meter_transition_history_actual_gpio));
+    fpga.meter_transition_history_head = 0;
+    fpga.meter_transition_history_count = 0;
     memset((void *)fpga.diag_ch1_raw, 0, sizeof(fpga.diag_ch1_raw));
     memset((void *)fpga.diag_ch2_raw, 0, sizeof(fpga.diag_ch2_raw));
     fpga.diag_data_varies = 0;
@@ -472,6 +572,7 @@ static void cmd_help(void)
         "  e.g.: gpio set B11 1\r\n"
         "gpio read <port><pin>           Read GPIO pin\r\n"
         "gpio scan                       Scan FPGA-related pins\r\n"
+        "buzzer test [ms]                Force continuity buzzer briefly\r\n"
         "mem read <addr> [count]         Read 32-bit words\r\n"
         "  e.g.: mem read 0x40021000 4\r\n"
         "mem write <addr> <value>        Write 32-bit word\r\n"
@@ -481,6 +582,9 @@ static void cmd_help(void)
         "flash wtest <addr> CONFIRM      Non-destructive write-primitive self-test (blank 4KB sector)\r\n"
         "trig raw <0-4095>               Write DAC1 (PA4) directly + sw trigger\r\n"
         "trig <range> <level>            Scope trigger DAC: range 0-9, level -100..100\r\n"
+        "screen dump [shadow] [x y w h]  Dump text indexed4 LCD shadow\r\n"
+        "screen dumpbin [x y w h]        Binary indexed4 LCD shadow dump\r\n"
+        "screen shadow page [y]          Clear full-screen shadow capture\r\n"
         "fpga cmd <hi> <lo>              Send FPGA command bytes\r\n"
         "  e.g.: fpga cmd 0 9   (sends 0x00 0x09)\r\n"
         "        fpga cmd 0x0509 (sends 0x05 0x09)\r\n"
@@ -514,6 +618,28 @@ static void cmd_help(void)
         "fpga scope entry <8 bytes>      Reset + send 0x01,0B..11 params\r\n"
         "fpga scope timing <5 bytes>     Send 0x20,0x21,0x26..0x28 params\r\n"
         "fpga scope trig <4 bytes>       Send 0x07/0x0A,0x16..0x19\r\n"
+        "mode meter [submode] [layout]   Switch UI + FPGA to DMM frontend\r\n"
+        "mode scope                      Switch UI + FPGA to scope frontend\r\n"
+        "mode startup [scope|meter]      Get/set Settings > Startup on Boot\r\n"
+        "meter dump [delay_ms]           Show parsed DMM/UI/raw frame state\r\n"
+        "meter autoscan [settle_ms]      Probe DMM submodes and select best live mode\r\n"
+        "meter auto [start|status|cancel] Async DMM function auto-select\r\n"
+        "meter trace                     One machine-readable DMM producer record\r\n"
+        "meter frontend                  Show DMM analog frontend GPIO state\r\n"
+        "meter probe-tail [auto|07|0a]   Override stock PC7-gated DMM tail for diagnostics\r\n"
+        "meter boot-sequence [ms]        Replay stock DMM boot word order + trace\r\n"
+        "meter pc11-timing [lo hi]       Probe DMM PC11 gate timing + trace\r\n"
+        "meter mux-arms <ce> <ab> [ms]   Apply stock mux arms, poll, trace\r\n"
+        "meter mux-stream [count] [ms]   Stream DMM frames plus frontend GPIOs\r\n"
+        "meter stream [count] [delay_ms] Print compact DMM frame stream\r\n"
+        "meter adc-snapshot              Show read-only DMM waveform sampler state\r\n"
+        "ui dump                         Show current UI mode/redraw state\r\n"
+        "meter wave                      Show DMM voltage waveform sample stats\r\n"
+        "meter wave reset                Reset DMM waveform diagnostics\r\n"
+        "meter wave sampler [on|off]     Enable/disable experimental SPI3 sampler\r\n"
+        "meter wave path [direct|preacq] Get/set DMM waveform SPI path\r\n"
+        "meter wave selector [auto|N]    DMM wave selector byte\r\n"
+        "meter wave preacq [auto|N]      DMM wave pre-acq byte\r\n"
         "fpga acq [mode]                 Trigger SPI3 acquisition\r\n"
         "spi3 read [len]                 Raw SPI3 read + hex dump\r\n"
         "spi3 xfer <hex...>              Send arbitrary MOSI bytes, dump MISO\r\n"
@@ -526,11 +652,42 @@ static void cmd_help(void)
         "spi3 gowin                      Read+decode Gowin ID/USERCODE/STATUS regs\r\n"
         "spi3 scopetest [bank]           Full scope seq: USART cfg->PC0->0x04/05 read\r\n"
         "spi3 acqtest                    Decomposer Phase 20 validation test\r\n"
-        "spi3 h2verify                   Re-upload H2 + capture FPGA responses\r\n"
+        "spi3 stock-readback             Stock case-8 SPI3 readback; not DMM proof\r\n"
+        "spi3 h2txdiag                   Replay H2 TX + sample MISO; no ACK/apply proof\r\n"
         "reboot bootloader               Reboot into USB HID updater\r\n"
         "uptime                          Show uptime\r\n"
         "\r\n"
     );
+}
+
+static uint16_t count_non_ff_bytes(const uint8_t *bytes, uint8_t len)
+{
+    uint16_t count = 0;
+
+    for (uint8_t i = 0; i < len; i++) {
+        if (bytes[i] != 0xFFU) {
+            count++;
+        }
+    }
+
+    return count;
+}
+
+static uint16_t count_post_h2_non_ff_snapshot(
+    uint8_t rx_len[FPGA_POST_H2_TRIGGER_HISTORY],
+    uint8_t rx[FPGA_POST_H2_TRIGGER_HISTORY][FPGA_POST_H2_RX_HISTORY])
+{
+    uint16_t count = 0;
+
+    for (uint8_t i = 0; i < FPGA_POST_H2_TRIGGER_HISTORY; i++) {
+        uint8_t shown = rx_len[i];
+        if (shown > FPGA_POST_H2_RX_HISTORY) {
+            shown = FPGA_POST_H2_RX_HISTORY;
+        }
+        count = (uint16_t)(count + count_non_ff_bytes(rx[i], shown));
+    }
+
+    return count;
 }
 
 static void cmd_version(void)
@@ -548,6 +705,12 @@ static void cmd_status(void)
 {
     extern volatile uint32_t uptime_seconds;
 
+    /*
+     * Keep the status header in chunks smaller than usb_debug_printf()'s
+     * 256-byte buffer. A single oversized format string silently truncates the
+     * output and can glue the following line onto "SPI3 OK", which makes live
+     * DMM evidence harder to compare across firmware builds.
+     */
     usb_debug_printf(
         "=== System ===\r\n"
         "Uptime: %lus\r\n"
@@ -559,8 +722,7 @@ static void cmd_status(void)
         "RX bytes: %u\r\n"
         "Data frames: %u\r\n"
         "Echo frames: %u\r\n"
-        "SPI3 OK: %u\r\n"
-        "SPI3 timeouts: %u (total %u)\r\n",
+        "RX sync: data_start=%u echo_start=%u data_hdr=%u echo_hdr=%u bad2=%u stray=%u\r\n",
         (unsigned long)uptime_seconds,
         system_core_clock / 1000000,
         fpga.initialized ? "YES" : "NO",
@@ -569,9 +731,29 @@ static void cmd_status(void)
         fpga.rx_byte_count,
         fpga.frame_count,
         fpga.echo_count,
-        fpga.spi3_ok_count,
-        fpga.spi3_timeout_count, fpga.spi3_total_timeouts
+        fpga.rx_sync_data_start_count,
+        fpga.rx_sync_echo_start_count,
+        fpga.rx_sync_data_header_count,
+        fpga.rx_sync_echo_header_count,
+        fpga.rx_sync_bad_second_count,
+        fpga.rx_sync_stray_count
     );
+    usb_debug_printf(
+        "RX gates: data_tx_busy_drop=%u echo_valid=%u echo_bad=%u\r\n",
+        fpga.rx_data_tx_busy_drop_count,
+        fpga.rx_echo_valid_count,
+        fpga.rx_echo_bad_count
+    );
+    usb_debug_printf(
+        "SPI3 OK: %u\r\n"
+        "SPI3 timeouts: %u (total %u)\r\n"
+        "SPI3 first byte: 0x%02X\r\n",
+        fpga.spi3_ok_count,
+        fpga.spi3_timeout_count, fpga.spi3_total_timeouts,
+        fpga.spi3_first_byte
+    );
+    usb_print_last_tx_frame();
+    usb_print_recent_tx_frames();
 
     /* spi3_first_byte is written only when an acquisition read is actually
      * attempted (fpga.c ~1589 normal path, ~1718 warm-handoff 0x04 path). With
@@ -716,6 +898,28 @@ static void cmd_status(void)
                     fpga.scope_status[0], fpga.scope_status[1],
                     fpga.scope_status[2], fpga.scope_status[3]);
             }
+        }
+
+        usb_debug_printf(
+            "post-H2 SPI3 boot: enq=%u run=%u drop=%u mask=0x%02X\r\n",
+            fpga.post_h2_spi3_boot_enqueued,
+            fpga.post_h2_spi3_boot_run_count,
+            fpga.post_h2_spi3_boot_dropped,
+            fpga.post_h2_spi3_boot_mask);
+        for (uint8_t i = 0; i < FPGA_POST_H2_TRIGGER_HISTORY; i++) {
+            uint8_t len = fpga.post_h2_spi3_rx_len[i];
+            usb_debug_printf("post-H2 rx[%u]: trigger=%02X len=%u bytes=",
+                             (unsigned)i,
+                             (unsigned)fpga.post_h2_spi3_trigger[i],
+                             (unsigned)len);
+            uint8_t shown = len;
+            if (shown > FPGA_POST_H2_RX_HISTORY) shown = FPGA_POST_H2_RX_HISTORY;
+            for (uint8_t j = 0; j < shown; j++) {
+                usb_debug_printf("%s%02X", j == 0 ? "" : " ",
+                                 (unsigned)fpga.post_h2_spi3_rx[i][j]);
+            }
+            if (len > FPGA_POST_H2_RX_HISTORY) usb_send_str(" ...");
+            usb_send_str("\r\n");
         }
     }
 
@@ -912,6 +1116,31 @@ static void cmd_gpio_set(const char *args)
                      (int)('A' + ((uint32_t)port - (uint32_t)GPIOA) / 0x400),
                      __builtin_ctz(pin),
                      val ? "HIGH" : "LOW");
+}
+
+static void cmd_buzzer_test(const char *args)
+{
+    uint32_t duration = 750;
+    bool started = false;
+    bool active = false;
+    uint32_t toggles = 0;
+    uint32_t create_failures = 0;
+
+    if (args && *args) {
+        if (parse_int(args, &duration) != 0 || duration > 5000U) {
+            usb_send_str("Usage: buzzer test [ms<=5000]\r\n");
+            return;
+        }
+    }
+
+    continuity_buzzer_force_ms(duration);
+    continuity_buzzer_snapshot(&started, &active, &toggles, &create_failures);
+    usb_debug_printf("buzzer forced_ms=%lu task=%u active=%u toggles=%lu create_fail=%lu\r\n",
+                     duration,
+                     started ? 1U : 0U,
+                     active ? 1U : 0U,
+                     toggles,
+                     create_failures);
 }
 
 static void cmd_gpio_read(const char *args)
@@ -1276,6 +1505,226 @@ static void cmd_scope_trig(const char *args)
     uint32_t mv = ((uint32_t)code * 3300u) / 4095u;
     usb_debug_printf("DAC1(PA4) = code %u (0x%03X)  ~%lu.%03lu V expected\r\n",
                      code, code, (unsigned long)(mv / 1000), (unsigned long)(mv % 1000));
+}
+
+static void cmd_screen_dump(const char *args)
+{
+    char buf[64];
+    char *saveptr = NULL;
+    char *tok;
+    uint32_t x = 0;
+    uint32_t y = 0;
+    uint32_t w = LCD_WIDTH;
+    uint32_t h = LCD_HEIGHT;
+
+    if (args && *args) {
+        if (strlen(args) >= sizeof(buf)) {
+            usb_send_str("Usage: screen dump [shadow] [x y w h]\r\n");
+            return;
+        }
+
+        strcpy(buf, args);
+        tok = strtok_r(buf, " \t", &saveptr);
+        if (tok && strcmp(tok, "shadow") == 0) {
+            tok = strtok_r(NULL, " \t", &saveptr);
+            if (tok == NULL) goto parsed_screen_args;
+        }
+        if (tok == NULL || parse_int(tok, &x) != 0) {
+            usb_send_str("Usage: screen dump [shadow] [x y w h]\r\n");
+            return;
+        }
+        tok = strtok_r(NULL, " \t", &saveptr);
+        if (tok == NULL || parse_int(tok, &y) != 0) {
+            usb_send_str("Usage: screen dump [shadow] [x y w h]\r\n");
+            return;
+        }
+        tok = strtok_r(NULL, " \t", &saveptr);
+        if (tok == NULL || parse_int(tok, &w) != 0) {
+            usb_send_str("Usage: screen dump [shadow] [x y w h]\r\n");
+            return;
+        }
+        tok = strtok_r(NULL, " \t", &saveptr);
+        if (tok == NULL || parse_int(tok, &h) != 0) {
+            usb_send_str("Usage: screen dump [shadow] [x y w h]\r\n");
+            return;
+        }
+        if (strtok_r(NULL, " \t", &saveptr) != NULL) {
+            usb_send_str("Usage: screen dump [shadow] [x y w h]\r\n");
+            return;
+        }
+    }
+
+parsed_screen_args:
+    if (x >= LCD_WIDTH || y >= LCD_HEIGHT ||
+        w == 0 || h == 0 ||
+        w > LCD_WIDTH || h > LCD_HEIGHT ||
+        x > LCD_WIDTH - w || y > LCD_HEIGHT - h) {
+        usb_send_str("Usage: screen dump [shadow] [x y w h]\r\n");
+        usb_debug_printf("  bounds: x<%u y<%u x+w<=%u y+h<=%u\r\n",
+                         (unsigned)LCD_WIDTH,
+                         (unsigned)LCD_HEIGHT,
+                         (unsigned)LCD_WIDTH,
+                         (unsigned)LCD_HEIGHT);
+        return;
+    }
+
+    usb_debug_printf("SCREENDUMP x=%lu y=%lu w=%lu h=%lu format=%s\r\n",
+                     x, y, w, h, "indexed4");
+
+    const uint8_t *bits = lcd_shadow_bits();
+    static const char hexdigits[] = "0123456789ABCDEF";
+    uint16_t page_y = lcd_shadow_page_y();
+    for (uint32_t row = 0; row < h; row++) {
+        usb_debug_printf("ROW %lu ", row);
+        for (uint32_t col = 0; col < w; col++) {
+            uint32_t sx = x + col;
+            uint32_t sy = y + row;
+            uint8_t idx = 0;
+            if (sy >= page_y && sy < (uint32_t)page_y + LCD_SHADOW_HEIGHT) {
+                uint32_t shadow_y = sy - page_y;
+                uint8_t byte = bits[shadow_y * LCD_SHADOW_STRIDE + (sx >> 1)];
+                idx = (sx & 1U) ? (byte & 0x0FU) : (byte >> 4);
+            }
+            char c = hexdigits[idx & 0x0F];
+            usb_send_bytes((const uint8_t *)&c, 1);
+        }
+        usb_send_str("\r\n");
+    }
+}
+
+static uint32_t crc32_update(uint32_t crc, const uint8_t *data, uint32_t len)
+{
+    crc = ~crc;
+    for (uint32_t i = 0; i < len; i++) {
+        crc ^= data[i];
+        for (uint8_t bit = 0; bit < 8; bit++) {
+            uint32_t mask = 0U - (crc & 1U);
+            crc = (crc >> 1) ^ (0xEDB88320U & mask);
+        }
+    }
+    return ~crc;
+}
+
+static bool parse_screen_region_args(const char *args,
+                                     uint32_t *x,
+                                     uint32_t *y,
+                                     uint32_t *w,
+                                     uint32_t *h)
+{
+    char buf[64];
+    char *saveptr = NULL;
+    char *tok;
+
+    *x = 0;
+    *y = 0;
+    *w = LCD_WIDTH;
+    *h = LCD_HEIGHT;
+
+    if (args && *args) {
+        if (strlen(args) >= sizeof(buf)) return false;
+        strcpy(buf, args);
+
+        tok = strtok_r(buf, " \t", &saveptr);
+        if (tok == NULL || parse_int(tok, x) != 0) return false;
+        tok = strtok_r(NULL, " \t", &saveptr);
+        if (tok == NULL || parse_int(tok, y) != 0) return false;
+        tok = strtok_r(NULL, " \t", &saveptr);
+        if (tok == NULL || parse_int(tok, w) != 0) return false;
+        tok = strtok_r(NULL, " \t", &saveptr);
+        if (tok == NULL || parse_int(tok, h) != 0) return false;
+        if (strtok_r(NULL, " \t", &saveptr) != NULL) return false;
+    }
+
+    return *x < LCD_WIDTH && *y < LCD_HEIGHT &&
+           *w > 0 && *h > 0 &&
+           *w <= LCD_WIDTH && *h <= LCD_HEIGHT &&
+           *x <= LCD_WIDTH - *w && *y <= LCD_HEIGHT - *h;
+}
+
+static void cmd_screen_dumpbin(const char *args)
+{
+    uint32_t x, y, w, h;
+    uint8_t out_row[LCD_SHADOW_STRIDE];
+
+    if (!parse_screen_region_args(args, &x, &y, &w, &h)) {
+        usb_send_str("Usage: screen dumpbin [x y w h]\r\n");
+        usb_debug_printf("  bounds: x<%u y<%u x+w<=%u y+h<=%u\r\n",
+                         (unsigned)LCD_WIDTH,
+                         (unsigned)LCD_HEIGHT,
+                         (unsigned)LCD_WIDTH,
+                         (unsigned)LCD_HEIGHT);
+        return;
+    }
+
+    uint32_t row_len = (w + 1U) / 2U;
+    uint32_t len = row_len * h;
+    uint32_t crc = 0;
+    const uint8_t *bits = lcd_shadow_bits();
+
+    for (uint32_t row = 0; row < h; row++) {
+        uint32_t sy = y + row;
+        memset(out_row, 0, row_len);
+        for (uint32_t col = 0; col < w; col++) {
+            uint32_t sx = x + col;
+            uint8_t src = bits[sy * LCD_SHADOW_STRIDE + (sx >> 1)];
+            uint8_t idx = (sx & 1U) ? (src & 0x0FU) : (src >> 4);
+            if ((col & 1U) == 0) {
+                out_row[col >> 1] = (uint8_t)(idx << 4);
+            } else {
+                out_row[col >> 1] |= idx;
+            }
+        }
+        crc = crc32_update(crc, out_row, row_len);
+    }
+
+    usb_debug_printf("SCREENBIN x=%lu y=%lu w=%lu h=%lu format=indexed4 len=%lu crc32=%08lX\r\n",
+                     x, y, w, h, len, crc);
+
+    for (uint32_t row = 0; row < h; row++) {
+        uint32_t sy = y + row;
+        memset(out_row, 0, row_len);
+        for (uint32_t col = 0; col < w; col++) {
+            uint32_t sx = x + col;
+            uint8_t src = bits[sy * LCD_SHADOW_STRIDE + (sx >> 1)];
+            uint8_t idx = (sx & 1U) ? (src & 0x0FU) : (src >> 4);
+            if ((col & 1U) == 0) {
+                out_row[col >> 1] = (uint8_t)(idx << 4);
+            } else {
+                out_row[col >> 1] |= idx;
+            }
+        }
+        usb_send_bytes(out_row, (uint16_t)row_len);
+    }
+
+    usb_send_str("\r\nSCREENBIN END\r\n");
+}
+
+static void cmd_screen_shadow(const char *args)
+{
+    if (args == NULL || *args == '\0') {
+        usb_debug_printf("shadow_page_y=%u height=%u\r\n",
+                         (unsigned)lcd_shadow_page_y(),
+                         (unsigned)LCD_SHADOW_HEIGHT);
+        return;
+    }
+
+    if (strncmp(args, "page", 4) == 0 &&
+        (args[4] == '\0' || args[4] == ' ' || args[4] == '\t')) {
+        const char *value = args + 4;
+        uint32_t y = 0;
+        while (*value == ' ' || *value == '\t') value++;
+        if (*value != '\0' && parse_int(value, &y) != 0) {
+            usb_send_str("Usage: screen shadow page [y]\r\n");
+            return;
+        }
+        lcd_shadow_set_page((uint16_t)y);
+        usb_debug_printf("shadow_page_y=%u height=%u\r\n",
+                         (unsigned)lcd_shadow_page_y(),
+                         (unsigned)LCD_SHADOW_HEIGHT);
+        return;
+    }
+
+    usb_send_str("Usage: screen shadow page [y]\r\n");
 }
 
 static void cmd_fpga_cmd(const char *args)
@@ -1820,6 +2269,1677 @@ static void cmd_spi3_read(const char *args)
     }
 }
 
+static int32_t scaled_i100(float value)
+{
+    float scaled = value * 100.0f;
+    if (scaled >= 0.0f) return (int32_t)(scaled + 0.5f);
+    return (int32_t)(scaled - 0.5f);
+}
+
+static int32_t scaled_i10000(float value)
+{
+    float scaled = value * 10000.0f;
+    if (scaled >= 0.0f) return (int32_t)(scaled + 0.5f);
+    return (int32_t)(scaled - 0.5f);
+}
+
+static void print_i100(const char *label, float value, const char *suffix)
+{
+    int32_t scaled = scaled_i100(value);
+    int32_t abs_scaled = scaled < 0 ? -scaled : scaled;
+    usb_debug_printf("%s%s%ld.%02ld%s\r\n",
+                     label,
+                     scaled < 0 ? "-" : "",
+                     abs_scaled / 100,
+                     abs_scaled % 100,
+                     suffix ? suffix : "");
+}
+
+static const char *meter_layout_name(uint8_t layout)
+{
+    switch (layout) {
+    case METER_LAYOUT_FULL:  return "full";
+    case METER_LAYOUT_CHART: return "chart";
+    case METER_LAYOUT_STATS: return "stats";
+    case METER_LAYOUT_FUSE:  return "fuse";
+    default:                 return "?";
+    }
+}
+
+static meter_voltage_wave_snapshot_t usb_meter_wave_snap;
+
+static void cmd_mode(const char *args)
+{
+    if (args == NULL || *args == '\0') {
+        usb_debug_printf("current=%lu startup=%s meter_submode=%u (%s) layout=%u (%s)\r\n",
+                         (uint32_t)current_mode,
+                         startup_mode_name(startup_mode),
+                         (unsigned)meter_submode,
+                         meter_submode_name(meter_submode),
+                         (unsigned)meter_layout,
+                         meter_layout_name(meter_layout));
+        return;
+    }
+
+    if (strcmp(args, "scope") == 0) {
+        current_mode = MODE_OSCILLOSCOPE;
+        fpga_enter_scope_mode();
+        usb_send_str("mode=scope\r\n");
+        return;
+    }
+
+    if (strncmp(args, "startup", 7) == 0 &&
+        (args[7] == '\0' || args[7] == ' ' || args[7] == '\t')) {
+        const char *value = args + 7;
+        while (*value == ' ' || *value == '\t') value++;
+
+        if (*value == '\0') {
+            usb_debug_printf("startup=%s\r\n", startup_mode_name(startup_mode));
+        } else if (strcmp(value, "scope") == 0) {
+            startup_mode_set(STARTUP_SCOPE);
+            usb_send_str("startup=Scope\r\n");
+        } else if (strcmp(value, "meter") == 0) {
+            startup_mode_set(STARTUP_METER);
+            usb_send_str("startup=Meter\r\n");
+        } else {
+            usb_send_str("Usage: mode startup [scope|meter]\r\n");
+        }
+        return;
+    }
+
+    if (strncmp(args, "meter", 5) == 0 &&
+        (args[5] == '\0' || args[5] == ' ' || args[5] == '\t')) {
+        char buf[48];
+        char *tok;
+        char *saveptr = NULL;
+        uint32_t submode = meter_submode;
+        uint32_t layout = meter_layout;
+
+        if (strlen(args) >= sizeof(buf)) {
+            usb_send_str("Usage: mode meter [submode] [layout]\r\n");
+            return;
+        }
+        strcpy(buf, args);
+        tok = strtok_r(buf, " \t", &saveptr);  /* meter */
+        tok = strtok_r(NULL, " \t", &saveptr);
+        if (tok && (parse_int(tok, &submode) != 0 || submode >= METER_SUBMODE_COUNT)) {
+            usb_debug_printf("Usage: mode meter [0-%u] [0-%u]\r\n",
+                             (unsigned)(METER_SUBMODE_COUNT - 1),
+                             (unsigned)(METER_LAYOUT_COUNT - 1));
+            return;
+        }
+        tok = strtok_r(NULL, " \t", &saveptr);
+        if (tok && (parse_int(tok, &layout) != 0 || layout >= METER_LAYOUT_COUNT)) {
+            usb_debug_printf("Usage: mode meter [0-%u] [0-%u]\r\n",
+                             (unsigned)(METER_SUBMODE_COUNT - 1),
+                             (unsigned)(METER_LAYOUT_COUNT - 1));
+            return;
+        }
+
+        current_mode = MODE_MULTIMETER;
+        meter_submode = (uint8_t)submode;
+        meter_layout = (uint8_t)layout;
+        meter_reset_minmaxavg();
+        meter_voltage_wave_reset();
+        /*
+         * Match the button-driven production transition path. The explicit
+         * `fpga meter reinit` debug command still performs the DCV wake preamble
+         * when that diagnostic is wanted, but ordinary host mode switches must
+         * not inject an extra DCV materialization before the requested submode.
+         * Shorted-probe traces on 2026-06-07 showed that the wake preamble makes
+         * host/sweep validation diverge from the real UI path and causes the
+         * double relay click reported during sweeps.
+         */
+        fpga_set_meter_mode((uint8_t)submode);
+        usb_debug_printf("mode=meter submode=%lu (%s) layout=%lu (%s)\r\n",
+                         submode,
+                         meter_submode_name((uint8_t)submode),
+                         layout,
+                         meter_layout_name((uint8_t)layout));
+        return;
+    }
+
+    usb_send_str("Usage: mode [scope|meter [submode] [layout]|startup [scope|meter]]\r\n");
+}
+
+static void cmd_meter_dump(const char *args)
+{
+    uint32_t delay = 0;
+    meter_autoselect_status_t auto_st;
+    meter_reading_t snap;
+    bool have_snap;
+    bool live;
+
+    if (args && *args) {
+        if (parse_int(args, &delay) != 0 || delay > 5000) {
+            usb_send_str("Usage: meter dump [delay_ms<=5000]\r\n");
+            return;
+        }
+    }
+    if (delay > 0) vTaskDelay(pdMS_TO_TICKS(delay));
+
+    memset(&snap, 0, sizeof(snap));
+    snap.display_str[0] = '-';
+    snap.display_str[1] = '-';
+    snap.display_str[2] = '-';
+    snap.display_str[3] = '\0';
+    snap.unit_suffix = "";
+    have_snap = meter_data_snapshot(&snap);
+    live = have_snap && snap.valid && snap.submode == meter_submode;
+    meter_autoselect_get_status(&auto_st);
+
+    usb_send_str("=== DMM State ===\r\n");
+    usb_debug_printf("mode=%lu startup=%s meter_submode=%u (%s) layout=%u (%s)\r\n",
+                     (uint32_t)current_mode,
+                     startup_mode_name(startup_mode),
+                     (unsigned)meter_submode,
+                     meter_submode_name(meter_submode),
+                     (unsigned)meter_layout,
+                     meter_layout_name(meter_layout));
+    usb_debug_printf("autoselect state=%s current=%u (%s) index=%u/%u best=%u (%s) best_score=%u last_score=%u cancel=%u\r\n",
+                     meter_autoselect_state_name(auto_st.state),
+                     (unsigned)auto_st.current_submode,
+                     meter_submode_name(auto_st.current_submode),
+                     (unsigned)auto_st.current_index,
+                     (unsigned)auto_st.candidate_count,
+                     (unsigned)auto_st.best_submode,
+                     meter_submode_name(auto_st.best_submode),
+                     (unsigned)auto_st.best_score,
+                     (unsigned)auto_st.last_score,
+                     auto_st.cancel_pending ? 1U : 0U);
+    usb_debug_printf("ui_draws=%lu full_clears=%lu partial_clears=%lu draw_us=%lu max_draw_us=%lu over_budget=%lu rendered_update=%lu last_full=%u ui_live=%u continuity_flash=%u live_same_submode=%u\r\n",
+                     meter_screen_draw_count,
+                     meter_screen_full_clear_count,
+                     meter_screen_partial_clear_count,
+                     meter_screen_last_draw_us,
+                     meter_screen_max_draw_us,
+                     meter_screen_over_budget_count,
+                     meter_screen_last_reading_display_update,
+                     (unsigned)meter_screen_last_full_clear,
+                     (unsigned)meter_screen_last_live,
+                     (unsigned)meter_screen_last_continuity_flash,
+                     live ? 1U : 0U);
+    usb_debug_printf("valid=%u reading_submode=%u class=%u updates=%lu display=%s unit=%s\r\n",
+                     snap.valid ? 1U : 0U,
+                     (unsigned)snap.submode,
+                     (unsigned)snap.result_class,
+                     snap.update_count,
+                     live ? snap.display_str : "---",
+                     (live && snap.unit_suffix) ? snap.unit_suffix : "");
+    usb_debug_printf("transition_discard_remaining=%u transition_frame_skips=%lu\r\n",
+                     (unsigned)meter_frame_discard_count,
+                     meter_transition_frame_skip_count);
+    usb_debug_printf("bcd_value=%d decimal_pos=%u negative=%u unit_variant=%u bar_i100=%ld aux_freq_i10=%ld\r\n",
+                     snap.bcd_value,
+                     (unsigned)snap.decimal_pos,
+                     snap.negative ? 1U : 0U,
+                     (unsigned)snap.unit_variant,
+                     (long)scaled_i100(snap.bar_fraction),
+                     (long)scaled_i100(snap.aux_freq_hz) / 10L);
+    usb_debug_printf("flags ac=%u auto=%u hold=%u probe=%u range_ind=%u range_cmd=%u beep=%u\r\n",
+                     snap.is_ac ? 1U : 0U,
+                     snap.is_auto_range ? 1U : 0U,
+                     snap.is_hold ? 1U : 0U,
+                     (unsigned)snap.probe_type,
+                     (unsigned)snap.range_indicator,
+                     (unsigned)snap.range_cmd,
+                     snap.continuity_beep ? 1U : 0U);
+    usb_debug_printf("stock_fsm mode=%u variant=%u format=%u dc_state=%u display_cmd=%u unit_index=%u composite=%u\r\n",
+                     (unsigned)snap.stock_mode,
+                     (unsigned)snap.stock_variant,
+                     (unsigned)snap.stock_format,
+                     (unsigned)snap.stock_dc_state,
+                     (unsigned)snap.stock_display_cmd,
+                     (unsigned)snap.stock_unit_index,
+                     (unsigned)snap.stock_composite_index);
+    usb_debug_printf("frame_family expected=%u observed=%u reject=%u\r\n",
+                     (unsigned)snap.expected_frame_family,
+                     (unsigned)snap.observed_frame_family,
+                     (unsigned)snap.reject_reason);
+    usb_send_str("frame=");
+    for (int i = 0; i < 12; i++) usb_debug_printf("%02X%s", snap.dbg_frame[i], i == 11 ? "" : " ");
+    usb_send_str("\r\nnibbles=");
+    for (int i = 0; i < 4; i++) usb_debug_printf("%02X%s", snap.dbg_nibbles[i], i == 3 ? "" : " ");
+    usb_send_str(" raw_digits=");
+    for (int i = 0; i < 4; i++) usb_debug_printf("%02X%s", snap.dbg_raw_digits[i], i == 3 ? "" : " ");
+    usb_send_str("\r\nf6_history=");
+    uint8_t f6_count = meter_f6_history_count;
+    if (f6_count > METER_F6_HISTORY_LEN) f6_count = METER_F6_HISTORY_LEN;
+    for (int i = 0; i < f6_count; i++) usb_debug_printf("%02X%s", meter_f6_history[i], i + 1 == f6_count ? "" : " ");
+    usb_send_str("\r\n");
+    usb_debug_printf("wave_samples=%lu\r\n", meter_voltage_wave_sample_count());
+
+    usb_send_str("history newest_first:\r\n");
+    uint8_t count = meter_frame_history_count;
+    if (count > METER_FRAME_HISTORY_LEN) count = METER_FRAME_HISTORY_LEN;
+    for (uint8_t n = 0; n < count; n++) {
+        uint8_t idx = (uint8_t)((meter_frame_history_head + METER_FRAME_HISTORY_LEN - 1U - n)
+                                % METER_FRAME_HISTORY_LEN);
+        const meter_frame_history_t *h = &meter_frame_history[idx];
+        usb_debug_printf("#%u upd=%lu sub=%u cls=%u raw=%d dp=%u unit=%s disp=%s "
+                         "family=%u/%u reject=%u "
+                         "f6=%02X f7=%02X f8=%02X f9=%02X extra=%04X aux_freq_i10=%u digits=%02X,%02X,%02X,%02X\r\n",
+                         (unsigned)n,
+                         h->update_count,
+                         (unsigned)h->submode,
+                         (unsigned)h->result_class,
+                         h->bcd_value,
+                         (unsigned)h->decimal_pos,
+                         h->unit_suffix ? h->unit_suffix : "",
+                         h->display_str,
+                         (unsigned)h->expected_frame_family,
+                         (unsigned)h->observed_frame_family,
+                         (unsigned)h->reject_reason,
+                         (unsigned)h->flags,
+                         (unsigned)h->status,
+                         (unsigned)h->meas_flags,
+                         (unsigned)h->additional_status,
+                         (unsigned)h->extra,
+                         (unsigned)h->aux_freq_hz_i10,
+                         (unsigned)h->raw_digits[0],
+                         (unsigned)h->raw_digits[1],
+                         (unsigned)h->raw_digits[2],
+                         (unsigned)h->raw_digits[3]);
+    }
+}
+
+static void cmd_meter_autoscan(const char *args)
+{
+    uint32_t settle_ms = 2500;
+    uint32_t wait_budget_ms;
+    uint8_t best_mode = meter_submode;
+    uint8_t best_score = 0;
+    size_t candidate_count = 0;
+    const uint8_t *candidates = meter_auto_candidates(&candidate_count);
+
+    if (args && *args) {
+        if (parse_int(args, &settle_ms) != 0 || settle_ms > 3000) {
+            usb_send_str("Usage: meter autoscan [settle_ms<=3000]\r\n");
+            return;
+        }
+    }
+    wait_budget_ms = (settle_ms < 2500U) ? 2500U : settle_ms;
+
+    current_mode = MODE_MULTIMETER;
+    meter_layout = METER_LAYOUT_FULL;
+    usb_debug_printf("autoscan settle_ms=%lu wait_budget_ms=%lu candidates=%u\r\n",
+                     settle_ms,
+                     wait_budget_ms,
+                     (unsigned)candidate_count);
+
+    for (uint8_t i = 0; i < candidate_count; i++) {
+        uint8_t submode = candidates[i];
+        uint8_t score;
+
+        meter_submode = submode;
+        meter_reset_minmaxavg();
+        meter_voltage_wave_reset();
+        /*
+         * Autoscan is a user-visible mode walk, not a transport wake diagnostic.
+         * Use the same no-wake transition as button left/right so the scan does
+         * not do a DCV preamble before every candidate or double-click relays.
+         */
+        fpga_set_meter_mode(submode);
+
+        score = 0;
+        for (uint32_t waited = 0; waited < wait_budget_ms; waited += 100U) {
+            vTaskDelay(pdMS_TO_TICKS(100));
+            score = meter_auto_score(submode, (const meter_reading_t *)&meter_reading);
+            if (score > 0) break;
+        }
+        usb_debug_printf("auto candidate sub=%u (%s) score=%u valid=%u cls=%u "
+                         "family=%u/%u reject=%u "
+                         "disp=%s unit=%s raw=%d dp=%u f8=%02X seq=%u word=%04X apply=%04X\r\n",
+                         (unsigned)submode,
+                         meter_submode_name(submode),
+                         (unsigned)score,
+                         meter_reading.valid ? 1U : 0U,
+                         (unsigned)meter_reading.result_class,
+                         (unsigned)meter_reading.expected_frame_family,
+                         (unsigned)meter_reading.observed_frame_family,
+                         (unsigned)meter_reading.reject_reason,
+                         (meter_reading.valid && meter_reading.submode == submode)
+                            ? meter_reading.display_str : "---",
+                         (meter_reading.valid && meter_reading.submode == submode &&
+                          meter_reading.unit_suffix) ? meter_reading.unit_suffix : "",
+                         meter_reading.bcd_value,
+                         (unsigned)meter_reading.decimal_pos,
+                         (unsigned)meter_reading.dbg_frame[8],
+                         (unsigned)fpga.meter_mode_sequence_count,
+                         (unsigned)fpga.meter_mode_selector_word,
+                         (unsigned)fpga.meter_mode_apply_word);
+        if (score > best_score) {
+            best_score = score;
+            best_mode = submode;
+        }
+    }
+
+    meter_submode = best_mode;
+    meter_reset_minmaxavg();
+    meter_voltage_wave_reset();
+    fpga_set_meter_mode(best_mode);
+    usb_debug_printf("autoscan selected submode=%u (%s) score=%u\r\n",
+                     (unsigned)best_mode,
+                     meter_submode_name(best_mode),
+                     (unsigned)best_score);
+}
+
+static void cmd_meter_auto_async(const char *args)
+{
+    meter_autoselect_status_t st;
+
+    while (args && *args == ' ') args++;
+    if (args == NULL || *args == '\0' || strcmp(args, "start") == 0) {
+        if (meter_autoselect_start(700U)) {
+            usb_send_str("meter auto started settle_ms=700\r\n");
+        } else {
+            usb_send_str("meter auto start failed\r\n");
+        }
+    } else if (strncmp(args, "start ", 6) == 0) {
+        uint32_t settle_ms;
+        if (parse_int(args + 6, &settle_ms) != 0 || settle_ms > 3000U) {
+            usb_send_str("Usage: meter auto [start [settle_ms<=3000]|status|cancel]\r\n");
+            return;
+        }
+        if (meter_autoselect_start(settle_ms)) {
+            usb_debug_printf("meter auto started settle_ms=%lu\r\n", settle_ms);
+        } else {
+            usb_send_str("meter auto start failed\r\n");
+        }
+    } else if (strcmp(args, "status") == 0) {
+        /* handled below */
+    } else if (strcmp(args, "cancel") == 0) {
+        meter_autoselect_cancel();
+        usb_send_str("meter auto cancel requested\r\n");
+    } else {
+        usb_send_str("Usage: meter auto [start [settle_ms<=3000]|status|cancel]\r\n");
+        return;
+    }
+
+    meter_autoselect_get_status(&st);
+    usb_debug_printf("meter auto state=%s current=%u (%s) index=%u/%u "
+                     "best=%u (%s) best_score=%u last_score=%u "
+                     "settle_ms=%lu wait_budget_ms=%lu cancel=%u\r\n",
+                     meter_autoselect_state_name(st.state),
+                     (unsigned)st.current_submode,
+                     meter_submode_name(st.current_submode),
+                     (unsigned)st.current_index,
+                     (unsigned)st.candidate_count,
+                     (unsigned)st.best_submode,
+                     meter_submode_name(st.best_submode),
+                     (unsigned)st.best_score,
+                     (unsigned)st.last_score,
+                     st.settle_ms,
+                     st.wait_budget_ms,
+                     st.cancel_pending ? 1U : 0U);
+}
+
+static uint8_t gpio_level(gpio_type *port, uint16_t pin)
+{
+    return (port->idt & (1U << pin)) ? 1U : 0U;
+}
+
+static int parse_stream_args(const char *args, uint32_t *count, uint32_t *delay_ms,
+                             const char *usage)
+{
+    char buf[32];
+    char *tok;
+    char *saveptr = NULL;
+
+    if (args == NULL || *args == '\0') return 0;
+    if (strlen(args) >= sizeof(buf)) {
+        usb_send_str(usage);
+        return -1;
+    }
+
+    strcpy(buf, args);
+    tok = strtok_r(buf, " \t", &saveptr);
+    if (tok && (parse_int(tok, count) != 0 || *count > 200)) {
+        usb_send_str(usage);
+        return -1;
+    }
+    tok = strtok_r(NULL, " \t", &saveptr);
+    if (tok && (parse_int(tok, delay_ms) != 0 || *delay_ms > 5000)) {
+        usb_send_str(usage);
+        return -1;
+    }
+    tok = strtok_r(NULL, " \t", &saveptr);
+    if (tok) {
+        usb_send_str(usage);
+        return -1;
+    }
+    return 0;
+}
+
+static uint16_t meter_dbg_extra(void)
+{
+    return ((uint16_t)meter_reading.dbg_frame[10] << 8) |
+           meter_reading.dbg_frame[11];
+}
+
+static int parse_mux_arm_args(const char *args, uint32_t *portc_porte,
+                              uint32_t *porta_portb, uint32_t *settle_ms,
+                              const char *usage)
+{
+    char buf[48];
+    char *tok;
+    char *saveptr = NULL;
+
+    if (args == NULL || *args == '\0' || strlen(args) >= sizeof(buf)) {
+        usb_send_str(usage);
+        return -1;
+    }
+
+    strcpy(buf, args);
+    tok = strtok_r(buf, " \t", &saveptr);
+    if (tok == NULL || parse_int(tok, portc_porte) != 0 ||
+        *portc_porte > 9) {
+        usb_send_str(usage);
+        return -1;
+    }
+    tok = strtok_r(NULL, " \t", &saveptr);
+    if (tok == NULL || parse_int(tok, porta_portb) != 0 ||
+        *porta_portb > 9) {
+        usb_send_str(usage);
+        return -1;
+    }
+    tok = strtok_r(NULL, " \t", &saveptr);
+    if (tok && (parse_int(tok, settle_ms) != 0 || *settle_ms > 5000)) {
+        usb_send_str(usage);
+        return -1;
+    }
+    tok = strtok_r(NULL, " \t", &saveptr);
+    if (tok) {
+        usb_send_str(usage);
+        return -1;
+    }
+    return 0;
+}
+
+static void print_frame_hex(const char *label, const uint8_t frame[12])
+{
+    usb_send_str(label);
+    for (int i = 0; i < 12; i++) {
+        usb_debug_printf("%02X%s", (unsigned)frame[i], i == 11 ? "" : " ");
+    }
+    usb_send_str("\r\n");
+}
+
+static void print_volatile_frame_inline(const volatile uint8_t frame[12])
+{
+    for (int i = 0; i < 12; i++) {
+        usb_debug_printf("%s%02X", i == 0 ? "" : " ", (unsigned)frame[i]);
+    }
+}
+
+static void print_tx_frame_inline(const uint8_t frame[FPGA_TX_FRAME_SIZE])
+{
+    for (uint8_t i = 0; i < FPGA_TX_FRAME_SIZE; i++) {
+        usb_debug_printf("%s%02X", i == 0 ? "" : " ",
+                         (unsigned)frame[i]);
+    }
+}
+
+static void cmd_meter_trace(void)
+{
+    meter_reading_t snap;
+    bool have_snap = meter_data_snapshot(&snap);
+    bool live = have_snap && current_mode == MODE_MULTIMETER &&
+                snap.valid && snap.submode == meter_submode;
+    fpga_meter_selector_t selectors = fpga_meter_expected_selectors(meter_submode);
+    fpga_meter_transition_plan_t plan =
+        fpga_meter_transition_plan_for_submode(meter_submode);
+    uint16_t plan_probe_word = plan.has_probe_detect ?
+        (uint16_t)(gpio_level(GPIOC, 7) ? 0x0507U : 0x050AU) : 0U;
+    uint16_t extra = have_snap ?
+        (((uint16_t)snap.dbg_frame[10] << 8) | snap.dbg_frame[11]) : 0;
+    uint8_t rxh_count;
+    uint8_t rxh_frames[FPGA_RX_FRAME_HISTORY][FPGA_RX_FRAME_SIZE];
+    uint16_t rxh_data[FPGA_RX_FRAME_HISTORY];
+    uint16_t rxh_tx[FPGA_RX_FRAME_HISTORY];
+    uint16_t rxh_echo[FPGA_RX_FRAME_HISTORY];
+    uint16_t rxh_seq[FPGA_RX_FRAME_HISTORY];
+    uint8_t rxh_seq_sub[FPGA_RX_FRAME_HISTORY];
+    uint8_t rxh_busy[FPGA_RX_FRAME_HISTORY];
+    uint8_t rxh_discard[FPGA_RX_FRAME_HISTORY];
+    uint8_t txh_count;
+    uint8_t txh_frames[FPGA_TX_FRAME_HISTORY][FPGA_TX_FRAME_SIZE];
+    uint16_t txh_tx[FPGA_TX_FRAME_HISTORY];
+    uint8_t txc_count;
+    uint8_t txc_frames[FPGA_TX_FRAME_HISTORY][FPGA_TX_FRAME_SIZE];
+    uint16_t txc_tx[FPGA_TX_FRAME_HISTORY];
+    uint8_t mth_count;
+    uint8_t mth_submode[FPGA_METER_TRANSITION_HISTORY];
+    uint16_t mth_config[FPGA_METER_TRANSITION_HISTORY];
+    uint16_t mth_selector[FPGA_METER_TRANSITION_HISTORY];
+    uint16_t mth_apply[FPGA_METER_TRANSITION_HISTORY];
+    uint8_t mth_bank[FPGA_METER_TRANSITION_HISTORY];
+    uint8_t mth_bank_first[FPGA_METER_TRANSITION_HISTORY];
+    uint8_t mth_bank_second[FPGA_METER_TRANSITION_HISTORY];
+    uint16_t mth_probe[FPGA_METER_TRANSITION_HISTORY];
+    uint16_t mth_start[FPGA_METER_TRANSITION_HISTORY];
+    uint16_t mth_seq[FPGA_METER_TRANSITION_HISTORY];
+    uint16_t mth_tx_before[FPGA_METER_TRANSITION_HISTORY];
+    uint16_t mth_tx_after[FPGA_METER_TRANSITION_HISTORY];
+    uint16_t mth_frame_before[FPGA_METER_TRANSITION_HISTORY];
+    uint16_t mth_frame_after[FPGA_METER_TRANSITION_HISTORY];
+    uint16_t mth_planned_gpio[FPGA_METER_TRANSITION_HISTORY];
+    uint16_t mth_actual_gpio[FPGA_METER_TRANSITION_HISTORY];
+    uint8_t first_rx_valid;
+    uint8_t first_rx_armed;
+    uint8_t first_rx_submode;
+    uint16_t first_rx_seq;
+    uint16_t first_rx_config;
+    uint16_t first_rx_selector;
+    uint16_t first_rx_apply;
+    uint16_t first_rx_probe;
+    uint16_t first_rx_start;
+    uint16_t first_rx_planned_gpio;
+    uint16_t first_rx_actual_gpio;
+    uint16_t first_rx_data;
+    uint16_t first_rx_tx;
+    uint16_t first_rx_echo;
+    uint8_t first_rx_busy;
+    uint8_t first_rx_discard;
+    uint8_t first_rx_frame[FPGA_RX_FRAME_SIZE];
+    uint32_t first_rx_h2_bytes;
+    uint8_t first_rx_h2_done;
+    uint8_t first_rx_h2_post_run;
+    uint8_t first_rx_h2_post_mask;
+    uint8_t producer_frame[FPGA_RX_FRAME_SIZE];
+    uint16_t rx_sync_data_start;
+    uint16_t rx_sync_echo_start;
+    uint16_t rx_sync_data_header;
+    uint16_t rx_sync_echo_header;
+    uint16_t rx_sync_bad_second;
+    uint16_t rx_sync_stray;
+    uint8_t last_echo_frame[FPGA_RX_ECHO_FRAME_SIZE];
+    uint8_t rxraw_count;
+    uint8_t rxraw_byte[FPGA_RX_RAW_HISTORY];
+    uint16_t rxraw_tx[FPGA_RX_RAW_HISTORY];
+    uint8_t rxraw_tx_index[FPGA_RX_RAW_HISTORY];
+    uint8_t rxraw_rx_index[FPGA_RX_RAW_HISTORY];
+    uint8_t post_h2_trigger[FPGA_POST_H2_TRIGGER_HISTORY];
+    uint8_t post_h2_rx_len[FPGA_POST_H2_TRIGGER_HISTORY];
+    uint8_t post_h2_rx[FPGA_POST_H2_TRIGGER_HISTORY][FPGA_POST_H2_RX_HISTORY];
+    uint32_t h2_rx_00_count;
+    uint32_t h2_rx_ff_count;
+    uint32_t h2_rx_other_count;
+    uint8_t h2_close_rx_len;
+    uint8_t h2_close_rx[sizeof(fpga.h2_close_rx)];
+    const factory_cal_t *factory_cal = flash_fs_factory_cal();
+
+    taskENTER_CRITICAL();
+    memcpy(producer_frame, (const void *)fpga.rx_frame, FPGA_RX_FRAME_SIZE);
+    rx_sync_data_start = fpga.rx_sync_data_start_count;
+    rx_sync_echo_start = fpga.rx_sync_echo_start_count;
+    rx_sync_data_header = fpga.rx_sync_data_header_count;
+    rx_sync_echo_header = fpga.rx_sync_echo_header_count;
+    rx_sync_bad_second = fpga.rx_sync_bad_second_count;
+    rx_sync_stray = fpga.rx_sync_stray_count;
+    memcpy(last_echo_frame, (const void *)fpga.last_rx_echo_frame,
+           sizeof(last_echo_frame));
+    rxraw_count = fpga.rx_raw_history_count;
+    if (rxraw_count > FPGA_RX_RAW_HISTORY) {
+        rxraw_count = FPGA_RX_RAW_HISTORY;
+    }
+    for (uint8_t n = 0; n < rxraw_count; n++) {
+        uint8_t idx = (uint8_t)((fpga.rx_raw_history_head +
+                                 FPGA_RX_RAW_HISTORY - 1U - n) %
+                                FPGA_RX_RAW_HISTORY);
+        rxraw_byte[n] = fpga.rx_raw_history[idx];
+        rxraw_tx[n] = fpga.rx_raw_history_tx_count[idx];
+        rxraw_tx_index[n] = fpga.rx_raw_history_tx_index[idx];
+        rxraw_rx_index[n] = fpga.rx_raw_history_rx_index[idx];
+    }
+    memcpy(post_h2_trigger, (const void *)fpga.post_h2_spi3_trigger,
+           sizeof(post_h2_trigger));
+    memcpy(post_h2_rx_len, (const void *)fpga.post_h2_spi3_rx_len,
+           sizeof(post_h2_rx_len));
+    memcpy(post_h2_rx, (const void *)fpga.post_h2_spi3_rx,
+           sizeof(post_h2_rx));
+    h2_rx_00_count = fpga.h2_rx_00_count;
+    h2_rx_ff_count = fpga.h2_rx_ff_count;
+    h2_rx_other_count = fpga.h2_rx_other_count;
+    h2_close_rx_len = fpga.h2_close_rx_len;
+    memcpy(h2_close_rx, (const void *)fpga.h2_close_rx, sizeof(h2_close_rx));
+    first_rx_valid = fpga.meter_first_rx_after_transition_valid;
+    first_rx_armed = fpga.meter_first_rx_after_transition_armed;
+    first_rx_submode = fpga.meter_first_rx_after_transition_submode;
+    first_rx_seq = fpga.meter_first_rx_after_transition_seq;
+    first_rx_config = fpga.meter_first_rx_after_transition_config;
+    first_rx_selector = fpga.meter_first_rx_after_transition_selector;
+    first_rx_apply = fpga.meter_first_rx_after_transition_apply;
+    first_rx_probe = fpga.meter_first_rx_after_transition_probe;
+    first_rx_start = fpga.meter_first_rx_after_transition_start;
+    first_rx_planned_gpio =
+        fpga.meter_first_rx_after_transition_planned_gpio;
+    first_rx_actual_gpio = fpga.meter_first_rx_after_transition_actual_gpio;
+    first_rx_data = fpga.meter_first_rx_after_transition_data;
+    first_rx_tx = fpga.meter_first_rx_after_transition_tx;
+    first_rx_echo = fpga.meter_first_rx_after_transition_echo;
+    first_rx_busy = fpga.meter_first_rx_after_transition_busy;
+    first_rx_discard = fpga.meter_first_rx_after_transition_discard;
+    memcpy(first_rx_frame,
+           (const void *)fpga.meter_first_rx_after_transition_frame,
+           FPGA_RX_FRAME_SIZE);
+    first_rx_h2_bytes = fpga.meter_first_rx_after_transition_h2_bytes;
+    first_rx_h2_done = fpga.meter_first_rx_after_transition_h2_done;
+    first_rx_h2_post_run = fpga.meter_first_rx_after_transition_h2_post_run_count;
+    first_rx_h2_post_mask = fpga.meter_first_rx_after_transition_h2_post_mask;
+    rxh_count = fpga.rx_frame_history_count;
+    if (rxh_count > FPGA_RX_FRAME_HISTORY) rxh_count = FPGA_RX_FRAME_HISTORY;
+    for (uint8_t n = 0; n < rxh_count; n++) {
+        uint8_t idx = (uint8_t)((fpga.rx_frame_history_head +
+                                 FPGA_RX_FRAME_HISTORY - 1U - n) %
+                                FPGA_RX_FRAME_HISTORY);
+        memcpy(rxh_frames[n], (const void *)fpga.rx_frame_history[idx],
+               FPGA_RX_FRAME_SIZE);
+        rxh_data[n] = fpga.rx_history_frame_count[idx];
+        rxh_tx[n] = fpga.rx_history_tx_count[idx];
+        rxh_echo[n] = fpga.rx_history_echo_count[idx];
+        rxh_seq[n] = fpga.rx_history_sequence_count[idx];
+        rxh_seq_sub[n] = fpga.rx_history_sequence_submode[idx];
+        rxh_busy[n] = fpga.rx_history_transition_busy[idx];
+        rxh_discard[n] = fpga.rx_history_discard_remaining[idx];
+    }
+    txh_count = fpga.tx_frame_history_count;
+    if (txh_count > FPGA_TX_FRAME_HISTORY) {
+        txh_count = FPGA_TX_FRAME_HISTORY;
+    }
+    for (uint8_t n = 0; n < txh_count; n++) {
+        uint8_t idx = (uint8_t)((fpga.tx_frame_history_head +
+                                 FPGA_TX_FRAME_HISTORY - 1U - n) %
+                                FPGA_TX_FRAME_HISTORY);
+        memcpy(txh_frames[n], (const void *)fpga.tx_frame_history[idx],
+               FPGA_TX_FRAME_SIZE);
+        txh_tx[n] = fpga.tx_frame_history_tx_count[idx];
+    }
+    txc_count = fpga.tx_control_frame_history_count;
+    if (txc_count > FPGA_TX_FRAME_HISTORY) {
+        txc_count = FPGA_TX_FRAME_HISTORY;
+    }
+    for (uint8_t n = 0; n < txc_count; n++) {
+        uint8_t idx = (uint8_t)((fpga.tx_control_frame_history_head +
+                                 FPGA_TX_FRAME_HISTORY - 1U - n) %
+                                FPGA_TX_FRAME_HISTORY);
+        memcpy(txc_frames[n], (const void *)fpga.tx_control_frame_history[idx],
+               FPGA_TX_FRAME_SIZE);
+        txc_tx[n] = fpga.tx_control_frame_history_tx_count[idx];
+    }
+    mth_count = fpga.meter_transition_history_count;
+    if (mth_count > FPGA_METER_TRANSITION_HISTORY) {
+        mth_count = FPGA_METER_TRANSITION_HISTORY;
+    }
+    for (uint8_t n = 0; n < mth_count; n++) {
+        uint8_t idx = (uint8_t)((fpga.meter_transition_history_head +
+                                 FPGA_METER_TRANSITION_HISTORY - 1U - n) %
+                                FPGA_METER_TRANSITION_HISTORY);
+        mth_submode[n] = fpga.meter_transition_history_submode[idx];
+        mth_config[n] = fpga.meter_transition_history_config[idx];
+        mth_selector[n] = fpga.meter_transition_history_selector[idx];
+        mth_apply[n] = fpga.meter_transition_history_apply[idx];
+        mth_bank[n] = fpga.meter_transition_history_bank[idx];
+        mth_bank_first[n] = fpga.meter_transition_history_bank_first[idx];
+        mth_bank_second[n] = fpga.meter_transition_history_bank_second[idx];
+        mth_probe[n] = fpga.meter_transition_history_probe[idx];
+        mth_start[n] = fpga.meter_transition_history_start[idx];
+        mth_seq[n] = fpga.meter_transition_history_sequence_count[idx];
+        mth_tx_before[n] = fpga.meter_transition_history_tx_before[idx];
+        mth_tx_after[n] = fpga.meter_transition_history_tx_after[idx];
+        mth_frame_before[n] = fpga.meter_transition_history_frame_before[idx];
+        mth_frame_after[n] = fpga.meter_transition_history_frame_after[idx];
+        mth_planned_gpio[n] = fpga.meter_transition_history_planned_gpio[idx];
+        mth_actual_gpio[n] = fpga.meter_transition_history_actual_gpio[idx];
+    }
+    taskEXIT_CRITICAL();
+
+    usb_send_str("=== DMM Trace ===\r\n");
+    usb_debug_printf("trace v=1 snapshot=%u\r\n", have_snap ? 1U : 0U);
+    if (!have_snap) return;
+
+    usb_debug_printf("context mode=%lu startup=%s ui_sub=%u "
+                     "reading_sub=%u live=%u valid=%u updates=%lu\r\n",
+                     (uint32_t)current_mode,
+                     startup_mode_name(startup_mode),
+                     (unsigned)meter_submode,
+                     (unsigned)snap.submode,
+                     live ? 1U : 0U,
+                     snap.valid ? 1U : 0U,
+                     snap.update_count);
+    usb_debug_printf("producer counts tx=%u rx_bytes=%u data=%u echo=%u "
+                     "rx_valid=%u\r\n",
+                     fpga.tx_count,
+                     fpga.rx_byte_count,
+                     fpga.frame_count,
+                     fpga.echo_count,
+                     fpga.rx_frame_valid ? 1U : 0U);
+    usb_debug_printf("producer_last_rx data=%u tx=%u echo=%u seq=%u "
+                     "seq_sub=%u busy=%u discard=%u\r\n",
+                     fpga.last_rx_frame_count,
+                     fpga.last_rx_tx_count,
+                     fpga.last_rx_echo_count,
+                     fpga.last_rx_mode_sequence_count,
+                     (unsigned)fpga.last_rx_mode_sequence_submode,
+                     (unsigned)fpga.last_rx_transition_busy,
+                     (unsigned)fpga.last_rx_discard_remaining);
+    usb_debug_printf("rx_sync data_start=%u echo_start=%u data_hdr=%u "
+                     "echo_hdr=%u bad_second=%u stray=%u "
+                     "data_tx_busy_drop=%u echo_valid=%u echo_bad=%u\r\n",
+                     rx_sync_data_start,
+                     rx_sync_echo_start,
+                     rx_sync_data_header,
+                     rx_sync_echo_header,
+                     rx_sync_bad_second,
+                     rx_sync_stray,
+                     fpga.rx_data_tx_busy_drop_count,
+                     fpga.rx_echo_valid_count,
+                     fpga.rx_echo_bad_count);
+    usb_debug_printf("plan stock_mode=%u raw_low=%02X family=%u mux=%u "
+                     "portc_porte=%u porta_portb=%u settle_ms=%u discard=%u "
+                     "bank=%u/%02X/%02X\r\n",
+                     (unsigned)selectors.function_selector,
+                     (unsigned)selectors.range_selector,
+                     (unsigned)plan.frame_family,
+                     (unsigned)plan.mux_index,
+                     (unsigned)plan.portc_porte_mux,
+                     (unsigned)plan.porta_portb_mux,
+                     (unsigned)plan.settle_ms,
+                     (unsigned)plan.discard_frames,
+                     plan.has_command_bank_prefix ? 1U : 0U,
+                     (unsigned)plan.command_bank_first,
+                     (unsigned)plan.command_bank_second);
+    usb_debug_printf("wire config=%04X has_config=%u selector=%04X "
+                     "apply=%04X has_apply=%u probe=%04X start=%04X "
+                     "seq_count=%u seq_sub=%u\r\n",
+                     (unsigned)plan.config_word,
+                     plan.has_config_word ? 1U : 0U,
+                     (unsigned)plan.selector_word,
+                     (unsigned)plan.apply_word,
+                     plan.has_apply_word ? 1U : 0U,
+                     (unsigned)plan_probe_word,
+                     (unsigned)plan.start_word,
+                     (unsigned)fpga.meter_mode_sequence_count,
+                     (unsigned)fpga.meter_mode_sequence_submode);
+    usb_debug_printf("last_sequence config=%04X selector=%04X apply=%04X "
+                     "probe=%04X start=%04X\r\n",
+                     (unsigned)fpga.meter_mode_config_word,
+                     (unsigned)fpga.meter_mode_selector_word,
+                     (unsigned)fpga.meter_mode_apply_word,
+                     (unsigned)fpga.meter_mode_probe_word,
+                     (unsigned)fpga.meter_mode_start_word);
+    usb_debug_printf("decoded display=%s unit=%s value_i10000=%ld raw=%d "
+                     "dp=%u class=%u reject=%u family=%u/%u extra=%04X\r\n",
+                     snap.valid ? snap.display_str : "---",
+                     (snap.valid && snap.unit_suffix) ? snap.unit_suffix : "",
+                     (long)scaled_i10000(snap.value),
+                     snap.bcd_value,
+                     (unsigned)snap.decimal_pos,
+                     (unsigned)snap.result_class,
+                     (unsigned)snap.reject_reason,
+                     (unsigned)snap.expected_frame_family,
+                     (unsigned)snap.observed_frame_family,
+                     (unsigned)extra);
+    usb_debug_printf("stock_fsm mode=%u variant=%u format=%u dc_state=%u "
+                     "display_cmd=%u unit_index=%u composite=%u\r\n",
+                     (unsigned)snap.stock_mode,
+                     (unsigned)snap.stock_variant,
+                     (unsigned)snap.stock_format,
+                     (unsigned)snap.stock_dc_state,
+                     (unsigned)snap.stock_display_cmd,
+                     (unsigned)snap.stock_unit_index,
+                     (unsigned)snap.stock_composite_index);
+    usb_debug_printf("transition busy=%u discard_now=%u skip_count=%lu\r\n",
+                     fpga_meter_transition_busy() ? 1U : 0U,
+                     (unsigned)meter_frame_discard_count,
+                     meter_transition_frame_skip_count);
+    print_frame_hex("producer_frame=", producer_frame);
+    print_frame_hex("parsed_frame=", snap.dbg_frame);
+    usb_debug_printf("first_transition_rx valid=%u armed=%u sub=%u seq=%u "
+                     "config=%04X selector=%04X apply=%04X probe=%04X "
+                     "start=%04X "
+                     "planned_gpio=%03X actual_gpio=%03X data=%u tx=%u "
+                     "echo=%u busy=%u discard=%u h2_bytes=%lu h2_done=%u "
+                     "h2_post_run=%u h2_post_mask=%02X frame=",
+                     (unsigned)first_rx_valid,
+                     (unsigned)first_rx_armed,
+                     (unsigned)first_rx_submode,
+                     first_rx_seq,
+                     first_rx_config,
+                     first_rx_selector,
+                     first_rx_apply,
+                     first_rx_probe,
+                     first_rx_start,
+                     first_rx_planned_gpio,
+                     first_rx_actual_gpio,
+                     first_rx_data,
+                     first_rx_tx,
+                     first_rx_echo,
+                     (unsigned)first_rx_busy,
+                     (unsigned)first_rx_discard,
+                     first_rx_h2_bytes,
+                     (unsigned)first_rx_h2_done,
+                     (unsigned)first_rx_h2_post_run,
+                     (unsigned)first_rx_h2_post_mask);
+    print_volatile_frame_inline(first_rx_frame);
+    usb_send_str("\r\n");
+    usb_send_str("last_echo_frame=");
+    for (uint8_t i = 0; i < FPGA_RX_ECHO_FRAME_SIZE; i++) {
+        usb_debug_printf("%s%02X", i == 0 ? "" : " ",
+                         (unsigned)last_echo_frame[i]);
+    }
+    usb_send_str("\r\n");
+    usb_send_str("rx_raw newest_first:\r\n");
+    for (uint8_t n = 0; n < rxraw_count; n++) {
+        usb_debug_printf("rxraw n=%u tx=%u txi=%u rxi=%u byte=%02X\r\n",
+                         (unsigned)n,
+                         rxraw_tx[n],
+                         (unsigned)rxraw_tx_index[n],
+                         (unsigned)rxraw_rx_index[n],
+                         (unsigned)rxraw_byte[n]);
+    }
+    usb_send_str("transition_history newest_first:\r\n");
+    for (uint8_t n = 0; n < mth_count; n++) {
+        usb_debug_printf("mth n=%u sub=%u seq=%u config=%04X selector=%04X "
+                         "apply=%04X bank=%u/%02X/%02X probe=%04X "
+                         "start=%04X tx=%u..%u data=%u..%u planned_gpio=%03X "
+                         "actual_gpio=%03X\r\n",
+                         (unsigned)n,
+                         (unsigned)mth_submode[n],
+                         mth_seq[n],
+                         mth_config[n],
+                         mth_selector[n],
+                         mth_apply[n],
+                         (unsigned)mth_bank[n],
+                         (unsigned)mth_bank_first[n],
+                         (unsigned)mth_bank_second[n],
+                         mth_probe[n],
+                         mth_start[n],
+                         mth_tx_before[n],
+                         mth_tx_after[n],
+                         mth_frame_before[n],
+                         mth_frame_after[n],
+                         mth_planned_gpio[n],
+                         mth_actual_gpio[n]);
+    }
+    usb_send_str("producer_history newest_first:\r\n");
+    for (uint8_t n = 0; n < rxh_count; n++) {
+        usb_debug_printf("rxh n=%u data=%u tx=%u echo=%u seq=%u seq_sub=%u "
+                         "busy=%u discard=%u frame=",
+                         (unsigned)n,
+                         rxh_data[n],
+                         rxh_tx[n],
+                         rxh_echo[n],
+                         rxh_seq[n],
+                         (unsigned)rxh_seq_sub[n],
+                         (unsigned)rxh_busy[n],
+                         (unsigned)rxh_discard[n]);
+        print_volatile_frame_inline(rxh_frames[n]);
+        usb_send_str("\r\n");
+    }
+    usb_send_str("tx_history newest_first:\r\n");
+    for (uint8_t n = 0; n < txh_count; n++) {
+        usb_debug_printf("txh n=%u tx=%u frame=", (unsigned)n, txh_tx[n]);
+        print_tx_frame_inline(txh_frames[n]);
+        usb_send_str("\r\n");
+    }
+    usb_send_str("tx_control_history newest_first:\r\n");
+    for (uint8_t n = 0; n < txc_count; n++) {
+        usb_debug_printf("txc n=%u tx=%u frame=", (unsigned)n, txc_tx[n]);
+        print_tx_frame_inline(txc_frames[n]);
+        usb_send_str("\r\n");
+    }
+    usb_debug_printf("gpio control PC6=%u PB11=%u PC11=%u PC7=%u PC0=%u\r\n",
+                     gpio_level(GPIOC, 6),
+                     gpio_level(GPIOB, 11),
+                     gpio_level(GPIOC, 11),
+                     gpio_level(GPIOC, 7),
+                     gpio_level(GPIOC, 0));
+    usb_debug_printf("gpio_frontend PC12=%u PE4=%u PE5=%u PE6=%u PA15=%u "
+                     "PA10=%u PB10=%u PB9=%u PA6=%u\r\n",
+                     gpio_level(GPIOC, 12),
+                     gpio_level(GPIOE, 4),
+                     gpio_level(GPIOE, 5),
+                     gpio_level(GPIOE, 6),
+                     gpio_level(GPIOA, 15),
+                     gpio_level(GPIOA, 10),
+                     gpio_level(GPIOB, 10),
+                     gpio_level(GPIOB, 9),
+                     gpio_level(GPIOA, 6));
+    uint16_t h2_close_nonff = count_non_ff_bytes(h2_close_rx, h2_close_rx_len);
+    uint16_t post_h2_nonff =
+        count_post_h2_non_ff_snapshot(post_h2_rx_len, post_h2_rx);
+
+    usb_debug_printf("h2 bytes=%lu done=%u post_enq=%u post_run=%u "
+                     "post_drop=%u post_mask=%02X post_rx_nonff=%u "
+                     "spi_ok=%u spi_to=%u rx00=%lu rxff=%lu rxother=%lu "
+                     "rx_nonff=%lu close_len=%u close_nonff=%u\r\n",
+                     fpga.h2_bytes_sent,
+                     fpga.h2_upload_done ? 1U : 0U,
+                     (unsigned)fpga.post_h2_spi3_boot_enqueued,
+                     (unsigned)fpga.post_h2_spi3_boot_run_count,
+                     (unsigned)fpga.post_h2_spi3_boot_dropped,
+                     (unsigned)fpga.post_h2_spi3_boot_mask,
+                     (unsigned)post_h2_nonff,
+                     fpga.spi3_ok_count,
+                     fpga.spi3_total_timeouts,
+                     h2_rx_00_count,
+                     h2_rx_ff_count,
+                     h2_rx_other_count,
+                     h2_rx_00_count + h2_rx_other_count,
+                     (unsigned)h2_close_rx_len,
+                     (unsigned)h2_close_nonff);
+    usb_debug_printf("factory_cal loaded=%u ch_size=%u channels=%u\r\n",
+                     (factory_cal != NULL && factory_cal->loaded) ? 1U : 0U,
+                     (unsigned)FACTORY_CAL_CHANNEL_SIZE,
+                     (unsigned)FACTORY_CAL_NUM_CHANNELS);
+    usb_send_str("h2_close_rx bytes=");
+    for (uint8_t i = 0; i < h2_close_rx_len && i < sizeof(h2_close_rx); i++) {
+        usb_debug_printf("%s%02X", i == 0 ? "" : " ",
+                         (unsigned)h2_close_rx[i]);
+    }
+    usb_send_str("\r\n");
+    for (uint8_t i = 0; i < FPGA_POST_H2_TRIGGER_HISTORY; i++) {
+        uint8_t len = post_h2_rx_len[i];
+        uint8_t shown = len;
+        if (shown > FPGA_POST_H2_RX_HISTORY) shown = FPGA_POST_H2_RX_HISTORY;
+        usb_debug_printf("h2_post_rx n=%u trigger=%02X len=%u bytes=",
+                         (unsigned)i,
+                         (unsigned)post_h2_trigger[i],
+                         (unsigned)len);
+        for (uint8_t j = 0; j < shown; j++) {
+            usb_debug_printf("%s%02X", j == 0 ? "" : " ",
+                             (unsigned)post_h2_rx[i][j]);
+        }
+        if (len > FPGA_POST_H2_RX_HISTORY) usb_send_str(" ...");
+        usb_send_str("\r\n");
+    }
+}
+
+static void cmd_meter_frontend(void)
+{
+    uint16_t extra = meter_dbg_extra();
+    fpga_meter_selector_t selectors = fpga_meter_expected_selectors(meter_submode);
+    fpga_meter_transition_plan_t plan =
+        fpga_meter_transition_plan_for_submode(meter_submode);
+    uint8_t tx_count = fpga.tx_cmd_history_count;
+
+    usb_send_str("=== DMM Frontend ===\r\n");
+    usb_debug_printf("mode=%lu startup=%s meter_submode=%u (%s) reading_submode=%u valid=%u class=%u updates=%lu\r\n",
+                     (uint32_t)current_mode,
+                     startup_mode_name(startup_mode),
+                     (unsigned)meter_submode,
+                     meter_submode_name(meter_submode),
+                     (unsigned)meter_reading.submode,
+                     meter_reading.valid ? 1U : 0U,
+                     (unsigned)meter_reading.result_class,
+                     meter_reading.update_count);
+    usb_debug_printf("expected_selector stock_mode=%u raw_low=%02X voltage_function_axis=%u\r\n",
+                     (unsigned)selectors.function_selector,
+                     (unsigned)selectors.range_selector,
+                     selectors.voltage_function_axis ? 1U : 0U);
+    usb_debug_printf("transition_plan family=%u mux=%u portc_porte_mux=%u porta_portb_mux=%u discard=%u settle_ms=%u selector=%04X apply=%04X has_apply=%u\r\n",
+                     (unsigned)plan.frame_family,
+                     (unsigned)plan.mux_index,
+                     (unsigned)plan.portc_porte_mux,
+                     (unsigned)plan.porta_portb_mux,
+                     (unsigned)plan.discard_frames,
+                     (unsigned)plan.settle_ms,
+                     (unsigned)plan.selector_word,
+                     (unsigned)plan.apply_word,
+                     plan.has_apply_word ? 1U : 0U);
+    usb_debug_printf("mode_sequence count=%u submode=%u selector=%04X apply=%04X probe=%04X start=%04X\r\n",
+                     (unsigned)fpga.meter_mode_sequence_count,
+                     (unsigned)fpga.meter_mode_sequence_submode,
+                     (unsigned)fpga.meter_mode_selector_word,
+                     (unsigned)fpga.meter_mode_apply_word,
+                     (unsigned)fpga.meter_mode_probe_word,
+                     (unsigned)fpga.meter_mode_start_word);
+    usb_debug_printf("display=%s unit=%s bcd_value=%d dp=%u f6=%02X f7=%02X f8=%02X f9=%02X extra=%04X aux_freq_i10=%ld beep=%u discard=%u trans_skips=%lu\r\n",
+                     meter_reading.valid ? meter_reading.display_str : "---",
+                     (meter_reading.valid && meter_reading.unit_suffix) ? meter_reading.unit_suffix : "",
+                     meter_reading.bcd_value,
+                     (unsigned)meter_reading.decimal_pos,
+                     (unsigned)meter_reading.dbg_frame[6],
+                     (unsigned)meter_reading.dbg_frame[7],
+                     (unsigned)meter_reading.dbg_frame[8],
+                     (unsigned)meter_reading.dbg_frame[9],
+                     (unsigned)extra,
+                     (long)scaled_i100(meter_reading.aux_freq_hz) / 10L,
+                     meter_reading.continuity_beep ? 1U : 0U,
+                     (unsigned)meter_frame_discard_count,
+                     meter_transition_frame_skip_count);
+    usb_debug_printf("frame_family expected=%u observed=%u reject=%u\r\n",
+                     (unsigned)meter_reading.expected_frame_family,
+                     (unsigned)meter_reading.observed_frame_family,
+                     (unsigned)meter_reading.reject_reason);
+    usb_send_str("tx_recent:");
+    for (uint8_t i = 0; i < tx_count; i++) {
+        uint8_t idx = (uint8_t)((fpga.tx_cmd_history_head + 16U - tx_count + i) & 0x0FU);
+        usb_debug_printf(" %02X%02X",
+                         (unsigned)fpga.tx_cmd_hi_history[idx],
+                         (unsigned)fpga.tx_cmd_lo_history[idx]);
+    }
+    usb_send_str("\r\n");
+    usb_print_last_tx_frame();
+    usb_print_recent_tx_frames();
+    usb_debug_printf("control PC6_spi=%u PB11_active=%u PC11_meter_mux=%u PC7_probe=%u PC0_ready=%u probe_tail_override=%d\r\n",
+                     gpio_level(GPIOC, 6),
+                     gpio_level(GPIOB, 11),
+                     gpio_level(GPIOC, 11),
+                     gpio_level(GPIOC, 7),
+                     gpio_level(GPIOC, 0),
+                     (int)fpga_meter_probe_tail_override);
+    usb_debug_printf("port_c_e PC12_route=%u PE4=%u PE5=%u PE6=%u\r\n",
+                     gpio_level(GPIOC, 12),
+                     gpio_level(GPIOE, 4),
+                     gpio_level(GPIOE, 5),
+                     gpio_level(GPIOE, 6));
+    usb_debug_printf("port_a_b PA15=%u PA10=%u PB10=%u PB9=%u PA6=%u\r\n",
+                     gpio_level(GPIOA, 15),
+                     gpio_level(GPIOA, 10),
+                     gpio_level(GPIOB, 10),
+                     gpio_level(GPIOB, 9),
+                     gpio_level(GPIOA, 6));
+}
+
+static void cmd_meter_probe_tail(const char *args)
+{
+    while (args != NULL && (*args == ' ' || *args == '\t')) args++;
+
+    if (args == NULL || *args == '\0') {
+        if (fpga_meter_probe_tail_override < 0) {
+            usb_debug_printf("meter probe-tail=auto PC7=%u live=%02X\r\n",
+                             gpio_level(GPIOC, 7),
+                             gpio_level(GPIOC, 7) ? 0x07U : FPGA_CMD_METER_NOPROBE);
+        } else {
+            usb_debug_printf("meter probe-tail=%02X override=1 PC7=%u\r\n",
+                             (unsigned)fpga_meter_probe_tail_override,
+                             gpio_level(GPIOC, 7));
+        }
+        return;
+    }
+
+    if (strcmp(args, "auto") == 0) {
+        fpga_meter_probe_tail_override = -1;
+        usb_send_str("meter probe-tail=auto\r\n");
+    } else if (strcmp(args, "07") == 0 || strcmp(args, "7") == 0) {
+        fpga_meter_probe_tail_override = 0x07;
+        usb_send_str("meter probe-tail=07\r\n");
+    } else if (strcmp(args, "0a") == 0 || strcmp(args, "0A") == 0 ||
+               strcmp(args, "10") == 0) {
+        fpga_meter_probe_tail_override = FPGA_CMD_METER_NOPROBE;
+        usb_send_str("meter probe-tail=0A\r\n");
+    } else {
+        usb_send_str("Usage: meter probe-tail [auto|07|0a]\r\n");
+    }
+}
+
+static void print_meter_mux_stream_line(uint32_t index)
+{
+    meter_reading_t snap;
+    bool have_snap = meter_data_snapshot(&snap);
+    bool live = current_mode == MODE_MULTIMETER &&
+                have_snap &&
+                snap.valid &&
+                snap.submode == meter_submode;
+    fpga_meter_selector_t selectors = fpga_meter_expected_selectors(meter_submode);
+    fpga_meter_transition_plan_t plan =
+        fpga_meter_transition_plan_for_submode(meter_submode);
+
+    usb_debug_printf("t=%lu upd=%lu ui_sub=%u rd_sub=%u live=%u cls=%u "
+                     "stock_mode=%u raw_low=%02X family=%u mux=%u "
+                     "portc_porte=%u porta_portb=%u settle=%u ",
+                     index,
+                     have_snap ? snap.update_count : 0UL,
+                     (unsigned)meter_submode,
+                     have_snap ? (unsigned)snap.submode : 0U,
+                     live ? 1U : 0U,
+                     have_snap ? (unsigned)snap.result_class : 0U,
+                     (unsigned)selectors.function_selector,
+                     (unsigned)selectors.range_selector,
+                     (unsigned)plan.frame_family,
+                     (unsigned)plan.mux_index,
+                     (unsigned)plan.portc_porte_mux,
+                     (unsigned)plan.porta_portb_mux,
+                     (unsigned)plan.settle_ms);
+    usb_debug_printf("obs_family=%u reject=%u seq=%u seq_sub=%u "
+                     "seq_word=%04X seq_apply=%04X tx=%u data=%u echo=%u ",
+                     have_snap ? (unsigned)snap.observed_frame_family : 0U,
+                     have_snap ? (unsigned)snap.reject_reason : 0U,
+                     (unsigned)fpga.meter_mode_sequence_count,
+                     (unsigned)fpga.meter_mode_sequence_submode,
+                     (unsigned)fpga.meter_mode_selector_word,
+                     (unsigned)fpga.meter_mode_apply_word,
+                     fpga.tx_count,
+                     fpga.frame_count,
+                     fpga.echo_count);
+    usb_debug_printf("disp=%s unit=%s raw=%d dp=%u f6=%02X f7=%02X "
+                     "f8=%02X f9=%02X extra=%04X discard=%u ",
+                     (have_snap && snap.valid) ? snap.display_str : "---",
+                     (have_snap && snap.valid && snap.unit_suffix) ? snap.unit_suffix : "",
+                     have_snap ? snap.bcd_value : 0,
+                     have_snap ? (unsigned)snap.decimal_pos : 0U,
+                     have_snap ? (unsigned)snap.dbg_frame[6] : 0U,
+                     have_snap ? (unsigned)snap.dbg_frame[7] : 0U,
+                     have_snap ? (unsigned)snap.dbg_frame[8] : 0U,
+                     have_snap ? (unsigned)snap.dbg_frame[9] : 0U,
+                     (unsigned)meter_dbg_extra(),
+                     (unsigned)meter_frame_discard_count);
+    usb_debug_printf("PC6=%u PB11=%u PC11=%u PC12=%u PE4=%u PE5=%u PE6=%u "
+                     "PA15=%u PA10=%u PB10=%u PB9=%u PA6=%u frame=",
+                     gpio_level(GPIOC, 6),
+                     gpio_level(GPIOB, 11),
+                     gpio_level(GPIOC, 11),
+                     gpio_level(GPIOC, 12),
+                     gpio_level(GPIOE, 4),
+                     gpio_level(GPIOE, 5),
+                     gpio_level(GPIOE, 6),
+                     gpio_level(GPIOA, 15),
+                     gpio_level(GPIOA, 10),
+                     gpio_level(GPIOB, 10),
+                     gpio_level(GPIOB, 9),
+                     gpio_level(GPIOA, 6));
+    if (have_snap) {
+        print_volatile_frame_inline(snap.dbg_frame);
+    }
+    usb_send_str("\r\n");
+}
+
+static void cmd_meter_mux_stream(const char *args)
+{
+    uint32_t count = 16;
+    uint32_t delay_ms = 250;
+    uint32_t last_update = 0xFFFFFFFFu;
+    const char *usage = "Usage: meter mux-stream [count<=200] [delay_ms<=5000]\r\n";
+
+    if (parse_stream_args(args, &count, &delay_ms, usage) != 0) return;
+
+    usb_debug_printf("mux-stream count=%lu delay_ms=%lu\r\n", count, delay_ms);
+    for (uint32_t i = 0; i < count; i++) {
+        if (meter_reading.update_count != last_update) {
+            last_update = meter_reading.update_count;
+            print_meter_mux_stream_line(i);
+        }
+        if (delay_ms > 0) vTaskDelay(pdMS_TO_TICKS(delay_ms));
+    }
+}
+
+static void cmd_meter_mux_arms(const char *args)
+{
+    uint32_t portc_porte = 0;
+    uint32_t porta_portb = 0;
+    uint32_t settle_ms = 300;
+    uint16_t planned_gpio = 0;
+    uint16_t actual_gpio = 0;
+    const char *usage =
+        "Usage: meter mux-arms <portc_porte 0-9> <porta_portb 0-9> [settle_ms<=5000]\r\n";
+
+    if (parse_mux_arm_args(args, &portc_porte, &porta_portb,
+                           &settle_ms, usage) != 0) {
+        return;
+    }
+    if (current_mode != MODE_MULTIMETER) {
+        usb_send_str("ERR: switch to meter mode before applying DMM mux arms\r\n");
+        return;
+    }
+    if (!fpga_debug_apply_meter_mux_arms((uint8_t)portc_porte,
+                                         (uint8_t)porta_portb,
+                                         &planned_gpio,
+                                         &actual_gpio)) {
+        usb_send_str(usage);
+        return;
+    }
+
+    vTaskDelay(pdMS_TO_TICKS(settle_ms));
+    (void)fpga_send_cmd(0x05, FPGA_CMD_METER_START);
+    vTaskDelay(pdMS_TO_TICKS(350));
+
+    usb_send_str("=== DMM Mux Arms Trace ===\r\n");
+    usb_debug_printf("mux_arms portc_porte=%lu porta_portb=%lu settle_ms=%lu "
+                     "planned_gpio=%03X actual_gpio=%03X\r\n",
+                     portc_porte,
+                     porta_portb,
+                     settle_ms,
+                     (unsigned)planned_gpio,
+                     (unsigned)actual_gpio);
+    cmd_meter_trace();
+}
+
+static void cmd_meter_boot_sequence(const char *args)
+{
+    uint32_t settle_ms = 300;
+    uint16_t planned_gpio = 0;
+    uint16_t actual_gpio = 0;
+    const char *usage = "Usage: meter boot-sequence [settle_ms<=5000]\r\n";
+
+    if (args != NULL && *args != '\0') {
+        if (parse_int(args, &settle_ms) != 0 || settle_ms > 5000U) {
+            usb_send_str(usage);
+            return;
+        }
+    }
+    if (current_mode != MODE_MULTIMETER) {
+        usb_send_str("ERR: switch to meter mode before replaying DMM boot order\r\n");
+        return;
+    }
+    if (!fpga_debug_send_meter_boot_order(meter_submode,
+                                          settle_ms,
+                                          &planned_gpio,
+                                          &actual_gpio)) {
+        usb_send_str(usage);
+        return;
+    }
+
+    vTaskDelay(pdMS_TO_TICKS(settle_ms));
+    (void)fpga_send_cmd(0x05, FPGA_CMD_METER_START);
+    vTaskDelay(pdMS_TO_TICKS(350));
+
+    usb_send_str("=== DMM Boot-Order Trace ===\r\n");
+    usb_debug_printf("boot_sequence submode=%u (%s) settle_ms=%lu "
+                     "order=0508,0509,probe,selector planned_gpio=%03X actual_gpio=%03X\r\n",
+                     (unsigned)meter_submode,
+                     meter_submode_name(meter_submode),
+                     settle_ms,
+                     (unsigned)planned_gpio,
+                     (unsigned)actual_gpio);
+    cmd_meter_trace();
+}
+
+static void cmd_meter_pc11_timing(const char *args)
+{
+    uint32_t low_ms = 250;
+    uint32_t high_ms = 250;
+    uint16_t planned_gpio = 0;
+    uint16_t actual_gpio = 0;
+    const char *usage = "Usage: meter pc11-timing [low_ms<=5000] [high_ms<=5000]\r\n";
+
+    if (args != NULL && *args != '\0') {
+        char buf[48];
+        char *saveptr = NULL;
+        char *tok;
+
+        strncpy(buf, args, sizeof(buf) - 1);
+        buf[sizeof(buf) - 1] = '\0';
+        tok = strtok_r(buf, " \t", &saveptr);
+        if (tok != NULL &&
+            (parse_int(tok, &low_ms) != 0 || low_ms > 5000U)) {
+            usb_send_str(usage);
+            return;
+        }
+        tok = strtok_r(NULL, " \t", &saveptr);
+        if (tok != NULL &&
+            (parse_int(tok, &high_ms) != 0 || high_ms > 5000U)) {
+            usb_send_str(usage);
+            return;
+        }
+        if (strtok_r(NULL, " \t", &saveptr) != NULL) {
+            usb_send_str(usage);
+            return;
+        }
+    }
+    if (current_mode != MODE_MULTIMETER) {
+        usb_send_str("ERR: switch to meter mode before probing DMM PC11 timing\r\n");
+        return;
+    }
+    if (!fpga_debug_send_meter_pc11_timing(meter_submode,
+                                           low_ms,
+                                           high_ms,
+                                           &planned_gpio,
+                                           &actual_gpio)) {
+        usb_send_str(usage);
+        return;
+    }
+
+    vTaskDelay(pdMS_TO_TICKS(high_ms));
+    (void)fpga_send_cmd(0x05, FPGA_CMD_METER_START);
+    vTaskDelay(pdMS_TO_TICKS(350));
+
+    usb_send_str("=== DMM PC11 Timing Trace ===\r\n");
+    usb_debug_printf("pc11_timing submode=%u (%s) low_ms=%lu high_ms=%lu "
+                     "planned_gpio=%03X actual_gpio=%03X\r\n",
+                     (unsigned)meter_submode,
+                     meter_submode_name(meter_submode),
+                     low_ms,
+                     high_ms,
+                     (unsigned)planned_gpio,
+                     (unsigned)actual_gpio);
+    cmd_meter_trace();
+}
+
+static void cmd_meter_stream(const char *args)
+{
+    uint32_t count = 16;
+    uint32_t delay_ms = 250;
+    uint32_t last_update = 0xFFFFFFFFu;
+    const char *usage = "Usage: meter stream [count<=200] [delay_ms<=5000]\r\n";
+
+    if (parse_stream_args(args, &count, &delay_ms, usage) != 0) return;
+
+    usb_debug_printf("stream count=%lu delay_ms=%lu\r\n", count, delay_ms);
+    for (uint32_t i = 0; i < count; i++) {
+        meter_reading_t snap;
+
+        if (meter_data_snapshot(&snap) &&
+            snap.update_count != last_update) {
+            last_update = snap.update_count;
+            uint16_t extra = ((uint16_t)snap.dbg_frame[10] << 8) |
+                             snap.dbg_frame[11];
+            usb_debug_printf("%lu upd=%lu sub=%u cls=%u family=%u/%u reject=%u "
+                             "raw=%d dp=%u unit=%s disp=%s "
+                             "f6=%02X f7=%02X f8=%02X f9=%02X extra=%04X aux_freq_i10=%ld wave=%lu beep=%u\r\n",
+                             i,
+                             snap.update_count,
+                             (unsigned)snap.submode,
+                             (unsigned)snap.result_class,
+                             (unsigned)snap.expected_frame_family,
+                             (unsigned)snap.observed_frame_family,
+                             (unsigned)snap.reject_reason,
+                             snap.bcd_value,
+                             (unsigned)snap.decimal_pos,
+                             snap.unit_suffix ? snap.unit_suffix : "",
+                             snap.display_str,
+                             (unsigned)snap.dbg_frame[6],
+                             (unsigned)snap.dbg_frame[7],
+                             (unsigned)snap.dbg_frame[8],
+                             (unsigned)snap.dbg_frame[9],
+                             (unsigned)extra,
+                             (long)scaled_i100(snap.aux_freq_hz) / 10L,
+                             meter_voltage_wave_sample_count(),
+                             snap.continuity_beep ? 1U : 0U);
+        }
+        if (delay_ms > 0) vTaskDelay(pdMS_TO_TICKS(delay_ms));
+    }
+}
+
+static void cmd_meter_adc_snapshot(void)
+{
+    meter_voltage_wave_snapshot(&usb_meter_wave_snap, METER_VOLTAGE_WAVE_RENDER_POINTS,
+                                meter_reading.aux_freq_hz);
+
+    usb_send_str("=== DMM ADC Snapshot ===\r\n");
+    usb_debug_printf("mode=%lu meter_submode=%u (%s) wave_samples=%lu\r\n",
+                     (uint32_t)current_mode,
+                     (unsigned)meter_submode,
+                     meter_submode_name(meter_submode),
+                     meter_voltage_wave_sample_count());
+    usb_debug_printf("sampler=%s spi_path=%s selector_override=%d last_preacq=%02X last_selector=%02X "
+                     "preacq_override=%d last_preacq_rx=%02X last_sample=%02X min_sample=%02X max_sample=%02X samples=%lu ff_samples=%lu "
+                     "zero_samples=%lu enq_attempts=%lu enq_success=%lu enq_drops=%lu\r\n",
+                     fpga_meter_adc_sampler_enabled ? "on" : "off",
+                     fpga_meter_adc_use_preacq ? "preacq" : "direct",
+                     (int)fpga_meter_adc_selector_override,
+                     (unsigned)fpga_meter_adc_last_preacq,
+                     (unsigned)fpga_meter_adc_last_selector,
+                     (int)fpga_meter_adc_preacq_override,
+                     (unsigned)fpga_meter_adc_last_preacq_rx,
+                     (unsigned)fpga_meter_adc_last_sample,
+                     (unsigned)fpga_meter_adc_min_sample,
+                     (unsigned)fpga_meter_adc_max_sample,
+                     fpga_meter_adc_samples,
+                     fpga_meter_adc_ff_samples,
+                     fpga_meter_adc_zero_samples,
+                     fpga_meter_adc_enqueue_attempts,
+                     fpga_meter_adc_enqueue_success,
+                     fpga_meter_adc_enqueue_drops);
+    usb_debug_printf("adc_diag trans=%lu not_v=%lu gen=%lu last_gen=%lu first=%02X busy=%u discard=%u probing=%u to=%lu total_to=%lu ch=%u\r\n",
+                     fpga_meter_adc_transition_skips,
+                     fpga_meter_adc_not_voltage_skips,
+                     fpga_meter_adc_reset_generation,
+                     fpga_meter_adc_last_reset_generation,
+                     (unsigned)fpga_meter_adc_first_sample_after_reset,
+                     fpga_meter_transition_busy() ? 1U : 0U,
+                     (unsigned)meter_frame_discard_count,
+                     fpga.spi3_probing ? 1U : 0U,
+                     (unsigned long)fpga.spi3_timeout_count,
+                     (unsigned long)fpga.spi3_total_timeouts,
+                     (unsigned)active_channel);
+    usb_debug_printf("snapshot_count=%u raw_last=%u raw_min=%u raw_max=%u p2p=%u synced=%u\r\n",
+                     (unsigned)usb_meter_wave_snap.count,
+                     (unsigned)usb_meter_wave_snap.raw_last,
+                     (unsigned)usb_meter_wave_snap.raw_min,
+                     (unsigned)usb_meter_wave_snap.raw_max,
+                     (unsigned)usb_meter_wave_snap.peak_to_peak_raw,
+                     usb_meter_wave_snap.synced ? 1U : 0U);
+    print_i100("mean_raw=", usb_meter_wave_snap.mean_raw, "");
+    print_i100("rms_raw=", usb_meter_wave_snap.rms_raw, "");
+    print_i100("freq=", usb_meter_wave_snap.freq_hz, " Hz");
+    usb_debug_printf("dmm_display=%s dmm_unit=%s dmm_class=%u dmm_updates=%lu dmm_valid=%u\r\n",
+                     meter_reading.valid ? meter_reading.display_str : "---",
+                     (meter_reading.valid && meter_reading.unit_suffix) ? meter_reading.unit_suffix : "",
+                     (unsigned)meter_reading.result_class,
+                     meter_reading.update_count,
+                     meter_reading.valid ? 1U : 0U);
+}
+
+static void cmd_ui_dump(void)
+{
+    meter_autoselect_status_t auto_st;
+    meter_autoselect_get_status(&auto_st);
+
+    usb_debug_printf("mode=%lu startup=%s meter_submode=%u (%s) layout=%u (%s) "
+                     "settings_depth=%d selected=%d sub_selected=%d\r\n",
+                     (uint32_t)current_mode,
+                     startup_mode_name(startup_mode),
+                     (unsigned)meter_submode,
+                     meter_submode_name(meter_submode),
+                     (unsigned)meter_layout,
+                     meter_layout_name(meter_layout),
+                     (int)settings_depth,
+                     (int)settings_selected,
+                     (int)settings_sub_selected);
+    usb_debug_printf("meter_ui draws=%lu full_clears=%lu partial_clears=%lu draw_us=%lu max_draw_us=%lu over_budget=%lu rendered_update=%lu last_full=%u live=%u continuity_flash=%u reading_valid=%u "
+                     "reading_submode=%u updates=%lu display_updates=%lu\r\n",
+                     meter_screen_draw_count,
+                     meter_screen_full_clear_count,
+                     meter_screen_partial_clear_count,
+                     meter_screen_last_draw_us,
+                     meter_screen_max_draw_us,
+                     meter_screen_over_budget_count,
+                     meter_screen_last_reading_display_update,
+                     (unsigned)meter_screen_last_full_clear,
+                     (unsigned)meter_screen_last_live,
+                     (unsigned)meter_screen_last_continuity_flash,
+                     meter_reading.valid ? 1U : 0U,
+                     (unsigned)meter_reading.submode,
+                     meter_reading.update_count,
+                     meter_reading.display_update_count);
+    usb_debug_printf("autoselect state=%s current=%u (%s) index=%u/%u best=%u (%s) best_score=%u last_score=%u cancel=%u\r\n",
+                     meter_autoselect_state_name(auto_st.state),
+                     (unsigned)auto_st.current_submode,
+                     meter_submode_name(auto_st.current_submode),
+                     (unsigned)auto_st.current_index,
+                     (unsigned)auto_st.candidate_count,
+                     (unsigned)auto_st.best_submode,
+                     meter_submode_name(auto_st.best_submode),
+                     (unsigned)auto_st.best_score,
+                     (unsigned)auto_st.last_score,
+                     auto_st.cancel_pending ? 1U : 0U);
+}
+
+static void cmd_meter_wave(void)
+{
+    extern volatile device_mode_t current_mode;
+    extern volatile uint8_t meter_submode;
+
+    uint32_t before = meter_voltage_wave_sample_count();
+    vTaskDelay(pdMS_TO_TICKS(250));
+    uint32_t after = meter_voltage_wave_sample_count();
+
+    meter_voltage_wave_snapshot(&usb_meter_wave_snap, METER_VOLTAGE_WAVE_RENDER_POINTS, 0.0f);
+
+    usb_send_str("=== SPI3 Meter ADC Probe ===\r\n");
+    usb_debug_printf("mode=%lu meter_submode=%u (%s)\r\n",
+                     (uint32_t)current_mode,
+                     (unsigned)meter_submode,
+                     meter_submode_name(meter_submode));
+    usb_debug_printf("samples_total=%lu delta_250ms=%lu approx_rate=%lu Hz\r\n",
+                     after, after - before, (after - before) * 4U);
+    usb_debug_printf("sampler=%s spi_path=%s enq=%lu ok=%lu drop=%lu samples=%lu ff=%lu zero=%lu "
+                     "selector_mode=%d preacq_mode=%d last_pre=%02X pre_rx=%02X selector=%02X last=%02X min=%02X max=%02X\r\n",
+                     fpga_meter_adc_sampler_enabled ? "on" : "off",
+                     fpga_meter_adc_use_preacq ? "preacq" : "direct",
+                     fpga_meter_adc_enqueue_attempts,
+                     fpga_meter_adc_enqueue_success,
+                     fpga_meter_adc_enqueue_drops,
+                     fpga_meter_adc_samples,
+                     fpga_meter_adc_ff_samples,
+                     fpga_meter_adc_zero_samples,
+                     (int)fpga_meter_adc_selector_override,
+                     (int)fpga_meter_adc_preacq_override,
+                     (unsigned)fpga_meter_adc_last_preacq,
+                     (unsigned)fpga_meter_adc_last_preacq_rx,
+                     (unsigned)fpga_meter_adc_last_selector,
+                     (unsigned)fpga_meter_adc_last_sample,
+                     (unsigned)fpga_meter_adc_min_sample,
+                     (unsigned)fpga_meter_adc_max_sample);
+    usb_debug_printf("adc_diag trans=%lu not_v=%lu gen=%lu last_gen=%lu first=%02X busy=%u discard=%u probing=%u to=%lu total_to=%lu ch=%u\r\n",
+                     fpga_meter_adc_transition_skips,
+                     fpga_meter_adc_not_voltage_skips,
+                     fpga_meter_adc_reset_generation,
+                     fpga_meter_adc_last_reset_generation,
+                     (unsigned)fpga_meter_adc_first_sample_after_reset,
+                     fpga_meter_transition_busy() ? 1U : 0U,
+                     (unsigned)meter_frame_discard_count,
+                     fpga.spi3_probing ? 1U : 0U,
+                     (unsigned long)fpga.spi3_timeout_count,
+                     (unsigned long)fpga.spi3_total_timeouts,
+                     (unsigned)active_channel);
+    usb_debug_printf("snapshot_count=%u raw_last=%u raw_min=%u raw_max=%u p2p=%u synced=%u\r\n",
+                     (unsigned)usb_meter_wave_snap.count,
+                     (unsigned)usb_meter_wave_snap.raw_last,
+                     (unsigned)usb_meter_wave_snap.raw_min,
+                     (unsigned)usb_meter_wave_snap.raw_max,
+                     (unsigned)usb_meter_wave_snap.peak_to_peak_raw,
+                     usb_meter_wave_snap.synced ? 1U : 0U);
+    print_i100("mean_raw=", usb_meter_wave_snap.mean_raw, "");
+    print_i100("rms_raw=", usb_meter_wave_snap.rms_raw, "");
+    print_i100("freq=", usb_meter_wave_snap.freq_hz, " Hz");
+    usb_debug_printf("dmm=%s %s class=%u updates=%lu valid=%u\r\n",
+                     meter_reading.display_str,
+                     meter_reading.unit_suffix ? meter_reading.unit_suffix : "",
+                     (unsigned)meter_reading.result_class,
+                     meter_reading.update_count,
+                     meter_reading.valid ? 1U : 0U);
+    usb_send_str("Experimental SPI3 meter-ADC probe; all-FF means this path is not armed/valid, not a DMM waveform.\r\n");
+}
+
+static void cmd_meter_wave_args(const char *args)
+{
+    if (args == NULL || *args == '\0') {
+        cmd_meter_wave();
+        return;
+    }
+
+    if (strcmp(args, "reset") == 0) {
+        meter_voltage_wave_reset();
+        fpga_meter_adc_diag_reset();
+        usb_send_str("meter wave diagnostics reset\r\n");
+        return;
+    }
+
+    if (strncmp(args, "sampler", 7) == 0 &&
+        (args[7] == '\0' || args[7] == ' ' || args[7] == '\t')) {
+        const char *value = args + 7;
+        while (*value == ' ' || *value == '\t') value++;
+        if (*value == '\0') {
+            usb_debug_printf("meter wave sampler=%s\r\n",
+                             fpga_meter_adc_sampler_enabled ? "on" : "off");
+        } else if (strcmp(value, "on") == 0) {
+            fpga_meter_adc_sampler_enabled = true;
+            meter_voltage_wave_reset();
+            fpga_meter_adc_diag_reset();
+            usb_send_str("meter wave sampler=on\r\n");
+        } else if (strcmp(value, "off") == 0) {
+            fpga_meter_adc_sampler_enabled = false;
+            meter_voltage_wave_reset();
+            fpga_meter_adc_diag_reset();
+            usb_send_str("meter wave sampler=off\r\n");
+        } else {
+            usb_send_str("Usage: meter wave sampler [on|off]\r\n");
+        }
+        return;
+    }
+
+    if (strncmp(args, "path", 4) == 0 &&
+        (args[4] == '\0' || args[4] == ' ' || args[4] == '\t')) {
+        const char *value = args + 4;
+        while (*value == ' ' || *value == '\t') value++;
+
+        if (*value == '\0') {
+            usb_debug_printf("meter wave path=%s\r\n",
+                             fpga_meter_adc_use_preacq ? "preacq" : "direct");
+        } else if (strcmp(value, "direct") == 0) {
+            fpga_meter_adc_use_preacq = false;
+            meter_voltage_wave_reset();
+            fpga_meter_adc_diag_reset();
+            usb_send_str("meter wave path=direct\r\n");
+        } else if (strcmp(value, "preacq") == 0) {
+            fpga_meter_adc_use_preacq = true;
+            meter_voltage_wave_reset();
+            fpga_meter_adc_diag_reset();
+            usb_send_str("meter wave path=preacq\r\n");
+        } else {
+            usb_send_str("Usage: meter wave path [direct|preacq]\r\n");
+        }
+        return;
+    }
+
+    if (strncmp(args, "selector", 8) == 0 &&
+        (args[8] == '\0' || args[8] == ' ' || args[8] == '\t')) {
+        const char *value = args + 8;
+        uint32_t selector;
+        while (*value == ' ' || *value == '\t') value++;
+
+        if (*value == '\0') {
+            usb_debug_printf("meter wave selector=%d\r\n",
+                             (int)fpga_meter_adc_selector_override);
+        } else if (strcmp(value, "auto") == 0) {
+            fpga_meter_adc_selector_override = -1;
+            meter_voltage_wave_reset();
+            fpga_meter_adc_diag_reset();
+            usb_send_str("meter wave selector=auto\r\n");
+        } else if (parse_int(value, &selector) == 0 && selector <= 255U) {
+            fpga_meter_adc_selector_override = (int16_t)selector;
+            meter_voltage_wave_reset();
+            fpga_meter_adc_diag_reset();
+            usb_debug_printf("meter wave selector=%d\r\n",
+                             (int)fpga_meter_adc_selector_override);
+        } else {
+            usb_send_str("Usage: meter wave selector [auto|0..255]\r\n");
+        }
+        return;
+    }
+
+    if (strncmp(args, "preacq", 6) == 0 &&
+        (args[6] == '\0' || args[6] == ' ' || args[6] == '\t')) {
+        const char *value = args + 6;
+        uint32_t preacq;
+        while (*value == ' ' || *value == '\t') value++;
+
+        if (*value == '\0') {
+            usb_debug_printf("meter wave preacq=%d\r\n",
+                             (int)fpga_meter_adc_preacq_override);
+        } else if (strcmp(value, "auto") == 0) {
+            fpga_meter_adc_preacq_override = -1;
+            meter_voltage_wave_reset();
+            fpga_meter_adc_diag_reset();
+            usb_send_str("meter wave preacq=auto\r\n");
+        } else if (parse_int(value, &preacq) == 0 && preacq <= 255U) {
+            fpga_meter_adc_preacq_override = (int16_t)preacq;
+            meter_voltage_wave_reset();
+            fpga_meter_adc_diag_reset();
+            usb_debug_printf("meter wave preacq=%d\r\n",
+                             (int)fpga_meter_adc_preacq_override);
+        } else {
+            usb_send_str("Usage: meter wave preacq [auto|0..255]\r\n");
+        }
+        return;
+    }
+
+    usb_send_str("Usage: meter wave [reset|sampler|path|selector|preacq]\r\n");
+}
+
 static void cmd_uptime(void)
 {
     extern volatile uint32_t uptime_seconds;
@@ -1872,7 +3992,13 @@ static void cmd_spi3_acqtest(void)
     usb_debug_printf("SPI3 CTRL1: 0x%08lX\r\n", *(volatile uint32_t *)0x40003C00);
     usb_debug_printf("SPI3 CTRL2: 0x%08lX\r\n", *(volatile uint32_t *)0x40003C04);
     usb_debug_printf("SPI3 STS:   0x%08lX\r\n", *(volatile uint32_t *)0x40003C08);
-    usb_debug_printf("H2 done: %d  bytes: %lu\r\n", fpga.h2_upload_done, fpga.h2_bytes_sent);
+    usb_debug_printf("H2 tx:   %d  bytes: %lu (no ACK proof)\r\n",
+                     fpga.h2_upload_done, fpga.h2_bytes_sent);
+    usb_debug_printf("post-H2 SPI3 boot: enq=%u run=%u drop=%u mask=0x%02X\r\n",
+                     fpga.post_h2_spi3_boot_enqueued,
+                     fpga.post_h2_spi3_boot_run_count,
+                     fpga.post_h2_spi3_boot_dropped,
+                     fpga.post_h2_spi3_boot_mask);
 
     /* --- Test 1: Raw read with CS LOW (16 bytes) --- */
     usb_send_str("\r\n-- T1: Raw SPI3 read (CS low, 16x 0xFF) --\r\n");
@@ -1987,16 +4113,17 @@ static void cmd_spi3_acqtest(void)
 }
 
 /* ═══════════════════════════════════════════════════════════════════
- * H2 Upload Verification — Re-upload with response capture
+ * H2 TX Replay Diagnostic — sample MISO without claiming acceptance
  *
- * Re-sends the 115,638-byte H2 cal table while capturing the FPGA's
- * simultaneous responses at key points. If the FPGA is actually
- * accepting the data, we might see non-FF responses (ACK bytes,
- * status changes, or block-boundary markers).
+ * Re-sends the 115,638-byte H2 table while sampling the FPGA's simultaneous
+ * MISO bytes at key points. Stock-visible evidence proves the TX stream and
+ * table layout only; no recovered ACK/apply condition ties this diagnostic to
+ * FPGA acceptance or DMM physical calibration.
  * ═══════════════════════════════════════════════════════════════════ */
-static void cmd_spi3_h2verify(void)
+static void cmd_spi3_h2txdiag(void)
 {
-    usb_send_str("=== H2 Upload Verification ===\r\n\r\n");
+    usb_send_str("=== H2 TX Replay Diagnostic ===\r\n");
+    usb_send_str("Samples MISO only; no recovered ACK/apply proof.\r\n\r\n");
 
     /* Pre-upload state */
     usb_debug_printf("PC0 before: %d\r\n", (GPIOC->idt & 1) ? 1 : 0);
@@ -2091,7 +4218,8 @@ static void cmd_spi3_h2verify(void)
     for (int i = 0; i < 16; i++) usb_debug_printf("%02X ", resp_post[i]);
     usb_send_str("\r\n");
 
-    usb_debug_printf("\r\nTotal non-FF during upload: %d / 115638\r\n", total_nonff);
+    usb_debug_printf("\r\nTotal non-FF during TX replay: %d / 115638\r\n", total_nonff);
+    usb_send_str("Interpretation: TX/sample diagnostic only; not calibration proof.\r\n");
     usb_debug_printf("PC0 final: %d\r\n", (GPIOC->idt & 1) ? 1 : 0);
     usb_send_str("=== Done ===\r\n");
 }
@@ -2641,6 +4769,69 @@ static void cmd_spi3_seq(const char *args)
 }
 
 /* ═══════════════════════════════════════════════════════════════════
+ * Stock SPI3 case-8 readback probe — not a DMM correction
+ *
+ * Stock V1.2.0 `spi3_acquisition_task` dispatches queue trigger byte 9
+ * (`trigger_byte - 1 == 8`) to the block at project address 0x0803779C.  That
+ * block performs a small SPI3 readback and stores the assembled halfword at
+ * `ms+0x46` (`DAT_2000013E`).  RAM-map/decompile consumers classify that word
+ * as scope `trigger_position_sample` evidence, not H2 acceptance and not DMM
+ * range/calibration state.
+ *
+ * Keep this command diagnostic-only.  It intentionally does not patch the DMM
+ * reading, change selector words, or use the returned bytes as a coefficient.
+ * ═══════════════════════════════════════════════════════════════════ */
+static void cmd_spi3_stock_readback(void)
+{
+    uint8_t first_discard;
+    uint8_t seed_hi;
+    uint8_t cmd_0a_rx;
+    uint8_t mid_discard;
+    uint8_t low;
+    uint16_t ms46_equiv;
+
+    usb_send_str("=== Stock SPI3 Case-8 Readback Diagnostic ===\r\n");
+    usb_send_str("Stock refs: 0x0803779C..0x080378F4 stores ms+0x46; scope-shaped, not DMM apply/calibration.\r\n\r\n");
+
+    usb_debug_printf("PC0  (data-ready): %d\r\n", (GPIOC->idt & (1 << 0)) ? 1 : 0);
+    usb_debug_printf("PC6  (SPI enable): %d\r\n", (GPIOC->idt & (1 << 6)) ? 1 : 0);
+    usb_debug_printf("PB11 (active):     %d\r\n", (GPIOB->idt & (1 << 11)) ? 1 : 0);
+    usb_debug_printf("PB6  (CS idle):    %d\r\n", (GPIOB->idt & (1 << 6)) ? 1 : 0);
+
+    /*
+     * Mirror the visible stock transaction shape:
+     *   CS low:  0xFF discard, 0xFF -> high byte seed
+     *   CS high: 1 tick delay
+     *   CS low:  0x0A discard, 0xFF discard, 0xFF -> low byte
+     *
+     * The middle 0xFF read is discarded by the stock block before shifting the
+     * earlier seed into the high byte.  Printing it helps catch non-FF activity
+     * without pretending the stock app uses it for DMM state.
+     */
+    GPIOB->clr = (1 << 6);
+    first_discard = spi3_raw_xfer(0xFF);
+    seed_hi = spi3_raw_xfer(0xFF);
+    GPIOB->scr = (1 << 6);
+
+    vTaskDelay(pdMS_TO_TICKS(1));
+
+    GPIOB->clr = (1 << 6);
+    cmd_0a_rx = spi3_raw_xfer(0x0A);
+    mid_discard = spi3_raw_xfer(0xFF);
+    low = spi3_raw_xfer(0xFF);
+    GPIOB->scr = (1 << 6);
+
+    ms46_equiv = ((uint16_t)seed_hi << 8) | (uint16_t)low;
+
+    usb_debug_printf("rx first_ff_discard=%02X seed_hi=%02X cmd_0a=%02X mid_ff_discard=%02X low=%02X\r\n",
+                     first_discard, seed_hi, cmd_0a_rx, mid_discard, low);
+    usb_debug_printf("ms46_equiv=0x%04X\r\n", ms46_equiv);
+    usb_debug_printf("PC0 final: %d\r\n", (GPIOC->idt & 1) ? 1 : 0);
+    usb_send_str("Interpretation: diagnostic scope readback only; not a DMM multiplier, range writer, H2 ACK, or calibration proof.\r\n");
+    usb_send_str("=== Done ===\r\n");
+}
+
+/* ═══════════════════════════════════════════════════════════════════
  * Command Dispatcher
  * ═══════════════════════════════════════════════════════════════════ */
 
@@ -2670,6 +4861,10 @@ static void dispatch_command(char *line)
         cmd_gpio_read(line + 10);
     } else if (strcmp(line, "gpio scan") == 0) {
         cmd_gpio_scan();
+    } else if (strcmp(line, "buzzer test") == 0) {
+        cmd_buzzer_test("");
+    } else if (strncmp(line, "buzzer test ", 12) == 0) {
+        cmd_buzzer_test(line + 12);
     } else if (strncmp(line, "mem read ", 9) == 0) {
         cmd_mem_read(line + 9);
     } else if (strncmp(line, "mem write ", 10) == 0) {
@@ -2686,6 +4881,18 @@ static void dispatch_command(char *line)
         cmd_flash_wtest(line + 12);
     } else if (strcmp(line, "flash diag") == 0) {
         cmd_flash_diag();
+    } else if (strcmp(line, "screen dump") == 0) {
+        cmd_screen_dump("");
+    } else if (strncmp(line, "screen dump ", 12) == 0) {
+        cmd_screen_dump(line + 12);
+    } else if (strcmp(line, "screen dumpbin") == 0) {
+        cmd_screen_dumpbin("");
+    } else if (strncmp(line, "screen dumpbin ", 15) == 0) {
+        cmd_screen_dumpbin(line + 15);
+    } else if (strcmp(line, "screen shadow") == 0) {
+        cmd_screen_shadow("");
+    } else if (strncmp(line, "screen shadow ", 14) == 0) {
+        cmd_screen_shadow(line + 14);
     } else if (strncmp(line, "fpga cmd ", 9) == 0) {
         cmd_fpga_cmd(line + 9);
     } else if (strncmp(line, "fpga frame ", 11) == 0) {
@@ -2748,6 +4955,56 @@ static void dispatch_command(char *line)
         cmd_fpga_scope_timing(line + 18);
     } else if (strncmp(line, "fpga scope trig ", 16) == 0) {
         cmd_fpga_scope_trig(line + 16);
+    } else if (strncmp(line, "mode", 4) == 0 && (line[4] == '\0' || line[4] == ' ' || line[4] == '\t')) {
+        const char *args = line + 4;
+        while (*args == ' ' || *args == '\t') args++;
+        cmd_mode(args);
+    } else if (strcmp(line, "meter dump") == 0) {
+        cmd_meter_dump("");
+    } else if (strncmp(line, "meter dump ", 11) == 0) {
+        cmd_meter_dump(line + 11);
+    } else if (strcmp(line, "meter autoscan") == 0) {
+        cmd_meter_autoscan("");
+    } else if (strncmp(line, "meter autoscan ", 15) == 0) {
+        cmd_meter_autoscan(line + 15);
+    } else if (strcmp(line, "meter auto") == 0) {
+        cmd_meter_auto_async("");
+    } else if (strncmp(line, "meter auto ", 11) == 0) {
+        cmd_meter_auto_async(line + 11);
+    } else if (strcmp(line, "meter trace") == 0) {
+        cmd_meter_trace();
+    } else if (strcmp(line, "meter frontend") == 0) {
+        cmd_meter_frontend();
+    } else if (strcmp(line, "meter probe-tail") == 0) {
+        cmd_meter_probe_tail("");
+    } else if (strncmp(line, "meter probe-tail ", 17) == 0) {
+        cmd_meter_probe_tail(line + 17);
+    } else if (strcmp(line, "meter boot-sequence") == 0) {
+        cmd_meter_boot_sequence("");
+    } else if (strncmp(line, "meter boot-sequence ", 20) == 0) {
+        cmd_meter_boot_sequence(line + 20);
+    } else if (strcmp(line, "meter pc11-timing") == 0) {
+        cmd_meter_pc11_timing("");
+    } else if (strncmp(line, "meter pc11-timing ", 18) == 0) {
+        cmd_meter_pc11_timing(line + 18);
+    } else if (strncmp(line, "meter mux-arms ", 15) == 0) {
+        cmd_meter_mux_arms(line + 15);
+    } else if (strcmp(line, "meter mux-stream") == 0) {
+        cmd_meter_mux_stream("");
+    } else if (strncmp(line, "meter mux-stream ", 17) == 0) {
+        cmd_meter_mux_stream(line + 17);
+    } else if (strcmp(line, "meter stream") == 0) {
+        cmd_meter_stream("");
+    } else if (strncmp(line, "meter stream ", 13) == 0) {
+        cmd_meter_stream(line + 13);
+    } else if (strcmp(line, "meter adc-snapshot") == 0) {
+        cmd_meter_adc_snapshot();
+    } else if (strcmp(line, "ui dump") == 0) {
+        cmd_ui_dump();
+    } else if (strcmp(line, "meter wave") == 0) {
+        cmd_meter_wave_args("");
+    } else if (strncmp(line, "meter wave ", 11) == 0) {
+        cmd_meter_wave_args(line + 11);
     } else if (strncmp(line, "fpga acq", 8) == 0) {
         cmd_fpga_acq(line[8] == ' ' ? line + 9 : "");
     } else if (strncmp(line, "fpga reinit", 11) == 0) {
@@ -2770,8 +5027,11 @@ static void dispatch_command(char *line)
         cmd_spi3_scopetest(line[14] == ' ' ? line + 15 : "");
     } else if (strcmp(line, "spi3 acqtest") == 0) {
         cmd_spi3_acqtest();
-    } else if (strcmp(line, "spi3 h2verify") == 0) {
-        cmd_spi3_h2verify();
+    } else if (strcmp(line, "spi3 stock-readback") == 0) {
+        cmd_spi3_stock_readback();
+    } else if (strcmp(line, "spi3 h2txdiag") == 0 ||
+               strcmp(line, "spi3 h2verify") == 0) {
+        cmd_spi3_h2txdiag();
     } else if (strcmp(line, "spi3 probe") == 0) {
         /* Bit-bang SPI3 probe: disable SPI peripheral, manually toggle
          * SCK and read MISO to test if the FPGA drives the line. */
@@ -2983,6 +5243,6 @@ static void vUsbDebugTask(void *pvParameters)
 void usb_debug_create_task(void)
 {
 #ifndef EMULATOR_BUILD
-    xTaskCreate(vUsbDebugTask, "usb_dbg", 512, NULL, 2, NULL);
+    xTaskCreate(vUsbDebugTask, "usb_dbg", 768, NULL, 2, NULL);
 #endif
 }

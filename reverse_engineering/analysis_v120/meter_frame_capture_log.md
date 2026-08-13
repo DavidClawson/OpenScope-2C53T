@@ -162,25 +162,26 @@ offset — only for display formatting.
 
 ## Calibration Issue — Low Ω Range
 
-The ~3.04× low reading for 147 Ω is the first clear indication
-that our firmware is missing the per-range gain coefficients that
-stock loads from SPI flash at boot.
+The ~3.04× low reading for 147 Ω is evidence that the low-Ohm
+physical path needs an unrecovered stock/factory correction or range
+state. It is not evidence for the older 301-byte per-channel blob
+hypothesis.
 
 Evidence:
 - 3.3 kΩ / 10 kΩ / 100 kΩ all read with ~2% error (within resistor
   tolerance). These values are on the kΩ sub-ranges.
 - 147 Ω reads at **33% of actual value**. That's a full-scale
   coefficient error, not tolerance drift.
-- The factory cal stub we added in Phase 0.3 (`flash_fs_load_factory_cal`
-  at `src/drivers/flash_fs.c:199`) allocates 301 bytes per channel
-  for exactly this kind of data but does not yet populate it — the
-  SPI flash driver is still stubbed.
+- The older Phase 0.3 factory-cal stub and 301-byte-per-channel story were
+  superseded: state offsets `0x356` and `0x483` are roll-buffer regions, and
+  the bench-unit W25Q `System file/9999.BIN` entry is cluster 0 / size 0.
+  `flash_fs_load_factory_cal()` now deliberately fails closed until a real
+  stock xref, W25Q table, H2/SPI3 acceptance trace, or stock runtime trace
+  proves a calibration source.
 
-**Action:** Log this as a **known issue** and defer to Phase 3
-when the factory cal load is wired to real SPI flash reads. Do
-NOT apply a hardcoded 3× correction: we don't know whether it's
-exactly 3× across the range, and other resistors below ~1 kΩ
-might need different coefficients.
+**Action:** Keep low-Ohm normal frames fail-closed and continue the stock
+RE search. Do NOT apply a hardcoded 3× correction or wire invented W25Q
+filenames into meter_data.c.
 
 ## Gaps Needing More Captures
 
@@ -196,20 +197,22 @@ For the decoder to cover all meter ranges, we still need:
 | DC/AC current | Different mode | Low |
 | Frequency, capacitance | Different submode | Low |
 
-Each new `frame[6]` value found in the wild adds one row to the
-decoder table. No decompiler archaeology required.
+For DC voltage, range/exponent is no longer keyed from `frame[6]`:
+stock-analysis range hints use `frame[8].7`, `frame[3].4`, `frame[4].4`, and `frame[5].4`
+before the display-format translation. New voltage captures should therefore log
+the full 12-byte frame, decoded digits, the four range-hint bits, and `[10..11]`
+separately. For resistance/current/passive modes, new `frame[6]` values may still
+identify additional format variants.
 
 ## Decoder Confidence
 
 - **High confidence** (2+ data points matching): `0x07`→low Ω,
   `0x4B`→kΩ dp=1, `0x4D`→kΩ dp=2.
-- **Single point** (no second confirmation): `0x0F`→DCV. Matches
-  what we already display correctly via `default_decimal_pos[0]`.
+- **DCV range hints**: DCV exponent selection uses stock-analysis range-hint
+  bits, not `frame[6]` or `[10..11]`. Verified local fixtures now cover hint 3
+  (`4.994 V`), hint 2 (`31.96 V`), and hint 1 (`228.x V`). Hint 4 and low
+  sub-volt boundaries still need a sweep.
 - **Unmapped**: everything else.
-
-The single-point `0x0F` is low risk to ship because the default
-DCV path already produces the correct output — the decoder just
-formalizes what's already working.
 
 ## Cross-reference to prior research
 
@@ -236,9 +239,13 @@ formalizes what's already working.
 1. **Phase 1 can ship a working resistance decoder today.** 4 out
    of 5 broken readings fixed from 7 data points. No decompiler
    guessing.
-2. **Phase 3 (factory cal load) is elevated in importance.** The
-   147 Ω miss is a concrete motivation — we have a specific
-   symptom tied to a specific fix.
-3. **Future meter modes (ACV, current, freq, cap) can be added
-   incrementally** by capturing one or two reference frames per
-   mode and extending the `frame[6]` table.
+2. **Factory calibration/range evidence is unresolved, not a queued
+   "load the cal file" task.** The 147 Ω miss is a concrete symptom,
+   but the old 301-byte W25Q story was disproven; any fix must come
+   from stock xrefs, W25Q/H2 acceptance evidence, or repeatable live
+   stock traces.
+3. **Future meter modes (ACV, current, freq, cap) need stock-backed
+   frame-family and state-machine evidence.** Do not grow `frame[6]`
+   or unit tables from one or two reference frames alone; add
+   adversarial property tests for wrong-family, stale-frame, and
+   AC/current-safety cases as each mode is recovered.

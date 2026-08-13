@@ -16,9 +16,6 @@
 #include "dac_output.h"
 #include "at32f403a_407.h"
 
-/* TMR6 registers (basic timer — no GPIO, no capture/compare) */
-#define TMR6   ((tmr_type *)TMR6_BASE)
-
 /* DMA2 Channel 3 — maps to DAC1 on AT32F403A */
 #define DMA2_CH3  ((dma_channel_type *)DMA2_CHANNEL3_BASE)
 #define DMA2_REG  ((dma_type *)DMA2_BASE)

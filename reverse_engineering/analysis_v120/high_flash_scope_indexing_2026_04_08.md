@@ -183,22 +183,47 @@ Interpretation:
 - loaded value = 16-bit halfword
 
 So `0x080BB40C` is best modeled as a compact halfword table indexed by:
-- a primary mode/range selector at `DAT_2000105B`
+- a scope trigger-overlay row selector at `DAT_2000105B`
 - a secondary 2-way or per-channel selector
 
 ## 4. What `DAT_2000105B` likely means
 
-`DAT_2000105B` is not yet cleanly named in the current RAM notes, but it is the primary row selector for `0x080BB40C`.
+`DAT_2000105B` is now guarded as a scope trigger-overlay row selector, not a
+DMM range source.  The current stock/decompile evidence is:
+
+```text
+function_names.md:
+  08021b40 scope_draw_trigger_overlay
+  08019af8 scope_draw_trigger_marker
+
+ram_map.txt:
+  0x2000105B DAT_2000105b (12 refs): FUN_08021b40@08021b40, ...
+
+full_decompile.c:
+  12839  uVar10 = (uint)DAT_2000105b;
+  12846  *(undefined2 *)(uVar10 * 4 + 0x80bb40c + uVar9 * 2));
+  12850  uVar2 = *(undefined2 *)(uVar10 * 4 + 0x80bb40c + uVar9 * 2);
+  12899  *(undefined2 *)((uint)DAT_2000105b * 4 + 0x80bb40c));
+  12902  *(undefined2 *)((uint)DAT_2000105b * 4 + 0x80bb40e));
+```
+
+The same inspected block reads scope/channel drawing state such as
+`DAT_2000010d`, `DAT_2000012c`, and the signed channel offset bytes
+`DAT_200000fc`/`DAT_200000fd`. It does not call `FUN_080018a4` or
+`FUN_08001a58`, does not touch `0x20002D74`, and does not form a raw `0x05xx`
+DMM command word. The downloaded V1.2.0 APP image also has a zero-filled
+app-slot shadow at `0x080B740C` for the runtime-looking `0x080BB40C` address.
+
+This is the **Scope Trigger Overlay 105B Boundary**: useful scope/UI evidence,
+not DMM range proof, not a factory calibration source, and not an explanation
+for the low-DCV mismatch.
 
 References:
 - [ram_map.txt](/Users/david/Desktop/osc/reverse_engineering/analysis_v120/ram_map.txt#L301)
 
-Given where it appears, it is probably one of:
-- scope range / attenuation selection
-- scope theme/style submode used by a shared drawing path
-- channel-specific frontend/range mode
-
-What matters for triage is simpler: `DAT_2000105B` drives the row of `0x080BB40C`, while `DAT_20001025` drives the direct raw-command byte from `0x080BB3FC`.
+What matters for triage is simpler: `DAT_2000105B` drives a scope
+trigger-overlay halfword/style lookup, while `DAT_20001025` drives the direct
+DMM raw-command byte from `0x080BB3FC`.
 
 ## 5. Practical conclusion
 

@@ -271,6 +271,27 @@ static void test_screenshot_fill_rect(void)
     PASS();
 }
 
+static void test_screenshot_fill_rect_clips_at_edge(void)
+{
+    TEST("fill_rect clips at framebuffer edge");
+    screenshot_init();
+    screenshot_clear(0x0000);
+
+    screenshot_fill_rect(SCREENSHOT_WIDTH - 1, SCREENSHOT_HEIGHT - 1, 4, 4, 0xF800);
+
+    const uint8_t *fb = screenshot_get_framebuffer();
+    uint32_t corner = ((SCREENSHOT_HEIGHT - 1) * SCREENSHOT_WIDTH +
+                       (SCREENSHOT_WIDTH - 1)) * SCREENSHOT_BPP;
+    ASSERT_EQ(fb[corner], 0x00, "red low byte at clipped corner");
+    ASSERT_EQ(fb[corner + 1], 0xF8, "red high byte at clipped corner");
+
+    uint32_t before = ((SCREENSHOT_HEIGHT - 1) * SCREENSHOT_WIDTH +
+                       (SCREENSHOT_WIDTH - 2)) * SCREENSHOT_BPP;
+    ASSERT_EQ(fb[before], 0x00, "neighbor low byte remains black");
+    ASSERT_EQ(fb[before + 1], 0x00, "neighbor high byte remains black");
+    PASS();
+}
+
 static void test_screenshot_bmp_header(void)
 {
     TEST("BMP header has correct signature, size, dimensions");
@@ -382,6 +403,7 @@ int main(void)
     test_screenshot_clear_red();
     test_screenshot_set_pixel();
     test_screenshot_fill_rect();
+    test_screenshot_fill_rect_clips_at_edge();
     test_screenshot_bmp_header();
     test_screenshot_bmp_pixel_data();
     test_screenshot_bmp_too_small_buffer();

@@ -997,12 +997,12 @@ void scope_mode_cursor(undefined4 param_1, undefined4 param_2) {
      *
      * CALIBRATION LOOKUP TABLE:
      *   Voltage conversion uses DAT_0804BFB8 (a per-range scale table):
-     *     scale = *(uint16*)(&DAT_0804BFB8 + (meter_function % 3) * 2)
-     *     divisor_d = (double)(meter_function / 3)
+     *     scale = *(uint16*)(&DAT_0804BFB8 + (scope_mux_range % 3) * 2)
+     *     divisor_d = (double)(scope_mux_range / 3)
      *     volt_per_lsb = scale_d / divisor_d
      *
      *   Per STATE_STRUCTURE.md, the calibration table at 0x0804BFB8 maps
-     *   meter_function (0-based range selector) to millivolts per ADC count.
+     *   scope mux range (0-based range selector) to millivolts per ADC count.
      *   NOTE: The binary dump shows 0x0004BFB8 is all zeros, suggesting
      *   this table may be loaded from SPI flash at runtime (not hardcoded in flash).
      *
@@ -1036,7 +1036,7 @@ void scope_mode_cursor(undefined4 param_1, undefined4 param_2) {
 
         do {
             uint8_t *pbVar32 = pb_base;
-            uint8_t ch_range = *(uint8_t *)(&DAT_200000FA + uVar22);  /* meter_function[ch] */
+            uint8_t ch_range = *(uint8_t *)(&DAT_200000FA + uVar22);  /* scope_mux_range[ch] */
             int8_t  ch_dcoff = *(int8_t *)(&DAT_200000FC + uVar22);   /* adc_offset[ch] */
             int iVar20 = (int)uVar22 * 0x30;                           /* cursor array stride */
 
@@ -1224,8 +1224,8 @@ void scope_mode_cursor(undefined4 param_1, undefined4 param_2) {
  *  Called at the end of each scope_mode_timebase pass. It:
  *    1. Copies current timebase/range config to the scope_state shadow registers:
  *         DAT_20000EB8 = timebase_index  (state[0xDC0])
- *         DAT_20000EB9 = meter_function  (state[0xDC1])
- *         DAT_20000EBA = meter_range     (state[0xDC2])
+ *         DAT_20000EB9 = scope_ch1_mux_range  (state[0xDC1])
+ *         DAT_20000EBA = scope_ch2_mux_range  (state[0xDC2])
  *         DAT_20000EBB = ch2_adc_offset  (state[0xDC3])
  *         DAT_20000EBC = ch2_adc_offset  (state[0xDC4])
  *         etc.
@@ -1255,8 +1255,8 @@ void scope_mode_cursor(undefined4 param_1, undefined4 param_2) {
 void scope_display_refresh(void) {
     /* Shadow current config into display state registers */
     DAT_20000EB8 = DAT_20000125;   /* timebase_index copy */
-    DAT_20000EB9 = DAT_200000FA;   /* meter_function copy */
-    DAT_20000EBA = DAT_200000FB;   /* meter_range copy */
+    DAT_20000EB9 = DAT_200000FA;   /* scope_ch1_mux_range copy */
+    DAT_20000EBA = DAT_200000FB;   /* scope_ch2_mux_range copy */
     DAT_20000EBC = DAT_200000FD;   /* ch2_adc_offset copy */
     _DAT_20000EBE = _DAT_20000112 >> 16 | _DAT_20000112 << 16;  /* trigger_pos swapped */
     _DAT_20000EB6 = _DAT_2000010C; /* voltage_range copy */

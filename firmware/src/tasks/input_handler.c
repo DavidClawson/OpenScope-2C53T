@@ -7,7 +7,7 @@
  *
  * Integrated features from 4 agent worktrees:
  *   - Cursor measurement mode (TRIGGER toggles, arrows move cursors)
- *   - Meter 10 sub-modes (LEFT/RIGHT cycle, SELECT resets min/max/avg)
+ *   - Meter sub-modes (LEFT/RIGHT cycle, SELECT resets min/max/avg)
  *   - Signal gen: amplitude stepping, duty cycle, frequency presets
  *   - Math channel, persistence, component tester (settings sub-menus)
  */
@@ -24,6 +24,7 @@
 #include "persistence.h"
 #include "shared_mem.h"
 #include "fpga.h"
+#include "meter_autoselect.h"
 #include "at32f403a_407.h"
 #include "button_scan.h"
 #include "task.h"
@@ -99,6 +100,9 @@ void input_handle_settings_ok(void)
             break;
         case 6: /* Bode Plot -- enter bode screen */
             settings_depth = 6;
+            break;
+        case 7: /* Startup on Boot -- cycle target mode */
+            startup_mode_adjust(1);
             break;
         case 8: /* About -- display info screen */
             settings_depth = 2;
@@ -208,6 +212,7 @@ uint8_t input_handle_button(button_id_t button, QueueHandle_t dq)
     /* -- Mode / Navigation ---------------------------------------- */
 
     case BTN_MENU:
+        meter_autoselect_cancel();
         if (current_mode == MODE_SETTINGS && settings_depth > 0) {
             settings_depth = 0;
             settings_sub_selected = 0;
@@ -350,7 +355,17 @@ uint8_t input_handle_button(button_id_t button, QueueHandle_t dq)
 
     case BTN_AUTO:
         if (current_mode == MODE_MULTIMETER) {
-            meter_toggle_relative();
+            meter_autoselect_status_t st;
+            meter_autoselect_get_status(&st);
+            if (st.state == METER_AUTOSELECT_RUNNING) {
+                meter_autoselect_cancel();
+                scope_show_popup("AUTO CANCEL");
+            } else if (meter_autoselect_start(700U)) {
+                scope_show_popup("AUTO DMM");
+            } else {
+                scope_show_popup("AUTO ERR");
+            }
+            cmd = DCMD_DRAW_METER;
             send_cmd(dq, cmd);
         } else if (current_mode == MODE_OSCILLOSCOPE) {
 #ifdef FEATURE_FFT
@@ -547,8 +562,12 @@ uint8_t input_handle_button(button_id_t button, QueueHandle_t dq)
     /* -- LEFT / RIGHT --------------------------------------------- */
 
     case BTN_LEFT:
-        if (current_mode == MODE_SETTINGS && settings_depth == 0 && settings_selected == 3) {
-            theme_cycle_reverse();
+        if (current_mode == MODE_SETTINGS && settings_depth == 0 &&
+            (settings_selected == 3 || settings_selected == 7)) {
+            if (settings_selected == 3)
+                theme_cycle_reverse();
+            else
+                startup_mode_adjust(-1);
             cmd = DCMD_DRAW_SETTINGS;
             send_cmd(dq, cmd);
         }
@@ -603,8 +622,12 @@ uint8_t input_handle_button(button_id_t button, QueueHandle_t dq)
         break;
 
     case BTN_RIGHT:
-        if (current_mode == MODE_SETTINGS && settings_depth == 0 && settings_selected == 3) {
-            theme_cycle();
+        if (current_mode == MODE_SETTINGS && settings_depth == 0 &&
+            (settings_selected == 3 || settings_selected == 7)) {
+            if (settings_selected == 3)
+                theme_cycle();
+            else
+                startup_mode_adjust(1);
             cmd = DCMD_DRAW_SETTINGS;
             send_cmd(dq, cmd);
         }

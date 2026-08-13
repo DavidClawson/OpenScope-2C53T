@@ -755,13 +755,9 @@ static uint16_t gpio_prev_a = 0, gpio_prev_b = 0;
 static uint16_t gpio_prev_c = 0, gpio_prev_d = 0, gpio_prev_e = 0;
 static bool gpio_scan_started = false;
 
-/* Rapid-sample toggle counters (prev_state = 0xFF means "not initialized") */
-static uint32_t pa1_toggle_count = 0;
-static uint8_t  pa1_prev_state = 0xFF;
+/* Debug overlay toggle indicators derived from the accumulated GPIO masks. */
 static uint32_t pb3_toggle_count = 0;  /* SPI3 SCK — should toggle if GMUX works */
-static uint8_t  pb3_prev_state = 0xFF;
 static uint32_t pb4_toggle_count = 0;  /* SPI3 MISO — should toggle if FPGA responds */
-static uint8_t  pb4_prev_state = 0xFF;
 
 static void gpio_scan_update(void)
 {
@@ -1060,8 +1056,9 @@ static void draw_scope_debug(const theme_t *th)
      *      Exp H demoted this from "the wall" to a non-discriminator: stock reads
      *      the same 0x00039020 here and still configures. Compare CFG's D flag.
      * Dropped S2/ST here — CTRL2 and STS were static (0003 / 0002) across every
-     * run so far, and ED is the number this experiment turns on. */
-    snprintf(buf, sizeof(buf), "S1:%04X ED:%02X%02X%02X%02X H2:%c",
+     * run so far, and ED is the number this experiment turns on.
+     * H2T means bytes streamed, not recovered FPGA acceptance. */
+    snprintf(buf, sizeof(buf), "S1:%04X ED:%02X%02X%02X%02X H2T:%c",
              (uint16_t)fpga.diag_spi_ctrl1,
              fpga.edit_mode_status[0], fpga.edit_mode_status[1],
              fpga.edit_mode_status[2], fpga.edit_mode_status[3],
@@ -1356,7 +1353,7 @@ static void draw_fft_region(uint16_t y_top, uint16_t height)
     fft_process(sbuf, FFT_SIZE, &fft_result);
 
     const float *draw_data = (fft_result.avg_db != NULL)
-                             ? fft_result.avg_db : fft_result.magnitude_db;
+                             ? fft_result.avg_db : fft_result.level_db;
 
     uint16_t zoom_start = cfg->zoom_start_bin;
     uint16_t zoom_end = cfg->zoom_end_bin;
@@ -1433,7 +1430,7 @@ static void draw_fft_region(uint16_t y_top, uint16_t height)
 
         uint16_t peak_x = (uint16_t)((uint32_t)(peak_bin - zoom_start)
                           * LCD_WIDTH / zoom_span);
-        float norm = (ref_db - fft_result.peaks[p].magnitude_db) / range_db;
+        float norm = (ref_db - fft_result.peaks[p].level_db) / range_db;
         if (norm < 0.0f) norm = 0.0f;
         uint16_t peak_y = y_top + (uint16_t)(norm * (float)height);
 
@@ -1598,7 +1595,7 @@ void draw_waterfall_screen(void)
     }
 
     const float *draw_data = (fft_result.avg_db != NULL)
-                             ? fft_result.avg_db : fft_result.magnitude_db;
+                             ? fft_result.avg_db : fft_result.level_db;
 
     uint16_t zoom_start = cfg->zoom_start_bin;
     uint16_t zoom_end = cfg->zoom_end_bin;

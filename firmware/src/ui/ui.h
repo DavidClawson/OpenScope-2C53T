@@ -24,6 +24,12 @@ typedef enum {
     MODE_COUNT
 } device_mode_t;
 
+typedef enum {
+    STARTUP_SCOPE = 0,
+    STARTUP_METER,
+    STARTUP_COUNT
+} startup_mode_t;
+
 /* Display commands sent via queue */
 typedef enum {
     DCMD_DRAW_SPLASH = 0,
@@ -74,13 +80,24 @@ typedef enum {
  * ═══════════════════════════════════════════════════════════════════ */
 
 extern volatile device_mode_t current_mode;
+extern volatile startup_mode_t startup_mode;
 extern volatile uint32_t      uptime_seconds;
 extern volatile int8_t        settings_selected;  /* Selected menu item index */
 extern volatile int8_t        settings_depth;      /* 0=top, 1=sub-menu, 2=about, 3=osc-math, 4=component */
 extern volatile int8_t        settings_sub_selected; /* Sub-menu selection */
 extern volatile uint8_t       active_channel;      /* 0=CH1, 1=CH2 (for scope adjustments) */
-extern volatile uint8_t       meter_submode;       /* 0-9: current meter sub-mode */
-extern volatile uint8_t       meter_layout;        /* 0=full, 1=chart, 2=stats */
+extern volatile uint8_t       meter_submode;       /* 0-10: current meter sub-mode */
+extern volatile uint8_t       meter_layout;        /* 0=full, 1=chart, 2=stats, 3=fuse */
+extern volatile uint32_t      meter_screen_draw_count; /* Incremented by draw_meter_screen() */
+extern volatile uint32_t      meter_screen_full_clear_count;
+extern volatile uint32_t      meter_screen_partial_clear_count;
+extern volatile uint32_t      meter_screen_last_draw_us;
+extern volatile uint32_t      meter_screen_max_draw_us;
+extern volatile uint32_t      meter_screen_over_budget_count;
+extern volatile uint32_t      meter_screen_last_reading_display_update;
+extern volatile uint8_t       meter_screen_last_full_clear;
+extern volatile uint8_t       meter_screen_last_live;  /* Last draw used same-submode data */
+extern volatile uint8_t       meter_screen_last_continuity_flash;
 extern volatile bool          meter_rel_enabled;   /* Relative/delta mode */
 extern volatile float         meter_rel_reference; /* Zero reference value */
 extern volatile bool          meter_hold_enabled;  /* Auto-hold mode */
@@ -99,7 +116,7 @@ extern volatile bool          persist_enabled;
 #define SETTINGS_ITEM_COUNT     12
 #define SETTINGS_OSC_ITEM_COUNT 8
 #define SETTINGS_ABOUT_LINES    5
-#define METER_SUBMODE_COUNT     10
+#define METER_SUBMODE_COUNT     11
 #define METER_LAYOUT_COUNT      4
 #define METER_LAYOUT_FULL       0
 #define METER_LAYOUT_CHART      1
@@ -147,6 +164,8 @@ void draw_waterfall_screen(void);
 
 /* meter_ui.c */
 void draw_meter_screen(void);
+void meter_screen_invalidate(void);
+bool meter_screen_needs_periodic_redraw(void);
 void meter_reset_minmaxavg(void);
 void meter_toggle_relative(void);
 void meter_toggle_hold(void);
@@ -160,6 +179,9 @@ void fuse_prev_rating(void);
 void fuse_next_type(void);
 void fuse_prev_type(void);
 const char *meter_submode_name(uint8_t submode);
+const char *startup_mode_name(startup_mode_t mode);
+void startup_mode_set(startup_mode_t mode);
+void startup_mode_adjust(int dir);
 
 /* siggen_ui.c */
 void draw_siggen_screen(uint32_t frame);

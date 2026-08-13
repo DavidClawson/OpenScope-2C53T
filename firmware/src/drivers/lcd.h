@@ -67,8 +67,8 @@
 #define GPIOD_CRL       (*(volatile uint32_t *)0x40011400)
 #define GPIOD_CRH       (*(volatile uint32_t *)0x40011404)
 
-/* GPIO port E registers (0x40011800) */
-#define GPIOE_CRL       (*(volatile uint32_t *)0x40011800)
+/* GPIO port E registers. */
+#define GPIOE_CRL       (*(volatile uint32_t *)(0x40010000UL + 6144UL))
 #define GPIOE_CRH       (*(volatile uint32_t *)0x40011804)
 
 /* GPIO config: AF push-pull output, 50MHz */
@@ -179,6 +179,7 @@ void lcd_set_window(uint16_t x, uint16_t y, uint16_t w, uint16_t h);
 
 /* Drawing primitives */
 void lcd_set_pixel(uint16_t x, uint16_t y, uint16_t color);
+void lcd_blit_rect(uint16_t x, uint16_t y, uint16_t w, uint16_t h, const uint16_t *pixels);
 void lcd_fill_rect(uint16_t x, uint16_t y, uint16_t w, uint16_t h, uint16_t color);
 void lcd_clear(uint16_t color);
 
@@ -204,6 +205,15 @@ void lcd_set_brightness(uint8_t level);  /* If backlight PWM is available */
 void lcd_display_on(void);
 void lcd_display_off(void);
 void lcd_set_orientation(uint8_t madctl);
+
+/* 4-bit indexed software shadow of pixels written through lcd_write_data().
+ * Used only for USB/debug screenshots when LCD GRAM readback is unreliable. */
+#define LCD_SHADOW_STRIDE  ((LCD_WIDTH + 1) / 2)
+#define LCD_SHADOW_HEIGHT  LCD_HEIGHT
+const uint8_t *lcd_shadow_bits(void);
+void lcd_shadow_clear(void);
+void lcd_shadow_set_page(uint16_t y);
+uint16_t lcd_shadow_page_y(void);
 
 /* Delay helper (platform-specific, must be provided) */
 extern void delay_ms(uint32_t ms);

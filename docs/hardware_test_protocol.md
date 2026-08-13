@@ -74,9 +74,53 @@ Simplest real-world measurement — use the built-in DMM to measure a battery.
 ### 2.1 DC Voltage
 - [ ] Switch to Multimeter mode
 - [ ] Plug multimeter leads into COM and V/Ω/C jacks
+- [ ] For live validation screenshots, frame the PSU/source terminals, both
+      leads, and the 2C53T COM + V/Ω/C jacks in the same still image. A source
+      display alone proves only the source setting, not that the DMM voltage
+      terminals are connected.
 - [ ] Measure a fresh AA battery (expect ~1.5V)
 - [ ] Reading displayed on screen (verify it's in the right ballpark)
-- [ ] LEFT/RIGHT cycles through sub-modes (all 10 render without crash)
+- [ ] LEFT/RIGHT cycles through sub-modes (all 11 render without crash)
+
+### 2.1a DMM voltage waveform overlay
+- [ ] Keep the multimeter leads in COM and V/Ω/C. Do not connect the
+      oscilloscope CH1/CH2 probes for this test.
+- [ ] In DC Voltage, Full layout shows the normal numeric DMM voltage plus a
+      compact ripple/shape panel.
+- [ ] Apply a safe low-voltage AC sine source through the DMM voltage jacks
+      (isolated function generator or low-voltage transformer output, not
+      mains). AC Voltage shows the normal numeric DMM voltage plus a compact
+      waveform panel.
+- [ ] In the USB debug shell, run `meter dump`, `meter mux-stream`, and
+      `meter wave` while the safe source is connected. With the host helper,
+      use `meter-dump`, `meter-mux-stream`, and `command "meter wave"`.
+      Capture the raw 12-byte DMM frame, decoded BCD, decimal position, unit,
+      `aux_freq_i10`, expected function/range selectors, GPIO frontend state,
+      recent FPGA USART command pairs, `samples_total`, `delta_250ms`, SPI path,
+      selector, raw min/max/RMS, estimated frequency, and the decoded DMM
+      reading. `delta_250ms` should show the case-5 sample path advancing much
+      faster than the few-hertz decoded DMM frames.
+- [ ] If `meter wave` shows flat samples, sweep the candidate path explicitly:
+      `meter wave reset`, `meter wave path direct`, `meter wave selector 0`,
+      `meter wave selector 1`, then repeat for `meter wave path preacq`.
+      Capture `last_pre`, `selector`, `last`, `min`, `max`, `ff`, `zero`, and
+      `p2p` for each combination. Through the host helper, run these with
+      `command "meter wave ..."` so each mutating diagnostic is visible in the
+      command log.
+- [ ] The waveform shape changes when the same safe source is changed from
+      sine to stepped/modified-square, clipped, or chopped output.
+- [ ] Numeric DMM voltage remains the authoritative reading; the waveform is a
+      shape/ripple aid, not a calibrated oscilloscope measurement.
+- [ ] Resistance, continuity, diode, capacitance, temperature, and current
+      modes do not show the waveform overlay.
+- [ ] Only after the low-voltage DMM-jack test passes, repeat with mains-rated
+      leads and normal mains safety practice if mains waveform inspection is
+      needed.
+- [ ] Mains validation must still use the multimeter COM and V/Ω/C jacks, not
+      CH1/CH2. On the 2026-06-05 bench unit, AC Voltage live mains produced
+      stable `227.5..227.8 V` and `aux_freq_i10=490`, but the waveform
+      sample path stayed flat `0xFF` across `direct/preacq` and selector `0/1`;
+      that is a failed waveform-source test, not a pass.
 
 ### 2.2 Meter layouts
 - [ ] OK cycles: Full → Chart → Stats → Full

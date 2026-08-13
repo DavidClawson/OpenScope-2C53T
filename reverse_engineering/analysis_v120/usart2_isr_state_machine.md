@@ -77,10 +77,11 @@ byte N arrives (N >= 3):
 
 ## What this fixes in our firmware / docs
 
-### CLAUDE.md line 29 and 150 are wrong
-Both say "10-byte TX / 12-byte RX" and "12-byte RX (0x5A 0xA5 data,
-0xAA 0x55 echo)". **The echo is 10 bytes, not 12.** Only the data
-frame is 12 bytes. Suggested corrections:
+### Older protocol summaries are incomplete
+Older summaries that say "10-byte TX / 12-byte RX" or group both
+`0x5A 0xA5` data and `0xAA 0x55` echo under 12-byte RX are incomplete.
+**The echo is 10 bytes, not 12.** Only the data frame is 12 bytes.
+Preferred wording:
 
 - Line 29: `9600 baud, 10-byte TX / 12-byte data RX / 10-byte echo RX`
 - Line 150: `10-byte TX frames (header + cmd + params + checksum),

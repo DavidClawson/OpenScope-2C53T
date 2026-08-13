@@ -31,10 +31,10 @@ Despite claiming "FPGA protocol 100% decoded", SPI3 MISO remained dead — the F
 - **Ours:** Wrote `GPIOC->scr = (1U << 11)` without calling `gpio_init()` — pin defaults to floating input on reset, so the write was silently ignored
 - **Fix:** Added `gpio_init(GPIOC, {PINS_11, OUTPUT})` before the scr write
 
-### 5. Missing Boot Commands 0x03, 0x04, 0x05 (MEDIUM)
-- **Stock:** Sends all 0x01-0x08 during USART boot sequence
-- **Ours:** Only sent 0x01, 0x02, 0x06, 0x07, 0x08 (skipped 0x03=trigger, 0x04=vertical scale, 0x05=channel enable)
-- **Fix:** Added the missing 3 commands
+### 5. Legacy boot-command finding superseded (2026-06-06)
+- **Stock V1.2.0:** The post-H2 bytes `1,2,6,7,8` are queued to SPI3 queue `0x20002D78`, not to the USART/DVOM wire queue.
+- **Open firmware:** Do not add 0x03/0x04/0x05 or replay `1,2,6,7,8` on the USART wire from this old note.
+- **Guard:** `scripts/test_stock_h2_table.py` verifies the stock queue payloads and target bytes.
 
 ### 6. Handshake Byte Count Wrong (MEDIUM)
 - **Stock:** Sends 4 bytes per CS transaction (0x00, 0x05, 0x00, 0x00) with leading dummy

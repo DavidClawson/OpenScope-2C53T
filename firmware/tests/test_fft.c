@@ -58,7 +58,7 @@ static void test_square_harmonics(void)
     printf("  Num peaks: %d\n", result.num_peaks);
     for (int i = 0; i < result.num_peaks && i < 4; i++)
         printf("  Peak %d: %.1f Hz @ %.1f dB\n",
-               i + 1, result.peaks[i].freq_hz, result.peaks[i].magnitude_db);
+               i + 1, result.peaks[i].freq_hz, result.peaks[i].level_db);
 
     ASSERT(result.num_peaks >= 3, "At least 3 peaks detected");
 
@@ -110,7 +110,7 @@ static void test_all_windows(void)
         int peak_bin = result.peaks[0].bin;
         float leakage = 0.0f, main_lobe = 0.0f;
         for (int i = 1; i < result.num_bins; i++) {
-            float linear = powf(10.0f, result.magnitude_db[i] / 20.0f);
+            float linear = powf(10.0f, result.level_db[i] / 20.0f);
             if (abs(i - peak_bin) <= 5)
                 main_lobe += linear;
             else

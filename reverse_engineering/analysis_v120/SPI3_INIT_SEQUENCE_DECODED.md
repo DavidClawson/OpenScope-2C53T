@@ -11,6 +11,14 @@ GPIO pin mux is correct (verified on hardware). This document decodes
 the exact stock firmware SPI3 initialization sequence to identify any
 missing steps.
 
+> 2026-06-06 correction: this is the SPI3 init choreography correction. The
+> early clock-only synchronization hypothesis was superseded by byte-accurate
+> stock disassembly and
+> `spi3_bulk_cal_resolved.md`. The stock-visible sequence is explicit SPI3 data
+> writes (`00 05 00 00`, delay, `12 00 00`, delay, `15 00 00 3B`), then the
+> 115,638-byte H2 table in 3-byte records, then `3A`/flush/CS deassert. MISO is
+> drained/discarded; no recovered FPGA ACK/apply status exists.
+
 ## Stock Firmware SPI3 Init Sequence
 
 The following sequence occurs in `FUN_08027a50` (the 15KB system init),
@@ -47,7 +55,9 @@ GPIOB_BSRR = 0x40;  // 0x40010C10: PB6 HIGH (CS deassert)
 ### Step 4: SPI3 peripheral init
 
 ```c
-// Init params: 0x100 (prescaler /4?), 0x1010100 (Mode 3 + master + 8bit?)
+// Init params: 0x00000100 and 0x01010100.
+// Byte-grounded at 0x080265CE and 0x080265D4; decoded by the stock SPI
+// helper as full-duplex master, Mode 3, 8-bit, MSB-first, software NSS, /2.
 FUN_0803a848(&SPI3_CTRL1, init_params);  // SPI3 base = 0x40003C00
 
 // Enable DMA request lines
@@ -80,28 +90,44 @@ do {
 } while (uVar15 != 0);
 ```
 
-### Step 7: SPI3 handshake (CRITICAL — 4 dummy exchanges)
+### Step 7: SPI3 handshake and H2 start opcode
 
-**After the 100ms delay, the stock firmware performs exactly 4 SPI3
-byte exchanges before the H2 upload loop.** Each exchange consists of:
+The later byte-accurate pass recovered the SPI3 data bytes that this older
+decompile summary missed. Stock performs explicit SPI3 transfers, not a
+mysterious clock-only synchronization phase:
 
-```c
-// Wait for TXE (TX buffer empty)
-while (!(SPI3_STS & 0x02)) {};  // 0x40003C08 bit 1
-
-// Wait for RXNE (RX buffer not empty) 
-while (!(SPI3_STS & 0x01)) {};  // 0x40003C08 bit 0
+```text
+0x0802676E.. phase-7 handshake:
+  CS_HI 00
+  CS_LO 05 00
+  CS_HI 00             ; sync/query group
+  delay
+  CS_LO 12 00
+  CS_HI 00             ; second command group
+  delay
+  CS_LO 15 00
+  CS_HI 00
+  CS_LO 3B             ; third command group plus H2 bulk-start opcode
 ```
 
-This pattern repeats 4 times. The stock firmware does NOT write explicit
-data to `SPI3_DT` during these 4 exchanges — it just polls TXE and RXNE.
-This suggests the TX buffer was pre-loaded or the FPGA is responding to
-the clock edges alone.
+The exact GPIO chip-select edges are still tracked through the stock CS writes,
+not inferred from RX contents. `0x3B` is the SPI3 session opcode that enters H2
+bulk-write mode; it is not a USART2 command and it is not present inside the H2
+table itself.
 
-**Then there's ANOTHER SysTick delay (~100ms).** Then 4 MORE SPI3
-TXE+RXNE polls.
+The stock pre-H2 CS edges are binary-guarded by
+`scripts/test_stock_h2_table.py`: `0x0802676E` deasserts PB6 CS before the
+first `0x00`, `0x080267B0` asserts CS before `0x05`, and `0x08026AE6`
+asserts CS before `0x3B`. The older unframed preamble model was a stale note,
+not stock evidence.
 
-### Step 8: H2 calibration bulk upload
+The same guard also pins the immediate pre-delay order:
+`0x080265E8..0x0802660C` sets SPI3 CTRL2 bits and SPE first,
+`0x0802661C..0x0802663C` configures/drives PC6 high second, and only then does
+stock enter the SysTick delay before `0x0802676E`. That ordering is a stock
+boot fact, not an H2 acceptance proof.
+
+### Step 8: H2 bulk table upload
 
 ```c
 iVar18 = 0;
@@ -116,8 +142,8 @@ do {
     // Wait RXNE again
     while (!(SPI3_STS & 0x01)) {};
     
-    // Read source byte from flash
-    puVar3 = &DAT_08051d1b + iVar18;
+    // Read source bytes from flash
+    puVar3 = &DAT_08051d19 + iVar18;
     
     // Two more TXE+RXNE polls
     while (!(SPI3_STS & 0x02)) {};
@@ -129,43 +155,63 @@ do {
 
 **KEY OBSERVATION:** The loop advances by 3 bytes per iteration
 (`iVar18 += 3`) and the total count is 115,638 (`0x1C3B6`). This means
-38,546 iterations, each transferring 3 bytes. The per-iteration pattern
-of 3 SPI exchanges (6 TXE+RXNE polls) matches a 3-byte-per-block
-transfer protocol.
+38,546 iterations, each transferring 3 bytes. The source data starts at
+`0x08051D19`, and the table SHA/layout are guarded by
+`scripts/test_stock_h2_table.py`.
 
-The source data starts at `DAT_08051d1b` (flash address `0x08051D1B`).
+Stock drains or ignores MISO during this loop. The current firmware's
+`h2_bytes_sent == 115638` diagnostic is therefore TX-side evidence only: it
+proves byte transmission, not FPGA acceptance/apply status and not DMM physical
+calibration correctness.
 
 ### Step 9: Post-upload handshake
 
 ```c
-// 4 more TXE+RXNE poll pairs (drain SPI buffers)
-
-// CS assert then deassert (toggle)
-GPIOB_BSRR_RESET = 0x40;  // 0x40010C14: PB6 LOW (CS assert)
-// ... TXE+RXNE polls ...
-GPIOB_BSRR_SET = 0x40;    // 0x40010C10: PB6 HIGH (CS deassert)
-
-// Write 0 to SPI3_DT
-SPI3_DT = 0;               // 0x40003C0C: flush
-
-// Disable SysTick
-SYSTICK_CTRL &= ~1;        // 0xE000E010: clear ENABLE bit
+// Stock-resolved post-H2 sequence:
+//   CS deassert; TX 0x00
+//   CS assert; TX 0x3A; TX 0x00
+//   CS deassert; TX 0x00
+//   CS assert; TX 0x00; CS deassert
+//   TX 0x00 final visible flush
 ```
 
-### Step 10: USART2 boot commands
+The resolved stock note pins these offsets:
+
+```text
+0x08026AE6: PB6 CS assert before H2 start
+0x08026B06..0x08026B08: send 0x3B
+0x08026B7C..0x08026C30: 38,546 x 3-byte H2 records
+0x08026C32: PB6 CS deassert
+0x08026C54: send 0x00 flush with CS HIGH
+0x08026C76: PB6 CS assert
+0x08026C96..0x08026C98: send 0x3A with CS LOW
+0x08026CD2: send 0x00 flush with CS LOW
+0x08026CF6: PB6 CS deassert
+0x08026D18: send 0x00 flush with CS HIGH
+0x08026D3A: PB6 CS assert
+0x08026D5C: send 0x00 flush with CS LOW
+0x08026D7E: PB6 CS deassert
+0x08026DA8: send 0x00 final visible flush with CS HIGH
+```
+
+### Step 10: post-H2 SPI3 queue triggers
 
 ```c
-// Queue USART2 commands via FUN_0803ecf0 (queue send):
-FUN_0803ecf0(queue, 1, ...);  // command 0x01: channel init
-FUN_0803ecf0(queue, 2, ...);  // command 0x02: siggen setup  
-FUN_0803ecf0(queue, 6, ...);  // command 0x06: siggen setup
-FUN_0803ecf0(queue, 7, ...);  // command 0x07: meter probe detect
-FUN_0803ecf0(queue, 8, ...);  // command 0x08: meter configure
+// Queue SPI3 acquisition triggers to 0x20002D78 via xQueueGenericSend:
+trigger = 1; xQueueGenericSend(*(0x20002D78), &trigger, ...);
+trigger = 2; xQueueGenericSend(*(0x20002D78), &trigger, ...);
+trigger = 6; xQueueGenericSend(*(0x20002D78), &trigger, ...);
+trigger = 7; xQueueGenericSend(*(0x20002D78), &trigger, ...);
+trigger = 8; xQueueGenericSend(*(0x20002D78), &trigger, ...);
 ```
+
+The byte/target extraction is guarded by `scripts/test_stock_h2_table.py`.
+These are not USART2/DVOM wire commands and not DMM multiplier coefficients.
 
 ### Step 11: PC4 conditional set
 
 ```c
+// 0x08026E2E..0x08026E8A, after SPI3 triggers 1,2,6,7,8 are queued
 CRM_APB2EN |= 0x10;  // GPIOC clock enable
 // Configure PC4 as output
 if (DAT_2000010f == 2) {
@@ -175,76 +221,39 @@ if (DAT_2000010f == 2) {
 }
 ```
 
-**PC4 is set conditionally based on `DAT_2000010f`.** This RAM variable
-comes from the `.data` init section (which is missing from our binary
-dump). Its default value determines whether PC4 starts HIGH or LOW.
+**PC4 is set conditionally based on `DAT_2000010f` / `ms[0x17]`.**
+STATE_STRUCTURE.md identifies this byte as `trigger_run_mode`:
+`0=AUTO`, `1=NORMAL`, `2=SINGLE`.  That makes the post-H2 PC4 branch a
+scope-state boundary, not a DMM range byte, not an H2 ACK/apply proof, and
+not a low-DCV correction.  This branch is left unimplemented until a stock `.data` default,
+stock/open trace, or measured multi-mode effect
+proves which PC4 level should be driven and what that level changes.
 
-## What's Different From the Custom Firmware?
-
-Compare this against the osc project's `fpga.c` init sequence:
+## Current Open-Firmware Boundary
 
 | Step | Stock firmware | Custom firmware | Match? |
 |------|---------------|-----------------|--------|
 | SPI3 clock enable | ✅ CRM_APB1EN \|= 0x8000 | ✅ Yes | ✅ |
 | GPIO PB3/4/5/6 config | ✅ 4 calls to pin config helper | ✅ Yes | ✅ |
 | CS deassert (PB6 HIGH) | ✅ Before SPI3 enable | ✅ Yes | ✅ |
-| SPI3 CTRL2 \|= 3 (DMA) | ✅ Before enable | ✅ Line 1577 | ✅ |
+| SPI3 CTRL2 \|= 3 (DMA) | ✅ Before enable | ✅ Yes | ✅ |
 | SPI3 CTRL1 \|= 0x40 (enable) | ✅ Yes | ✅ Yes | ✅ |
 | PC6 HIGH | ✅ After SPI3 enable | ✅ Yes | ✅ |
-| **100ms delay after PC6** | ✅ SysTick-based | **⚠️ Check** | **?** |
-| **4 dummy SPI exchanges** | ✅ TXE+RXNE polls ×4 | **❌ Not seen** | **❌** |
-| **Second 100ms delay** | ✅ SysTick-based | **❌ Not seen** | **❌** |
-| **4 more dummy exchanges** | ✅ TXE+RXNE polls ×4 | **❌ Not seen** | **❌** |
-| H2 bulk upload (3B/iter) | ✅ 38,546 iterations | **⚠️ Check format** | **?** |
-| Post-upload CS toggle | ✅ Assert then deassert | **⚠️ Check** | **?** |
-| SPI3_DT = 0 flush | ✅ After upload | **❌ Not seen** | **❌** |
-| USART2 commands 1,2,6,7,8 | ✅ After SPI3 complete | **⚠️ Check order** | **?** |
-| **PC4 conditional set** | ✅ Based on RAM flag | **❌ Unknown** | **❌** |
+| 100ms delay after SPI3 enable | ✅ SysTick-based | ✅ `systick_delay_ms(100)` | ✅ |
+| Handshake/start bytes | ✅ `00 05 00 00`, `12 00 00`, `15 00 00 3B` | ✅ same byte groups | ✅ |
+| H2 bulk upload | ✅ 38,546 x 3-byte records | ✅ same table and 3-byte loop | ✅ TX only |
+| Post-upload CS/`3A`/flush sequence | ✅ CS edges plus `3A`/flush | ✅ mirrored in `fpga.c` | ✅ TX only |
+| Post-H2 SPI3 queue triggers 1,2,6,7,8 | ✅ queued to `0x20002D78` after SPI3/H2 complete | ✅ queued to `spi3_acq_queue`; not sent as USART | partial |
+| PC4 conditional set | ✅ `0x08026E2E..0x08026E8A`, based on `DAT_2000010f` / `ms[0x17]` (`trigger_run_mode`) | documented unresolved; no open PC4 write yet | gap |
 
-## Critical Missing Steps
+## Remaining Gap
 
-### 1. The 4+4 dummy SPI exchanges (MOST LIKELY CAUSE)
-
-The stock firmware performs **8 dummy SPI3 exchanges** (4 before a delay,
-4 after) between PC6 going HIGH and the H2 upload starting. These are
-just TXE+RXNE polls without explicit data writes — they clock the SPI
-bus to synchronize with the FPGA's SPI slave.
-
-If the custom firmware jumps straight from PC6=HIGH to the H2 upload
-without these synchronization exchanges, the FPGA's SPI slave may never
-enter its receive-ready state. The FPGA might require seeing clock
-edges on SCK (from the dummy exchanges) as a "wake up" signal.
-
-### 2. The inter-exchange delays
-
-The stock firmware has ~100ms SysTick delays:
-- After PC6 goes HIGH (before first 4 dummy exchanges)
-- After first 4 dummy exchanges (before second 4)
-
-These delays give the FPGA time to enable its SPI slave logic after
-the enable signal.
-
-### 3. The 3-byte-per-iteration transfer format
-
-The H2 upload loop advances by 3 bytes per iteration, not 1. If the
-custom firmware sends bytes one at a time, the FPGA's SPI protocol
-state machine may not recognize the framing.
-
-### 4. PC4 conditional output
-
-PC4 is set HIGH or LOW based on a RAM flag at `DAT_2000010f`. This
-could be a hardware strapping pin (e.g., selecting between FPGA
-configuration modes). If it's wrong, the FPGA might be in the wrong
-mode to accept SPI3 data.
-
-## Recommended Test Sequence
-
-1. **Add the 8 dummy SPI3 exchanges** with 100ms delays between groups
-2. **Verify the 3-byte transfer framing** in the H2 upload loop
-3. **Check PC4** — try both HIGH and LOW to see if either enables FPGA SPI
-4. **Check the exact delay timing** — the stock firmware uses SysTick with
-   a system-clock-dependent reload value (`DAT_20002b20`)
-
-The dummy exchanges are the most likely fix. The FPGA probably needs to
-see SCK activity after PC6 goes HIGH before it enables its SPI slave
-data path. Without those clock edges, MISO stays tri-stated (0xFF).
+The current unresolved H2 question is not "add dummy exchanges". It is
+acceptance/effect: whether the FPGA accepted and applied the transmitted table,
+and whether that state explains low-DCV/current/low-Ohm physical correctness.
+Resolving that requires a stock/open-firmware SPI3 trace with MISO/CS timing or
+repeatable live validation across multiple DMM ranges after a preflighted
+OpenScope image. Until then, H2 byte count remains diagnostic only.  The PC4
+post-H2 trigger-run-mode boundary is a separate unresolved GPIO state boundary;
+it should not be used as a blind low-DCV or DMM-range fix without stock default
+or effect evidence.

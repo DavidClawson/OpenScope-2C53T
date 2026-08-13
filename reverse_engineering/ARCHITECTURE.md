@@ -504,15 +504,20 @@ The `meter_data_processor` (1776 bytes) applies double-precision floating-point 
 The `meter_mode_handler` (504 bytes) runs an 8-state finite state machine:
 
 ```
-State 0 (IDLE)       -- Check rx[7] bits for AC, auto-range, overload
-State 1 (POLARITY)   -- rx[7] bit 0 sets calibration coefficient
-State 2 (OVERLOAD)   -- Overload flag or range change detection
-State 3 (AC/DC)      -- rx[7] bit 2 = AC flag, rx[6] bit 6 = hold
-State 4 (RANGE)      -- rx[6] bits 4-5 = range, rx[7] bit 0 = polarity
-State 5 (AUTO-RANGE) -- Auto-range flag sets cal coefficient 0 or 4
-State 6 (STANDBY A)  -- rx[6] bit 4 selects cal coefficient
+State 0 (IDLE)       -- Check rx[7] status/format/overload bits
+State 1 (POLARITY)   -- rx[7] bit 0 participates in formatter/display state
+State 2 (OVERLOAD)   -- Overload flag or range-status branch
+State 3 (AC/DC)      -- rx[7] bit 2 is status/decimal helper, not AC evidence
+State 4 (RANGE)      -- rx[6] bits 4-5 are display/FSM status bits
+State 5 (AUTO-RANGE) -- Auto-range status updates formatter state
+State 6 (STANDBY A)  -- rx[6] bit 4 updates formatter/display state
 State 7 (STANDBY B)  -- Same
 ```
+
+Legacy correction (2026-06-06): `ms[0xF37]` is `DAT_2000102f`, the display
+decimal-shift state, not a recovered factory calibration coefficient. Current
+stock evidence does not prove `rx[7] bit 2` as AC-present confidence and does
+not recover a DMM-owned runtime analog range writer for `ms[0x02]`/`ms[0x03]`.
 
 ### Step 5: Display
 

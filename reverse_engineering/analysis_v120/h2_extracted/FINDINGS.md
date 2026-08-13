@@ -36,15 +36,23 @@ The 5-agent analysis is solid. Proceed to replay planning with confidence.
 
 The doc said the sentinel pattern "breaks down later where the data becomes
 denser/more variable." This extraction pins the boundary down precisely:
-the sentinel map is **four contiguous runs**, not a gradient.
+the sentinel map is **four contiguous runs**, not a gradient.  The H2 table
+binary guard in `scripts/test_stock_h2_table.py` checks these boundaries
+directly against stock `APP_2C53T_V1.2.0_251015.bin`, including the table
+SHA-256 `27ec73be12a946e1a53b5254a4c91707a78e6a79b6f9e96b0e070164454d1aa4`.
 
 | Run | Blocks | Byte range | Size | Sentinel? |
 |---|---|---|---|---|
 | 0 | 0–543 | `0x00000`–`0x153FF` | 87,040 B | **YES** (544 blocks) |
-| 1 | 544–567 | `0x15400`–`0x167FF` | 3,840 B | no (24 blocks) |
-| 2 | 568–569 | `0x16800`–`0x168FF` | 320 B | **YES** (2 blocks) |
-| 3 | 570–721 | `0x16900`–`0x1C37F` | 22,528 B | no (152 blocks) |
-| — | (tail) | `0x1C380`–`0x1C3B5` | 54 B | n/a (partial block) |
+| 1 | 544–567 | `0x15400`–`0x162FF` | 3,840 B | no (24 blocks) |
+| 2 | 568–569 | `0x16300`–`0x1643F` | 320 B | **YES** (2 blocks) |
+| 3 | 570–721 | `0x16440`–`0x1C33F` | 24,320 B | no (152 blocks) |
+| — | (tail) | `0x1C340`–`0x1C3B5` | 118 B | n/a (partial block) |
+
+Correction note, 2026-06-06: an earlier version of this synthesis had the
+Run 1/2/3 byte ranges and tail start wrong while the block counts were right.
+`722 * 160 = 0x1C340`, so the H2 tail bytes count is 118, not 54.  The
+guard above keeps the stock H2 geometry from drifting again.
 
 **Interpretation:** the table is two concatenated sub-tables with
 different internal formats.
@@ -207,6 +215,14 @@ graduated experiment**, not the single-shot full-table upload that the
 - Fall back to logic analyzer on a stock unit during boot (per
   `fpga_h2_spi3_bulk.md` §"Option A")
 
+### Current software boundary
+
+The H2 table binary guard proves stock extraction geometry only.  It is
+deliberately **no ACK/apply proof**: it does not show that the FPGA accepted
+the table, used it for DMM calibration, or produced any physical correction
+coefficient.  Treat H2/SPI3 as unresolved for DMM accuracy until stock traffic
+or guarded live evidence proves acceptance and effect.
+
 ### What MUST NOT be done
 - **No truncation inside a block.** If the tag is a checksum, mid-block
   truncation corrupts the checksum and the FPGA will reject. Always end
@@ -256,6 +272,12 @@ Both the bin and the analysis report are reproducible by running
 ---
 
 ## 10. Confidence assessment
+
+The extraction proves the table and structure, not the FPGA's acceptance of a
+custom replay. Current firmware diagnostics can prove only TX byte count unless
+a future stock xref or MISO/live trace recovers an ACK/apply condition. Treat
+the DMM calibration effect as unproven until bench evidence covers multiple DMM
+modes/ranges.
 
 | Claim | Confidence |
 |---|---|

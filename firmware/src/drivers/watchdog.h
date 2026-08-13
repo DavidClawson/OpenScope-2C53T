@@ -72,5 +72,6 @@ bool health_is_stalled(int slot);
 /* Display a fatal error on the LCD (red screen of death).
  * This bypasses FreeRTOS and writes directly to the LCD. */
 void fault_display(const char *title, const char *detail);
+void fault_assert(const char *file, int line);
 
 #endif /* WATCHDOG_H */

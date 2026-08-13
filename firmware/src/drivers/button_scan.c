@@ -61,6 +61,7 @@ static QueueHandle_t  s_button_queue = NULL;
 static volatile uint16_t s_raw_state = 0;
 static uint8_t s_debounce[NUM_BUTTONS] = {0};
 static uint16_t s_repeat[NUM_BUTTONS] = {0};
+static uint8_t s_started = 0;
 
 /* ═══════════════════════════════════════════════════════════════════
  * GPIO helpers — reconfigure pins each scan phase
@@ -186,6 +187,10 @@ void TMR3_GLOBAL_IRQHandler(void) {
     if (!(TMR3->ists & 0x01)) return;
     TMR3->ists &= ~0x01;
 
+    if (!s_started || s_button_queue == NULL) {
+        return;
+    }
+
     uint16_t events = matrix_scan();
     s_raw_state = events;
 
@@ -260,10 +265,15 @@ void button_scan_init(QueueHandle_t button_queue) {
     TMR3->pr    = 19;
     TMR3->cval  = 0;
     TMR3->ists  = 0;
-    TMR3->iden  = (1 << 0);  /* Update interrupt enable */
+    TMR3->iden  = 0;
 
     nvic_irq_enable(TMR3_GLOBAL_IRQn, 5, 0);
+}
 
+void button_scan_start(void) {
+    s_started = 1;
+    TMR3->ists = 0;
+    TMR3->iden = (1 << 0);   /* Update interrupt enable */
     TMR3->ctrl1 |= (1 << 0);  /* Counter enable */
 }
 
