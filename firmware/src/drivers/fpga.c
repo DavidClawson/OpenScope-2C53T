@@ -617,6 +617,10 @@ static void spi3_pump_h2_record(const uint8_t *tx, uint32_t n)
  * GPIO-mode vs AF is the remaining variable and Build B is next. See issue #18
  * and docs/bench_plan_2026-08-13.md. Success = CFG line shows D1 (DONE_FINAL)
  * and S1:037F (both phases confirmed at /256). */
+#ifndef FPGA_OMIT_05
+#define FPGA_OMIT_05  0
+#endif
+
 #ifndef FPGA_CONFIG_A
 #define FPGA_CONFIG_A  0
 #endif
@@ -3485,20 +3489,26 @@ uint8_t fpga_spi3_config_sequence(const fpga_cfg_seq_opts_t *opt)
      * init_hs[] capture indices are identical across all three. */
     if (opt->prelude_frame_mode == 1) {
         SPI3_CS_ASSERT();
-        fpga.init_hs[1] = spi3_xfer(0x05);
-        fpga.init_hs[2] = spi3_xfer(0x00);
+        if (!opt->omit_05) {
+            fpga.init_hs[1] = spi3_xfer(0x05);
+            fpga.init_hs[2] = spi3_xfer(0x00);
+        }
         fpga.init_hs[4] = spi3_xfer(0x12);
         fpga.init_hs[5] = spi3_xfer(0x00);
         fpga.init_hs[7] = spi3_xfer(0x15);
         fpga.init_hs[8] = spi3_xfer(0x00);
         SPI3_CS_DEASSERT();
     } else {
-        /* [1] 05 00 */
-        SPI3_CS_ASSERT();
-        fpga.init_hs[1] = spi3_xfer(0x05);
-        fpga.init_hs[2] = spi3_xfer(0x00);
-        SPI3_CS_DEASSERT();
-        cfg_trace_capture(opt, 1);   /* T1: after ERASE_SRAM */
+        /* [1] 05 00 — skipped entirely when omit_05 is set. init_hs[1]/[2] stay
+         * at their zero-init value, which is how the bench tells the frame was
+         * not sent (a real 0x05 frame records the MISO bytes here). */
+        if (!opt->omit_05) {
+            SPI3_CS_ASSERT();
+            fpga.init_hs[1] = spi3_xfer(0x05);
+            fpga.init_hs[2] = spi3_xfer(0x00);
+            SPI3_CS_DEASSERT();
+        }
+        cfg_trace_capture(opt, 1);   /* T1: after ERASE_SRAM (or in place of it) */
         fpga_scope_delay_ms(opt->prelude_gap_ms);
 
         /* [1b] Build A (2026-08-13): the maksidze/Stlkv V0.4 "richer prelude"
@@ -4295,6 +4305,16 @@ void fpga_init(void)
         .probe_edit     = 1,
 #else
         .upload_br      = SPI3_UPLOAD_BR,
+#endif
+#if FPGA_OMIT_05
+        /* 2026-08-13, issue #18: hardware-SPI path with 0x05 ERASE_SRAM omitted.
+         * The single-variable test maksidze proposed and we committed to running
+         * in parallel — it separates "bit-bang vs AF" from "no-0x05 vs 0x05",
+         * the confound our own Build A/B comparison could not break. probe_edit
+         * reads STATUS(0x41) after CONFIG_ENABLE so the overlay shows whether
+         * SYSTEM_EDIT_MODE engaged, which is the wall test proper. */
+        .omit_05        = 1,
+        .probe_edit     = 1,
 #endif
         .prelude_gap_ms = 100,
         .post_close_ms  = 600,

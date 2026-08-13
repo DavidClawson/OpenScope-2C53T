@@ -531,6 +531,25 @@ guest-configA: CFLAGS += -DGUEST_BUILD -DFPGA_USART_SILENT_SCOPE=1 -DFPGA_CONFIG
 guest-configA: LDSCRIPT = ld/at32f403a_guest.ld
 guest-configA: clean all
 
+# 0x05-omit test (2026-08-13, issue #18): the HARDWARE-SPI config path with the
+# 0x05 ERASE_SRAM frame skipped, so the prelude is 0x12 INIT_ADDR -> 0x15
+# CONFIG_ENABLE. This is the single-variable experiment maksidze proposed and we
+# committed to running in parallel.
+#
+# WHY: our working Build B bit-bang loader ALSO omits 0x05, while the failing
+# hardware-SPI loader sends it -- so "bit-bang vs AF-mode" and "no-0x05 vs 0x05"
+# have never been separated. maksidze's stock /64 capture already proved a GW1N
+# can be configured over slow hardware SPI, which excludes clock rate and leaves
+# the prelude as the live suspect.
+#
+# READ: the LCD overlay CFG: line. 0003F460 / D1 = DONE_FINAL set -> the prelude
+# was the answer all along, and we gain a config path ~100x faster than
+# bit-banging 115,638 bytes. 00039020 / D0 = unchanged wall -> 0x05 is not the
+# variable and the bit-bang/AF difference is what matters.
+guest-config05: CFLAGS += -DGUEST_BUILD -DFPGA_USART_SILENT_SCOPE=1 -DFPGA_OMIT_05=1
+guest-config05: LDSCRIPT = ld/at32f403a_guest.ld
+guest-config05: clean all
+
 # Build B (2026-08-13): true bit-bang transplant of the maksidze/Stlkv V0.4
 # loader (ported byte-for-byte from Stlkv/OpenScope-2C23T-2C53T-port). Runs the
 # whole SSPI handshake on GPIO-mode PB3/4/5/6 instead of the SPI3 peripheral,

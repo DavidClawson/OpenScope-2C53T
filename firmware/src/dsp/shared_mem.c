@@ -29,7 +29,7 @@ static const char *owner_names[SHMEM_OWNER_COUNT] = {
 /* RAM needs per owner */
 static const uint32_t owner_needs[SHMEM_OWNER_COUNT] = {
     0,
-    SHMEM_NEED_FFT,
+    SHMEM_NEED_FFT_TOTAL,   /* FFT proper + the waterfall sub-tenant */
     SHMEM_NEED_PERSISTENCE,
     SHMEM_NEED_SCREENSHOT,
     SHMEM_NEED_DECODE,

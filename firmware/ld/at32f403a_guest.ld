@@ -21,6 +21,13 @@ MEMORY
 {
   FLASH (rx)      : ORIGIN = 0x08007000, LENGTH = 996K
   RAM (xrw)       : ORIGIN = 0x20000000, LENGTH = 224K
+  /* SPIM is UNREACHABLE on 2C53T hardware — do not place anything here.
+   * 0x08400000 is the AT32 XIP window for an external SPI NOR chip, but the
+   * SPIM peripheral has only two fixed pin maps and both collide with pins
+   * this board has already spent — including PA11/PA12, which are USB D-/D+.
+   * Our W25Q128 is on SPI2 (PB12/13/14/15) and is read by streaming, not by
+   * memory mapping. This region is inherited Artery boilerplate; .spim is
+   * 0 bytes and must stay that way. See docs/roadmap.md. */
   SPIM (rx)       : ORIGIN = 0x08400000, LENGTH = 16384K
 }
 

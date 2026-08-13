@@ -86,6 +86,18 @@ static void fft_setup_pointers(uint8_t *pool)
 #endif
 }
 
+/* The waterfall history buffer is a sub-tenant of this region (see
+ * SHMEM_FFT_WATERFALL_OFFSET). Pin the relationship at compile time so raising
+ * FFT_SIZE, or switching to the larger radix-2 layout, breaks the build rather
+ * than silently overwriting the waterfall — or being overwritten by it. */
+#ifdef USE_CMSIS_DSP
+#define FFT_POOL_LAYOUT_END  (FFT_SIZE * 14 + FFT_BINS * 12)
+#else
+#define FFT_POOL_LAYOUT_END  (FFT_SIZE * 18 + FFT_BINS * 12)
+#endif
+_Static_assert(FFT_POOL_LAYOUT_END <= SHMEM_FFT_WATERFALL_OFFSET,
+               "FFT pool layout has grown into the waterfall sub-tenant region");
+
 /* Current configuration */
 static fft_config_t current_cfg;
 static bool initialized = false;
