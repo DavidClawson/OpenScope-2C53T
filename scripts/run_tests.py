@@ -33,6 +33,13 @@ from pathlib import Path
 SCRIPTS = Path(__file__).resolve().parent
 
 # Suites in rough order of how much they protect: flash safety first.
+#
+# test_firmware_build.py is last because it is by far the slowest (~15 s; it
+# compiles five targets from clean) and because a source-level failure is
+# usually easier to read after the cheap text checks have had their say. It is
+# also the only suite that runs a compiler over firmware/src at all -- until it
+# was added on 2026-08-13, a green gate was compatible with firmware that did
+# not build. See its module docstring.
 SUITES = (
     "test_iap_erase_guard.py",
     "test_flash_regions.py",
@@ -44,12 +51,28 @@ SUITES = (
     "test_stock_hybrid_power_hold_patch.py",
     "test_stock_settings.py",
     "test_stock_settings_diff.py",
+    "test_firmware_build.py",
 )
 
 RAN_RE = re.compile(r"^Ran (\d+) test", re.MULTILINE)
 SKIP_COUNT_RE = re.compile(r"skipped=(\d+)")
 # unittest -v prints:  test_name (module.Class.test_name) ... skipped 'reason'
-SKIP_LINE_RE = re.compile(r"^(\S+) \([^)]*\) \.\.\. skipped ['\"](.*)['\"]", re.MULTILINE)
+#
+# ...UNLESS the test has a docstring, in which case unittest puts its first
+# line on a SECOND line and the result trails that instead:
+#
+#   test_guest_builds (mod.Class.test_guest_builds)
+#   `make guest` -- the bench image. ... skipped 'reason'
+#
+# The original single-line pattern silently missed that form, and the fallback
+# below then reported every such skip as "(unnamed) / reason not reported" --
+# a reporter that loses the very information it exists to surface. Found
+# 2026-08-13 when test_firmware_build.py (whose tests all have docstrings) had
+# its skip reasons swallowed. The optional group absorbs the docstring line.
+SKIP_LINE_RE = re.compile(
+    r"^(?P<name>\S+) \([^)]*\)(?:\n.*?)? \.\.\. skipped ['\"](?P<reason>.*)['\"]",
+    re.MULTILINE,
+)
 # the non-unittest suites print a bare:  skipped 'reason'
 BARE_SKIP_RE = re.compile(r"^skipped ['\"](.*)['\"]\s*$", re.MULTILINE)
 
@@ -91,7 +114,9 @@ def run_suite(name: str) -> SuiteResult:
 
     ran = RAN_RE.search(result.output)
     result.ran = int(ran.group(1)) if ran else 0
-    result.skipped = [(m.group(1), m.group(2)) for m in SKIP_LINE_RE.finditer(result.output)]
+    result.skipped = [
+        (m.group("name"), m.group("reason")) for m in SKIP_LINE_RE.finditer(result.output)
+    ]
     result.skipped += [("(whole suite)", m.group(1)) for m in BARE_SKIP_RE.finditer(result.output)]
 
     # Suites that don't use unittest report their own totals; fall back to the
