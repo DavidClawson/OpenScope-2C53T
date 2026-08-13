@@ -212,6 +212,7 @@ uint8_t input_handle_button(button_id_t button, QueueHandle_t dq)
     /* -- Mode / Navigation ---------------------------------------- */
 
     case BTN_MENU:
+        meter_autoselect_cancel();
         if (current_mode == MODE_SETTINGS && settings_depth > 0) {
             settings_depth = 0;
             settings_sub_selected = 0;

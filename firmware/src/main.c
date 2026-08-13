@@ -639,7 +639,11 @@ int main(void)
     meter_data_init();
     meter_voltage_wave_init();
     startup_mode_load();
+#if FPGA_WARM_HANDOFF_TEST
+    current_mode = MODE_OSCILLOSCOPE;
+#else
     current_mode = startup_target_mode();
+#endif
 
     /* Factory calibration boundary: initialize the W25Q wrapper, then
      * leave the calibration mirror unloaded. Stock evidence has not

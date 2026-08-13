@@ -118,6 +118,11 @@ static bool meter_autoselect_cancel_requested(void)
     return cancel;
 }
 
+static bool meter_autoselect_mode_changed(void)
+{
+    return current_mode != MODE_MULTIMETER;
+}
+
 static void meter_autoselect_prepare_candidate(uint8_t submode)
 {
     meter_submode = submode;
@@ -142,6 +147,7 @@ static uint8_t meter_autoselect_wait_score(uint8_t submode,
         meter_reading_t snap;
 
         if (meter_autoselect_cancel_requested()) break;
+        if (meter_autoselect_mode_changed()) break;
         vTaskDelay(pdMS_TO_TICKS(METER_AUTOSELECT_POLL_MS));
         if (meter_data_snapshot(&snap)) {
             score = meter_auto_score(submode, &snap);
@@ -163,7 +169,6 @@ static void meter_autoselect_run_once(uint32_t settle_ms)
         (settle_ms < METER_AUTOSELECT_MIN_WAIT_MS) ?
         METER_AUTOSELECT_MIN_WAIT_MS : settle_ms;
 
-    current_mode = MODE_MULTIMETER;
     meter_layout = METER_LAYOUT_FULL;
     meter_autoselect_set_status(METER_AUTOSELECT_RUNNING, original_mode, 0,
                                 candidate_count, best_mode, best_score, 0,
@@ -173,7 +178,9 @@ static void meter_autoselect_run_once(uint32_t settle_ms)
         uint8_t submode = candidates[i];
         uint8_t score;
 
-        if (meter_autoselect_cancel_requested()) break;
+        if (meter_autoselect_cancel_requested() || meter_autoselect_mode_changed()) {
+            break;
+        }
 
         meter_autoselect_prepare_candidate(submode);
         meter_autoselect_set_status(METER_AUTOSELECT_RUNNING, submode, i,
@@ -190,10 +197,13 @@ static void meter_autoselect_run_once(uint32_t settle_ms)
                                     score, settle_ms, wait_budget_ms);
     }
 
-    if (meter_autoselect_cancel_requested()) {
-        best_mode = original_mode;
-        best_score = 0;
-        meter_autoselect_prepare_candidate(best_mode);
+    if (meter_autoselect_cancel_requested() ||
+        meter_autoselect_mode_changed()) {
+        if (!meter_autoselect_mode_changed()) {
+            best_mode = original_mode;
+            best_score = 0;
+            meter_autoselect_prepare_candidate(best_mode);
+        }
         meter_autoselect_set_status(METER_AUTOSELECT_CANCELLED, best_mode,
                                     candidate_count, candidate_count,
                                     best_mode, best_score, 0,
