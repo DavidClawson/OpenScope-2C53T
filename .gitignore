@@ -43,6 +43,7 @@ firmware/tests/test_math_measure
 firmware/tests/test_persistence
 firmware/tests/test_siggen
 firmware/tests/test_theme
+firmware/tests/test_waterfall_blit
 firmware/tests/test_xy_roll_trend
 
 # Compiled emulator tools
