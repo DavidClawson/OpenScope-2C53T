@@ -64,6 +64,23 @@ capture BSRAMs, which needs the spine → `GB{n}0` mapping (apicula has no GW1N-
 now a genuinely open coin-flip, not a near-certainty — which makes Step 0 more
 worth running, not less.
 
+**⚑ RESOLVED SAME NIGHT (progress log M11) — and it converges with Step 0b.**
+The spine → GB mapping was pinned by three independent anchors: the SPI receiver
+(`R16C9`, whose `LUT4_3.I0` *is* the SI pad) is clocked from **GB00** ⇒ GB00 =
+SCLK; all 15 IDDRC ADC input registers plus `BSRAM_0/3 CLKA` are on **GB20** ⇒
+GB20 = PLL out 1; the ADC clock-forward ODDR is on **GB50** ⇒ GB50 = PLL out 2
+(clock out on one PLL output, sample the return on another). The result:
+
+> **The scope capture BSRAMs (`BSRAM_0`/`BSRAM_3`) are written on the RAW PLL
+> CLOCK. `BSRAM_1`/`BSRAM_2` are written on a GATED FABRIC CLOCK** — GB40 ←
+> `LUT4 R4C13_LUT4_7` = `I3 | (I1 & I2)`, whose enable cone contains the SI pad
+> and the entire SPI receiver.
+
+So M8 was right about the path it examined and the rate control is on the *other*
+buffer — the same block Step 0b was already going to probe, reached from a
+completely different direction. **That raises Step 0b above Step 0 in priority:
+the timebase and the unknown read opcode now look like one mechanism.**
+
 So **run Step 0 as a falsification test, not an open question**, and keep it
 cheap: with the ESP32 driving a known 1 kHz square from the coldtrace path, send
 2–3 *wildly* different `tb_prescaler`/`tb_period` values.
@@ -98,14 +115,16 @@ Test: with `guest-coldtrace` running, sweep SPI3 read opcodes beyond the known
 words whose content tracks a slow input from the ESP32. Minutes on the existing
 rig, and a hit would hand us the slow timebase directly.
 
-**"Not simulable" was true for the wrong reason — and may be fixable
-(2026-08-13, M10).** The harness caveat is that `m_simarm` force-drives *every*
-GB tap from one common `clk`; SPI SCLK turns out to enter the design as a
-**dedicated clock input on its own spine** (pad `R19C5_IA` → BLBDCLK3 →
-SPINE16/24), so that force is exactly what overwrites the SPI domain. Driving
-the SCLK spine from the SCLK pad in the testbench should restore SPI address
-decode in sim — which would move this sweep (and Stlkv's arm-address sweep) off
-the bench entirely. Gated on resolving spine → `GB{n}0`; see M10.
+**⚠ THIS STAYS A BENCH TEST — the "make it simulable" idea was tried and
+REFUTED the same night (M11).** The plan was: SPI SCLK enters as a dedicated
+clock input on its own spine (pad `R19C5_IA` → BLBDCLK3 → SPINE16/24 → GB00),
+so the harness forcing *every* GB tap to one `clk` is what overwrites the SPI
+domain; drive GB00 from the SCLK pad instead and address decode should work.
+`m_spidomain.py` swept all 8 indices and **the SPI bit counter never advances,
+including on the correct index** — because its `CLEAR` (`R16C9_LB21`) has no
+driver. Systemic: **2521 of 13871 cell input pins (18%) in the unpacked netlist
+reach no driver**, mostly `F`/`LB`/`X`/`CIN` families. The harness limit is
+netlist completeness, not clock forcing. Do not re-derive the clock idea.
 
 **Step 1 — wire the config into the cold-boot path.** Integrate the timebase block
 (`fpga_send_scope_sequence`) after config+arm in the `guest-coldtrace` path, coexisting
