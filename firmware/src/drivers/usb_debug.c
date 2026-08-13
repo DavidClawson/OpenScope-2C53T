@@ -312,6 +312,59 @@ static int parse_wire_bank_mode(const char *args, uint8_t *bank_mode)
     return -1;
 }
 
+/* ═══════════════════════════════════════════════════════════════════
+ * Which FPGA config path ran this boot — the witness the status shell
+ * needs before it is allowed to report anything about configuration.
+ *
+ * WHY THIS EXISTS. On 2026-08-13 the `status` command printed an FPGA
+ * config REFUSAL on a device that was configured and capturing: it read
+ * hardware-SPI-only fields on a bit-bang (FPGA_CONFIG_B) build, where
+ * that path never runs and the fields sit at their zero-init values.
+ * Zero is a plausible reading, so the shell reported it as one.
+ *
+ * The same hole was still open in the other direction. On a build where
+ * NO config path runs at all — FPGA_WARM_HANDOFF_TEST (stock configured
+ * the part before the handoff) or FPGA_BUS_RELEASED_BOOT — fpga_init()
+ * returns before any config sequence, every cfg_* field stays zero, and
+ * the old two-way test (marker present? no) labelled that "hardware
+ * SPI3" and decoded the all-zero STATUS as "NOT configured". Both halves
+ * of that sentence were fabricated.
+ *
+ * Evidence used, in order:
+ *   h2_upload_done  set to 1 by BOTH config paths (fpga.c bit-bang ~2209,
+ *                   hardware-SPI ~2562) and by nothing else. Clear => no
+ *                   config sequence ran this boot, so NOTHING downstream
+ *                   of it may be reported as a measurement.
+ *   diag_spi_ctrl1  == 0xBBBB is not a register value; the bit-bang
+ *                   sequence stores it as a path marker (fpga.c ~2169).
+ *                   The hardware-SPI path leaves the real CTRL1 there.
+ *
+ * This is inference from runtime witnesses on purpose: the config
+ * sequences themselves are bench-validated and are not to be edited to
+ * add a flag. `fpga reinit` re-runs the hardware-SPI path from the shell
+ * and correctly re-labels the result, because it rewrites both witnesses.
+ * ═══════════════════════════════════════════════════════════════════ */
+typedef enum {
+    CFG_PATH_NONE = 0,   /* no config sequence ran this boot */
+    CFG_PATH_BITBANG,    /* fpga_bitbang_config_sequence() (FPGA_CONFIG_B) */
+    CFG_PATH_HWSPI,      /* fpga_spi3_config_sequence() */
+} cfg_path_t;
+
+static cfg_path_t fpga_cfg_path(void)
+{
+    if (!fpga.h2_upload_done) return CFG_PATH_NONE;
+    return (fpga.diag_spi_ctrl1 == 0xBBBBu) ? CFG_PATH_BITBANG : CFG_PATH_HWSPI;
+}
+
+static const char *fpga_cfg_path_name(cfg_path_t p)
+{
+    switch (p) {
+    case CFG_PATH_BITBANG: return "GPIO bit-bang (FPGA_CONFIG_B)";
+    case CFG_PATH_HWSPI:   return "hardware SPI3";
+    default:               return "NONE — no config sequence ran this boot";
+    }
+}
+
 static void fpga_diag_snapshot_take(fpga_diag_snapshot_t *snap)
 {
     snap->tx_count = fpga.tx_count;
@@ -363,8 +416,12 @@ static void fpga_diag_clear(void)
 
 static void fpga_stock_diag_print(void)
 {
+    /* MCU-SIDE MODEL, NOT A DEVICE READ. Every field here is written by our own
+     * `fpga stock ...` commands (fpga_stock_shadow_write); nothing in it is
+     * clocked off the FPGA. All-zero means "not seeded", not "the FPGA reports
+     * zero". Labelled because it prints next to blocks that ARE device reads. */
     usb_debug_printf(
-        "\r\n=== Stock Shadow ===\r\n"
+        "\r\n=== Stock Shadow (MCU-side model — not read from the FPGA) ===\r\n"
         "F68..6B: %u / %u / %u / %u\r\n"
         "E1A..D:  %u / %u / %u / %u\r\n"
         "0x355:   %u\r\n",
@@ -503,8 +560,7 @@ static void cmd_status(void)
         "Data frames: %u\r\n"
         "Echo frames: %u\r\n"
         "SPI3 OK: %u\r\n"
-        "SPI3 timeouts: %u (total %u)\r\n"
-        "SPI3 first byte: 0x%02X\r\n",
+        "SPI3 timeouts: %u (total %u)\r\n",
         (unsigned long)uptime_seconds,
         system_core_clock / 1000000,
         fpga.initialized ? "YES" : "NO",
@@ -514,9 +570,18 @@ static void cmd_status(void)
         fpga.frame_count,
         fpga.echo_count,
         fpga.spi3_ok_count,
-        fpga.spi3_timeout_count, fpga.spi3_total_timeouts,
-        fpga.spi3_first_byte
+        fpga.spi3_timeout_count, fpga.spi3_total_timeouts
     );
+
+    /* spi3_first_byte is written only when an acquisition read is actually
+     * attempted (fpga.c ~1589 normal path, ~1718 warm-handoff 0x04 path). With
+     * no attempt it is still 0x00 from .bss, which is indistinguishable from a
+     * real 0x00 off the wire. Counters are the witness: a read attempt either
+     * succeeds (ok_count) or times out (total_timeouts). */
+    if (fpga.spi3_ok_count == 0 && fpga.spi3_total_timeouts == 0)
+        usb_send_str("SPI3 first byte: n/a (no acquisition read attempted yet)\r\n");
+    else
+        usb_debug_printf("SPI3 first byte: 0x%02X\r\n", fpga.spi3_first_byte);
 
     /* Split FPGA diag into separate printf to avoid buffer overflow */
     usb_debug_printf(
@@ -528,8 +593,8 @@ static void cmd_status(void)
         /* 0xBBBB is not a register value — fpga_bitbang_config_sequence()
          * stores it as a "this was the bit-bang build" marker. Printing it
          * bare invites reading it as a real CTRL1. */
-        "SPI3 CTRL1: 0x%04lX%s  STS: 0x%04lX\r\n"
-        "PB4(MISO) IDT: %d  PC6(EN): %d  PB6(CS): %d\r\n",
+        "SPI3 CTRL1: 0x%04lX%s  STS: 0x%04lX (both captured at SPI3 init)\r\n"
+        "PB4(MISO) IDT: %d  PC6(EN): %d  PB6(CS): %d (live pin reads)\r\n",
         fpga.diag_remap5,
         fpga.diag_remap7,
         (unsigned long)IOMUX->remap,
@@ -542,17 +607,40 @@ static void cmd_status(void)
         (GPIOB->idt & (1 << 6)) ? 1 : 0
     );
 
-    usb_debug_printf(
-        "\r\n=== SPI3 Handshake (11 bytes) ===\r\n"
-        "G1: %02X %02X %02X %02X  G2: %02X %02X %02X\r\n"
-        "G3: %02X %02X %02X %02X  Probe: %02X\r\n"
-        "BB: idle=%02X cs=%02X byte=%02X marker=%02X\r\n",
-        fpga.init_hs[0], fpga.init_hs[1], fpga.init_hs[2], fpga.init_hs[3],
-        fpga.init_hs[4], fpga.init_hs[5], fpga.init_hs[6],
-        fpga.init_hs[7], fpga.init_hs[8], fpga.init_hs[9], fpga.init_hs[10],
-        fpga.init_hs[11],
-        fpga.bb_idle, fpga.bb_cs, fpga.bb_byte, fpga.bb_marker
-    );
+    /* ── SPI3 handshake MISO capture ──────────────────────────────────────
+     *
+     * init_hs[0..10] is written ONLY by fpga_spi3_config_sequence() (fpga.c
+     * ~2449-2550). The bit-bang path does not touch it, and a build that runs
+     * no config path at all does not either — so on those builds G1/G2/G3 read
+     * 00 00 00 00, which is also what a dead MISO line looks like. That is the
+     * exact defect fixed for the H2 block on 2026-08-13, still open here.
+     *
+     * init_hs[11] ("Probe") is separate: it is written in fpga_init() Step 10
+     * (fpga.c ~3493), which runs on the hardware-SPI AND bit-bang boots but is
+     * skipped by the warm-handoff / bus-released early return. diag_probe_valid
+     * is set on the same line, so it is reported on its own witness rather than
+     * being lumped in with the handshake bytes. */
+    {
+        cfg_path_t path = fpga_cfg_path();
+
+        usb_send_str("\r\n=== SPI3 Handshake (11 bytes) ===\r\n");
+        if (path == CFG_PATH_HWSPI) {
+            usb_debug_printf(
+                "G1: %02X %02X %02X %02X  G2: %02X %02X %02X\r\n"
+                "G3: %02X %02X %02X %02X\r\n",
+                fpga.init_hs[0], fpga.init_hs[1], fpga.init_hs[2], fpga.init_hs[3],
+                fpga.init_hs[4], fpga.init_hs[5], fpga.init_hs[6],
+                fpga.init_hs[7], fpga.init_hs[8], fpga.init_hs[9], fpga.init_hs[10]);
+        } else {
+            usb_debug_printf("G1/G2/G3: n/a — never captured (config path: %s)\r\n",
+                             fpga_cfg_path_name(path));
+        }
+
+        if (fpga.diag_probe_valid)
+            usb_debug_printf("Probe (post-init 0xFF): %02X\r\n", fpga.init_hs[11]);
+        else
+            usb_send_str("Probe (post-init 0xFF): n/a — fpga_init Step 10 did not run\r\n");
+    }
 
     /* ── Config status: the field that actually says whether we configured ──
      *
@@ -572,34 +660,62 @@ static void cmd_status(void)
                       ((uint32_t)fpga.cfg_status_reg[1] << 16) |
                       ((uint32_t)fpga.cfg_status_reg[2] << 8)  |
                       (uint32_t)fpga.cfg_status_reg[3];
-        int bitbang = (fpga.diag_spi_ctrl1 == 0xBBBBu);  /* marker set by the
-                                                          * bit-bang sequence */
-        usb_debug_printf(
-            "\r\n=== FPGA Config ===\r\n"
-            "path: %s\r\n"
-            "STATUS(0x41): %08lX  DONE_FINAL(13): %s\r\n",
-            bitbang ? "GPIO bit-bang (FPGA_CONFIG_B)" : "hardware SPI3",
-            (unsigned long)sr,
-            ((sr >> 13) & 1u) ? "SET — configured" : "clear — NOT configured");
+        cfg_path_t path = fpga_cfg_path();
 
-        usb_debug_printf("\r\n=== H2 Bitstream Upload ===\r\n"
-                         "Bytes sent: %lu / 115638\r\n"
-                         "Upload done: %s\r\n",
-                         fpga.h2_bytes_sent,
-                         fpga.h2_upload_done ? "YES" : "NO");
+        usb_debug_printf("\r\n=== FPGA Config ===\r\n"
+                         "path: %s\r\n", fpga_cfg_path_name(path));
 
-        /* The two hardware-SPI-only readbacks. Suppress them on the bit-bang
-         * path rather than printing zeros that read as a refusal. */
-        if (bitbang) {
-            usb_send_str("0x3A close status: n/a (bit-bang path does not read it)\r\n"
-                         "0x03 scope status: n/a (bit-bang path does not read it)\r\n");
+        if (path == CFG_PATH_NONE) {
+            /* Nothing below this line was measured. Say so and print nothing
+             * that could be mistaken for a reading — cfg_status_reg,
+             * probe_id_bit_close, h2_close_status and scope_status are all
+             * still at their .bss zeros, and probe_id_bit_close == 0 in
+             * particular would otherwise decode as "anchor matched at bit 0". */
+            usb_send_str(
+                "STATUS(0x41):  n/a — not read\r\n"
+                "IDCODE anchor: n/a — not read\r\n"
+                "H2 upload:     n/a — no bitstream sent this boot\r\n"
+                "0x3A close status: n/a\r\n"
+                "0x03 scope status: n/a\r\n"
+                "NOTE: on a warm-handoff or bus-released build the FPGA may be\r\n"
+                "      fully configured by stock; this shell simply cannot see it.\r\n");
         } else {
+            /* ANCHOR FIRST — the project's mandatory method (CLAUDE.md, Exp J).
+             * fpga.c reads IDCODE at /256 in the SAME window as this status, so
+             * the status is only believed on a read path validated against a
+             * known answer. The shell never showed it, which left STATUS looking
+             * like a bare fact. Exp L: a part that configured successfully STOPS
+             * answering SSPI, so id_bit_close < 0 is the success-shaped reading
+             * and id_bit_close >= 0 proves the port never closed. */
             usb_debug_printf(
-                "0x3A close status: %02X (stock: F8)\r\n"
-                "0x03 scope status: %02X %02X %02X %02X (stock: 00 01 42 2E)\r\n",
-                fpga.h2_close_status,
-                fpga.scope_status[0], fpga.scope_status[1],
-                fpga.scope_status[2], fpga.scope_status[3]);
+                "STATUS(0x41): %08lX  DONE_FINAL(13): %s\r\n"
+                "IDCODE anchor after close: %s\r\n",
+                (unsigned long)sr,
+                ((sr >> 13) & 1u) ? "SET — configured" : "clear — NOT configured",
+                (fpga.probe_id_bit_close < 0)
+                    ? "silent (config port closed — consistent with configured;"
+                      " a dead bus reads the same)"
+                    : "still answering 0x0120681B => port OPEN => NOT configured");
+
+            usb_debug_printf("\r\n=== H2 Bitstream Upload ===\r\n"
+                             "Bytes sent: %lu / 115638\r\n"
+                             "Upload done: %s\r\n",
+                             fpga.h2_bytes_sent,
+                             fpga.h2_upload_done ? "YES" : "NO");
+
+            /* The two hardware-SPI-only readbacks. Suppress them on the bit-bang
+             * path rather than printing zeros that read as a refusal. */
+            if (path == CFG_PATH_BITBANG) {
+                usb_send_str("0x3A close status: n/a (bit-bang path does not read it)\r\n"
+                             "0x03 scope status: n/a (bit-bang path does not read it)\r\n");
+            } else {
+                usb_debug_printf(
+                    "0x3A close status: %02X (stock: F8)\r\n"
+                    "0x03 scope status: %02X %02X %02X %02X (stock: 00 01 42 2E)\r\n",
+                    fpga.h2_close_status,
+                    fpga.scope_status[0], fpga.scope_status[1],
+                    fpga.scope_status[2], fpga.scope_status[3]);
+            }
         }
     }
 
@@ -817,9 +933,17 @@ static void cmd_gpio_read(const char *args)
 
 static void cmd_gpio_scan(void)
 {
+    /* Live IDT reads throughout — every number below is measured, not cached.
+     * The LABELS are the fallible part: PB11's is flagged because the project
+     * no longer believes it (ripcord static sweep 2026-08-12 — stock writes
+     * PB11 only from CH2 analog range/cal code, never in master_init or the
+     * config window, so it is probably a CH2 attenuator relay). A diagnostic
+     * that asserts a pin's function more confidently than the evidence does is
+     * the same failure as printing an unmeasured value. */
     usb_send_str("=== FPGA Control Pins ===\r\n");
     usb_debug_printf("PC6  (SPI enable):  %d\r\n", (GPIOC->idt & (1 << 6))  ? 1 : 0);
-    usb_debug_printf("PB11 (active mode): %d\r\n", (GPIOB->idt & (1 << 11)) ? 1 : 0);
+    usb_debug_printf("PB11 (\"active mode\" — name DISPUTED, likely CH2 atten): %d\r\n",
+                     (GPIOB->idt & (1 << 11)) ? 1 : 0);
     usb_debug_printf("PC0  (data ready):  %d\r\n", (GPIOC->idt & (1 << 0))  ? 1 : 0);
     usb_debug_printf("PC11 (meter MUX):   %d\r\n", (GPIOC->idt & (1 << 11)) ? 1 : 0);
 
@@ -2152,21 +2276,47 @@ static void cmd_spi3_gowin(void)
         uint32_t usr = spi3_gowin_read_reg(0x13);   /* READ_USERCODE */
         uint32_t st  = spi3_gowin_read_reg(0x41);   /* READ_STATUS   */
 
-        usb_debug_printf("\r\n[clk %s]\r\n", SPEEDS[s].label);
+        /* The IDCODE read in THIS window, at THIS clock, is the anchor: it is
+         * the only value here with an independently known correct answer
+         * (0x0120681B, from the Gowin .fs preamble at file offset 0x4AD19).
+         * If it does not match, the read path is not trustworthy and neither
+         * is the STATUS taken through it — so the decode is withheld rather
+         * than printed as a list of named bits.
+         *
+         * This is not hypothetical. The /2 pass below is KNOWN BAD (fpga.c
+         * ~1564: at /2 the MISO bit is latched one edge early). Six weeks of
+         * this project ran on "0x8001C810 = READY POR", which was 0x00039020
+         * shifted by one bit and set bits 4/11/31 that are not defined Gowin
+         * bits at all. The old code here printed that decode with no caveat. */
+        int anchored = (id == 0x0120681BUL);
+
+        usb_debug_printf("\r\n[clk %s]%s\r\n", SPEEDS[s].label,
+                         SPEEDS[s].br == 0
+                             ? "  <-- KNOWN-INVALID READ CLOCK (fpga.c:1564);"
+                               " kept only as the negative control"
+                             : "");
         usb_debug_printf("IDCODE  (0x11): 0x%08lX  %s\r\n", id,
-                         id == 0x0120681BUL ? "== GW1N-2 OK (read path works!)"
-                                            : "!= 0x0120681B");
-        usb_debug_printf("USERCODE(0x13): 0x%08lX\r\n", usr);
-        usb_debug_printf("STATUS  (0x41): 0x%08lX\r\n", st);
-        usb_send_str("  decode:");
-        int any = 0;
-        for (unsigned i = 0; i < sizeof(STATUS_BITS) / sizeof(STATUS_BITS[0]); i++) {
-            if (st & STATUS_BITS[i].mask) {
-                usb_debug_printf(" [%s]", STATUS_BITS[i].name);
-                any = 1;
+                         anchored ? "== GW1N-2 OK (read path ANCHORED)"
+                                  : "!= 0x0120681B -> READ PATH NOT ANCHORED");
+        usb_debug_printf("USERCODE(0x13): 0x%08lX%s\r\n", usr,
+                         anchored ? "" : "  (unanchored — do not quote)");
+        usb_debug_printf("STATUS  (0x41): 0x%08lX%s\r\n", st,
+                         anchored ? "" : "  (unanchored — do not quote)");
+        if (!anchored) {
+            usb_send_str("  decode: WITHHELD — the anchor failed, so this word is not\r\n"
+                         "          known to be a register value. A stable wrong number\r\n"
+                         "          is indistinguishable from a right one.\r\n");
+        } else {
+            usb_send_str("  decode:");
+            int any = 0;
+            for (unsigned i = 0; i < sizeof(STATUS_BITS) / sizeof(STATUS_BITS[0]); i++) {
+                if (st & STATUS_BITS[i].mask) {
+                    usb_debug_printf(" [%s]", STATUS_BITS[i].name);
+                    any = 1;
+                }
             }
+            usb_send_str(any ? "\r\n" : " (no bits set)\r\n");
         }
-        usb_send_str(any ? "\r\n" : " (no bits set)\r\n");
     }
 
     /* Restore the original CTRL1 (baud + SPE) for the rest of the system. */
@@ -2176,8 +2326,13 @@ static void cmd_spi3_gowin(void)
         *ctrl1 = saved;
     }
 
-    usb_send_str("\r\nHealthy running FPGA expects IDCODE 0x0120681B + Done Final/VLD/Ready.\r\n"
-                 "If slow clock reads it but fast doesn't -> SSPI read path is clock-limited.\r\n");
+    usb_send_str("\r\nHow to read this (Exps J and L, 2026-07-28):\r\n"
+                 "  IDCODE 0x0120681B at /256 = read path is valid; STATUS can be trusted.\r\n"
+                 "  IDCODE silent/zero at /256 = the SSPI config port has CLOSED. That is\r\n"
+                 "    what a SUCCESSFULLY CONFIGURED part looks like (the pins belong to the\r\n"
+                 "    user design from then on) -- but a dead bus looks identical, so\r\n"
+                 "    corroborate with DONE_FINAL from the config path and a live trace.\r\n"
+                 "  The /2 pass is expected to be garbage; it is the negative control.\r\n");
 }
 
 /* spi3 scopetest [bank] — run the FULL runtime scope-capture sequence the
