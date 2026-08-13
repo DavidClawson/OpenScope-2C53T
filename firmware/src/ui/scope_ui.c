@@ -1285,6 +1285,64 @@ static void format_freq(float freq_hz, char *buf, int bufsize)
     buf[pos] = '\0';
 }
 
+/* ── Display reference auto-ranging ─────────────────────────────────
+ *
+ * fft_process() reports magnitude in dB relative to ONE ADC COUNT
+ * (20*log10(|X| * 2/N), |X| in counts) — not dBFS. A full-scale signal
+ * therefore peaks near 20*log10(32767) = 90 dB, and the configured default
+ * ref_level_db = 0.0 puts the top of the display ~90 dB BELOW the signal:
+ * every populated bin clamps to normalized = 0, i.e. the top colour of the
+ * ramp. Measured on the host with the same synthetic 1 kHz square the UI
+ * feeds itself (scratch probe, 2026-08-13): peak = 84.4 dB, and 318 of the
+ * 320 waterfall columns land in the RED band. That is the "hot red field
+ * with thin nulls" seen on the bench the same day.
+ *
+ * Fix: track the observed peak instead of hard-coding a magic 90. The
+ * reference follows frame_max + headroom, moving up immediately (so a
+ * growing signal never clips against the top) and easing down slowly
+ * through a dead band (so a jittering peak does not make the colours
+ * breathe). cfg->ref_level_db is preserved as a USER TRIM applied on top,
+ * which keeps fft_adjust_ref_level() meaningful.
+ *
+ * Known limit, stated rather than hidden: this ranges off the peak only. A
+ * spectrum with no dynamic range (broadband noise and nothing else) has its
+ * mean within ~10-15 dB of its peak and will still render as a flat, fairly
+ * hot field. That is a true statement about such a signal; distinguishing it
+ * would need a floor estimator as well, which is not warranted until real
+ * captured data (rather than the synthetic square below) drives this view.
+ */
+#define FFT_REF_HEADROOM_DB   6.0f   /* keep the peak just below the top    */
+#define FFT_REF_DEAD_BAND_DB  3.0f   /* ignore downward wobble below this   */
+#define FFT_REF_DECAY         0.10f  /* per-frame fraction on the way down  */
+
+static float fft_ref_tracked = 0.0f;
+static bool  fft_ref_primed  = false;
+
+static float fft_display_ref(const fft_config_t *cfg, const float *data,
+                             uint16_t start_bin, uint16_t end_bin)
+{
+    if (end_bin >= FFT_BINS) end_bin = FFT_BINS - 1;
+    if (start_bin > end_bin) start_bin = end_bin;
+
+    float peak = data[start_bin];
+    uint16_t b;
+    for (b = (uint16_t)(start_bin + 1); b <= end_bin; b++)
+        if (data[b] > peak) peak = data[b];
+
+    float target = peak + FFT_REF_HEADROOM_DB;
+
+    if (!fft_ref_primed) {
+        fft_ref_tracked = target;
+        fft_ref_primed = true;
+    } else if (target > fft_ref_tracked) {
+        fft_ref_tracked = target;                       /* attack: immediate */
+    } else if (fft_ref_tracked - target > FFT_REF_DEAD_BAND_DB) {
+        fft_ref_tracked += (target - fft_ref_tracked) * FFT_REF_DECAY;
+    }
+
+    return fft_ref_tracked + cfg->ref_level_db;
+}
+
 static void draw_fft_region(uint16_t y_top, uint16_t height)
 {
     const fft_config_t *cfg = fft_get_config();
@@ -1300,12 +1358,16 @@ static void draw_fft_region(uint16_t y_top, uint16_t height)
     const float *draw_data = (fft_result.avg_db != NULL)
                              ? fft_result.avg_db : fft_result.magnitude_db;
 
-    float ref_db = cfg->ref_level_db;
-    float range_db = cfg->db_range;
     uint16_t zoom_start = cfg->zoom_start_bin;
     uint16_t zoom_end = cfg->zoom_end_bin;
     uint16_t zoom_span = zoom_end - zoom_start;
     uint16_t x;
+
+    /* Same auto-ranged reference the waterfall uses: with the configured
+     * ref_level_db = 0 every bar pinned to full height, because the dB scale
+     * is relative to one count, not to full scale. See fft_display_ref(). */
+    float ref_db = fft_display_ref(cfg, draw_data, zoom_start, zoom_end);
+    float range_db = cfg->db_range;
 
     for (x = 0; x < LCD_WIDTH; x++) {
         uint16_t bin = zoom_start + (uint16_t)((uint32_t)x * zoom_span / LCD_WIDTH);
@@ -1474,14 +1536,26 @@ _Static_assert(WATERFALL_COLS == LCD_WIDTH,
  */
 static uint16_t waterfall_line[WATERFALL_COLS];
 
+/*
+ * Intensity -> colour, with a BLACK floor.
+ *
+ * intensity 0 = at/above the display reference, 255 = at/below the floor
+ * (reference - db_range). The old ramp ended at pure blue, so the noise
+ * floor painted the plot solid blue and only the very top 20% of the scale
+ * was red; combined with the reference bug (see fft_display_ref) that made
+ * the whole plot one flat colour. This one runs black -> blue -> cyan ->
+ * yellow -> red in four equal 64-step segments, which is the conventional
+ * spectrogram ordering and puts "nothing here" at black.
+ */
 static uint16_t intensity_to_color(uint8_t intensity)
 {
-    uint8_t inv = 255 - intensity;
-    if (inv > 204) return COLOR_RED;
-    if (inv > 153) return RGB565(255, (uint8_t)((inv - 153) * 5), 0);
-    if (inv > 102) return RGB565((uint8_t)((153 - inv + 102) * 5), 255, 0);
-    if (inv > 51)  return RGB565(0, 255, (uint8_t)((inv - 51) * 5));
-    return RGB565(0, (uint8_t)(inv * 5), 255);
+    uint16_t level = (uint16_t)(255u - intensity);   /* 0 = floor, 255 = hot */
+    uint8_t  t = (uint8_t)((level & 63u) * 4u);      /* position in segment  */
+
+    if (level < 64)  return RGB565(0, 0, t);                        /* black->blue  */
+    if (level < 128) return RGB565(0, t, 255);                      /* blue ->cyan  */
+    if (level < 192) return RGB565(t, 255, (uint8_t)(255 - t));     /* cyan ->yellow*/
+    return RGB565(255, (uint8_t)(255 - t), 0);                      /* yellow->red  */
 }
 
 void draw_waterfall_screen(void)
@@ -1510,11 +1584,12 @@ void draw_waterfall_screen(void)
      * and restart from row 0 instead of scrolling through a zeroed tail.
      *
      * Refill with 0xFF rather than leaving the pool's zeros: intensity 0 maps
-     * to COLOR_RED, i.e. 0 dB / full scale, so zeroed rows would render as
-     * maximum signal. 0xFF is the other end of the ramp (blue = -db_range =
-     * the noise floor), which is what "no data yet" should look like. Bench
-     * 2026-08-13: with the zero fill, entering WFALL painted the whole plot
-     * red and the history grew downward through it. */
+     * to the top of the ramp (red = at the display reference), so zeroed rows
+     * would render as maximum signal. 0xFF is the other end of the ramp
+     * (black = reference - db_range = the noise floor), which is what "no data
+     * yet" should look like. Bench 2026-08-13: with the zero fill, entering
+     * WFALL painted the whole plot red and the history grew downward
+     * through it. */
     uint32_t pool_generation = shared_mem_transition_count();
     if (pool_generation != waterfall_pool_generation) {
         waterfall_pool_generation = pool_generation;
@@ -1530,12 +1605,14 @@ void draw_waterfall_screen(void)
     uint16_t zoom_span = zoom_end - zoom_start;
     if (zoom_span == 0) zoom_span = 1;
 
+    float ref_db = fft_display_ref(cfg, draw_data, zoom_start, zoom_end);
+
     uint16_t x;
     for (x = 0; x < WATERFALL_COLS; x++) {
         uint16_t bin = zoom_start + (uint16_t)((uint32_t)x * zoom_span / WATERFALL_COLS);
         if (bin >= FFT_BINS) bin = FFT_BINS - 1;
         float db = draw_data[bin];
-        float normalized = (cfg->ref_level_db - db) / cfg->db_range;
+        float normalized = (ref_db - db) / cfg->db_range;
         if (normalized < 0.0f) normalized = 0.0f;
         if (normalized > 1.0f) normalized = 1.0f;
         waterfall_buf[waterfall_row_idx][x] = (uint8_t)(normalized * 255.0f);
