@@ -44,6 +44,17 @@ flash_fs_error_t flash_fs_raw_read_jedec(uint8_t *manufacturer,
 flash_fs_error_t flash_fs_raw_read_bytes(uint32_t addr, void *buf, uint32_t len);
 
 /* ── Raw WRITE primitives (faithful reimpl of the stock W25Q128 driver) ──
+ *
+ * ⚠ THESE ARE UNGUARDED. They take an absolute chip address and will erase or
+ * program anything, including the stock UI assets and the `3:/System file/`
+ * path where a pristine unit's factory calibration lives. They exist for bench
+ * diagnostics (`flash wtest`, which additionally refuses any sector that is not
+ * already blank).
+ *
+ * Automated writers must NOT call these. Use the region layer in
+ * flash_regions.h, which enforces read-only ranges by address, bounds-checks
+ * every operation, never erases implicitly, and verifies what it wrote.
+ */
  * Byte-exact from stock: WREN/RDSR-wait/sector-erase/page-program/page-loop/
  * smart-block-write (FUN_0802f344/f11c/ee9c/f36c/f2ac/f16c). THESE MODIFY FLASH.
  * The W25Q128 holds UI assets + screenshots in two FAT volumes — writing outside
