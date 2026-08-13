@@ -15,6 +15,7 @@
 #include "font.h"
 #include "theme.h"
 #include "scope_state.h"
+#include "scope_measure.h"
 #include "math_channel.h"
 #include "persistence.h"
 #include "fpga.h"
@@ -250,41 +251,153 @@ static void draw_one_badge(uint16_t x, uint16_t y, const char *label,
                            color, th->background, &font_small);
 }
 
+/* Shown wherever the instrument cannot measure the quantity today. */
+#define MEAS_NA  "--"
+
+/*
+ * Measure one channel's live capture record.
+ *
+ * Returns false — and leaves *m zeroed — unless the FPGA has actually
+ * delivered samples. fpga_data_ready() is the same gate the waveform plot
+ * uses (see draw_demo_waveform), so the badges and the trace can never
+ * disagree about whether what is on screen is real.
+ */
+static bool measure_live_channel(const volatile uint8_t *buf,
+                                 scope_measure_t *m)
+{
+    memset(m, 0, sizeof(*m));
+    if (!fpga_data_ready() || buf == NULL)
+        return false;
+
+    /* Cast away volatile for the analysis pass: the acquisition task may
+     * refill this buffer underneath us, but a torn read costs at most a few
+     * samples out of 1024 in a statistic — strictly less wrong than the
+     * rendering path, which plots the same buffer unsynchronised already.
+     * Anything stronger needs double-buffering in fpga.c, which is not this
+     * file's to change. */
+    scope_measure_record((const uint8_t *)buf, FPGA_ADC_BUF_SIZE, m);
+    return m->valid;
+}
+
+/* No float formatting: the firmware links newlib-nano without
+ * -u _printf_float, so "%f" prints nothing. Tenths are assembled by hand,
+ * exactly as format_si()/format_freq() do below. */
+static void fmt_counts(char *b, size_t n, unsigned v)
+{
+    snprintf(b, n, "%ucnt", v);
+}
+
+static void fmt_tenths(char *b, size_t n, float v, const char *unit)
+{
+    if (v < 0.0f) v = 0.0f;
+    unsigned t = (unsigned)(v * 10.0f + 0.5f);
+    snprintf(b, n, "%u.%u%s", t / 10u, t % 10u, unit);
+}
+
+/*
+ * Measurement badges.
+ *
+ * Until 2026-08-13 this function printed the string literals "1.00kHz",
+ * "707mV", "50.0%" and "1.00ms" — four numbers that had never touched an
+ * ADC sample, on a screen a user reads as measurements. They are gone.
+ *
+ * What is printed now is measured from the live record, in the units this
+ * instrument can actually defend (see scope_measure.h):
+ *
+ *   Vpp / Vrms   ADC COUNTS. Volts need the per-range gain/offset cal this
+ *                firmware does not have (dev plan §F2), so no volt figure is
+ *                offered — not even a plausible one.
+ *   Duty         a pure ratio; invariant under any affine counts->volts
+ *                mapping, so it is already correct and stays correct once
+ *                calibration lands. Asserted in tests/test_scope_measure.c.
+ *   Per          SAMPLES per cycle, measured between mid-level crossings.
+ *   Freq         "--". Hz needs a known sample rate, i.e. a timebase, and
+ *                this firmware has no timebase control at all (§F4).
+ *
+ * WIRING IT LATER is one line each: with a sample interval dt_s in hand,
+ *   Freq = 1 / (period_samples * dt_s),  Per(s) = period_samples * dt_s.
+ * With a per-range volts-per-count k,  Vpp(V) = pp * k, Vrms(V) = ac_rms * k.
+ * Nothing else in this function has to move.
+ */
 static void draw_measurement_badges(const scope_state_t *ss, const theme_t *th)
 {
-    /*
-     * Demo measurements — when real ADC is available, these will come
-     * from measurement_compute(). For now, show plausible values that
-     * update based on the current V/div and timebase settings.
-     */
     char buf[16];
+    scope_measure_t m1, m2;
 
-    /* Row 1 (bottom): Freq, Vpp, Vrms, Duty */
+    const bool have1 = ss->ch1.enabled &&
+                       measure_live_channel(fpga_get_ch1_buf(), &m1);
+    const bool have2 = ss->ch2.enabled &&
+                       measure_live_channel(fpga_get_ch2_buf(), &m2);
+    const uint16_t na = th->text_secondary;   /* dim: nothing to report */
+
+    /* ── Row 1 — CH1 ─────────────────────────────────────────────── */
     uint16_t x = 2;
     uint16_t y1 = BADGE_ROW_Y;
 
-    snprintf(buf, sizeof(buf), "1.00kHz");
-    draw_one_badge(x, y1, "Freq", buf, th->ch1, th);
+    /* No timebase => no Hz. Deliberately blank, not estimated. */
+    draw_one_badge(x, y1, "Freq", MEAS_NA, na, th);
     x += BADGE_W + 2;
 
-    snprintf(buf, sizeof(buf), "%s", vdiv_table[ss->ch1.vdiv_idx].label);
-    draw_one_badge(x, y1, "Vpp", buf, th->ch1, th);
+    if (have1) {
+        fmt_counts(buf, sizeof(buf), m1.pp);
+        draw_one_badge(x, y1, "Vpp", buf, th->ch1, th);
+    } else {
+        draw_one_badge(x, y1, "Vpp", MEAS_NA, na, th);
+    }
     x += BADGE_W + 2;
 
-    draw_one_badge(x, y1, "Vrms", "707mV", th->ch1, th);
+    if (have1) {
+        fmt_counts(buf, sizeof(buf), (unsigned)(m1.ac_rms + 0.5f));
+        draw_one_badge(x, y1, "Vrms", buf, th->ch1, th);
+    } else {
+        draw_one_badge(x, y1, "Vrms", MEAS_NA, na, th);
+    }
     x += BADGE_W + 2;
 
-    draw_one_badge(x, y1, "Duty", "50.0%", th->ch1, th);
+    if (have1 && m1.level_valid) {
+        fmt_tenths(buf, sizeof(buf), m1.duty_pct, "%");
+        draw_one_badge(x, y1, "Duty", buf, th->ch1, th);
+    } else {
+        /* Flat/near-flat record: the mid-level threshold would be sitting
+         * inside the noise, so a duty figure would be measuring dither. */
+        draw_one_badge(x, y1, "Duty", MEAS_NA, na, th);
+    }
 
-    /* Row 2 (above row 1): Period, Rise for CH2 context */
+    /* ── Row 2 — period, CH2, and the legend ─────────────────────── */
     x = 2;
     uint16_t y2 = BADGE_ROW2_Y;
 
-    draw_one_badge(x, y2, "Per", "1.00ms", th->ch2, th);
+    if (have1 && m1.period_valid) {
+        snprintf(buf, sizeof(buf), "%usmp",
+                 (unsigned)(m1.period_samples + 0.5f));
+        draw_one_badge(x, y2, "Per", buf, th->ch1, th);
+    } else {
+        draw_one_badge(x, y2, "Per", MEAS_NA, na, th);
+    }
     x += BADGE_W + 2;
 
-    snprintf(buf, sizeof(buf), "%s", vdiv_table[ss->ch2.vdiv_idx].label);
-    draw_one_badge(x, y2, "CH2 V", buf, th->ch2, th);
+    if (have2) {
+        fmt_counts(buf, sizeof(buf), m2.pp);
+        draw_one_badge(x, y2, "CH2pp", buf, th->ch2, th);
+    } else {
+        draw_one_badge(x, y2, "CH2pp", MEAS_NA, na, th);
+    }
+    x += BADGE_W + 2;
+
+    /*
+     * The legend is what makes the "--" and the "cnt" suffix readable
+     * without the source: it says, on the instrument itself, whether the
+     * trace is real and why the missing values are missing.
+     */
+    {
+        const char *note = (have1 || have2) ? "cnt=ADC raw  --=no tb/cal"
+                                            : "DEMO trace - no capture";
+        lcd_fill_rect(x, y2, (uint16_t)(LCD_WIDTH - x), BADGE_H,
+                      th->background);
+        if (font_string_width(note, &font_small) > LCD_WIDTH - x)
+            note = (have1 || have2) ? "--=no tb/cal" : "DEMO trace";
+        font_draw_string(x, y2 + 1, note, na, th->background, &font_small);
+    }
 }
 
 /* ═══════════════════════════════════════════════════════════════════
