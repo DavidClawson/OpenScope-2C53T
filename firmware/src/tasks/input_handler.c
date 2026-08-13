@@ -27,11 +27,22 @@
 #include "meter_autoselect.h"
 #include "at32f403a_407.h"
 #include "button_scan.h"
+#include "settings_store.h"
 #include "task.h"
 #include <stdio.h>
 
 /* MENU is bit 9 in the raw button-scan state (button_scan.c). */
 #define BTN_SCAN_MENU_MASK  0x0200u
+
+/* ── Settings persistence hooks ──────────────────────────────────────
+ * The input task is the only thing that changes settings, so it is also what
+ * decides when they are written. See settings_store.h for the policy; the
+ * short version is "debounced settle, plus a flush at deliberate boundaries".
+ * The FreeRTOS tick is 1 kHz (configTICK_RATE_HZ), so ticks are milliseconds. */
+static uint32_t settings_now_ms(void)
+{
+    return (uint32_t)(xTaskGetTickCount() * portTICK_PERIOD_MS);
+}
 
 #ifdef FEATURE_FFT
 #include "fft.h"
@@ -116,6 +127,9 @@ void input_handle_settings_ok(void)
         case 10: /* Firmware Update -- reboot into DFU bootloader */
             {
                 extern void dfu_request_reboot(void);
+                /* Deliberate boundary: we are about to reboot, so anything
+                 * still inside the settle window would be lost. */
+                (void)settings_store_flush(settings_now_ms());
                 dfu_request_reboot();
             }
             break;
@@ -234,6 +248,9 @@ uint8_t input_handle_button(button_id_t button, QueueHandle_t dq)
                 GPIOC->clr = (1U << 11);  /* PC11 LOW — meter disable */
             }
         }
+        /* Leaving a mode, or backing out of the settings menu, is a deliberate
+         * boundary: commit now rather than waiting out the settle window. */
+        (void)settings_store_flush(settings_now_ms());
         send_cmd(dq, cmd);
         break;
 
@@ -714,6 +731,8 @@ uint8_t input_handle_button(button_id_t button, QueueHandle_t dq)
              * The bootloader draws its own "firmware upgrade" screen, so no
              * delay/message here — reset immediately while MENU is still down. */
             if (button_scan_get_raw() & BTN_SCAN_MENU_MASK) {
+                /* Reboot boundary — same reasoning as the DFU entry above. */
+                (void)settings_store_flush(settings_now_ms());
                 __DSB();
                 NVIC_SystemReset();
                 while (1) { }
@@ -750,6 +769,12 @@ uint8_t input_handle_button(button_id_t button, QueueHandle_t dq)
                                     th->success, bg, &font_large);
             vTaskDelay(pdMS_TO_TICKS(500));
 
+            /* Last chance to persist: an orderly power-off is the one place we
+             * KNOW the settings are about to stop existing in RAM. Runs behind
+             * the "Goodbye!" frame so its SPI2 traffic is invisible to the
+             * user, and before the rail drops. */
+            (void)settings_store_flush(settings_now_ms());
+
             /* Drop PC9 LOW — device powers off */
             GPIOC->clr = (1U << 9);
 
@@ -761,6 +786,17 @@ uint8_t input_handle_button(button_id_t button, QueueHandle_t dq)
 
     default:
         break;
+    }
+
+    /* Settings persistence, once per button, after the handler has had its
+     * effect. note_change() is a struct compare — no flash access at all when
+     * nothing changed, which is the overwhelming majority of presses.
+     * service() writes only once a change has been quiet for the settle
+     * window, so holding an arrow key through ten values costs one record. */
+    {
+        uint32_t now = settings_now_ms();
+        settings_store_note_change(now);
+        (void)settings_store_service(now);
     }
 
     return cmd;
