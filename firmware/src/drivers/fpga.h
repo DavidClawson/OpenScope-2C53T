@@ -409,6 +409,21 @@ typedef struct {
                                *     Stores into probe_idcode/_user/_status and sets
                                *     probe_id_bit (the anchor). Requires
                                *     prelude_frame_mode 0 (split). See issue #18. */
+    uint8_t  omit_05;         /* 1 = skip the 0x05 ERASE_SRAM frame entirely, so the
+                               *     prelude is 0x12 INIT_ADDR → 0x15 CONFIG_ENABLE.
+                               *
+                               *     Breaks the confound in our own A/B (issue #18,
+                               *     2026-08-13): the bit-bang loader that CONFIGURES
+                               *     also omits 0x05, while the hardware-SPI loader
+                               *     that FAILS sends it — so "bit-bang vs AF" and
+                               *     "no-0x05 vs 0x05" have never been separated.
+                               *     maksidze's /64 stock capture already proved slow
+                               *     hardware SPI can configure a GW1N, so clock rate
+                               *     is excluded and the prelude is the live suspect.
+                               *     If this configures on the hardware-SPI path, the
+                               *     answer is the prelude, not the bit-bang — and we
+                               *     get a config path ~100x faster than bit-banging
+                               *     115,638 bytes. Applies to all prelude_frame_modes. */
 } fpga_cfg_seq_opts_t;
 
 /* Run the full SPI3 config handshake. Returns the 0x3A close status byte
