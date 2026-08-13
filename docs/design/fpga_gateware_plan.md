@@ -24,11 +24,11 @@ The original notes listed these as unknowns. Most are already settled here:
 | How many channels digitized? | **2** (CH1/CH2; per-channel 1026-byte SPI3 reads, opcodes 0x04/0x05; dual mode confirmed) | June #18 capture; warmtest bench |
 | GW1N-2 exact resources | 2,304 LUT4 / 2,016 FF / 72 Kbit BSRAM / 1 rPLL / **no DSP** / 96 Kbit user flash | `fpga_future.md`; gw1n2-apicula |
 | Where does sample memory live? | **BSRAM only** — netlist trace maps the ADC bus directly into the BRAMs; no external memory | `m_datapath.py` trace |
-| Is the ADC bus DDR? | Believed yes (250 MS/s DDR capture per roadmap) — **confirm IDDR primitives in the netlist** before designing the replacement front end | roadmap; open |
+| Is the ADC bus DDR? | **YES — confirmed 2026-08-13**: 15 IDDRC + 1 ODDRC in the netlist (7 IDDR pairs + 1 single, all on east/west edge tiles = the ADC buses; effective sample rate is 2× the bus clock) | `m_utilization.py` |
 | Is there a PLL, at what frequency? | Yes, the rPLL — configuration only partially decoded (Apicula gap); the fuzzing-oracle work targets exactly this | gw1n2-apicula workplan |
 | Does acquisition stall during readout? | Effectively yes: engine starts **unarmed** after config, captures a buffer, halts until re-armed. Stock drains 04/05 pairs every ~29 ms (~34 Hz). Whether stock ping-pongs internally is answerable from the netlist | engine-arm saga; June capture |
 | JTAG pads on the board? | **Yes** — four gold pads; DMM buzz-out vs MCU pins still pending. Less urgent now that SSPI config entry works; would still decouple "design correct?" from "config path correct?" during dev | CLAUDE.md next-steps |
-| Stock utilization / headroom | **Unanswered but cheap** — script over `scope_unpacked.v`. Do this first; every trigger-engine sizing decision depends on it | — |
+| Stock utilization / headroom | **ANSWERED 2026-08-13** — see §8.1 results below. Headline: LUTs 45% (plenty), FFs ~82% (the scarce resource), **BSRAM 4/4 = zero headroom** | `m_utilization.py` |
 
 ## 2. Corrections to the design-chat notes
 
@@ -182,11 +182,28 @@ front end rather than reinvent 250 MS/s sampling.)
 - **Ping-pong buffering** if it fits in 72 Kbit — acquire into one buffer while the
   MCU drains the other; the difference between continuous update and going blind
   every readout. Stock's arrangement (whether it already ping-pongs) is readable from
-  the netlist.
+  the netlist. ⚠ Utilization result (§8.1): stock already uses **all four BSRAM
+  blocks**, so ping-pong can't be added with new memory — it means halving record
+  depth or repartitioning what the four blocks hold (or discovering stock already
+  ping-pongs, which the CH1/CH2 × 2-block split makes plausible).
 
 ## 8. Head start (before the hardware arrives)
 
 1. **Stock utilization script** over `scope_unpacked.v` → exact LUT/FF/BSRAM headroom.
+   **DONE 2026-08-13** — `gw1n2-apicula/tools/m_utilization.py`. Results:
+   - **LUT4 sites: 1,047 / 2,304 (45.4%)** — 847 LUT4 + 192 ALU (carry) + 2
+     RAM16SDP4. ~1,257 sites free: the trigger engine fits comfortably.
+   - **FF sites: 1,416 / 1,728 (81.9%)** — registers, not LUTs, are the scarce
+     resource. ~312 free against the conservative 1,728 budget (~600 if the
+     budget is really 2,016 — datasheet check pending). Counter-heavy additions
+     (pulse width + holdoff ≈ 40–60 FFs) fit; be deliberate, not anxious.
+   - **BSRAM: 4 / 4 blocks — ZERO headroom.** Ping-pong buffering via *more*
+     BSRAM is off the table; any record-depth or 1-bit-stream idea must
+     restructure the existing four blocks, not add a fifth.
+   - DDR confirmed: 15 IDDRC + 1 ODDRC (see §1). rPLL confirmed in use via
+     clock-tap routing wires (`TRPLL0CLK*` at R10C10/C11) even though the
+     chipdb can't decode the primitive itself yet.
+   - 59 I/O pads (55 in / 3 out / 1 bidir); 1,296 wide-mux (MUX2) sites used.
 2. **Gowin EDA Education on mars** — unblocks both the GW1N-2 parallel-fit project
    and the rPLL differential-fuzzing oracle (`gw1n2-apicula/docs/03-workplan.md`).
 3. **Full-netlist sim harness** — extend `m_simarm.py` from the arm cone to the whole
