@@ -274,26 +274,35 @@ static void check_cursors_on_live_data(bool verbose)
 
 static void check_waterfall_live_data(bool verbose)
 {
-    /* Same shape as cursors-on but this is the expensive one: each full
-     * repaint of draw_waterfall_screen() is ~20,480 lcd_fill_rect calls
-     * (dev plan B1). 10 s at the stock 34 Hz read cadence, which the
-     * 50 ms display tick samples at 20 Hz. */
+    /* Same shape as cursors-on but this is the expensive screen. 10 s at the
+     * stock 34 Hz read cadence, which the 50 ms display tick samples at 20 Hz.
+     *
+     * COST MODEL — post-B1. Before B1 (merged 2026-08-13) a waterfall repaint
+     * was ~20,480 lcd_fill_rect calls, one per pixel column. B1 replaced that
+     * with a per-row blit: 1 fill_rect, 65 lcd_set_window, and 65,920 pixel
+     * writes. So fill_rect is no longer the meaningful unit of work and
+     * multiplying repaints by 20,480 would overstate this saving by ~20,000x.
+     * Pixel writes are what remains, and they scale linearly with repaints —
+     * which is exactly what B2 reduces. Keep this constant in step with
+     * draw_waterfall_screen(); tests/test_waterfall_blit.c measures it. */
+    enum { WF_PIXEL_WRITES_PER_REPAINT = 65920 };
+
     scenario_t s = { 200, 1, 0, false, false, FW_FULL_MIN, 0, FW_IDLE_TICK };
 
     tally_t nw = run(GATE_NEW, &s);
     tally_t od = run(GATE_OLD, &s);
 
-    unsigned long old_fills = (unsigned long)od.full * 20480UL;
-    unsigned long new_fills = (unsigned long)nw.full * 20480UL;
+    unsigned long old_px = (unsigned long)od.full * WF_PIXEL_WRITES_PER_REPAINT;
+    unsigned long new_px = (unsigned long)nw.full * WF_PIXEL_WRITES_PER_REPAINT;
 
     if (verbose)
-        printf("  waterfall view, 20 Hz capture (10 s):\n"
-               "      pre-B2  %u repaints = %lu lcd_fill_rect calls\n"
-               "      post-B2 %u repaints = %lu lcd_fill_rect calls\n",
-               od.full, old_fills, nw.full, new_fills);
+        printf("  waterfall view, 20 Hz capture (10 s), post-B1 blit:\n"
+               "      pre-B2  %u repaints = %lu pixel writes\n"
+               "      post-B2 %u repaints = %lu pixel writes\n",
+               od.full, old_px, nw.full, new_px);
 
-    CHECK(new_fills * 3 < old_fills, "expected >3x fewer fills, %lu vs %lu",
-          new_fills, old_fills);
+    CHECK(new_px * 3 < old_px, "expected >3x fewer pixel writes, %lu vs %lu",
+          new_px, old_px);
 }
 
 static void check_live_trace_not_throttled(bool verbose)
