@@ -525,13 +525,17 @@ static void cmd_status(void)
         "IOMUX remap5: 0x%08lX (init)\r\n"
         "IOMUX remap LIVE: 0x%08lX\r\n"
         "IOMUX remap5 LIVE: 0x%08lX\r\n"
-        "SPI3 CTRL1: 0x%04lX  STS: 0x%04lX\r\n"
+        /* 0xBBBB is not a register value — fpga_bitbang_config_sequence()
+         * stores it as a "this was the bit-bang build" marker. Printing it
+         * bare invites reading it as a real CTRL1. */
+        "SPI3 CTRL1: 0x%04lX%s  STS: 0x%04lX\r\n"
         "PB4(MISO) IDT: %d  PC6(EN): %d  PB6(CS): %d\r\n",
         fpga.diag_remap5,
         fpga.diag_remap7,
         (unsigned long)IOMUX->remap,
         (unsigned long)IOMUX->remap5,
         fpga.diag_spi_ctrl1,
+        (fpga.diag_spi_ctrl1 == 0xBBBBu) ? " (marker: bit-bang build, not a register read)" : "",
         fpga.diag_spi_sts,
         (GPIOB->idt & (1 << 4)) ? 1 : 0,
         (GPIOC->idt & (1 << 6)) ? 1 : 0,
@@ -550,18 +554,54 @@ static void cmd_status(void)
         fpga.bb_idle, fpga.bb_cs, fpga.bb_byte, fpga.bb_marker
     );
 
-    usb_debug_printf(
-        "\r\n=== H2 Bitstream Upload ===\r\n"
-        "Bytes sent: %lu / 115638\r\n"
-        "Upload done: %s\r\n"
-        "0x3A close status: %02X (stock: F8)\r\n"
-        "0x03 scope status: %02X %02X %02X %02X (stock: 00 01 42 2E)\r\n",
-        fpga.h2_bytes_sent,
-        fpga.h2_upload_done ? "YES" : "NO",
-        fpga.h2_close_status,
-        fpga.scope_status[0], fpga.scope_status[1],
-        fpga.scope_status[2], fpga.scope_status[3]
-    );
+    /* ── Config status: the field that actually says whether we configured ──
+     *
+     * 2026-08-13: this block used to print only the hardware-SPI fields below,
+     * unconditionally. Under a bit-bang build (FPGA_CONFIG_B) that path never
+     * runs, so `0x3A close status` and `0x03 scope status` sit at their
+     * zero-init values — and the shell confidently printed 00 / 00 00 00 00,
+     * the exact signature of a REFUSED config, on a device that was configured
+     * and capturing. Same family as the /2 status reads and the floating MISO:
+     * an instrument reporting on something it cannot see.
+     *
+     * cfg_status_reg[] is the Gowin STATUS register (0x41), populated by
+     * whichever config path ran. It is the authoritative answer, so it goes
+     * first and is decoded rather than left as raw hex. */
+    {
+        uint32_t sr = ((uint32_t)fpga.cfg_status_reg[0] << 24) |
+                      ((uint32_t)fpga.cfg_status_reg[1] << 16) |
+                      ((uint32_t)fpga.cfg_status_reg[2] << 8)  |
+                      (uint32_t)fpga.cfg_status_reg[3];
+        int bitbang = (fpga.diag_spi_ctrl1 == 0xBBBBu);  /* marker set by the
+                                                          * bit-bang sequence */
+        usb_debug_printf(
+            "\r\n=== FPGA Config ===\r\n"
+            "path: %s\r\n"
+            "STATUS(0x41): %08lX  DONE_FINAL(13): %s\r\n",
+            bitbang ? "GPIO bit-bang (FPGA_CONFIG_B)" : "hardware SPI3",
+            (unsigned long)sr,
+            ((sr >> 13) & 1u) ? "SET — configured" : "clear — NOT configured");
+
+        usb_debug_printf("\r\n=== H2 Bitstream Upload ===\r\n"
+                         "Bytes sent: %lu / 115638\r\n"
+                         "Upload done: %s\r\n",
+                         fpga.h2_bytes_sent,
+                         fpga.h2_upload_done ? "YES" : "NO");
+
+        /* The two hardware-SPI-only readbacks. Suppress them on the bit-bang
+         * path rather than printing zeros that read as a refusal. */
+        if (bitbang) {
+            usb_send_str("0x3A close status: n/a (bit-bang path does not read it)\r\n"
+                         "0x03 scope status: n/a (bit-bang path does not read it)\r\n");
+        } else {
+            usb_debug_printf(
+                "0x3A close status: %02X (stock: F8)\r\n"
+                "0x03 scope status: %02X %02X %02X %02X (stock: 00 01 42 2E)\r\n",
+                fpga.h2_close_status,
+                fpga.scope_status[0], fpga.scope_status[1],
+                fpga.scope_status[2], fpga.scope_status[3]);
+        }
+    }
 
     fpga_stock_diag_print();
 
