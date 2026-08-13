@@ -747,6 +747,27 @@ static void test_append_and_read_latest(void)
     CHECK(model.erases == 0, "appending must never erase");
 }
 
+/* Records are not page-aligned, so a payload can straddle a 256 B page boundary.
+ * The model aborts the whole run on a page-crossing program, so this test fails
+ * loudly rather than subtly if the splitting is ever dropped. */
+static void test_append_record_crossing_a_page_boundary(void)
+{
+    fresh();
+    uint8_t a[200], b[200];
+    memset(a, 0x1A, sizeof a);
+    memset(b, 0x2B, sizeof b);
+
+    CHECK_ST(flash_region_append(FLASH_REGION_USER_CAL, a, sizeof a), FLASH_REGION_OK);
+    /* second record: header at 208, payload 216..415 — spans pages 0 and 1 */
+    CHECK_ST(flash_region_append(FLASH_REGION_USER_CAL, b, sizeof b), FLASH_REGION_OK);
+
+    uint8_t back[200];
+    uint32_t len = 0;
+    CHECK_ST(flash_region_read_latest(FLASH_REGION_USER_CAL, back, sizeof back, &len),
+             FLASH_REGION_OK);
+    CHECK(len == sizeof b && memcmp(back, b, len) == 0, "page-straddling record is wrong");
+}
+
 static void test_append_is_elided_when_unchanged(void)
 {
     fresh();
@@ -916,6 +937,7 @@ int main(void)
     run("io errors propagate", test_io_errors_propagate);
 
     run("append and read latest", test_append_and_read_latest);
+    run("append record crossing a page boundary", test_append_record_crossing_a_page_boundary);
     run("append is elided when unchanged", test_append_is_elided_when_unchanged);
     run("append survives a torn record", test_append_survives_a_torn_record);
     run("a full log refuses and preserves", test_append_full_refuses_and_preserves);

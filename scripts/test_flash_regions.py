@@ -45,7 +45,10 @@ class Mutation:
     name: str
     old: str
     new: str
-    expect_fail: tuple[str, ...]
+    expect_fail: tuple[str, ...] = ()
+    # For mutations the model aborts on outright (rather than reporting a failed
+    # test), the substring the run must print.
+    expect_output: str = ""
 
 
 MUTATIONS: tuple[Mutation, ...] = (
@@ -138,6 +141,16 @@ MUTATIONS: tuple[Mutation, ...] = (
         expect_fail=("append is elided when unchanged",),
     ),
     Mutation(
+        name="page-boundary splitting in program_verified()",
+        old="""        uint32_t page_left = FLASH_REGION_PAGE_SIZE - ((addr + done) % FLASH_REGION_PAGE_SIZE);
+        uint32_t n = len - done;
+        if (n > page_left) n = page_left;
+""",
+        new="""        uint32_t n = len - done;
+""",
+        expect_output="MODEL VIOLATION: program crosses a page boundary",
+    ),
+    Mutation(
         name="needs-erase refusal (would become a silent read-modify-write)",
         old="""    if (!bitcompat) {""",
         new="""    if (!bitcompat && addr == 0xFFFFFFFFu) {""",
@@ -212,6 +225,10 @@ class GuardMutationTests(unittest.TestCase):
             f"removing the {m.name} did NOT make the tests fail. The guard is untested:\n"
             f"{proc.stdout}\n{proc.stderr}",
         )
+        if m.expect_output:
+            self.assertIn(m.expect_output, proc.stdout,
+                          f"removing the {m.name} did not produce the expected diagnostic:\n"
+                          f"{proc.stdout}")
         got = failing_labels(proc.stdout)
         for label in m.expect_fail:
             self.assertIn(
