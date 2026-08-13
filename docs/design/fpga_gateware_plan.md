@@ -204,10 +204,24 @@ front end rather than reinvent 250 MS/s sampling.)
      clock-tap routing wires (`TRPLL0CLK*` at R10C10/C11) even though the
      chipdb can't decode the primitive itself yet.
    - 59 I/O pads (55 in / 3 out / 1 bidir); 1,296 wide-mux (MUX2) sites used.
-2. **Gowin EDA Education on mars** — unblocks both the GW1N-2 parallel-fit project
-   and the rPLL differential-fuzzing oracle (`gw1n2-apicula/docs/03-workplan.md`).
+2. **Gowin EDA Education on mars** — **ALREADY INSTALLED** (`~/gowin/
+   V1.9.11.03_Education` + `gw1n2-apicula/tools/gowin-env.sh`), discovered
+   2026-08-13. What remains is using it: the GW1N-2 parallel-fit project and the
+   rPLL differential-fuzzing oracle (`gw1n2-apicula/docs/03-workplan.md`).
 3. **Full-netlist sim harness** — extend `m_simarm.py` from the arm cone to the whole
    capture path (fake ADC in → 0x04/0x05 out): the executable spec of §5 leg 3.
+   **STARTED 2026-08-13, core milestone hit** — `gw1n2-apicula/tools/m_capture.py`
+   captures synthetic ADC stimulus end-to-end through the stock netlist into
+   BSRAM_0 (512 samples then halt — reproducing the one-buffer pathology, and
+   matching stock's per-channel read size). En route it found two systematic
+   unpacker bugs that had silently degraded every previous sim (VCC-tied LSR
+   nets holding cells in reset — the ADC front end included; BSRAM macro-internal
+   pips never emitted), and decoded the capture memory geometry: 18-bit word =
+   DDR sample pair in 9-bit lanes, linear address counter, **left-edge ADC bit
+   order D7→D0 top-to-bottom**. Still open: lane bit-0 semantics, CH2, the SPI
+   readout path (SPI decode isn't simulable — faked clock tree — so the harness
+   forces the known run/done flop pair instead). Details:
+   `gw1n2-apicula/docs/06-progress-log.md` § 2026-08-13.
 4. **Python waveform generator** (§5) — pure software, needed by every leg.
 
 ## 9. Safety rule (from the roadmap, restated because it's absolute)
