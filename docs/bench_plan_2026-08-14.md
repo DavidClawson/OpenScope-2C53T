@@ -46,6 +46,24 @@ there is no fabric clock divider either. Remaining blind spot: the rPLL is not
 decoded by the chipdb — no fabric net drives PLL inputs, but that evidence is
 weaker than the two above.
 
+**⚠ THAT NETLIST ANSWER IS NOW PARTLY WITHDRAWN, 2026-08-13 (`m_clocktree.py`,
+progress log M10). The three M8 checks are all still true, but every one of them
+sits on the DATA/ENABLE side — none looks at the CLOCK. A gated or divided clock
+changes the sample rate with `WREA` and every `CE` still tied to VCC, so M8's
+evidence was structurally blind to it** (same failure mode as the `/2` reads and
+the floating MISO). Walking the tree from the top: this design has **six global
+clock sources, and THREE ARE GENERATED IN THE FABRIC** — `LUT4 R4C13_LUT4_7`
+(INIT `0xffc0` = `I3 | (I1 & I2)`), `LUT4 R4C13_LUT4_1` (INIT `0xfccc` =
+`I1 | (I2 & I3)`), and `DFFRE R16C17_DFFE_0`; the other three are SPI SCLK
+(pad `R19C5_IA`, on a spine) and two PLL outputs. The two LUTs are a clock-gate
+pair — `passthrough | (gate & enable)` — fed by flip-flop state plus `GB70`, the
+biggest clock net in the design. That is what a programmable divider looks like
+built from fabric. **Unresolved:** whether either fabric clock reaches the
+capture BSRAMs, which needs the spine → `GB{n}0` mapping (apicula has no GW1N-2
+`tap_start`; do NOT assume index mod 8). So the "NO CHANGE" prediction below is
+now a genuinely open coin-flip, not a near-certainty — which makes Step 0 more
+worth running, not less.
+
 So **run Step 0 as a falsification test, not an open question**, and keep it
 cheap: with the ESP32 driving a known 1 kHz square from the coldtrace path, send
 2–3 *wildly* different `tb_prescaler`/`tb_period` values.
@@ -77,9 +95,17 @@ than `0x04`/`0x05`.
 
 Test: with `guest-coldtrace` running, sweep SPI3 read opcodes beyond the known
 `0x03/0x04/0x05` and log reply length + content; look for one returning ≥1024
-words whose content tracks a slow input from the ESP32. Not simulable (SPI
-address decode needs the real clock tree), so it has to be bench — but it is
-minutes on the existing rig, and a hit would hand us the slow timebase directly.
+words whose content tracks a slow input from the ESP32. Minutes on the existing
+rig, and a hit would hand us the slow timebase directly.
+
+**"Not simulable" was true for the wrong reason — and may be fixable
+(2026-08-13, M10).** The harness caveat is that `m_simarm` force-drives *every*
+GB tap from one common `clk`; SPI SCLK turns out to enter the design as a
+**dedicated clock input on its own spine** (pad `R19C5_IA` → BLBDCLK3 →
+SPINE16/24), so that force is exactly what overwrites the SPI domain. Driving
+the SCLK spine from the SCLK pad in the testbench should restore SPI address
+decode in sim — which would move this sweep (and Stlkv's arm-address sweep) off
+the bench entirely. Gated on resolving spine → `GB{n}0`; see M10.
 
 **Step 1 — wire the config into the cold-boot path.** Integrate the timebase block
 (`fpga_send_scope_sequence`) after config+arm in the `guest-coldtrace` path, coexisting
