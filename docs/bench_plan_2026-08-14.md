@@ -31,16 +31,34 @@ track as a moving level; >~15 Hz aliases.
   never been validated on hardware** — the scope was dead until 2026-08-13.
 
 **Step 0 — PROVE THE MECHANISM (the load-bearing unknown, do this first).**
-We do not actually know that `0x0F/0x10/0x11` change the effective sample rate. The
-netlist says the ADC sample clock is PLL-derived and free-runs, so the timebase most
-likely works by **decimation / capture-window**, not by changing the ADC clock —
-or possibly by MCU-side read pacing (ripcord: stock's per-timebase pacer is TMR3, a
-9-entry 1-2-5 PR table). Bench test: with the ESP32 driving a known 1 kHz square from
-the coldtrace path, send 2–3 *wildly* different `tb_prescaler`/`tb_period` values and
-watch whether the captured waveform **stretches/compresses**.
-  - Stretches → decimation-via-these-commands confirmed; proceed to Step 1.
-  - No change → timebase is elsewhere (MCU read pacing via TMR3, or roll mode);
-    investigate that before building on the wrong model.
+We do not actually know that `0x0F/0x10/0x11` change the effective sample rate.
+
+**⚠ NETLIST ANSWER, 2026-08-13 (`gw1n2-apicula/tools/m_timebase.py`, progress log
+M8) — THERE IS NO RATE CONTROL IN THE CAPTURE PATH, so the expected bench result
+is "NO CHANGE".** Structurally, on all four BSRAMs: `WREA` tied VCC; **every**
+address-counter clock-enable tied VCC (CH1 8/8, CH2 8/8, BSRAM_1/2 10/10); `CEA`
+is a bare arm gate (CH1 `R13C2_LUT4_3` INIT `0x3300` = run & ~done; CH2
+`R11C17_LUT4_1` INIT `0x0f00`, same shape). A sample pair is written on *every*
+capture clock and the address advances *every* clock ⇒ no counter, no comparator,
+no divisor register exists to program. And the ADC clock output is a **plain
+forward** (the design's one ODDR has constant data pins `D0=VCC/D1=VSS`), so
+there is no fabric clock divider either. Remaining blind spot: the rPLL is not
+decoded by the chipdb — no fabric net drives PLL inputs, but that evidence is
+weaker than the two above.
+
+So **run Step 0 as a falsification test, not an open question**, and keep it
+cheap: with the ESP32 driving a known 1 kHz square from the coldtrace path, send
+2–3 *wildly* different `tb_prescaler`/`tb_period` values.
+  - **No change (PREDICTED)** → the timebase is MCU-side. Go straight to the real
+    candidates: read pacing (ripcord: stock's per-timebase pacer is TMR3, a
+    9-entry 1-2-5 PR table) and roll mode, i.e. rewrite Steps 1–3 around *when we
+    re-arm and read*, not around FPGA rate registers. Also suspect the
+    **BSRAM_1/2 pair** — 10-bit address counter on a *different* clock spine
+    (GB40 vs the scope buffers' GB20), sharing one enable flop; a slower,
+    deeper, separately-clocked buffer is exactly a roll-path shape, and it has
+    never been identified (old notes guessed "DMM?").
+  - Stretches → the netlist reading is wrong somewhere; stop and reconcile before
+    building on either model.
 
 **Step 1 — wire the config into the cold-boot path.** Integrate the timebase block
 (`fpga_send_scope_sequence`) after config+arm in the `guest-coldtrace` path, coexisting
