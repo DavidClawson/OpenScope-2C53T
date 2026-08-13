@@ -19,7 +19,7 @@
 #include "math_channel.h"
 #include "persistence.h"
 #include "fpga.h"
-#include "at32f403a_407.h"  /* GPIO port access for pin scanner */
+#include "at32f403a_407.h"  /* GPIO port reads in the debug overlay */
 #include <stdio.h>
 #include <math.h>
 #include <string.h>
@@ -862,66 +862,22 @@ static void draw_math_waveform(uint32_t frame)
 #define SCOPE_DBG_H   58
 
 /*
- * GPIO Pin Scanner — "poor man's logic analyzer"
+ * GPIO pin scanner — REMOVED 2026-08-13.
  *
- * Continuously reads all GPIO port input registers (IDT) and tracks
- * which pins have toggled at least once since boot. Displays a
- * toggle mask for each port (A-E).
+ * It accumulated per-port "this pin has toggled since boot" masks
+ * (gpio_toggle_a..e) every frame, and NOTHING read them: the overlay line
+ * that printed them was replaced during the config-entry experiments, and
+ * the two derived counters (pb3/pb4_toggle_count) were assigned and never
+ * used, which is why they showed up as unused statics in the build. An
+ * instrument with no readout is not an instrument; this file has enough
+ * history of numbers that could not mean what they appeared to mean.
  *
- * Any pin showing unexpected toggle activity could be the FPGA's
- * actual SPI data output — which might NOT be PB4 if the published
- * firmware doesn't match this V1.4 board hardware.
- *
- * Known toggling pins (expected):
- *   PA2 (USART2 TX), PA3 (USART2 RX)
- *   PA7,PA8 (button matrix)
- *   PB0 (button matrix), PB7 (PRM button)
- *   PC5,PC8,PC10,PC13 (buttons)
- *   PE2,PE3 (button matrix)
- *
- * Interesting if toggling (possible FPGA SPI data out):
- *   Any pin NOT in the known list above
+ * It is in git if it is ever wanted again: `git log -S gpio_toggle_a --
+ * firmware/src/ui/scope_ui.c` (added in 5b7437a, last read before 134fa83).
+ * Note the in-context MISO finder it once carried was already deleted in
+ * 2026-04-06 because it drove SPI3 from the display task and corrupted the
+ * acquisition task's transfers.
  */
-
-/* Accumulated toggle masks — bits set = pin toggled at least once */
-static uint16_t gpio_toggle_a = 0, gpio_toggle_b = 0;
-static uint16_t gpio_toggle_c = 0, gpio_toggle_d = 0, gpio_toggle_e = 0;
-static uint16_t gpio_prev_a = 0, gpio_prev_b = 0;
-static uint16_t gpio_prev_c = 0, gpio_prev_d = 0, gpio_prev_e = 0;
-static bool gpio_scan_started = false;
-
-/* Debug overlay toggle indicators derived from the accumulated GPIO masks. */
-static uint32_t pb3_toggle_count = 0;  /* SPI3 SCK — should toggle if GMUX works */
-static uint32_t pb4_toggle_count = 0;  /* SPI3 MISO — should toggle if FPGA responds */
-
-static void gpio_scan_update(void)
-{
-    uint16_t a = (uint16_t)GPIOA->idt;
-    uint16_t b = (uint16_t)GPIOB->idt;
-    uint16_t c = (uint16_t)GPIOC->idt;
-    uint16_t d = (uint16_t)GPIOD->idt;
-    uint16_t e = (uint16_t)GPIOE->idt;
-
-    if (gpio_scan_started) {
-        gpio_toggle_a |= (a ^ gpio_prev_a);
-        gpio_toggle_b |= (b ^ gpio_prev_b);
-        gpio_toggle_c |= (c ^ gpio_prev_c);
-        gpio_toggle_d |= (d ^ gpio_prev_d);
-        gpio_toggle_e |= (e ^ gpio_prev_e);
-    }
-
-    /* In-context SPI3 MISO finder REMOVED (2026-04-06).
-     * This was doing its own CS/SPI transfers from the display task,
-     * which corrupts the acquisition task's SPI3 transfers (both tasks
-     * hit the same SPI peripheral simultaneously on a single-core MCU).
-     * The scanner found PC6-LOW enables FPGA SPI — no longer need this. */
-    pb3_toggle_count = (gpio_toggle_b >> 3) & 1;
-    pb4_toggle_count = (gpio_toggle_b >> 4) & 1;
-
-    gpio_prev_a = a; gpio_prev_b = b;
-    gpio_prev_c = c; gpio_prev_d = d; gpio_prev_e = e;
-    gpio_scan_started = true;
-}
 
 /* Set by draw_scope_screen (whose full-area clear wipes 180-224) so the strip
  * background is refilled exactly when needed; the live incremental path never
@@ -942,9 +898,6 @@ static void dbg_pad(char *s, unsigned cap, unsigned width)
 
 static void draw_scope_debug(const theme_t *th)
 {
-    /* Update toggle masks */
-    gpio_scan_update();
-
     /* Dark background strip */
 #if (defined(FPGA_PIN_SWEEP_BUILD) && FPGA_PIN_SWEEP_BUILD) || \
     (defined(FPGA_CFG_TRACE_BUILD) && FPGA_CFG_TRACE_BUILD) || \
