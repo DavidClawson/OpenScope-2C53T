@@ -7,7 +7,7 @@
  * When USE_CMSIS_DSP is defined, uses ARM's arm_rfft_fast_f32().
  * Otherwise falls back to custom radix-2 DIT. No other dependencies.
  *
- * Memory: ~88KB static (.bss), no heap allocation.
+ * Memory: ~96KB radix-2 / ~80KB CMSIS, from the shared pool (no heap, no .bss).
  */
 
 #include "fft.h"
@@ -31,7 +31,7 @@ static arm_rfft_fast_instance_f32 fft_instance;
 #define FFT_PEAK_THRESHOLD_DB (-60.0f)
 
 /* ═══════════════════════════════════════════════════════════════════
- * Static buffers (~88KB total in .bss)
+ * Pool buffers (80KB CMSIS / 96KB radix-2 — see SHMEM_NEED_FFT)
  * ═══════════════════════════════════════════════════════════════════ */
 
 /*
@@ -46,7 +46,11 @@ static arm_rfft_fast_instance_f32 fft_instance;
  *   [64KB]  max_hold_buf        8KB
  *   [72KB]  twiddle_re          8KB (radix2 only)
  *   [80KB]  twiddle_im          8KB (radix2 only)
- *   Total: 72KB (CMSIS) or 88KB (radix2) of 150KB pool
+ *   then    sample_buf          8KB (int16_t[FFT_SIZE], BOTH paths)
+ *   Total: 80KB (CMSIS) or 96KB (radix2) of 150KB pool
+ *
+ * The sample_buf line is the one this comment used to omit, which is where the
+ * old "72KB / 88KB" figures — and the wrong SHMEM_NEED_FFT — came from.
  */
 static float *fft_buf = 0;
 static float *window_coeffs = 0;
@@ -97,6 +101,20 @@ static void fft_setup_pointers(uint8_t *pool)
 #endif
 _Static_assert(FFT_POOL_LAYOUT_END <= SHMEM_FFT_WATERFALL_OFFSET,
                "FFT pool layout has grown into the waterfall sub-tenant region");
+
+/* Second, independent tie: the DIAGNOSTIC figure must equal the REAL layout.
+ * SHMEM_NEED_FFT was a hand-maintained 90112 that matched neither layout (it
+ * was radix-2 minus sample_buf) and fed the About/health screens. It is now
+ * derived from FFT_SIZE/FFT_BINS in shared_mem.h; this pins the derivation to
+ * the pointer arithmetic above so the two cannot drift apart again.
+ *
+ * This does NOT make the assert above redundant, and that one must stay: the
+ * two check different things. This one says "the reported size is the real
+ * size"; that one says "the real size fits below the waterfall". Raising
+ * FFT_SIZE to 8192 keeps THIS assert satisfied (both sides scale) while the
+ * one above fires — which is the collision it was added to catch. */
+_Static_assert(FFT_POOL_LAYOUT_END == SHMEM_NEED_FFT,
+               "SHMEM_NEED_FFT no longer matches the real FFT pool layout");
 
 /* Current configuration */
 static fft_config_t current_cfg;

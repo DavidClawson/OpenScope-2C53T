@@ -3492,6 +3492,12 @@ void fpga_init(void)
     SPI3_CS_ASSERT();
     fpga.init_hs[11] = spi3_xfer(0xFF);  /* Post-init probe byte */
     SPI3_CS_DEASSERT();
+    fpga.diag_probe_valid = 1;           /* witness: this byte WAS measured.
+                                          * The warm-handoff and bus-released
+                                          * paths return before Step 10, and
+                                          * 0x00 is a legal MISO byte, so the
+                                          * shell cannot infer it from the
+                                          * value. See usb_debug.c cmd_status. */
 
     systick_delay_ms(10);
 

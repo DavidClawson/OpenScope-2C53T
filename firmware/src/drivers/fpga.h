@@ -183,14 +183,29 @@ typedef struct {
     volatile uint8_t  diag_ch2_raw[4];     /* First 4 raw CH2 bytes (before cal) */
     volatile uint8_t  diag_data_varies;    /* 1 if data varies within read, 0 if constant */
 
-    /* Bit-bang GPIO test results (set once during init, never overwritten) */
-    volatile uint8_t  bb_idle;             /* PB4 before CS assert (expect 1) */
-    volatile uint8_t  bb_cs;              /* PB4 after CS assert (0 = FPGA responds!) */
-    volatile uint8_t  bb_byte;            /* 8-bit MISO from manual SCK toggle */
-    volatile uint8_t  bb_marker;          /* 0xBB = bit-bang test ran */
+    /* REMOVED 2026-08-13: bb_idle / bb_cs / bb_byte / bb_marker.
+     *
+     * They held the results of an early manual-MISO bit-bang probe that was
+     * deleted from fpga_init long ago ("Bit-bang test REMOVED — it was
+     * disrupting the GMUX pin connection", fpga.c Step 10). Nothing has
+     * written them since, but `status` kept printing them with their original
+     * legend — including "cs=00" annotated as "0 = FPGA responds!". A reader
+     * saw a confident zero for a probe that has not existed for months.
+     * Structurally-unpopulated fields do not get to render as measurements;
+     * with no writer left, the honest form is no field at all.
+     * (Unrelated to fpga_bitbang_config_sequence(), which is live.) */
 
     /* Init handshake diagnostic (captured during fpga_init) */
-    volatile uint8_t  init_hs[12];         /* Handshake response bytes (11 used + probe) */
+    volatile uint8_t  init_hs[12];         /* Handshake response bytes (11 used + probe).
+                                            * [0..10] written ONLY by
+                                            * fpga_spi3_config_sequence(); [11] by
+                                            * fpga_init Step 10 — see diag_probe_valid. */
+    volatile uint8_t  diag_probe_valid;    /* 1 = init_hs[11] was actually measured.
+                                            * fpga_init Step 10 is skipped by the
+                                            * warm-handoff / bus-released early
+                                            * returns, and 0x00 is a legal MISO byte,
+                                            * so the shell needs a separate witness to
+                                            * tell "read a zero" from "never read". */
     volatile uint32_t diag_remap5;         /* IOMUX remap5 (spi3_gmux) */
     volatile uint32_t diag_remap7;         /* IOMUX remap7 (swjtag_gmux) */
     volatile uint32_t diag_spi_ctrl1;      /* SPI3 CTRL1 after init */
