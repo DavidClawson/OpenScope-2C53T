@@ -42,6 +42,7 @@ C_SOURCES += src/ui/resistor_calc_ui.c
 C_SOURCES += src/ui/bode_ui.c
 C_SOURCES += src/ui/fuse_ui.c
 C_SOURCES += src/ui/scope_state.c
+C_SOURCES += src/ui/scope_measure.c
 C_SOURCES += src/tasks/input_handler.c
 C_SOURCES += src/tasks/measurement.c
 C_SOURCES += src/drivers/flash_fs.c
@@ -443,12 +444,20 @@ $(BUILD_DIR)/test_fpga_meter_plan: tests/test_fpga_meter_plan.c src/drivers/fpga
 test-fpga-meter-plan: $(BUILD_DIR)/test_fpga_meter_plan
 	$<
 
+$(BUILD_DIR)/test_scope_measure: tests/test_scope_measure.c src/ui/scope_measure.c src/ui/scope_measure.h | $(BUILD_DIR)
+	$(HOST_CC) -std=gnu11 -Wall -Wextra -Isrc/ui $< src/ui/scope_measure.c -lm -o $@
+
+# Measurements the scope badges are allowed to print. Includes two negative
+# controls (broken implementations that MUST be caught) — see the file header.
+test-scope-measure: $(BUILD_DIR)/test_scope_measure
+	$<
+
 test-stock-meter-literals:
 	python3 ../scripts/test_stock_meter_literals.py
 
 test-meter: test-meter-data test-meter-auto test-meter-voltage-wave test-fpga-meter-plan test-stock-meter-literals
 
-.PHONY: all clean disasm size renode soak-test soak-quick flash flash-dfu bootloader flash-bootloader flash-all guest guest-warmtest guest-usart-silent emu test-meter-data test-meter-auto test-meter-voltage-wave test-fpga-meter-plan test-stock-meter-literals test-meter
+.PHONY: all clean disasm size renode soak-test soak-quick flash flash-dfu bootloader flash-bootloader flash-all guest guest-warmtest guest-usart-silent emu test-meter-data test-meter-auto test-meter-voltage-wave test-fpga-meter-plan test-stock-meter-literals test-meter test-scope-measure
 
 # ═══════════════════════════════════════════════════════════════════════════
 # BENCH / EXPERIMENT IMAGE INDEX                          (index added 2026-08-13)
