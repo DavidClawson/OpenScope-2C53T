@@ -113,6 +113,13 @@ typedef struct {
     uint16_t h1_y;
     uint16_t h2_y;
 
+    /* Display scales for the cursor delta readout.
+     *
+     * 0.0 means UNKNOWN — not "zero seconds per pixel". Both are 0 today
+     * (see scope_state_init) because seconds need a timebase and volts need
+     * per-range calibration, and this firmware has neither. Consumers MUST
+     * check for > 0 before using them; scope_ui.c falls back to samples and
+     * ADC counts, which are exact, when they are 0. */
     float time_per_pixel;
     float volts_per_pixel;
 } cursor_state_t;

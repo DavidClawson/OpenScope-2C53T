@@ -666,63 +666,79 @@ static void draw_cursors(void)
                                h2_active ? color_active : color_inactive, &font_small);
     }
 
-    /* Delta readout */
+    /*
+     * Delta readout.
+     *
+     * Both cursor axes have an EXACT relationship to the capture, because
+     * the waveform plot defines one:
+     *
+     *   horizontal — draw_demo_waveform()/draw_scope_live_frame() plot
+     *                buf[x] at column x, so one screen column IS one sample.
+     *                dx pixels = dx samples, exactly, no calibration.
+     *   vertical   — the same plots use
+     *                  y = SCOPE_MID_Y - (sample - 128) * SCOPE_H / 256,
+     *                so dy pixels = dy * 256 / SCOPE_H ADC counts, exactly.
+     *
+     * Seconds and volts are a different matter: they need a sample rate and
+     * a per-range gain, neither of which exists yet (dev plan §F2/§F4).
+     * So the readouts are in samples and counts, and the s/V forms appear
+     * only once cursor.time_per_pixel / volts_per_pixel are non-zero — which
+     * scope_state.c documents as "unknown" and sets to 0 until a timebase
+     * and a calibration are wired. That is the whole switch-over.
+     */
     uint16_t badge_y = SCOPE_BOT - 28;
     uint16_t badge_x = 4;
     char buf[24];
+    char label[40];
 
     if (c->mode == CURSOR_VERTICAL || c->mode == CURSOR_BOTH) {
         int16_t dx = (int16_t)c->v2_x - (int16_t)c->v1_x;
-        float dt = (float)dx * c->time_per_pixel;
+        int16_t adx = (dx < 0) ? (int16_t)-dx : dx;
 
         lcd_fill_rect(badge_x, badge_y, 100, 13, th->background);
-        format_si(dt < 0.0f ? -dt : dt, "s", buf, sizeof(buf));
-        {
-            char label[32];
-            int li = 0;
-            label[li++] = 'd'; label[li++] = 't'; label[li++] = '=';
-            if (dt < 0.0f) label[li++] = '-';
-            int j = 0;
-            while (buf[j] && li < 30) label[li++] = buf[j++];
-            label[li] = '\0';
-            font_draw_string(badge_x, badge_y, label, th->highlight, th->highlight, &font_small);
+        if (c->time_per_pixel > 0.0f) {
+            float dt = (float)adx * c->time_per_pixel;
+            format_si(dt, "s", buf, sizeof(buf));
+            snprintf(label, sizeof(label), "dt=%s%s", dx < 0 ? "-" : "", buf);
+        } else {
+            snprintf(label, sizeof(label), "dt=%s%dsmp", dx < 0 ? "-" : "", adx);
         }
+        font_draw_string(badge_x, badge_y, label,
+                         th->highlight, th->highlight, &font_small);
 
-        if (dx != 0) {
-            float freq = 1.0f / (dt < 0.0f ? -dt : dt);
-            lcd_fill_rect(badge_x, badge_y + 14, 100, 13, th->background);
+        lcd_fill_rect(badge_x, badge_y + 14, 100, 13, th->background);
+        if (c->time_per_pixel > 0.0f && adx != 0) {
+            float freq = 1.0f / ((float)adx * c->time_per_pixel);
             format_si(freq, "Hz", buf, sizeof(buf));
-            {
-                char label[32];
-                int li = 0;
-                label[li++] = '1'; label[li++] = '/'; label[li++] = 'd';
-                label[li++] = 't'; label[li++] = '=';
-                int j = 0;
-                while (buf[j] && li < 30) label[li++] = buf[j++];
-                label[li] = '\0';
-                font_draw_string(badge_x, badge_y + 14, label,
-                                 th->highlight, th->highlight, &font_small);
-            }
+            snprintf(label, sizeof(label), "1/dt=%s", buf);
+        } else {
+            /* No sample rate => no Hz. Saying "1/dt=--" beats printing a
+             * number derived from a placeholder time base. */
+            snprintf(label, sizeof(label), "1/dt=%s", MEAS_NA);
         }
+        font_draw_string(badge_x, badge_y + 14, label,
+                         th->highlight, th->highlight, &font_small);
     }
 
     if (c->mode == CURSOR_HORIZONTAL || c->mode == CURSOR_BOTH) {
         int16_t dy = (int16_t)c->h1_y - (int16_t)c->h2_y;
-        float dv = (float)dy * c->volts_per_pixel;
+        int16_t ady = (dy < 0) ? (int16_t)-dy : dy;
 
         uint16_t vbadge_x = (c->mode == CURSOR_BOTH) ? 120 : badge_x;
         lcd_fill_rect(vbadge_x, badge_y, 100, 13, th->background);
-        format_si(dv < 0.0f ? -dv : dv, "V", buf, sizeof(buf));
-        {
-            char label[32];
-            int li = 0;
-            label[li++] = 'd'; label[li++] = 'V'; label[li++] = '=';
-            if (dv < 0.0f) label[li++] = '-';
-            int j = 0;
-            while (buf[j] && li < 30) label[li++] = buf[j++];
-            label[li] = '\0';
-            font_draw_string(vbadge_x, badge_y, label, th->highlight, th->highlight, &font_small);
+        if (c->volts_per_pixel > 0.0f) {
+            float dv = (float)ady * c->volts_per_pixel;
+            format_si(dv, "V", buf, sizeof(buf));
+            snprintf(label, sizeof(label), "dV=%s%s", dy < 0 ? "-" : "", buf);
+        } else {
+            /* Pixels -> counts is the plot's own transform, inverted. */
+            unsigned counts = (unsigned)(((uint32_t)ady * 256u + SCOPE_H / 2u)
+                                         / (uint32_t)SCOPE_H);
+            snprintf(label, sizeof(label), "dV=%s%ucnt",
+                     dy < 0 ? "-" : "", counts);
         }
+        font_draw_string(vbadge_x, badge_y, label,
+                         th->highlight, th->highlight, &font_small);
     }
 
     /* Cursor mode indicator */

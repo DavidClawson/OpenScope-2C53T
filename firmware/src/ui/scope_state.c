@@ -94,8 +94,29 @@ void scope_state_init(scope_state_t *s)
     s->cursor.v2_x = CURSOR_SCOPE_LEFT + (CURSOR_SCOPE_WIDTH * 2) / 3;
     s->cursor.h1_y = CURSOR_SCOPE_TOP + CURSOR_SCOPE_HEIGHT / 3;
     s->cursor.h2_y = CURSOR_SCOPE_TOP + (CURSOR_SCOPE_HEIGHT * 2) / 3;
-    s->cursor.time_per_pixel  = 10.0e-3f / (float)CURSOR_SCOPE_WIDTH;
-    s->cursor.volts_per_pixel = 8.0f / (float)CURSOR_SCOPE_HEIGHT;
+    /*
+     * Cursor scales: 0.0 == UNKNOWN, and that is the truth today.
+     *
+     * These used to be seeded with 10 ms across the screen and 8 V down it,
+     * and nothing ever updated them — not scope_adjust_timebase(), not
+     * scope_adjust_vdiv(). Every "dt = 1.2 ms" and "dV = 340 mV" the cursor
+     * readout has ever shown came from those two constants, so the numbers
+     * tracked the cursor positions and nothing else. They looked like
+     * measurements.
+     *
+     * There is no honest value to put here yet: seconds need a known sample
+     * rate (no timebase control exists — dev plan §F4) and volts need the
+     * per-range gain/offset calibration (§F2, still placeholder). So they
+     * stay 0 and scope_ui.c reads that as "quote the deltas in samples and
+     * ADC counts instead", which are exact.
+     *
+     * TO WIRE THEM UP: set time_per_pixel from the sample interval (one
+     * screen column is one sample in the current plot) and volts_per_pixel
+     * from the calibrated volts-per-count times 256/SCOPE_H. The moment
+     * either goes non-zero the UI switches that axis to s / V on its own.
+     */
+    s->cursor.time_per_pixel  = 0.0f;
+    s->cursor.volts_per_pixel = 0.0f;
 }
 
 scope_state_t *scope_state_get(void)
