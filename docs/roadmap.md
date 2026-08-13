@@ -127,6 +127,77 @@ of it before the move below.
   read over SPI2 into the pool on demand, which needs no XIP and no new pins.
   Executable module *code* is out of reach (see the SPIM note above); design
   modules as data + a firmware-side interpreter, not as loadable binaries.
+  **Prerequisite: the region layer below.**
+
+### W25Q region layer (prerequisite for anything that writes)
+
+Small, and it must exist *before* the first automated writer does. Not FatFs —
+a region table plus a bounds-checked allocator, on the order of a couple of
+hundred lines.
+
+**Flash wear is not the reason.** W25Q128JV is rated 100,000 P/E cycles per
+4 KB sector with 20-year retention; reads cause no wear at all (read-disturb is
+a NAND concern, not NOR). Only erases count, and the granularity is 4 KB, so
+changing one byte costs a full sector erase:
+
+| Erases/day, one sector | Sector lifetime |
+|---|---|
+| 1 | ~274 years |
+| 10 | ~27 years |
+| 100 | ~2.7 years |
+| every 10 s | **~12 days** |
+
+So the only rule that matters is about *frequency, not volume*: **write on
+explicit user action or at shutdown — never on a timer, never per-keypress.**
+Module installs a few times a month land around 1,600 years on a single sector
+with no wear levelling at all; module *loads* are reads and cost nothing. Two
+cheap habits make it moot anyway: skip no-op writes (compare before erasing),
+and append fixed-size records into a sector until it fills rather than
+rewriting it (16 × 256 B records = 16× fewer erases).
+
+**The real hazard is a stray erase, not endurance.** Irreplaceable data lives
+on that chip — factory calibration at `3:/System file/cal_ch1.bin` /
+`cal_ch2.bin`, plus stock's UI assets. We cannot regenerate factory cal. And
+today there is nothing between a caller and that data: `flash_fs_read()` and
+`flash_fs_write_atomic()` are still stubs with FatFs TODOs, so only the raw
+primitives (`raw_read_bytes`, `raw_write_block`, `raw_sector_erase`) are live,
+addressed by absolute sector. What the layer needs:
+
+- a region map with explicit **read-only** regions (factory cal, stock assets)
+  that the write path refuses by address, not by convention;
+- bounds checks on every write/erase against the target region;
+- a designated scratch/user region for everything we generate;
+- no-op-write elision, and append-style records for anything frequently updated.
+
+*(Current wear: zero. Nothing writes to the W25Q at runtime — `config_save()`
+targets a static RAM buffer and has no callers; the only live write paths are
+manual `usb_debug.c` shell commands that read back and verify.)*
+
+### User calibration mode (unlocked by the region layer)
+
+Worth filing now because it may be the pragmatic answer to a thread that has
+resisted reverse engineering. **Write to a separate user-cal region — never to
+the factory sector.** Factory cal is the instrument's provenance, is
+irreplaceable, and is in a format we have not decoded; overwriting it trades a
+known-good reference for a guess.
+
+The standard instrument pattern applies: factory cal stays read-only, user cal
+is an overlay stored in our own format, and a blank or corrupt user region
+falls back to factory. That gives revert-to-factory for free and makes a botched
+calibration recoverable.
+
+Why it may matter more than a convenience feature: the meter's low-Ω and DCV
+accuracy currently depend on per-device factory coefficients we have never
+recovered (the `0.0304` bench factor was one unit's, and PR #13 correctly fails
+those bands closed rather than shipping it). A guided "measure this known
+reference, we will store the coefficient" routine sidesteps decoding the stock
+format entirely — the user supplies the ground truth a reference DMM already
+has. Wear is irrelevant here: a calibration is a handful of writes in the life
+of a device.
+
+Gated on the region layer, and on scope work per the FPGA-first stance — not a
+now item, but the design constraint (separate region, never the factory sector)
+should be settled before anyone starts.
 - **FFT twiddle tables → W25Q** — ~101 KB of internal flash, read-only. Would
   have to be *loaded into the pool* at `fft_init()` rather than XIP'd, so it
   trades 101 KB of flash for pool space and a boot-time read. Only worth it if
