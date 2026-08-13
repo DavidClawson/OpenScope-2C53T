@@ -144,8 +144,8 @@ capacitance-vs-temperature selector words.
 
 The unit lookup boundary guard also pins the stock draw-call slice at
 `0x08009AE4`, where the renderer computes `0x0804C40C + mode * 0x30 +
-DAT_20001026 * 4`, and the first 48 bytes at `0x0804C40C`. In the downloaded
-V1.2.0 APP image that zero-filled lookup region is not a valid in-image Thumb
-pointer table. Therefore `DAT_20001026` is stock formatter state, but
-`0x0804C40C` is not a recovered stock unit string table and must not be used as
-proof for local unit suffix text.
+DAT_20001026 * 4`. Corrected 2026-08-13: `0x0804C40C` is a stock-runtime
+literal in an APP image linked at `0x08007000`, so the bytes live at file offset
+`0x4540C`, not `0x4C40C`. The corrected offset is a recovered stock
+unit-string pointer table; the old zero-filled read was an off-by-0x7000
+addressing error.

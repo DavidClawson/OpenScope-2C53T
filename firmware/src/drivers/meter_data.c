@@ -86,11 +86,6 @@ static void meter_data_test_call_hook(meter_data_test_hook_point_t point)
         meter_data_test_hook(point);
     }
 }
-#else
-static void meter_data_test_call_hook(int point)
-{
-    (void)point;
-}
 #endif
 
 typedef struct {
@@ -431,11 +426,10 @@ static void format_4digit_unsigned(float v, char *s)
  * unresolved hardware range state.
  *
  * Strings are ASCII-only so the font renderer doesn't need Greek mu/ohm
- * glyphs. Stock formatter writes DAT_20001026 indices, but the downloaded
- * V1.2.0 APP image does not contain a recovered stock unit string table at
- * 0x0804C40C; that region is a documented negative boundary. The suffix text
- * below is local UI text attached to stock formatter indices, not a recovered
- * stock string dump.
+ * glyphs. Stock formatter writes DAT_20001026 indices, and the corrected
+ * stock-runtime lookup at 0x0804C40C (file offset 0x4540C in the 0x08007000
+ * APP image) recovers the unit suffix pointer table. The text below keeps the
+ * local ASCII rendering policy while staying aligned with those stock slots.
  * ═══════════════════════════════════════════════════════════════════ */
 
 static const char * const unit_suffix_table[11][3] = {
@@ -1218,7 +1212,9 @@ void meter_data_invalidate(uint8_t submode)
 
     meter_writer_lock_acquire();
     meter_reading_write_begin();
+#ifdef METER_DATA_HOST_TESTS
     meter_data_test_call_hook(METER_DATA_TEST_HOOK_INVALIDATE_AFTER_WRITE_BEGIN);
+#endif
     r->value = 0.0f;
     r->bcd_value = 0;
     memset(r->digits, 0, sizeof(r->digits));
@@ -1280,7 +1276,9 @@ void meter_data_process_frame(const volatile uint8_t *frame, uint8_t submode)
     old_unit_suffix[sizeof(old_unit_suffix) - 1] = '\0';
 
     meter_reading_write_begin();
+#ifdef METER_DATA_HOST_TESTS
     meter_data_test_call_hook(METER_DATA_TEST_HOOK_PROCESS_AFTER_WRITE_BEGIN);
+#endif
 
     /* Save raw frame for debug display */
     for (int i = 0; i < 12; i++) r->dbg_frame[i] = frame[i];

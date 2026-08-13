@@ -773,8 +773,8 @@ eight-byte command table:
 
 | Stock slot | Selector | Stock formatter evidence | Local use |
 |---:|---:|---|---|
-| 2 | `0x0517` | `full_decompile.c` case 2 writes display unit state `4` for one DCA range and `3` for another, keyed by `DAT_2000102e`. The unit lookup boundary guard proves `0x0804C40C` is not a recovered stock unit string table, so mA/A suffix text remains local/inferred. | local DC current small range and DC A range |
-| 3 | `0x050B` | `full_decompile.c` case 3 writes display unit state `5`; suffix text for that unit index is local/inferred because the downloaded APP image has a zero-filled lookup region rather than recovered stock strings. | local AC current small range; AC A is only local policy until proven |
+| 2 | `0x0517` | `full_decompile.c` case 2 writes display unit state `4` for one DCA range and `3` for another, keyed by `DAT_2000102e`. The corrected unit lookup guard resolves runtime `0x0804C40C` through stock APP base `0x08007000` and recovers the mA/A suffix pointers. | local DC current small range and DC A range |
+| 3 | `0x050B` | `full_decompile.c` case 3 writes display unit state `5`; the corrected unit lookup table recovers the stock suffix pointer for this unit index. | local AC current small range; AC A is only local policy until proven |
 
 No inspected stock path proves a separate uA selector, and no inspected AC path
 proves an A-range ACA formatter. The stock evidence so far distinguishes DC

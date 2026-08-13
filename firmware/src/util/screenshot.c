@@ -64,12 +64,17 @@ void screenshot_set_pixel(uint16_t x, uint16_t y, uint16_t color)
 void screenshot_fill_rect(uint16_t x, uint16_t y, uint16_t w, uint16_t h, uint16_t color)
 {
     if (!initialized) return;
+    if (x >= SCREENSHOT_WIDTH || y >= SCREENSHOT_HEIGHT) return;
+    if (w > SCREENSHOT_WIDTH - x) w = SCREENSHOT_WIDTH - x;
+    if (h > SCREENSHOT_HEIGHT - y) h = SCREENSHOT_HEIGHT - y;
 
     uint8_t lo = (uint8_t)(color & 0xFF);
     uint8_t hi = (uint8_t)((color >> 8) & 0xFF);
 
-    for (uint16_t row = y; row < y + h && row < SCREENSHOT_HEIGHT; row++) {
-        for (uint16_t col = x; col < x + w && col < SCREENSHOT_WIDTH; col++) {
+    uint16_t y_end = (uint16_t)(y + h);
+    uint16_t x_end = (uint16_t)(x + w);
+    for (uint16_t row = y; row < y_end; row++) {
+        for (uint16_t col = x; col < x_end; col++) {
             uint32_t offset = ((uint32_t)row * SCREENSHOT_WIDTH + col) * SCREENSHOT_BPP;
             shadow_fb[offset]     = lo;
             shadow_fb[offset + 1] = hi;

@@ -1362,7 +1362,8 @@ static void cmd_screen_dump(const char *args)
 parsed_screen_args:
     if (x >= LCD_WIDTH || y >= LCD_HEIGHT ||
         w == 0 || h == 0 ||
-        x + w > LCD_WIDTH || y + h > LCD_HEIGHT) {
+        w > LCD_WIDTH || h > LCD_HEIGHT ||
+        x > LCD_WIDTH - w || y > LCD_HEIGHT - h) {
         usb_send_str("Usage: screen dump [shadow] [x y w h]\r\n");
         usb_debug_printf("  bounds: x<%u y<%u x+w<=%u y+h<=%u\r\n",
                          (unsigned)LCD_WIDTH,
@@ -1441,7 +1442,8 @@ static bool parse_screen_region_args(const char *args,
 
     return *x < LCD_WIDTH && *y < LCD_HEIGHT &&
            *w > 0 && *h > 0 &&
-           *x + *w <= LCD_WIDTH && *y + *h <= LCD_HEIGHT;
+           *w <= LCD_WIDTH && *h <= LCD_HEIGHT &&
+           *x <= LCD_WIDTH - *w && *y <= LCD_HEIGHT - *h;
 }
 
 static void cmd_screen_dumpbin(const char *args)

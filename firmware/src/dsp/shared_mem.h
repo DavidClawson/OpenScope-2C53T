@@ -40,7 +40,9 @@ typedef enum {
 /* Size of the shared pool. Keep this above the largest enabled consumer.
  * The old RGB565 screenshot utility needs 150KB and must fail closed unless
  * this pool is deliberately restored to that size. */
+#ifndef SHMEM_POOL_SIZE
 #define SHMEM_POOL_SIZE  98304
+#endif
 
 /* RAM sizes each feature actually needs (for diagnostics/budgeting) */
 #define SHMEM_NEED_FFT          90112   /* 88 KB (radix-2) */

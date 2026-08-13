@@ -21,15 +21,11 @@
    analog range writer for `ms[0x02]`/`ms[0x03]`. Do not turn this into a claim
    that stock sends no meter range commands at all.
 
-4. **Unit lookup boundary corrected 2026-06-06.** The stock renderer computes a
-   lookup address from `DAT_20001026` at `0x08009AE4`, but the downloaded
-   V1.2.0 APP image has a zero-filled region at `0x0804C40C`; this is not a
-   recovered stock unit-string table. Therefore `0x0804C40C` is not a
-   recovered stock unit-string table.
-   Boundary: not a recovered stock unit-string table.
-   `DAT_20001026` remains stock formatter state, while local suffix text
-   remains inferred/local.
-   Boundary: local suffix text remains inferred/local.
+4. **Unit lookup boundary corrected again 2026-08-13.** The stock renderer
+   computes a lookup address from `DAT_20001026` at `0x08009AE4`. That lookup
+   base is the stock-runtime literal `0x0804C40C`, but the APP image is linked
+   at `0x08007000`, so the file offset is `0x4540C`, not `0x4C40C`. The corrected
+   offset contains the recovered 12-entry unit-string pointer table.
 
 5. **DCV sub-state machine (DAT_20001027) persists across frames**. It has 4 states (0, 1, 2, 3) and is reset to 0 only on valid digit frames. The complexity comes from conditional transitions based on frame[6] and frame[7] bit patterns.
 
@@ -358,13 +354,12 @@ Index mapping (from write patterns):
 | 10 | Frequency | 1 | kHz |
 | 11 | Frequency | 2 | MHz |
 
-**Corrected 2026-06-06:** the draw path still computes
-`0x804c40c + index * 4`, but the downloaded V1.2.0 APP image does not contain a
-recovered unit-string pointer table there. The unit lookup boundary guard pins
-the draw-call slice at `0x08009AE4` and the first 48 bytes at `0x0804C40C`;
-that zero-filled lookup region is not valid in-image Thumb pointer evidence.
-Therefore the formatter unit indices are stock evidence, while the actual suffix
-strings remain local/inferred.
+**Corrected 2026-08-13:** the draw path computes the stock-runtime address
+`0x0804C40C + index * 4`. Since the stock APP is linked at `0x08007000`, the
+table lives at file offset `0x4540C`; the previous `0x4C40C` read was the same
+off-by-0x7000 mistake class as the H2 extraction bug. The corrected table
+contains 12 stock pointers resolving to unit strings including `Ω`, `kΩ`, `MΩ`,
+`mF`, `nF`, and `uF`.
 
 **Flash table location claimed by the decompile:** `0x804c40c + index * 4`
 
@@ -728,10 +723,11 @@ where per_submode_offset is:
 
 1. **Exact bit-to-segment mapping in meter IC.** The BCD lookup table (our meter_data.c line 62–79) decodes FPGA nibbles to digit codes, but the underlying 7-segment LCD drive encoding remains undocumented in the decomp.
 
-2. **Stock unit suffix table contents.** The decomp references
-   `0x0804C40C`, but current binary guards show the downloaded APP image has a
-   zero-filled lookup region there, not a recovered stock string/pointer table.
-   We are relying on stock formatter indices plus local/inferred suffix text.
+2. **Unit suffix language/encoding beyond the recovered table.** The decomp
+   references stock-runtime `0x0804C40C`, and current binary guards now resolve
+   that through the stock-app base to the live pointer table at file `0x4540C`.
+   The stock suffix pointers are recovered; remaining uncertainty is how far
+   localized strings and LCD segment rendering share this table.
 
 3. **func_0x08033ef8 source code.** It's called but not defined in the decomp. Likely a jump table (TBB/TBH) in the original binary, collapsed into an external symbol by Ghidra.
 
@@ -773,15 +769,14 @@ where per_submode_offset is:
 
 ### For display strings:
 
-1. **Our meter_data.c unit_suffix_table is local UI text.** It is attached to
-   stock formatter indices from lines 2889–2963, but it is not verified as a
-   byte-for-byte stock string table because `0x0804C40C` is not recovered
-   string-table evidence in the downloaded V1.2.0 APP image.
+1. **Our meter_data.c unit_suffix_table follows recovered stock unit slots.** It
+   is attached to stock formatter indices from lines 2889–2963 and now matches
+   the corrected stock pointer table for the resolved unit suffixes.
 
 2. **DAT_20001026 to renderer lookup** goes through the stock arithmetic using
-   `0x0804C40C`, but that region is not recovered stock string-table evidence in
-   this image. We supply local ASCII suffixes from formatter indices instead of
-   claiming byte-for-byte stock text.
+   runtime `0x0804C40C`. Always translate that runtime literal with stock APP
+   base `0x08007000` before inspecting bytes; reading file `0x4C40C` reopens the
+   stale zero-region bug.
 
 ---
 

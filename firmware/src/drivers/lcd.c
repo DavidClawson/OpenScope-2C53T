@@ -17,6 +17,8 @@
 
 #include "lcd.h"
 
+#include <stdbool.h>
+
 /* ========================================================================
  * Embedded 8x16 ASCII font (chars 0x20-0x7E)
  *
@@ -140,6 +142,9 @@ static uint16_t lcd_shadow_y;
 static uint16_t lcd_shadow_w;
 static uint16_t lcd_shadow_h;
 static uint32_t lcd_shadow_pos;
+static uint16_t lcd_shadow_last_color;
+static uint8_t lcd_shadow_last_index;
+static bool lcd_shadow_last_valid;
 
 static const uint16_t lcd_shadow_palette[16] = {
     COLOR_BLACK,
@@ -162,6 +167,10 @@ static const uint16_t lcd_shadow_palette[16] = {
 
 static uint8_t lcd_shadow_palette_index(uint16_t color)
 {
+    if (lcd_shadow_last_valid && color == lcd_shadow_last_color) {
+        return lcd_shadow_last_index;
+    }
+
     uint8_t best = 0;
     uint32_t best_dist = 0xFFFFFFFFu;
     int32_t r = (int32_t)((color >> 11) & 0x1F);
@@ -184,6 +193,9 @@ static uint8_t lcd_shadow_palette_index(uint16_t color)
             if (dist == 0) break;
         }
     }
+    lcd_shadow_last_color = color;
+    lcd_shadow_last_index = best;
+    lcd_shadow_last_valid = true;
     return best;
 }
 
@@ -224,6 +236,9 @@ void lcd_shadow_clear(void)
             lcd_shadow[y][x] = 0;
         }
     }
+    lcd_shadow_last_color = 0;
+    lcd_shadow_last_index = 0;
+    lcd_shadow_last_valid = false;
 }
 
 void lcd_shadow_set_page(uint16_t y)
@@ -581,8 +596,8 @@ void lcd_blit_rect(uint16_t x, uint16_t y, uint16_t w, uint16_t h, const uint16_
     if (w == 0 || h == 0) return;
     if (x >= LCD_WIDTH || y >= LCD_HEIGHT) return;
     uint16_t src_w = w;
-    if (x + w > LCD_WIDTH) w = LCD_WIDTH - x;
-    if (y + h > LCD_HEIGHT) h = LCD_HEIGHT - y;
+    if (w > LCD_WIDTH - x) w = LCD_WIDTH - x;
+    if (h > LCD_HEIGHT - y) h = LCD_HEIGHT - y;
     if (w == 0 || h == 0) return;
 
     lcd_set_window(x, y, w, h);
@@ -598,8 +613,8 @@ void lcd_blit_rect(uint16_t x, uint16_t y, uint16_t w, uint16_t h, const uint16_
 void lcd_fill_rect(uint16_t x, uint16_t y, uint16_t w, uint16_t h, uint16_t color)
 {
     if (x >= LCD_WIDTH || y >= LCD_HEIGHT) return;
-    if (x + w > LCD_WIDTH) w = LCD_WIDTH - x;
-    if (y + h > LCD_HEIGHT) h = LCD_HEIGHT - y;
+    if (w > LCD_WIDTH - x) w = LCD_WIDTH - x;
+    if (h > LCD_HEIGHT - y) h = LCD_HEIGHT - y;
 
     lcd_set_window(x, y, w, h);
 

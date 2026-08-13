@@ -146,13 +146,13 @@ did **not** produce a task loop. It produced a short floating-point helper.
 That means the decompiler symbol/handle names around this area are not strong
 enough to settle the dispatcher question by themselves.
 
-### B. `0x0804C40C` is also weaker than we thought
+### B. `0x0804C40C` addressing correction
 
-Older notes treated `0x0804C40C` as a flash pointer table for unit strings, but
-the raw V1.2.0 bytes there are all zero in the downloaded image.
-
-That does not prove the analysis is wrong, but it is another sign that some of
-our “hardcoded flash table” claims are overconfident relative to the raw file.
+Older notes later treated `0x0804C40C` as a weak/zero-filled unit-string-table
+candidate, but that was an addressing error. The stock APP is linked at
+`0x08007000`, so runtime `0x0804C40C` maps to file offset `0x4540C`; the all-zero
+bytes were at the wrong file offset `0x4C40C`. The corrected offset contains the
+unit-string pointer table.
 
 ### C. There is no nearby real code-pointer array
 

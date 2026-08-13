@@ -16,6 +16,7 @@ RAM_MAP = REPO / "reverse_engineering/analysis_v120/ram_map.txt"
 FULL_DECOMPILE = REPO / "reverse_engineering/analysis_v120/full_decompile.c"
 FUNCTION_NAMES = REPO / "reverse_engineering/analysis_v120/function_names.md"
 BASE = 0x08000000
+STOCK_APP_BASE = 0x08007000
 EXPECTED_SHA256 = "a17c5c35c97bb898f15672a1747bc1041d8ed507c16999ddba0d1e4e2ec0c760"
 EXPECTED_METER_SELECTOR_TABLE = bytes.fromhex("14 0c 17 0b 0a 12 11 10")
 EXPECTED_MUX_STATE_RAM_MAP_REFS = {
@@ -785,12 +786,12 @@ EXPECTED_CURRENT_FORMATTER_VARIANT_SEQUENCES = {
     ),
 }
 EXPECTED_UNIT_LOOKUP_BOUNDARY_SEQUENCES = {
-    "display_unit_lookup_zero_region": (
+    "display_unit_lookup_pointer_table": (
         0x0804C40C,
         bytes.fromhex(
-            "00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 "
-            "00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 "
-            "00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00"
+            "cb d8 0b 08 ca d8 0b 08 c6 d8 0b 08 3e bc 0b 08 "
+            "41 bc 0b 08 3b bc 0b 08 42 bc 0b 08 3d d0 0b 08 "
+            "02 bc 0b 08 ff bb 0b 08 03 bc 0b 08 d6 d0 0b 08"
         ),
     ),
     "display_unit_lookup_draw_call": (
@@ -1870,6 +1871,12 @@ def read(addr: int, size: int) -> bytes:
     return data[off : off + size]
 
 
+def read_stock_runtime(addr: int, size: int) -> bytes:
+    data = BIN.read_bytes()
+    off = addr - STOCK_APP_BASE
+    return data[off : off + size]
+
+
 def find_direct_thumb_bl_callers(target: int) -> list[int]:
     data = BIN.read_bytes()
     callers: list[int] = []
@@ -2718,20 +2725,21 @@ def verify_current_formatter_variant_sequences() -> dict[str, object]:
 
 
 def verify_unit_lookup_boundary_sequences() -> dict[str, object]:
-    """Check the stock unit lookup negative boundary.
+    """Check the stock unit lookup pointer table.
 
     Stock draw code at `0x08009AE4` computes
     `0x0804C40C + DAT_20001058 * 0x30 + DAT_20001026 * 4` and loads one word
-    for the unit-render call.  Older notes treated the base as a recovered
-    12-entry unit-string pointer table, but the downloaded V1.2.0 image has a
-    zero-filled first 48 bytes there.  Those words are not valid in-image
-    Thumb/text pointers, so they are negative evidence: stock
-    formatter unit indices are real, but unit string contents are not recovered
-    from this APP image.
+    for the unit-render call. The runtime literal is in the stock APP image,
+    which is linked at 0x08007000, so file offset = runtime - 0x08007000.
+    Guarding this through `read_stock_runtime()` keeps the old off-by-0x7000
+    zero-region mistake from returning.
     """
     checked: dict[str, dict[str, str]] = {}
     for name, (addr, expected) in EXPECTED_UNIT_LOOKUP_BOUNDARY_SEQUENCES.items():
-        actual = read(addr, len(expected))
+        if name == "display_unit_lookup_pointer_table":
+            actual = read_stock_runtime(addr, len(expected))
+        else:
+            actual = read(addr, len(expected))
         if actual != expected:
             raise AssertionError(
                 f"{name} {addr:#010x}: expected {expected.hex(' ')}, "
@@ -2742,23 +2750,37 @@ def verify_unit_lookup_boundary_sequences() -> dict[str, object]:
             "bytes": actual.hex(" "),
         }
 
-    words = struct.unpack(
+    pointers = struct.unpack(
         "<12I",
-        read(EXPECTED_UNIT_LOOKUP_BOUNDARY_SEQUENCES["display_unit_lookup_zero_region"][0], 48),
+        read_stock_runtime(
+            EXPECTED_UNIT_LOOKUP_BOUNDARY_SEQUENCES["display_unit_lookup_pointer_table"][0],
+            48,
+        ),
     )
-    thumb_pointers = [
-        value for value in words
-        if (value & 1) and BASE <= (value & ~1) < BASE + BIN.stat().st_size
-    ]
-    if thumb_pointers:
-        raise AssertionError(
-            "0x0804C40C unexpectedly contains in-image Thumb pointers: "
-            + ", ".join(f"{value:#010x}" for value in thumb_pointers)
-        )
-    checked["display_unit_lookup_zero_region"]["words"] = " ".join(
-        f"{value:#010x}" for value in words
+    expected_strings = {
+        0: "Ω".encode(),
+        1: "kΩ".encode(),
+        2: "MΩ".encode(),
+        3: b"nF",
+        4: b"uF",
+        5: b"mF",
+    }
+    resolved: dict[str, str] = {}
+    for index, expected in expected_strings.items():
+        ptr = pointers[index]
+        actual = read_stock_runtime(ptr, len(expected) + 1)
+        if actual != expected + b"\x00":
+            raise AssertionError(
+                f"unit pointer {index} at {ptr:#010x}: expected "
+                f"{expected!r} NUL, got {actual!r}"
+            )
+        resolved[str(index)] = f"{ptr:#010x}:{expected.decode()}"
+
+    checked["display_unit_lookup_pointer_table"]["pointers"] = " ".join(
+        f"{value:#010x}" for value in pointers
     )
-    return {"sequences": checked, "thumb_pointers": thumb_pointers}
+    checked["display_unit_lookup_pointer_table"]["resolved"] = resolved
+    return {"sequences": checked}
 
 
 def verify_meter_mux_restore_sequences() -> dict[str, object]:

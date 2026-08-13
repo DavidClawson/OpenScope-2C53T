@@ -130,10 +130,12 @@ frame=5A A5 44 8E EF E7 07 24 80 00 01 89
             self.skipTest(f"missing stock APP binary: {stock_h2_table.BIN}")
 
         result = stock_h2_table.verify_h2_table()
-        self.assertEqual(result["file_offset"], "0x51d19")
+        self.assertEqual(result["file_offset"], "0x4ad19")
         self.assertEqual(result["flash_addr"], "0x08051d19")
         self.assertEqual(result["stats"]["total_bytes"], 115638)
-        self.assertEqual(result["tail_range"], (0x1C340, 0x1C3B5, 118))
+        self.assertEqual(result["table_sha256"], stock_h2_table.EXPECTED_H2_SHA256)
+        self.assertEqual(result["gowin_preamble_offset"], 22)
+        self.assertEqual(result["gowin_idcode_offset"], 28)
         labels = {item["label"] for item in result["preamble_sequence"]}
         self.assertIn("h2_start_3b_with_cs_low", labels)
         spi3_pc6_labels = [item["label"] for item in result["spi3_enable_pc6_sequence"]]

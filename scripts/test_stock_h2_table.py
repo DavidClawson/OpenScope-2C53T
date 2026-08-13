@@ -15,10 +15,10 @@ EXPECTED_STOCK_SHA256 = (
     "a17c5c35c97bb898f15672a1747bc1041d8ed507c16999ddba0d1e4e2ec0c760"
 )
 EXPECTED_H2_SHA256 = (
-    "27ec73be12a946e1a53b5254a4c91707a78e6a79b6f9e96b0e070164454d1aa4"
+    "5a0e73384e496bdb3b3d591b852bec2e806e70cbc71439c9829695324efd5c3b"
 )
 
-FILE_OFFSET = 0x51D19
+FILE_OFFSET = 0x4AD19
 FLASH_ADDR = 0x08051D19
 BASE_ADDR = 0x08000000
 TABLE_SIZE = 0x1C3B6
@@ -29,26 +29,19 @@ SENTINEL_BYTES = b"\xff" * 6
 
 EXPECTED_STATS = {
     "total_bytes": 115638,
-    "zero_bytes": 75356,
-    "nonzero_bytes": 40282,
-    "ff_bytes": 6199,
-    "records": 38546,
-    "all_zero_records": 20654,
-    "nonzero_records": 17892,
-    "records_with_ff": 3537,
-    "all_ff_records": 824,
-    "full_blocks": 722,
-    "tail_bytes": 118,
-    "sentinel_blocks": 546,
-    "blocks_without_sentinel": 176,
+    "zero_bytes": 89288,
+    "nonzero_bytes": 26350,
+    "ff_bytes": 4750,
 }
 
-EXPECTED_SENTINEL_RUNS = [
-    (0, 543, True, 0x00000, 0x153FF, 87040),
-    (544, 567, False, 0x15400, 0x162FF, 3840),
-    (568, 569, True, 0x16300, 0x1643F, 320),
-    (570, 721, False, 0x16440, 0x1C33F, 24320),
-]
+EXPECTED_H2_PREFIX = bytes.fromhex(
+    "ff ff ff ff ff ff ff ff ff ff ff ff ff ff ff ff "
+    "ff ff ff ff ff ff a5 c3 06 00 00 00 01 20 68 1b"
+)
+EXPECTED_H2_SUFFIX = bytes.fromhex(
+    "34 73 0a 00 00 00 00 00 23 77 ff ff ff ff ff ff "
+    "ff ff 08 00 00 00 ff ff ff ff ff ff ff ff ff ff"
+)
 
 EXPECTED_BLOCK_MARKERS = {
     0: {
@@ -533,8 +526,6 @@ def verify_h2_table() -> dict[str, object]:
     calibration coefficients.
     """
     data = load_h2_table()
-    records = _records(data)
-    flags = _sentinel_map(data)
     byte_counts = Counter(data)
 
     stats = {
@@ -542,33 +533,12 @@ def verify_h2_table() -> dict[str, object]:
         "zero_bytes": byte_counts[0],
         "nonzero_bytes": len(data) - byte_counts[0],
         "ff_bytes": byte_counts[0xFF],
-        "records": len(records),
-        "all_zero_records": sum(1 for rec in records if rec == b"\x00\x00\x00"),
-        "nonzero_records": sum(1 for rec in records if rec != b"\x00\x00\x00"),
-        "records_with_ff": sum(1 for rec in records if 0xFF in rec),
-        "all_ff_records": sum(1 for rec in records if rec == b"\xff\xff\xff"),
-        "full_blocks": len(data) // BLOCK_SIZE,
-        "tail_bytes": len(data) % BLOCK_SIZE,
-        "sentinel_blocks": sum(flags),
-        "blocks_without_sentinel": len(flags) - sum(flags),
     }
     _assert_equal("H2 stats", stats, EXPECTED_STATS)
-
-    runs = _sentinel_runs(flags)
-    _assert_equal("H2 sentinel runs", runs, EXPECTED_SENTINEL_RUNS)
-
-    tail_start = stats["full_blocks"] * BLOCK_SIZE
-    _assert_equal("H2 tail start", tail_start, 0x1C340)
-    _assert_equal("H2 tail end", len(data) - 1, 0x1C3B5)
-
-    for block_index, expected in EXPECTED_BLOCK_MARKERS.items():
-        off = block_index * BLOCK_SIZE
-        actual = {
-            "sentinel": flags[block_index],
-            "pre": _hex(data[off + 27:off + 30]),
-            "post": _hex(data[off + 36:off + 39]),
-        }
-        _assert_equal(f"H2 block {block_index} marker", actual, expected)
+    _assert_equal("H2 corrected prefix", data[:len(EXPECTED_H2_PREFIX)], EXPECTED_H2_PREFIX)
+    _assert_equal("H2 corrected suffix", data[-len(EXPECTED_H2_SUFFIX):], EXPECTED_H2_SUFFIX)
+    _assert_equal("H2 Gowin preamble offset", data.find(bytes.fromhex("a5 c3")), 22)
+    _assert_equal("H2 Gowin IDCODE offset", data.find(bytes.fromhex("01 20 68 1b")), 28)
 
     spi3_enable_pc6_sequence = verify_spi3_enable_pc6_sequence()
     preamble_sequence = verify_h2_preamble_sequence()
@@ -581,8 +551,8 @@ def verify_h2_table() -> dict[str, object]:
         "flash_addr": f"0x{FLASH_ADDR:08x}",
         "table_sha256": EXPECTED_H2_SHA256,
         "stats": stats,
-        "sentinel_runs": runs,
-        "tail_range": (tail_start, len(data) - 1, stats["tail_bytes"]),
+        "gowin_preamble_offset": data.find(bytes.fromhex("a5 c3")),
+        "gowin_idcode_offset": data.find(bytes.fromhex("01 20 68 1b")),
         "spi3_enable_pc6_sequence": spi3_enable_pc6_sequence,
         "preamble_sequence": preamble_sequence,
         "close_sequence": close_sequence,
@@ -603,11 +573,9 @@ def main() -> None:
         f"sha256={result['table_sha256']}"
     )
     print(
-        "stock H2/SPI3 table runs: "
-        + "; ".join(
-            f"{start}-{end}:{'sentinel' if has else 'dense'}"
-            for start, end, has, _, _, _ in result["sentinel_runs"]
-        )
+        "stock H2/SPI3 bitstream: "
+        f"gowin_preamble_offset={result['gowin_preamble_offset']} "
+        f"idcode_offset={result['gowin_idcode_offset']}"
     )
     print(
         "stock SPI3 enable/PC6 order: "
