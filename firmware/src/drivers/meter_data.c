@@ -38,10 +38,28 @@ uint8_t meter_frame_history_count;
 uint8_t meter_frame_history_head;
 
 static volatile uint32_t meter_reading_seq;
+static volatile uint8_t meter_writer_lock;
+
+#ifdef METER_DATA_HOST_TESTS
+static meter_data_test_hook_fn meter_data_test_hook;
+#endif
 
 static void meter_data_barrier(void)
 {
     __asm volatile ("" ::: "memory");
+}
+
+static void meter_writer_lock_acquire(void)
+{
+    while (__sync_lock_test_and_set(&meter_writer_lock, 1U) != 0U) {
+    }
+    meter_data_barrier();
+}
+
+static void meter_writer_lock_release(void)
+{
+    meter_data_barrier();
+    __sync_lock_release(&meter_writer_lock);
 }
 
 static void meter_reading_write_begin(void)
@@ -55,6 +73,25 @@ static void meter_reading_write_end(void)
     meter_data_barrier();
     meter_reading_seq++;
 }
+
+#ifdef METER_DATA_HOST_TESTS
+void meter_data_test_set_hook(meter_data_test_hook_fn hook)
+{
+    meter_data_test_hook = hook;
+}
+
+static void meter_data_test_call_hook(meter_data_test_hook_point_t point)
+{
+    if (meter_data_test_hook != NULL) {
+        meter_data_test_hook(point);
+    }
+}
+#else
+static void meter_data_test_call_hook(int point)
+{
+    (void)point;
+}
+#endif
 
 typedef struct {
     uint8_t stock_mode;
@@ -123,6 +160,7 @@ static uint16_t meter_aux_freq_i10(const meter_reading_t *r)
     } \
     meter_reading_write_end(); \
     meter_record_history(); \
+    meter_writer_lock_release(); \
 } while (0)
 
 #define METER_REJECT_FRAME() do { \
@@ -151,6 +189,7 @@ static uint16_t meter_aux_freq_i10(const meter_reading_t *r)
     } \
     meter_reading_write_end(); \
     meter_record_history(); \
+    meter_writer_lock_release(); \
 } while (0)
 
 static void meter_clear_payload(meter_reading_t *r)
@@ -515,6 +554,47 @@ static bool frame_has_zero_detect_status(const volatile uint8_t *frame)
      * it is not voltage-family evidence, AC evidence, or a range multiplier.
      */
     return (frame[7] & 0x08U) != 0;
+}
+
+static bool raw_digits_are_blank_or_zero(const uint8_t raw_digits[4])
+{
+    for (uint8_t i = 0; i < 4; i++) {
+        if (raw_digits[i] != 0x10U && raw_digits[i] != 0U) {
+            return false;
+        }
+    }
+    return true;
+}
+
+static bool raw_digits_match_zero_detect_dcv_signature(const uint8_t raw_digits[4])
+{
+    return raw_digits[0] == 0x10U && raw_digits[1] == 0U &&
+           raw_digits[2] == 4U && raw_digits[3] == 7U;
+}
+
+static bool raw_digits_match_zero_detect_passive_signature(const uint8_t raw_digits[4])
+{
+    return raw_digits[0] == 0x10U && raw_digits[1] == 0U &&
+           raw_digits[2] == 7U && raw_digits[3] == 6U;
+}
+
+static bool zero_detect_signature_is_trusted(uint8_t submode,
+                                             const uint8_t raw_digits[4])
+{
+    if (raw_digits_are_blank_or_zero(raw_digits)) {
+        return true;
+    }
+
+    if (submode == 0) {
+        return raw_digits_match_zero_detect_dcv_signature(raw_digits);
+    }
+
+    if (submode == 2 || submode == 3 || submode == 6 ||
+        submode == 7 || submode == 8 || submode == 9) {
+        return raw_digits_match_zero_detect_passive_signature(raw_digits);
+    }
+
+    return false;
 }
 
 static bool submode_accepts_zero_detect_short(uint8_t submode)
@@ -1099,6 +1179,7 @@ static void format_reading(meter_reading_t *r, uint8_t submode)
 void meter_data_init(void)
 {
     meter_reading_seq = 0;
+    meter_writer_lock = 0;
     memset(&meter_reading, 0, sizeof(meter_reading));
     memset(&meter_stock_fsm, 0, sizeof(meter_stock_fsm));
     memset(meter_frame_history, 0, sizeof(meter_frame_history));
@@ -1135,7 +1216,9 @@ void meter_data_invalidate(uint8_t submode)
 {
     meter_reading_t *r = &meter_reading;
 
+    meter_writer_lock_acquire();
     meter_reading_write_begin();
+    meter_data_test_call_hook(METER_DATA_TEST_HOOK_INVALIDATE_AFTER_WRITE_BEGIN);
     r->value = 0.0f;
     r->bcd_value = 0;
     memset(r->digits, 0, sizeof(r->digits));
@@ -1169,6 +1252,7 @@ void meter_data_invalidate(uint8_t submode)
     meter_sync_stock_fsm_debug(r);
     r->update_count++;
     meter_reading_write_end();
+    meter_writer_lock_release();
 }
 
 void meter_data_process_frame(const volatile uint8_t *frame, uint8_t submode)
@@ -1178,6 +1262,7 @@ void meter_data_process_frame(const volatile uint8_t *frame, uint8_t submode)
     /* Validate header */
     if (frame[0] != 0x5A || frame[1] != 0xA5) return;
 
+    meter_writer_lock_acquire();
     bool old_valid = r->valid;
     uint8_t old_submode = r->submode;
     meter_result_class_t old_result_class = r->result_class;
@@ -1195,6 +1280,7 @@ void meter_data_process_frame(const volatile uint8_t *frame, uint8_t submode)
     old_unit_suffix[sizeof(old_unit_suffix) - 1] = '\0';
 
     meter_reading_write_begin();
+    meter_data_test_call_hook(METER_DATA_TEST_HOOK_PROCESS_AFTER_WRITE_BEGIN);
 
     /* Save raw frame for debug display */
     for (int i = 0; i < 12; i++) r->dbg_frame[i] = frame[i];
@@ -1306,7 +1392,8 @@ void meter_data_process_frame(const volatile uint8_t *frame, uint8_t submode)
 
     if (frame_has_zero_detect_status(frame) &&
         submode_accepts_zero_detect_short(submode) &&
-        !frame_has_voltage_payload_marker(frame)) {
+        !frame_has_voltage_payload_marker(frame) &&
+        zero_detect_signature_is_trusted(submode, r->dbg_raw_digits)) {
         finish_zero_detect_short(r, submode, frame);
         METER_FINISH_FRAME();
         return;
@@ -1418,6 +1505,18 @@ void meter_data_process_frame(const volatile uint8_t *frame, uint8_t submode)
     uint8_t d1 = digit1;
     uint8_t d2 = digit2;
     uint8_t d3 = digit3;
+
+    if (submode != 0 && (frame[2] & 0x08U) != 0U) {
+        /*
+         * Stock only proves frame[2].3 as the raw +10000 extension in the DCV
+         * formatter/value path. Reusing that bit in other submodes creates a
+         * host-side mismatch where the 4-digit display keeps the old digits but
+         * the computed value silently jumps by +10000/divisor.
+         */
+        r->reject_reason = METER_REJECT_UNSUPPORTED_EXTENSION;
+        METER_REJECT_FRAME();
+        return;
+    }
 
     r->digits[0] = d0;
     r->digits[1] = d1;

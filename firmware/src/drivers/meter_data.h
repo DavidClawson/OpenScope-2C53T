@@ -36,6 +36,7 @@ typedef enum {
     METER_REJECT_INVALID_SUBMODE = 2,
     METER_REJECT_MISSING_AC_EVIDENCE = 3,
     METER_REJECT_UNRESOLVED_CALIBRATION = 4,
+    METER_REJECT_UNSUPPORTED_EXTENSION = 5,
 } meter_reject_reason_t;
 
 /* ═══════════════════════════════════════════════════════════════════
@@ -145,6 +146,17 @@ extern meter_reading_t meter_reading;
  * can otherwise mix an old special state (for example OL) with a newer value.
  */
 bool meter_data_snapshot(meter_reading_t *out);
+
+#ifdef METER_DATA_HOST_TESTS
+typedef enum {
+    METER_DATA_TEST_HOOK_PROCESS_AFTER_WRITE_BEGIN = 1,
+    METER_DATA_TEST_HOOK_INVALIDATE_AFTER_WRITE_BEGIN = 2,
+} meter_data_test_hook_point_t;
+
+typedef void (*meter_data_test_hook_fn)(meter_data_test_hook_point_t point);
+
+void meter_data_test_set_hook(meter_data_test_hook_fn hook);
+#endif
 
 /* Debug: distinct values of frame[6] seen since boot.
  * Up to 8 unique byte values stored; new values push out the oldest.

@@ -6,6 +6,7 @@
  */
 
 #include <math.h>
+#include <pthread.h>
 #include <stdio.h>
 #include <string.h>
 
@@ -1846,6 +1847,55 @@ static int test_zero_detect_short_frames_report_terminal_zero_modes(void)
     return 1;
 }
 
+static int test_zero_detect_does_not_clamp_nonzero_range_hunting_frame(void)
+{
+    uint8_t frame[12];
+
+    build_segment_frame(frame, 1, 2, 3, 4, 0x00, 0x28, 0x00, 0x00, 0);
+
+    meter_data_init();
+    process_frame(frame, 0);
+    ASSERT(!meter_reading.valid);
+    ASSERT(meter_reading.reject_reason == METER_REJECT_WRONG_FRAME_FAMILY);
+    ASSERT(expect_payload_cleared("---"));
+    ASSERT(meter_reading.dbg_raw_digits[0] == 1);
+    ASSERT(meter_reading.dbg_raw_digits[1] == 2);
+    ASSERT(meter_reading.dbg_raw_digits[2] == 3);
+    ASSERT(meter_reading.dbg_raw_digits[3] == 4);
+    return 1;
+}
+
+static int test_acv_rejects_unimplemented_plus_10000_extension(void)
+{
+    uint8_t frame[12] = {
+        0x5A, 0xA5, 0xA5, 0xAD, 0xED, 0xBF,
+        0x0D, 0x00, 0x02, 0x00, 0x00, 0x31,
+    };
+    frame[2] |= 0x08U;
+
+    meter_data_init();
+    process_frame(frame, 1);
+    ASSERT(!meter_reading.valid);
+    ASSERT(meter_reading.reject_reason == METER_REJECT_UNSUPPORTED_EXTENSION);
+    ASSERT(expect_payload_cleared("---"));
+    return 1;
+}
+
+static int test_current_rejects_unimplemented_plus_10000_extension(void)
+{
+    uint8_t frame[12];
+
+    build_segment_frame(frame, 2, 2, 6, 1, 0x40, 0x00, 0x00, 0x00, 0);
+    frame[2] |= 0x08U;
+
+    meter_data_init();
+    process_frame(frame, 2);
+    ASSERT(!meter_reading.valid);
+    ASSERT(meter_reading.reject_reason == METER_REJECT_UNSUPPORTED_EXTENSION);
+    ASSERT(expect_payload_cleared("---"));
+    return 1;
+}
+
 static int test_mixed_special_voltage_digits_do_not_become_numeric_dcv(void)
 {
     uint8_t frame[12];
@@ -2538,6 +2588,106 @@ static int test_snapshot_returns_coherent_latest_completed_reading(void)
     return 1;
 }
 
+typedef struct {
+    pthread_mutex_t mutex;
+    pthread_cond_t cond;
+    int process_paused;
+    int invalidate_paused;
+    int allow_process;
+    int allow_invalidate;
+} meter_writer_pause_t;
+
+static meter_writer_pause_t meter_writer_pause = {
+    PTHREAD_MUTEX_INITIALIZER,
+    PTHREAD_COND_INITIALIZER,
+    0, 0, 0, 0
+};
+
+static void meter_writer_test_hook(meter_data_test_hook_point_t point)
+{
+    pthread_mutex_lock(&meter_writer_pause.mutex);
+    if (point == METER_DATA_TEST_HOOK_PROCESS_AFTER_WRITE_BEGIN) {
+        meter_writer_pause.process_paused = 1;
+        pthread_cond_broadcast(&meter_writer_pause.cond);
+        while (!meter_writer_pause.allow_process) {
+            pthread_cond_wait(&meter_writer_pause.cond, &meter_writer_pause.mutex);
+        }
+    } else if (point == METER_DATA_TEST_HOOK_INVALIDATE_AFTER_WRITE_BEGIN) {
+        meter_writer_pause.invalidate_paused = 1;
+        pthread_cond_broadcast(&meter_writer_pause.cond);
+        while (!meter_writer_pause.allow_invalidate) {
+            pthread_cond_wait(&meter_writer_pause.cond, &meter_writer_pause.mutex);
+        }
+    }
+    pthread_mutex_unlock(&meter_writer_pause.mutex);
+}
+
+static void *thread_process_frame(void *arg)
+{
+    process_frame((const uint8_t *)arg, 2);
+    return NULL;
+}
+
+static void *thread_invalidate(void *arg)
+{
+    (void)arg;
+    meter_data_invalidate(6);
+    return NULL;
+}
+
+static int test_snapshot_rejects_concurrent_two_writer_window(void)
+{
+    uint8_t current_frame[12];
+    pthread_t process_thread;
+    pthread_t invalidate_thread;
+    meter_reading_t snap;
+
+    build_segment_frame(current_frame, 1, 8, 6, 3, 0x40, 0x00, 0x00, 0x00, 0);
+
+    meter_data_init();
+    process_frame(current_frame, 2);
+    meter_data_test_set_hook(meter_writer_test_hook);
+
+    pthread_mutex_lock(&meter_writer_pause.mutex);
+    meter_writer_pause.process_paused = 0;
+    meter_writer_pause.invalidate_paused = 0;
+    meter_writer_pause.allow_process = 0;
+    meter_writer_pause.allow_invalidate = 0;
+    pthread_mutex_unlock(&meter_writer_pause.mutex);
+
+    ASSERT(pthread_create(&process_thread, NULL, thread_process_frame, current_frame) == 0);
+
+    pthread_mutex_lock(&meter_writer_pause.mutex);
+    while (!meter_writer_pause.process_paused) {
+        pthread_cond_wait(&meter_writer_pause.cond, &meter_writer_pause.mutex);
+    }
+    pthread_mutex_unlock(&meter_writer_pause.mutex);
+
+    ASSERT(pthread_create(&invalidate_thread, NULL, thread_invalidate, NULL) == 0);
+
+    ASSERT(!meter_data_snapshot(&snap));
+
+    pthread_mutex_lock(&meter_writer_pause.mutex);
+    meter_writer_pause.allow_process = 1;
+    pthread_cond_broadcast(&meter_writer_pause.cond);
+    pthread_mutex_unlock(&meter_writer_pause.mutex);
+    ASSERT(pthread_join(process_thread, NULL) == 0);
+
+    pthread_mutex_lock(&meter_writer_pause.mutex);
+    while (!meter_writer_pause.invalidate_paused) {
+        pthread_cond_wait(&meter_writer_pause.cond, &meter_writer_pause.mutex);
+    }
+    meter_writer_pause.allow_invalidate = 1;
+    pthread_cond_broadcast(&meter_writer_pause.cond);
+    pthread_mutex_unlock(&meter_writer_pause.mutex);
+    ASSERT(pthread_join(invalidate_thread, NULL) == 0);
+
+    meter_data_test_set_hook(NULL);
+    ASSERT(!meter_reading.valid);
+    ASSERT_STR_EQ(meter_reading.display_str, "---");
+    return 1;
+}
+
 int main(void)
 {
     printf("Meter data frame tests\n");
@@ -2586,6 +2736,9 @@ int main(void)
     TEST(dcv_zero_detect_short_frame_reports_zero_not_low_input_number);
     TEST(passive_zero_detect_short_frames_report_short_state);
     TEST(zero_detect_short_frames_report_terminal_zero_modes);
+    TEST(zero_detect_does_not_clamp_nonzero_range_hunting_frame);
+    TEST(acv_rejects_unimplemented_plus_10000_extension);
+    TEST(current_rejects_unimplemented_plus_10000_extension);
     TEST(mixed_special_voltage_digits_do_not_become_numeric_dcv);
     TEST(frame6_0x40_is_not_a_global_resistance_family_marker);
     TEST(voltage_mode_mains_frame_uses_stock_range_hint);
@@ -2606,6 +2759,7 @@ int main(void)
     TEST(large_current_submodes_use_active_local_range_state);
     TEST(current_submodes_do_not_expose_unproven_microamp_unit);
     TEST(snapshot_returns_coherent_latest_completed_reading);
+    TEST(snapshot_rejects_concurrent_two_writer_window);
 
     printf("\n%d/%d tests passed\n", tests_passed, tests_run);
     return (tests_passed == tests_run) ? 0 : 1;
