@@ -2314,13 +2314,25 @@ static uint8_t fpga_preacq_command_byte(void)
     return (uint8_t)(0x80 | voltage_range);
 }
 
+/* Private post-H2 boot queue tags.
+ * These values intentionally do not overlap with normal acquisition trigger bytes
+ * (FPGA_ACQ_* + 1) so public acquisition cannot collide with boot choreography.
+ */
+enum {
+    FPGA_POST_H2_TRIGGER_FAST_TB = 0xF1u,
+    FPGA_POST_H2_TRIGGER_ROLL = 0xF2u,
+    FPGA_POST_H2_TRIGGER_METER_ADC = 0xF3u,
+    FPGA_POST_H2_TRIGGER_SIGGEN = 0xF4u,
+    FPGA_POST_H2_TRIGGER_STATUS = 0xF5u,
+};
+
 static bool fpga_is_stock_post_h2_spi3_trigger(uint8_t trigger)
 {
-    return trigger == (FPGA_ACQ_FAST_TB + 1) ||
-           trigger == (FPGA_ACQ_ROLL + 1) ||
-           trigger == (FPGA_ACQ_METER_ADC + 1) ||
-           trigger == (FPGA_ACQ_SIGGEN + 1) ||
-           trigger == (FPGA_ACQ_STATUS + 1);
+    return trigger == FPGA_POST_H2_TRIGGER_FAST_TB ||
+           trigger == FPGA_POST_H2_TRIGGER_ROLL ||
+           trigger == FPGA_POST_H2_TRIGGER_METER_ADC ||
+           trigger == FPGA_POST_H2_TRIGGER_SIGGEN ||
+           trigger == FPGA_POST_H2_TRIGGER_STATUS;
 }
 
 static uint8_t fpga_stock_timebase_byte(void)
@@ -2338,11 +2350,11 @@ static uint8_t fpga_stock_trigger_edge_byte(void)
 static uint8_t fpga_post_h2_trigger_diag_index(uint8_t trigger_byte)
 {
     switch (trigger_byte) {
-    case FPGA_ACQ_FAST_TB + 1:   return 0;
-    case FPGA_ACQ_ROLL + 1:      return 1;
-    case FPGA_ACQ_METER_ADC + 1: return 2;
-    case FPGA_ACQ_SIGGEN + 1:    return 3;
-    case FPGA_ACQ_STATUS + 1:    return 4;
+    case FPGA_POST_H2_TRIGGER_FAST_TB:   return 0;
+    case FPGA_POST_H2_TRIGGER_ROLL:      return 1;
+    case FPGA_POST_H2_TRIGGER_METER_ADC: return 2;
+    case FPGA_POST_H2_TRIGGER_SIGGEN:    return 3;
+    case FPGA_POST_H2_TRIGGER_STATUS:    return 4;
     default:                     return 0xFF;
     }
 }
@@ -2373,9 +2385,10 @@ static void fpga_post_h2_diag_rx(uint8_t idx, uint8_t rx_byte)
 static void fpga_run_stock_post_h2_spi3_trigger(uint8_t trigger_byte)
 {
     /*
-     * Stock V1.2.0 queues 1,2,6,7,8 to 0x20002D78 after H2 close
+     * Post-H2 stock sequence equivalent uses private queue tags so normal
+     * acquisition trigger bytes cannot collide with boot choreography.
      * (0x08026DCE..0x08026E2A). The consumer at 0x080374B2 first writes the
-     * queued byte itself to SPI3, then dispatches on `trigger_byte - 1`.
+     * queued byte itself to SPI3, then dispatches on the queue value.
      *
      * The local state bytes used below are the open-firmware equivalents of
      * stock scope bytes (`ms[0x2D]`, `ms[0x16]`, `ms[0x18]`). They are not DMM
@@ -2389,25 +2402,25 @@ static void fpga_run_stock_post_h2_spi3_trigger(uint8_t trigger_byte)
     fpga_post_h2_diag_rx(diag_idx, spi3_xfer(trigger_byte));
 
     switch (trigger_byte) {
-    case FPGA_ACQ_FAST_TB + 1:
+    case FPGA_POST_H2_TRIGGER_FAST_TB:
         fpga_post_h2_diag_rx(diag_idx, spi3_xfer(fpga_stock_timebase_byte()));
         break;
 
-    case FPGA_ACQ_ROLL + 1:
+    case FPGA_POST_H2_TRIGGER_ROLL:
         for (unsigned i = 0; i < 5; i++) {
             fpga_post_h2_diag_rx(diag_idx, spi3_xfer(0xFF));
         }
         break;
 
-    case FPGA_ACQ_METER_ADC + 1:
+    case FPGA_POST_H2_TRIGGER_METER_ADC:
         fpga_post_h2_diag_rx(diag_idx, spi3_xfer(fpga_meter_adc_select_byte()));
         break;
 
-    case FPGA_ACQ_SIGGEN + 1:
+    case FPGA_POST_H2_TRIGGER_SIGGEN:
         fpga_post_h2_diag_rx(diag_idx, spi3_xfer(fpga_stock_trigger_edge_byte()));
         break;
 
-    case FPGA_ACQ_STATUS + 1:
+    case FPGA_POST_H2_TRIGGER_STATUS:
         /*
          * Stock TBH map at 0x0803753A sends public trigger byte 8 to
          * 0x08037760, not to the 0x08037800 two-phase calibration readback.
@@ -2432,11 +2445,11 @@ static void fpga_run_stock_post_h2_spi3_trigger(uint8_t trigger_byte)
 static void fpga_enqueue_stock_post_h2_spi3_boot_triggers(void)
 {
     static const uint8_t stock_triggers[] = {
-        FPGA_ACQ_FAST_TB + 1,
-        FPGA_ACQ_ROLL + 1,
-        FPGA_ACQ_METER_ADC + 1,
-        FPGA_ACQ_SIGGEN + 1,
-        FPGA_ACQ_STATUS + 1,
+        FPGA_POST_H2_TRIGGER_FAST_TB,
+        FPGA_POST_H2_TRIGGER_ROLL,
+        FPGA_POST_H2_TRIGGER_METER_ADC,
+        FPGA_POST_H2_TRIGGER_SIGGEN,
+        FPGA_POST_H2_TRIGGER_STATUS,
     };
 
     for (unsigned i = 0; i < sizeof(stock_triggers); i++) {
@@ -3763,15 +3776,13 @@ void fpga_init(void)
      * GMUX remap (AT32-specific).
      *
      * Stock V1.2.0 proves only the JTAG/SWD remap plus PB3/PB4/PB5 GPIO
-     * configuration. It does not write SPI3_GMUX/remap5. The AT32 HAL's
-     * SPI3_GMUX_0010 route also maps SPI3 CS/I2S_WS onto PA15 and MCK onto PB10,
-     * while this board uses PB6 as software CS and PA15/PB10 as DMM frontend
-     * control pins. Clearing SPI3_GMUX has also tested negative for fixing the
-     * all-0xFF H2 readback, so keep it as stock/scopediag route evidence only:
-     * do not infer DMM range, calibration, or coefficients from this pin route.
+     * configuration. It does not write SPI3_GMUX/remap5. B1 fix intentionally
+     * keeps SPI3_GMUX_0010 set TRUE to preserve the default AT32 pin route.
+     * This does not prove DMM calibration/range semantics by itself; it is a
+     * routing-level correction only.
      */
     gpio_pin_remap_config(SWJTAG_GMUX_010, TRUE);
-    gpio_pin_remap_config(SPI3_GMUX_0010, FALSE);
+    gpio_pin_remap_config(SPI3_GMUX_0010, TRUE);
 
     /* ---------------------------------------------------------------
      * Step 2: USART2 init — 9600 baud, 8N1, TX+RX with interrupts
