@@ -21,6 +21,7 @@
 #include "at32f403a_407.h"  /* GPIO port access for pin scanner */
 #include <stdio.h>
 #include <math.h>
+#include <string.h>
 
 /* ═══════════════════════════════════════════════════════════════════
  * Layout constants
@@ -1490,11 +1491,19 @@ void draw_waterfall_screen(void)
 
     /* shared_mem_acquire() zeroes the pool whenever the owner changes, so a
      * round trip through screenshot/persistence wipes the history. Detect that
-     * and restart from row 0 instead of scrolling through a zeroed tail. */
+     * and restart from row 0 instead of scrolling through a zeroed tail.
+     *
+     * Refill with 0xFF rather than leaving the pool's zeros: intensity 0 maps
+     * to COLOR_RED, i.e. 0 dB / full scale, so zeroed rows would render as
+     * maximum signal. 0xFF is the other end of the ramp (blue = -db_range =
+     * the noise floor), which is what "no data yet" should look like. Bench
+     * 2026-08-13: with the zero fill, entering WFALL painted the whole plot
+     * red and the history grew downward through it. */
     uint32_t pool_generation = shared_mem_transition_count();
     if (pool_generation != waterfall_pool_generation) {
         waterfall_pool_generation = pool_generation;
         waterfall_row_idx = 0;
+        memset(waterfall_buf, 0xFF, SHMEM_FFT_WATERFALL_SIZE);
     }
 
     const float *draw_data = (fft_result.avg_db != NULL)
