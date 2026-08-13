@@ -115,6 +115,7 @@ extern volatile bool          persist_enabled;
 #ifdef FEATURE_FFT
 #include "fft.h"
 #include "fft_test_signals.h"
+#include "shared_mem.h"   /* waterfall history is a sub-tenant of the FFT pool region */
 extern volatile scope_view_t scope_view;
 extern fft_result_t     fft_result;
 #endif
