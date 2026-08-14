@@ -133,6 +133,41 @@ uint32_t config_serialize(const device_config_t *cfg, uint8_t *buf, uint32_t buf
  * struct holding a rejected record. */
 bool config_deserialize(device_config_t *cfg, const uint8_t *buf, uint32_t buf_size);
 
+/* ── Write enable — OFF BY DEFAULT ───────────────────────────────────
+ *
+ * SETTINGS_PERSIST_WRITES gates every flash WRITE this module can make.
+ * Reads (config_load, config_load_or_defaults) are never gated.
+ *
+ * Why it defaults to 0, as of 2026-08-13: this is the first code in the
+ * project's history to write the W25Q at runtime, and it has never done so on
+ * any physical unit — every result behind it is a host model of NOR behaviour.
+ * Models are where this project's bugs have historically lived.
+ *
+ * The exposure is NOT the factory calibration. Cal is in FLASH_REGION_SYSVOL
+ * (0x000000-0x1FFFFF), marked READONLY and enforced by address; every write
+ * here goes to FLASH_REGION_SETTINGS at 0xF10000, ~14 MB away and a different
+ * region kind. tests/test_config_persist.c aims the writer at sysvol on
+ * purpose and every write is refused, with the chip byte-identical after.
+ *
+ * The exposure is that the region map was derived from full-chip dumps of ONE
+ * unit (bench unit #1), where 0xF00000+ is blank. Whether stock's FAT12 on a
+ * different unit or firmware revision claims those clusters is unverified.
+ * Worst case there is losing settings or a screenshot, not calibration.
+ *
+ * It is off anyway because the failure is asymmetric: low probability, and —
+ * until a factory-cal backup exists — no recovery path if the reasoning above
+ * is wrong somewhere. Flip it on with `make guest-persist` for the supervised
+ * bench check, and change this default only once that has passed on hardware.
+ *
+ * With writes disabled config_save() returns false and counts saves_disabled,
+ * NOT saves_failed. A refusal we chose is not a failure we suffered, and any
+ * diagnostic that conflates them is lying in the way this project keeps
+ * getting burned by.
+ */
+#ifndef SETTINGS_PERSIST_WRITES
+#define SETTINGS_PERSIST_WRITES 0
+#endif
+
 /* ── Persistence ─────────────────────────────────────────────────────
  * These require flash_regions_init()/flash_regions_bind_w25q() to have run.
  * With no backend bound they refuse (config_save returns false) rather than
@@ -170,6 +205,12 @@ const char *config_load_result_name(config_load_result_t r);
 typedef struct {
     uint32_t saves_ok;         /* including elided no-op saves */
     uint32_t saves_failed;
+    uint32_t saves_disabled;   /* refused because SETTINGS_PERSIST_WRITES==0.
+                                * Deliberately NOT counted as saves_failed —
+                                * nothing was attempted and nothing went wrong. */
+    bool     writes_enabled;   /* mirrors SETTINGS_PERSIST_WRITES, so a reader
+                                * of these stats never has to guess which build
+                                * produced them. */
     uint32_t compactions;      /* log full -> region reset -> re-append */
     uint32_t loads_ok;
     uint32_t loads_defaulted;

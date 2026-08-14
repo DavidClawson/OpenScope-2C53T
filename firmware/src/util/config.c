@@ -178,9 +178,22 @@ const char *config_load_result_name(config_load_result_t r)
     return "unknown";
 }
 
-const config_persist_stats_t *config_persist_stats(void) { return &g_stats; }
+const config_persist_stats_t *config_persist_stats(void)
+{
+    /* Stamped on every read so a caller can never be handed a stats block that
+     * does not say which kind of build produced it. saves_ok == 0 means two
+     * completely different things depending on this flag, and a diagnostic
+     * that cannot tell them apart is the failure mode this project keeps
+     * paying for. */
+    g_stats.writes_enabled = (SETTINGS_PERSIST_WRITES != 0);
+    return &g_stats;
+}
 
-void config_persist_stats_reset(void) { memset(&g_stats, 0, sizeof(g_stats)); }
+void config_persist_stats_reset(void)
+{
+    memset(&g_stats, 0, sizeof(g_stats));
+    g_stats.writes_enabled = (SETTINGS_PERSIST_WRITES != 0);
+}
 
 bool config_save(const device_config_t *cfg)
 {
@@ -188,6 +201,14 @@ bool config_save(const device_config_t *cfg)
         g_stats.saves_failed++;
         return false;
     }
+#if !SETTINGS_PERSIST_WRITES
+    /* Writes disabled at build time (the default — see config.h). Bail before
+     * touching the region layer at all, so a disabled build issues no erase,
+     * no program, and no CS assert on SPI2. Counted separately from failures:
+     * this is a choice, not a fault. */
+    g_stats.saves_disabled++;
+    return false;
+#else
     if (!flash_regions_ready()) {
         /* No backend bound (host build with no model, emulator, or a region
          * table that failed its self-check). Refuse loudly instead of
@@ -242,6 +263,7 @@ bool config_save(const device_config_t *cfg)
 
     g_stats.saves_ok++;
     return true;
+#endif /* SETTINGS_PERSIST_WRITES */
 }
 
 /* Forward: the load worker, defined below with the rest of the load path. */

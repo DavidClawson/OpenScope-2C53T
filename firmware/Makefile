@@ -462,7 +462,8 @@ $(BUILD_DIR)/test_config_persist: tests/test_config_persist.c src/util/config.c 
                                   src/util/settings_store.c src/util/settings_store.h \
                                   src/drivers/flash_regions.c src/drivers/flash_regions.h \
                                   src/ui/theme.c src/ui/scope_state.c | $(BUILD_DIR)
-	$(HOST_CC) -std=c11 -Wall -Wextra -Werror -O1 -Isrc/util -Isrc/drivers -Isrc/ui -Isrc/dsp \
+	$(HOST_CC) -std=c11 -Wall -Wextra -Werror -O1 -DSETTINGS_PERSIST_WRITES=1 \
+		-Isrc/util -Isrc/drivers -Isrc/ui -Isrc/dsp \
 		$< src/util/config.c src/util/settings_store.c src/drivers/flash_regions.c \
 		src/ui/theme.c src/ui/scope_state.c -o $@
 
@@ -482,7 +483,7 @@ $(BUILD_DIR)/test_redraw_gate: tests/test_redraw_gate.c src/ui/redraw_gate.h | $
 test-redraw-gate: $(BUILD_DIR)/test_redraw_gate
 	$<
 
-.PHONY: all clean disasm size renode soak-test soak-quick flash flash-dfu bootloader flash-bootloader flash-all guest guest-warmtest guest-usart-silent emu test-meter-data test-meter-auto test-meter-voltage-wave test-fpga-meter-plan test-stock-meter-literals test-meter test-scope-measure test-redraw-gate test-config-persist
+.PHONY: all clean disasm size renode soak-test soak-quick flash flash-dfu bootloader flash-bootloader flash-all guest guest-warmtest guest-usart-silent emu test-meter-data test-meter-auto test-meter-voltage-wave test-fpga-meter-plan test-stock-meter-literals test-meter test-scope-measure test-redraw-gate test-config-persist guest-persist
 
 # ═══════════════════════════════════════════════════════════════════════════
 # BENCH / EXPERIMENT IMAGE INDEX                          (index added 2026-08-13)
@@ -701,6 +702,22 @@ guest-configB-arm: clean all
 # stays with OK: climbing, the readout works but the engine is still unarmed.
 # [LIVE] THE shippable rig. Cold boot -> configured FPGA -> live capture,
 #        bench-confirmed 2026-08-13. Start here when in doubt.
+# [LIVE] guest-persist — guest-coldtrace PLUS runtime settings persistence.
+# SETTINGS_PERSIST_WRITES defaults to 0 everywhere else (see src/util/config.h):
+# this is the ONLY build that writes the W25Q at runtime. Nothing in this
+# project has ever done that on hardware, so treat the first run as a
+# supervised bench step:
+#   1. Dump 0xF10000-0xF1FFFF first and confirm it is 0xFF-blank on the unit.
+#   2. Cold-boot check: config entry must still reach CFG:0003F460 (DONE_FINAL).
+#      settings_store_init() runs after fpga_init() so it should not perturb it.
+#   3. Change theme -> press another button >2 s later (or MENU) -> power off ->
+#      power on. The theme should return.
+#   4. Dump again and confirm ONLY 0xF10000+ changed.
+# Factory calibration lives at 0x000000-0x1FFFFF, a READONLY region ~14 MB away.
+guest-persist: CFLAGS += -DGUEST_BUILD -DFPGA_WARM_HANDOFF_TEST=1 -DFPGA_USART_SILENT_SCOPE=1 -DFPGA_CONFIG_B=1 -DFPGA_CONFIG_B_ARM=1 -DSETTINGS_PERSIST_WRITES=1
+guest-persist: LDSCRIPT = ld/at32f403a_guest.ld
+guest-persist: clean all
+
 guest-coldtrace: CFLAGS += -DGUEST_BUILD -DFPGA_WARM_HANDOFF_TEST=1 -DFPGA_USART_SILENT_SCOPE=1 -DFPGA_CONFIG_B=1 -DFPGA_CONFIG_B_ARM=1
 guest-coldtrace: LDSCRIPT = ld/at32f403a_guest.ld
 guest-coldtrace: clean all
