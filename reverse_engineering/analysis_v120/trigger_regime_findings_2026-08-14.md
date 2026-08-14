@@ -58,7 +58,10 @@ Two regimes, flipped by comparator activity (input signal vs DAC1 trigger refere
 
 Decoded from that:
 
-- **`FF` = unwritten buffer words.** The readout serves samples up to the current fill
+- **`FF` = unwritten buffer words. ⚠ CORRECTED THE SAME EVENING — this is WRONG;
+  see the addendum below. `FF` = RAILED SAMPLES (ADC at 255; the 3 Vpp ESP32
+  signal clips the range top). A cleared/unwritten buffer reads `0x00`.** The
+  original (wrong) reasoning kept for the record: the readout serves samples up to the current fill
   point and floats/high past it. "All-FF" = armed with an empty (freshly cleared)
   buffer, not a dead bus and not a railed ADC. (The earlier all-FF panic reads were
   taken with a fast sine crossing the reference — permanently-just-cleared buffers.)
@@ -136,3 +139,84 @@ accumulate-in-place netlist signature; also unproven.
 4. Re-run the cadence experiment with signal state controlled (only after 3).
 5. Re-sweep opcodes 0x06–0x1F in the triggered regime (after 3; the sweep tool
    already exists).
+
+---
+
+# ADDENDUM — same evening: the trigger is DIGITAL, and triggered capture WORKS
+
+Second half of the session, after the June-capture re-read and the edge-paced
+build (commit 3b19014) went on the bench. Each item below is a live A/B on
+bench unit #1, driven entirely over CDC + the ESP32.
+
+## 1. Register 0x08 is a DIGITAL post-ADC trigger level — bench-proven both ways
+
+With a quiet input (noise floor ~52–101, mean ~82) and the stock arm value
+`08 AD` (level 173): **0 PC0 edges/s**. Write `08 37` (level 55, inside the
+noise band): **4.6 edges/s — the noise itself starts triggering.** Restore
+`08 AD`: 0 edges/s again. The trigger comparator lives in the fabric and
+compares ADC codes; stock's arm sequence sets level 173.
+
+**Corollary — DAC1 (PA4) is NOT the trigger comparator reference.** It is much
+more likely the frontend's **vertical offset/bias**: the 2026-08-12 finding
+("reset zeroes DAC1 → captures read flat" and `trig raw 4000` → all-FF frames)
+stays factually intact but the mechanism is re-read as *signal pushed out of /
+across the ADC window*, not a dead comparator. `scope_trigger_dac_raw()` and
+the CLAUDE.md/CALIBRATION.md "trigger comparator DAC1" language need a
+correction pass once this is netlist-confirmed.
+
+## 2. FF disambiguated: railed samples, not unwritten words
+
+1 Vpp sine (cannot rail) + trigger level 0x64 matched to it: **five
+consecutive full frames of live data, zero FF bytes anywhere** — and one
+all-`0x00` frame caught mid-cycle. So: cleared/unwritten buffer = `0x00`
+(consistent with the sweep's zero-filled unused opcodes); `FF` = ADC railed at
+255 (3 Vpp ESP32 output clips the current range). The main-text "FF =
+unwritten words" claim is corrected accordingly. (Squares read high≈223 while
+sine peaks read 255 — frontend bandwidth/overshoot question, unresolved,
+minor.)
+
+## 3. Triggered capture WORKS when the level matches the signal
+
+Same test: full live frames on every read, means tracking the signal slice.
+The "triggered regime collapse" of the morning was three stacked artifacts:
+trigger level 173 vs a signal railing through it, ADC railing reading as FF,
+and the validity gate rejecting constant frames. With the level matched and
+railing avoided, **the scope captures triggered sweeps of a real signal on
+open firmware.** Next feature step: wire the scope UI's trigger-level control
+to an SPI `0x08` write (it currently only moves DAC1 = the offset).
+
+## 4. Default capture rate measured: ~2.7 kS/s (fill ≈ 375 ms)
+
+Trigger-frequency sweep with the PC0 edge counter: completions at ≤2.8 Hz,
+zero at ≥3.0 Hz; edge rate saturates ~2.67/s regardless of trigger rate ⇒ the
+1024-sample fill takes ~350–375 ms ⇒ **the free-running default sample clock
+is ~2.7 kS/s**, not 250 MS/s. Stock's one 416 ms first-cycle outlier (win15)
+is the same slow default fill.
+
+## 5. THE new central question: what makes stock's engine 23× faster
+
+After that first slow fill, stock sustains **18 ms cycles (~57 kS/s)** with
+**byte-identical SPI input to ours** (MOSI pure opcode+FF, USART silent, same
+five arm writes). Something outside the replayed SPI/USART traffic switches
+stock's engine fast — and whatever it is, it is probably the timebase
+mechanism (bench plan §1 / dev plan F4). Candidates, none tested: the analog
+posture (stock boots DMM: PC11 high, meter relay bank, meter-mode DAC1 value),
+some interaction of completed read-pairs at the right cadence, or fabric state
+we have not identified. Netlist + a DMM-posture replay are the two obvious
+attacks.
+
+## 6. PC0 edge semantics (measured, this build)
+
+Falling edges fire **once per completed capture** in the triggered regime and
+**not at all** in the never-triggered state — yet never-triggered reads return
+fresh varying noise every time. Interpretive question left open: the engine
+may be a continuous circular pre-trigger writer (read = live stream; trigger =
+freeze+complete), which would fit all of today's observations. Netlist item.
+
+## Firmware state after this session
+
+Commit 3b19014 (`guest-coldtrace`, flashed and validated on unit #1): EXINT0
+PC0 edge counter (`status` → "PC0 edges"), edge-paced acquisition with probe
+fallback, 3-byte read-header capture (`acq hdr` in `status`), gate honours
+stock's b2==01 valid flag. The b2==01 flag has **never** been observed on our
+engine in any regime — stock-state-specific, unexplained, tracked under item 5.
