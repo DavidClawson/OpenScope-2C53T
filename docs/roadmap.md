@@ -155,16 +155,46 @@ cheap habits make it moot anyway: skip no-op writes (compare before erasing),
 and append fixed-size records into a sector until it fills rather than
 rewriting it (16 × 256 B records = 16× fewer erases).
 
-**The real hazard is a stray erase, not endurance.** Irreplaceable data lives
-on that chip — factory calibration at `3:/System file/cal_ch1.bin` /
-`cal_ch2.bin`, plus stock's UI assets. We cannot regenerate factory cal. And
+**The real hazard is a stray erase, not endurance.** Stock's UI assets and its
+whole `3:` volume live on that chip, and we cannot regenerate any of it.
+
+> ⚠ **Correction (2026-08-14).** Earlier drafts of this section named
+> `3:/System file/cal_ch1.bin` / `cal_ch2.bin` as the factory calibration files.
+> **Those filenames were invented.** They appear nowhere in the 16 MB dump
+> `archive/w25q128_dump_2026_05_30.bin` and nowhere in any stock APP binary. The
+> only cal-shaped path stock actually references is
+> `3:/System file/9999.bin`, and in every dump we have that file is an empty
+> placeholder (FAT entry `9999    BIN`, attr `0x20`, cluster 0, size 0).
+> `analysis_v120/meter_w25q_calibration_boundary_2026_06_06.md` flagged the
+> invented names on 2026-06-06 and the warning was not acted on.
+>
+> What *is* established: stock restores a calibration-like table into RAM
+> `0x20000358..0x2000044A` from a saved config, checks a sentinel at `ms[0x34E]`,
+> and when that sentinel is erased (`0xFFFF`) or zero it falls back to
+> **hardcoded defaults compiled into the firmware image** at
+> `0x080261BE..0x08026506`. Separately,
+> `analysis_v120/w25q128_flash_map_2026-06-13.md` swept the whole chip and found
+> only UI JPEGs, screenshots, FAT metadata and the empty `9999.BIN` — no cal —
+> and narrowed the saved-config source to **MCU internal flash `0x08006000`**,
+> which our own app overwrites on both bench units. Whether per-device factory
+> calibration exists at all, and where, is **under investigation** — see
+> `reverse_engineering/analysis_v120/factory_cal_truth_2026-08-14.md`.
+> The inverse error is just as easy to make: our W25Q evidence is two
+> byte-identical archived dumps plus one live read of bench unit #2, all of
+> which had already been reflashed by us. That is not proof about a pristine
+> unit, and the June boundary analysis deliberately left cross-unit comparison
+> open.
+
+The read-only enforcement below is unchanged and still correct — it protects
+stock's volumes by address, whatever they turn out to contain. And
 today there is nothing between a caller and that data: `flash_fs_read()` and
 `flash_fs_write_atomic()` are still stubs with FatFs TODOs, so only the raw
 primitives (`raw_read_bytes`, `raw_write_block`, `raw_sector_erase`) are live,
 addressed by absolute sector. What the layer needs:
 
-- a region map with explicit **read-only** regions (factory cal, stock assets)
-  that the write path refuses by address, not by convention;
+- a region map with explicit **read-only** regions (everything stock owns —
+  both FAT volumes, assets included) that the write path refuses by address,
+  not by convention;
 - bounds checks on every write/erase against the target region;
 - a designated scratch/user region for everything we generate;
 - no-op-write elision, and append-style records for anything frequently updated.
@@ -176,15 +206,16 @@ manual `usb_debug.c` shell commands that read back and verify.)*
 ### User calibration mode (unlocked by the region layer)
 
 Worth filing now because it may be the pragmatic answer to a thread that has
-resisted reverse engineering. **Write to a separate user-cal region — never to
-the factory sector.** Factory cal is the instrument's provenance, is
-irreplaceable, and is in a format we have not decoded; overwriting it trades a
-known-good reference for a guess.
+resisted reverse engineering. **Write to a separate user-cal region — never
+into anything stock owns.** Whatever per-device provenance the instrument
+carries, we have not located it and have not decoded it (see the correction
+above); overwriting a region we do not understand trades a possibly-known-good
+reference for a guess.
 
-The standard instrument pattern applies: factory cal stays read-only, user cal
-is an overlay stored in our own format, and a blank or corrupt user region
-falls back to factory. That gives revert-to-factory for free and makes a botched
-calibration recoverable.
+The standard instrument pattern applies: everything stock owns stays read-only,
+user cal is an overlay stored in our own format, and a blank or corrupt user
+region falls back to whatever the stock-side default is. That gives
+revert-to-factory for free and makes a botched calibration recoverable.
 
 Why it may matter more than a convenience feature: the meter's low-Ω and DCV
 accuracy currently depend on per-device factory coefficients we have never

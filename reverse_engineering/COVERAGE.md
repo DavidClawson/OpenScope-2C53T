@@ -51,7 +51,7 @@ See `analysis_v120/gap_functions.md` for the complete 17-function inventory with
 | 0x08037400 | `fpga_command_rx_task` | ~1 KB | Infinite loop on xQueueReceive for FPGA responses |
 | 0x0800b908 | Mode init dispatcher (10-case switch) | 512B | **CORRECTION**: Not 6 independent functions — single switch in FUN_0800b908. Boot-time only. Queues 1-byte cmd codes to usart_cmd_queue. |
 | 0x08039734 | `timer_init_helper` | ~200B | TIM2/TIM5 configuration (FPGA timing) |
-| 0x08001830 | `calibration_loader` | ~100B | Loads 301-byte per-channel cal data from SPI flash |
+| 0x08001830 | `roll_buffer_preload_or_transform` | ~100B | Pre-seeds the 301-byte per-channel **roll-mode sample buffers**. Was mislabeled `calibration_loader` "loading cal data from SPI flash"; reclassified in `analysis_v120/cal_data_myth_busted.md` (corrected 2026-08-14) |
 
 ### Beyond Code Region
 
@@ -141,7 +141,7 @@ The complete 309-function naming inventory is in `analysis_v120/function_names.m
 | 0802771c | 110 | `tmr3_isr` | High | Timer-driven USART exchange + button scan trigger |
 | 08037800 | 472 | `fpga_spi3_transfer` | **High** | SPI3 CS control (PB6), ADC sample read, float math |
 | 08037400 | ~1K | `fpga_command_rx_task` | **High** | Infinite loop on xQueueReceive for FPGA responses |
-| 08001830 | ~100 | `calibration_loader` | High | 301-byte per-channel cal data from SPI flash |
+| 08001830 | ~100 | `roll_buffer_preload_or_transform` | High | Pre-seeds the 301-byte per-channel roll-mode buffers — **not** cal data (corrected 2026-08-14, see `cal_data_myth_busted.md`) |
 | 08039734 | ~200 | `timer_init_helper` | High | TIM2/TIM5 config (called 2x from system_init) |
 
 ### Corrections from Prior Analysis

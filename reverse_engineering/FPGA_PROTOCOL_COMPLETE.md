@@ -867,12 +867,23 @@ calibrated = (uint8_t)(int)result;
 | `+0xDB6` | 2 bytes | Roll mode sample count (max 300) |
 | `+0xDB8` | 2 bytes | Acquisition sample counter |
 
-### Calibration Data Source
+### Roll-buffer preload (previously mislabeled "Calibration Data Source")
 
-Per-channel calibration data (301 bytes each) is loaded from SPI flash at boot by `calibration_loader` (`FUN_08001830`):
-- CH1: loaded to `ms + 0x356` buffer with XOR 0x80 transform
-- CH2: loaded to `ms + 0x483` buffer with XOR 0x80 transform
-- 6 gain/offset calibration pairs stored at RAM `0x20000358`-`0x20000434`
+> ⚠ **Corrected 2026-08-14.** This section used to read "per-channel calibration data
+> (301 bytes each) is loaded from SPI flash at boot by `calibration_loader`". Both halves
+> are wrong: the regions are the **oscilloscope roll-mode sample buffers**
+> (`analysis_v120/cal_data_myth_busted.md`), and no calibration file has ever been found
+> on the SPI flash (`analysis_v120/w25q128_flash_map_2026-06-13.md`).
+
+`FUN_08001830` (flash `0x08001830`) pre-seeds the two 301-byte roll-mode buffers at boot:
+- CH1: `ms + 0x356`, count `0x12D`, key `state[4] ^ 0x80`
+- CH2: `ms + 0x483`, count `0x12D`, key `state[5] ^ 0x80`
+
+Separately, the scope gain/offset table at RAM `0x20000358`–`0x20000434` (20 bytes per
+voltage range; entry count inconsistent across our docs) is real, but stock restores it
+from a **saved config** with a sentinel at `ms[0x34E]`, falling back to defaults compiled
+into the stock image at `0x080261BE..0x08026506`. Where (or whether) per-device factory
+calibration is stored is an open question — `analysis_v120/factory_cal_truth_2026-08-14.md`.
 
 ---
 

@@ -158,10 +158,32 @@ yet. That connection work is small and it is a good first contribution.
 
 ### Calibration — the honest part
 
-Stock ships with **per-channel factory calibration** read from files on the internal SPI flash
-(`3:/System file/cal_ch1.bin`, `cal_ch2.bin`). OpenScope's loader for those files exists but sits
-on top of the stubbed filesystem layer, so it always reads zero bytes and falls back to built-in
-defaults. The firmware is honest about this in a comment; the effect is not subtle.
+> **Correction (2026-08-14).** An earlier version of this section — including the copy posted to
+> issue #12 — said stock reads per-channel factory calibration from
+> `3:/System file/cal_ch1.bin` and `cal_ch2.bin`. **Those two filenames were fabricated.** They
+> appear nowhere in our 16 MB flash dump and nowhere in any stock firmware binary. Our own
+> 2026-06-06 analysis had already labelled them invented; the label was missed and the names
+> propagated into several docs. The corrected text follows. Sorry — that one was on us.
+
+What stock actually does is narrower than we said. It restores a calibration-like table into RAM
+(`0x20000358..0x2000044A`) from a saved configuration, guarded by a sentinel; when that sentinel
+is erased or zero it falls back to **defaults compiled into the stock firmware image**
+(`0x080261BE..0x08026506`). So a stock unit can run on image-baked defaults with no per-device
+data involved. The only calibration-shaped file path stock references is
+`3:/System file/9999.bin`, and in every flash dump we have that file is **empty** (cluster 0,
+size 0). A whole-chip sweep (`analysis_v120/w25q128_flash_map_2026-06-13.md`) found no
+calibration anywhere on the SPI flash and pointed at MCU internal flash `0x08006000` as the
+saved-config home — a sector our own firmware overwrites, so no copy survives on our bench units.
+Whether per-device factory calibration exists on this platform at all, and where it is stored, is
+**under investigation** — tracked in
+`reverse_engineering/analysis_v120/factory_cal_truth_2026-08-14.md`. We are not going to guess at
+a replacement answer. (The inverse error is just as easy to make: "not in our dumps" is not "not
+on any unit" — every unit we have dumped had already been reflashed by us, and nobody has read a
+pristine one.)
+
+OpenScope, meanwhile, has **no per-device calibration at all**. `flash_fs_load_factory_cal()` is a
+deliberate fail-closed stub: it probes no filenames, always reports "not loaded", and the scope
+plots raw ADC counts. That is a known gap, not a regression, and the effect is not subtle:
 
 Consequences:
 
@@ -180,7 +202,7 @@ Consequences:
 ### Storage, screenshots and USB
 
 These three all trace back to one missing piece. Stock runs FatFs over the 16 MB W25Q128 with two
-volumes and uses it for screenshots, the file browser and calibration data, exposed to a PC as
+volumes and uses it for screenshots, the file browser and system files, exposed to a PC as
 USB Mass Storage.
 
 OpenScope has the **raw flash primitives** — JEDEC ID, read, sector erase, page program,

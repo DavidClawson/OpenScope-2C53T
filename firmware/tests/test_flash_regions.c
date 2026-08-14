@@ -306,9 +306,14 @@ static void test_bad_table_fails_closed(void)
 static void test_write_to_readonly_region_is_refused(void)
 {
     fresh();
-    /* Put plausible factory content in the System file volume so a stray write
-     * would be visible as data loss rather than as a change to blank flash. */
-    memset(model.mem + 0x007000u, 0x5A, 301);   /* stands in for cal_ch1.bin */
+    /* Put plausible stock content in the System file volume so a stray write
+     * would be visible as data loss rather than as a change to blank flash.
+     * 0x007000 is the start of volume "3:"'s data region (see
+     * analysis_v120/w25q128_flash_map_2026-06-13.md) — i.e. real stock file
+     * bytes. It used to be commented as standing in for "cal_ch1.bin", an
+     * invented filename that exists in no dump; the test is unaffected, only
+     * the comment was wrong. */
+    memset(model.mem + 0x007000u, 0x5A, 301);
     uint8_t *snap = snapshot();
 
     uint8_t data[301];
@@ -317,7 +322,7 @@ static void test_write_to_readonly_region_is_refused(void)
     /* by region id */
     CHECK_ST(flash_region_write(FLASH_REGION_SYSVOL, 0x7000u, data, sizeof data),
              FLASH_REGION_ERR_READ_ONLY);
-    /* by absolute address, straight at the cal blob */
+    /* by absolute address, straight at stock's file data */
     CHECK_ST(flash_regions_write_abs(0x007000u, data, sizeof data),
              FLASH_REGION_ERR_READ_ONLY);
     /* first and last byte of each read-only region */

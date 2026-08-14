@@ -139,37 +139,49 @@ Additional entries referenced only by `scope_main_fsm` (0x08019e98):
 
 These 12 entries likely correspond to the 12 V/div settings available on the scope (from 10 mV/div to 10 V/div). Each 20-byte structure probably contains gain, offset, and auxiliary calibration coefficients for that voltage range.
 
-### Per-Channel Calibration Arrays
+### Per-Channel 301-Byte Arrays — NOT calibration (corrected 2026-08-14)
 
-Two 301-byte calibration arrays are loaded at boot:
+> ⚠ **This section previously described two 301-byte per-channel arrays as
+> "calibration arrays" loaded from SPI flash, and `FUN_08001830` as a
+> `calibration_loader` that XOR-deobfuscates cal bytes. That is wrong.**
+> `analysis_v120/cal_data_myth_busted.md` reclassified both regions as the
+> **oscilloscope roll-mode sample buffers**, and the "calibration_loader" label
+> as a guess made only because the sole call site is at boot. The old text is
+> removed rather than annotated, because it was being cited as evidence for a
+> factory-cal file that does not exist.
 
-| Channel | RAM Address | Offset from ms | Size | XOR |
-|---------|-------------|-----------------|------|-----|
-| CH1 | `ms+0x356` (0x2000044E) | +0x356 | 301 bytes (0x12D) | XOR 0x80 |
-| CH2 | `ms+0x483` (0x2000057B) | +0x483 | 301 bytes (0x12D) | XOR 0x80 |
+| Channel | RAM Address | Offset from ms | Size |
+|---------|-------------|-----------------|------|
+| CH1 | `ms+0x356` (0x2000044E) | +0x356 | 301 bytes (0x12D) |
+| CH2 | `ms+0x483` (0x2000057B) | +0x483 | 301 bytes (0x12D) |
 
-Note: These same RAM regions double as the roll mode circular buffers during acquisition. The calibration data is only needed during the loading phase.
+These are the roll-mode sample buffers, 301 samples per channel — the same
+regions `scope_main_fsm` indexes as `&state[0x356 + ch * 0x12D]` during
+acquisition, and that single-shot trigger copies into the display buffer at
+`state[0x5B0+i]`. They are not calibration storage in any phase.
 
-### FUN_08001830: calibration_loader
+### FUN_08001830 (flash `0x08001830`) — roll-buffer preload/transform
 
-This function loads per-channel calibration data from SPI flash into RAM at boot:
+Called twice from master init (callers pinned at `0x080271A8`) with
+`state+0x356` and `state+0x483`, count `0x12D`, and `state[4]`/`state[5] ^ 0x80`.
+It loops 301 times writing to the destination using the XORed byte as a lookup
+key — consistent with **pre-seeding the roll buffer with a midscale pattern**,
+not with loading calibration data. The `^ 0x80` is midscale-centring of a signed
+value, not deobfuscation of a stored cal blob.
 
-```c
-// Called twice from system_init (FUN_08023A50):
-//   calibration_loader(ms + 0x356, 0x12D, byte_xor_0x80);  // CH1
-//   calibration_loader(ms + 0x483, 0x12D, byte_xor_0x80);  // CH2
+Meter readings never touch these regions at all: they arrive from the meter
+front end as pre-scaled BCD over USART2. The scope ADC path and the meter path
+are separate.
 
-void calibration_loader(uint8_t *dest, uint16_t count, uint8_t xor_val) {
-    // Reads 'count' bytes from SPI flash calibration region
-    // XORs each byte with xor_val (0x80) before storing
-    // This XOR obfuscation is a simple protection against casual reading
-    for (int i = 0; i < count; i++) {
-        dest[i] = flash_read_byte() ^ xor_val;
-    }
-}
-```
-
-The XOR with 0x80 effectively flips the sign bit of each byte, converting between signed and unsigned representations. This is likely because the calibration data in flash is stored as signed offsets (-128 to +127) but used as unsigned correction values in the pipeline.
+**For where stock's calibration-like values actually come from**, see
+`analysis_v120/meter_w25q_calibration_boundary_2026_06_06.md`: a saved-config
+restore into `0x20000358..0x2000044A` with a sentinel at `ms[0x34E]`, falling
+back to hardcoded defaults compiled into the stock image at
+`0x080261BE..0x08026506`. Whether per-device factory calibration exists at all is
+**an open question** — `analysis_v120/factory_cal_truth_2026-08-14.md`. Note in
+particular that `3:/System file/cal_ch1.bin` / `cal_ch2.bin`, which appear in
+older drafts of several project docs, are **invented filenames** present in no
+dump and no binary.
 
 ---
 
@@ -610,8 +622,8 @@ All hardcoded constants discovered in the V1.2.0 firmware binary:
 | Min clamp | `0.0` | VFP s26 | Lower bound for calibrated samples |
 | Meter cal reference | `494.0` | Literal pool 0x080373DC | Double-precision meter reference |
 | Double rounding | `2^52` | Literal pool 0x080373EC | Fast double-to-int conversion |
-| Cal array size | `301` (0x12D) | calibration_loader param | Per-channel cal data bytes |
-| Cal XOR mask | `0x80` | calibration_loader param | Flash obfuscation key |
+| Roll-buffer size | `301` (0x12D) | `FUN_08001830` param | Per-channel roll-mode samples — **not** cal data (see § Per-Channel 301-Byte Arrays) |
+| Roll-buffer seed XOR | `0x80` | `FUN_08001830` param | Midscale centring of the preload key — **not** a flash obfuscation key |
 | Gain/offset entries | 12 | 0x20000358-0x20000434 | Per-V/div cal coefficients |
 | Voltage range XOR | `0xFF80` (~0x7F) | spi3_acquisition_task | MCU-to-FPGA range transform |
 
@@ -701,7 +713,7 @@ void calibrate_scope_buffer(uint8_t *buf, int count,
 6. Send USART boot command sequence (commands 0x01-0x08)
 7. Perform SPI3 dummy handshake (CS assert, send 0x00, CS deassert)
 8. Wait 10 ms for FPGA stabilization
-9. Load calibration data from SPI flash (301 bytes per channel)
+9. Pre-seed the roll-mode sample buffers (301 bytes per channel, `FUN_08001830`) — this step was previously described as "load calibration data from SPI flash"; it is not calibration
 10. Begin acquisition loop
 
 ### Known Gotchas

@@ -13,9 +13,20 @@ filesystem, no FatFS, ~600 lines including comments.
 
 **Not wear.** 100,000 P/E cycles per 4 KB sector is ~274 years at one erase a
 day. The hazard is a **stray erase destroying data we cannot regenerate**: the
-stock UI assets, and on a pristine unit the factory calibration under
-`3:/System file/`. A sector erase is indivisible and irreversible, and
+stock UI assets and stock's FAT structures, plus whatever a unit we have never
+dumped may carry. A sector erase is indivisible and irreversible, and
 `flash_fs_raw_sector_erase(0)` will erase sector 0 without complaint.
+
+> ⚠ **Correction (2026-08-14).** This paragraph used to say the protected data
+> included "on a pristine unit the factory calibration under `3:/System file/`",
+> and elsewhere this repo named that as `cal_ch1.bin` / `cal_ch2.bin`. **Those
+> filenames were invented and no calibration file has been found on the W25Q at
+> all** — `analysis_v120/w25q128_flash_map_2026-06-13.md` swept the whole 16 MB
+> and found only UI JPEGs, screenshots, FAT metadata and an *empty*
+> `9999.BIN`. The region layer's rule is unchanged and still right: never write
+> into anything stock owns, enforced by address. Where per-device calibration
+> lives (if it exists) is an open question —
+> `reverse_engineering/analysis_v120/factory_cal_truth_2026-08-14.md`.
 
 The guard rail goes in *before* the first automated writer exists, which is why
 this is worth doing now: today nothing writes the W25Q at runtime.
@@ -28,7 +39,7 @@ Derived from `reverse_engineering/analysis_v120/w25q128_flash_map_2026-06-13.md`
 
 | id | range | size | kind |
 |---|---|---|---|
-| `sysvol` | `0x000000`–`0x1FFFFF` | 2 MB | **read-only** — FatFS `3:`, UI JPEGs, `System file/`, factory cal path |
+| `sysvol` | `0x000000`–`0x1FFFFF` | 2 MB | **read-only** — FatFS `3:`, UI JPEGs, `System file/` (incl. the empty `9999.BIN`) |
 | `uservol` | `0x200000`–`0xEFFFFF` | 13 MB | **read-only** — FatFS `2:`, stock screenshot store |
 | `usercal` | `0xF00000`–`0xF0FFFF` | 64 KB | append log — user calibration overlay |
 | `settings` | `0xF10000`–`0xF1FFFF` | 64 KB | append log — saved settings |

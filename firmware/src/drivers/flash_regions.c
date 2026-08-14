@@ -25,11 +25,31 @@
  *   0x200000-0xFFFFFF   FatFS "2:"  screenshot store
  *
  * Everything stock owns is therefore READONLY here, including the whole
- * `3:/System file/` path where a pristine unit's cal_ch1.bin / cal_ch2.bin
- * live. (On both bench units that file is an empty placeholder — the factory
- * cal is not on this chip. That is a fact about two units, not a licence to
- * write there: a user's unit may be pristine, and we cannot regenerate what we
- * erase.)
+ * `3:/System file/` path.
+ *
+ * CORRECTED 2026-08-14: this comment used to say that path holds "a pristine
+ * unit's cal_ch1.bin / cal_ch2.bin". Those filenames were INVENTED — they
+ * appear nowhere in archive/w25q128_dump_2026_05_30.bin and nowhere in any
+ * stock APP binary. The only cal-shaped path stock references is
+ * `3:/System file/9999.bin`, and in the dumps we have it is an empty
+ * placeholder (FAT entry "9999    BIN", attr 0x20, cluster 0, size 0).
+ * Separately, stock can run entirely on calibration-like defaults compiled
+ * into its own firmware image (0x080261BE..0x08026506, selected when the
+ * sentinel at ms[0x34E] is erased or zero), so the existence and location of
+ * any per-device factory calibration is an OPEN QUESTION — see
+ * reverse_engineering/analysis_v120/factory_cal_truth_2026-08-14.md.
+ *
+ * None of that changes the region table below, and the READONLY marking on
+ * "sysvol" stays exactly as it is. The rule was never "protect a specific
+ * file"; it is "never write into anything stock owns" — the UI JPEGs alone
+ * justify it, and the whole-chip sweep in w25q128_flash_map_2026-06-13.md
+ * shows both FAT volumes cover all 16 MB with no raw region.
+ *
+ * And the inverse claim is not proven either: our evidence is two
+ * byte-identical archived dumps plus one live read of bench unit #2, all of
+ * units we had already reflashed. Absent here is not absent everywhere, a
+ * user's unit may carry data ours does not, and we cannot regenerate what we
+ * erase.
  *
  * OUR WRITABLE WINDOW is the top 1 MB minus the final sector,
  * 0xF00000-0xFFEFFF. Why there:

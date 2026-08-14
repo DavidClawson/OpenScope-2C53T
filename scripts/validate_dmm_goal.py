@@ -152,6 +152,12 @@ def run_software_gate() -> list[dict[str, Any]]:
 
 def verify_no_unrecovered_meter_coefficients() -> dict[str, Any]:
     """Fail on invented coefficient paths, not on missing explanatory prose."""
+    # NOTE (2026-08-14): the two `cal_ch*.bin` entries below are INVENTED
+    # filenames — they exist in no W25Q dump and in no stock binary. They are
+    # blacklisted here precisely so they can never be wired into meter/flash
+    # code again. Keep them; they are a guard, not a lead. Background:
+    # reverse_engineering/analysis_v120/meter_w25q_calibration_boundary_2026_06_06.md
+    # and .../factory_cal_truth_2026-08-14.md.
     forbidden = [
         "METER_CAL_LOW_OHM_FACTOR",
         "0.0304f",

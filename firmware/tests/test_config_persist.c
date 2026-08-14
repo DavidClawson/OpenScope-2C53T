@@ -217,7 +217,9 @@ static bool unchanged_since(const uint8_t *snap)
 
 /* Plausible irreplaceable content everywhere the region table calls read-only,
  * so a stray write or erase shows up as data loss rather than as a change to
- * blank flash. 0x007000 stands in for `3:/System file/cal_ch1.bin`. */
+ * blank flash. (0x007000 is the start of stock volume "3:"'s data region; an
+ * earlier comment here named `3:/System file/cal_ch1.bin`, an invented filename
+ * that exists in no dump — the fill is what matters, not the label.) */
 static void fill_readonly_regions(void)
 {
     for (uint32_t i = 0; i < FLASH_REGION_COUNT; i++) {
@@ -579,7 +581,7 @@ static void test_writer_cannot_reach_a_readonly_region(void)
     };
 
     model_blank();
-    memset(model.mem + 0x030000u, 0x5A, 301);      /* stands in for cal_ch1.bin */
+    memset(model.mem + 0x030000u, 0x5A, 301);      /* irreplaceable content in a read-only region */
     config_persist_stats_reset();
     model_counters_reset();
     CHECK(flash_regions_init_table(&model_backend, hostile, 4) == FLASH_REGION_OK,
