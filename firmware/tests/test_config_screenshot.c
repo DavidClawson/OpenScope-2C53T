@@ -4,7 +4,8 @@
  * Build (native):
  *   gcc -o tests/test_config_screenshot tests/test_config_screenshot.c \
  *       src/util/config.c src/util/screenshot.c src/dsp/shared_mem.c \
- *       -DFEATURE_SCREENSHOT -Isrc/util -Isrc/dsp -lm
+ *       src/drivers/flash_regions.c \
+ *       -DFEATURE_SCREENSHOT -Isrc/util -Isrc/dsp -Isrc/drivers -lm
  *
  * Run:
  *   ./tests/test_config_screenshot
@@ -182,18 +183,24 @@ static void test_config_serialize_buffer_too_small(void)
     PASS();
 }
 
-static void test_config_save_load_roundtrip(void)
+static void test_config_save_without_storage_refuses(void)
 {
-    TEST("save/load round-trip via stub backend");
+    /* 2026-08-13: config_save() used to write to a static RAM buffer, and this
+     * test asserted the round-trip through it — which is why "config save/load
+     * with checksum" was believed to work for months while nothing survived a
+     * reboot. The backend is now the W25Q region layer, and with no backend
+     * bound a save must REFUSE rather than claim success.
+     *
+     * The real round-trip is tested against a NOR flash model in
+     * tests/test_config_persist.c, which is where persistence belongs. */
+    TEST("save refuses when no storage is bound");
     device_config_t original, loaded;
     config_init_defaults(&original);
     original.auto_shutdown_mins = 15;
     original.checksum = config_compute_checksum(&original);
 
-    ASSERT_TRUE(config_save(&original), "save should succeed");
-    ASSERT_TRUE(config_load(&loaded), "load should succeed");
-    ASSERT_EQ(loaded.auto_shutdown_mins, 15, "value preserved");
-    ASSERT_TRUE(config_validate(&loaded), "loaded config valid");
+    ASSERT_FALSE(config_save(&original), "save must not claim success with no backend");
+    ASSERT_FALSE(config_load(&loaded), "load must not invent a record");
     PASS();
 }
 
@@ -397,7 +404,7 @@ int main(void)
     test_config_deserialize_bad_magic();
     test_config_deserialize_bad_checksum();
     test_config_serialize_buffer_too_small();
-    test_config_save_load_roundtrip();
+    test_config_save_without_storage_refuses();
 
     printf("\n=== Screenshot Tests ===\n");
     test_screenshot_clear_red();

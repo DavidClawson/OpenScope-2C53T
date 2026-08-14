@@ -38,6 +38,7 @@ extern void system_clock_config(void);
 #include "meter_data.h"
 #include "meter_voltage_wave.h"
 #include "flash_fs.h"
+#include "settings_store.h"
 #include "usb_debug.h"
 #include "rtt.h"
 #include "fault.h"
@@ -889,6 +890,24 @@ int main(void)
     fpga_init();
     wdt_counter_reload();
 #endif
+
+    /* User settings: bind the W25Q region layer, load the newest saved record
+     * (or defaults) and apply it to live UI state. Never fails in a way main()
+     * has to handle — no storage, or a corrupt/foreign record, simply means
+     * defaults. See settings_store.h.
+     *
+     * POSITION IS DELIBERATE, and it is the one thing to re-check if the cold
+     * boot ever regresses. It must come AFTER:
+     *   - flash_fs_init(), whose mutex and raw SPI2 primitives it uses;
+     *   - theme_init() / scope_state_init(), whose defaults it overwrites;
+     *   - fpga_init(), because this is the first code in this firmware's
+     *     history to drive SPI2 (and PB12/CS) before the scheduler, and the
+     *     FPGA config sequence right above it is bench-validated and fragile.
+     *     Keeping it downstream leaves that sequence's electrical environment
+     *     exactly as it was validated.
+     * And BEFORE the fpga_set_meter_mode(meter_submode) call below, which
+     * consumes the restored meter submode, and before the display task exists. */
+    settings_store_init();
 
     /* Create queues */
     xDisplayQueue = xQueueCreate(20, sizeof(uint8_t));

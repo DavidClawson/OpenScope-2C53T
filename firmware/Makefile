@@ -78,6 +78,7 @@ C_SOURCES += src/dsp/bode.c
 C_SOURCES += src/tasks/component_test.c
 C_SOURCES += src/tasks/mask_test.c
 C_SOURCES += src/util/config.c
+C_SOURCES += src/util/settings_store.c
 C_SOURCES += src/util/screenshot.c
 C_SOURCES += src/decode/decode_uart.c
 C_SOURCES += src/decode/decode_i2c.c
@@ -452,6 +453,22 @@ $(BUILD_DIR)/test_scope_measure: tests/test_scope_measure.c src/ui/scope_measure
 test-scope-measure: $(BUILD_DIR)/test_scope_measure
 	$<
 
+# Settings persistence: config.c + settings_store.c against a NOR flash model
+# (erase sets 0xFF, program only clears bits, page programs cannot cross a page).
+# Proves the round trip, the fallbacks (first boot / torn record / bad checksum /
+# foreign version), and — the one that matters — that the settings writer cannot
+# reach a read-only region. See tests/test_config_persist.c.
+$(BUILD_DIR)/test_config_persist: tests/test_config_persist.c src/util/config.c src/util/config.h \
+                                  src/util/settings_store.c src/util/settings_store.h \
+                                  src/drivers/flash_regions.c src/drivers/flash_regions.h \
+                                  src/ui/theme.c src/ui/scope_state.c | $(BUILD_DIR)
+	$(HOST_CC) -std=c11 -Wall -Wextra -Werror -O1 -Isrc/util -Isrc/drivers -Isrc/ui -Isrc/dsp \
+		$< src/util/config.c src/util/settings_store.c src/drivers/flash_regions.c \
+		src/ui/theme.c src/ui/scope_state.c -o $@
+
+test-config-persist: $(BUILD_DIR)/test_config_persist
+	$<
+
 test-stock-meter-literals:
 	python3 ../scripts/test_stock_meter_literals.py
 
@@ -465,7 +482,7 @@ $(BUILD_DIR)/test_redraw_gate: tests/test_redraw_gate.c src/ui/redraw_gate.h | $
 test-redraw-gate: $(BUILD_DIR)/test_redraw_gate
 	$<
 
-.PHONY: all clean disasm size renode soak-test soak-quick flash flash-dfu bootloader flash-bootloader flash-all guest guest-warmtest guest-usart-silent emu test-meter-data test-meter-auto test-meter-voltage-wave test-fpga-meter-plan test-stock-meter-literals test-meter test-scope-measure test-redraw-gate
+.PHONY: all clean disasm size renode soak-test soak-quick flash flash-dfu bootloader flash-bootloader flash-all guest guest-warmtest guest-usart-silent emu test-meter-data test-meter-auto test-meter-voltage-wave test-fpga-meter-plan test-stock-meter-literals test-meter test-scope-measure test-redraw-gate test-config-persist
 
 # ═══════════════════════════════════════════════════════════════════════════
 # BENCH / EXPERIMENT IMAGE INDEX                          (index added 2026-08-13)
