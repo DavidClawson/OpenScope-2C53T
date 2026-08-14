@@ -754,6 +754,16 @@ static void cmd_status(void)
         fpga.spi3_timeout_count, fpga.spi3_total_timeouts,
         fpga.spi3_first_byte
     );
+    /* Trigger-regime instruments (2026-08-14): PC0 falling edges = fresh
+     * data-ready events (sample twice to get a rate); acq headers are the 3
+     * MISO bytes of the last 04/05 read — stock's CH1 b2==01 = buffer valid. */
+    usb_debug_printf(
+        "PC0 edges: %lu\r\n"
+        "acq hdr CH1: %02X %02X %02X  CH2: %02X %02X %02X\r\n",
+        (unsigned long)fpga.pc0_edges,
+        fpga.acq_hdr_ch1[0], fpga.acq_hdr_ch1[1], fpga.acq_hdr_ch1[2],
+        fpga.acq_hdr_ch2[0], fpga.acq_hdr_ch2[1], fpga.acq_hdr_ch2[2]
+    );
     usb_print_last_tx_frame();
     usb_print_recent_tx_frames();
 

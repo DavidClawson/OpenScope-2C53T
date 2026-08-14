@@ -340,7 +340,18 @@ typedef struct {
     volatile uint8_t  h2_upload_done;      /* 1 = TX completed without error */
     volatile uint8_t  h2_close_status;     /* MISO byte after 0x3A close (stock: 0xF8) */
     volatile uint8_t  scope_status[4];     /* MISO from post-upload 0x03 read
-                                            * (stock boot: 00 01 42 2E — issue-#18 capture) */
+                                            * (stock boot: 00 01 42 2E — issue-#18 capture)
+                                            * ⚠ all-zeros on healthy armed boots too —
+                                            * NOT an arm indicator (2026-08-14). */
+    volatile uint8_t  acq_hdr_ch1[3];      /* 3 MISO header bytes of the last 0x04 read.
+                                            * June-capture re-read (2026-08-14): stock's
+                                            * b2==0x01 is a buffer-valid flag — set on
+                                            * 143/174 CH1 windows, NEVER on CH2. */
+    volatile uint8_t  acq_hdr_ch2[3];      /* Same for the last 0x05 read */
+    volatile uint32_t pc0_edges;           /* PC0 (data-ready) falling edges via EXINT0.
+                                            * One per fresh ready event — the instrument
+                                            * for engine cycle rate per trigger regime,
+                                            * and the pacing source for the acq task. */
     volatile uint8_t  cfg_status_reg[4];   /* Gowin STATUS_REGISTER (opcode 0x41),
                                             * big-endian as clocked. The authoritative
                                             * config status. Bits (openFPGALoader

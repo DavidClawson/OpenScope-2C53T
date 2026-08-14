@@ -126,6 +126,7 @@ C_SOURCES += $(AT32_DRV)/src/at32f403a_407_crm.c
 C_SOURCES += $(AT32_DRV)/src/at32f403a_407_gpio.c
 C_SOURCES += $(AT32_DRV)/src/at32f403a_407_flash.c
 C_SOURCES += $(AT32_DRV)/src/at32f403a_407_misc.c
+C_SOURCES += $(AT32_DRV)/src/at32f403a_407_exint.c
 C_SOURCES += $(AT32_DRV)/src/at32f403a_407_xmc.c
 C_SOURCES += $(AT32_DRV)/src/at32f403a_407_wdt.c
 C_SOURCES += $(AT32_DRV)/src/at32f403a_407_adc.c

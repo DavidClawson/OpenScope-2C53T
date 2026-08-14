@@ -2769,6 +2769,16 @@ static void fpga_acquisition_task(void *pv)
  * a previous pause can never satisfy a new request. */
 static volatile bool acq_pause_req = false;
 static volatile bool acq_pause_ack = false;
+
+/* PC0 (FPGA data-ready, active LOW) falling-edge counter. A polled level
+ * read cannot see a short deassert pulse, which is exactly what made every
+ * prior PC0 observation regime-blind; EXINT0 catches edges of any width.
+ * No FreeRTOS calls here, so any NVIC priority is safe. */
+void EXINT0_IRQHandler(void)
+{
+    exint_flag_clear(EXINT_LINE_0);
+    fpga.pc0_edges++;
+}
 #endif
 
 #if FPGA_WARM_HANDOFF_TEST
@@ -2792,8 +2802,16 @@ static uint8_t fpga_warmtest_read_channel(uint8_t opcode, volatile uint8_t *buf)
     uint8_t s0 = spi3_xfer(opcode);        /* MISO during opcode: 0x80 marker
                                               expected in the first window
                                               after data-ready (Stlkv) */
-    (void)spi3_xfer(0xFF);                 /* status bytes 2 and 3 */
-    (void)spi3_xfer(0xFF);
+    uint8_t h1 = spi3_xfer(0xFF);          /* header bytes 2 and 3 — stock's
+                                              b2 (June capture re-read,
+                                              2026-08-14) is a buffer-valid
+                                              flag on CH1: 0x01 = complete */
+    uint8_t h2 = spi3_xfer(0xFF);
+    {
+        volatile uint8_t *hdr = (opcode == 0x04) ? fpga.acq_hdr_ch1
+                                                 : fpga.acq_hdr_ch2;
+        hdr[0] = s0; hdr[1] = h1; hdr[2] = h2;
+    }
     if (opcode == 0x04)
         fpga.spi3_first_byte = s0;         /* debug overlay "1:" field */
 
@@ -2817,6 +2835,7 @@ static uint8_t fpga_warmtest_read_channel(uint8_t opcode, volatile uint8_t *buf)
 static void fpga_warmtest_acq_task(void *pv)
 {
     (void)pv;
+    uint32_t edges_consumed = 0;   /* pc0_edges value at our last pair read */
     for (;;) {
         if (!fpga.initialized || fpga.bus_released) {
             vTaskDelay(pdMS_TO_TICKS(100));
@@ -2831,21 +2850,26 @@ static void fpga_warmtest_acq_task(void *pv)
             continue;
         }
 
-        /* PC0 data-ready, active LOW (input pull-up set in fpga_init, so an
-         * undriven pin reads "not ready"). Poll at ~1 kHz like stock — but
-         * as a FAST-PATH HINT, not a hard gate. Bench run 1+2 (2026-08-12)
-         * against June's Rounds 1-4 showed why a hard gate deadlocks: a
-         * stopped engine (which is what a MENU+Power handoff leaves behind —
-         * stock's upgrade-entry code shuts capture down before resetting)
-         * never raises data-ready spontaneously; June saw PC0 respond
-         * AROUND unconditional reads, and got the stale buffer that way.
-         * So: wait briefly for a spontaneous ready (the free-running Stlkv
-         * state), else probe-read anyway at ~2 Hz and let the validity gate
-         * below decide. A probe read of a stopped engine returns the stale
-         * capture once (accepted, then frozen — diagnostic in itself). */
+        /* EDGE-PACED ready wait — rewritten 2026-08-14 after the June-capture
+         * re-read (analysis_v120/trigger_regime_findings_2026-08-14.md).
+         *
+         * Stock's runtime never reads on a LEVEL: it waits out a fresh
+         * data-ready event per 04/05 pair (median 18 ms, zero partial
+         * buffers in 348 windows) and sends nothing else — the paced read
+         * pair itself completes the capture cycle. The old level-gated loop
+         * here re-read whenever PC0 sat low, which works in the free-run
+         * regime (quiet input) and collects stale/partial buffers the moment
+         * real trigger crossings begin. Pace on EXINT0 falling edges instead:
+         * proceed only when a data-ready edge has fired since our last pair.
+         *
+         * The probe-read fallback below stays, for two reasons: a STOPPED
+         * engine emits no edges (the 2026-08-12 hard-gate deadlock lesson),
+         * and if free-run turns out not to pulse PC0 per cycle (unmeasured —
+         * the pc0_edges counter in `status` now answers this on the bench),
+         * this build degrades to ~4 probe pairs/s instead of deadlocking. */
         bool ready = false;
         for (int w = 0; w < 100; w++) {
-            if (!(GPIOC->idt & (1u << 0))) { ready = true; break; }
+            if (fpga.pc0_edges != edges_consumed) { ready = true; break; }
             vTaskDelay(pdMS_TO_TICKS(1));
         }
         if (!ready) {
@@ -2878,6 +2902,9 @@ static void fpga_warmtest_acq_task(void *pv)
             vTaskDelay(pdMS_TO_TICKS(FPGA_PROBE_CADENCE_MS));
         }
 
+        edges_consumed = fpga.pc0_edges;   /* consume BEFORE reading: an edge
+                                              during our read is a new capture
+                                              and belongs to the next cycle */
         uint8_t s1 = fpga_warmtest_read_channel(0x04, fpga.ch1_buf);
         uint8_t s2 = fpga_warmtest_read_channel(0x05, fpga.ch2_buf);
 
@@ -2895,7 +2922,13 @@ static void fpga_warmtest_acq_task(void *pv)
         for (int i = 1; i < 1023; i++) {
             if (fpga.ch1_buf[i] != fpga.ch1_buf[0]) { varies = true; break; }
         }
-        if (marker || varies) {
+        /* Stock's b2==0x01 buffer-valid flag (CH1 windows only in the June
+         * capture) — a constant-valued frame is VALID when the flag says the
+         * capture completed; in the triggered regime a real signal aliased
+         * within the ~µs window is constant, and rejecting it was how the
+         * gate manufactured the "frozen OK counter" symptom. */
+        bool bufvalid = (fpga.acq_hdr_ch1[2] == 0x01);
+        if (marker || varies || bufvalid) {
             fpga.spi3_ok_count++;
             fpga.spi3_timeout_count = 0;
             data_ready = true;
@@ -4284,6 +4317,24 @@ void fpga_init(void)
     gpio_cfg.gpio_pull = GPIO_PULL_UP;
     gpio_init(GPIOC, &gpio_cfg);
     gpio_cfg.gpio_pull = GPIO_PULL_NONE;   /* restore shared struct default */
+
+    /* PC0 falling-edge counter on EXINT0 (2026-08-14) — the data-ready EDGE
+     * instrument. Counts fresh ready events regardless of pulse width (a
+     * polled level read is blind to short deasserts, which kept every prior
+     * PC0 observation regime-ambiguous) and paces the acquisition task the
+     * way stock's runtime is paced (June capture: one 04/05 pair per ready
+     * event, never a level re-read). Read the count in `status`. */
+    IOMUX->exintc1_bit.exint0 = 2;         /* EXINT line 0 <- port C */
+    {
+        exint_init_type ei;
+        exint_default_para_init(&ei);
+        ei.line_select   = EXINT_LINE_0;
+        ei.line_mode     = EXINT_LINE_INTERRUPT;
+        ei.line_polarity = EXINT_TRIGGER_FALLING_EDGE;
+        ei.line_enable   = TRUE;
+        exint_init(&ei);
+    }
+    nvic_irq_enable(EXINT0_IRQn, 6, 0);
 
     /* Trigger DAC — THE missing link (Stlkv, issue #18, 2026-08-12): the MCU
      * reset zeroes DAC1 (PA4, DHR12R1 @ 0x40007408), the FPGA's trigger
