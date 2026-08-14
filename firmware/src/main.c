@@ -10,6 +10,7 @@
  */
 
 #include "at32f403a_407.h"
+#include "cal_dump.h"
 
 /* AT32 clock config (from at32f403a_gcc/user/) */
 extern void system_clock_config(void);
@@ -833,6 +834,19 @@ int main(void)
 
     wdt_counter_reload();
     /* LCD init complete — UI will be drawn by FreeRTOS display task */
+
+#if CAL_DUMP_MODE
+    /* `make guest-caldump` only. Reports MCU flash 0x08006000..0x08006FFF —
+     * the saved-config sector that is stock's candidate home for per-device
+     * calibration, and which nobody has ever read on any unit because RDP
+     * blocks external debuggers (the CPU can read its own flash fine).
+     *
+     * Deliberately placed here: the LCD and backlight are up, and NOTHING
+     * else has run — no FPGA init, no flash_fs, no settings store, no
+     * scheduler. It never returns. A diagnostic image should do one thing,
+     * and this one is read-only. See src/util/cal_dump.h. */
+    cal_dump_run();
+#endif
 
     /*
      * FFT engine is initialized ON DEMAND when user enters FFT view

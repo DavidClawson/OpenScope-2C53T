@@ -78,6 +78,7 @@ C_SOURCES += src/dsp/bode.c
 C_SOURCES += src/tasks/component_test.c
 C_SOURCES += src/tasks/mask_test.c
 C_SOURCES += src/util/config.c
+C_SOURCES += src/util/cal_dump.c
 C_SOURCES += src/util/settings_store.c
 C_SOURCES += src/util/screenshot.c
 C_SOURCES += src/decode/decode_uart.c
@@ -483,7 +484,7 @@ $(BUILD_DIR)/test_redraw_gate: tests/test_redraw_gate.c src/ui/redraw_gate.h | $
 test-redraw-gate: $(BUILD_DIR)/test_redraw_gate
 	$<
 
-.PHONY: all clean disasm size renode soak-test soak-quick flash flash-dfu bootloader flash-bootloader flash-all guest guest-warmtest guest-usart-silent emu test-meter-data test-meter-auto test-meter-voltage-wave test-fpga-meter-plan test-stock-meter-literals test-meter test-scope-measure test-redraw-gate test-config-persist guest-persist
+.PHONY: all clean disasm size renode soak-test soak-quick flash flash-dfu bootloader flash-bootloader flash-all guest guest-warmtest guest-usart-silent emu test-meter-data test-meter-auto test-meter-voltage-wave test-fpga-meter-plan test-stock-meter-literals test-meter test-scope-measure test-redraw-gate test-config-persist guest-persist guest-caldump
 
 # ═══════════════════════════════════════════════════════════════════════════
 # BENCH / EXPERIMENT IMAGE INDEX                          (index added 2026-08-13)
@@ -714,6 +715,18 @@ guest-configB-arm: clean all
 #      power on. The theme should return.
 #   4. Dump again and confirm ONLY 0xF10000+ changed.
 # Factory calibration lives at 0x000000-0x1FFFFF, a READONLY region ~14 MB away.
+# [LIVE] guest-caldump — READ-ONLY diagnostic. Reports MCU flash
+# 0x08006000..0x08006FFF, the saved-config sector that is stock's candidate home
+# for per-device calibration. Nobody has ever read it on any unit: RDP blocks
+# external debuggers, but the CPU reads its own flash normally, so the firmware
+# can do what the debugger cannot.
+# Writes NOTHING. Links at 0x08007000 so it cannot overlap the region it reads.
+# Runs immediately after LCD bring-up and never returns — no FPGA init, no
+# scheduler. Report the CRC32 it prints. See src/util/cal_dump.h.
+guest-caldump: CFLAGS += -DGUEST_BUILD -DCAL_DUMP_MODE=1
+guest-caldump: LDSCRIPT = ld/at32f403a_guest.ld
+guest-caldump: clean all
+
 guest-persist: CFLAGS += -DGUEST_BUILD -DFPGA_WARM_HANDOFF_TEST=1 -DFPGA_USART_SILENT_SCOPE=1 -DFPGA_CONFIG_B=1 -DFPGA_CONFIG_B_ARM=1 -DSETTINGS_PERSIST_WRITES=1
 guest-persist: LDSCRIPT = ld/at32f403a_guest.ld
 guest-persist: clean all
