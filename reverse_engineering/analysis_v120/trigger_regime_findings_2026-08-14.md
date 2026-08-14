@@ -304,3 +304,54 @@ Sharp questions for `gw1n2-apicula` + the m_capture.py sim harness:
    there a divisor register the five writes never touch?
 4. b2 freshness-flag mechanism on CH1 (and why ours reads sample-like bytes
    where stock has flags — response mux alignment?).
+
+---
+
+# ADDENDUM 3 — 2026-08-15: netlist session (gw1n2-apicula M12) — the 23x rate control is a real SPI-reachable counter on BSRAM_1/2
+
+Since the bench excluded every MCU-side/wire hypothesis (Addendum 2), the
+switch is in the fabric. Took it to the `gw1n2-apicula` unpacked netlist. Full
+writeup: that repo's `docs/06-progress-log.md` § M12. Four new tools there
+(`m_regime/m_readmux/m_countchk/m_divider/m_gate40`).
+
+## Result — a programmable-rate write gate on the slow buffer, loadable over SPI
+
+M11 had localized the only gated/slow storage to **BSRAM_1/2** (a both-channels,
+1024-word, accumulate-in-place record — M9 — written on a GATED fabric clock
+GB40, not the raw PLL clock the scope buffers use). M12 traced GB40's gate
+(`R4C13_LUT4_7`) driver cone and it is **a counter/accumulator, not a bare
+enable**:
+- a self-feeding accumulator (`R13C5_DFFE_0/4/5`) = the divider element;
+- gated by the BSRAM_1/2 address-counter phase (`R12C12 ← R8C9/R8C10`);
+- **reachable from the SPI arm/receiver bank** (`R13C8 ← R14C8/R16C9`; `R14C8`
+  is an arm flop, `R16C9` the SPI bit-counter).
+
+A counter feeding a clock gate, with a load path from the SPI writes, is the
+structural definition of a **programmable sample-rate divider** — and it sits
+on the buffer pair **this firmware has never read** (only 0x04/0x05 =
+BSRAM_0/3, the raw scope buffers). This is the strongest candidate yet for both
+the timebase and stock's 23x auto-refresh: stock may be driving/ reading the
+BSRAM_1/2 path (continuously written by its gated clock) while our engine only
+uses the trigger-gated raw buffers.
+
+## Two caveats that keep this honest
+1. **Reachability ≠ located bit.** The cone is a counter (unlike the scope
+   buffers' bare run&~done CEA), which is why this is more than M8's refuted
+   "SPI reaches the cone" — but the actual divisor VALUE / which written
+   register is not yet pinned.
+2. **The sim can't run the divider**, for a now-precisely-located reason: the
+   SPI-receiver/arm flops' CLEAR and clock nets are on the **long-wire (LW)
+   branch network**, which is undriven in the unpacked netlist because
+   apicula's chipdb has no `GW1N-2` segment model. Same dead-net class as the
+   BSRAM pips, but not patchable from `db.nodes`. Fixing it (a
+   `_segment_data['GW1N-2']` entry, modeled on GW1N-1/GW1NZ-1) is the apicula
+   PR that would unblock BOTH the SPI address-decode sim and the divider sim.
+
+## Bench action this hands us (cheap, next session)
+Read-opcode sweep **targeting BSRAM_1/2**, on guest-coldtrace: the readout mux
+(M9) shares SO across all four blocks under different selects, so some opcode
+other than 0x04/0x05 should return the 1024-word accumulate record. If its
+content auto-refreshes on a quiet input (unlike 0x04/0x05, which only refresh on
+a trigger), that IS stock's fast regime, read directly. The opcode space is
+low-5-bit (Addendum 1), and 0x06-0x1F were only swept in the never-triggered
+regime — re-sweep them here watching for a long, trigger-independent reply.
