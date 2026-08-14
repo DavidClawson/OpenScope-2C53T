@@ -18,6 +18,26 @@ through `0x803`, the rest erased. Values are small clustered integers of calibra
 shape (`1701, 1626, 1700, 1628, 3201, 3304, …`), not the large values found in the
 stock image's compiled-in default table.
 
+## ✅ VERIFIED AGAINST LIVE HARDWARE — 2026-08-14
+
+`make guest-caldump` embeds this file and diffs it against the live page on bench
+unit #1. Result, read off the device:
+
+| Region | Offsets | Differs | Meaning |
+|---|---|---|---|
+| header / settings | `0x000–0x02F` | ~15 / 48 | stock rewrote its settings — expected |
+| **CALIBRATION** | `0x030–0x12F` | **0 / 256** | **byte-identical to this file** |
+| tail (RAM garbage) | `0x130–0x1FF` | ~124 / 208 | uninitialised stack in stock's 512 B staging buffer; differs on every write, means nothing |
+
+Whole-page diff was 139 bytes across `0x005–0x1FB`, which looked alarming until it
+was split by region. **The calibration did not move.** Unit #1 still holds its factory
+values, this file is a byte-exact copy of them, and stock never overwrote them with
+its compiled-in defaults during the July/August bench sessions.
+
+Note the method: the whole-page byte count conflated a meaningless garbage tail with
+the data that matters and would have supported either conclusion. The per-region split
+is what made it a measurement rather than an argument.
+
 ## Why this file exists separately
 
 **This may be the only per-device factory calibration record this project possesses,

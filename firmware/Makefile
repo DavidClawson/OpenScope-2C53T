@@ -79,6 +79,7 @@ C_SOURCES += src/tasks/component_test.c
 C_SOURCES += src/tasks/mask_test.c
 C_SOURCES += src/util/config.c
 C_SOURCES += src/util/cal_dump.c
+C_SOURCES += src/util/cal_reference.c
 C_SOURCES += src/util/settings_store.c
 C_SOURCES += src/util/screenshot.c
 C_SOURCES += src/decode/decode_uart.c

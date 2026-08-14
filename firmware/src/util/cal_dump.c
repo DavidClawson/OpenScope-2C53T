@@ -99,6 +99,10 @@ static void cal_scan(const volatile uint8_t *p, cal_stats_t *s)
 /* ────────────────────────────────────────────────────────────────────
  * Page 0 — the verdict. This is the page a user photographs and posts.
  * ──────────────────────────────────────────────────────────────────── */
+/* Byte-exact archived copy of unit #1's page (see cal_reference.c). Lets the
+ * device report WHAT CHANGED rather than making a human diff hex on an LCD. */
+extern const uint8_t cal_reference_page[4096];
+
 static void draw_summary(const cal_stats_t *s)
 {
     char buf[64];
@@ -152,6 +156,68 @@ static void draw_summary(const cal_stats_t *s)
     map[16] = '\0';
     font_draw_string(4, y, map, FG, BG, &font_medium);
     y += 20;
+
+    /* ── Diff against the archived page ──
+     * The live page having MORE non-FF bytes than the archive means something
+     * rewrote it after 2026-06-12 — almost certainly stock, during the July/
+     * August bench sessions, since stock rewrites this whole page whenever its
+     * settings change. The question that actually matters is not "did it
+     * change" but "did the CALIBRATION change, or only settings bytes". Stock
+     * writes compiled-in defaults over this page when it judges the sentinel
+     * invalid, so a wholesale cal loss is a real (if unlikely) possibility. */
+    const volatile uint8_t *live = (const volatile uint8_t *)CAL_DUMP_BASE;
+    uint32_t ndiff = 0;
+    int32_t first_diff = -1, last_diff = -1;
+    for (uint32_t i = 0; i < CAL_DUMP_LEN; i++) {
+        if (live[i] != cal_reference_page[i]) {
+            ndiff++;
+            if (first_diff < 0) first_diff = (int32_t)i;
+            last_diff = (int32_t)i;
+        }
+    }
+
+    if (ndiff == 0) {
+        font_draw_string(4, y, "MATCHES 2026-06-12 archive", GOOD, BG, &font_small);
+        y += LINE_H;
+    } else {
+        snprintf(buf, sizeof(buf), "DIFFERS: %lu B  0x%03lX..0x%03lX",
+                 (unsigned long)ndiff, (unsigned long)first_diff,
+                 (unsigned long)last_diff);
+        font_draw_string(4, y, buf, WARN, BG, &font_small);
+        y += LINE_H;
+    }
+
+    /* Per-region diff — the number that actually matters.
+     *
+     * Page layout, decoded from the archived copy:
+     *   0x000-0x02F  header + settings (signature 0x55 at 0)
+     *   0x030-0x0AF  CALIBRATION block A (uint16 pairs, ~1600-1716)
+     *   0x0B0-0x12F  CALIBRATION block B (uint16 pairs, ~3195-3306)
+     *   0x130-0x1FF  zeros, then RAM POINTERS (0x2002xxxx) — uninitialised
+     *                stack flushed out with stock's 512-byte staging buffer.
+     *                This region differs on EVERY write and means nothing.
+     *
+     * A whole-page byte count conflates the meaningless tail with the data we
+     * care about. Splitting it is the difference between "settings changed"
+     * and "stock overwrote the calibration with its compiled-in defaults". */
+    static const struct { uint32_t lo, hi; const char *name; } regions[] = {
+        { 0x000, 0x030, "hdr/settings" },
+        { 0x030, 0x130, "CALIBRATION"  },
+        { 0x130, 0x200, "tail(RAM gbg)"},
+    };
+    for (unsigned r = 0; r < 3; r++) {
+        uint32_t n = 0;
+        for (uint32_t i = regions[r].lo; i < regions[r].hi; i++)
+            if (live[i] != cal_reference_page[i]) n++;
+        uint32_t span = regions[r].hi - regions[r].lo;
+        snprintf(buf, sizeof(buf), "  %-13s %lu/%lu",
+                 regions[r].name, (unsigned long)n, (unsigned long)span);
+        /* Calibration is the only row where non-zero is alarming. */
+        uint16_t c = (r == 1) ? (n ? HOT : GOOD) : DIM;
+        font_draw_string(4, y, buf, c, BG, &font_small);
+        y += LINE_H;
+    }
+    y += 4;
 
     font_draw_string(4, y, "READ-ONLY. Nothing was written.", DIM, BG, &font_small);
     y += LINE_H;
