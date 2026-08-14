@@ -355,3 +355,57 @@ content auto-refreshes on a quiet input (unlike 0x04/0x05, which only refresh on
 a trigger), that IS stock's fast regime, read directly. The opcode space is
 low-5-bit (Addendum 1), and 0x06-0x1F were only swept in the never-triggered
 regime — re-sweep them here watching for a long, trigger-independent reply.
+
+---
+
+# ADDENDUM 4 — 2026-08-15: BSRAM_1/2 opcode sweep (NEGATIVE) + the raw buffer free-runs and is directly pollable
+
+Bench, guest-coldtrace-faithful, quiet input (ESP32 off, PC0 edges frozen at 0).
+Ran the M12 read-opcode sweep. `bsram_sweep.py`.
+
+## 1. NEGATIVE: no read opcode exposes BSRAM_1/2 in our engine state
+Swept 0x06-0x1F (twice each, ~400 ms apart, looking for a long trigger-
+independent reply). **Only 0x03/0x04/0x05 respond (0x09/0x0A too when a signal
+is present); 0x06-0x1F are inert zeros.** So BSRAM_1/2 is NOT reachable by a
+distinct read opcode. If the MCU reads it at all it must be through the SHARED
+readout mux (M9) under a config-set SELECT (M12: the select nets are real but
+route through the unpacker's dead F-lane class) — i.e. the same 0x04/0x05
+opcode, mux-switched by a config bit we have not set, not a new opcode. The
+"read BSRAM_1/2 directly" shortcut does not exist from firmware as-is.
+
+## 2. POSITIVE and important: the raw buffer (BSRAM_0/3) free-runs and holds a COHERENT waveform, readable independent of any trigger
+- With the input quiet and **PC0 frozen at 0** (no triggering), `0x04`/`0x05`
+  content still CHANGES between reads. The raw capture buffer writes
+  continuously regardless of trigger state.
+- With a signal present, a direct `0x04` poll returns a **coherent waveform** —
+  e.g. a 30 Hz sine shows ~13 clean cycles across the 1024-sample buffer, and
+  the shape tracks the input. This is not scrambled live noise; it is the real
+  captured trace.
+- **This reframes the whole "engine only updates on trigger" problem.** Our
+  acquisition task is EDGE-PACED (waits for a PC0/trigger-completion edge), so a
+  quiet or non-triggering input makes it read ~never even though the buffer is
+  full of fresh, coherent data. **A free-running / auto-trigger display is a
+  firmware READ-PACING change** — poll 0x04/0x05 on a timer (stock's ~18-34 ms
+  cadence) instead of waiting for PC0 — NOT a fabric change. This is the direct,
+  shippable win from this session.
+
+## 3. The 23x, re-stated precisely (and it is now clearly off-bench)
+The slow ~2.7/s number was always the *trigger-completion* (PC0) cadence, never
+the write rate. Two independent methods put our SAMPLE rate at low kS/s
+(yesterday's trigger-frequency cutoff ~2.7 kS/s; today's 30 Hz→13-cycles/buffer
+~2.4 kS/s), and higher frequencies visibly ALIAS in the buffer (10 Hz shows
+more cycles than 40/80 Hz), confirming the low rate. Stock's 18 ms fresh-buffer
+cadence implies ~57 kS/s ⇒ the ~23x is a genuine **sample-rate** gap on
+identical SPI/USART. Per M8 the ADC clock is a bare PLL forward (no fabric
+divider), so the difference is either the FPGA-internal PLL config (not
+decodable by current apicula) or a raw-vs-accumulate BUFFER select (M9/M12
+BSRAM_1/2, whose write clock IS counter-gated and SPI-reachable). Both are
+netlist/sim questions; the bench has now given all it can on the rate itself.
+
+## Net for next session
+1. **Firmware (shippable): add an auto/free-run acquisition mode** that
+   timer-polls 0x04/0x05 (~30 Hz) when not in triggered mode — gives a
+   continuously-updating trace on any input, the thing the scope visibly lacks.
+   The edge-paced path stays for triggered/normal mode.
+2. **Netlist (the 23x): the readout-mux SELECT and the FPGA PLL** — needs the
+   apicula GW1N-2 long-wire segment model (M12 blocker) before either simulates.
