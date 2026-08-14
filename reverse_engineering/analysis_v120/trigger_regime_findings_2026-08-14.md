@@ -220,3 +220,87 @@ PC0 edge counter (`status` → "PC0 edges"), edge-paced acquisition with probe
 fallback, 3-byte read-header capture (`acq hdr` in `status`), gate honours
 stock's b2==01 valid flag. The b2==01 flag has **never** been observed on our
 engine in any regime — stock-state-specific, unexplained, tracked under item 5.
+
+---
+
+# ADDENDUM 2 — 2026-08-15: posture and wire-protocol EXCLUDED; the 23× is a regime, and it is not set by anything we replay
+
+Next-day bench session, fully remote (CDC shell + ESP32), plus one flash cycle
+(`guest-coldtrace-faithful`, David on IAP/power duty).
+
+## 7. Detector-design note that un-broke the morning
+
+A 20 Hz trigger square produces **zero** completions — §3's cutoff is a hard
+"none above ~3 Hz" (a retrigger mid-fill restarts the capture), not a
+saturation. The morning's "engine dead" scare was this, mis-read. Corollary
+kept: a 20 Hz square is a clean *binary speed detector* — it can only produce
+completions if the fill gets much faster (fill < 50 ms), so baseline 0 is the
+expected negative.
+
+## 8. DMM analog posture does NOT set the capture rate (A/B, controls passed)
+
+PC11 HIGH, the full meter relay bank (PC12/PE4/PE5/PE6/PA15/PA10/PB10 in DCV
+pattern), and both together: 20 Hz detector 0.00/s at every rung while a 2 Hz
+control confirmed the trigger still crossed (1.75–2.50/s). Posture flips
+tested both *after* arm and (via re-arm) *at* arm time; also PA2 driven
+HIGH/LOW at arm (our silent build leaves the FPGA's USART RX floating — the
+classic invisible-pin class). **All negative**: `0x03` byte1 stays 00, no
+auto-refresh.
+
+## 9. Stock's June capture, re-read at the window level — the 23× reframed
+
+- Stock's **first** 04 read (win 13) is valid (`b2=01`) **0.6 ms after the
+  arm write** — the buffer was already full from free-running during the
+  600 ms post-close silence.
+- The famous 416 ms gap sits between read 1 and read 2 (win 13→15); after
+  that no gap exceeds 30 ms.
+- The 31 invalid (`b2=00`) windows are **scattered** through 5.5–10.2 s, not
+  clustered at the start: b2 is a *freshness* flag, and stock's buffer
+  refreshes at ~26–45/s **with a probe that never triggers** (floating, level
+  0xAD=173).
+- CH2 (05) b2 is always 00 — the freshness flag lives on CH1 only. Stock CH1
+  b0 ∈ {00×148, 80×26}; ours is always 80.
+
+**So the "23×" is not a missing clock divider; stock's engine runs an
+auto-refresh regime ours never enters.** Our engine refreshes the read buffer
+only on a trigger; stock's refreshes continuously. The engines already
+diverge at boot: stock's post-arm `0x03` reads `00 01 42 2E 2E`; ours reads
+`00 00 <sample-ish>` in every state we can produce.
+
+## 10. Faithful-boot experiment: wire protocol EXCLUDED (negative, decisive)
+
+`make guest-coldtrace-faithful` made the bit-bang config+arm byte-exact to
+stock's captured windows 0–13, closing all five wire deltas in one shot: (1)
+no 0x41/0x11 reads between payload and 0x3A close, (2) 05 00 ERASE_SRAM
+prelude present, (3) stock's empty-CS-pulse + 100 ms prelude spacing with no
+prelude reads, (4) the lone 00-byte frame after close, (5) arm writes
+back-to-back at /2 with the 0x03 read at /2. Flashed, genuine FPGA power
+cycle, quiet input (stock-capture conditions):
+
+- quiet-input PC0 rate **0.00/s** (no auto-refresh)
+- live `0x03` = `00 00 5A …` (byte1 still 00)
+- headers still sample-like (`80 00 4D`)
+
+Side result: the faithful sequence configures and arms fine, warm AND cold —
+including with 0x05 ERASE present, which closes half of the old Build-B
+bisect (0x05 is harmless on the bit-bang path; whether its *absence* matters
+was mooted).
+
+**Conclusion: everything we replay — bytes, framing, order, spacing, posture
+pins, PA2 — is now excluded as the regime switch.** What the capture could
+not see (it had 8 channels: SPI ×4, USART ×2, PC6, PB11) and what we have
+not simulated is where the answer lives. Also recorded: the June capture ran
+/64-patched stock **in DMM mode** — stock's fast 04/05 cadence is its
+DMM-mode acquisition; "scope mode" was never captured. The fast regime may be
+the meter-ADC fabric path presenting on the same opcodes.
+
+## Next attack: the netlist/sim session (bench exhausted for this question)
+
+Sharp questions for `gw1n2-apicula` + the m_capture.py sim harness:
+1. What drives byte1 of the opcode-0x03 response (stock 01, ours 00)?
+2. What logic pulses PC0, and what re-starts a fill (auto-refresh vs
+   triggered one-shot)?
+3. What do arm regs 01 (=08) and 02 (=03) select — mode? decimation? Is
+   there a divisor register the five writes never touch?
+4. b2 freshness-flag mechanism on CH1 (and why ours reads sample-like bytes
+   where stock has flags — response mux alignment?).

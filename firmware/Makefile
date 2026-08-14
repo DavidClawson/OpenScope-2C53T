@@ -737,6 +737,18 @@ guest-coldtrace: CFLAGS += -DGUEST_BUILD -DFPGA_WARM_HANDOFF_TEST=1 -DFPGA_USART
 guest-coldtrace: LDSCRIPT = ld/at32f403a_guest.ld
 guest-coldtrace: clean all
 
+# [BENCH 2026-08-15] guest-coldtrace-faithful — coldtrace with the config+arm
+# sequence made BYTE-EXACT to stock's June-capture wire protocol (see the
+# FPGA_CONFIG_B_FAITHFUL comment block in fpga.c for the five deltas closed).
+# Target observation: does the engine land in stock's state — post-arm 0x03
+# status 00 01 42 2E 2E, CH1 header byte2 flag semantics (00/01), and buffer
+# auto-refresh at ~26-45/s with a quiet input (the "23x mystery"). NOTE: this
+# build cannot read DONE_FINAL (no config-port reads by design); judge success
+# by the 0x03 SS bytes, demo-trace disappearance, and live OK/PC0 rates.
+guest-coldtrace-faithful: CFLAGS += -DGUEST_BUILD -DFPGA_WARM_HANDOFF_TEST=1 -DFPGA_USART_SILENT_SCOPE=1 -DFPGA_CONFIG_B=1 -DFPGA_CONFIG_B_ARM=1 -DFPGA_CONFIG_B_FAITHFUL=1
+guest-coldtrace-faithful: LDSCRIPT = ld/at32f403a_guest.ld
+guest-coldtrace-faithful: clean all
+
 # Experiment G (2026-07-28): RECONFIG_N pulse candidates. Exp F closed every
 # enumerable static MCU-state difference and the wall held, which sends us back
 # to apicula's answer (docs/CONFIG_ENTRY_REPLY_FROM_APICULA.md): a running GW1N

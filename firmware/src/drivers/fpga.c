@@ -659,6 +659,29 @@ static void spi3_pump_h2_record(const uint8_t *tx, uint32_t n)
 #define FPGA_CONFIG_B  0
 #endif
 
+/* Faithful-boot variant (2026-08-15, `make guest-coldtrace-faithful`) — makes
+ * the Build B sequence BYTE-EXACT to stock's captured wire protocol (June
+ * capture windows 0-13, analysis_full.txt). Motivation: with nominally
+ * identical arm writes our engine lands in a visibly different state than
+ * stock's (post-arm 0x03 reads 00 00... vs stock's 00 01 42 2E 2E; CH1 header
+ * byte2 reads sample-like values vs stock's clean 00/01 freshness flag; and
+ * stock's buffer auto-refreshes at ~26-45/s with NO triggers while ours
+ * refreshes only on trigger — the real shape of the "23x mystery"). The five
+ * deltas this closes, in one shot (bisect later if it works):
+ *   1. NO config-port reads between payload and 0x3A close (we read 0x41+0x11
+ *      there; stock closes immediately — Exp L: port reads desync acquisition)
+ *   2. 0x05 00 ERASE_SRAM prelude present (V0.4/Build B omits it — open bisect)
+ *   3. stock's empty CS pulse + 100 ms spacing prelude, no 0x11/0x13/0x41 reads
+ *   4. lone 00-byte CS frame after the 0x3A close (stock window 6)
+ *   5. arm writes back-to-back at /2 with the 0x03 status read at /2
+ *      (not /256 with 2 ms gaps)
+ * Cost: no DONE_FINAL readback (the status screen will say "NOT configured");
+ * success indicators are the 0x03 SS bytes (01 in byte 1 = stock-armed), the
+ * demo-trace latch, and live PC0/OK rates. */
+#ifndef FPGA_CONFIG_B_FAITHFUL
+#define FPGA_CONFIG_B_FAITHFUL  0
+#endif
+
 /* Bench plan item 5 (2026-08-13, `make guest-warmtest-ch2`) — bring up the CH2
  * trigger reference (TMR13 CH1 PWM-DAC on PA6) alongside the warm-handoff DAC1
  * arm, so a live CH2 trace can be validated. Layers onto guest-warmtest. See
@@ -3354,6 +3377,19 @@ uint8_t fpga_bitbang_config_sequence(void)
     gpio_cfg.gpio_pull = GPIO_PULL_NONE;   /* floating, as Stlkv's transplant */
     gpio_init(GPIOB, &gpio_cfg);
 
+#if FPGA_CONFIG_B_FAITHFUL
+    /* Stock's captured prelude, byte-exact (windows 0-3): empty CS pulse,
+     * 100 ms, 05 00 ERASE_SRAM, 100 ms, 12 00, 100 ms, 15 00, then straight
+     * into the 3B frame. No reads of any kind. */
+    GPIOB->clr = BB_CS;
+    GPIOB->scr = BB_CS;
+    fpga_scope_delay_ms(100);
+    bb_cmd16(0x05, 0x00);   /* ERASE_SRAM (stock sends it; V0.4 omitted it) */
+    fpga_scope_delay_ms(100);
+    bb_cmd16(0x12, 0x00);   /* INIT_ADDR */
+    fpga_scope_delay_ms(100);
+    bb_cmd16(0x15, 0x00);   /* CONFIG_ENABLE */
+#else
     /* Prelude reads (populate the anchor + overlay). */
     bb_read_reg32(0x11, (uint8_t *)fpga.probe_idcode);
     bb_read_reg32(0x13, (uint8_t *)fpga.probe_user);
@@ -3365,6 +3401,7 @@ uint8_t fpga_bitbang_config_sequence(void)
 
     bb_cmd16(0x12, 0x00);   /* INIT_ADDR */
     bb_cmd16(0x15, 0x00);   /* CONFIG_ENABLE */
+#endif
 
     /* 0x3B + full payload in one CS-LOW frame. */
     (void)bb_xfer(0);
@@ -3376,6 +3413,16 @@ uint8_t fpga_bitbang_config_sequence(void)
     fpga.h2_bytes_sent  = FPGA_H2_CAL_TABLE_SIZE;
     fpga.h2_upload_done = 1;
 
+#if FPGA_CONFIG_B_FAITHFUL
+    /* Stock closes IMMEDIATELY after the payload — no 0x41/0x13/0x11 reads
+     * (delta 1, the leading suspect for the engine-state divergence). Then the
+     * lone 00-byte frame (window 6, 7 us after the close). */
+    bb_cmd16(0x3A, 0x00);   /* CONFIG_DISABLE */
+    GPIOB->clr = BB_CS;
+    (void)bb_xfer(0x00);    /* stock window 6: single 00 byte in its own frame */
+    GPIOB->scr = BB_CS;
+    fpga_scope_delay_ms(100);
+#else
     /* Post-upload STATUS — this drives CFG + the D (DONE_FINAL) overlay flag. */
     bb_read_reg32(0x41, (uint8_t *)fpga.cfg_status_reg);
     /* Post-config IDCODE anchor (Exp L: a configured part stops answering, so
@@ -3387,6 +3434,7 @@ uint8_t fpga_bitbang_config_sequence(void)
 
     bb_cmd16(0x3A, 0x00);   /* CONFIG_DISABLE */
     fpga_scope_delay_ms(100);
+#endif
 
     /* Restore PB3/4/5 to SPI3 AF so the acquisition task can read 0x04/0x05
      * over hardware SPI3 if config took. PB6 stays GPIO (software CS). */
@@ -3411,8 +3459,16 @@ uint8_t fpga_bitbang_config_sequence(void)
      * disappearance. Runs over hardware SPI3 (AF restored just above): a
      * configured part's SSPI pins are now the user design's runtime control SPI.
      * SSPI reads are valid only at a slow clock, so read 0x03 at /256. */
+#if FPGA_CONFIG_B_FAITHFUL
+    /* Stock timeline: 0x3A close at t=4.448, arm burst at t=5.055 (~607 ms;
+     * 100 ms already spent above), writes back-to-back at the runtime clock
+     * (/2), 0x03 status read likewise at /2 — no /256, no inter-write gaps. */
+    fpga_scope_delay_ms(500);
+    spi3_set_br(0);                      /* /2 — stock's runtime clock */
+#else
     fpga_scope_delay_ms(600);
     spi3_set_br(7);                      /* /256 */
+#endif
     {
         static const uint8_t arm_cfg[][2] = {
             { 0x01, 0x08 }, { 0x02, 0x03 }, { 0x06, 0x00 },
@@ -3423,7 +3479,9 @@ uint8_t fpga_bitbang_config_sequence(void)
             spi3_xfer(arm_cfg[i][0]);
             spi3_xfer(arm_cfg[i][1]);
             SPI3_CS_DEASSERT();
+#if !FPGA_CONFIG_B_FAITHFUL
             fpga_scope_delay_ms(2);
+#endif
         }
         SPI3_CS_ASSERT();
         spi3_xfer(0x03);
