@@ -32,13 +32,32 @@
 #define SCOPE_BOT       (LCD_HEIGHT - 16)  /* Above info bar */
 #define SCOPE_H         (SCOPE_BOT - SCOPE_TOP)
 #define SCOPE_MID_Y     (SCOPE_TOP + SCOPE_H / 2)
+#ifdef SCOPE_DEBUG_OVERLAY
+#define SCOPE_DBG_Y     (LCD_HEIGHT - 60)  /* top of the debug strip */
+#endif
 
 /* Measurement badge layout */
 #define BADGE_W         76
 #define BADGE_H         14
 #define BADGE_PAD       2
+/* Badge rows.
+ *
+ * BENCH 2026-08-14: with SCOPE_DEBUG_OVERLAY the badges were INVISIBLE, and had
+ * been in every build — `-DSCOPE_DEBUG_OVERLAY` is unconditional in the
+ * Makefile's C_DEFS, so there was no configuration in which they showed. The
+ * overlay's four lines start at SCOPE_DBG_Y (=180) and run to ~219, painting
+ * straight over rows that sat at 193 and 208.
+ *
+ * Debug builds therefore stack the badges ABOVE the debug strip. That costs
+ * waveform height, which is the right trade: an overlay build is a bench build,
+ * and a measurement you cannot see is worth less than the pixels it hides. */
+#ifdef SCOPE_DEBUG_OVERLAY
+#define BADGE_ROW_Y     (SCOPE_DBG_Y - BADGE_H - 2)
+#define BADGE_ROW2_Y    (BADGE_ROW_Y - BADGE_H - 1)
+#else
 #define BADGE_ROW_Y     (SCOPE_BOT - BADGE_H - 2)
 #define BADGE_ROW2_Y    (BADGE_ROW_Y - BADGE_H - 1)
+#endif
 
 /* Quick-change popup */
 #define POPUP_W         200
@@ -858,7 +877,8 @@ static void draw_math_waveform(uint32_t frame)
 
 #ifdef SCOPE_DEBUG_OVERLAY
 
-#define SCOPE_DBG_Y   (LCD_HEIGHT - 60)
+/* SCOPE_DBG_Y is defined with the layout constants at the top of this file,
+ * because the badge rows must be positioned relative to it. */
 #define SCOPE_DBG_H   58
 
 /*
@@ -1268,11 +1288,14 @@ void draw_scope_live_frame(void)
     /* The live band stops where fixed furniture begins: the debug strip
      * (debug builds) or the measurement badge rows. Those regions repaint
      * themselves; streaming over them would z-fight at frame rate. */
-#ifdef SCOPE_DEBUG_OVERLAY
-    const uint16_t band_bot = SCOPE_DBG_Y;
-#else
+    /* Always the badge rows: they are the topmost fixed furniture in BOTH
+     * configurations. In overlay builds the badges now sit ABOVE the debug
+     * strip (see BADGE_ROW_Y), so stopping at SCOPE_DBG_Y — as this did until
+     * 2026-08-14 — streamed the waveform straight over them at frame rate.
+     * That was the second occlusion bug in a row here: first the debug strip
+     * painted over the badges, then moving the badges up put them inside the
+     * live band. Anchor to the badges and both cases are covered. */
     const uint16_t band_bot = BADGE_ROW2_Y;
-#endif
     const uint16_t band_h = band_bot - SCOPE_TOP;
 
     /* Trigger dotted line, exactly as draw_trigger_indicator places it. */
@@ -1325,6 +1348,29 @@ void draw_scope_live_frame(void)
             lcd_write_data(c);
         }
     }
+
+    /* ⚠ Measurement badges are NOT refreshed here — REVERTED 2026-08-14.
+     * DO NOT REINSTATE WITHOUT READING THIS.
+     *
+     * Calling draw_measurement_badges() from this function KILLED ACQUISITION
+     * on the bench: OK: reached exactly 20 and stopped, TO: climbed forever,
+     * and it survived two full FPGA power cycles and a pinhole reset.
+     * Reproduced on BOTH guest-persist and guest-coldtrace, so it was not the
+     * settings-persistence work. Before the edit, OK: ran past 191,000.
+     *
+     * Why: the measurement passes read 1024 samples from BOTH channel buffers,
+     * three times each, from the DISPLAY task — while the acquisition task is
+     * writing those same buffers over SPI3.
+     *
+     * The badges do need refreshing (they otherwise latch "--" from scope
+     * entry, where fpga.c has just cleared data_ready, and B2's redraw gating
+     * means no further full repaint is triggered). But the fix belongs on the
+     * other side: give the redraw epoch a measurement-generation term so a
+     * full repaint happens when new samples land, instead of doing 6 KB of
+     * analysis inline on the capture-rate path.
+     *
+     * Cost of leaving it out: stale badges — a display bug. The version that
+     * was here was a data-loss bug. Prefer the display bug. */
 
 #ifdef SCOPE_DEBUG_OVERLAY
     /* Keep the counters moving; opaque fixed-width lines, no strip refill. */

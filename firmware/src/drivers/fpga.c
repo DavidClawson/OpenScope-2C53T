@@ -115,6 +115,29 @@ static TaskHandle_t      tx_task_handle  = NULL;
 static TaskHandle_t      rx_task_handle  = NULL;
 
 /* Track whether we've received at least one valid acquisition */
+/* Acquisition refresh cadence, ms.
+ *
+ * DO NOT LOWER THIS WITHOUT READING THIS NOTE. Bench-measured 2026-08-14:
+ *   150 ms  -> OK: climbs past 191,000, runs indefinitely
+ *    30 ms  -> OK: reaches 20, then STOPS; TO: climbs forever, and the only
+ *              recovery is a true FPGA power cycle (POWER -> "Goodbye" ->
+ *              UNPLUG USB -> replug). A pinhole reset does not fix it.
+ *
+ * Mechanism, consistent with Exp L: reading the port faster than the engine
+ * can serve desynchronises the SPI stream, and it does not resync.
+ *
+ * Stock polls at ~29 ms and is fine — because stock SETS A TIMEBASE, so its
+ * buffers fill that fast. Ours free-runs at whatever the post-config default
+ * is, and 150 ms is roughly matched to it. The 400 -> 150 ms tuning recorded
+ * below was someone finding the same floor empirically.
+ *
+ * So refresh rate and sample rate are NOT independent: you cannot read buffers
+ * faster than the engine fills them. Raising this is gated on the timebase
+ * work (dev plan F4), not on UI smoothness. */
+#ifndef FPGA_PROBE_CADENCE_MS
+#define FPGA_PROBE_CADENCE_MS 150u
+#endif
+
 static volatile bool data_ready = false;
 static volatile bool scope_reinit_pending = false;
 static volatile bool meter_transition_busy = false;
@@ -2814,9 +2837,24 @@ static void fpga_warmtest_acq_task(void *pv)
              * but a dead reference is exactly the silent capture-killer this
              * experiment must not misdiagnose). */
             scope_trigger_dac_raw(2048);
-            vTaskDelay(pdMS_TO_TICKS(150)); /* probe cadence ~4 Hz — bench
-                                               run 6 felt "buffered" at the
-                                               original 400 ms */
+            /* Probe cadence. History: 400 ms felt "buffered" on bench run 6,
+             * so it went to 150 ms (~6.7 Hz). Both numbers were chosen for
+             * the WARM-HANDOFF case, where the capture engine was STOPPED
+             * and a probe read returned the stale buffer — slow polling was
+             * the safe choice there.
+             *
+             * guest-coldtrace free-runs the engine, so that caution mostly
+             * does not apply. Stock's own runtime cadence is ~29 ms (0x04/
+             * 0x05 read pairs, measured in maksidze's June capture), which
+             * is the refresh target this should have had all along.
+             *
+             * NOTE this is REFRESH rate — how often a 1024-sample buffer is
+             * fetched. It is independent of the SAMPLE rate inside that
+             * buffer, which is what horizontal measurements depend on and
+             * which this firmware still does not control (dev plan F4).
+             * Raising this makes the trace smoother and gives measurements
+             * more updates to work with; it does not make them more correct. */
+            vTaskDelay(pdMS_TO_TICKS(FPGA_PROBE_CADENCE_MS));
         }
 
         uint8_t s1 = fpga_warmtest_read_channel(0x04, fpga.ch1_buf);

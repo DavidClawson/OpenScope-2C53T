@@ -135,6 +135,37 @@ void scope_measure_record(const uint8_t *samples, uint16_t n,
             out->period_samples = (float)(last_rise - first_rise) /
                                   (float)(rising - 1u);
             out->period_valid = (out->period_samples > 0.0f);
+
+            /* ── Duty, recomputed over WHOLE CYCLES ────────────────────
+             *
+             * BENCH 2026-08-14. Pass 2 measures duty across the entire
+             * record, which is only unbiased when the record holds an
+             * integer number of cycles. It does not: a 2 Hz square at the
+             * current acquisition rate gives ~600 samples/cycle in a 1024
+             * sample buffer = ~1.7 cycles, so the leftover 0.7 cycle drags
+             * the answer around with the window phase. Measured on a
+             * commanded 24.7% square, the badge wandered across roughly
+             * 20-40% — and the predicted phase-bias range for that record
+             * is 14-29%, which matches.
+             *
+             * [first_rise, last_rise) spans exactly (rising-1) whole
+             * cycles by construction, so duty over that span is
+             * phase-independent. Still affine-invariant, so it remains
+             * correct before any calibration exists.
+             *
+             * NOTE this does not explain readings near 50% on that signal,
+             * which phase bias alone cannot produce. That, and the cycle
+             * detector intermittently finding nothing, point at the record
+             * not being a uniform-rate time series — the open timebase
+             * question (dev plan F4), not an arithmetic problem here. */
+            uint32_t above_c = 0;
+            for (uint16_t i = first_rise; i < last_rise; i++) {
+                if ((uint16_t)(2u * (uint16_t)samples[i]) > mid2)
+                    above_c++;
+            }
+            uint16_t span = (uint16_t)(last_rise - first_rise);
+            if (span > 0u)
+                out->duty_pct = (float)above_c * 100.0f / (float)span;
         }
     }
 }
