@@ -117,23 +117,26 @@ static TaskHandle_t      rx_task_handle  = NULL;
 /* Track whether we've received at least one valid acquisition */
 /* Acquisition refresh cadence, ms.
  *
- * DO NOT LOWER THIS WITHOUT READING THIS NOTE. Bench-measured 2026-08-14:
- *   150 ms  -> OK: climbs past 191,000, runs indefinitely
- *    30 ms  -> OK: reaches 20, then STOPS; TO: climbs forever, and the only
- *              recovery is a true FPGA power cycle (POWER -> "Goodbye" ->
- *              UNPLUG USB -> replug). A pinhole reset does not fix it.
- *
- * Mechanism, consistent with Exp L: reading the port faster than the engine
- * can serve desynchronises the SPI stream, and it does not resync.
- *
- * Stock polls at ~29 ms and is fine — because stock SETS A TIMEBASE, so its
- * buffers fill that fast. Ours free-runs at whatever the post-config default
- * is, and 150 ms is roughly matched to it. The 400 -> 150 ms tuning recorded
- * below was someone finding the same floor empirically.
- *
- * So refresh rate and sample rate are NOT independent: you cannot read buffers
- * faster than the engine fills them. Raising this is gated on the timebase
- * work (dev plan F4), not on UI smoothness. */
+ * ⚠ CORRECTED 2026-08-14 EVENING — the morning version of this note (and its
+ * bench measurements) was CONFOUNDED and its claims are withdrawn. See
+ * analysis_v120/trigger_regime_findings_2026-08-14.md for the full evidence.
+ *   - "only recovery is a true FPGA power cycle / pinhole reset does not fix
+ *     it" — REFUTED. The freeze is a live, instantly-reversible READOUT
+ *     REGIME, not a latched engine state: it begins when the input signal
+ *     crosses the DAC1 trigger reference and ends the moment it stops, same
+ *     boot, no reset of anything.
+ *   - "30 ms wedges, 150 ms is safe" — CONFOUNDED. The same freeze reproduced
+ *     at 150 ms with an active signal, and full-speed ~137 reads/s ran clean
+ *     for tens of thousands of frames with a quiet input. The controlling
+ *     variable in every recorded observation is trigger activity, not
+ *     cadence. Re-measure with signal state controlled before trusting any
+ *     cadence number.
+ * What IS established: our 0x04/0x05 protocol only streams in the FREE-RUN
+ * regime (no trigger crossings). Under real triggers the engine serves stale
+ * or partially-filled buffers (unwritten words read FF) until a per-capture
+ * re-arm this task does not yet perform — that re-arm, decoded from stock's
+ * runtime capture, is the actual fix. This constant is left at 150 ms as a
+ * harmless default until then. */
 #ifndef FPGA_PROBE_CADENCE_MS
 #define FPGA_PROBE_CADENCE_MS 150u
 #endif

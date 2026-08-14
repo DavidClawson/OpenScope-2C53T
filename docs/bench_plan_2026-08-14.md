@@ -139,6 +139,17 @@ into CH1 → `spi3 opsweep` → for any hit, `spi3 opread <op> 2048 dump` twice
 with two different siggen settings and confirm the payload tracks. Then
 `opsweep 40 ff` if the low space is dry.
 
+**✅ RUN 2026-08-14 (remote bench session) — sweep exhaustive, no hidden buffer
+opcode in the free-run regime; the design decodes only the LOW 5 OPCODE BITS
+(0x20–0x3F alias 0x00–0x1F exactly), and 0x09/0x0A are dynamic min/max-shaped
+registers. But the session's main result is bigger and reframes items 1 and 4:
+the "engine wedge" was never a wedge — it is a reversible TRIGGER-REGIME
+readout failure (our 0x04/0x05 protocol lacks stock's per-capture re-arm), and
+`FF` bytes are simply unwritten buffer words. Full writeup, refuted claims, and
+the new next-steps ladder: `analysis_v120/trigger_regime_findings_2026-08-14.md`.
+The BSRAM_1/2 hunt continues under the triggered regime once the re-arm
+protocol is decoded (June stock runtime capture re-read, then netlist).**
+
 **⚠ THIS STAYS A BENCH TEST — the "make it simulable" idea was tried and
 REFUTED the same night (M11).** The plan was: SPI SCLK enters as a dedicated
 clock input on its own spine (pad `R19C5_IA` → BLBDCLK3 → SPINE16/24 → GB00),
