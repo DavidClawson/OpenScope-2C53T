@@ -15,10 +15,11 @@
 #include "font.h"
 #include "theme.h"
 #include "scope_state.h"
+#include "scope_measure.h"
 #include "math_channel.h"
 #include "persistence.h"
 #include "fpga.h"
-#include "at32f403a_407.h"  /* GPIO port access for pin scanner */
+#include "at32f403a_407.h"  /* GPIO port reads in the debug overlay */
 #include <stdio.h>
 #include <math.h>
 #include <string.h>
@@ -250,41 +251,153 @@ static void draw_one_badge(uint16_t x, uint16_t y, const char *label,
                            color, th->background, &font_small);
 }
 
+/* Shown wherever the instrument cannot measure the quantity today. */
+#define MEAS_NA  "--"
+
+/*
+ * Measure one channel's live capture record.
+ *
+ * Returns false — and leaves *m zeroed — unless the FPGA has actually
+ * delivered samples. fpga_data_ready() is the same gate the waveform plot
+ * uses (see draw_demo_waveform), so the badges and the trace can never
+ * disagree about whether what is on screen is real.
+ */
+static bool measure_live_channel(const volatile uint8_t *buf,
+                                 scope_measure_t *m)
+{
+    memset(m, 0, sizeof(*m));
+    if (!fpga_data_ready() || buf == NULL)
+        return false;
+
+    /* Cast away volatile for the analysis pass: the acquisition task may
+     * refill this buffer underneath us, but a torn read costs at most a few
+     * samples out of 1024 in a statistic — strictly less wrong than the
+     * rendering path, which plots the same buffer unsynchronised already.
+     * Anything stronger needs double-buffering in fpga.c, which is not this
+     * file's to change. */
+    scope_measure_record((const uint8_t *)buf, FPGA_ADC_BUF_SIZE, m);
+    return m->valid;
+}
+
+/* No float formatting: the firmware links newlib-nano without
+ * -u _printf_float, so "%f" prints nothing. Tenths are assembled by hand,
+ * exactly as format_si()/format_freq() do below. */
+static void fmt_counts(char *b, size_t n, unsigned v)
+{
+    snprintf(b, n, "%ucnt", v);
+}
+
+static void fmt_tenths(char *b, size_t n, float v, const char *unit)
+{
+    if (v < 0.0f) v = 0.0f;
+    unsigned t = (unsigned)(v * 10.0f + 0.5f);
+    snprintf(b, n, "%u.%u%s", t / 10u, t % 10u, unit);
+}
+
+/*
+ * Measurement badges.
+ *
+ * Until 2026-08-13 this function printed the string literals "1.00kHz",
+ * "707mV", "50.0%" and "1.00ms" — four numbers that had never touched an
+ * ADC sample, on a screen a user reads as measurements. They are gone.
+ *
+ * What is printed now is measured from the live record, in the units this
+ * instrument can actually defend (see scope_measure.h):
+ *
+ *   Vpp / Vrms   ADC COUNTS. Volts need the per-range gain/offset cal this
+ *                firmware does not have (dev plan §F2), so no volt figure is
+ *                offered — not even a plausible one.
+ *   Duty         a pure ratio; invariant under any affine counts->volts
+ *                mapping, so it is already correct and stays correct once
+ *                calibration lands. Asserted in tests/test_scope_measure.c.
+ *   Per          SAMPLES per cycle, measured between mid-level crossings.
+ *   Freq         "--". Hz needs a known sample rate, i.e. a timebase, and
+ *                this firmware has no timebase control at all (§F4).
+ *
+ * WIRING IT LATER is one line each: with a sample interval dt_s in hand,
+ *   Freq = 1 / (period_samples * dt_s),  Per(s) = period_samples * dt_s.
+ * With a per-range volts-per-count k,  Vpp(V) = pp * k, Vrms(V) = ac_rms * k.
+ * Nothing else in this function has to move.
+ */
 static void draw_measurement_badges(const scope_state_t *ss, const theme_t *th)
 {
-    /*
-     * Demo measurements — when real ADC is available, these will come
-     * from measurement_compute(). For now, show plausible values that
-     * update based on the current V/div and timebase settings.
-     */
     char buf[16];
+    scope_measure_t m1, m2;
 
-    /* Row 1 (bottom): Freq, Vpp, Vrms, Duty */
+    const bool have1 = ss->ch1.enabled &&
+                       measure_live_channel(fpga_get_ch1_buf(), &m1);
+    const bool have2 = ss->ch2.enabled &&
+                       measure_live_channel(fpga_get_ch2_buf(), &m2);
+    const uint16_t na = th->text_secondary;   /* dim: nothing to report */
+
+    /* ── Row 1 — CH1 ─────────────────────────────────────────────── */
     uint16_t x = 2;
     uint16_t y1 = BADGE_ROW_Y;
 
-    snprintf(buf, sizeof(buf), "1.00kHz");
-    draw_one_badge(x, y1, "Freq", buf, th->ch1, th);
+    /* No timebase => no Hz. Deliberately blank, not estimated. */
+    draw_one_badge(x, y1, "Freq", MEAS_NA, na, th);
     x += BADGE_W + 2;
 
-    snprintf(buf, sizeof(buf), "%s", vdiv_table[ss->ch1.vdiv_idx].label);
-    draw_one_badge(x, y1, "Vpp", buf, th->ch1, th);
+    if (have1) {
+        fmt_counts(buf, sizeof(buf), m1.pp);
+        draw_one_badge(x, y1, "Vpp", buf, th->ch1, th);
+    } else {
+        draw_one_badge(x, y1, "Vpp", MEAS_NA, na, th);
+    }
     x += BADGE_W + 2;
 
-    draw_one_badge(x, y1, "Vrms", "707mV", th->ch1, th);
+    if (have1) {
+        fmt_counts(buf, sizeof(buf), (unsigned)(m1.ac_rms + 0.5f));
+        draw_one_badge(x, y1, "Vrms", buf, th->ch1, th);
+    } else {
+        draw_one_badge(x, y1, "Vrms", MEAS_NA, na, th);
+    }
     x += BADGE_W + 2;
 
-    draw_one_badge(x, y1, "Duty", "50.0%", th->ch1, th);
+    if (have1 && m1.level_valid) {
+        fmt_tenths(buf, sizeof(buf), m1.duty_pct, "%");
+        draw_one_badge(x, y1, "Duty", buf, th->ch1, th);
+    } else {
+        /* Flat/near-flat record: the mid-level threshold would be sitting
+         * inside the noise, so a duty figure would be measuring dither. */
+        draw_one_badge(x, y1, "Duty", MEAS_NA, na, th);
+    }
 
-    /* Row 2 (above row 1): Period, Rise for CH2 context */
+    /* ── Row 2 — period, CH2, and the legend ─────────────────────── */
     x = 2;
     uint16_t y2 = BADGE_ROW2_Y;
 
-    draw_one_badge(x, y2, "Per", "1.00ms", th->ch2, th);
+    if (have1 && m1.period_valid) {
+        snprintf(buf, sizeof(buf), "%usmp",
+                 (unsigned)(m1.period_samples + 0.5f));
+        draw_one_badge(x, y2, "Per", buf, th->ch1, th);
+    } else {
+        draw_one_badge(x, y2, "Per", MEAS_NA, na, th);
+    }
     x += BADGE_W + 2;
 
-    snprintf(buf, sizeof(buf), "%s", vdiv_table[ss->ch2.vdiv_idx].label);
-    draw_one_badge(x, y2, "CH2 V", buf, th->ch2, th);
+    if (have2) {
+        fmt_counts(buf, sizeof(buf), m2.pp);
+        draw_one_badge(x, y2, "CH2pp", buf, th->ch2, th);
+    } else {
+        draw_one_badge(x, y2, "CH2pp", MEAS_NA, na, th);
+    }
+    x += BADGE_W + 2;
+
+    /*
+     * The legend is what makes the "--" and the "cnt" suffix readable
+     * without the source: it says, on the instrument itself, whether the
+     * trace is real and why the missing values are missing.
+     */
+    {
+        const char *note = (have1 || have2) ? "cnt=ADC raw  --=no tb/cal"
+                                            : "DEMO trace - no capture";
+        lcd_fill_rect(x, y2, (uint16_t)(LCD_WIDTH - x), BADGE_H,
+                      th->background);
+        if (font_string_width(note, &font_small) > LCD_WIDTH - x)
+            note = (have1 || have2) ? "--=no tb/cal" : "DEMO trace";
+        font_draw_string(x, y2 + 1, note, na, th->background, &font_small);
+    }
 }
 
 /* ═══════════════════════════════════════════════════════════════════
@@ -390,6 +503,12 @@ void draw_demo_waveform(uint32_t frame)
     /* SPI3 acquisition triggers are now fired from main.c display loop
      * with 500ms warmup delay and early-abort safety. See main.c and
      * fpga_acquisition_task() for the crash-protection logic. */
+
+    /* Mark the trace as synthetic ON the trace. The badge legend says the
+     * same thing at the bottom of the screen, but the waveform is what
+     * catches the eye and it is the thing that is not real. */
+    font_draw_string(4, SCOPE_TOP + 14, "DEMO", th->warning, th->warning,
+                     &font_small);
 
     static const int8_t sin_lut[64] = {
          0, 10, 19, 29, 38, 47, 56, 63, 71, 77, 83, 88, 92, 96, 98, 99,
@@ -553,63 +672,79 @@ static void draw_cursors(void)
                                h2_active ? color_active : color_inactive, &font_small);
     }
 
-    /* Delta readout */
+    /*
+     * Delta readout.
+     *
+     * Both cursor axes have an EXACT relationship to the capture, because
+     * the waveform plot defines one:
+     *
+     *   horizontal — draw_demo_waveform()/draw_scope_live_frame() plot
+     *                buf[x] at column x, so one screen column IS one sample.
+     *                dx pixels = dx samples, exactly, no calibration.
+     *   vertical   — the same plots use
+     *                  y = SCOPE_MID_Y - (sample - 128) * SCOPE_H / 256,
+     *                so dy pixels = dy * 256 / SCOPE_H ADC counts, exactly.
+     *
+     * Seconds and volts are a different matter: they need a sample rate and
+     * a per-range gain, neither of which exists yet (dev plan §F2/§F4).
+     * So the readouts are in samples and counts, and the s/V forms appear
+     * only once cursor.time_per_pixel / volts_per_pixel are non-zero — which
+     * scope_state.c documents as "unknown" and sets to 0 until a timebase
+     * and a calibration are wired. That is the whole switch-over.
+     */
     uint16_t badge_y = SCOPE_BOT - 28;
     uint16_t badge_x = 4;
     char buf[24];
+    char label[40];
 
     if (c->mode == CURSOR_VERTICAL || c->mode == CURSOR_BOTH) {
         int16_t dx = (int16_t)c->v2_x - (int16_t)c->v1_x;
-        float dt = (float)dx * c->time_per_pixel;
+        int16_t adx = (dx < 0) ? (int16_t)-dx : dx;
 
         lcd_fill_rect(badge_x, badge_y, 100, 13, th->background);
-        format_si(dt < 0.0f ? -dt : dt, "s", buf, sizeof(buf));
-        {
-            char label[32];
-            int li = 0;
-            label[li++] = 'd'; label[li++] = 't'; label[li++] = '=';
-            if (dt < 0.0f) label[li++] = '-';
-            int j = 0;
-            while (buf[j] && li < 30) label[li++] = buf[j++];
-            label[li] = '\0';
-            font_draw_string(badge_x, badge_y, label, th->highlight, th->highlight, &font_small);
+        if (c->time_per_pixel > 0.0f) {
+            float dt = (float)adx * c->time_per_pixel;
+            format_si(dt, "s", buf, sizeof(buf));
+            snprintf(label, sizeof(label), "dt=%s%s", dx < 0 ? "-" : "", buf);
+        } else {
+            snprintf(label, sizeof(label), "dt=%s%dsmp", dx < 0 ? "-" : "", adx);
         }
+        font_draw_string(badge_x, badge_y, label,
+                         th->highlight, th->highlight, &font_small);
 
-        if (dx != 0) {
-            float freq = 1.0f / (dt < 0.0f ? -dt : dt);
-            lcd_fill_rect(badge_x, badge_y + 14, 100, 13, th->background);
+        lcd_fill_rect(badge_x, badge_y + 14, 100, 13, th->background);
+        if (c->time_per_pixel > 0.0f && adx != 0) {
+            float freq = 1.0f / ((float)adx * c->time_per_pixel);
             format_si(freq, "Hz", buf, sizeof(buf));
-            {
-                char label[32];
-                int li = 0;
-                label[li++] = '1'; label[li++] = '/'; label[li++] = 'd';
-                label[li++] = 't'; label[li++] = '=';
-                int j = 0;
-                while (buf[j] && li < 30) label[li++] = buf[j++];
-                label[li] = '\0';
-                font_draw_string(badge_x, badge_y + 14, label,
-                                 th->highlight, th->highlight, &font_small);
-            }
+            snprintf(label, sizeof(label), "1/dt=%s", buf);
+        } else {
+            /* No sample rate => no Hz. Saying "1/dt=--" beats printing a
+             * number derived from a placeholder time base. */
+            snprintf(label, sizeof(label), "1/dt=%s", MEAS_NA);
         }
+        font_draw_string(badge_x, badge_y + 14, label,
+                         th->highlight, th->highlight, &font_small);
     }
 
     if (c->mode == CURSOR_HORIZONTAL || c->mode == CURSOR_BOTH) {
         int16_t dy = (int16_t)c->h1_y - (int16_t)c->h2_y;
-        float dv = (float)dy * c->volts_per_pixel;
+        int16_t ady = (dy < 0) ? (int16_t)-dy : dy;
 
         uint16_t vbadge_x = (c->mode == CURSOR_BOTH) ? 120 : badge_x;
         lcd_fill_rect(vbadge_x, badge_y, 100, 13, th->background);
-        format_si(dv < 0.0f ? -dv : dv, "V", buf, sizeof(buf));
-        {
-            char label[32];
-            int li = 0;
-            label[li++] = 'd'; label[li++] = 'V'; label[li++] = '=';
-            if (dv < 0.0f) label[li++] = '-';
-            int j = 0;
-            while (buf[j] && li < 30) label[li++] = buf[j++];
-            label[li] = '\0';
-            font_draw_string(vbadge_x, badge_y, label, th->highlight, th->highlight, &font_small);
+        if (c->volts_per_pixel > 0.0f) {
+            float dv = (float)ady * c->volts_per_pixel;
+            format_si(dv, "V", buf, sizeof(buf));
+            snprintf(label, sizeof(label), "dV=%s%s", dy < 0 ? "-" : "", buf);
+        } else {
+            /* Pixels -> counts is the plot's own transform, inverted. */
+            unsigned counts = (unsigned)(((uint32_t)ady * 256u + SCOPE_H / 2u)
+                                         / (uint32_t)SCOPE_H);
+            snprintf(label, sizeof(label), "dV=%s%ucnt",
+                     dy < 0 ? "-" : "", counts);
         }
+        font_draw_string(vbadge_x, badge_y, label,
+                         th->highlight, th->highlight, &font_small);
     }
 
     /* Cursor mode indicator */
@@ -727,66 +862,22 @@ static void draw_math_waveform(uint32_t frame)
 #define SCOPE_DBG_H   58
 
 /*
- * GPIO Pin Scanner — "poor man's logic analyzer"
+ * GPIO pin scanner — REMOVED 2026-08-13.
  *
- * Continuously reads all GPIO port input registers (IDT) and tracks
- * which pins have toggled at least once since boot. Displays a
- * toggle mask for each port (A-E).
+ * It accumulated per-port "this pin has toggled since boot" masks
+ * (gpio_toggle_a..e) every frame, and NOTHING read them: the overlay line
+ * that printed them was replaced during the config-entry experiments, and
+ * the two derived counters (pb3/pb4_toggle_count) were assigned and never
+ * used, which is why they showed up as unused statics in the build. An
+ * instrument with no readout is not an instrument; this file has enough
+ * history of numbers that could not mean what they appeared to mean.
  *
- * Any pin showing unexpected toggle activity could be the FPGA's
- * actual SPI data output — which might NOT be PB4 if the published
- * firmware doesn't match this V1.4 board hardware.
- *
- * Known toggling pins (expected):
- *   PA2 (USART2 TX), PA3 (USART2 RX)
- *   PA7,PA8 (button matrix)
- *   PB0 (button matrix), PB7 (PRM button)
- *   PC5,PC8,PC10,PC13 (buttons)
- *   PE2,PE3 (button matrix)
- *
- * Interesting if toggling (possible FPGA SPI data out):
- *   Any pin NOT in the known list above
+ * It is in git if it is ever wanted again: `git log -S gpio_toggle_a --
+ * firmware/src/ui/scope_ui.c` (added in 5b7437a, last read before 134fa83).
+ * Note the in-context MISO finder it once carried was already deleted in
+ * 2026-04-06 because it drove SPI3 from the display task and corrupted the
+ * acquisition task's transfers.
  */
-
-/* Accumulated toggle masks — bits set = pin toggled at least once */
-static uint16_t gpio_toggle_a = 0, gpio_toggle_b = 0;
-static uint16_t gpio_toggle_c = 0, gpio_toggle_d = 0, gpio_toggle_e = 0;
-static uint16_t gpio_prev_a = 0, gpio_prev_b = 0;
-static uint16_t gpio_prev_c = 0, gpio_prev_d = 0, gpio_prev_e = 0;
-static bool gpio_scan_started = false;
-
-/* Debug overlay toggle indicators derived from the accumulated GPIO masks. */
-static uint32_t pb3_toggle_count = 0;  /* SPI3 SCK — should toggle if GMUX works */
-static uint32_t pb4_toggle_count = 0;  /* SPI3 MISO — should toggle if FPGA responds */
-
-static void gpio_scan_update(void)
-{
-    uint16_t a = (uint16_t)GPIOA->idt;
-    uint16_t b = (uint16_t)GPIOB->idt;
-    uint16_t c = (uint16_t)GPIOC->idt;
-    uint16_t d = (uint16_t)GPIOD->idt;
-    uint16_t e = (uint16_t)GPIOE->idt;
-
-    if (gpio_scan_started) {
-        gpio_toggle_a |= (a ^ gpio_prev_a);
-        gpio_toggle_b |= (b ^ gpio_prev_b);
-        gpio_toggle_c |= (c ^ gpio_prev_c);
-        gpio_toggle_d |= (d ^ gpio_prev_d);
-        gpio_toggle_e |= (e ^ gpio_prev_e);
-    }
-
-    /* In-context SPI3 MISO finder REMOVED (2026-04-06).
-     * This was doing its own CS/SPI transfers from the display task,
-     * which corrupts the acquisition task's SPI3 transfers (both tasks
-     * hit the same SPI peripheral simultaneously on a single-core MCU).
-     * The scanner found PC6-LOW enables FPGA SPI — no longer need this. */
-    pb3_toggle_count = (gpio_toggle_b >> 3) & 1;
-    pb4_toggle_count = (gpio_toggle_b >> 4) & 1;
-
-    gpio_prev_a = a; gpio_prev_b = b;
-    gpio_prev_c = c; gpio_prev_d = d; gpio_prev_e = e;
-    gpio_scan_started = true;
-}
 
 /* Set by draw_scope_screen (whose full-area clear wipes 180-224) so the strip
  * background is refilled exactly when needed; the live incremental path never
@@ -807,9 +898,6 @@ static void dbg_pad(char *s, unsigned cap, unsigned width)
 
 static void draw_scope_debug(const theme_t *th)
 {
-    /* Update toggle masks */
-    gpio_scan_update();
-
     /* Dark background strip */
 #if (defined(FPGA_PIN_SWEEP_BUILD) && FPGA_PIN_SWEEP_BUILD) || \
     (defined(FPGA_CFG_TRACE_BUILD) && FPGA_CFG_TRACE_BUILD) || \
@@ -1315,6 +1403,56 @@ static void format_freq(float freq_hz, char *buf, int bufsize)
 static float fft_ref_tracked = 0.0f;
 static bool  fft_ref_primed  = false;
 
+/* ── Where the spectrum views get their samples ──────────────────────
+ *
+ * Until 2026-08-13 every FFT view — spectrum, split and waterfall — called
+ * test_signal_generate() unconditionally and analysed a synthetic 1 kHz
+ * square. Cold-boot capture started working that same day and none of them
+ * lit up, because none of them was ever connected to the ADC. Worse, the
+ * views did not say so: a user could not tell the spectrum of their probe
+ * from the spectrum of a constant compiled into the firmware.
+ *
+ * Now: the live CH1 record if there is one, the test signal otherwise, and
+ * the view is LABELLED with which it got. Same latch discipline as the
+ * trace (scope_ui.c fpga_data_ready() gate).
+ *
+ * Two honest limits, both visible in the labelling rather than hidden:
+ *
+ *  1. THE FREQUENCY AXIS IS NOT CALIBRATED FOR LIVE DATA. fft_config's
+ *     sample_rate_hz is a placeholder (there is no timebase — dev plan §F4),
+ *     so bin -> Hz is unknown. The live view therefore reports the peak by
+ *     BIN INDEX, which is exact, and never in Hz. The demo view does quote
+ *     Hz, and may: the test signal is synthesised at exactly that assumed
+ *     rate, so the two agree by construction.
+ *  2. The record is 1024 samples into a 4096-point transform. fft_process()
+ *     zero-pads, which interpolates the spectrum (fine), but applies the
+ *     first quarter of a 4096-point window to it, which is an asymmetric
+ *     taper (not fine — it costs sidelobe rejection). Relative magnitudes
+ *     stay meaningful; this is a real limitation of analysing a short record
+ *     with a long window, and the fix belongs in fft.c, not here.
+ */
+static bool fft_prepare_input(const fft_config_t *cfg, int16_t *sbuf,
+                              uint16_t *n_out)
+{
+    const volatile uint8_t *b = fpga_get_ch1_buf();
+
+    if (fpga_data_ready() && b != NULL) {
+        /* Unsigned 8-bit about 128 -> signed, then a fixed <<7 for numeric
+         * headroom in the transform. A constant gain shifts every bin by the
+         * same dB and cannot change the shape of the spectrum. */
+        for (uint16_t i = 0; i < FPGA_ADC_BUF_SIZE; i++)
+            sbuf[i] = (int16_t)(((int16_t)b[i] - 128) * 128);
+        *n_out = FPGA_ADC_BUF_SIZE;
+        return true;
+    }
+
+    test_signal_generate(TEST_SIG_SQUARE, sbuf,
+                         FFT_SIZE, cfg->sample_rate_hz,
+                         1000.0f, 0.0f, 0.8f);
+    *n_out = FFT_SIZE;
+    return false;
+}
+
 static float fft_display_ref(const fft_config_t *cfg, const float *data,
                              uint16_t start_bin, uint16_t end_bin)
 {
@@ -1347,10 +1485,9 @@ static void draw_fft_region(uint16_t y_top, uint16_t height)
 
     int16_t *sbuf = fft_get_sample_buf();
     if (!sbuf) return;  /* FFT not initialized */
-    test_signal_generate(TEST_SIG_SQUARE, sbuf,
-                         FFT_SIZE, cfg->sample_rate_hz,
-                         1000.0f, 0.0f, 0.8f);
-    fft_process(sbuf, FFT_SIZE, &fft_result);
+    uint16_t nsamp = 0;
+    bool live = fft_prepare_input(cfg, sbuf, &nsamp);
+    fft_process(sbuf, nsamp, &fft_result);
 
     const float *draw_data = (fft_result.avg_db != NULL)
                              ? fft_result.avg_db : fft_result.level_db;
@@ -1441,16 +1578,41 @@ static void draw_fft_region(uint16_t y_top, uint16_t height)
             lcd_set_pixel(peak_x + 1, peak_y - 2, COLOR_RED);
         }
 
-        if (p == 0) {
-            char freq_str[16];
-            format_freq(fft_result.peaks[0].freq_hz, freq_str, sizeof(freq_str));
-            font_draw_string(4, y_top + 2, freq_str, COLOR_WHITE, COLOR_WHITE, &font_small);
-        }
-
+        /* The per-peak harmonic tags ("Fund", "H2", ...) are RATIOS between
+         * bins, so they stay true whatever the sample rate turns out to be —
+         * unlike an absolute Hz figure, which is why one is drawn here and
+         * the other is not. */
         if (fft_result.peaks[p].label[0] != '\0' && peak_x > 8 && peak_x < LCD_WIDTH - 30) {
             font_draw_string(peak_x - 8, peak_y - 12,
                              fft_result.peaks[p].label, COLOR_ORANGE, COLOR_ORANGE, &font_small);
         }
+    }
+
+    /* Source + peak header. The peak is quoted in Hz ONLY for the synthetic
+     * signal, where the sample rate is the one it was generated at; for live
+     * capture it is quoted as a bin index, which needs no rate to be true. */
+    {
+        char hdr[28];
+        uint16_t color;
+        if (live) {
+            color = COLOR_WHITE;
+            if (fft_result.num_peaks > 0)
+                snprintf(hdr, sizeof(hdr), "LIVE CH1  pk bin %u",
+                         (unsigned)fft_result.peaks[0].bin);
+            else
+                snprintf(hdr, sizeof(hdr), "LIVE CH1");
+        } else {
+            char freq_str[16];
+            color = COLOR_ORANGE;
+            if (fft_result.num_peaks > 0) {
+                format_freq(fft_result.peaks[0].freq_hz, freq_str,
+                            sizeof(freq_str));
+                snprintf(hdr, sizeof(hdr), "DEMO sq  pk %s", freq_str);
+            } else {
+                snprintf(hdr, sizeof(hdr), "DEMO SIGNAL");
+            }
+        }
+        font_draw_string(4, y_top + 2, hdr, color, color, &font_small);
     }
 
     const char *win_names[] = { "Rect", "Hann", "Hamm", "BHar", "Flat" };
@@ -1481,17 +1643,36 @@ void draw_split_screen(uint32_t frame)
     for (x = 0; x < LCD_WIDTH; x++)
         lcd_set_pixel(x, scope_mid, COLOR_GRID_CENTER);
 
-    static const int8_t sin_lut[64] = {
-         0, 10, 19, 29, 38, 47, 56, 63, 71, 77, 83, 88, 92, 96, 98, 99,
-        100, 99, 98, 96, 92, 88, 83, 77, 71, 63, 56, 47, 38, 29, 19, 10,
-         0,-10,-19,-29,-38,-47,-56,-63,-71,-77,-83,-88,-92,-96,-98,-99,
-       -100,-99,-98,-96,-92,-88,-83,-77,-71,-63,-56,-47,-38,-29,-19,-10,
-    };
-    for (x = 0; x < LCD_WIDTH; x++) {
-        uint8_t idx = (uint8_t)((x * 4 + frame) & 0x3F);
-        int16_t wy = scope_mid - (sin_lut[idx] * 25 / 100);
-        if (wy >= (int16_t)scope_top && wy < (int16_t)scope_bot)
-            lcd_set_pixel(x, (uint16_t)wy, COLOR_CH1);
+    /* Top half: the real CH1 record when there is one. Half-height, so the
+     * same y-transform as the full trace with SCOPE_H replaced by the band
+     * height — one screen column is still one sample. */
+    const volatile uint8_t *b1 = fpga_get_ch1_buf();
+    bool trace_live = fpga_data_ready() && b1 != NULL;
+
+    if (trace_live) {
+        uint16_t band_h = (uint16_t)(scope_bot - scope_top);
+        for (x = 0; x < LCD_WIDTH && x < FPGA_ADC_BUF_SIZE; x++) {
+            int16_t wy = (int16_t)scope_mid -
+                         (int16_t)(((int16_t)b1[x] - 128) * band_h / 256);
+            if (wy >= (int16_t)scope_top && wy < (int16_t)scope_bot)
+                lcd_set_pixel(x, (uint16_t)wy, COLOR_CH1);
+        }
+    } else {
+        static const int8_t sin_lut[64] = {
+             0, 10, 19, 29, 38, 47, 56, 63, 71, 77, 83, 88, 92, 96, 98, 99,
+            100, 99, 98, 96, 92, 88, 83, 77, 71, 63, 56, 47, 38, 29, 19, 10,
+             0,-10,-19,-29,-38,-47,-56,-63,-71,-77,-83,-88,-92,-96,-98,-99,
+           -100,-99,-98,-96,-92,-88,-83,-77,-71,-63,-56,-47,-38,-29,-19,-10,
+        };
+        for (x = 0; x < LCD_WIDTH; x++) {
+            uint8_t idx = (uint8_t)((x * 4 + frame) & 0x3F);
+            int16_t wy = scope_mid - (sin_lut[idx] * 25 / 100);
+            if (wy >= (int16_t)scope_top && wy < (int16_t)scope_bot)
+                lcd_set_pixel(x, (uint16_t)wy, COLOR_CH1);
+        }
+        /* An animated sine that no probe produced. Say so. */
+        font_draw_string(4, scope_top + 2, "DEMO TRACE",
+                         COLOR_ORANGE, COLOR_ORANGE, &font_small);
     }
 
     uint16_t divider_y = SCOPE_TOP + SCOPE_H / 2;
@@ -1561,10 +1742,9 @@ void draw_waterfall_screen(void)
 
     int16_t *sbuf = fft_get_sample_buf();
     if (!sbuf) return;  /* FFT not initialized */
-    test_signal_generate(TEST_SIG_SQUARE, sbuf,
-                         FFT_SIZE, cfg->sample_rate_hz,
-                         1000.0f, 0.0f, 0.8f);
-    fft_process(sbuf, FFT_SIZE, &fft_result);
+    uint16_t nsamp = 0;
+    bool live = fft_prepare_input(cfg, sbuf, &nsamp);
+    fft_process(sbuf, nsamp, &fft_result);
 
     /* Resolve the history buffer out of the FFT's pool tenancy. Returns NULL
      * if FFT no longer owns the pool, in which case there is nothing valid to
@@ -1683,7 +1863,14 @@ void draw_waterfall_screen(void)
             lcd_write_pixels(waterfall_line, WATERFALL_COLS);
     }
 
-    font_draw_string(4, SCOPE_TOP + 2, "WFALL", COLOR_WHITE, COLOR_WHITE, &font_small);
+    /* Say which signal built this history. A waterfall of a compiled-in test
+     * tone looks exactly like a waterfall of a probe. */
+    if (live)
+        font_draw_string(4, SCOPE_TOP + 2, "WFALL LIVE CH1",
+                         COLOR_WHITE, COLOR_WHITE, &font_small);
+    else
+        font_draw_string(4, SCOPE_TOP + 2, "WFALL DEMO SIGNAL",
+                         COLOR_ORANGE, COLOR_ORANGE, &font_small);
 }
 
 #endif /* FEATURE_FFT */
