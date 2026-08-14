@@ -17,6 +17,7 @@ instead.
 
 | Date | Title | Short version |
 |---|---|---|
+| 2026-08-14 | [The wedge that never was](2026-08-14-the-wedge-that-never-was.md) | The "engine wedge needing a power cycle" was never real — it was the trigger regime plus lying instruments. Found the FPGA's digital trigger-level register (0x08), measured the default sample rate (~2.7 kS/s), got real triggered captures. Open question: what makes stock 23× faster. |
 | 2026-08-13 | [Cold boot to a live scope](2026-08-13-cold-boot-to-scope.md) | The wall came down. It wasn't the bytes — it was that we drove config over hardware SPI instead of bit-banging GPIO. Cold-boot to a live, probe-responsive scope on open firmware. |
 | 2026-08-12 | [The wall came down, and it wasn't us who pushed it](2026-08-12-the-wall-came-down.md) | The four-month arc, the six theories that died on the way, and the two contributors — Stlkv and maksidze — who actually solved it. Plus the first live trace, via warm handoff. |
 | 2026-08-11 | [The pins the diff couldn't see](2026-08-11-invisible-pins.md) | We'd ruled out a whole class of hardware difference using a comparison that couldn't detect it. |
