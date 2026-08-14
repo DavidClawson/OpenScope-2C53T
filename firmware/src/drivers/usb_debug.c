@@ -648,6 +648,8 @@ static void cmd_help(void)
         "    f=prelude frame: 0 split(stock) 1 combined 2 merge15+3B; u=pre-upload gap; k<br>=cmd-phase clk div; tc<n>=trailing clocks\r\n"
         "    pe=probe SYSTEM_EDIT_MODE after 0x15 (STATUS@/256); rl=send 0x3C RELOAD before prelude; reports 0x41 STATUS\r\n"
         "spi3 acqread                    Read CH1/CH2 via real 0x04/0x05 protocol\r\n"
+        "spi3 opread <op> [len [dump]]   One read window under any opcode + stats\r\n"
+        "spi3 opsweep [a b [len]]        Sweep read opcodes (BSRAM_1/2 hunt, Step 0b)\r\n"
         "spi3 armtest [pb11|pc6]         Pulse FPGA run/re-arm pin, re-cfg, acqread\r\n"
         "spi3 gowin                      Read+decode Gowin ID/USERCODE/STATUS regs\r\n"
         "spi3 scopetest [bank]           Full scope seq: USART cfg->PC0->0x04/05 read\r\n"
@@ -4319,6 +4321,206 @@ static void cmd_spi3_acqread(void)
     usb_send_str("(span>0 = live signal; span=0 = flat. Feed siggen->CH1 to verify.)\r\n");
 }
 
+/* ── Step 0b (bench plan 2026-08-14): the BSRAM_1/2 read-opcode hunt ──────
+ *
+ * The netlist work (gw1n2-apicula progress log M9–M11) identified BSRAM_1/2
+ * as a separately-clocked, accumulate-in-place buffer pair — the shape of a
+ * decimated/roll buffer, i.e. plausibly the slow timebase — and showed all
+ * four BSRAMs feed the SAME readout mux (→ SPI SO + DRDY). So the MCU can
+ * read it, under some opcode other than 0x04/0x05. These commands sweep the
+ * opcode space for it on the live coldtrace rig.
+ *
+ * Framing is byte-identical to the proven 0x04/0x05 path: ONE CS-LOW window,
+ * opcode + 2 filler bytes + payload. The continuous acquisition task is
+ * parked first via fpga_acq_pause() — a shell CS assert interleaved with its
+ * frames is the same desync class as the 30 ms cadence finding (fpga.c),
+ * which needed a true FPGA power cycle to clear.
+ *
+ * Known opcode map on the CONFIGURED user design (not the Gowin config
+ * port, which is closed — Exp L): 0x01/0x02/0x06/0x07/0x08 = arm-sequence
+ * WRITES (opsweep skips them: the 0xFF payload filler would smash live
+ * registers — 0x01 is the run register); 0x03 = status read; 0x04/0x05 =
+ * channel reads (kept in the sweep as positive controls). */
+#define SPI3_OPREAD_MAX_LEN 4096u
+
+static bool spi3_opread_window(uint8_t opcode, uint32_t len, bool dump)
+{
+    uint8_t first16[16];
+    uint8_t r0, r1, r2;
+    uint16_t smin = 255, smax = 0;
+    uint32_t ssum = 0, nonff = 0;
+
+    GPIOB->clr = (1 << 6);                 /* CS assert (LOW) */
+    r0 = spi3_raw_xfer(opcode);
+    r1 = spi3_raw_xfer(0xFF);
+    r2 = spi3_raw_xfer(0xFF);
+    for (uint32_t i = 0; i < len; i++) {
+        uint8_t s = spi3_raw_xfer(0xFF);
+        if (i < 16) first16[i] = s;
+        if (s < smin) smin = s;
+        if (s > smax) smax = s;
+        if (s != 0xFF) nonff++;
+        ssum += s;
+        if (dump) {
+            if (i % 16 == 0) usb_debug_printf("%04lX:", (unsigned long)i);
+            usb_debug_printf(" %02X", s);
+            if (i % 16 == 15 || i == len - 1) usb_send_str("\r\n");
+        }
+    }
+    GPIOB->scr = (1 << 6);                 /* CS deassert (HIGH) */
+
+    usb_debug_printf("op %02X: s=%02X %02X %02X nff=%lu/%lu "
+                     "min=%u max=%u mean=%lu span=%u first16:",
+                     opcode, r0, r1, r2,
+                     (unsigned long)nonff, (unsigned long)len,
+                     smin, smax, (unsigned long)(len ? ssum / len : 0),
+                     (unsigned)(smax - smin));
+    for (int i = 0; i < 16 && (uint32_t)i < len; i++)
+        usb_debug_printf(" %02X", first16[i]);
+    usb_send_str("\r\n");
+    return smax > smin;                    /* payload varies */
+}
+
+/* Full proven-shape 0x04 read; returns the sample span. Used as the wedge
+ * canary between sweep steps. Full 1026-byte window on purpose — do NOT
+ * shorten it (frame shape is part of the protocol; see the 0x05 hazard note
+ * on fpga_warmtest_read_channel). Consumes one capture frame. */
+static unsigned spi3_canary_span(void)
+{
+    uint8_t smin = 255, smax = 0;
+    GPIOB->clr = (1 << 6);
+    (void)spi3_raw_xfer(0x04);
+    (void)spi3_raw_xfer(0xFF);
+    (void)spi3_raw_xfer(0xFF);
+    for (uint32_t i = 0; i < 1023; i++) {
+        uint8_t s = spi3_raw_xfer(0xFF);
+        if (s < smin) smin = s;
+        if (s > smax) smax = s;
+    }
+    GPIOB->scr = (1 << 6);
+    return (unsigned)(smax - smin);
+}
+
+/* spi3 opread <op-hex> [len [dump]] — one read window of `len` payload bytes
+ * (default 1026, matching the channel-read shape; max 4096) under an
+ * arbitrary opcode, with stats and optional full hex dump. */
+static void cmd_spi3_opread(const char *args)
+{
+    char buf[64];
+    char *saveptr = NULL;
+    char *tok, *end;
+    uint32_t len = 1026;
+    bool dump = false;
+    unsigned long op;
+
+    if (strlen(args) >= sizeof(buf)) { usb_send_str("ERR: line too long\r\n"); return; }
+    strcpy(buf, args);
+
+    tok = strtok_r(buf, " \t", &saveptr);
+    if (!tok) { usb_send_str("Usage: spi3 opread <op-hex> [len [dump]]\r\n"); return; }
+    op = strtoul(tok, &end, 16);
+    if (*end != '\0' || op > 0xFF) { usb_send_str("ERR: bad opcode\r\n"); return; }
+
+    tok = strtok_r(NULL, " \t", &saveptr);
+    if (tok) {
+        len = strtoul(tok, &end, 0);
+        if (*end != '\0' || len == 0 || len > SPI3_OPREAD_MAX_LEN) {
+            usb_debug_printf("ERR: len 1..%u\r\n", SPI3_OPREAD_MAX_LEN);
+            return;
+        }
+        tok = strtok_r(NULL, " \t", &saveptr);
+        if (tok && strcmp(tok, "dump") == 0) dump = true;
+    }
+
+    if (!fpga_acq_pause()) {
+        usb_send_str("ERR: acq task did not park — bus not safe, aborting\r\n");
+        return;
+    }
+    spi3_opread_window((uint8_t)op, len, dump);
+    fpga_acq_resume();
+}
+
+/* spi3 opsweep [start end [len]] — sweep opcodes (hex bounds, default
+ * 00..3F, known writes skipped), one window each, 0x04 canary between
+ * steps. Run with the ESP32 feeding a LIVE slow signal into CH1: the
+ * canary then has span>0, so a wedged readout mux is detectable and the
+ * sweep aborts naming the offending opcode. A hit = an unknown opcode
+ * whose payload varies / is non-FF — re-read it twice with different
+ * siggen settings (spi3 opread <op> 2048 dump) to confirm it tracks. */
+static void cmd_spi3_opsweep(const char *args)
+{
+    char buf[64];
+    char *saveptr = NULL;
+    char *tok, *end;
+    uint32_t start = 0x00, stop = 0x3F, len = 2048;  /* 1024 words: BSRAM_1/2
+                                                        is a word-wide pair */
+    static const uint8_t skip[] = { 0x01, 0x02, 0x06, 0x07, 0x08 };
+    unsigned flat_streak = 0;
+
+    if (strlen(args) >= sizeof(buf)) { usb_send_str("ERR: line too long\r\n"); return; }
+    strcpy(buf, args);
+
+    tok = strtok_r(buf, " \t", &saveptr);
+    if (tok) {
+        start = strtoul(tok, &end, 16);
+        if (*end != '\0' || start > 0xFF) { usb_send_str("ERR: bad start\r\n"); return; }
+        tok = strtok_r(NULL, " \t", &saveptr);
+        if (!tok) { usb_send_str("Usage: spi3 opsweep [start end [len]]\r\n"); return; }
+        stop = strtoul(tok, &end, 16);
+        if (*end != '\0' || stop > 0xFF || stop < start) { usb_send_str("ERR: bad end\r\n"); return; }
+        tok = strtok_r(NULL, " \t", &saveptr);
+        if (tok) {
+            len = strtoul(tok, &end, 0);
+            if (*end != '\0' || len == 0 || len > SPI3_OPREAD_MAX_LEN) {
+                usb_debug_printf("ERR: len 1..%u\r\n", SPI3_OPREAD_MAX_LEN);
+                return;
+            }
+        }
+    }
+
+    if (!fpga_acq_pause()) {
+        usb_send_str("ERR: acq task did not park — bus not safe, aborting\r\n");
+        return;
+    }
+
+    unsigned base_span = spi3_canary_span();
+    usb_debug_printf("=== opsweep %02lX..%02lX len=%lu  baseline 0x04 span=%u ===\r\n",
+                     (unsigned long)start, (unsigned long)stop,
+                     (unsigned long)len, base_span);
+    if (base_span == 0)
+        usb_send_str("WARN: CH1 is flat — feed the siggen into CH1 first, or the\r\n"
+                     "      canary cannot tell a wedged mux from no signal.\r\n");
+
+    for (uint32_t op = start; op <= stop; op++) {
+        bool skipped = false;
+        for (unsigned i = 0; i < sizeof(skip); i++)
+            if (op == skip[i]) { skipped = true; break; }
+        if (skipped) {
+            usb_debug_printf("op %02lX: SKIP (known write reg)\r\n", (unsigned long)op);
+            continue;
+        }
+
+        spi3_opread_window((uint8_t)op, len, false);
+        vTaskDelay(pdMS_TO_TICKS(150));    /* cadence floor, see fpga.c */
+        unsigned cspan = spi3_canary_span();
+        usb_debug_printf("      canary span=%u\r\n", cspan);
+        if (base_span > 0) {
+            flat_streak = (cspan == 0) ? flat_streak + 1 : 0;
+            if (flat_streak >= 2) {
+                usb_debug_printf("ABORT: canary flat twice — engine likely wedged "
+                                 "by op %02lX or %02lX. FPGA power cycle to recover\r\n"
+                                 "(POWER->Goodbye->UNPLUG USB->replug).\r\n",
+                                 (unsigned long)op, (unsigned long)(op - 1));
+                break;
+            }
+        }
+        vTaskDelay(pdMS_TO_TICKS(150));
+    }
+
+    usb_send_str("=== opsweep done ===\r\n");
+    fpga_acq_resume();
+}
+
 /* spi3 gowin — read the Gowin SSPI ID / USERCODE / STATUS registers using
  * rosenrot00's PROVEN-WORKING 2C23T framing and decode the status bits.
  *
@@ -5019,6 +5221,10 @@ static void dispatch_command(char *line)
         cmd_reboot_bootloader();
     } else if (strcmp(line, "spi3 acqread") == 0) {
         cmd_spi3_acqread();
+    } else if (strncmp(line, "spi3 opread", 11) == 0) {
+        cmd_spi3_opread(line[11] == ' ' ? line + 12 : "");
+    } else if (strncmp(line, "spi3 opsweep", 12) == 0) {
+        cmd_spi3_opsweep(line[12] == ' ' ? line + 13 : "");
     } else if (strncmp(line, "spi3 armtest", 12) == 0) {
         cmd_spi3_armtest(line[12] == ' ' ? line + 13 : "");
     } else if (strcmp(line, "spi3 gowin") == 0) {

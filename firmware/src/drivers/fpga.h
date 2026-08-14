@@ -693,6 +693,25 @@ void fpga_set_active(bool active);
  */
 void fpga_bus_release(void);
 
+/*
+ * Cooperative acquisition pause (Step 0b, bench plan 2026-08-14).
+ *
+ * Parks the continuous warm-handoff/coldtrace acquisition task BETWEEN CS
+ * frames so a debug-shell probe can own the SPI3 bus. This is deliberately
+ * NOT vTaskSuspend (which the config sequences use — they reset the engine
+ * afterwards anyway): a suspend can land mid-1026-byte window, and a
+ * half-clocked frame is the same desync class as the 30 ms cadence finding
+ * (fpga.c FPGA_PROBE_CADENCE_MS note), which needed a true FPGA power cycle
+ * to clear.
+ *
+ * fpga_acq_pause() returns true once the task acknowledges it is parked
+ * (immediately true in builds without the continuous task); false on a ~1 s
+ * timeout, in which case the bus is NOT safe to touch. Balance every pause
+ * with fpga_acq_resume().
+ */
+bool fpga_acq_pause(void);
+void fpga_acq_resume(void);
+
 /* RECONFIG_N candidate pin sweep. Pulses each candidate LOW->HIGH, sends
  * CONFIG_ENABLE, and reads the anchored STATUS, looking for any pin that makes
  * the part respond. Restores every pin's original config as it goes.

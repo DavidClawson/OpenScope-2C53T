@@ -2759,6 +2759,16 @@ static void fpga_acquisition_task(void *pv)
 }
 
 #if FPGA_WARM_HANDOFF_TEST
+/* Cooperative pause handshake for the continuous acquisition task below.
+ * Protocol (see fpga_acq_pause): requester sets req, clears ack, then waits
+ * for a FRESH ack — the task raises ack only at its park point, never inside
+ * a CS frame. The task re-raises ack every parked cycle, so a stale ack from
+ * a previous pause can never satisfy a new request. */
+static volatile bool acq_pause_req = false;
+static volatile bool acq_pause_ack = false;
+#endif
+
+#if FPGA_WARM_HANDOFF_TEST
 /* ─── Warm-handoff acquisition (2026-08-12) ──────────────────────────
  * The real per-channel read protocol from the issue-#18 stock capture,
  * bench-proven on this board by Stlkv's port: PC0 data-ready (active LOW),
@@ -2807,6 +2817,14 @@ static void fpga_warmtest_acq_task(void *pv)
     for (;;) {
         if (!fpga.initialized || fpga.bus_released) {
             vTaskDelay(pdMS_TO_TICKS(100));
+            continue;
+        }
+
+        /* Park point for fpga_acq_pause(): always between CS frames, so a
+         * shell-side bus user never interleaves with a half-read window. */
+        if (acq_pause_req) {
+            acq_pause_ack = true;
+            vTaskDelay(pdMS_TO_TICKS(10));
             continue;
         }
 
@@ -2889,6 +2907,38 @@ static void fpga_warmtest_acq_task(void *pv)
     }
 }
 #endif /* FPGA_WARM_HANDOFF_TEST */
+
+/* See fpga.h. In builds without the continuous acquisition task there is
+ * nothing to park, so pause trivially succeeds (the queue-driven task only
+ * touches SPI3 on explicit triggers, which the shell user controls). */
+bool fpga_acq_pause(void)
+{
+#if FPGA_WARM_HANDOFF_TEST
+    if (acq_task_handle == NULL)
+        return true;
+    acq_pause_req = true;
+    acq_pause_ack = false;      /* demand a FRESH ack from the park point */
+    /* Worst-case ack latency = one full loop pass: ≤100 ms PC0 wait (or the
+     * FPGA_PROBE_CADENCE_MS branch) + two 1026-byte reads + 10 ms. 1 s is
+     * comfortable margin. */
+    for (int i = 0; i < 100; i++) {
+        if (acq_pause_ack)
+            return true;
+        vTaskDelay(pdMS_TO_TICKS(10));
+    }
+    acq_pause_req = false;      /* don't leave a half-armed request behind */
+    return false;
+#else
+    return true;
+#endif
+}
+
+void fpga_acq_resume(void)
+{
+#if FPGA_WARM_HANDOFF_TEST
+    acq_pause_req = false;
+#endif
+}
 
 /* ═══════════════════════════════════════════════════════════════════
  * SPI3 FPGA config handshake (shared by fpga_init and `fpga reinit`)

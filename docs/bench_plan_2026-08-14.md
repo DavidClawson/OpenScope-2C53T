@@ -115,6 +115,30 @@ Test: with `guest-coldtrace` running, sweep SPI3 read opcodes beyond the known
 words whose content tracks a slow input from the ESP32. Minutes on the existing
 rig, and a hit would hand us the slow timebase directly.
 
+**✅ TOOLING READY (2026-08-14, gate-green, not yet flashed).** Shell-driven —
+CDC enumerates on every coldtrace build (5/5, `CLAUDE.local.md`), so the agent
+can run the whole sweep over `/dev/ttyACM*` while driving the ESP32 on
+`/dev/ttyUSB0`. New pieces:
+- `fpga_acq_pause()`/`fpga_acq_resume()` (`fpga.c`) — cooperative park of the
+  continuous acquisition task **between CS frames** (deliberately not
+  `vTaskSuspend`, which can land mid-window — the desync class from the 30 ms
+  cadence finding). Fresh-ack handshake, 1 s timeout, fails closed.
+- `spi3 opread <op-hex> [len [dump]]` — one CS-LOW window (opcode + 2 filler
+  + payload, byte-identical to the proven 0x04/0x05 framing) under any
+  opcode; stats line (non-FF count, min/max/mean/span, first16) + optional
+  full hex dump.
+- `spi3 opsweep [start end [len]]` — default `00..3F`, len 2048 (1024 words —
+  BSRAM_1/2 is word-wide), skipping the known write registers
+  `01/02/06/07/08` (0xFF filler would smash the run register). Between every
+  step: a full-shape 0x04 **canary read**; if CH1 was live at sweep start and
+  the canary goes flat twice running, the sweep aborts naming the suspect
+  opcode (recovery = true FPGA power cycle).
+
+Procedure: flash `guest-coldtrace` → confirm live trace → ESP32 `sine` ~2 Hz
+into CH1 → `spi3 opsweep` → for any hit, `spi3 opread <op> 2048 dump` twice
+with two different siggen settings and confirm the payload tracks. Then
+`opsweep 40 ff` if the low space is dry.
+
 **⚠ THIS STAYS A BENCH TEST — the "make it simulable" idea was tried and
 REFUTED the same night (M11).** The plan was: SPI SCLK enters as a dedicated
 clock input on its own spine (pad `R19C5_IA` → BLBDCLK3 → SPINE16/24 → GB00),
