@@ -51,6 +51,7 @@ Pin every reproduction rather than following moving branch heads:
 | stock unpack and GW1N-2 chipdb baseline | `DavidClawson/apicula`, `gw1n2-build` | `2987a6a323107e54d02b2d47a452f0fd09c95a07` |
 | GW1N-2 pinout/IO development | `DavidClawson/apicula`, `gw1n2-io` | `cf5ab40d203a3f79dc233bdd8000b7c5fc2dfacb` |
 | GW1N-2 place-and-route development | `DavidClawson/nextpnr`, `gw1n2` | `59c8f93a62ee17adc8d1c5d7f399697ffeb85c0f` |
+| exact GW1N-UV2/QN48 chipdb, packing, and the debug-clock image build | `Komzpa/apicula`, `agent/gw1n2-qn48-chipdb-20260815` | `d978cad` (atop `cea1618`) |
 
 The chipdb build requires Gowin EDA device data for `GW1N-1P5C`:
 `GW1N-1P5C.fse`, `.dat`, and `.tm`. Those vendor inputs are not checked in.

@@ -35,6 +35,18 @@ digital trigger level, opcode aliasing, and divided-tick contracts. None of
 these checks proves stock memory order, trigger behavior, timing closure, or
 hardware equivalence.
 
+## Debug-clock hardware image
+
+`rtl/debugclk_hw_top.sv` plus `constraints/fnirsi_2c53t_qn48.cst` form the
+first buildable image for the exact GW1N-UV2/QN48 part. It uses only the six
+pins with netlist-grade evidence (runtime SPI, the IOR1B run line, and the
+clock-capable IOB7B pad as an MCU-driven debug sample clock) and feeds the
+capture path synthetic on-chip ramp and walking-one data, so no unproven ADC,
+clock, or board net is touched. `tools/build_debugclk_image.sh` reproduces the
+`.fs` build (synthesis, exact-part place-and-route, packing) with pinned tools;
+build products stay out of the tree. The image is for volatile SRAM loading
+only and has not yet been proven on hardware.
+
 ## Quick local checks
 
 When Icarus Verilog and Verilator are installed:
@@ -48,7 +60,7 @@ verilator --lint-only --timing -Wall \
   fpga/rtl/capture_channel.sv fpga/rtl/trigger_timebase.sv \
   fpga/rtl/trigger_comparator.sv fpga/rtl/spi_runtime_interface.sv \
   fpga/rtl/spi_control_registers.sv fpga/rtl/rate_divider.sv \
-  fpga/rtl/fnirsi_2c53t_top.sv
+  fpga/rtl/fnirsi_2c53t_top.sv fpga/rtl/debugclk_hw_top.sv
 python3 -m unittest fpga/tests/test_capture_bsram_mapping.py
 python3 -m unittest fpga/tests/test_netlist_verification.py
 ```
