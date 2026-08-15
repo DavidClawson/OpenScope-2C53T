@@ -339,13 +339,19 @@ uses the trigger-gated raw buffers.
    buffers' bare run&~done CEA), which is why this is more than M8's refuted
    "SPI reaches the cone" — but the actual divisor VALUE / which written
    register is not yet pinned.
-2. **The sim can't run the divider**, for a now-precisely-located reason: the
-   SPI-receiver/arm flops' CLEAR and clock nets are on the **long-wire (LW)
-   branch network**, which is undriven in the unpacked netlist because
-   apicula's chipdb has no `GW1N-2` segment model. Same dead-net class as the
-   BSRAM pips, but not patchable from `db.nodes`. Fixing it (a
-   `_segment_data['GW1N-2']` entry, modeled on GW1N-1/GW1NZ-1) is the apicula
-   PR that would unblock BOTH the SPI address-decode sim and the divider sim.
+2. **The sim can't run the divider**: the SPI-receiver/arm flops' CLEAR and
+   clock nets are on the **long-wire (LW) branch network**, which is undriven in
+   the unpacked netlist. ⚠ **CORRECTED 2026-08-14 (apicula M13):** the original
+   guess here — "because apicula's chipdb has no `GW1N-2` segment model, fixable
+   with a `_segment_data['GW1N-2']` entry" — is **REFUTED**. Deriving the entry
+   was done (db.segments 0→40) and changed NOTHING: `gowin_unpack` builds
+   aliases from `db.nodes`, never `db.segments`, and the decisive control is
+   that `R16C9_LB21` is undriven on the fully-WORKING GW1NZ-1 and GW1N-1 too —
+   an undriven LW branch at unpack time is normal apicula behaviour on every
+   device, not a GW1N-2 gap. The real unblock is a **segment-aware sim harness
+   that force-drives the floating LW nets** (same trick as the BSRAM-pip
+   force-restores), NOT a chipdb entry. See gw1n2-apicula `docs/06-progress-log.md`
+   § M13.
 
 ## Bench action this hands us (cheap, next session)
 Read-opcode sweep **targeting BSRAM_1/2**, on guest-coldtrace: the readout mux
@@ -407,8 +413,10 @@ netlist/sim questions; the bench has now given all it can on the rate itself.
    timer-polls 0x04/0x05 (~30 Hz) when not in triggered mode — gives a
    continuously-updating trace on any input, the thing the scope visibly lacks.
    The edge-paced path stays for triggered/normal mode.
-2. **Netlist (the 23x): the readout-mux SELECT and the FPGA PLL** — needs the
-   apicula GW1N-2 long-wire segment model (M12 blocker) before either simulates.
+2. **Netlist (the 23x): the readout-mux SELECT and the FPGA PLL** — needs a
+   segment-aware sim harness that force-drives the floating long-wire nets (NOT
+   a chipdb segment entry — that lever was refuted, apicula M13) before either
+   simulates.
 
 ---
 

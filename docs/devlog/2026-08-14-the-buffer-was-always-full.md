@@ -34,14 +34,24 @@ definition of a programmable sample-rate divider. It sits on a buffer pair our
 firmware has never read. That's the strongest candidate yet for both the
 timebase and stock's 23×.
 
-We couldn't *run* it in simulation, and the reason is worth writing down because
-it's a clean lesson: the SPI receiver's reset and clock nets ride the chip's
-long-wire network, and that network is undriven in the unpacked netlist —
-because the open-source chip database has no segment model for this specific
-Gowin part. Same class of gap as some missing RAM connections we'd patched
-before, but this one can't be patched from the database; it needs the segment
-topology derived. So the divider's exact divisor stays a bench question for now,
-and the sim work has a concrete next target.
+We couldn't *run* it in simulation. The SPI receiver's reset and clock nets ride
+the chip's long-wire network, and that network is undriven in the unpacked
+netlist, so the flops that would advance the divider can't be clocked in the sim.
+
+Our first theory for *why* it was undriven turned out to be wrong, and the way it
+fell is a fair example of how this project works. We'd guessed the open-source
+chip database was simply missing the long-wire segment model for this particular
+Gowin part — a gap we could derive and fill. So we derived it. And then the check
+killed the theory cleanly: those same nets are undriven on the *other* Gowin
+parts too, including ones whose toolchain works end to end, so an undriven
+long-wire at unpack time is just how the tool represents that layer — not a
+part-specific hole. The segment model we'd built was real and correct, and it
+wasn't the lever; the unpacker never consults it. The actual fix is a simulation
+harness that force-drives those long-wire nets itself, the same trick we'd
+already used for some missing RAM connections. So the divider's exact divisor
+stays a bench question for now, the sim has a concrete (and correctly identified)
+next target, and we spent an afternoon proving a plausible shortcut wasn't one —
+which is cheaper than believing it.
 
 ## The realization that changed the framing
 
@@ -114,17 +124,19 @@ ranges; running it across all ten is a careful bench hour, not a guess.
 - **The front-end relays are configured correctly** — the coarse attenuator
   works and is bench-verified.
 - **The 23× has a concrete home**: a programmable-rate counter on a buffer we've
-  never read, blocked in simulation only by a missing piece of the open-source
-  chip database.
+  never read. To read its divisor in simulation we need a harness that force-
+  drives the FPGA's long-wire nets — a known technique, now correctly identified
+  as the next step.
 
-Three things we'd assumed were hardware limits turned out to be, in order: a
-read-pacing choice we control, a relay table we'd guessed wrong, and a gain range
-that lives in a different layer than we were looking. The recurring lesson of
-this project keeps being the same one — measure the thing directly before
-theorizing about why it can't work — and it keeps being worth relearning.
+Four things we'd assumed were hardware limits turned out to be, in order: a
+read-pacing choice we control, a relay table we'd guessed wrong, a gain range
+that lives in a different layer than we were looking, and a simulation blocker
+we'd blamed on the wrong missing piece. The recurring lesson of this project
+keeps being the same one — measure the thing directly before theorizing about why
+it can't work — and it keeps being worth relearning.
 
 The netlist counter is the thread that could turn the scope from a level tracker
-into a real timebase-controlled instrument. If unpacking Gowin long-wire segments
-is your kind of problem,
+into a real timebase-controlled instrument. If gate-level FPGA simulation and
+Gowin internals are your kind of problem,
 [#18](https://github.com/DavidClawson/OpenScope-2C53T/issues/18) is where this
 project's hardest questions get answered.
