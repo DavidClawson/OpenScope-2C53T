@@ -3357,6 +3357,23 @@ void fpga_reconfig_pin_sweep(void)
 /* One mode-3 byte: CLK falls, drive MOSI, CLK rises, sample MISO. MSB first.
  * No explicit delay — the GPIO write latency IS the slow/gapped clock that
  * distinguishes this from hardware SPI3 (the whole point of the A/B). */
+#ifndef FPGA_BB_HALF_DELAY
+#define FPGA_BB_HALF_DELAY 0   /* nops per SCK half-period; 0 = as fast as GPIO writes go */
+#endif
+/* Logic-analyzer builds (`make guest-coldtrace-la`, issue #18 2026-08-15):
+ * maksidze's Saleae tops out at 24 MS/s and the undelayed loop clocks faster
+ * than that resolves (his 1508.zip bit-bang captures came back aliased).
+ * FPGA_BB_HALF_DELAY=60 gives a ~1-2 MHz SCK — trivially resolvable — at the
+ * cost of ~1 s extra config time. Config entry is not timing-sensitive
+ * (Exp B2 / the whole bit-bang-vs-AF story), so this should not change the
+ * outcome; if it does, that is itself a finding. */
+static inline void bb_half_delay(void)
+{
+#if FPGA_BB_HALF_DELAY > 0
+    for (volatile int d = 0; d < FPGA_BB_HALF_DELAY; d++) { __asm__ volatile("nop"); }
+#endif
+}
+
 static uint8_t bb_xfer(uint8_t value)
 {
     uint8_t result = 0;
@@ -3364,7 +3381,9 @@ static uint8_t bb_xfer(uint8_t value)
         GPIOB->clr = BB_SCK;
         if (value & 0x80u) GPIOB->scr = BB_MOSI;
         else               GPIOB->clr = BB_MOSI;
+        bb_half_delay();
         GPIOB->scr = BB_SCK;
+        bb_half_delay();
         result = (uint8_t)(result << 1);
         value  = (uint8_t)(value << 1);
         if (GPIOB->idt & BB_MISO) result |= 1u;

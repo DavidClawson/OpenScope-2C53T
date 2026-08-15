@@ -489,7 +489,7 @@ $(BUILD_DIR)/test_redraw_gate: tests/test_redraw_gate.c src/ui/redraw_gate.h | $
 test-redraw-gate: $(BUILD_DIR)/test_redraw_gate
 	$<
 
-.PHONY: all clean disasm size renode soak-test soak-quick flash flash-dfu bootloader flash-bootloader flash-all guest guest-warmtest guest-usart-silent emu test-meter-data test-meter-auto test-meter-voltage-wave test-fpga-meter-plan test-stock-meter-literals test-meter test-scope-measure test-redraw-gate test-config-persist guest-persist guest-caldump guest-coldtrace-slow
+.PHONY: all clean disasm size renode soak-test soak-quick flash flash-dfu bootloader flash-bootloader flash-all guest guest-warmtest guest-usart-silent emu test-meter-data test-meter-auto test-meter-voltage-wave test-fpga-meter-plan test-stock-meter-literals test-meter test-scope-measure test-redraw-gate test-config-persist guest-persist guest-caldump guest-coldtrace-slow guest-coldtrace-la
 
 # ═══════════════════════════════════════════════════════════════════════════
 # BENCH / EXPERIMENT IMAGE INDEX                          (index added 2026-08-13)
@@ -517,6 +517,7 @@ test-redraw-gate: $(BUILD_DIR)/test_redraw_gate
 #   guest              standard bench image (IAP + LCD overlay loop)
 #   guest-coldtrace    cold boot -> configured FPGA -> live trace (the rig)
 #   guest-coldtrace-slow  same, AUTO read cadence 500 ms (acq starvation test)
+#   guest-coldtrace-la    same, bit-bang config SCK slowed for 24 MS/s logic analyzers
 #   guest-configB      config only; also the queued CDC single-variable test
 #   guest-configB-arm  config + engine arm, no live readout
 #   guest-warmtest     warm-handoff dev loop for scope-side work
@@ -740,6 +741,15 @@ guest-persist: clean all
 guest-coldtrace: CFLAGS += -DGUEST_BUILD -DFPGA_WARM_HANDOFF_TEST=1 -DFPGA_USART_SILENT_SCOPE=1 -DFPGA_CONFIG_B=1 -DFPGA_CONFIG_B_ARM=1
 guest-coldtrace: LDSCRIPT = ld/at32f403a_guest.ld
 guest-coldtrace: clean all
+
+# [LA 2026-08-15] guest-coldtrace-la — coldtrace with the bit-bang config clock
+# slowed (FPGA_BB_HALF_DELAY=60 nops per half period, ~1-2 MHz SCK) so a
+# 24 MS/s logic analyzer can decode the whole config sequence (issue #18:
+# maksidze's captures of the undelayed loop were aliased). Otherwise identical
+# to guest-coldtrace.
+guest-coldtrace-la: CFLAGS += -DGUEST_BUILD -DFPGA_WARM_HANDOFF_TEST=1 -DFPGA_USART_SILENT_SCOPE=1 -DFPGA_CONFIG_B=1 -DFPGA_CONFIG_B_ARM=1 -DFPGA_BB_HALF_DELAY=60
+guest-coldtrace-la: LDSCRIPT = ld/at32f403a_guest.ld
+guest-coldtrace-la: clean all
 
 # [BENCH 2026-08-15] guest-coldtrace-slow — coldtrace with the AUTO free-run
 # read cadence throttled from 30 ms to 500 ms (> one ~430 ms buffer fill).
