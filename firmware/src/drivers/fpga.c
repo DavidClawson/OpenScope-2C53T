@@ -4501,6 +4501,29 @@ void fpga_init(void)
     gpio_init(GPIOA, &gpio_cfg);
     gpio_cfg.gpio_pins = GPIO_PINS_10;
     gpio_init(GPIOB, &gpio_cfg);
+
+    /* AC/DC COUPLING RELAYS — PD12 (CH1), PD13 (CH2), HIGH = DC.
+     * Found 2026-08-15 in stock's scope settings handler (0x0800BD60 item 2 ->
+     * GPIOD BSRR/BRR at 0x0800C846..0x0800C93E; boot restore at 0x0802C58E;
+     * state bytes ms[0x00]/ms[0x01], 0=AC 1=DC), and BENCH-CONFIRMED the same
+     * evening: with PD12 driven HIGH a 300 mV -> 3 V DC step moved the captured
+     * mean 218 -> railed, where before it did not move at all.
+     *
+     * ⚠ WHY THIS WAS INVISIBLE: our reset default leaves PD12 in EXMC ALTERNATE
+     * FUNCTION (address line A17) — GPIOD CRH read 0xBB4BBBBB on the bench, and
+     * an AF pin ignores ODR, so writing BSRR did nothing. None of our LCD
+     * accesses assert A17 (the LCD's RS is A16/PD11 — 0x6001FFFE vs 0x60020000
+     * differ in HADDR bit 17 = A16, despite the comment in lcd.c), so EXMC held
+     * PD12 LOW forever = permanently AC-coupled, with a ~9 Hz high-pass that we
+     * spent a morning characterising as an analog property of the front end.
+     * Taking the pins as plain GPIO outputs is what stock does (its GPIOD CRH
+     * nibbles for PD12/PD13 are 1 = output push-pull in the Exp E SWD dump).
+     *
+     * DC is the default for scope work; a coupling menu should drive these. */
+    gpio_cfg.gpio_pins = GPIO_PINS_12 | GPIO_PINS_13;
+    gpio_init(GPIOD, &gpio_cfg);
+    GPIOD->scr = (1U << 12) | (1U << 13);   /* both channels DC-coupled */
+
     fpga_set_scope_frontend_range(fpga_scope_primary_range(scope_state_get()));
     /* PC12 override — BENCH-MEASURED 2026-08-12 (run 5, live A/B on the
      * SAVE toggle): with PC12 LOW (what the approximate range table sets in
