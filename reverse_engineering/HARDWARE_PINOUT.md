@@ -57,7 +57,7 @@
 | PB6 | SPI3 CS (FPGA) | Output | Push-pull (GPIO) | 50 MHz | `spi3_init_and_setup`; 3 refs to GPIOB BOP/BCR in FPGA task | Active LOW; software-controlled |
 | PB7 | Button (PRM) | Input | Pull-up | -- | `peripheral_map.md` | Direct GPIO, active-low |
 | PB8 | LCD backlight | Output | Push-pull | 50 MHz | `main.c` line 299; `FPGA_BOOT_SEQUENCE.md` | HIGH = backlight on |
-| PB9 | Unknown | -- | -- | -- | | |
+| PB9 | Buzzer / audio output (TMR4_CH4 PWM) | AF | AF push-pull | -- | Hardware probed under stock (issue #25, maksidze: waveform present exactly while the device beeps) + validated in custom firmware (`maksidze/DOOM-2C53T` `firmware/src/drivers/pwm_audio.c`, TMR4 CH4 PWM mode A) | Onboard piezo. NOT an analog-frontend or FPGA-config pin (retires the Exp E "PB9 AF-PP in stock" candidate) |
 | PB10 | Analog MUX control | Output | Push-pull | 50 MHz | `gpio_mux_porta_portb` at 0x08001A58 | 10-mode analog routing; USART3 TX probed dead |
 | PB11 | FPGA active mode | Output | Push-pull | 50 MHz | `FPGA_BOOT_SEQUENCE.md` step 52; `FUN_08037800` | HIGH = FPGA active measurement mode; set via GPIOB_BOP = 0x800 |
 | PB12 | SPI2 CS (flash) | Output | Push-pull | 50 MHz | `spi2_block_read` at 0x0802F048; hardware verified | Active LOW; Winbond W25Q128JV chip select |
@@ -631,7 +631,7 @@ This sets the SWJ_CFG field (bits [26:24] in the actual register, represented as
 The following MCU pins have no identified function from decompilation or hardware probing:
 
 **GPIOA:** PA0, PA1, PA4, PA5, PA6 (PA4/PA5 may be DAC outputs)
-**GPIOB:** PB1, PB2, PB9
+**GPIOB:** PB1, PB2
 **GPIOC:** PC1, PC2, PC3, PC4, PC8, PC11, PC13, PC14, PC15
 **GPIOD:** PD2, PD3, PD6
 **GPIOE:** PE0, PE1

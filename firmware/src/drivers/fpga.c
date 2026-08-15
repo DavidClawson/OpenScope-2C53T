@@ -1458,8 +1458,11 @@ static void fpga_set_scope_frontend_range(uint8_t range_idx)
     if (b & 0x40) GPIOB->scr = (1U << 10); else GPIOB->clr = (1U << 10); /* PB10 */
     /* PB11 NOT driven — held HIGH as the engine run co-signal (see above). */
 
-    /* Shared analog enables stay asserted in scope mode. */
-    GPIOB->scr = (1U << 9);
+    /* PA6 stays asserted in scope mode (stock configures it as an output;
+     * function still unproven). PB9 is NOT driven here any more: it is the
+     * onboard piezo buzzer (TMR4_CH4 PWM — issue #25, maksidze, 2026-08-15,
+     * probed under stock + validated in DOOM-2C53T), not an analog enable.
+     * Holding it HIGH just put DC on the piezo. */
     GPIOA->scr = (1U << 6);
 }
 
@@ -4682,8 +4685,10 @@ void fpga_init(void)
     gpio_init(GPIOC, &gpio_cfg);
 
     /*
-     * PB9/PA6 auxiliary AFE pins: stock init configures them as outputs but
-     * no stock BOP/BCR level write has been recovered.  Keep them low rather
+     * PB9 = onboard buzzer (TMR4_CH4 PWM; issue #25) — configured as a plain
+     * output held LOW here = buzzer silent; a future beep driver should take
+     * it over as TMR4 CH4. PA6: stock init configures it as an output but no
+     * stock BOP/BCR level write has been recovered.  Keep it low rather
      * than applying the old bench-inferred high level. PB11 is configured only
      * after SPI3/H2, then driven by the same mux projection as runtime DMM
      * transitions before the meter activation command block.
