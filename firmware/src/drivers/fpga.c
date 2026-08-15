@@ -1488,6 +1488,17 @@ static void fpga_set_scope_frontend_range(uint8_t range_idx)
     GPIOA->scr = (1U << 6);
 }
 
+/* Bench-cal hook (2026-08-15): apply a scope frontend range by index and force
+ * DC coupling (PC12 HIGH), so the per-range gain can be characterised from the
+ * shell without cycling volts/div through the UI. Clamps to VDIV_COUNT-1. See
+ * `fpga scope range <n>` in usb_debug.c and the frontend gain-cal work. */
+void fpga_scope_set_range_diag(uint8_t range_idx)
+{
+    if (range_idx >= VDIV_COUNT) range_idx = VDIV_COUNT - 1;
+    fpga_set_scope_frontend_range(range_idx);
+    GPIOC->scr = (1U << 12);   /* PC12 HIGH = DC coupling (bench-measured) */
+}
+
 static uint8_t fpga_probe_cmd_byte(void)
 {
     /*

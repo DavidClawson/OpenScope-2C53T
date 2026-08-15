@@ -610,6 +610,7 @@ static void cmd_help(void)
         "fpga wire words <w...>         Send final 16-bit wire words directly\r\n"
         "fpga wire entry [ch1|ch2|both] Send candidate scope-entry wire-word bank\r\n"
         "fpga wire scope [ch1|ch2|both] Wire-word entry + runtime scope blocks\r\n"
+        "fpga scope range <0-9>          Apply frontend range n (DC), for gain cal\r\n"
         "fpga scope reinit               Re-apply scope frontend + FPGA cfg\r\n"
         "fpga meter reinit [submode]     Re-apply meter frontend + FPGA cfg\r\n"
         "fpga scope wake                 Meter wake preamble then scope cfg\r\n"
@@ -1826,6 +1827,20 @@ static void cmd_fpga_scope_reinit(void)
 {
     fpga_request_scope_reinit();
     usb_send_str("Scope reinit queued\r\n");
+}
+
+/* `fpga scope range <n>` — apply frontend range n (0..9 = 5mV/div..5V/div)
+ * with DC coupling, for per-range gain characterisation. */
+static void cmd_fpga_scope_range(const char *args)
+{
+    uint32_t n = 0;
+    if (args == NULL || *args == '\0' || parse_int(args, &n) != 0) {
+        usb_send_str("Usage: fpga scope range <0-9>\r\n");
+        return;
+    }
+    fpga_scope_set_range_diag((uint8_t)n);
+    usb_debug_printf("scope frontend range = %lu (DC coupling forced)\r\n",
+                     (unsigned long)n);
 }
 
 static void cmd_fpga_diag_clear(void)
@@ -5151,6 +5166,8 @@ static void dispatch_command(char *line)
         cmd_fpga_wire_entry(line[15] == ' ' ? line + 16 : "");
     } else if (strncmp(line, "fpga wire scope", 15) == 0) {
         cmd_fpga_wire_scope(line[15] == ' ' ? line + 16 : "");
+    } else if (strncmp(line, "fpga scope range ", 17) == 0) {
+        cmd_fpga_scope_range(line + 17);
     } else if (strcmp(line, "fpga scope reinit") == 0) {
         cmd_fpga_scope_reinit();
     } else if (strncmp(line, "fpga meter reinit", 17) == 0) {

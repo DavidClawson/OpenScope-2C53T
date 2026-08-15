@@ -747,6 +747,10 @@ void fpga_enter_scope_mode(void);
  */
 void fpga_scope_reinit(void);
 
+/* Bench gain-cal hook: apply scope frontend range <n> (0..VDIV_COUNT-1) with
+ * DC coupling forced, for per-range gain characterisation from the shell. */
+void fpga_scope_set_range_diag(uint8_t range_idx);
+
 /*
  * Queue a scope reinit to be serviced asynchronously from the display loop.
  * This is safe to invoke from the USB debug shell.

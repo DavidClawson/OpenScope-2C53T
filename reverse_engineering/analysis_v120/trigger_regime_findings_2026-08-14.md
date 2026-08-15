@@ -440,3 +440,42 @@ trigger mode (`guest-coldtrace`, `fpga.c`):
 until per-range gain cal is done (dev plan; the placeholder relay table). And
 NORMAL-mode "hold" is code-verified but bench-pending (no shell command to
 switch trigger mode; needs the UI trigger-mode button).
+
+---
+
+# ADDENDUM 6 — 2026-08-15: per-range frontend gain characterization — the relay table is SCRAMBLED, not a ladder
+
+Started the per-range gain cal. Added `fpga scope range <0-9>` (drives
+`fpga_set_scope_frontend_range` + PC12 HIGH from the shell). Bench, coldtrace,
+CH1 = ESP32.
+
+## Key findings
+1. **The relays physically switch** — David heard distinct relay clicks (some
+   faint, some loud) stepping through the ranges. The GPIO->relay path works.
+2. **DC-level sweep was a dud** — the ESP32 `dc <mV>` command does not reliably
+   move its output (echo always shows mid=1656), so a "DC input sweep" held the
+   input constant; code stayed ~80 at every range. Not evidence about the
+   frontend. Use SINE for gain, not the ESP32 DC path.
+3. **Sine peak-to-peak per range DOES vary, but is NOT an ordered ladder.**
+   Fixed 40 Hz sine, amp 2000, DAC1=2500, measured via 0x09/0x0A min/max regs:
+
+   | range | 0 | 1 | 2 | 3 | 4 | 5 | 6 | 7 | 8 | 9 |
+   |---|---|---|---|---|---|---|---|---|---|---|
+   | pp (codes) | 131 | 205 | 199 | 162 | 251* | 64 | 229 | dead | dead | dead |
+
+   *range 4 rails (max 253). Ranges 7-9 return no signal (min>max garbage) —
+   they route the input to a dead path. Ranges 0-6 give unordered gains.
+
+## Conclusion — cal is BLOCKED on the relay table, not the cal math
+The "approximate reconstructed truth table" in `fpga_set_scope_frontend_range`
+(commented "intentionally simple... obviously scope-like") does NOT implement an
+ordered attenuation ladder: gains are scrambled (64..251), one range rails, and
+three ranges are dead. Calibrating gain per range on top of a scrambled table
+would just cal the wrong mapping. The right sequence is:
+  1. Replace the approximate table with STOCK's real per-range relay patterns
+     (from gpio_mux_portc_porte @0x080088A4 + gpio_mux_porta_portb @0x08008A58),
+     so range index -> gain is an ordered, sane ladder.
+  2. THEN measure codes/volt + zero-code per range and wire it into the render
+     (which today ignores vdiv entirely: fixed (sample-128)*SCOPE_H/256) and the
+     Vpp/Vrms measurement path.
+Stock-table extraction is in progress (Ghidra decompile of the two mux fns).
