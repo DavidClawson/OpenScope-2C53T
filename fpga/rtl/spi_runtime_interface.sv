@@ -41,8 +41,12 @@ module spi_runtime_interface #(
     output logic                   last_known_frame_error
 );
 
-    localparam logic [7:0] OPCODE_CH1 = 8'h04;
-    localparam logic [7:0] OPCODE_CH2 = 8'h05;
+    // Bench opcode sweep (2026-08-14): opcodes 0x20-0x3F alias 0x00-0x1F
+    // exactly, including live channel data on 0x24/0x25, so the stock design
+    // decodes only the low five opcode bits.  The full received byte is still
+    // exposed raw on the opcode outputs.
+    localparam logic [4:0] OPCODE_SELECT_CH1 = 5'h04;
+    localparam logic [4:0] OPCODE_SELECT_CH2 = 5'h05;
 
     logic [2:0] rx_bit_index;
     logic [6:0] rx_shift;
@@ -54,18 +58,20 @@ module spi_runtime_interface #(
     logic [7:0] completed_rx_byte;
     logic       completed_opcode_known;
     logic       spi_inactive;
+    logic [4:0] opcode_select;
 
     assign completed_rx_byte = {rx_shift, spi_mosi};
-    assign completed_opcode_known = (completed_rx_byte == OPCODE_CH1) ||
-                                    (completed_rx_byte == OPCODE_CH2);
+    assign completed_opcode_known = (completed_rx_byte[4:0] == OPCODE_SELECT_CH1) ||
+                                    (completed_rx_byte[4:0] == OPCODE_SELECT_CH2);
     assign spi_inactive = !reset_n || spi_cs_n;
     assign spi_miso = tx_first_byte ? first_response_byte[7-tx_bit_index] : tx_shift[7];
     assign spi_miso_oe = !spi_cs_n;
+    assign opcode_select = opcode[4:0];
 
     always_comb begin
-        if (opcode_valid && (opcode == OPCODE_CH1)) begin
+        if (opcode_valid && (opcode_select == OPCODE_SELECT_CH1)) begin
             response_channel = 2'd1;
-        end else if (opcode_valid && (opcode == OPCODE_CH2)) begin
+        end else if (opcode_valid && (opcode_select == OPCODE_SELECT_CH2)) begin
             response_channel = 2'd2;
         end else begin
             response_channel = 2'd0;

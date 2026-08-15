@@ -17,7 +17,6 @@ module tb_fnirsi_2c53t_top;
     logic [DATA_WIDTH-1:0]             adc_ch2_data;
     logic                              raw_arm_enable;
     logic [TIMEBASE_WIDTH-1:0]         raw_interval_minus_one;
-    logic                              raw_trigger_event;
     logic [7:0]                        raw_response_status0;
     logic [7:0]                        raw_response_status1;
     logic [7:0]                        raw_response_status2;
@@ -29,6 +28,14 @@ module tb_fnirsi_2c53t_top;
     logic                              sample_tick;
     logic                              trigger_pulse;
     logic                              trigger_seen;
+    logic                              ch1_at_or_above_level;
+    logic [7:0]                        reg_raw_01;
+    logic [7:0]                        reg_raw_02;
+    logic [7:0]                        reg_raw_06;
+    logic [7:0]                        reg_raw_07;
+    logic [7:0]                        reg_trigger_level;
+    logic [7:0]                        reg_raw_rate_divisor;
+    logic                              slow_path_tick;
     logic [CAPTURE_ADDR_WIDTH-1:0]     ch1_write_ptr;
     logic [CAPTURE_ADDR_WIDTH-1:0]     ch2_write_ptr;
     logic [7:0]                        spi_opcode;
@@ -47,6 +54,7 @@ module tb_fnirsi_2c53t_top;
 
     logic [7:0]                        received_miso;
     int unsigned                       failures;
+    int unsigned                       slow_tick_count;
 
     always #5 sample_clk = ~sample_clk;
 
@@ -64,7 +72,6 @@ module tb_fnirsi_2c53t_top;
         .adc_ch2_data(adc_ch2_data),
         .raw_arm_enable(raw_arm_enable),
         .raw_interval_minus_one(raw_interval_minus_one),
-        .raw_trigger_event(raw_trigger_event),
         .raw_response_status0(raw_response_status0),
         .raw_response_status1(raw_response_status1),
         .raw_response_status2(raw_response_status2),
@@ -76,6 +83,14 @@ module tb_fnirsi_2c53t_top;
         .sample_tick(sample_tick),
         .trigger_pulse(trigger_pulse),
         .trigger_seen(trigger_seen),
+        .ch1_at_or_above_level(ch1_at_or_above_level),
+        .reg_raw_01(reg_raw_01),
+        .reg_raw_02(reg_raw_02),
+        .reg_raw_06(reg_raw_06),
+        .reg_raw_07(reg_raw_07),
+        .reg_trigger_level(reg_trigger_level),
+        .reg_raw_rate_divisor(reg_raw_rate_divisor),
+        .slow_path_tick(slow_path_tick),
         .ch1_write_ptr(ch1_write_ptr),
         .ch2_write_ptr(ch2_write_ptr),
         .spi_opcode(spi_opcode),
@@ -121,14 +136,12 @@ module tb_fnirsi_2c53t_top;
 
     task automatic capture_clock(
         input logic [7:0] ch1_value,
-        input logic [7:0] ch2_value,
-        input logic       trigger_event
+        input logic [7:0] ch2_value
     );
         begin
             @(negedge sample_clk);
             adc_ch1_data = ch1_value;
             adc_ch2_data = ch2_value;
-            raw_trigger_event = trigger_event;
             @(posedge sample_clk);
             #1;
         end
@@ -167,6 +180,20 @@ module tb_fnirsi_2c53t_top;
             spi_cs_n = 1'b1;
             #2;
             expect_bit(spi_miso_oe, 1'b0, "MISO output-enable after CS");
+        end
+    endtask
+
+    // The observed stock write shape: a two-byte CS-low frame carrying a
+    // register select and one value byte.
+    task automatic write_register(
+        input logic [7:0] select_byte,
+        input logic [7:0] value_byte
+    );
+        begin
+            begin_transaction();
+            transfer_byte(select_byte, received_miso);
+            transfer_byte(value_byte, received_miso);
+            end_transaction();
         end
     endtask
 
@@ -221,7 +248,6 @@ module tb_fnirsi_2c53t_top;
         adc_ch2_data = '0;
         raw_arm_enable = 1'b0;
         raw_interval_minus_one = '0;
-        raw_trigger_event = 1'b0;
         raw_response_status0 = 8'hd3;
         raw_response_status1 = 8'h61;
         raw_response_status2 = 8'hb2;
@@ -229,43 +255,61 @@ module tb_fnirsi_2c53t_top;
         spi_sclk = 1'b1;
         spi_mosi = 1'b0;
         failures = 0;
+        slow_tick_count = 0;
 
         repeat (2) @(posedge sample_clk);
         reset_n = 1'b1;
         repeat (2) @(posedge sample_clk);
 
+        // Reset defaults are the stock arm-sequence register values.
+        expect_equal8(reg_trigger_level, 8'had, "reset trigger level");
+        expect_equal8(reg_raw_01, 8'h08, "reset raw reg 01");
+        expect_equal8(reg_raw_02, 8'h03, "reset raw reg 02");
+        expect_equal8(reg_raw_rate_divisor, 8'h00, "reset rate divisor");
+
         // Negative control: disarmed ADC changes do not advance either buffer.
-        capture_clock(8'hee, 8'hdd, 1'b0);
+        capture_clock(8'hee, 8'hdd);
         if (ch1_write_ptr !== '0 || ch2_write_ptr !== '0) begin
             $error("disarmed capture advanced write pointers");
             failures++;
         end
 
-        // One sample per armed clock.  The trigger event latches and then
-        // freezes later writes; no stock post-trigger policy is invented here.
+        // Free-run phase: one sample per armed clock, every CH1 sample below
+        // the default 0xAD trigger level.  The bench-matching expectation is a
+        // full buffer with no trigger activity at all.
         @(negedge sample_clk);
         raw_arm_enable = 1'b1;
-        raw_interval_minus_one = '0;
         for (int unsigned sample_number = 0; sample_number < CAPTURE_DEPTH; sample_number++) begin
             capture_clock(8'h10 + 8'(sample_number),
-                          8'h80 + 8'(sample_number),
-                          sample_number == CAPTURE_DEPTH - 1);
+                          8'h80 + 8'(sample_number));
             if (sample_number == 0) begin
                 expect_bit(sample_tick, 1'b1, "first armed sample tick");
+                expect_bit(slow_path_tick, 1'b1, "undivided slow-path tick");
             end
         end
-        expect_bit(trigger_seen, 1'b1, "trigger latch");
-        expect_bit(trigger_pulse, 1'b1, "trigger pulse");
+        expect_bit(trigger_seen, 1'b0, "free run leaves trigger clear");
+        if (ch1_write_ptr !== '0 || ch2_write_ptr !== '0) begin
+            $error("free-run buffer did not wrap to pointer zero");
+            failures++;
+        end
 
-        capture_clock(8'h99, 8'ha9, 1'b0);
-        if (ch1_write_ptr !== CAPTURE_ADDR_WIDTH'(0) ||
-            ch2_write_ptr !== CAPTURE_ADDR_WIDTH'(0)) begin
-            $error("trigger freeze did not hold write pointers after a full buffer");
+        // Disarm holds the buffer content for a stable readback; the stock CDC
+        // between free-running writes and SPI reads is deliberately not
+        // modeled here.
+        @(negedge sample_clk);
+        raw_arm_enable = 1'b0;
+        capture_clock(8'h99, 8'ha9);
+        if (ch1_write_ptr !== '0 || ch2_write_ptr !== '0) begin
+            $error("disarm did not stop capture writes");
             failures++;
         end
 
         read_channel(8'h04, 8'h10, "CH1 read");
         read_channel(8'h05, 8'h80, "CH2 read");
+
+        // Bench alias fact: the design decodes only the low five opcode bits,
+        // so 0x24 serves the same CH1 read as 0x04.
+        read_channel(8'h24, 8'h10, "CH1 alias read");
 
         // Unknown opcodes remain raw SPI events and are not upgraded into a
         // known read response or a frame-length error.
@@ -288,12 +332,78 @@ module tb_fnirsi_2c53t_top;
         expect_bit(spi_last_known_frame_valid, 1'b0, "unknown frame valid");
         expect_bit(spi_last_known_frame_error, 1'b0, "unknown frame error");
         expect_equal8(spi_last_opcode, 8'h99, "unknown last opcode");
+        expect_equal8(reg_trigger_level, 8'had, "unexposed register write left trigger level");
+
+        // Register writes use the observed two-byte frame shape.
+        write_register(8'h08, 8'h80);
+        expect_equal8(reg_trigger_level, 8'h80, "trigger level write");
+        write_register(8'h22, 8'h55);
+        expect_equal8(reg_raw_02, 8'h55, "aliased raw register write");
+
+        // Negative control: a three-byte unknown frame must not commit.
+        begin_transaction();
+        transfer_byte(8'h08, received_miso);
+        transfer_byte(8'hee, received_miso);
+        transfer_byte(8'hff, received_miso);
+        end_transaction();
+        expect_equal8(reg_trigger_level, 8'h80, "three-byte frame ignored");
+
+        write_register(8'h0b, 8'h03);
+        expect_equal8(reg_raw_rate_divisor, 8'h03, "rate divisor write");
+
+        // Triggered phase: the comparator, not a testbench input, produces the
+        // trigger.  Below-level samples seed history, the 0xc0 sample crosses
+        // the written 0x80 level, the latch lands one cycle later (writing one
+        // post-crossing sample), and the freeze then holds both pointers.  No
+        // stock post-trigger policy is claimed by this sequencing.
+        @(negedge sample_clk);
+        raw_arm_enable = 1'b1;
+        capture_clock(8'h20, 8'h20);
+        capture_clock(8'h20, 8'h20);
+        capture_clock(8'hc0, 8'h20);
+        expect_bit(trigger_seen, 1'b0, "crossing latch is registered");
+        expect_bit(ch1_at_or_above_level, 1'b1, "comparator saw the crossing sample");
+        capture_clock(8'h20, 8'h20);
+        expect_bit(trigger_pulse, 1'b1, "trigger pulse");
+        expect_bit(trigger_seen, 1'b1, "trigger latch");
+        capture_clock(8'h33, 8'h33);
+        expect_bit(trigger_pulse, 1'b0, "trigger pulse is one cycle");
+        if (ch1_write_ptr !== CAPTURE_ADDR_WIDTH'(4) ||
+            ch2_write_ptr !== CAPTURE_ADDR_WIDTH'(4)) begin
+            $error("trigger freeze did not hold write pointers");
+            failures++;
+        end
+        capture_clock(8'h44, 8'h44);
+        if (ch1_write_ptr !== CAPTURE_ADDR_WIDTH'(4) ||
+            ch2_write_ptr !== CAPTURE_ADDR_WIDTH'(4)) begin
+            $error("frozen write pointers moved");
+            failures++;
+        end
+
+        // The SPI-written divisor paces the slow-path tick: divisor 3 gives
+        // one tick every four armed cycles.
+        @(negedge sample_clk);
+        raw_arm_enable = 1'b0;
+        capture_clock(8'h20, 8'h20);
+        @(negedge sample_clk);
+        raw_arm_enable = 1'b1;
+        slow_tick_count = 0;
+        for (int unsigned cycle_number = 0; cycle_number < 8; cycle_number++) begin
+            capture_clock(8'h20, 8'h20);
+            if (slow_path_tick) begin
+                slow_tick_count++;
+            end
+        end
+        if (slow_tick_count != 2) begin
+            $error("divided slow-path tick count got %0d, expected 2", slow_tick_count);
+            failures++;
+        end
 
         if (failures != 0) begin
             $fatal(1, "fnirsi_2c53t_top failed with %0d error(s)", failures);
         end
 
-        $display("PASS: top captures both channels, latches trigger, serves 0x04/0x05 reads, and preserves unknown opcodes");
+        $display("PASS: free-run capture, register writes, comparator trigger, alias reads, divided slow-path tick, and raw unknown opcodes");
         $finish;
     end
 
