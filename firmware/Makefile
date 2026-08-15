@@ -737,7 +737,7 @@ guest-coldtrace: CFLAGS += -DGUEST_BUILD -DFPGA_WARM_HANDOFF_TEST=1 -DFPGA_USART
 guest-coldtrace: LDSCRIPT = ld/at32f403a_guest.ld
 guest-coldtrace: clean all
 
-# [BENCH 2026-08-15] guest-coldtrace-faithful — coldtrace with the config+arm
+# [BENCH 2026-08-14] guest-coldtrace-faithful — coldtrace with the config+arm
 # sequence made BYTE-EXACT to stock's June-capture wire protocol (see the
 # FPGA_CONFIG_B_FAITHFUL comment block in fpga.c for the five deltas closed).
 # Target observation: does the engine land in stock's state — post-arm 0x03

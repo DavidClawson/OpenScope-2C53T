@@ -223,7 +223,7 @@ engine in any regime — stock-state-specific, unexplained, tracked under item 5
 
 ---
 
-# ADDENDUM 2 — 2026-08-15: posture and wire-protocol EXCLUDED; the 23× is a regime, and it is not set by anything we replay
+# ADDENDUM 2 — 2026-08-14: posture and wire-protocol EXCLUDED; the 23× is a regime, and it is not set by anything we replay
 
 Next-day bench session, fully remote (CDC shell + ESP32), plus one flash cycle
 (`guest-coldtrace-faithful`, David on IAP/power duty).
@@ -307,7 +307,7 @@ Sharp questions for `gw1n2-apicula` + the m_capture.py sim harness:
 
 ---
 
-# ADDENDUM 3 — 2026-08-15: netlist session (gw1n2-apicula M12) — the 23x rate control is a real SPI-reachable counter on BSRAM_1/2
+# ADDENDUM 3 — 2026-08-14: netlist session (gw1n2-apicula M12) — the 23x rate control is a real SPI-reachable counter on BSRAM_1/2
 
 Since the bench excluded every MCU-side/wire hypothesis (Addendum 2), the
 switch is in the fabric. Took it to the `gw1n2-apicula` unpacked netlist. Full
@@ -358,7 +358,7 @@ regime — re-sweep them here watching for a long, trigger-independent reply.
 
 ---
 
-# ADDENDUM 4 — 2026-08-15: BSRAM_1/2 opcode sweep (NEGATIVE) + the raw buffer free-runs and is directly pollable
+# ADDENDUM 4 — 2026-08-14: BSRAM_1/2 opcode sweep (NEGATIVE) + the raw buffer free-runs and is directly pollable
 
 Bench, guest-coldtrace-faithful, quiet input (ESP32 off, PC0 edges frozen at 0).
 Ran the M12 read-opcode sweep. `bsram_sweep.py`.
@@ -412,7 +412,7 @@ netlist/sim questions; the bench has now given all it can on the rate itself.
 
 ---
 
-# ADDENDUM 5 — 2026-08-15: auto/free-run acquisition IMPLEMENTED + bench-verified
+# ADDENDUM 5 — 2026-08-14: auto/free-run acquisition IMPLEMENTED + bench-verified
 
 Acted on Addendum 4 item 1. `fpga_warmtest_acq_task` now branches on the scope
 trigger mode (`guest-coldtrace`, `fpga.c`):
@@ -443,7 +443,7 @@ switch trigger mode; needs the UI trigger-mode button).
 
 ---
 
-# ADDENDUM 6 — 2026-08-15: per-range frontend gain characterization — the relay table is SCRAMBLED, not a ladder
+# ADDENDUM 6 — 2026-08-14: per-range frontend gain characterization — the relay table is SCRAMBLED, not a ladder
 
 Started the per-range gain cal. Added `fpga scope range <0-9>` (drives
 `fpga_set_scope_frontend_range` + PC12 HIGH from the shell). Bench, coldtrace,
@@ -482,7 +482,7 @@ Stock-table extraction is in progress (Ghidra decompile of the two mux fns).
 
 ---
 
-# ADDENDUM 7 — 2026-08-15: stock's real relay table decoded + implemented; coarse attenuator now works
+# ADDENDUM 7 — 2026-08-14: stock's real relay table decoded + implemented; coarse attenuator now works
 
 Extracted stock's per-range relay patterns from the Ghidra decompile of
 `gpio_mux_portc_porte` (CH1, flash 0x080088A4) and `gpio_mux_porta_portb`
@@ -520,7 +520,7 @@ pp per range: 0:234 1:234 2:169 3:206 4:232 5:75 6:75 7:202 8:169 9:193
 
 ---
 
-# ADDENDUM 8 — 2026-08-15: gain measured, architecture understood; cal needs per-range centering
+# ADDENDUM 8 — 2026-08-14: gain measured, architecture understood; cal needs per-range centering
 
 Measured actual input->code gain with buffer-based pp (reading 0x04 samples
 directly — the 0x09/0x0A min/max regs are too noisy across separate SPI reads).

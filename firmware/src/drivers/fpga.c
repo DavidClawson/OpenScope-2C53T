@@ -131,7 +131,7 @@ static TaskHandle_t      rx_task_handle  = NULL;
  *     variable in every recorded observation is trigger activity, not
  *     cadence. Re-measure with signal state controlled before trusting any
  *     cadence number.
- * FURTHER CORRECTED 2026-08-15 (Addendum 4): the raw buffer free-runs and holds
+ * FURTHER CORRECTED 2026-08-14 (Addendum 4): the raw buffer free-runs and holds
  * a COHERENT waveform whether or not anything triggers — a direct 0x04 poll of a
  * 30 Hz sine shows ~13 clean cycles across the 1024-sample buffer with PC0 never
  * pulsing. So the "unwritten words read FF / needs a per-capture re-arm" model is
@@ -144,7 +144,7 @@ static TaskHandle_t      rx_task_handle  = NULL;
 #define FPGA_PROBE_CADENCE_MS 150u   /* retired; kept only to not break overrides */
 #endif
 
-/* Auto/free-run acquisition (2026-08-15, analysis_v120/
+/* Auto/free-run acquisition (2026-08-14, analysis_v120/
  * trigger_regime_findings_2026-08-14.md Addendum 4). The raw capture buffer
  * (BSRAM_0/3, read via 0x04/0x05) free-runs at the sample clock regardless of
  * trigger state, and a direct poll returns a COHERENT waveform (bench: a 30 Hz
@@ -692,7 +692,7 @@ static void spi3_pump_h2_record(const uint8_t *tx, uint32_t n)
 #define FPGA_CONFIG_B  0
 #endif
 
-/* Faithful-boot variant (2026-08-15, `make guest-coldtrace-faithful`) — makes
+/* Faithful-boot variant (2026-08-14, `make guest-coldtrace-faithful`) — makes
  * the Build B sequence BYTE-EXACT to stock's captured wire protocol (June
  * capture windows 0-13, analysis_full.txt). Motivation: with nominally
  * identical arm writes our engine lands in a visibly different state than
@@ -1408,7 +1408,7 @@ static uint8_t fpga_scope_primary_range(const scope_state_t *ss)
     return (ch->vdiv_idx < VDIV_COUNT) ? ch->vdiv_idx : (VDIV_COUNT - 1);
 }
 
-/* Absolute per-range relay levels, reconstructed 2026-08-15 from STOCK's
+/* Absolute per-range relay levels, reconstructed 2026-08-14 from STOCK's
  * gpio_mux_portc_porte (CH1: PC12/PE4/PE5/PE6, flash 0x080088A4) and
  * gpio_mux_porta_portb (CH2: PA15/PA10/PB10, flash 0x08008A58). Stock drives
  * those pins with DIFFERENTIAL SET/CLR writes that touch only some pins per
@@ -1463,7 +1463,7 @@ static void fpga_set_scope_frontend_range(uint8_t range_idx)
     GPIOA->scr = (1U << 6);
 }
 
-/* Bench-cal hook (2026-08-15): apply a scope frontend range by index and force
+/* Bench-cal hook (2026-08-14): apply a scope frontend range by index and force
  * DC coupling (PC12 HIGH), so the per-range gain can be characterised from the
  * shell without cycling volts/div through the UI. Clamps to VDIV_COUNT-1. See
  * `fpga scope range <n>` in usb_debug.c and the frontend gain-cal work. */
