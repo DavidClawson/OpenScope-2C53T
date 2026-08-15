@@ -19,10 +19,18 @@ and board continuity results are integrated together.
 - `docs/reconstruction.md` — recovered block map, protocol facts, and unknowns.
 - `docs/verification.md` — proof levels and acceptance criteria.
 
-`rtl/capture_channel.sv` is currently a portable circular capture-memory
-primitive. Its unit test proves wrap, freeze, readback, and the disabled-capture
-negative control. It does **not** yet prove Gowin BSRAM inference, stock memory
-ordering, trigger behavior, timing closure, or hardware equivalence.
+The top-level default has two 1024 x 8 raw capture stores. The portable
+registered-read/write split maps through the installed Yosys Gowin mapper to
+two `DPX9B` BSRAM primitives, one per channel. Each store needs 8192 bits; the
+mapper's 14-bit, byte-addressed BSRAM primitive has 18432 initialization bits,
+so the two stores need two primitives rather than one shared store. This is a
+resource-mapping result, not a claim about stock order, trigger behavior, or
+the sample-clock/SPI-clock CDC protocol.
+
+The unit test proves wrap, freeze, readback, and the disabled-capture negative
+control. The BSRAM check proves the target synthesis netlist retains two `DPX9B`
+cells and rejects a register fallback. Neither check proves stock memory order,
+trigger behavior, timing closure, or hardware equivalence.
 
 ## Quick local checks
 
@@ -33,7 +41,10 @@ iverilog -g2012 -s tb_capture_channel \
   -o /tmp/tb_capture_channel \
   fpga/rtl/capture_channel.sv fpga/sim/tb_capture_channel.sv
 vvp /tmp/tb_capture_channel
-verilator --lint-only --timing -Wall fpga/rtl/capture_channel.sv
+verilator --lint-only --timing -Wall \
+  fpga/rtl/capture_channel.sv fpga/rtl/trigger_timebase.sv \
+  fpga/rtl/spi_runtime_interface.sv fpga/rtl/fnirsi_2c53t_top.sv
+python3 -m unittest fpga/tests/test_capture_bsram_mapping.py
 python3 -m unittest fpga/tests/test_netlist_verification.py
 ```
 
