@@ -494,6 +494,45 @@ static void draw_popup(const theme_t *th)
  * Demo waveform (sine + square)
  * ═══════════════════════════════════════════════════════════════════ */
 
+/* Render one channel's live ADC buffer into the vertical band [y_top, y_bot),
+ * AUTO-FITTING the trace to that band from its own min/max (2026-08-14). This
+ * makes any signal fill the screen centred, regardless of the frontend gain,
+ * the DC offset (DAC1), or amplitude — no clipping, no manual centring. It is
+ * a visualisation autoscale, NOT a volts reference; the Vpp/Vrms badges carry
+ * the calibrated volts separately. Consecutive samples are connected with a
+ * vertical span so the trace reads as a continuous line, not dots. */
+static void draw_channel_autofit(const volatile uint8_t *buf, uint16_t color,
+                                 int16_t y_top, int16_t y_bot)
+{
+    uint16_t n = (LCD_WIDTH < 512u) ? (uint16_t)LCD_WIDTH : 512u;
+    uint8_t mn = 255, mx = 0;
+    for (uint16_t x = 0; x < n; x++) {
+        uint8_t s = buf[x];
+        if (s < mn) mn = s;
+        if (s > mx) mx = s;
+    }
+    int span = (int)mx - (int)mn;
+    if (span < 8) span = 8;                 /* don't zoom pure noise to full band */
+    int h = (int)(y_bot - y_top) - 3;       /* usable height, small margin */
+    if (h < 4) h = 4;
+    int16_t prev_y = -1;
+    for (uint16_t x = 0; x < n; x++) {
+        int yy = (int)(y_bot - 2) - ((int)((int)buf[x] - mn) * h) / span;
+        if (yy < y_top) yy = y_top;
+        if (yy >= y_bot) yy = y_bot - 1;
+        int16_t y = (int16_t)yy;
+        if (prev_y >= 0) {                  /* connect prev..cur vertically */
+            int16_t a = prev_y < y ? prev_y : y;
+            int16_t b = prev_y < y ? y : prev_y;
+            for (int16_t v = a; v <= b; v++)
+                lcd_set_pixel(x, (uint16_t)v, color);
+        } else {
+            lcd_set_pixel(x, (uint16_t)y, color);
+        }
+        prev_y = y;
+    }
+}
+
 void draw_demo_waveform(uint32_t frame)
 {
     const theme_t *th = theme_get();
@@ -523,36 +562,18 @@ void draw_demo_waveform(uint32_t frame)
         /* Re-triggering DISABLED — see note in demo waveform fallback.
          * TODO: re-enable once SPI3 protocol is confirmed working. */
 
-        /* CH1: real ADC data */
-        if (ss->ch1.enabled && ch1_buf != NULL) {
-            int16_t ch1_offset = ss->ch1.position;
-            for (uint16_t x = 0; x < LCD_WIDTH && x < 512; x++) {
-                /* Map 0-255 ADC value to waveform area.
-                 * 128 = center (SCOPE_MID_Y), scale to fit SCOPE_H. */
-                int16_t sample = (int16_t)ch1_buf[x];
-                int16_t y = SCOPE_MID_Y - ((sample - 128) * SCOPE_H / 256)
-                            - ch1_offset;
-                if (y >= SCOPE_TOP && y < SCOPE_BOT) {
-                    lcd_set_pixel(x, (uint16_t)y, th->ch1);
-                    if (y + 1 < SCOPE_BOT)
-                        lcd_set_pixel(x, (uint16_t)(y + 1), th->ch1);
-                }
-            }
-        }
-
-        /* CH2: real ADC data */
-        if (ss->ch2.enabled && ch2_buf != NULL) {
-            int16_t ch2_offset = ss->ch2.position;
-            for (uint16_t x = 0; x < LCD_WIDTH && x < 512; x++) {
-                int16_t sample = (int16_t)ch2_buf[x];
-                int16_t y = SCOPE_MID_Y - ((sample - 128) * SCOPE_H / 256)
-                            - ch2_offset;
-                if (y >= SCOPE_TOP && y < SCOPE_BOT) {
-                    lcd_set_pixel(x, (uint16_t)y, th->ch2);
-                    if (y + 1 < SCOPE_BOT)
-                        lcd_set_pixel(x, (uint16_t)(y + 1), th->ch2);
-                }
-            }
+        /* Auto-fit render. If both channels are live, split the scope area
+         * into top (CH1) and bottom (CH2) bands so the traces don't overlap;
+         * a single live channel gets the whole area. */
+        bool c1 = ss->ch1.enabled && ch1_buf != NULL;
+        bool c2 = ss->ch2.enabled && ch2_buf != NULL;
+        if (c1 && c2) {
+            draw_channel_autofit(ch1_buf, th->ch1, SCOPE_TOP, SCOPE_MID_Y - 1);
+            draw_channel_autofit(ch2_buf, th->ch2, SCOPE_MID_Y + 1, SCOPE_BOT);
+        } else if (c1) {
+            draw_channel_autofit(ch1_buf, th->ch1, SCOPE_TOP, SCOPE_BOT);
+        } else if (c2) {
+            draw_channel_autofit(ch2_buf, th->ch2, SCOPE_TOP, SCOPE_BOT);
         }
         return;
     }
