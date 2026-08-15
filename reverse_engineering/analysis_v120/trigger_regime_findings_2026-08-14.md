@@ -563,3 +563,55 @@ directly — the 0x09/0x0A min/max regs are too noisy across separate SPI reads)
   fit gain+offset) is defined and proven on 2 ranges; running it for all 10 is
   ~15-20 min of careful bench and is the direct next step. The second (digital)
   gain layer is a separate RE task for full per-vdiv-setting scaling.
+
+---
+
+# ADDENDUM 9 — 2026-08-14: parallel-agent session — cal tool, volts wiring, full-range structure, segment-model refutation
+
+Ran three agents in parallel + a bench cal pass. Outcomes, honestly:
+
+## Delivered
+- **Vpp/Vrms -> volts on calibrated ranges** (agent, `scope_ui.c`): shows real
+  volts on vdiv_idx 2 and 8 (the two carefully-measured ranges), honest ADC
+  counts elsewhere. Reviewed, correct, shipped (commit 29ae051).
+- **`fpga scope center [0-9]` tool** (agent, `usb_debug.c`): per-range DC-offset
+  centering search. Shipped, then BUGFIXED same day (see below).
+- **Corrected the segment-model premise** — see the M12 addendum correction and
+  the devlog: the GW1N-2 `_segment_data` lever is REFUTED (apicula M13). The
+  undriven LW nets are normal apicula unpack behaviour on all devices; the real
+  sim unblock is a segment-aware harness that force-drives them.
+
+## The tool bug (found on the bench, fixed)
+`fpga scope center` built + gated clean but its reported means clustered
+120-170 regardless of DAC1 (real means span 0-255 with DAC1). Root cause: the
+search called `scope_trigger_dac_raw()` WITHOUT `scope_trigger_dac_init()`
+first, so the DAC writes were inert and the binary search flailed around a
+fixed operating point. `trig raw` calls the init; the tool didn't. Fixed (init
+once before the search). A clean lesson: build+gate green is not bench-valid.
+
+## Full 10-range gain STRUCTURE (host-side, since the tool was mid-fix)
+Per-range centered (host-side DAC1 search via direct opread — reliable),
+sine 8Hz amp100, buffer pp -> codes/Vpp:
+
+| range | 0 | 1 | 2 | 3 | 4 | 5 | 6 | 7 | 8 | 9 |
+|---|---|---|---|---|---|---|---|---|---|---|
+| codes/Vpp | 40 | 40 | 350 | 90 | 90 | 1340 | 1280 | 30 | 190 | 90 |
+
+- **Aliased pairs confirmed** (0==1, 3==4, 5==6) — matches the stock relay-code
+  aliasing decode. The measurement is capturing real structure.
+- **range 2 = 350 reproduces the careful earlier 347** (0.9%). But **range 8 =
+  190 vs the careful multi-point 154 (~24% off)**. So single-point-per-range is
+  ±25% — good for STRUCTURE, NOT precise enough to wire as a trustworthy volts
+  cal. The low sample rate + shell-read noise + 8Hz undersampling are the limit.
+- Gains do NOT track the vdiv labels (range 5 = "200mV/div" but a very high
+  analog gain) — re-confirming the earlier finding: volts/div is the digital
+  layer, the relays are just a few analog gains, and vdiv_idx->relay is
+  many-to-few.
+
+## Status
+- Wired volts cal = ranges 2 (347) and 8 (154), the only two measured by the
+  careful multi-point method. NOT expanding to the ±25% quick numbers — a
+  confident wrong voltage is worse than honest counts.
+- A trustworthy full table needs the careful per-range multi-point method (~5
+  amps each, per-range centered) AND is ultimately limited by the ~2.4 kS/s
+  sample rate. Deferred; the structure and procedure are both now in hand.

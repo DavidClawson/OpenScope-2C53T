@@ -1949,6 +1949,13 @@ static void cmd_fpga_scope_center(const char *args)
         return;
     }
 
+    /* BUGFIX 2026-08-14: the search's scope_trigger_dac_raw() writes were inert
+     * without this init (bench: reported means clustered 120-170 regardless of
+     * DAC1, never spanning 0-255, so the binary search flailed around a fixed
+     * operating point). `trig raw` calls it too — the DAC peripheral must be
+     * enabled before raw writes take effect. */
+    scope_trigger_dac_init();
+
     uint32_t first = all ? 0 : n;
     uint32_t last  = all ? 9 : n;
     for (uint32_t r = first; r <= last; r++) {
