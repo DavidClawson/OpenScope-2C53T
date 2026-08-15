@@ -53,6 +53,16 @@ RE methodology and analysis docs. The primary RE artifacts live in [`reverse_eng
 - [RTOS Analysis](re/rtos_analysis.md) — FreeRTOS kernel identification via string signatures
 - [Reference Projects](re/reference_projects.md) — pecostm32 FNIRSI hack, EEVblog, open-source tools
 
+## Community Tools & Sibling Projects
+
+Independent firmware and tooling for the same hardware, by contributors. Not maintained here — see each repo.
+
+- [maksidze/FNIRSI-2C53T-flash-dump](https://github.com/maksidze/FNIRSI-2C53T-flash-dump) — GUEST firmware (`0x08007000`, flashed with `scripts/iap_flash.py`) exposing the W25Q128 over USB MSC: `FAT0` (2 MB system assets), `FAT1` (14 MB user data) and a raw 64 MiB `FLASH WRITE` volume with byte-exact `FLASH.BIN` dump/restore. **The W25Q recovery path** — and the tool for cross-unit / factory-cal dumps (issue #18, 2026-08-15).
+- [maksidze/DOOM-2C53T](https://github.com/maksidze/DOOM-2C53T) — DOOM on the 2C53T; its `pwm_audio.c` is the reference for the PB9 buzzer (TMR4_CH4 PWM, issue #25).
+- [Stlkv/OpenScope-2C23T-2C53T-port](https://github.com/Stlkv/OpenScope-2C23T-2C53T-port) (branch `2c53t-port`) — the bit-bang SSPI loader transplant that first cold-configured the 2C53T FPGA (issue #18); our `fpga_bitbang_config_sequence()` is ported from it.
+- [rosenrot00/OpenScope-2C23T](https://github.com/rosenrot00/OpenScope-2C23T) — independent 2C23T firmware with a working scope; source of the PC8/PC9 config-control observations.
+- [DavidClawson/gw1n2-apicula](https://github.com/DavidClawson/gw1n2-apicula) — sibling repo: GW1N-2 bitstream RE / Apicula support, netlist and capture-path sim harness for this FPGA.
+
 ## Quick Start
 
 1. Build firmware: `cd firmware && make` (hardware) or `make emu` (emulator)
