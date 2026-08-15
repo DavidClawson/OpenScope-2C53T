@@ -16,11 +16,12 @@ module fnirsi_2c53t_top #(
     input  logic [DATA_WIDTH-1:0]             adc_ch1_data,
     input  logic [DATA_WIDTH-1:0]             adc_ch2_data,
 
-    // Raw local controls.  The stock register map, arming lifecycle,
-    // trigger source/polarity, and timebase encoding are still unknown.
+    // Raw local controls.  The complete stock register map, arming lifecycle,
+    // and timebase encoding are still unknown; the trigger event is no longer
+    // an input because the comparator is bench-evidenced as digital and
+    // post-ADC, driven by SPI register 0x08 (see trigger_comparator).
     input  logic                              raw_arm_enable,
     input  logic [TIMEBASE_WIDTH-1:0]         raw_interval_minus_one,
-    input  logic                              raw_trigger_event,
 
     // Raw response bytes for the three non-sample positions used by the
     // observed 1026-byte CS-low runtime reads.  Their meanings are not decoded
@@ -38,6 +39,23 @@ module fnirsi_2c53t_top #(
     output logic                              sample_tick,
     output logic                              trigger_pulse,
     output logic                              trigger_seen,
+    output logic                              ch1_at_or_above_level,
+
+    // Committed SPI control registers.  Only 0x08 has decoded semantics; the
+    // other stock-written registers are re-exposed raw for integration or a
+    // later evidenced block.
+    output logic [7:0]                        reg_raw_01,
+    output logic [7:0]                        reg_raw_02,
+    output logic [7:0]                        reg_raw_06,
+    output logic [7:0]                        reg_raw_07,
+    output logic [7:0]                        reg_trigger_level,
+    output logic [7:0]                        reg_raw_rate_divisor,
+
+    // Reconstruction slot for the gated BSRAM_1/2 write cadence: the divided
+    // tick is exported instead of instantiating the slow store pair because
+    // that record's function (decimation, min/max, roll) is still a
+    // hypothesis.
+    output logic                              slow_path_tick,
 
     output logic [CAPTURE_ADDR_WIDTH-1:0]     ch1_write_ptr,
     output logic [CAPTURE_ADDR_WIDTH-1:0]     ch2_write_ptr,
@@ -67,6 +85,7 @@ module fnirsi_2c53t_top #(
     logic                          capture_write_enable;
     logic                          capture_freeze;
     logic                          sample_response_byte;
+    logic                          ch1_crossing_event;
 
     assign capture_write_enable = raw_arm_enable && sample_tick;
     assign capture_freeze = trigger_seen;
@@ -105,6 +124,54 @@ module fnirsi_2c53t_top #(
         endcase
     end
 
+    // Commit boundary is CS rising, matching the observed stock write frames.
+    // The committed values cross into the sample_clk domain without a
+    // recovered CDC protocol, the same declared limitation as the capture
+    // memories' dual-clock read path.
+    spi_control_registers #(
+        .COUNT_WIDTH(SPI_COUNT_WIDTH)
+    ) control_registers (
+        .reset_n(reset_n),
+        .spi_cs_n(spi_cs_n),
+        .opcode_select(spi_opcode[4:0]),
+        .opcode_valid(spi_opcode_valid),
+        .known_read_active(spi_known_read_active),
+        .transaction_byte_count(spi_transaction_byte_count),
+        .rx_byte(spi_rx_byte),
+        .raw_reg_01(reg_raw_01),
+        .raw_reg_02(reg_raw_02),
+        .raw_reg_06(reg_raw_06),
+        .raw_reg_07(reg_raw_07),
+        .trigger_level(reg_trigger_level),
+        .raw_rate_divisor(reg_raw_rate_divisor)
+    );
+
+    // CH1 is the trigger source here because every bench trigger observation
+    // is CH1-side and the b2 freshness flag appears on CH1 reads only; stock
+    // source and edge selection remain unknown.
+    trigger_comparator #(
+        .DATA_WIDTH(DATA_WIDTH)
+    ) ch1_trigger (
+        .clk(sample_clk),
+        .reset_n(reset_n),
+        .arm_enable(raw_arm_enable),
+        .sample_valid(sample_tick),
+        .sample_data(adc_ch1_data),
+        .trigger_level(reg_trigger_level),
+        .at_or_above_level(ch1_at_or_above_level),
+        .crossing_event(ch1_crossing_event)
+    );
+
+    rate_divider #(
+        .DIVISOR_WIDTH(8)
+    ) slow_path_rate (
+        .clk(sample_clk),
+        .reset_n(reset_n),
+        .enable(raw_arm_enable),
+        .raw_divisor(reg_raw_rate_divisor),
+        .divided_tick(slow_path_tick)
+    );
+
     trigger_timebase #(
         .COUNTER_WIDTH(TIMEBASE_WIDTH)
     ) timebase (
@@ -112,7 +179,7 @@ module fnirsi_2c53t_top #(
         .reset_n(reset_n),
         .raw_arm_enable(raw_arm_enable),
         .raw_interval_minus_one(raw_interval_minus_one),
-        .raw_trigger_event(raw_trigger_event),
+        .raw_trigger_event(ch1_crossing_event),
         .sample_tick(sample_tick),
         .trigger_pulse(trigger_pulse),
         .trigger_seen(trigger_seen)

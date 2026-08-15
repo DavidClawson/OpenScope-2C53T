@@ -173,7 +173,7 @@ module tb_spi_runtime_interface;
 
             for (byte_number = 3; byte_number < FRAME_BYTES; byte_number++) begin
                 transfer_byte(8'hff, received_miso);
-                expected_sample = ((requested_opcode == 8'h04) ? 8'h40 : 8'h80) ^
+                expected_sample = ((requested_opcode[4:0] == 5'h04) ? 8'h40 : 8'h80) ^
                                   8'(byte_number - 3);
                 expect_byte(received_miso, expected_sample, "sample byte");
             end
@@ -208,6 +208,11 @@ module tb_spi_runtime_interface;
 
         read_known_frame(8'h04);
         read_known_frame(8'h05);
+
+        // Bench alias fact (2026-08-14): only the low five opcode bits are
+        // decoded, so 0x24 must behave exactly as the CH1 read while the raw
+        // opcode byte stays visible unmodified.
+        read_known_frame(8'h24);
 
         // Negative control: 0x05 is not accepted as CH2 unless CS stays low
         // for the complete observed 1026-byte runtime window.

@@ -29,8 +29,11 @@ the sample-clock/SPI-clock CDC protocol.
 
 The unit test proves wrap, freeze, readback, and the disabled-capture negative
 control. The BSRAM check proves the target synthesis netlist retains two `DPX9B`
-cells and rejects a register fallback. Neither check proves stock memory order,
-trigger behavior, timing closure, or hardware equivalence.
+cells and rejects a register fallback. The register, comparator, and divider
+blocks carry their own testbenches for the bench-grounded runtime writes,
+digital trigger level, opcode aliasing, and divided-tick contracts. None of
+these checks proves stock memory order, trigger behavior, timing closure, or
+hardware equivalence.
 
 ## Quick local checks
 
@@ -43,7 +46,9 @@ iverilog -g2012 -s tb_capture_channel \
 vvp /tmp/tb_capture_channel
 verilator --lint-only --timing -Wall \
   fpga/rtl/capture_channel.sv fpga/rtl/trigger_timebase.sv \
-  fpga/rtl/spi_runtime_interface.sv fpga/rtl/fnirsi_2c53t_top.sv
+  fpga/rtl/trigger_comparator.sv fpga/rtl/spi_runtime_interface.sv \
+  fpga/rtl/spi_control_registers.sv fpga/rtl/rate_divider.sv \
+  fpga/rtl/fnirsi_2c53t_top.sv
 python3 -m unittest fpga/tests/test_capture_bsram_mapping.py
 python3 -m unittest fpga/tests/test_netlist_verification.py
 ```

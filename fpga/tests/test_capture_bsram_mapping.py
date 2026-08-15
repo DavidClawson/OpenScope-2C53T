@@ -18,7 +18,10 @@ class CaptureBsramMappingTest(unittest.TestCase):
         sources = [
             RTL / "capture_channel.sv",
             RTL / "trigger_timebase.sv",
+            RTL / "trigger_comparator.sv",
             RTL / "spi_runtime_interface.sv",
+            RTL / "spi_control_registers.sv",
+            RTL / "rate_divider.sv",
             RTL / "fnirsi_2c53t_top.sv",
         ]
         script = " ; ".join([
