@@ -517,3 +517,41 @@ pp per range: 0:234 1:234 2:169 3:206 4:232 5:75 6:75 7:202 8:169 9:193
   256-code scale) + Vpp/Vrms to real volts for at least the default range.
 - FUTURE (separate RE): the second gain layer (vdiv -> relay-code + RAM gain
   term mapping) for full per-vdiv-setting calibration.
+
+---
+
+# ADDENDUM 8 — 2026-08-15: gain measured, architecture understood; cal needs per-range centering
+
+Measured actual input->code gain with buffer-based pp (reading 0x04 samples
+directly — the 0x09/0x0A min/max regs are too noisy across separate SPI reads).
+
+## Clean, trustworthy gains (per-range CENTERED, multi-point linear fit)
+- **range 8 (2V/div): 154 codes/Vpp** (pp 19/34/51/64/81 @ amp 100..500mVpp,
+  dead linear). 1 code ≈ 6.5 mV.
+- **range 2 (20mV/div): 347 codes/Vpp** (~2.3x range 8).
+
+## Two architecture findings that reshape the cal
+1. **The relays are a COARSE ~2x attenuator, NOT the volts/div mechanism.**
+   20mV/div vs 2V/div differ by only 2.3x in analog gain, not ~100x. The
+   1000:1 volts/div span (5mV..5V) is achieved in a SECOND layer (FPGA config
+   / stock's RAM gain term at 0x200000fc + display scaling), not the analog
+   frontend. The frontend gives ~2 analog gains; everything else is digital.
+2. **Each range has its own DC operating point (bias), so gain cal needs
+   PER-RANGE CENTERING.** A fixed DAC1 across all ranges gives garbage: the
+   same amp80 input reads pp=2 (railed flat) on some ranges and pp=150+ on
+   others purely because DAC1=2400 centers some and rails others. The clean
+   fits above worked because each range was centered individually first. So the
+   real cal is a 2-parameter (offset + gain) fit PER RANGE, each requiring a
+   centering search — not a single automated sweep.
+
+## Status / honest stopping point
+- DONE: stock relay table (coarse attenuator verified); 2 ranges cleanly
+  characterized; the frontend architecture understood.
+- NOT wired to volts: the per-range gain is only cleanly known for 2 of 10
+  ranges, and fixed-offset automated sweeps are confounded by per-range bias.
+  Wiring Vpp/Vrms to volts with partial/unreliable gains would show WRONG volts
+  — worse than the current honest ADC-counts display. Deferred deliberately.
+- The clean cal PROCEDURE (per range: center via DAC1 -> 3-point amp sweep ->
+  fit gain+offset) is defined and proven on 2 ranges; running it for all 10 is
+  ~15-20 min of careful bench and is the direct next step. The second (digital)
+  gain layer is a separate RE task for full per-vdiv-setting scaling.
