@@ -314,6 +314,44 @@ static void fmt_tenths(char *b, size_t n, float v, const char *unit)
 }
 
 /*
+ * Format a voltage with automatic mV/V ranging, integer math only (same
+ * reason as fmt_tenths: newlib-nano's "%f" prints nothing). Sub-volt values
+ * read as whole millivolts ("154mV"); at/above 1 V, two decimals ("1.66V").
+ * Rounding is done once, in millivolts, so 0.9995 V shows "1.00V" rather than
+ * the nonsense "1000mV".
+ */
+static void fmt_volts(char *b, size_t n, float v)
+{
+    if (v < 0.0f) v = 0.0f;
+    unsigned mv = (unsigned)(v * 1000.0f + 0.5f);   /* millivolts, rounded */
+    if (mv < 1000u)
+        snprintf(b, n, "%umV", mv);
+    else
+        snprintf(b, n, "%u.%02uV", mv / 1000u, (mv % 1000u) / 10u);
+}
+
+/*
+ * Per-range volts-per-ADC-count, from bench measurements on unit #1.
+ * Returns 0.0f for any range we have NOT measured — the caller MUST then fall
+ * back to honest ADC counts rather than invent a voltage. This is the whole
+ * point of the split: a confident wrong number is worse than a raw count.
+ *
+ * CALIBRATED RANGES (bench, per-range-centered linear fits):
+ *   idx 2 (20mV/div): 347 codes per volt -> 1 count = 1/347 V = 2.882 mV
+ *   idx 8 (2V/div):   154 codes per volt -> 1 count = 1/154 V = 6.494 mV
+ * ALL OTHER ranges (0,1,3,4,5,6,7,9) are UNKNOWN and await the full 10-range
+ * calibration sweep; they return 0.0f and keep showing counts.
+ */
+static float scope_cal_volts_per_count(uint8_t vdiv_idx)
+{
+    switch (vdiv_idx) {
+    case 2:  return 1.0f / 347.0f;   /* 20mV/div */
+    case 8:  return 1.0f / 154.0f;   /* 2V/div (default range) */
+    default: return 0.0f;            /* uncalibrated -> show ADC counts */
+    }
+}
+
+/*
  * Measurement badges.
  *
  * Until 2026-08-13 this function printed the string literals "1.00kHz",
@@ -323,9 +361,12 @@ static void fmt_tenths(char *b, size_t n, float v, const char *unit)
  * What is printed now is measured from the live record, in the units this
  * instrument can actually defend (see scope_measure.h):
  *
- *   Vpp / Vrms   ADC COUNTS. Volts need the per-range gain/offset cal this
- *                firmware does not have (dev plan §F2), so no volt figure is
- *                offered — not even a plausible one.
+ *   Vpp / Vrms   VOLTS on the ranges we have a bench-measured volts-per-count
+ *                for (currently vdiv_idx 2 = 20mV/div and 8 = 2V/div; see
+ *                scope_cal_volts_per_count). On every other range we still
+ *                have no cal, so those show honest ADC COUNTS ("Ncnt") rather
+ *                than a plausible-but-invented voltage. The full 10-range
+ *                sweep (dev plan §F2) will fill in the rest.
  *   Duty         a pure ratio; invariant under any affine counts->volts
  *                mapping, so it is already correct and stays correct once
  *                calibration lands. Asserted in tests/test_scope_measure.c.
@@ -333,10 +374,10 @@ static void fmt_tenths(char *b, size_t n, float v, const char *unit)
  *   Freq         "--". Hz needs a known sample rate, i.e. a timebase, and
  *                this firmware has no timebase control at all (§F4).
  *
- * WIRING IT LATER is one line each: with a sample interval dt_s in hand,
- *   Freq = 1 / (period_samples * dt_s),  Per(s) = period_samples * dt_s.
- * With a per-range volts-per-count k,  Vpp(V) = pp * k, Vrms(V) = ac_rms * k.
- * Nothing else in this function has to move.
+ * The volts wiring is now DONE (Vpp = pp * k, Vrms = ac_rms * k, with k from
+ * scope_cal_volts_per_count(vdiv_idx), k == 0 meaning "show counts"). Freq/Per
+ * still await a timebase: with a sample interval dt_s in hand it is one line
+ * each, Freq = 1 / (period_samples * dt_s), Per(s) = period_samples * dt_s.
  */
 static void draw_measurement_badges(const scope_state_t *ss, const theme_t *th)
 {
@@ -357,8 +398,12 @@ static void draw_measurement_badges(const scope_state_t *ss, const theme_t *th)
     draw_one_badge(x, y1, "Freq", MEAS_NA, na, th);
     x += BADGE_W + 2;
 
+    /* Calibrated ranges show volts; all others fall back to ADC counts. */
+    const float k1 = scope_cal_volts_per_count(ss->ch1.vdiv_idx);
+
     if (have1) {
-        fmt_counts(buf, sizeof(buf), m1.pp);
+        if (k1 > 0.0f) fmt_volts(buf, sizeof(buf), (float)m1.pp * k1);
+        else           fmt_counts(buf, sizeof(buf), m1.pp);
         draw_one_badge(x, y1, "Vpp", buf, th->ch1, th);
     } else {
         draw_one_badge(x, y1, "Vpp", MEAS_NA, na, th);
@@ -366,7 +411,8 @@ static void draw_measurement_badges(const scope_state_t *ss, const theme_t *th)
     x += BADGE_W + 2;
 
     if (have1) {
-        fmt_counts(buf, sizeof(buf), (unsigned)(m1.ac_rms + 0.5f));
+        if (k1 > 0.0f) fmt_volts(buf, sizeof(buf), m1.ac_rms * k1);
+        else           fmt_counts(buf, sizeof(buf), (unsigned)(m1.ac_rms + 0.5f));
         draw_one_badge(x, y1, "Vrms", buf, th->ch1, th);
     } else {
         draw_one_badge(x, y1, "Vrms", MEAS_NA, na, th);
@@ -396,7 +442,9 @@ static void draw_measurement_badges(const scope_state_t *ss, const theme_t *th)
     x += BADGE_W + 2;
 
     if (have2) {
-        fmt_counts(buf, sizeof(buf), m2.pp);
+        const float k2 = scope_cal_volts_per_count(ss->ch2.vdiv_idx);
+        if (k2 > 0.0f) fmt_volts(buf, sizeof(buf), (float)m2.pp * k2);
+        else           fmt_counts(buf, sizeof(buf), m2.pp);
         draw_one_badge(x, y2, "CH2pp", buf, th->ch2, th);
     } else {
         draw_one_badge(x, y2, "CH2pp", MEAS_NA, na, th);

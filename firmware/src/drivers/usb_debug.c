@@ -611,6 +611,7 @@ static void cmd_help(void)
         "fpga wire entry [ch1|ch2|both] Send candidate scope-entry wire-word bank\r\n"
         "fpga wire scope [ch1|ch2|both] Wire-word entry + runtime scope blocks\r\n"
         "fpga scope range <0-9>          Apply frontend range n (DC), for gain cal\r\n"
+        "fpga scope center [0-9]         Auto-center DAC1 (mid-scale) per range; all if omitted\r\n"
         "fpga scope reinit               Re-apply scope frontend + FPGA cfg\r\n"
         "fpga meter reinit [submode]     Re-apply meter frontend + FPGA cfg\r\n"
         "fpga scope wake                 Meter wake preamble then scope cfg\r\n"
@@ -1841,6 +1842,126 @@ static void cmd_fpga_scope_range(const char *args)
     fpga_scope_set_range_diag((uint8_t)n);
     usb_debug_printf("scope frontend range = %lu (DC coupling forced)\r\n",
                      (unsigned long)n);
+}
+
+/* Raw SPI3 byte exchange on the shared FPGA bus (defined later in this file). */
+static uint8_t spi3_raw_xfer(uint8_t tx);
+
+/* ---- fpga scope center [range] -------------------------------------------
+ *
+ * Per-range DC-offset CENTERING for scope gain calibration.
+ *
+ * Each frontend voltage range has its own DC operating point, so before per-
+ * range GAIN can be calibrated the vertical-offset DAC (DAC1 / PA4) must be
+ * positioned so a quiet/DC input lands at mid-scale (ADC code ~128). Doing
+ * this by hand for every range is slow; this command automates it on-device.
+ *
+ * For each range it applies the frontend (DC coupling) via
+ * fpga_scope_set_range_diag(), then binary-searches DAC1 (0..4095) for the
+ * value that drives the mean of a 0x04 CH1 capture closest to 128. DAC1 is
+ * monotonic-increasing vs ADC code (bench: 500->~0, 2500->~140, 3500->~255),
+ * so the search raises DAC1 when the mean is below target and lowers it when
+ * above. The operator must keep the input quiet/DC while this runs (no AC
+ * signal) — it averages a static level.
+ *
+ * Diagnostic / bench only — it does NOT touch the normal acquisition path.
+ * The continuous acquisition task is parked with fpga_acq_pause() for the
+ * whole command so our CS-framed reads never interleave with its capture
+ * frames (same hazard class as `spi3 opread` / `spi3 opsweep`).
+ */
+#define SCOPE_CENTER_TARGET   128u   /* ADC mid-scale code we center on    */
+#define SCOPE_CENTER_NBYTES   256u   /* payload bytes averaged per read     */
+#define SCOPE_CENTER_AVG      2u     /* reads averaged to knock down noise  */
+#define SCOPE_CENTER_ITERS    12u    /* binary-search steps over 0..4095    */
+
+/* One 0x04 CH1 read window; returns the mean of the first `nbytes` payload
+ * bytes. Same framing as spi3_opread_window (one CS-LOW window, opcode + 2
+ * filler bytes, then payload). Caller must already hold the acq pause. */
+static uint32_t scope_center_read_mean(uint32_t nbytes)
+{
+    uint32_t ssum = 0;
+    GPIOB->clr = (1 << 6);                 /* CS assert (PB6 LOW)    */
+    (void)spi3_raw_xfer(0x04);
+    (void)spi3_raw_xfer(0xFF);
+    (void)spi3_raw_xfer(0xFF);
+    for (uint32_t i = 0; i < nbytes; i++)
+        ssum += spi3_raw_xfer(0xFF);
+    GPIOB->scr = (1 << 6);                 /* CS deassert (PB6 HIGH) */
+    return nbytes ? ssum / nbytes : 0;
+}
+
+/* Average SCOPE_CENTER_AVG windows for a noise-robust mean. */
+static uint32_t scope_center_robust_mean(void)
+{
+    uint32_t acc = 0;
+    for (uint32_t k = 0; k < SCOPE_CENTER_AVG; k++) {
+        acc += scope_center_read_mean(SCOPE_CENTER_NBYTES);
+        vTaskDelay(pdMS_TO_TICKS(5));
+    }
+    return acc / SCOPE_CENTER_AVG;
+}
+
+/* Binary-search DAC1 for a CH1 mean of ~128. Assumes the range is already
+ * applied and the acq task paused. Returns the best DAC1 found and its
+ * resulting mean via *out_dac / *out_mean. */
+static void scope_center_one(uint16_t *out_dac, uint32_t *out_mean)
+{
+    uint16_t lo = 0, hi = 4095;
+    uint16_t best_dac = 2048;
+    uint32_t best_mean = 0;
+    uint32_t best_err = 0xFFFFFFFFu;
+
+    for (uint32_t it = 0; it < SCOPE_CENTER_ITERS; it++) {
+        uint16_t mid = (uint16_t)((lo + hi) / 2);
+        scope_trigger_dac_raw(mid);
+        vTaskDelay(pdMS_TO_TICKS(10));     /* DAC + frontend settle */
+        uint32_t mean = scope_center_robust_mean();
+        uint32_t err = (mean > SCOPE_CENTER_TARGET)
+                       ? mean - SCOPE_CENTER_TARGET
+                       : SCOPE_CENTER_TARGET - mean;
+        if (err < best_err) {
+            best_err = err;
+            best_dac = mid;
+            best_mean = mean;
+        }
+        if (mean < SCOPE_CENTER_TARGET) lo = mid;   /* need higher DAC1 */
+        else                            hi = mid;   /* need lower  DAC1 */
+        if (hi - lo <= 1) break;
+    }
+    *out_dac = best_dac;
+    *out_mean = best_mean;
+}
+
+/* `fpga scope center [0-9]` — auto-center DAC1 for one range (arg given) or
+ * for every range 0..9 (no arg), one report line per range. */
+static void cmd_fpga_scope_center(const char *args)
+{
+    bool all = (args == NULL || *args == '\0');
+    uint32_t n = 0;
+
+    if (!all && (parse_int(args, &n) != 0 || n > 9)) {
+        usb_send_str("Usage: fpga scope center [0-9]\r\n");
+        return;
+    }
+
+    if (!fpga_acq_pause()) {
+        usb_send_str("ERR: acq task did not park — bus not safe, aborting\r\n");
+        return;
+    }
+
+    uint32_t first = all ? 0 : n;
+    uint32_t last  = all ? 9 : n;
+    for (uint32_t r = first; r <= last; r++) {
+        uint16_t dac;
+        uint32_t mean;
+        fpga_scope_set_range_diag((uint8_t)r);
+        vTaskDelay(pdMS_TO_TICKS(20));     /* relay/frontend settle */
+        scope_center_one(&dac, &mean);
+        usb_debug_printf("range %lu: center DAC1=%u (mean=%lu)\r\n",
+                         (unsigned long)r, dac, (unsigned long)mean);
+    }
+
+    fpga_acq_resume();
 }
 
 static void cmd_fpga_diag_clear(void)
@@ -5168,6 +5289,8 @@ static void dispatch_command(char *line)
         cmd_fpga_wire_scope(line[15] == ' ' ? line + 16 : "");
     } else if (strncmp(line, "fpga scope range ", 17) == 0) {
         cmd_fpga_scope_range(line + 17);
+    } else if (strncmp(line, "fpga scope center", 17) == 0) {
+        cmd_fpga_scope_center(line[17] == ' ' ? line + 18 : "");
     } else if (strcmp(line, "fpga scope reinit") == 0) {
         cmd_fpga_scope_reinit();
     } else if (strncmp(line, "fpga meter reinit", 17) == 0) {
