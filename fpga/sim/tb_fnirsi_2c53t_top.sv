@@ -265,7 +265,7 @@ module tb_fnirsi_2c53t_top;
         expect_equal8(reg_trigger_level, 8'had, "reset trigger level");
         expect_equal8(reg_raw_01, 8'h08, "reset raw reg 01");
         expect_equal8(reg_raw_02, 8'h03, "reset raw reg 02");
-        expect_equal8(reg_raw_rate_divisor, 8'h00, "reset rate divisor");
+        expect_equal8(reg_raw_rate_divisor, 8'h08, "reset raw rate alias");
 
         // Negative control: disarmed ADC changes do not advance either buffer.
         capture_clock(8'hee, 8'hdd);
@@ -284,7 +284,7 @@ module tb_fnirsi_2c53t_top;
                           8'h80 + 8'(sample_number));
             if (sample_number == 0) begin
                 expect_bit(sample_tick, 1'b1, "first armed sample tick");
-                expect_bit(slow_path_tick, 1'b1, "undivided slow-path tick");
+                expect_bit(slow_path_tick, 1'b0, "legacy 0x08 slow-path phase");
             end
         end
         expect_bit(trigger_seen, 1'b0, "free run leaves trigger clear");
@@ -348,8 +348,9 @@ module tb_fnirsi_2c53t_top;
         end_transaction();
         expect_equal8(reg_trigger_level, 8'h80, "three-byte frame ignored");
 
-        write_register(8'h0b, 8'h03);
-        expect_equal8(reg_raw_rate_divisor, 8'h03, "rate divisor write");
+        write_register(8'h01, 8'h0e);
+        expect_equal8(reg_raw_01, 8'h0e, "raw rate select write");
+        expect_equal8(reg_raw_rate_divisor, 8'h0e, "raw rate alias write");
 
         // Triggered phase: the comparator, not a testbench input, produces the
         // trigger.  Below-level samples seed history, the 0xc0 sample crosses
@@ -380,8 +381,9 @@ module tb_fnirsi_2c53t_top;
             failures++;
         end
 
-        // The SPI-written divisor paces the slow-path tick: divisor 3 gives
-        // one tick every four armed cycles.
+        // The SPI-written 0x0e rate select paces the slow path at half the
+        // 0x0f base interval.  This short smoke loop only checks that it does
+        // not retain the retired raw-divisor placeholder cadence.
         @(negedge sample_clk);
         raw_arm_enable = 1'b0;
         capture_clock(8'h20, 8'h20);
@@ -394,8 +396,8 @@ module tb_fnirsi_2c53t_top;
                 slow_tick_count++;
             end
         end
-        if (slow_tick_count != 2) begin
-            $error("divided slow-path tick count got %0d, expected 2", slow_tick_count);
+        if (slow_tick_count != 0) begin
+            $error("0x0e ladder interval unexpectedly ticked in 8 cycles: %0d", slow_tick_count);
             failures++;
         end
 

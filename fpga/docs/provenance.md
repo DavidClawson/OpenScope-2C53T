@@ -53,6 +53,34 @@ Pin every reproduction rather than following moving branch heads:
 | GW1N-2 place-and-route development | `DavidClawson/nextpnr`, `gw1n2` | `59c8f93a62ee17adc8d1c5d7f399697ffeb85c0f` |
 | exact GW1N-UV2/QN48 chipdb, packing, and the debug-clock image build | `Komzpa/apicula`, `agent/gw1n2-qn48-chipdb-20260815` | `d978cad` (atop `cea1618`) |
 
+## Debug-clock image reproduction
+
+Commit `25eb00b` is the first buildable exact-part debug-clock image. The
+recorded build used Yosys `0.66` (`git sha1 86f2ddebce7e98ce7cacc27e8a5c14cb53b51b51`) and Python `3.14.7`.
+
+| Artifact | SHA-256 |
+|---|---|
+| `apycula/GW1N-2.msgpack.xz` built at `Komzpa/apicula` `d978cad` | `3dc7b45d3c2eb1dc714a0e9bbbb55c2ab154d6a5bc6d546d8c947c8e452e285e` |
+| `debugclk_hw_top.fs` from the recorded build | `9c465d72a5cd5866b7c4b06baa87f10b2e4e3c5f965f09c1518fa08c47d10751` |
+
+Reproduce it with (all four tools from the pinned revisions in the table
+above):
+
+```sh
+APICULA_PYTHON=<python with apycula installed -e at d978cad> \
+NEXTPNR=<nextpnr-himbaechel built from DavidClawson/nextpnr gw1n2 59c8f93a> \
+NEXTPNR_SRC=<that nextpnr source tree> \
+BBASM=<bba/bbasm from the same nextpnr build> \
+OUT=<empty build dir> \
+sh fpga/tools/build_debugclk_image.sh
+sha256sum "$OUT"/debugclk_hw_top.fs
+```
+
+At the pinned baseline the command used the exact-part Apicula checkout
+providing `apycula/GW1N-2.msgpack.xz`; without that chipdb,
+`nextpnr-himbaechel` reports `No package for partnumber GW1N-UV2QN48XFC6/I5`.
+Keep the hash tied to this commit: later RTL changes change the `.fs` image.
+
 The chipdb build requires Gowin EDA device data for `GW1N-1P5C`:
 `GW1N-1P5C.fse`, `.dat`, and `.tm`. Those vendor inputs are not checked in.
 Without the exact generated `GW1N-2.msgpack.xz`, a fresh unpack is blocked and

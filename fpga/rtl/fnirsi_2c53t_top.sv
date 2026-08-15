@@ -8,7 +8,10 @@ module fnirsi_2c53t_top #(
     parameter int unsigned CAPTURE_ADDR_WIDTH = (CAPTURE_DEPTH <= 1) ? 1 : $clog2(CAPTURE_DEPTH),
     parameter int unsigned FRAME_BYTES = 1026,
     parameter int unsigned SPI_COUNT_WIDTH = 16,
-    parameter int unsigned TIMEBASE_WIDTH = 16
+    parameter int unsigned TIMEBASE_WIDTH = 16,
+    parameter int unsigned SLOW_PATH_DIVISOR_WIDTH = 16,
+    parameter int unsigned SLOW_PATH_BASE_DIVISOR = 16'd1999,
+    parameter int unsigned SLOW_PATH_LEGACY_DIVISOR = 16'd8
 ) (
     input  logic                              sample_clk,
     input  logic                              reset_n,
@@ -41,9 +44,11 @@ module fnirsi_2c53t_top #(
     output logic                              trigger_seen,
     output logic                              ch1_at_or_above_level,
 
-    // Committed SPI control registers.  Only 0x08 has decoded semantics; the
-    // other stock-written registers are re-exposed raw for integration or a
-    // later evidenced block.
+    // Committed SPI control registers.  Register 0x08 is the bench-proven
+    // trigger level; register 0x01 is now also consumed locally as the raw
+    // slow-path rate select byte per the PR #24 / 2026-08-15 reconstruction.
+    // The other stock-written registers remain raw exports for a later
+    // evidenced owner.
     output logic [7:0]                        reg_raw_01,
     output logic [7:0]                        reg_raw_02,
     output logic [7:0]                        reg_raw_06,
@@ -54,7 +59,9 @@ module fnirsi_2c53t_top #(
     // Reconstruction slot for the gated BSRAM_1/2 write cadence: the divided
     // tick is exported instead of instantiating the slow store pair because
     // that record's function (decimation, min/max, roll) is still a
-    // hypothesis.
+    // hypothesis.  The port name keeps historical compatibility even though
+    // the source byte is now raw register 0x01, not a separate placeholder
+    // divisor register.
     output logic                              slow_path_tick,
 
     output logic [CAPTURE_ADDR_WIDTH-1:0]     ch1_write_ptr,
@@ -163,12 +170,15 @@ module fnirsi_2c53t_top #(
     );
 
     rate_divider #(
-        .DIVISOR_WIDTH(8)
+        .SELECT_WIDTH(8),
+        .DIVISOR_WIDTH(SLOW_PATH_DIVISOR_WIDTH),
+        .BASE_DIVISOR(SLOW_PATH_BASE_DIVISOR),
+        .LEGACY_SLOW_DEFAULT_DIVISOR(SLOW_PATH_LEGACY_DIVISOR)
     ) slow_path_rate (
         .clk(sample_clk),
         .reset_n(reset_n),
         .enable(raw_arm_enable),
-        .raw_divisor(reg_raw_rate_divisor),
+        .raw_divisor(reg_raw_01),
         .divided_tick(slow_path_tick)
     );
 

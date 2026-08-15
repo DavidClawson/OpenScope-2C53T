@@ -94,7 +94,7 @@ module tb_spi_control_registers;
         expect_reg(raw_reg_06, 8'h00, "reset raw_reg_06");
         expect_reg(raw_reg_07, 8'h00, "reset raw_reg_07");
         expect_reg(trigger_level, 8'had, "reset trigger_level");
-        expect_reg(raw_rate_divisor, 8'h00, "reset raw_rate_divisor");
+        expect_reg(raw_rate_divisor, 8'h08, "raw rate alias follows raw_reg_01");
 
         // A two-byte unknown frame commits its register.
         close_frame(8'h08, 1'b0, COUNT_WIDTH'(2), 8'h80);
@@ -114,15 +114,12 @@ module tb_spi_control_registers;
         expect_reg(raw_reg_01, 8'h08, "known read left raw_reg_01");
         expect_reg(trigger_level, 8'h80, "known read left trigger_level");
 
-        // The placeholder rate-divisor select accepts a write.
-        close_frame(8'h0b, 1'b0, COUNT_WIDTH'(2), 8'h16);
-        expect_reg(raw_rate_divisor, 8'h16, "rate divisor write");
-
         // The remaining stock arm registers store raw values.
         close_frame(8'h01, 1'b0, COUNT_WIDTH'(2), 8'ha1);
         close_frame(8'h06, 1'b0, COUNT_WIDTH'(2), 8'ha6);
         close_frame(8'h07, 1'b0, COUNT_WIDTH'(2), 8'ha7);
         expect_reg(raw_reg_01, 8'ha1, "raw_reg_01 write");
+        expect_reg(raw_rate_divisor, 8'ha1, "raw rate alias after raw_reg_01 write");
         expect_reg(raw_reg_06, 8'ha6, "raw_reg_06 write");
         expect_reg(raw_reg_07, 8'ha7, "raw_reg_07 write");
 

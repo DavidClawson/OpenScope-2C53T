@@ -37,17 +37,28 @@ hardware oracle for those details.
   `0x00`–`0x1F` exactly, including live channel data on `0x24`/`0x25`
   (exhaustive sweep, 2026-08-14). Extending that decode to write selects is a
   hypothesis, not a bench result.
-- A byte-exact replay of the full stock configuration and arm traffic
-  (2026-08-14) left the capture rate at its slow default, so registers
-  `0x01/0x02/0x06/0x07/0x08` are unlikely to be the sample-rate control. That
-  control is structurally traced to a counter gating the `BSRAM_1/2` write
-  clock, with a load path from the SPI receiver bank (`gw1n2-apicula` M12);
-  its register address is unknown.
-- Default capture-rate measurements disagree in detail while agreeing on the
-  regime: 2026-08-15 bench gives ~1.07 kS/s (1024-sample fill ≈ 0.96 s), the
-  2026-08-14 methods gave ~2.4–2.7 kS/s, and stock sustains ~23× faster. The
-  spread is unresolved; this RTL encodes no clock frequency and takes no
-  position on it.
+- The 2026-08-15 maintainer sweep (DavidClawson/OpenScope-2C53T PR #24)
+  identifies register `0x01` as the rate select; the counter gating the
+  `BSRAM_1/2` write clock with an SPI-side load path (M12) is the structural
+  candidate it loads. A 2026-08-16 attempt to reproduce the ladder in the
+  published `m_divider.py` micro-sim was inconclusive: the extracted gates sit
+  flat because the SPI/arm clear and clock nets are undriven long-wire
+  branches in the unpacked netlist, so the ladder rests on the bench sweep.
+- The ~1.07 kS/s and earlier ~2.4–2.7 kS/s measurements were both artifacts of
+  mode `0x08`: its zero-crossing count is tone-independent and triggered reads
+  can be torn. They are not sample-rate measurements and do not imply a hidden
+  23× divider. Stock almost certainly runs `0x0F`, retiring that mystery.
+
+| `reg 0x01` | Measured rate | Rate vs `0x0F` | Divisor vs `0x0F` |
+|---|---|---|---|
+| `0x0F` | ≈30 kS/s | 1× | 1 (stock candidate) |
+| `0x0E` | ≈60 kS/s | 2× | /2 |
+| `0x0D` | ≈150 kS/s | 5× | /5 |
+| `0x0C` | ≈300 kS/s | 10× | /10 |
+| `0x0B` | ≈500–600 kS/s (indicative) | ≈20× | /20 |
+| `0x0A` | ≈1 MS/s (indicative) | ≈33× | /33 |
+| `0x10` / `0x1F` | ≈15 kS/s | 0.5× | ×2 |
+| `0x08` | not a uniform rate | — | legacy slow default kept; suspected decimation/peak-detect mode, not a ladder point |
 
 ## Recovered block map
 
@@ -57,7 +68,7 @@ hardware oracle for those details.
 | SPI-fed control flop plus run inputs | participates in capture enable/re-arm | `capture_control` | medium-high; polarity and complete register map unknown |
 | SPI-loaded control register bank | commits the five observed two-byte write frames | `spi_control_registers` | high frame shape; only `0x08` semantics decoded |
 | post-ADC comparator against register `0x08` | digital trigger level in ADC codes | `trigger_comparator` | high mechanism (bench, both directions); edge, source, hysteresis, holdoff unknown |
-| counter-gated `BSRAM_1/2` write clock with SPI-side load | programmable sample-rate divider | `rate_divider` | medium structure (M12); divisor address and value unknown |
+| counter-gated `BSRAM_1/2` write clock with SPI-side load | `reg 0x01` low-nibble rate ladder (`0x0F`..`0x0A`, plus `0x10`/`0x1F` special 15 kS/s) | `rate_divider` | medium structure (M12); `0x08` is still the observed slow-default, but its exact stock semantic is unresolved |
 | large counter/control cone | sequences capture and read addresses | `capture_sequencer` | medium |
 | `BSRAM_0` at `R10C2` | raw CH1 capture store on PLL clock | `capture_channel` instance | high role, byte mapping unknown |
 | `BSRAM_3` at `R10C17` | raw CH2 capture store on PLL clock | `capture_channel` instance | high role, byte mapping unknown |
@@ -83,7 +94,7 @@ Counts help detect gross drift; they do not prove behavior.
 | `BSRAM_1/2` are a slow/computed path | SDR inputs, gated clock, shared counter, read-modify-write | medium; decimation/roll meaning is a hypothesis |
 | SPI register `0x08` is the digital post-ADC trigger level; stock arms `0xAD` | two-way bench A/B at levels `0xAD` and `0x37` (2026-08-14) | high mechanism and encoding; polarity, hysteresis, holdoff unknown |
 | opcode decode uses only the low five bits | exhaustive read-opcode sweep, exact `0x20`–`0x3F` aliasing | high for reads; write selects by declared extension only |
-| the capture-rate control is an SPI-reachable counter on the `BSRAM_1/2` clock gate | M12 structural trace; byte-exact arm replay stays slow | medium; register address and divisor encoding unknown |
+| the capture-rate control is an SPI-reachable counter on the `BSRAM_1/2` clock gate, selected by `reg 0x01` | ladder: 2026-08-15 PR #24 bench sweep; counter shape: M12 structural trace (micro-sim reproduction inconclusive — gates flat on undriven long-wire nets) | medium; `0x08` slow-default semantics remain unresolved |
 | handwritten `capture_channel` matches stock | unit simulation only | low equivalence confidence; no synthesis/P&R/hardware proof |
 
 ## Current editable RTL
@@ -98,13 +109,16 @@ specific `BSRAM_*` macro. The next integration layer must decide how trigger,
 freeze, read-pointer translation, channel muxing, and CDC are represented.
 
 `spi_control_registers.sv` commits the observed two-byte write frames at the CS
-boundary, with reset defaults equal to the stock arm-sequence values.
+boundary, with reset defaults equal to the stock arm-sequence values. The raw
+`0x01` byte is also the rate-divider select; the old out-of-map divisor
+placeholder has been retired.
 `trigger_comparator.sv` implements the bench-proven digital post-ADC level
 comparison against register `0x08`, with rising-edge crossing as its declared
 local contract. `rate_divider.sv` reconstructs the M12 counter-gate shape as an
-SPI-loadable sample-rate divider; its load select is an explicit placeholder
-address, and the top exports the divided tick instead of instantiating the
-`BSRAM_1/2` store pair because that record's function is still a hypothesis.
+SPI-loadable sample-rate divider using the measured `0x01` ladder; its absolute
+base clock remains parameterized and the top exports the divided tick instead
+of instantiating the `BSRAM_1/2` store pair because that record's function is
+still a hypothesis.
 
 ## Explicit unknowns
 
@@ -117,8 +131,8 @@ address, and the top exports the divided tick instead of instantiating the
 - trigger edge and source selection, hysteresis, holdoff, pre/post-trigger
   split, and the re-arm sequence (the threshold register `0x08` and its
   ADC-code encoding are now decoded);
-- the sample-rate divisor register address and encoding (the `rate_divider`
-  load select is an explicit placeholder);
+- the exact stock preload convention for `reg 0x01` mode `0x08` and any
+  remaining selection source behind it;
 - semantics of the stored raw registers `0x01`, `0x02`, `0x06`, and `0x07`;
 - whether `BSRAM_1/2` implement decimation, min/max, roll mode, or another
   computed record;
