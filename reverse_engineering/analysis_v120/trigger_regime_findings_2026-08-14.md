@@ -409,3 +409,34 @@ netlist/sim questions; the bench has now given all it can on the rate itself.
    The edge-paced path stays for triggered/normal mode.
 2. **Netlist (the 23x): the readout-mux SELECT and the FPGA PLL** — needs the
    apicula GW1N-2 long-wire segment model (M12 blocker) before either simulates.
+
+---
+
+# ADDENDUM 5 — 2026-08-15: auto/free-run acquisition IMPLEMENTED + bench-verified
+
+Acted on Addendum 4 item 1. `fpga_warmtest_acq_task` now branches on the scope
+trigger mode (`guest-coldtrace`, `fpga.c`):
+- **AUTO**: brief edge-wait (`FPGA_AUTO_TRIG_WAIT_MS`=25), then free-run poll
+  0x04/0x05 at ~30 Hz (`FPGA_AUTO_CADENCE_MS`). Uses a triggered capture WHEN
+  a PC0 edge is available, free-runs otherwise.
+- **NORMAL/SINGLE**: wait `FPGA_NORMAL_TRIG_WAIT_MS`=300 for an edge; on timeout
+  HOLD the last trace (skip the read) — correct triggered behaviour.
+
+**Bench (unit #1, coldtrace, scope mode, AUTO):**
+- Quiet / non-triggering input: **OK/s ~21, PC0/s 0, TO/s 0** — the display now
+  refreshes continuously with no triggering (was effectively frozen on a quiet
+  input under the old edge-paced-only loop). The core fix, confirmed.
+- **Regression caught + fixed:** the first cut re-armed DAC1 (the vertical
+  OFFSET) to mid on every free-run poll, which would fight the UI vertical-
+  position control. Now gated to a genuine dry spell (≥32 consecutive rejected
+  reads). Verified: TO/s=0 in normal AUTO polling ⇒ the re-arm branch never
+  runs; DAC1 holds its set value.
+- **DAC1 = vertical offset, re-confirmed cleanly on this build:** DC-mid input,
+  DAC1 500→signal 0, 1500→15, 2500→~140 (centered), 3500→255 (railed). Directly
+  validates Addendum 1's DAC1-offset reading.
+
+**Still open (separate, not this change):** the frontend volts/div GAIN — a
+1.5 Vpp input maps to only ~30 ADC codes on the boot range, so traces are tiny
+until per-range gain cal is done (dev plan; the placeholder relay table). And
+NORMAL-mode "hold" is code-verified but bench-pending (no shell command to
+switch trigger mode; needs the UI trigger-mode button).

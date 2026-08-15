@@ -131,14 +131,47 @@ static TaskHandle_t      rx_task_handle  = NULL;
  *     variable in every recorded observation is trigger activity, not
  *     cadence. Re-measure with signal state controlled before trusting any
  *     cadence number.
- * What IS established: our 0x04/0x05 protocol only streams in the FREE-RUN
- * regime (no trigger crossings). Under real triggers the engine serves stale
- * or partially-filled buffers (unwritten words read FF) until a per-capture
- * re-arm this task does not yet perform — that re-arm, decoded from stock's
- * runtime capture, is the actual fix. This constant is left at 150 ms as a
- * harmless default until then. */
+ * FURTHER CORRECTED 2026-08-15 (Addendum 4): the raw buffer free-runs and holds
+ * a COHERENT waveform whether or not anything triggers — a direct 0x04 poll of a
+ * 30 Hz sine shows ~13 clean cycles across the 1024-sample buffer with PC0 never
+ * pulsing. So the "unwritten words read FF / needs a per-capture re-arm" model is
+ * wrong: FF was a railed ADC, and a smooth display needs only free-run POLLING,
+ * not a re-arm. The acquisition task now branches on the scope trigger mode —
+ * AUTO free-run polls, NORMAL/SINGLE wait for a real edge and hold on none — see
+ * FPGA_AUTO_CADENCE_MS / FPGA_AUTO_TRIG_WAIT_MS / FPGA_NORMAL_TRIG_WAIT_MS below.
+ * FPGA_PROBE_CADENCE_MS is retired (no longer referenced). */
 #ifndef FPGA_PROBE_CADENCE_MS
-#define FPGA_PROBE_CADENCE_MS 150u
+#define FPGA_PROBE_CADENCE_MS 150u   /* retired; kept only to not break overrides */
+#endif
+
+/* Auto/free-run acquisition (2026-08-15, analysis_v120/
+ * trigger_regime_findings_2026-08-14.md Addendum 4). The raw capture buffer
+ * (BSRAM_0/3, read via 0x04/0x05) free-runs at the sample clock regardless of
+ * trigger state, and a direct poll returns a COHERENT waveform (bench: a 30 Hz
+ * sine shows ~13 clean cycles across the 1024-sample buffer with PC0 never
+ * pulsing). So a continuously-updating display is a READ-PACING choice, not a
+ * fabric feature: in AUTO mode we free-run poll 0x04/0x05 rather than waiting
+ * for a trigger edge that a quiet or below-threshold input never produces.
+ *
+ *   FPGA_AUTO_CADENCE_MS   free-run poll period in AUTO mode (~30 Hz). The
+ *                          display's own ~50 ms frame loop is the real cap;
+ *                          faster only costs SPI time (~275 us/pair at /2).
+ *   FPGA_AUTO_TRIG_WAIT_MS how long AUTO waits for a real trigger edge before
+ *                          falling through to a free-run read — small, so a
+ *                          triggered capture is preferred WHEN available (a
+ *                          stable trace) but the display never stalls without
+ *                          one. This is exactly analog-scope "auto" behaviour.
+ *   FPGA_NORMAL_TRIG_WAIT_MS  NORMAL/SINGLE edge-wait budget per iteration; on
+ *                          timeout the loop HOLDS the last trace (no free-run
+ *                          overwrite), which is correct triggered-mode behaviour. */
+#ifndef FPGA_AUTO_CADENCE_MS
+#define FPGA_AUTO_CADENCE_MS 30u
+#endif
+#ifndef FPGA_AUTO_TRIG_WAIT_MS
+#define FPGA_AUTO_TRIG_WAIT_MS 25u
+#endif
+#ifndef FPGA_NORMAL_TRIG_WAIT_MS
+#define FPGA_NORMAL_TRIG_WAIT_MS 300u
 #endif
 
 static volatile bool data_ready = false;
@@ -2890,39 +2923,54 @@ static void fpga_warmtest_acq_task(void *pv)
          * and if free-run turns out not to pulse PC0 per cycle (unmeasured —
          * the pc0_edges counter in `status` now answers this on the bench),
          * this build degrades to ~4 probe pairs/s instead of deadlocking. */
-        bool ready = false;
-        for (int w = 0; w < 100; w++) {
-            if (fpga.pc0_edges != edges_consumed) { ready = true; break; }
+        /* Ready-wait policy branches on the scope trigger mode (Addendum 4).
+         *
+         *   AUTO   — free-run display. Wait only a short budget for a real
+         *            trigger edge (so a triggered, stable capture is used WHEN
+         *            available), then read the free-running buffer anyway. The
+         *            buffer holds a coherent waveform regardless of triggering,
+         *            so this updates smoothly on any input, including a quiet or
+         *            below-threshold one that never pulses PC0.
+         *   NORMAL — triggered display. Wait a longer budget for an edge; on
+         *   /SINGLE  timeout, HOLD the last trace (skip the read) rather than
+         *            overwriting it with an untriggered free-run buffer. That is
+         *            the correct behaviour: no trigger => trace frozen.
+         *
+         * DAC1 (PA4) is the vertical OFFSET (Addendum 1), not a trigger
+         * comparator reference, so it must NOT be slammed to mid on every
+         * free-run poll — that would override the UI vertical-position control.
+         * The defensive re-arm is now gated on a genuine dry spell (many
+         * consecutive rejected reads), the only case where a dropped reference
+         * is plausible; a normal AUTO free-run read is a SUCCESS, not a
+         * timeout. */
+        const scope_state_t *ss_acq = scope_state_get();
+        bool auto_mode = (ss_acq == NULL) || (ss_acq->trigger.mode == TRIG_AUTO);
+        unsigned wait_ms = auto_mode ? FPGA_AUTO_TRIG_WAIT_MS
+                                     : FPGA_NORMAL_TRIG_WAIT_MS;
+
+        bool triggered = false;
+        for (unsigned w = 0; w < wait_ms; w++) {
+            if (fpga.pc0_edges != edges_consumed) { triggered = true; break; }
             vTaskDelay(pdMS_TO_TICKS(1));
         }
-        if (!ready) {
-            fpga.spi3_total_timeouts++;    /* overlay "TO:" — no spontaneous
-                                              ready (also counts rejected
-                                              frames, see below) */
-            /* Defensive re-arm: the trigger reference is MCU-internal and
-             * read-only on the wire, so restoring it costs nothing. Covers
-             * any path that dropped DAC1 (the known ones are compiled out,
-             * but a dead reference is exactly the silent capture-killer this
-             * experiment must not misdiagnose). */
-            scope_trigger_dac_raw(2048);
-            /* Probe cadence. History: 400 ms felt "buffered" on bench run 6,
-             * so it went to 150 ms (~6.7 Hz). Both numbers were chosen for
-             * the WARM-HANDOFF case, where the capture engine was STOPPED
-             * and a probe read returned the stale buffer — slow polling was
-             * the safe choice there.
-             *
-             * guest-coldtrace free-runs the engine, so that caution mostly
-             * does not apply. Stock's own runtime cadence is ~29 ms (0x04/
-             * 0x05 read pairs, measured in maksidze's June capture), which
-             * is the refresh target this should have had all along.
-             *
-             * NOTE this is REFRESH rate — how often a 1024-sample buffer is
-             * fetched. It is independent of the SAMPLE rate inside that
-             * buffer, which is what horizontal measurements depend on and
-             * which this firmware still does not control (dev plan F4).
-             * Raising this makes the trace smoother and gives measurements
-             * more updates to work with; it does not make them more correct. */
-            vTaskDelay(pdMS_TO_TICKS(FPGA_PROBE_CADENCE_MS));
+
+        if (!triggered) {
+            if (auto_mode) {
+                /* Free-run poll: fall through and read the live buffer. Pace
+                 * to ~30 Hz so the display (its own ~50 ms frame loop is the
+                 * real cap) stays smooth without spinning SPI. NOTE this is
+                 * REFRESH rate, not SAMPLE rate — horizontal measurements
+                 * depend on the in-buffer sample clock, still uncontrolled
+                 * (dev plan F4); a faster refresh gives more updates, not more
+                 * correct time bases. */
+                vTaskDelay(pdMS_TO_TICKS(FPGA_AUTO_CADENCE_MS));
+            } else {
+                /* NORMAL/SINGLE, no trigger this window: hold the last trace.
+                 * Count it as a timeout for the "TO:" overlay and loop back
+                 * WITHOUT reading — ch1_buf/ch2_buf keep the last capture. */
+                fpga.spi3_total_timeouts++;
+                continue;
+            }
         }
 
         edges_consumed = fpga.pc0_edges;   /* consume BEFORE reading: an edge
@@ -2957,6 +3005,15 @@ static void fpga_warmtest_acq_task(void *pv)
             data_ready = true;
         } else {
             fpga.spi3_total_timeouts++;    /* rejected frame — shows in TO: */
+            /* Dry-spell recovery only: after a run of rejected reads (a dead
+             * bus / dropped reference, not the normal free-run path), restore
+             * DAC1 to mid so a lost vertical reference cannot silently freeze
+             * capture. Rare by construction, so it does not fight the UI
+             * vertical-position control the way a per-poll re-arm would. */
+            if (++fpga.spi3_timeout_count >= 32) {
+                scope_trigger_dac_raw(2048);
+                fpga.spi3_timeout_count = 0;
+            }
         }
 
         /* Bound the read rate lightly; the display's own 50 ms frame loop
@@ -2977,8 +3034,8 @@ bool fpga_acq_pause(void)
         return true;
     acq_pause_req = true;
     acq_pause_ack = false;      /* demand a FRESH ack from the park point */
-    /* Worst-case ack latency = one full loop pass: ≤100 ms PC0 wait (or the
-     * FPGA_PROBE_CADENCE_MS branch) + two 1026-byte reads + 10 ms. 1 s is
+    /* Worst-case ack latency = one full loop pass: the trigger-mode edge wait
+     * (≤FPGA_NORMAL_TRIG_WAIT_MS) + two 1026-byte reads + 10 ms. 1 s is
      * comfortable margin. */
     for (int i = 0; i < 100; i++) {
         if (acq_pause_ack)
