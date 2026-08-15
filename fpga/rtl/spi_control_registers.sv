@@ -3,16 +3,7 @@
 `timescale 1ns/1ps
 
 module spi_control_registers #(
-    parameter int unsigned COUNT_WIDTH = 16,
-    // PLACEHOLDER SELECT, NOT EVIDENCE: netlist tracing (gw1n2-apicula M12)
-    // shows the gated BSRAM_1/2 write clock behind a counter whose load path
-    // reaches the SPI receiver bank, but the divisor register address has not
-    // been identified.  The byte-exact stock arm replay (2026-08-14) stayed at
-    // the slow default rate, which argues the five observed arm registers are
-    // not that divisor, so the placeholder deliberately sits outside them at
-    // an unobserved address.  Replace it the moment the bench or netlist pins
-    // the real select.
-    parameter logic [4:0] RAW_RATE_DIVISOR_SELECT = 5'h0b
+    parameter int unsigned COUNT_WIDTH = 16
 ) (
     input  logic                   reset_n,
     input  logic                   spi_cs_n,
@@ -37,15 +28,21 @@ module spi_control_registers #(
     // Reset defaults are the stock arm-sequence values (01 08 / 02 03 / 06 00
     // / 07 00 / 08 AD) so an unwritten reconstruction matches the only fully
     // observed register state.  The true pre-write power-on contents are
-    // unknown; only register 0x08 has decoded semantics (the digital post-ADC
-    // trigger level, bench-proven 2026-08-14).  Registers 0x01/0x02/0x06/0x07
-    // are stored and re-exposed raw.
+    // unknown; register 0x08 is the digital post-ADC trigger level (bench
+    // proven 2026-08-14), and register 0x01 now selects the measured rate
+    // ladder. Registers 0x01/0x02/0x06/0x07 remain exposed raw.
     localparam logic [7:0] RESET_REG_01        = 8'h08;
     localparam logic [7:0] RESET_REG_02        = 8'h03;
     localparam logic [7:0] RESET_REG_06        = 8'h00;
     localparam logic [7:0] RESET_REG_07        = 8'h00;
     localparam logic [7:0] RESET_TRIGGER_LEVEL = 8'had;
-    localparam logic [7:0] RESET_RATE_DIVISOR  = 8'h00;
+
+    // Compatibility alias only: PR #24 (2026-08-15) moved the slow-path rate
+    // select onto observed register 0x01, so there is no longer a separate
+    // placeholder write path.  Keep exposing the old port name so existing
+    // top-level/sim wiring still sees the raw byte, but the single source of
+    // truth is raw_reg_01.
+    assign raw_rate_divisor = raw_reg_01;
 
     // Every observed stock write is a two-byte CS-low frame: a select byte
     // followed by one value byte.  Commit therefore happens at the observed
@@ -59,7 +56,6 @@ module spi_control_registers #(
             raw_reg_06       <= RESET_REG_06;
             raw_reg_07       <= RESET_REG_07;
             trigger_level    <= RESET_TRIGGER_LEVEL;
-            raw_rate_divisor <= RESET_RATE_DIVISOR;
         end else if (opcode_valid && !known_read_active &&
                      (transaction_byte_count == COUNT_WIDTH'(2))) begin
             case (opcode_select)
@@ -68,11 +64,7 @@ module spi_control_registers #(
                 5'h06:   raw_reg_06    <= rx_byte;
                 5'h07:   raw_reg_07    <= rx_byte;
                 5'h08:   trigger_level <= rx_byte;
-                default: begin
-                    if (opcode_select == RAW_RATE_DIVISOR_SELECT) begin
-                        raw_rate_divisor <= rx_byte;
-                    end
-                end
+                default: ;
             endcase
         end
     end
