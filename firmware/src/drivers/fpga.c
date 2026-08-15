@@ -1408,80 +1408,55 @@ static uint8_t fpga_scope_primary_range(const scope_state_t *ss)
     return (ch->vdiv_idx < VDIV_COUNT) ? ch->vdiv_idx : (VDIV_COUNT - 1);
 }
 
+/* Absolute per-range relay levels, reconstructed 2026-08-15 from STOCK's
+ * gpio_mux_portc_porte (CH1: PC12/PE4/PE5/PE6, flash 0x080088A4) and
+ * gpio_mux_porta_portb (CH2: PA15/PA10/PB10, flash 0x08008A58). Stock drives
+ * those pins with DIFFERENTIAL SET/CLR writes that touch only some pins per
+ * range; the absolute state below is stock's decode applied in range order
+ * 0->9 from a low reset (stock autoranges UPWARD — the caller does
+ * `if (r<9) r=r+1`), which is the deterministic settled state for that path.
+ * This SUPERSEDES the prior hand-guessed table (which had PC12 polarity
+ * backwards — the real coarse-attenuator boundary is at range 5: PC12/PA15
+ * HIGH for 0-4, LOW for 5-9).
+ *
+ * ⚠ PB11 is stock's CH2 fine-select relay but our cold-boot config HOLDS IT
+ * HIGH as the capture-engine run co-signal (IOR1B). Driving it as a relay
+ * would disarm the engine, so it is DELIBERATELY omitted here — CH2 loses one
+ * fine-select bit, an acceptable trade until the engine no longer needs PB11.
+ *
+ * ⚠ Also known-incomplete: the 10 relay codes are NOT 1:1 with the 10 vdiv
+ * settings (stock indexes a remapped per-channel range code, and adjacent
+ * CH1 codes here are identical — e.g. 0==1). Fine gain within a coarse relay
+ * step is done elsewhere (FPGA config / the multiplicative gain term stock
+ * keeps in RAM at 0x200000fc), not purely by these relays. So this fixes the
+ * COARSE ladder; full per-vdiv gain still needs that second layer. See
+ * analysis_v120/trigger_regime_findings_2026-08-14.md Addendum 6/7. */
 static void fpga_set_scope_frontend_range(uint8_t range_idx)
 {
-    /* Approximate gpio_mux_portc_porte / gpio_mux_porta_portb using the
-     * reconstructed truth table from core_subsystems_annotated.c. This is
-     * intentionally simple: we want a stable, obviously scope-like relay
-     * state instead of inheriting meter or siggen leftovers. */
-    switch (range_idx) {
-    case 0:
-    case 1:
-        GPIOC->clr = (1U << 12);
-        GPIOE->scr = (1U << 4);
-        GPIOE->clr = (1U << 5);
-        GPIOE->clr = (1U << 6);
-        GPIOA->clr = (1U << 15);
-        GPIOA->clr = (1U << 10);
-        GPIOB->clr = (1U << 10);
-        break;
+    /* bit0=PC12 bit1=PE4 bit2=PE5 bit3=PE6 bit4=PA15 bit5=PA10 bit6=PB10 */
+    static const uint8_t relay_tbl[10] = {
+        0x39, /* 0: PC12 H PE4 L PE5 L PE6 H | PA15 H PA10 H PB10 L */
+        0x79, /* 1: PC12 H PE4 L PE5 L PE6 H | PA15 H PA10 H PB10 H */
+        0x55, /* 2: PC12 H PE4 L PE5 H PE6 L | PA15 H PA10 L PB10 H */
+        0x17, /* 3: PC12 H PE4 H PE5 H PE6 L | PA15 H PA10 L PB10 L */
+        0x57, /* 4: PC12 H PE4 H PE5 H PE6 L | PA15 H PA10 L PB10 H */
+        0x2A, /* 5: PC12 L PE4 H PE5 L PE6 H | PA15 L PA10 H PB10 L */
+        0x6A, /* 6: PC12 L PE4 H PE5 L PE6 H | PA15 L PA10 H PB10 H */
+        0x68, /* 7: PC12 L PE4 L PE5 L PE6 H | PA15 L PA10 H PB10 H */
+        0x02, /* 8: PC12 L PE4 H PE5 L PE6 L | PA15 L PA10 L PB10 L */
+        0x46, /* 9: PC12 L PE4 H PE5 H PE6 L | PA15 L PA10 L PB10 H */
+    };
+    if (range_idx >= 10) range_idx = 9;
+    uint8_t b = relay_tbl[range_idx];
 
-    case 2:
-    case 3:
-    case 4:
-        GPIOC->clr = (1U << 12);
-        GPIOE->scr = (1U << 4);
-        if ((range_idx & 1U) != 0) GPIOE->scr = (1U << 5);
-        else                       GPIOE->clr = (1U << 5);
-        GPIOE->clr = (1U << 6);
-        GPIOA->scr = (1U << 15);
-        GPIOA->scr = (1U << 10);
-        GPIOB->clr = (1U << 10);
-        break;
-
-    case 5:
-    case 6:
-        GPIOC->clr = (1U << 12);
-        GPIOE->clr = (1U << 4);
-        if ((range_idx & 1U) != 0) GPIOE->scr = (1U << 5);
-        else                       GPIOE->clr = (1U << 5);
-        GPIOE->scr = (1U << 6);
-        GPIOA->clr = (1U << 15);
-        GPIOA->clr = (1U << 10);
-        GPIOB->clr = (1U << 10);
-        break;
-
-    case 7:
-        GPIOC->scr = (1U << 12);
-        GPIOE->clr = (1U << 4);
-        GPIOE->scr = (1U << 5);
-        GPIOE->scr = (1U << 6);
-        GPIOA->clr = (1U << 15);
-        GPIOA->clr = (1U << 10);
-        GPIOB->clr = (1U << 10);
-        break;
-
-    case 8:
-        GPIOC->clr = (1U << 12);
-        GPIOE->scr = (1U << 4);
-        GPIOE->clr = (1U << 5);
-        GPIOE->scr = (1U << 6);
-        GPIOA->clr = (1U << 15);
-        GPIOA->clr = (1U << 10);
-        GPIOB->scr = (1U << 10);
-        break;
-
-    case 9:
-    default:
-        GPIOC->clr = (1U << 12);
-        GPIOE->scr = (1U << 4);
-        GPIOE->scr = (1U << 5);
-        GPIOE->scr = (1U << 6);
-        GPIOA->clr = (1U << 15);
-        GPIOA->clr = (1U << 10);
-        GPIOB->clr = (1U << 10);
-        break;
-    }
+    if (b & 0x01) GPIOC->scr = (1U << 12); else GPIOC->clr = (1U << 12); /* PC12 */
+    if (b & 0x02) GPIOE->scr = (1U << 4);  else GPIOE->clr = (1U << 4);  /* PE4  */
+    if (b & 0x04) GPIOE->scr = (1U << 5);  else GPIOE->clr = (1U << 5);  /* PE5  */
+    if (b & 0x08) GPIOE->scr = (1U << 6);  else GPIOE->clr = (1U << 6);  /* PE6  */
+    if (b & 0x10) GPIOA->scr = (1U << 15); else GPIOA->clr = (1U << 15); /* PA15 */
+    if (b & 0x20) GPIOA->scr = (1U << 10); else GPIOA->clr = (1U << 10); /* PA10 */
+    if (b & 0x40) GPIOB->scr = (1U << 10); else GPIOB->clr = (1U << 10); /* PB10 */
+    /* PB11 NOT driven — held HIGH as the engine run co-signal (see above). */
 
     /* Shared analog enables stay asserted in scope mode. */
     GPIOB->scr = (1U << 9);

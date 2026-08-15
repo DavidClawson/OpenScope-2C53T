@@ -479,3 +479,41 @@ would just cal the wrong mapping. The right sequence is:
      (which today ignores vdiv entirely: fixed (sample-128)*SCOPE_H/256) and the
      Vpp/Vrms measurement path.
 Stock-table extraction is in progress (Ghidra decompile of the two mux fns).
+
+---
+
+# ADDENDUM 7 — 2026-08-15: stock's real relay table decoded + implemented; coarse attenuator now works
+
+Extracted stock's per-range relay patterns from the Ghidra decompile of
+`gpio_mux_portc_porte` (CH1, flash 0x080088A4) and `gpio_mux_porta_portb`
+(CH2, flash 0x08008A58). Replaced our hand-guessed table (which had PC12
+polarity BACKWARDS) in `fpga_set_scope_frontend_range`.
+
+## Stock's structure (decoded)
+- 10 per-channel range codes, driven by DIFFERENTIAL SET/CLR writes (only some
+  pins touched per case). Reconstructed absolute state by applying stock's
+  writes in range order 0->9 from a low reset (stock autoranges UP).
+- **Coarse attenuator boundary at range 5**: PC12 (CH1) and PA15 (CH2) are HIGH
+  for ranges 0-4, LOW for 5-9. Our old table had this inverted.
+- CH1 relay codes ALIAS (0==1, 5==6 identical) — fine gain within a coarse step
+  is a SECOND layer (FPGA config / stock's RAM gain term at 0x200000fc), not
+  these relays.
+- PB11 is stock's CH2 fine-select relay, but our cold-boot holds it HIGH as the
+  engine run co-signal (IOR1B) — DELIBERATELY not driven here (engine safety).
+
+## Bench verification (stock table, fixed 40Hz sine amp2000, DAC1=2500)
+pp per range: 0:234 1:234 2:169 3:206 4:232 5:75 6:75 7:202 8:169 9:193
+- **The range-5 attenuator step is REAL and working** (pp 232->75 exactly where
+  PC12/PA15 flip). The old scrambled table had no such structure.
+- CH1 aliasing confirmed: 0==1 (234), 5==6 (75), as predicted.
+- Engine survived (config/arm intact, SPI3 OK climbing) — PB11-hold worked.
+- Not a clean 10-step monotonic ladder: high-gain ranges RAIL on amp2000, and
+  fine gain is the un-driven second layer. True gains need small non-railing
+  inputs (measured next) and, for full per-vdiv cal, the second gain layer.
+
+## Status of the per-range gain cal
+- DONE: correct relay table (coarse attenuator verified).
+- NEXT: measure codes/volt on non-railing inputs; wire render (still fixed
+  256-code scale) + Vpp/Vrms to real volts for at least the default range.
+- FUTURE (separate RE): the second gain layer (vdiv -> relay-code + RAM gain
+  term mapping) for full per-vdiv-setting calibration.
