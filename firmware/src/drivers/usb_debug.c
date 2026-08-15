@@ -1872,7 +1872,9 @@ static uint8_t spi3_raw_xfer(uint8_t tx);
 #define SCOPE_CENTER_TARGET   128u   /* ADC mid-scale code we center on    */
 #define SCOPE_CENTER_NBYTES   256u   /* payload bytes averaged per read     */
 #define SCOPE_CENTER_AVG      2u     /* reads averaged to knock down noise  */
-#define SCOPE_CENTER_ITERS    12u    /* binary-search steps over 0..4095    */
+#define SCOPE_CENTER_ITERS    11u    /* binary-search steps over 0..4095    */
+#define SCOPE_CENTER_SETTLE_MS 480u  /* >= one ~430ms buffer fill after a DAC
+                                        move, so the read is not stale         */
 
 /* One 0x04 CH1 read window; returns the mean of the first `nbytes` payload
  * bytes. Same framing as spi3_opread_window (one CS-LOW window, opcode + 2
@@ -1914,7 +1916,13 @@ static void scope_center_one(uint16_t *out_dac, uint32_t *out_mean)
     for (uint32_t it = 0; it < SCOPE_CENTER_ITERS; it++) {
         uint16_t mid = (uint16_t)((lo + hi) / 2);
         scope_trigger_dac_raw(mid);
-        vTaskDelay(pdMS_TO_TICKS(10));     /* DAC + frontend settle */
+        /* BUGFIX 2026-08-14 (round 2): the DAC moves fine, but the capture
+         * buffer FREE-RUNS and takes ~430 ms to refill (1024 samples at
+         * ~2.4 kS/s). A 10 ms settle read the STALE buffer (old, roughly-
+         * centered DC ~130) every iteration, so the search never converged —
+         * the first "DAC init" fix was aimed at the wrong cause. Wait a full
+         * buffer fill so the read reflects the NEW DC operating point. */
+        vTaskDelay(pdMS_TO_TICKS(SCOPE_CENTER_SETTLE_MS));
         uint32_t mean = scope_center_robust_mean();
         uint32_t err = (mean > SCOPE_CENTER_TARGET)
                        ? mean - SCOPE_CENTER_TARGET

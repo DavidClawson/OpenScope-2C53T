@@ -615,3 +615,26 @@ sine 8Hz amp100, buffer pp -> codes/Vpp:
 - A trustworthy full table needs the careful per-range multi-point method (~5
   amps each, per-range centered) AND is ultimately limited by the ~2.4 kS/s
   sample rate. Deferred; the structure and procedure are both now in hand.
+
+---
+
+# ADDENDUM 10 — 2026-08-14: `fpga scope center` FIXED (settle time) and bench-validated
+
+The tool bug took two rounds — the first fix was aimed at the wrong cause:
+- **Round 1 (WRONG):** guessed the DAC writes were inert (missing
+  `scope_trigger_dac_init`). Added the init. Bench: NO change — means still
+  clustered ~122-169, direct opread MISMATCHED (tool said DAC1=3967 mean=132,
+  real mean at 3967 = 255 railed).
+- **Localized it:** after `fpga scope center 8`, direct opread read 255 — so
+  the DAC *did* move to a railing value; the tool's own read had returned 132.
+  ⇒ the DAC was fine; the READ was stale.
+- **Round 2 (CORRECT):** the capture buffer FREE-RUNS and takes ~430 ms to
+  refill (1024 samples @ ~2.4 kS/s). The 10 ms per-iteration settle read the
+  OLD buffer (previous, roughly-centered DC ~130) every time, so the binary
+  search saw "≈128 always" and never converged. Fix: wait one full buffer fill
+  (`SCOPE_CENTER_SETTLE_MS`=480) after each DAC move before reading.
+- **Bench-validated:** ranges 8/2/5 now converge to mean=128, and the tool's
+  DAC1 values MATCH direct opread (range 8 → 2431, = the host-side cal center).
+
+Lesson (again): build+gate green ≠ correct; and the first plausible root cause
+was wrong — only the localizing measurement (DAC moved, read stale) found it.
