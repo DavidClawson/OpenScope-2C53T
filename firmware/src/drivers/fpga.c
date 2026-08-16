@@ -1408,73 +1408,132 @@ static uint8_t fpga_scope_primary_range(const scope_state_t *ss)
     return (ch->vdiv_idx < VDIV_COUNT) ? ch->vdiv_idx : (VDIV_COUNT - 1);
 }
 
-/* Absolute per-range relay levels, reconstructed 2026-08-14 from STOCK's
- * gpio_mux_portc_porte (CH1: PC12/PE4/PE5/PE6, flash 0x080088A4) and
- * gpio_mux_porta_portb (CH2: PA15/PA10/PB10, flash 0x08008A58). Stock drives
- * those pins with DIFFERENTIAL SET/CLR writes that touch only some pins per
- * range; the absolute state below is stock's decode applied in range order
- * 0->9 from a low reset (stock autoranges UPWARD — the caller does
- * `if (r<9) r=r+1`), which is the deterministic settled state for that path.
- * This SUPERSEDES the prior hand-guessed table (which had PC12 polarity
- * backwards — the real coarse-attenuator boundary is at range 5: PC12/PA15
- * HIGH for 0-4, LOW for 5-9).
+/* ═══════════════════════════════════════════════════════════════════
+ * Per-channel coarse analog front end (relay / attenuator bank)
  *
- * ⚠ PB11 is stock's CH2 fine-select relay but our cold-boot config HOLDS IT
- * HIGH as the capture-engine run co-signal (IOR1B). Driving it as a relay
- * would disarm the engine, so it is DELIBERATELY omitted here — CH2 loses one
- * fine-select bit, an acceptable trade until the engine no longer needs PB11.
+ * Stock has TWO independent range functions, one per channel, each taking
+ * that channel's OWN range index (CH1 ms[0x02], CH2 ms[0x03]):
  *
- * ⚠ Also known-incomplete: the 10 relay codes are NOT 1:1 with the 10 vdiv
- * settings (stock indexes a remapped per-channel range code, and adjacent
- * CH1 codes here are identical — e.g. 0==1). Fine gain within a coarse relay
- * step is done elsewhere (FPGA config / the multiplicative gain term stock
- * keeps in RAM at 0x200000fc), not purely by these relays. So this fixes the
- * COARSE ladder; full per-vdiv gain still needs that second layer. See
- * analysis_v120/trigger_regime_findings_2026-08-14.md Addendum 6/7. */
-static void fpga_set_scope_frontend_range(uint8_t range_idx)
+ *   CH1  gpio_mux_portc_porte  flash 0x080088A4  ->  PC12 PE4  PE5  PE6
+ *   CH2  gpio_mux_porta_portb  flash 0x08008A58  ->  PA15 PB11 PB10 PA10
+ *
+ * They are the SAME 10-case table under the pin isomorphism
+ *   PC12 <-> PA15,  PE4 <-> PB11,  PE5 <-> PB10,  PE6 <-> PA10
+ * (desk sweep 2026-08-15: both functions traced arm-by-arm from objdump and
+ * re-derived by an independent verifier — analysis_v120/desk_sweep_2026-08-15.md §4.)
+ *
+ * This replaces the single 7-bit table of 2026-08-14, which was wrong twice
+ * over: it drove BOTH channels' pins from ONE range index (so CH2's bank
+ * followed CH1's volts/div), and its CH1 bits disagreed with stock at
+ * indices 0, 1, 3, 6 and 7.
+ *
+ * Bit 0 is the input PATH select (PC12 / PA15): HIGH = direct for the
+ * sensitive ranges 0-4, LOW = attenuated for 5-9. It is NOT a coupling or a
+ * connect/disconnect control — bench 2026-08-15 measured ~30x attenuation,
+ * not silence, with it LOW. AC/DC coupling is PD12/PD13.
+ *
+ * ⚠ Still known-incomplete: the 10 relay codes are not 1:1 with the 10 vdiv
+ * settings (adjacent codes repeat), so this is the COARSE ladder only; fine
+ * per-vdiv gain lives in the digital layer. See
+ * analysis_v120/trigger_regime_findings_2026-08-14.md Addendum 6/7.
+ * ═══════════════════════════════════════════════════════════════════ */
+
+/* bit0 = path select, bit1 = PE4/PB11, bit2 = PE5/PB10, bit3 = PE6/PA10 */
+static const uint8_t fpga_relay_tbl[10] = {
+    0x0B, /* 0: path H  b1 H  b2 L  b3 H */
+    0x0F, /* 1: path H  b1 H  b2 H  b3 H */
+    0x05, /* 2: path H  b1 L  b2 H  b3 L */
+    0x03, /* 3: path H  b1 H  b2 L  b3 L */
+    0x07, /* 4: path H  b1 H  b2 H  b3 L */
+    0x0A, /* 5: path L  b1 H  b2 L  b3 H */
+    0x0E, /* 6: path L  b1 H  b2 H  b3 H */
+    0x0C, /* 7: path L  b1 L  b2 H  b3 H */
+    0x02, /* 8: path L  b1 H  b2 L  b3 L */
+    0x06, /* 9: path L  b1 H  b2 H  b3 L */
+};
+
+/* PB11 is CH2's b1 relay, NOT an FPGA run/arm line (desk sweep 2026-08-15:
+ * stock writes it only from the CH2 range/cal functions; the netlist pad we
+ * had read as "IOR1B = the run line" is actually an ADC data bit; and on the
+ * bench that evening driving PB11 LOW did not stop an armed capture). It is
+ * still held HIGH across config + arm — only the CH2 range table releases it,
+ * and only after arming. Set this to 0 to restore the old always-HIGH
+ * behaviour if a cold boot is ever seen to fail arming. */
+#ifndef FPGA_PB11_AS_CH2_RELAY
+#define FPGA_PB11_AS_CH2_RELAY 1
+#endif
+
+static void fpga_set_ch1_frontend_range(uint8_t range_idx)
 {
-    /* bit0=PC12 bit1=PE4 bit2=PE5 bit3=PE6 bit4=PA15 bit5=PA10 bit6=PB10 */
-    static const uint8_t relay_tbl[10] = {
-        0x39, /* 0: PC12 H PE4 L PE5 L PE6 H | PA15 H PA10 H PB10 L */
-        0x79, /* 1: PC12 H PE4 L PE5 L PE6 H | PA15 H PA10 H PB10 H */
-        0x55, /* 2: PC12 H PE4 L PE5 H PE6 L | PA15 H PA10 L PB10 H */
-        0x17, /* 3: PC12 H PE4 H PE5 H PE6 L | PA15 H PA10 L PB10 L */
-        0x57, /* 4: PC12 H PE4 H PE5 H PE6 L | PA15 H PA10 L PB10 H */
-        0x2A, /* 5: PC12 L PE4 H PE5 L PE6 H | PA15 L PA10 H PB10 L */
-        0x6A, /* 6: PC12 L PE4 H PE5 L PE6 H | PA15 L PA10 H PB10 H */
-        0x68, /* 7: PC12 L PE4 L PE5 L PE6 H | PA15 L PA10 H PB10 H */
-        0x02, /* 8: PC12 L PE4 H PE5 L PE6 L | PA15 L PA10 L PB10 L */
-        0x46, /* 9: PC12 L PE4 H PE5 H PE6 L | PA15 L PA10 L PB10 H */
-    };
+    uint8_t b;
+
     if (range_idx >= 10) range_idx = 9;
-    uint8_t b = relay_tbl[range_idx];
+    b = fpga_relay_tbl[range_idx];
 
     if (b & 0x01) GPIOC->scr = (1U << 12); else GPIOC->clr = (1U << 12); /* PC12 */
     if (b & 0x02) GPIOE->scr = (1U << 4);  else GPIOE->clr = (1U << 4);  /* PE4  */
     if (b & 0x04) GPIOE->scr = (1U << 5);  else GPIOE->clr = (1U << 5);  /* PE5  */
     if (b & 0x08) GPIOE->scr = (1U << 6);  else GPIOE->clr = (1U << 6);  /* PE6  */
-    if (b & 0x10) GPIOA->scr = (1U << 15); else GPIOA->clr = (1U << 15); /* PA15 */
-    if (b & 0x20) GPIOA->scr = (1U << 10); else GPIOA->clr = (1U << 10); /* PA10 */
-    if (b & 0x40) GPIOB->scr = (1U << 10); else GPIOB->clr = (1U << 10); /* PB10 */
-    /* PB11 NOT driven — held HIGH as the engine run co-signal (see above). */
+}
 
-    /* PA6 stays asserted in scope mode (stock configures it as an output;
-     * function still unproven). PB9 is NOT driven here any more: it is the
-     * onboard piezo buzzer (TMR4_CH4 PWM — issue #25, maksidze, 2026-08-15,
-     * probed under stock + validated in DOOM-2C53T), not an analog enable.
-     * Holding it HIGH just put DC on the piezo. */
+static void fpga_set_ch2_frontend_range(uint8_t range_idx)
+{
+    uint8_t b;
+
+    if (range_idx >= 10) range_idx = 9;
+    b = fpga_relay_tbl[range_idx];
+
+    if (b & 0x01) GPIOA->scr = (1U << 15); else GPIOA->clr = (1U << 15); /* PA15 */
+#if FPGA_PB11_AS_CH2_RELAY
+    if (b & 0x02) GPIOB->scr = PB11_MASK;  else GPIOB->clr = PB11_MASK;  /* PB11 */
+#endif
+    if (b & 0x04) GPIOB->scr = (1U << 10); else GPIOB->clr = (1U << 10); /* PB10 */
+    if (b & 0x08) GPIOA->scr = (1U << 10); else GPIOA->clr = (1U << 10); /* PA10 */
+}
+
+/* Shared analog enables asserted in scope mode. PA6: stock configures it as
+ * an output, function still unproven. PB9 is deliberately NOT driven — it is
+ * the onboard piezo buzzer (TMR4_CH4 PWM, issue #25), not an analog enable. */
+static void fpga_scope_frontend_enables(void)
+{
     GPIOA->scr = (1U << 6);
 }
 
-/* Bench-cal hook (2026-08-14): apply a scope frontend range by index and force
- * DC coupling (PC12 HIGH), so the per-range gain can be characterised from the
- * shell without cycling volts/div through the UI. Clamps to VDIV_COUNT-1. See
- * `fpga scope range <n>` in usb_debug.c and the frontend gain-cal work. */
-void fpga_scope_set_range_diag(uint8_t range_idx)
+/* Apply BOTH channels from their own volts/div indices. */
+static void fpga_set_scope_frontend_ranges(const scope_state_t *ss)
+{
+    uint8_t r1 = (ss->ch1.vdiv_idx < VDIV_COUNT) ? ss->ch1.vdiv_idx : (VDIV_COUNT - 1);
+    uint8_t r2 = (ss->ch2.vdiv_idx < VDIV_COUNT) ? ss->ch2.vdiv_idx : (VDIV_COUNT - 1);
+
+    fpga_set_ch1_frontend_range(r1);
+    fpga_set_ch2_frontend_range(r2);
+    fpga_scope_frontend_enables();
+}
+
+/* Bench-cal hook: apply one range index to a channel (ch 0 = CH1, 1 = CH2,
+ * any other value = both) without cycling volts/div through the UI. See
+ * `fpga scope range <n> [ch]` in usb_debug.c.
+ *
+ * NOTE the previous version of this hook also forced PC12 HIGH, believing
+ * PC12 to be the DC-coupling select. It is not — it is the input path
+ * select, and forcing it HIGH pinned every range to the sensitive path
+ * (which rails a DC-coupled input). Coupling is PD12/PD13, set in the
+ * frontend init. */
+void fpga_scope_set_range_diag_ch(uint8_t ch, uint8_t range_idx)
 {
     if (range_idx >= VDIV_COUNT) range_idx = VDIV_COUNT - 1;
-    fpga_set_scope_frontend_range(range_idx);
-    GPIOC->scr = (1U << 12);   /* PC12 HIGH = DC coupling (bench-measured) */
+
+    if (ch == 0)      fpga_set_ch1_frontend_range(range_idx);
+    else if (ch == 1) fpga_set_ch2_frontend_range(range_idx);
+    else            { fpga_set_ch1_frontend_range(range_idx);
+                      fpga_set_ch2_frontend_range(range_idx); }
+
+    fpga_scope_frontend_enables();
+}
+
+void fpga_scope_set_range_diag(uint8_t range_idx)
+{
+    fpga_scope_set_range_diag_ch(0xFF, range_idx);   /* both channels */
 }
 
 static uint8_t fpga_probe_cmd_byte(void)
@@ -4524,16 +4583,10 @@ void fpga_init(void)
     gpio_init(GPIOD, &gpio_cfg);
     GPIOD->scr = (1U << 12) | (1U << 13);   /* both channels DC-coupled */
 
-    fpga_set_scope_frontend_range(fpga_scope_primary_range(scope_state_get()));
-    /* PC12 override — BENCH-MEASURED 2026-08-12 (run 5, live A/B on the
-     * SAVE toggle): with PC12 LOW (what the approximate range table sets in
-     * every arm) the input path is AC-coupled — finger noise passes, a DC
-     * battery does nothing. PC12 HIGH passes DC; the battery steps the
-     * trace. So PC12 is the coupling/input-routing select, HIGH = DC, and
-     * the shared truth table's unconditional LOW is wrong for DC scope use
-     * (left as-is there pending a proper per-range re-derivation; this
-     * build wants DC). SAVE still toggles it live for A/B. */
-    GPIOC->scr = (1U << 12);
+    fpga_set_scope_frontend_ranges(scope_state_get());
+    /* (The PC12-HIGH override that used to sit here is gone: PC12 is the input
+     * PATH select, not the DC-coupling select — the range table now sets it
+     * per range, and coupling is PD12/PD13 above. Bench 2026-08-15.) */
 
     /* Scope-engine restart — the fallback knob, promoted to the main path
      * after the first bench run (2026-08-12): with DAC1 restored but nothing
@@ -5011,7 +5064,7 @@ void fpga_scope_reinit(void)
     GPIOC->clr = (1U << 11);  /* PC11 LOW — meter MUX off */
     GPIOB->scr = PB11_MASK;   /* PB11 HIGH — FPGA active */
 
-    fpga_set_scope_frontend_range(fpga_scope_primary_range(ss));
+    fpga_set_scope_frontend_ranges(ss);
     fpga_scope_delay_ms(10);
     fpga_send_scope_sequence(ss);
 }

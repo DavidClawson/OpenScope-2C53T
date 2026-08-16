@@ -610,7 +610,7 @@ static void cmd_help(void)
         "fpga wire words <w...>         Send final 16-bit wire words directly\r\n"
         "fpga wire entry [ch1|ch2|both] Send candidate scope-entry wire-word bank\r\n"
         "fpga wire scope [ch1|ch2|both] Wire-word entry + runtime scope blocks\r\n"
-        "fpga scope range <0-9>          Apply frontend range n (DC), for gain cal\r\n"
+        "fpga scope range <0-9> [1|2]    Apply coarse frontend range (per channel)\r\n"
         "fpga scope center [0-9]         Auto-center DAC1 (mid-scale) per range; all if omitted\r\n"
         "fpga scope reinit               Re-apply scope frontend + FPGA cfg\r\n"
         "fpga meter reinit [submode]     Re-apply meter frontend + FPGA cfg\r\n"
@@ -1830,18 +1830,32 @@ static void cmd_fpga_scope_reinit(void)
     usb_send_str("Scope reinit queued\r\n");
 }
 
-/* `fpga scope range <n>` — apply frontend range n (0..9 = 5mV/div..5V/div)
- * with DC coupling, for per-range gain characterisation. */
+/* `fpga scope range <n> [ch]` — apply coarse frontend range n (0-9) to one
+ * channel (ch 1 or 2) or, with no channel given, to both. The two channels
+ * have independent relay banks (CH1 PC12/PE4/PE5/PE6, CH2 PA15/PB11/PB10/PA10)
+ * driven from the same 10-case stock table. Coupling is NOT touched here — it
+ * is PD12/PD13, set in the frontend init (bench 2026-08-15). */
 static void cmd_fpga_scope_range(const char *args)
 {
     uint32_t n = 0;
+    uint32_t chn = 0;
+    uint8_t ch_sel = 0xFF;
+    const char *space;
+
     if (args == NULL || *args == '\0' || parse_int(args, &n) != 0) {
-        usb_send_str("Usage: fpga scope range <0-9>\r\n");
+        usb_send_str("Usage: fpga scope range <0-9> [1|2]\r\n");
         return;
     }
-    fpga_scope_set_range_diag((uint8_t)n);
-    usb_debug_printf("scope frontend range = %lu (DC coupling forced)\r\n",
-                     (unsigned long)n);
+
+    space = strchr(args, ' ');
+    if (space != NULL && parse_int(space + 1, &chn) == 0) {
+        if (chn == 1 || chn == 2) ch_sel = (uint8_t)(chn - 1);
+    }
+
+    fpga_scope_set_range_diag_ch(ch_sel, (uint8_t)n);
+    usb_debug_printf("scope frontend range = %lu on %s\r\n",
+                     (unsigned long)n,
+                     ch_sel == 0 ? "CH1" : (ch_sel == 1 ? "CH2" : "CH1+CH2"));
 }
 
 /* Raw SPI3 byte exchange on the shared FPGA bus (defined later in this file). */
