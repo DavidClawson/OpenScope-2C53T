@@ -2890,7 +2890,17 @@ void EXINT0_IRQHandler(void)
  * The real per-channel read protocol from the issue-#18 stock capture,
  * bench-proven on this board by Stlkv's port: PC0 data-ready (active LOW),
  * then ONE 1026-byte CS-LOW window per channel — the opcode byte (0x04=CH1,
- * 0x05=CH2) plus 2 more status bytes, then 1023 samples. Strictly read-only
+ * 0x05=CH2) plus ONE dummy byte, then 1024 samples.
+ *
+ * CORRECTED 2026-08-15 from stock's own dispatch (handlers 0x0803E5A4 for
+ * op 0x04 and 0x0803E68C for op 0x05, decoded in
+ * analysis_v120/spi3_runtime_dispatch_2026-08-15.md): stock discards exactly
+ * TWO bytes — the opcode echo and one dummy — then captures 1024 samples into
+ * state[0x5B0 + 0..1023] (CH1) / [1024..2047] (CH2). We had been discarding
+ * three and keeping 1023, so every sample array was shifted one byte late and
+ * one sample short. The old third "header" byte was in fact sample[0]; the
+ * status line showed it as 0x7C/0x79, i.e. mid-scale sample values, never the
+ * 0x01 "buffer-valid flag" it had been read as. Strictly read-only
  * on the FPGA: scope-engine opcodes only, never the Gowin config port
  * (0x11/0x41 there desynchronise a configured part — Exp L). Feeds the same
  * buffers/flags the scope UI already consumes, so success shows on the LCD:
@@ -2906,20 +2916,17 @@ static uint8_t fpga_warmtest_read_channel(uint8_t opcode, volatile uint8_t *buf)
     uint8_t s0 = spi3_xfer(opcode);        /* MISO during opcode: 0x80 marker
                                               expected in the first window
                                               after data-ready (Stlkv) */
-    uint8_t h1 = spi3_xfer(0xFF);          /* header bytes 2 and 3 — stock's
-                                              b2 (June capture re-read,
-                                              2026-08-14) is a buffer-valid
-                                              flag on CH1: 0x01 = complete */
-    uint8_t h2 = spi3_xfer(0xFF);
+    uint8_t h1 = spi3_xfer(0xFF);          /* the ONE dummy byte stock
+                                              discards before the samples */
     {
         volatile uint8_t *hdr = (opcode == 0x04) ? fpga.acq_hdr_ch1
                                                  : fpga.acq_hdr_ch2;
-        hdr[0] = s0; hdr[1] = h1; hdr[2] = h2;
+        hdr[0] = s0; hdr[1] = h1; hdr[2] = 0;
     }
     if (opcode == 0x04)
         fpga.spi3_first_byte = s0;         /* debug overlay "1:" field */
 
-    for (int i = 0; i < 1023; i++) {
+    for (int i = 0; i < 1024; i++) {
         uint8_t raw = spi3_xfer(0xFF);
         if (i < 4) {
             if (opcode == 0x04) fpga.diag_ch1_raw[i] = raw;
@@ -2930,8 +2937,6 @@ static uint8_t fpga_warmtest_read_channel(uint8_t opcode, volatile uint8_t *buf)
         if (cal > 255) cal = 255;
         buf[i] = (uint8_t)cal;
     }
-    buf[1023] = buf[1022];   /* frame carries 1023 samples; don't leave a
-                                stale byte for the overlay's min/max scan */
     SPI3_CS_DEASSERT();
     return s0;
 }
@@ -3038,16 +3043,15 @@ static void fpga_warmtest_acq_task(void *pv)
          * false-negative; varying data is accepted on its own merits). */
         bool marker = (s1 == 0x80) || (s2 == 0x80);
         bool varies = false;
-        for (int i = 1; i < 1023; i++) {
+        for (int i = 1; i < 1024; i++) {
             if (fpga.ch1_buf[i] != fpga.ch1_buf[0]) { varies = true; break; }
         }
-        /* Stock's b2==0x01 buffer-valid flag (CH1 windows only in the June
-         * capture) — a constant-valued frame is VALID when the flag says the
-         * capture completed; in the triggered regime a real signal aliased
-         * within the ~µs window is constant, and rejecting it was how the
-         * gate manufactured the "frozen OK counter" symptom. */
-        bool bufvalid = (fpga.acq_hdr_ch1[2] == 0x01);
-        if (marker || varies || bufvalid) {
+        /* The old third gate term tested acq_hdr_ch1[2]==0x01 as a stock
+         * "buffer-valid" flag. Refuted 2026-08-15 by stock's own dispatch:
+         * stock discards only two bytes, so that byte is sample[0], and on
+         * this board it reads mid-scale (0x7C/0x79) and never 0x01. The term
+         * was therefore always false here — dropping it changes nothing. */
+        if (marker || varies) {
             fpga.spi3_ok_count++;
             fpga.spi3_timeout_count = 0;
             data_ready = true;
