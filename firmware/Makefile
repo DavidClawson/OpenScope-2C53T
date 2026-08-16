@@ -489,7 +489,7 @@ $(BUILD_DIR)/test_redraw_gate: tests/test_redraw_gate.c src/ui/redraw_gate.h | $
 test-redraw-gate: $(BUILD_DIR)/test_redraw_gate
 	$<
 
-.PHONY: all clean disasm size renode soak-test soak-quick flash flash-dfu bootloader flash-bootloader flash-all guest guest-warmtest guest-usart-silent emu test-meter-data test-meter-auto test-meter-voltage-wave test-fpga-meter-plan test-stock-meter-literals test-meter test-scope-measure test-redraw-gate test-config-persist guest-persist guest-caldump guest-coldtrace-slow guest-coldtrace-la
+.PHONY: all clean disasm size renode soak-test soak-quick flash flash-dfu bootloader flash-bootloader flash-all guest guest-warmtest guest-usart-silent emu test-meter-data test-meter-auto test-meter-voltage-wave test-fpga-meter-plan test-stock-meter-literals test-meter test-scope-measure test-redraw-gate test-config-persist guest-persist guest-caldump guest-coldtrace-slow guest-coldtrace-la guest-debugclk fpga-alt-header
 
 # ═══════════════════════════════════════════════════════════════════════════
 # BENCH / EXPERIMENT IMAGE INDEX                          (index added 2026-08-13)
@@ -518,6 +518,7 @@ test-redraw-gate: $(BUILD_DIR)/test_redraw_gate
 #   guest-coldtrace    cold boot -> configured FPGA -> live trace (the rig)
 #   guest-coldtrace-slow  same, AUTO read cadence 500 ms (acq starvation test)
 #   guest-coldtrace-la    same, bit-bang config SCK slowed for 24 MS/s logic analyzers
+#   guest-debugclk     coldtrace but loads the debugclk_hw_top DIAGNOSTIC bitstream
 #   guest-configB      config only; also the queued CDC single-variable test
 #   guest-configB-arm  config + engine arm, no live readout
 #   guest-warmtest     warm-handoff dev loop for scope-side work
@@ -773,6 +774,60 @@ guest-coldtrace-slow: clean all
 guest-coldtrace-faithful: CFLAGS += -DGUEST_BUILD -DFPGA_WARM_HANDOFF_TEST=1 -DFPGA_USART_SILENT_SCOPE=1 -DFPGA_CONFIG_B=1 -DFPGA_CONFIG_B_ARM=1 -DFPGA_CONFIG_B_FAITHFUL=1
 guest-coldtrace-faithful: LDSCRIPT = ld/at32f403a_guest.ld
 guest-coldtrace-faithful: clean all
+
+# [BENCH 2026-08-16] guest-debugclk — guest-coldtrace with a DIFFERENT FPGA
+# payload: the debugclk_hw_top diagnostic image instead of the stock bitstream
+# (-DFPGA_ALT_BITSTREAM=1 swaps fpga_cal_table.h's array for
+# src/drivers/fpga_bitstream_alt.h; everything else is bit-for-bit the
+# coldtrace configuration, so the bit-bang config path being exercised is the
+# one already proven to break the config-entry wall).
+#
+# What it is for: the image pushes SYNTHETIC lanes — CH1 a free-running 8-bit
+# ramp, CH2 a walking one — through the REAL capture/readout path. The bytes
+# are therefore known before we read them, which is exactly what the 2026-08-15
+# desk-sweep result lacks: op 04 and op 05 both returned CH1, and no evidence
+# since separates "the readout mux does not split the channels" from "our read
+# framing is wrong". A ramp and a one-hot pattern cannot be confused.
+#
+# It also hands the sample clock to the MCU. There is no PLL in this image:
+# PC6 (QN48 pin 30, IOB7B, dbg_clk) advances the whole capture core one sample
+# per RISING edge, and PB11 (QN48 pin 46, IOR1B, run_enable) re-arms on a
+# low->high edge. Both are driven from the shell — `fpga dbgclk` / `fpga dbgarm`
+# — so rate and arming are under direct control rather than inferred.
+# ⚠ Those two pins mean something else entirely on a stock payload (PC6 = "FPGA
+# SPI enable", PB11 = a CH2 relay per the 2026-08-15 sweep). Scope capture, the
+# meter path and every calibration assumption are OFF for this image.
+#
+# Bench: `fpga dbgarm` -> `fpga dbgclk 16` (>=8 clocks first: an 8-cycle
+# power-on-reset shifter runs off dbg_clk) -> `fpga dbgclk 1100` ->
+# `spi3 opread 04 1026 dump`. Expect "R1V" (52 31 56) then a rising ramp;
+# op 05 should give one-hot bytes. Read with opread, NOT the acq task:
+# this image frames 3 header bytes + 1023 samples where stock frames 2 + 1024.
+#
+# FPGA_CONFIG_B_ARM stays ON deliberately. It is what stages PB11 HIGH and
+# PC6 HIGH at boot, which is exactly the run/clock posture this image wants,
+# and its five post-config writes (01 08 / 02 03 / 06 00 / 07 00 / 08 AD) are
+# no-ops here: those values ARE this image's register reset defaults, so the
+# sequence writes each register the value it already holds.
+#
+# Regenerating the payload header after a new .fs build (the ONE command):
+#   python3 ../scripts/fs2header.py firmware/fpga/debugclk_hw_top.fs \
+#       firmware/src/drivers/fpga_bitstream_alt.h --name debugclk_hw_top \
+#       --notes-file firmware/fpga/debugclk_hw_top.notes.txt
+# (run from the repo root, or use `make fpga-alt-header` from firmware/).
+guest-debugclk: CFLAGS += -DGUEST_BUILD -DFPGA_WARM_HANDOFF_TEST=1 -DFPGA_USART_SILENT_SCOPE=1 -DFPGA_CONFIG_B=1 -DFPGA_CONFIG_B_ARM=1 -DFPGA_ALT_BITSTREAM=1
+guest-debugclk: LDSCRIPT = ld/at32f403a_guest.ld
+guest-debugclk: clean all
+
+# Regenerate the alternate payload header from its .fs. Not a build
+# dependency on purpose: the generated header is checked in, so a normal
+# build never needs Python, and a payload swap stays a deliberate act.
+FPGA_ALT_FS    ?= fpga/debugclk_hw_top.fs
+FPGA_ALT_NOTES ?= fpga/debugclk_hw_top.notes.txt
+FPGA_ALT_NAME  ?= debugclk_hw_top
+fpga-alt-header:
+	python3 ../scripts/fs2header.py $(FPGA_ALT_FS) src/drivers/fpga_bitstream_alt.h \
+		--name $(FPGA_ALT_NAME) --notes-file $(FPGA_ALT_NOTES)
 
 # Experiment G (2026-07-28): RECONFIG_N pulse candidates. Exp F closed every
 # enumerable static MCU-state difference and the wall held, which sends us back

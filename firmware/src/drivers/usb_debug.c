@@ -643,6 +643,10 @@ static void cmd_help(void)
         "meter wave selector [auto|N]    DMM wave selector byte\r\n"
         "meter wave preacq [auto|N]      DMM wave pre-acq byte\r\n"
         "fpga acq [mode]                 Trigger SPI3 acquisition\r\n"
+#if defined(FPGA_ALT_BITSTREAM)
+        "fpga dbgclk <count> [half_us]   debugclk image: N rising edges on PC6 (=N samples)\r\n"
+        "fpga dbgarm [low_ms]            debugclk image: re-arm via PB11 low->high (run_enable)\r\n"
+#endif
         "spi3 read [len]                 Raw SPI3 read + hex dump\r\n"
         "spi3 xfer <hex...>              Send arbitrary MOSI bytes, dump MISO\r\n"
         "spi3 seq <b..> | <b..>          xfer w/ mid-sequence CS pulse at '|'\r\n"
@@ -699,6 +703,9 @@ static void cmd_version(void)
     usb_debug_printf(
         "OpenScope 2C53T\r\n"
         "Build: " __DATE__ " " __TIME__ "\r\n"
+#ifdef FPGA_ALT_BITSTREAM
+        "FPGA payload: " FPGA_BITSTREAM_NAME " (ALT — not the stock scope design)\r\n"
+#endif
         "MCU: AT32F403A @ %uMHz\r\n"
         "SRAM: 224KB (EOPB0=0xFE)\r\n",
         system_core_clock / 1000000
@@ -4954,6 +4961,214 @@ static void cmd_spi3_armtest(const char *args)
                  " all-FF with pb11 -> rerun `spi3 armtest pc6`.)\r\n");
 }
 
+#if defined(FPGA_ALT_BITSTREAM)
+/* ═══════════════════════════════════════════════════════════════════
+ * Diagnostic-bitstream debug interface  (guest-debugclk / FPGA_ALT_BITSTREAM)
+ * ═══════════════════════════════════════════════════════════════════
+ *
+ * The debugclk_hw_top image drives SYNTHETIC lanes (CH1 = free-running 8-bit
+ * ramp, CH2 = walking one) through the REAL capture/readout path, so the bytes
+ * coming back are known a priori. That is what makes the open question
+ * answerable: in the 2026-08-15 desk sweep op 0x04 and op 0x05 both returned
+ * CH1, and nothing since has separated "the readout mux does not split the
+ * channels" from "our framing is wrong". With a known ramp on one lane and a
+ * one-hot pattern on the other, the two look nothing alike.
+ *
+ * Contract for these two commands, from the image's RTL constraints file
+ * (fnirsi_2c53t_qn48.cst), not inferred:
+ *
+ *   PC6  = QN48 pin 30 = IOB7B = dbg_clk. No PLL in this image — the MCU paces
+ *          the ENTIRE capture core, ONE SAMPLE PER RISING EDGE. At least 8
+ *          clocks must be sent before anything else (an 8-cycle power-on-reset
+ *          shifter runs off this clock).
+ *   PB11 = QN48 pin 46 = IOR1B = run_enable. capture_enable = run_enable AND
+ *          sample_tick; a low->high edge clears the trigger latch and re-arms,
+ *          and capture free-runs while it is HIGH. No SPI command is involved.
+ *
+ * ⚠ Both pins mean something ELSE on a stock-payload build — PC6 is "FPGA SPI
+ * enable (must be HIGH)" and PB11 is "FPGA active mode" (which the 2026-08-15
+ * desk sweep re-read as a CH2 attenuator relay). So this whole block is
+ * compiled ONLY under FPGA_ALT_BITSTREAM: the commands cannot be typed at a
+ * stock-payload build, and gating them also keeps every existing image
+ * byte-identical, which is what makes the payload swap auditable.
+ *
+ * Reading the result needs no new code: `spi3 opread 04 1026 dump` prints raw
+ * bytes from index 0, so the image's 3-byte "R1V" header is visible directly.
+ * Do NOT retarget fpga_warmtest_read_channel at it — that function is
+ * stock-framed (2-byte discard, 1024 samples) on purpose, and this image is
+ * 3-byte-header/1023-sample. One byte apart, opposite requirements.
+ */
+
+/* Busy-wait microseconds off the FREE-RUNNING FreeRTOS SysTick without
+ * reprogramming it — fpga.c's systick_delay_us seizes LOAD/VAL/CTRL outright,
+ * which is only safe pre-scheduler and would eat the RTOS tick here.
+ * Accumulates down-counter deltas so it stays correct across reload wraps.
+ * Not jitter-free: the tick ISR or a higher-priority task can stretch a half
+ * period, so half_us is a floor, not a guarantee. The FPGA does not care —
+ * it counts edges, not time. */
+static void dbg_delay_us(uint32_t us)
+{
+    if (us == 0) return;
+
+    uint32_t load = SysTick->LOAD + 1u;
+    if (load <= 1u) {                       /* SysTick not running (pre-scheduler) */
+        for (uint32_t i = 0; i < us * 30u; i++) __asm__ volatile("nop");
+        return;
+    }
+
+    uint64_t target = (uint64_t)us * (system_core_clock / 1000000u);
+    uint64_t acc = 0;
+    uint32_t prev = SysTick->VAL;
+    while (acc < target) {
+        uint32_t now = SysTick->VAL;
+        acc += (prev >= now) ? (uint32_t)(prev - now)
+                             : (uint32_t)(prev + load - now);
+        prev = now;
+    }
+}
+
+#define DBG_CLK_MAX_COUNT    1000000u
+#define DBG_CLK_MAX_HALF_US  100000u
+
+/* fpga dbgclk <count> [half_us] — emit `count` RISING edges on PC6, the
+ * diagnostic image's sample clock. One rising edge = one sample, so this is
+ * the sample-rate knob in its entirety. Default half_us=10 (~50 kHz).
+ *
+ * Idles HIGH and pulses LOW->HIGH rather than the other way round: that yields
+ * exactly `count` rising edges AND leaves PC6 at the level a stock-payload
+ * build expects, so the restore below never has to manufacture an extra edge. */
+static void cmd_fpga_dbgclk(const char *args)
+{
+    char buf[48];
+    char *saveptr = NULL, *tok;
+    uint32_t count = 0, half_us = 10;
+
+    if (strlen(args) >= sizeof(buf)) { usb_send_str("ERR: line too long\r\n"); return; }
+    strcpy(buf, args);
+
+    tok = strtok_r(buf, " \t", &saveptr);
+    if (!tok || parse_int(tok, &count) != 0 || count == 0 || count > DBG_CLK_MAX_COUNT) {
+        usb_debug_printf("Usage: fpga dbgclk <count 1..%lu> [half_us 0..%lu]\r\n",
+                         (unsigned long)DBG_CLK_MAX_COUNT,
+                         (unsigned long)DBG_CLK_MAX_HALF_US);
+        return;
+    }
+    tok = strtok_r(NULL, " \t", &saveptr);
+    if (tok && (parse_int(tok, &half_us) != 0 || half_us > DBG_CLK_MAX_HALF_US)) {
+        usb_debug_printf("ERR: half_us 0..%lu\r\n", (unsigned long)DBG_CLK_MAX_HALF_US);
+        return;
+    }
+
+    /* PC6 is the SPI-enable line on a stock payload, and on ANY payload the
+     * continuous acq task may be mid-CS-frame. Interleaving is the desync class
+     * that needed a true FPGA power cycle to clear (see spi3_opread_window). */
+    if (!fpga_acq_pause()) {
+        usb_send_str("ERR: acq task did not park — bus not safe, aborting\r\n");
+        return;
+    }
+
+    /* Save PC6's config nibble and output level so this is non-destructive.
+     * PC6 is pin 6 => CRL/cfglr bits 27:24. Read-modify-write THAT NIBBLE ONLY:
+     * a past session wrote a whole cfghr word for pins that live in cfglr,
+     * floated PC8 (POWER) and PC13, and the device read a phantom POWER press
+     * and shut down mid-test. gpio_init() with a single-pin mask does the
+     * per-nibble RMW for us on the way in; the restore does it by hand. */
+    uint32_t saved_nib = (GPIOC->cfglr >> 24) & 0xFu;
+    uint32_t saved_lvl = (GPIOC->odt >> 6) & 1u;
+
+    gpio_init_type gpio_cfg;
+    gpio_default_para_init(&gpio_cfg);
+    gpio_cfg.gpio_pins            = GPIO_PINS_6;
+    gpio_cfg.gpio_mode            = GPIO_MODE_OUTPUT;
+    gpio_cfg.gpio_out_type        = GPIO_OUTPUT_PUSH_PULL;
+    gpio_cfg.gpio_pull            = GPIO_PULL_NONE;
+    gpio_cfg.gpio_drive_strength  = GPIO_DRIVE_STRENGTH_STRONGER;
+    GPIOC->scr = (1u << 6);          /* stage HIGH before the driver turns on */
+    gpio_init(GPIOC, &gpio_cfg);     /* `gpio set` alone does nothing on a pin
+                                      * that is not already an output — that has
+                                      * cost this project a session before. */
+
+    for (uint32_t i = 0; i < count; i++) {
+        GPIOC->clr = (1u << 6);
+        dbg_delay_us(half_us);
+        GPIOC->scr = (1u << 6);      /* rising edge = one sample */
+        dbg_delay_us(half_us);
+    }
+
+    /* Restore level first (still driven, so no float glitch), then the mode. */
+    if (saved_lvl) GPIOC->scr = (1u << 6);
+    else           GPIOC->clr = (1u << 6);
+    GPIOC->cfglr = (GPIOC->cfglr & ~(0xFu << 24)) | (saved_nib << 24);
+
+    fpga_acq_resume();
+
+    usb_debug_printf("dbgclk: %lu rising edges on PC6, half=%luus; "
+                     "PC6 restored (cfg nibble %lX, level %lu); PC0=%d PB11=%d\r\n",
+                     (unsigned long)count, (unsigned long)half_us,
+                     (unsigned long)saved_nib, (unsigned long)saved_lvl,
+                     (GPIOC->idt & (1u << 0))  ? 1 : 0,
+                     (GPIOB->idt & (1u << 11)) ? 1 : 0);
+    if (!saved_lvl)
+        usb_send_str("NOTE: PC6 was LOW on entry and was restored LOW. On a stock payload\r\n"
+                     "      that is the FPGA-SPI-disabled state.\r\n");
+}
+
+/* fpga dbgarm [low_ms] — re-arm the diagnostic image: PB11 (run_enable) LOW
+ * for low_ms, then HIGH. The low->high edge clears the trigger latch; capture
+ * then free-runs for as long as PB11 stays HIGH (gated by dbg_clk ticks).
+ * Default 2 ms; 0 gives a ~100 us pulse.
+ *
+ * Unlike dbgclk this deliberately does NOT restore PB11's previous mode: HIGH
+ * and driven IS the run state, and handing the pin back to a floating input
+ * would undo the arm we just performed. The previous config nibble is printed
+ * so it can be put back by hand if needed. */
+static void cmd_fpga_dbgarm(const char *args)
+{
+    uint32_t low_ms = 2;
+
+    if (args && *args) {
+        if (parse_int(args, &low_ms) != 0 || low_ms > 1000u) {
+            usb_send_str("Usage: fpga dbgarm [low_ms 0..1000]\r\n");
+            return;
+        }
+    }
+
+    if (!fpga_acq_pause()) {
+        usb_send_str("ERR: acq task did not park — bus not safe, aborting\r\n");
+        return;
+    }
+
+    /* PB11 is pin 11 => CRH/cfghr nibble (11-8)*4 = 12. Single-pin gpio_init,
+     * never a whole-word write (see the PC8/PC13 incident noted on dbgclk). */
+    uint32_t saved_nib = (GPIOB->cfghr >> 12) & 0xFu;
+    uint32_t saved_lvl = (GPIOB->odt >> 11) & 1u;
+
+    gpio_init_type gpio_cfg;
+    gpio_default_para_init(&gpio_cfg);
+    gpio_cfg.gpio_pins            = GPIO_PINS_11;
+    gpio_cfg.gpio_mode            = GPIO_MODE_OUTPUT;
+    gpio_cfg.gpio_out_type        = GPIO_OUTPUT_PUSH_PULL;
+    gpio_cfg.gpio_pull            = GPIO_PULL_NONE;
+    gpio_cfg.gpio_drive_strength  = GPIO_DRIVE_STRENGTH_STRONGER;
+    gpio_init(GPIOB, &gpio_cfg);
+
+    GPIOB->clr = (1u << 11);                     /* run_enable LOW  */
+    if (low_ms) vTaskDelay(pdMS_TO_TICKS(low_ms));
+    else        dbg_delay_us(100);
+    GPIOB->scr = (1u << 11);                     /* LOW->HIGH = re-arm + run */
+
+    fpga_acq_resume();
+
+    usb_debug_printf("dbgarm: PB11 LOW %lums -> HIGH (armed, free-running). "
+                     "was cfg nibble %lX level %lu; left as output-pp HIGH. PC0=%d\r\n",
+                     (unsigned long)low_ms,
+                     (unsigned long)saved_nib, (unsigned long)saved_lvl,
+                     (GPIOC->idt & (1u << 0)) ? 1 : 0);
+    usb_send_str("Next: `fpga dbgclk <n>` to clock samples in, then "
+                 "`spi3 opread 04 1026 dump`.\r\n");
+}
+#endif /* FPGA_ALT_BITSTREAM */
+
 /* fpga reinit [br] [prelude_gap_ms] [post_close_ms] — replay the full SPI3
  * config handshake on demand (prelude → 0x3B bitstream → 0x3A close → scope
  * config) and report the result. Lets us sweep the handshake parameters in
@@ -5276,6 +5491,12 @@ static void dispatch_command(char *line)
         cmd_fpga_frame(line + 11);
     } else if (strcmp(line, "fpga diag clear") == 0) {
         cmd_fpga_diag_clear();
+#if defined(FPGA_ALT_BITSTREAM)
+    } else if (strncmp(line, "fpga dbgclk", 11) == 0) {
+        cmd_fpga_dbgclk(line[11] == ' ' ? line + 12 : "");
+    } else if (strncmp(line, "fpga dbgarm", 11) == 0) {
+        cmd_fpga_dbgarm(line[11] == ' ' ? line + 12 : "");
+#endif
     } else if (strcmp(line, "fpga busrelease") == 0) {
         cmd_fpga_bus_release();
     } else if (strcmp(line, "fpga stock diag") == 0) {

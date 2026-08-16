@@ -1,0 +1,43 @@
+Provenance: firmware/fpga/debugclk_hw_top.fs, copied verbatim from
+  /home/david/debugclk_build/out/debugclk_hw_top.fs (925842 ASCII bytes, 738 bit lines).
+  .fs sha256 9c465d72a5cd5866b7c4b06baa87f10b2e4e3c5f965f09c1518fa08c47d10751
+  — re-verified against the author's published hash when this header was generated.
+  Packed size 115638 bytes: byte-for-byte the same length as the stock payload.
+
+DIAGNOSTIC IMAGE — NOT the scope design. It drives SYNTHETIC lanes through the
+REAL capture/readout path, to answer whether the readout mux actually separates
+CH1 from CH2. That is open: in the 2026-08-15 desk sweep op 0x04 and op 0x05
+both returned CH1, and nothing since has distinguished "the mux is broken" from
+"our read framing is wrong". This image makes the two distinguishable, because
+the expected bytes are known a priori rather than inferred from an analog input.
+
+I/O contract, read off the RTL constraints file (fpga/constraints/
+fnirsi_2c53t_qn48.cst) rather than assumed:
+
+  QN48 pin 30 = IOB7B = PC6 = dbg_clk.
+    There is NO PLL in this image: the MCU paces the ENTIRE capture core, one
+    sample per RISING edge. Send at least 8 clocks before anything else — an
+    8-cycle power-on-reset shifter runs off this clock.
+  QN48 pin 46 = IOR1B = PB11 = run_enable.
+    capture_enable = run_enable AND sample_tick. Dropping and re-raising
+    run_enable clears the trigger latch and re-arms; capture free-runs while it
+    is HIGH. That is the WHOLE re-arm mechanism — no SPI command is involved.
+  SPI pins unchanged: PB6 CS, PB3 SCK, PB5 MOSI, PB4 MISO.
+
+Both of those names mean something else on a stock-payload build (PC6 = "FPGA
+SPI enable, must be HIGH"; PB11 = "FPGA active mode", re-read by the 2026-08-15
+desk sweep as a CH2 attenuator relay). They carry the contract above only under
+this image. The `fpga dbgclk` / `fpga dbgarm` shell commands drive them.
+
+READOUT FRAMING DIFFERS FROM STOCK BY ONE BYTE. This image puts its markers
+0x52 0x31 0x56 ("R1V") at byte indices 0/1/2 with samples at 3..1025 — 1023
+samples after a 3-byte header. Stock discards exactly 2 bytes and keeps 1024,
+and fpga_warmtest_read_channel was corrected to stock's framing in ce22b49 and
+must STAY that way. Read this image with `spi3 opread 04 1026 dump`, which
+prints raw bytes from index 0 and so needs no framing assumption at all; if a
+dedicated read path is ever added for this image, give it its own 3-byte header
+rather than editing the stock-framed function.
+
+Expected content: op 0x04 -> "R1V" then a long strictly-incrementing ramp;
+op 0x05 -> one-hot bytes (or zero). Opcode decode uses only the low 5 bits, and
+every opcode other than 0x04/0x05 returns an all-zero frame.
