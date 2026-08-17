@@ -2865,12 +2865,10 @@ static void fpga_acquisition_task(void *pv)
     }
 }
 
-#if FPGA_WARM_HANDOFF_TEST
-/* Cooperative pause handshake for the continuous acquisition task below.
- * Protocol (see fpga_acq_pause): requester sets req, clears ack, then waits
- * for a FRESH ack — the task raises ack only at its park point, never inside
- * a CS frame. The task re-raises ack every parked cycle, so a stale ack from
- * a previous pause can never satisfy a new request. */
+/* NOTE: deliberately OUTSIDE the FPGA_WARM_HANDOFF_TEST guard below. The debug
+ * shell references these unconditionally, so guarding them broke `make guest`
+ * at link time (caught 2026-08-17). The state is two bytes; the guarded part is
+ * only the acquisition task's USE of it. */
 /* ── Stock's re-arm handshake (2026-08-17) ───────────────────────────────
  *
  * Stock does NOT free-run and read whenever it feels like it. Its acquisition
@@ -2952,6 +2950,13 @@ void fpga_acq_rearm_set(bool on)      { acq_rearm_enable = on; }
 bool fpga_acq_rearm_get(void)         { return acq_rearm_enable; }
 void fpga_acq_rate_idx_set(uint8_t v) { acq_rate_idx = v; }
 uint8_t fpga_acq_rate_idx_get(void)   { return acq_rate_idx; }
+
+#if FPGA_WARM_HANDOFF_TEST
+/* Cooperative pause handshake for the continuous acquisition task below.
+ * Protocol (see fpga_acq_pause): requester sets req, clears ack, then waits
+ * for a FRESH ack — the task raises ack only at its park point, never inside
+ * a CS frame. The task re-raises ack every parked cycle, so a stale ack from
+ * a previous pause can never satisfy a new request. */
 
 /* One CS-framed scope-engine register write: opcode byte, value byte.
  * Same shape as the five arm writes (fpga.c, FPGA_CONFIG_B_ARM block) — these
