@@ -635,6 +635,28 @@ QueueHandle_t fpga_create_tasks(void);
 BaseType_t fpga_send_cmd(uint8_t cmd_high, uint8_t cmd_low);
 
 /*
+ * True when the dvom_TX drain task exists this boot.
+ *
+ * fpga_send_cmd() only ENQUEUES; the bytes reach PA2 when fpga_usart_tx_task
+ * pops them. Several bench builds (FPGA_USART_SILENT_SCOPE, warm-handoff,
+ * bus-released) deliberately create no such task, so the queue fills and
+ * nothing is ever transmitted while every caller sees pdTRUE. Any diagnostic
+ * that reports a send must consult this first — exp(02) on 2026-08-16 was
+ * recorded VOID because it did not.
+ */
+bool fpga_usart_tx_task_exists(void);
+
+/*
+ * Send one 2-byte command frame with the POLLED byte-level path, bypassing
+ * the TX queue and the drain task entirely. Blocking (10 bytes at 9600 baud
+ * plus TDC wait, ~11 ms) and safe to call with no scheduler.
+ *
+ * Note this still requires USART2 to be ENABLED (CTRL1 UEN/TE) — on a silent
+ * build see fpga_usart_scope_enable(true).
+ */
+void fpga_send_cmd_direct(uint8_t cmd_high, uint8_t cmd_low);
+
+/*
  * Trigger an SPI3 acquisition cycle.
  * mode: acquisition mode byte (1-9, maps to fpga_acq_mode_t + 1)
  *

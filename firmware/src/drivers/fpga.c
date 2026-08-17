@@ -5036,6 +5036,18 @@ BaseType_t fpga_send_cmd(uint8_t cmd_high, uint8_t cmd_low)
     return pdTRUE;
 }
 
+bool fpga_usart_tx_task_exists(void)
+{
+    return tx_task_handle != NULL;
+}
+
+void fpga_send_cmd_direct(uint8_t cmd_high, uint8_t cmd_low)
+{
+    /* Straight to the polled byte pump — no queue, so nothing can swallow it
+     * on a build that never creates dvom_TX. */
+    usart2_send_cmd(cmd_high, cmd_low);
+}
+
 BaseType_t fpga_trigger_acquisition(uint8_t mode)
 {
     if (spi3_acq_queue == NULL) return pdFALSE;
