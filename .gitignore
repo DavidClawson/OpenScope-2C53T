@@ -108,5 +108,8 @@ reverse_engineering/captures/export/
 /*.png
 
 # Bench signal-generator sketch (machine-specific, per-bench)
-/esp32_siggen/
+# esp32_siggen/ is now PUBLISHED (2026-08-17) -- it is the signal source every
+# bench experiment in docs/experiments/ is run against, so others cannot
+# reproduce our results without it.
+# /esp32_siggen/
 .claude/worktrees/
