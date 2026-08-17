@@ -1502,6 +1502,16 @@ static void fpga_scope_frontend_enables(void)
 /* Apply BOTH channels from their own volts/div indices. */
 static void fpga_set_scope_frontend_ranges(const scope_state_t *ss)
 {
+    /* Channel mask FIRST — it decides which converter each buffer is fed from,
+     * so applying ranges before it just attenuates the wrong path. Left
+     * floating this sits in mask 1 (CH1 into both buffers), which is what the
+     * "CH2 is dead" symptom actually was. */
+    {
+        bool c1 = (ss == NULL) || ss->ch1.enabled;
+        bool c2 = (ss != NULL) && ss->ch2.enabled;
+        fpga_set_channel_mask((c1 && c2) ? 3u : (c2 ? 2u : 1u));
+    }
+
     uint8_t r1 = (ss->ch1.vdiv_idx < VDIV_COUNT) ? ss->ch1.vdiv_idx : (VDIV_COUNT - 1);
     uint8_t r2 = (ss->ch2.vdiv_idx < VDIV_COUNT) ? ss->ch2.vdiv_idx : (VDIV_COUNT - 1);
 
@@ -2863,6 +2873,63 @@ static void fpga_acquisition_task(void *pv)
         SPI3_CS_DEASSERT();
         fpga.spi3_probing = false;
     }
+}
+
+/* ── Per-mode GPIO posture (2026-08-17) ──────────────────────────────────
+ *
+ * SOLVED TWO MONTH-OLD SYMPTOMS. Stock applies a per-mode GPIO posture that our
+ * runtime never replicated. An MCU reset wipes it while the FPGA's SRAM config
+ * survives — which is exactly why the warm handoff (docs/experiments/
+ * 2026-08-17-03-warm-handoff-2x2.md) pointed at our runtime rather than at our
+ * bit-bang configuration.
+ *
+ * CHANNEL MASK — ms[0x14] (1 = CH1, 2 = CH2, 3 = BOTH) drives GPIO as well as
+ * SPI3 op 0x02. Decoded at stock 0x0802E202, then bench-confirmed A/B/A with a
+ * 100 Hz tone on the CH1 jack and 250 Hz on the CH2 jack:
+ *
+ *   mask 3  PC2 H, PC1 L   op04 = CH1 22.3   op05 = CH2 65.2   <- two channels
+ *   mask 1  PC2 H, PC1 H   op04 = CH1 22.5   op05 = CH1 21.8
+ *   mask 2  PC2 L, PC1 L   op04 = CH2 64.4   op05 = CH2 65.4
+ *
+ * We left PC1/PC2 FLOATING, which lands in mask 1 — CH1 routed into BOTH
+ * converters. That one fact explains every CH2 symptom we collected: both
+ * buffers carrying CH1 at full amplitude, CH1's attenuator moving both, CH2's
+ * relay bank moving neither, and two genuinely distinct converters (proved by a
+ * 2.6-code offset, t=-357) both fed from one source.
+ *
+ * We were ALREADY sending op 0x02 = 3 in the arm writes. The GPIO half is the
+ * load-bearing one, which is why every reg-0x02 sweep read as negative.
+ *
+ * ⚠ PC1/PC2 appear in older notes as "swept negative". That sweep PULSED them on
+ * an UNCONFIGURED part while hunting config entry — a different question
+ * entirely. Do not treat it as covering this.
+ */
+void fpga_set_channel_mask(uint8_t mask)
+{
+    /* Configure before driving: a scr/clr write to a floating input does
+     * nothing at all, which is the single most repeated measurement bug in this
+     * project's history. PC1 = CRL bits 7:4, PC2 = CRL bits 11:8. */
+    GPIOC->cfglr = (GPIOC->cfglr & ~0x00000FF0u) | 0x00000330u;   /* PC1,PC2 PP 50MHz */
+
+    switch (mask) {
+    case 1:  GPIOC->scr = (1u << 2); GPIOC->scr = (1u << 1); break;  /* CH1  */
+    case 2:  GPIOC->clr = (1u << 2); GPIOC->clr = (1u << 1); break;  /* CH2  */
+    default: GPIOC->scr = (1u << 2); GPIOC->clr = (1u << 1); break;  /* BOTH */
+    }
+    fpga.channel_mask = mask;
+}
+
+/* PC11 = meter MUX enable. Stock drives it HIGH in meter mode and LOW in scope
+ * mode, switching WITH the UI mode; ours pinned it LOW unconditionally
+ * (main.c, "PC11 LOW (scope)"), so the meter was dead in every scope build and
+ * every USART measurement this project ever took was made with the far end
+ * switched off. A/B/A on the bench: HIGH -> 276 bytes received, LOW -> 0,
+ * HIGH -> 276. */
+void fpga_set_meter_mux(bool enable)
+{
+    GPIOC->cfghr = (GPIOC->cfghr & ~(0xFu << 12)) | (0x3u << 12);  /* PC11 PP 50MHz */
+    if (enable) GPIOC->scr = (1u << 11);
+    else        GPIOC->clr = (1u << 11);
 }
 
 /* NOTE: deliberately OUTSIDE the FPGA_WARM_HANDOFF_TEST guard below. The debug

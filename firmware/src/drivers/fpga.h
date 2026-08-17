@@ -182,6 +182,7 @@ typedef struct {
                                         * master (ESP32) via fpga_bus_release();
                                         * acq task stays off the bus while set */
     volatile uint16_t frame_count;     /* Data frame counter (0x5A 0xA5) */
+    volatile uint8_t  channel_mask;  /* Last applied PC1/PC2 code: 1=CH1 2=CH2 3=BOTH */
     volatile uint16_t echo_count;     /* Echo frame counter (0xAA 0x55) */
     volatile uint16_t tx_count;       /* TX commands sent */
     volatile uint16_t rx_byte_count;  /* Raw RX bytes received */
@@ -959,6 +960,12 @@ void fpga_stock_diag_reenter(void);
 void     fpga_usart_scope_enable(bool on);
 uint32_t fpga_usart_ctrl1(void);
 uint32_t fpga_usart_baudr(void);
+
+/* Per-mode GPIO posture — see the block comment in fpga.c. The channel mask
+ * (1=CH1, 2=CH2, 3=BOTH) is a 2-bit code on PC1/PC2, NOT just SPI3 op 0x02;
+ * leaving those pins floating routes CH1 into both converters. */
+void    fpga_set_channel_mask(uint8_t mask);
+void    fpga_set_meter_mux(bool enable);
 
 void    fpga_acq_rearm_set(bool on);
 bool    fpga_acq_rearm_get(void);
