@@ -2871,6 +2871,100 @@ static void fpga_acquisition_task(void *pv)
  * for a FRESH ack — the task raises ack only at its park point, never inside
  * a CS frame. The task re-raises ack every parked cycle, so a stale ack from
  * a previous pause can never satisfy a new request. */
+/* ── Stock's re-arm handshake (2026-08-17) ───────────────────────────────
+ *
+ * Stock does NOT free-run and read whenever it feels like it. Its acquisition
+ * loop is: gate on the timebase (op 0x01 blocks until enough samples have
+ * accumulated), read the 0x04/0x05 pair, then RE-ARM by writing reg 0x01 with
+ * the timebase index again. Decoded independently twice — from stock's op-01
+ * handler here, and by Stlkv on a second unit (issue #18, his section 6).
+ *
+ * Our acq task has always done the middle step only. Consequences we have
+ * actually measured, and expect this to fix:
+ *   - Stlkv counted capture glitches in the first ~26 us of the window in
+ *     124/168 frames: a sample drops off the plateau and recovers over ~10
+ *     samples, which no real signal can do. That is a buffer being read while
+ *     it is still being written.
+ *   - A free-running buffer can never be compared against itself, which is why
+ *     the op04-vs-op05 byte-identity test — the cheapest discriminator we have
+ *     for the CH2 fault — is currently impossible to run.
+ *
+ * RUNTIME-TOGGLEABLE ON PURPOSE. Every FPGA conclusion in this project that
+ * turned out to be wrong was a single-shot measurement with no control; the
+ * ones that held up were A/B/A. `fpga rearm on|off` flips this between reads
+ * with no reflash, so the same boot, the same probe and the same signal can
+ * produce both arms of the comparison.
+ *
+ * Default OFF: free-run is the bench-proven configuration that produced the
+ * cold-boot-to-live-trace result, and it stays the default until this is shown
+ * to be at least as good on hardware. */
+#ifndef FPGA_ACQ_REARM_DEFAULT
+#define FPGA_ACQ_REARM_DEFAULT 0
+#endif
+static volatile bool    acq_rearm_enable = (FPGA_ACQ_REARM_DEFAULT != 0);
+/* Reg 0x01 value currently in force. 0x08 = 5.00 MS/s, what the arm block
+ * writes at config time; the re-arm must rewrite THIS, not a constant, or it
+ * would silently undo any timebase the UI or the shell has selected. */
+static volatile uint8_t acq_rate_idx     = 0x08;
+
+/* ── USART2 late bring-up (2026-08-17) ───────────────────────────────────
+ *
+ * Coldtrace builds define FPGA_USART_SILENT_SCOPE, which leaves USART2 fully
+ * disabled (UEN clear) so the wire is electrically dark. That was necessary for
+ * the config-entry experiments and is now probably obsolete: config entry is
+ * solved, and stock's own order is USART2 DISABLED during config (Exp E dumped
+ * CTRL1=0x0000002c at the CONFIG_ENABLE instant — RE/TE/RDBFIEN set, UEN clear)
+ * and enabled only afterwards.
+ *
+ * Why this matters for CH2: stock's documented command table puts SCOPE CHANNEL
+ * CONFIGURATION on USART2, not SPI3 — cmd 0x01 is "Configure channel, Type 0
+ * (CH1) / Type 1 (CH2)", and 0x0B-0x11 are channel/trigger/timebase
+ * (FPGA_TASK_ANALYSIS.md). We have spent a month hunting a channel selector on
+ * SPI3 while the command that names itself "configure channel" lives on a bus
+ * this build switches off.
+ *
+ * A previous attempt brought USART2 up by hand-poking CTRL1 from the shell and
+ * saw no echo frame return. PA2 is configured as AF push-pull even under the
+ * silent flag, so that was not a pin artifact — but a hand poke is a weak
+ * instrument, so this does the bring-up the same way fpga_init does and REPORTS
+ * THE REGISTERS BACK so the precondition is verified rather than assumed. */
+void fpga_usart_scope_enable(bool on)
+{
+    if (on) {
+        USART2->ctrl1 = 0;
+        USART2->baudr = system_core_clock / 2 / FPGA_USART_BAUD;
+        USART2->ctrl1 |= (1 << 2);   /* RE      */
+        USART2->ctrl1 |= (1 << 3);   /* TE      */
+        USART2->ctrl1 |= (1 << 5);   /* RDBFIEN */
+        USART2->ctrl1 |= (1 << 13);  /* UEN     */
+        NVIC_SetPriority(USART2_IRQn, 5);
+        NVIC_EnableIRQ(USART2_IRQn);
+    } else {
+        NVIC_DisableIRQ(USART2_IRQn);
+        USART2->ctrl1 = 0;
+    }
+}
+
+uint32_t fpga_usart_ctrl1(void) { return USART2->ctrl1; }
+uint32_t fpga_usart_baudr(void) { return USART2->baudr; }
+
+void fpga_acq_rearm_set(bool on)      { acq_rearm_enable = on; }
+bool fpga_acq_rearm_get(void)         { return acq_rearm_enable; }
+void fpga_acq_rate_idx_set(uint8_t v) { acq_rate_idx = v; }
+uint8_t fpga_acq_rate_idx_get(void)   { return acq_rate_idx; }
+
+/* One CS-framed scope-engine register write: opcode byte, value byte.
+ * Same shape as the five arm writes (fpga.c, FPGA_CONFIG_B_ARM block) — these
+ * are runtime opcodes on the configured user design, NOT Gowin config-port
+ * opcodes, and are bench-proven safe against a live design. */
+static void fpga_scope_write_reg(uint8_t reg, uint8_t val)
+{
+    SPI3_CS_ASSERT();
+    spi3_xfer(reg);
+    spi3_xfer(val);
+    SPI3_CS_DEASSERT();
+}
+
 static volatile bool acq_pause_req = false;
 static volatile bool acq_pause_ack = false;
 
@@ -3067,6 +3161,15 @@ static void fpga_warmtest_acq_task(void *pv)
                 fpga.spi3_timeout_count = 0;
             }
         }
+
+        /* RE-ARM (stock's shape; off by default, `fpga rearm on` to enable).
+         * Stock writes reg 0x01 with the timebase index after each 0x04/0x05
+         * pair, which completes the capture cycle and starts the next one.
+         * Placed AFTER the accept/reject logic so a rejected frame still
+         * re-arms — otherwise one bad read would wedge acquisition, which is
+         * the deadlock this task's fallback path exists to avoid. */
+        if (acq_rearm_enable)
+            fpga_scope_write_reg(0x01, acq_rate_idx);
 
         /* Bound the read rate lightly; the display's own 50 ms frame loop
          * caps rendering, so reading faster than it draws only costs SPI

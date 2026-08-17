@@ -925,4 +925,22 @@ void fpga_wire_scope_sequence(uint8_t bank_mode);
  */
 void fpga_stock_diag_reenter(void);
 
+/* ── Acquisition re-arm (stock's handshake) ──────────────────────────────
+ * Runtime toggle, so the A/B/A can run inside one boot with no reflash.
+ * `fpga rearm on|off` in the debug shell; `fpga rate <idx>` sets the reg-0x01
+ * value that the re-arm rewrites (0x08 = 5.00 MS/s, the config-time default).
+ * See the block comment above acq_rearm_enable in fpga.c for why this exists
+ * and what it is expected to fix. */
+/* USART2 late bring-up — see the block comment in fpga.c. `fpga usart on`
+ * enables it the way fpga_init would and reports CTRL1/BAUDR back so the
+ * precondition is verified, not assumed. */
+void     fpga_usart_scope_enable(bool on);
+uint32_t fpga_usart_ctrl1(void);
+uint32_t fpga_usart_baudr(void);
+
+void    fpga_acq_rearm_set(bool on);
+bool    fpga_acq_rearm_get(void);
+void    fpga_acq_rate_idx_set(uint8_t v);
+uint8_t fpga_acq_rate_idx_get(void);
+
 #endif /* FPGA_H */

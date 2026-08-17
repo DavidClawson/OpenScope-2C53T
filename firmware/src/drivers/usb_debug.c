@@ -612,6 +612,9 @@ static void cmd_help(void)
         "fpga wire scope [ch1|ch2|both] Wire-word entry + runtime scope blocks\r\n"
         "fpga scope range <0-9> [1|2]    Apply coarse frontend range (per channel)\r\n"
         "fpga scope center [0-9]         Auto-center DAC1 (mid-scale) per range; all if omitted\r\n"
+        "fpga usart [on|off]             Bring USART2 up post-config; show CTRL1+RX\r\n"
+        "fpga rearm [on|off]             Stock post-read re-arm (reg01) A/B toggle\r\n"
+        "fpga rate [hexidx]              reg-0x01 rate index the re-arm rewrites\r\n"
         "fpga scope reinit               Re-apply scope frontend + FPGA cfg\r\n"
         "fpga meter reinit [submode]     Re-apply meter frontend + FPGA cfg\r\n"
         "fpga scope wake                 Meter wake preamble then scope cfg\r\n"
@@ -1829,6 +1832,61 @@ static void cmd_fpga_acq(const char *args)
     } else {
         usb_send_str("No SPI3 data received\r\n");
     }
+}
+
+/* `fpga usart [on|off]` — bring USART2 up AFTER config (stock's order) and
+ * report the registers back. Coldtrace builds leave it dark; stock's channel
+ * configuration command lives on this bus. Prints RX counters so "did anything
+ * answer" is a number rather than an impression. */
+static void cmd_fpga_usart(const char *args)
+{
+    char buf[160];
+    while (*args == ' ') args++;
+    if      (strncmp(args, "on",  2) == 0) fpga_usart_scope_enable(true);
+    else if (strncmp(args, "off", 3) == 0) fpga_usart_scope_enable(false);
+    else if (*args) { usb_send_str("usage: fpga usart [on|off]\r\n"); return; }
+
+    uint32_t c1 = fpga_usart_ctrl1();
+    snprintf(buf, sizeof(buf),
+             "USART2 CTRL1=%08lX BAUDR=%08lX  UEN=%u TE=%u RE=%u RDBFIEN=%u\r\n"
+             "  rx_bytes=%u echo_frames=%u\r\n",
+             (unsigned long)c1, (unsigned long)fpga_usart_baudr(),
+             (unsigned)((c1 >> 13) & 1), (unsigned)((c1 >> 3) & 1),
+             (unsigned)((c1 >> 2) & 1),  (unsigned)((c1 >> 5) & 1),
+             (unsigned)fpga.rx_byte_count, (unsigned)fpga.echo_count);
+    usb_send_str(buf);
+}
+
+/* `fpga rearm [on|off]` — stock's post-read re-arm write (reg 0x01 <- rate idx).
+ * Runtime-toggleable so the comparison can be run A/B/A inside one boot: the
+ * same probe, the same signal, the same FPGA configuration, one variable. */
+static void cmd_fpga_rearm(const char *args)
+{
+    char buf[96];
+    while (*args == ' ') args++;
+    if (*args) {
+        if      (strncmp(args, "on",  2) == 0) fpga_acq_rearm_set(true);
+        else if (strncmp(args, "off", 3) == 0) fpga_acq_rearm_set(false);
+        else { usb_send_str("usage: fpga rearm [on|off]\r\n"); return; }
+    }
+    snprintf(buf, sizeof(buf), "acq re-arm %s (reg 01 <- 0x%02X after each 04/05 pair)\r\n",
+             fpga_acq_rearm_get() ? "ON" : "OFF", fpga_acq_rate_idx_get());
+    usb_send_str(buf);
+}
+
+/* `fpga rate [idx]` — the reg-0x01 value the re-arm rewrites. Setting it here
+ * keeps the re-arm from silently reverting a timebase chosen elsewhere. */
+static void cmd_fpga_rate(const char *args)
+{
+    char buf[80];
+    while (*args == ' ') args++;
+    if (*args) {
+        unsigned v = (unsigned)strtoul(args, NULL, 16);
+        if (v > 0xFF) { usb_send_str("usage: fpga rate <hex idx>\r\n"); return; }
+        fpga_acq_rate_idx_set((uint8_t)v);
+    }
+    snprintf(buf, sizeof(buf), "acq rate idx = 0x%02X\r\n", fpga_acq_rate_idx_get());
+    usb_send_str(buf);
 }
 
 static void cmd_fpga_scope_reinit(void)
@@ -5541,6 +5599,12 @@ static void dispatch_command(char *line)
         cmd_fpga_scope_range(line + 17);
     } else if (strncmp(line, "fpga scope center", 17) == 0) {
         cmd_fpga_scope_center(line[17] == ' ' ? line + 18 : "");
+    } else if (strncmp(line, "fpga usart", 10) == 0) {
+        cmd_fpga_usart(line[10] == ' ' ? line + 11 : "");
+    } else if (strncmp(line, "fpga rearm", 10) == 0) {
+        cmd_fpga_rearm(line[10] == ' ' ? line + 11 : "");
+    } else if (strncmp(line, "fpga rate", 9) == 0) {
+        cmd_fpga_rate(line[9] == ' ' ? line + 10 : "");
     } else if (strcmp(line, "fpga scope reinit") == 0) {
         cmd_fpga_scope_reinit();
     } else if (strncmp(line, "fpga meter reinit", 17) == 0) {

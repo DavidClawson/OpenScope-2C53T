@@ -333,6 +333,27 @@ guest: clean all
 # See fpga.c FPGA_WARM_HANDOFF_TEST and docs/fpga_warm_handoff_test.md.
 # [LIVE] Warm-handoff dev loop (~2 min/iteration) for scope-side work with
 #        no cold-config risk. Needs stock flashed first + unbroken power.
+# guest-warmtest-usart — warm handoff with USART2 ALIVE (2026-08-17).
+#
+# The 2026-08-12 warm-handoff run proved our READ path against an FPGA that
+# STOCK configured, but it only ever checked CH1. It never checked CH2, and it
+# never checked the meter — and on 2026-08-17 the meter was found DEAD on
+# builds that configure the FPGA themselves ([[config-kills-the-meter]]:
+# USART2 STS=0x000000C0, TDC set, RDBF/ORERR never set, no byte ever returns).
+#
+# This build exists to ask both questions at once against a KNOWN-GOOD
+# configuration. FPGA_WARM_HANDOFF_TEST returns early from fpga_init before any
+# config sequence, so stock's SRAM configuration survives untouched; USART2 is
+# still initialised earlier in fpga_init, so with the silent flag off the bus is
+# live and `usart raw` + `fpga usart` can measure whether the meter answers.
+#
+# meter+CH2 both work  -> our bit-bang configuration is deficient, ONE root cause
+# neither works        -> our runtime code, not the configuration
+# split                -> two independent faults
+guest-warmtest-usart: CFLAGS += -DGUEST_BUILD -DFPGA_WARM_HANDOFF_TEST=1 -DFPGA_USART_SILENT_SCOPE=0
+guest-warmtest-usart: LDSCRIPT = ld/at32f403a_guest.ld
+guest-warmtest-usart: clean all
+
 guest-warmtest: CFLAGS += -DGUEST_BUILD -DFPGA_WARM_HANDOFF_TEST=1 -DFPGA_USART_SILENT_SCOPE=1
 guest-warmtest: LDSCRIPT = ld/at32f403a_guest.ld
 guest-warmtest: clean all
@@ -738,6 +759,39 @@ guest-caldump: clean all
 guest-persist: CFLAGS += -DGUEST_BUILD -DFPGA_WARM_HANDOFF_TEST=1 -DFPGA_USART_SILENT_SCOPE=1 -DFPGA_CONFIG_B=1 -DFPGA_CONFIG_B_ARM=1 -DSETTINGS_PERSIST_WRITES=1
 guest-persist: LDSCRIPT = ld/at32f403a_guest.ld
 guest-persist: clean all
+
+# guest-coldtrace-usart — coldtrace with USART2 ALIVE (2026-08-17).
+#
+# Identical to guest-coldtrace except FPGA_USART_SILENT_SCOPE is 0, so the
+# dvom_TX/dvom_RX/meter tasks are created and fpga_init runs the meter boot
+# sequence over USART2.
+#
+# WHY: stock's command table puts SCOPE CHANNEL CONFIGURATION on USART2 --
+# cmd 0x01 = "configure channel", type 0 = CH1 / type 1 = CH2, and 0x0B-0x11 =
+# channel/trigger/timebase (FPGA_TASK_ANALYSIS.md). CH2 has been chased on SPI3
+# for a month; that bus is now exhausted (full stock command set decoded and
+# matched, regs 01/02/06/07/08/09 swept, 02/06/07 re-swept with re-arm on).
+#
+# AND WHY THIS BUILD RATHER THAN A SHELL POKE: on 2026-08-17 USART2 was enabled
+# at runtime and verified by register readback (CTRL1 0x00000000 -> 0x0000202C,
+# BAUDR 0x30D4 = stock's), yet NOTHING answered -- not even 0x0508/0x0509, the
+# meter frames fpga_init itself sends in non-silent builds. So the USART results
+# are VOID, not negative: there is no validated instrument. Two causes were
+# found and only one is fixed. `usart tx` QUEUES, and coldtrace never creates
+# the task that drains the queue, so those frames were never transmitted at all
+# (this also voids the earlier 2026-08-16 "no echo ever returned" negative).
+# `usart raw` does transmit directly, and still drew no reply.
+#
+# This build exists to supply the missing positive control: if the METER works
+# here, USART2 is proven end-to-end and a silent scope command finally means
+# something. If the meter does NOT work here, the fault is in our USART bring-up
+# and no scope conclusion can be drawn from that bus at all.
+#
+# Config entry is unchanged (FPGA_CONFIG_B bit-bang), and stock's own order is
+# preserved: USART2 stays dark through config and comes up afterwards.
+guest-coldtrace-usart: CFLAGS += -DGUEST_BUILD -DFPGA_WARM_HANDOFF_TEST=1 -DFPGA_USART_SILENT_SCOPE=0 -DFPGA_CONFIG_B=1 -DFPGA_CONFIG_B_ARM=1
+guest-coldtrace-usart: LDSCRIPT = ld/at32f403a_guest.ld
+guest-coldtrace-usart: clean all
 
 guest-coldtrace: CFLAGS += -DGUEST_BUILD -DFPGA_WARM_HANDOFF_TEST=1 -DFPGA_USART_SILENT_SCOPE=1 -DFPGA_CONFIG_B=1 -DFPGA_CONFIG_B_ARM=1
 guest-coldtrace: LDSCRIPT = ld/at32f403a_guest.ld
