@@ -155,6 +155,38 @@ fit's assumption that the intercept absorbs an additive floor holds when tested
 directly, so no bias was smuggled in between EXP-08's estimator and this one.
 An absolute check needs a source this bench does not yet have.
 
+### 5c. Replicate, through the committed tool
+
+The measurement was then re-run end to end through
+`scripts/verify_scope_cal.py` — partly to prove the committed tool actually
+works before anyone relies on it (a tool that has never been executed is the
+same hazard as `usart tx` queueing into a task that did not exist), partly as a
+run-to-run reproducibility check. Same build, same session, ~20 minutes later.
+
+| channel | 5b floor-corrected | 5c floor-corrected | 5b spread | 5c spread |
+|---|---|---|---|---|
+| CH1 | 1987 / 1933 / 1945 | 1987 / 1890 / 1945 | 2.8% | 5.0% |
+| CH2 | 2012 / 2002 / 1927 | 1970 / 2044 / 1927 | 4.3% | 5.9% |
+
+mean/commanded: CH1 0.977 → 0.970, CH2 0.990 → 0.990. Control passed again
+(quiet 5.00/2.00, driven 49.00/56.00).
+
+**Run-to-run scatter is comparable to the cross-range spread itself** — no
+individual figure moved by more than ~4%, and the conclusion is unchanged, but
+this bounds how finely the design can resolve anything: differences below about
+5% are not distinguishable from repeat-measurement noise here.
+
+**A defect in the tool, found by this run and fixed.** The first version
+declared "INCONSISTENT" against a flat 15% threshold, and flagged CH1's
+two-point estimator at 15.4%. That verdict was wrong in kind, not degree: at
+range 7 the two-point denominator is 13 counts, so ±1 count on each end is
+±15% — the estimator cannot resolve a disagreement that small, and a threshold
+that ignores its own quantisation is an instrument that does not know what it
+can detect. The tool now computes each estimator's quantisation floor from the
+actual counts and compares the spread against `max(10%, 1.5 × floor)`, printing
+both. Under that rule the same data reads: floor-corrected consistent on both
+channels (limit 10%), two-point consistent (limit ~23% at range 7).
+
 ## 6. Blind spots
 
 - **Consistency is not accuracy.** A uniform scale error across all three
@@ -171,9 +203,10 @@ An absolute check needs a source this bench does not yet have.
 - **Same rig, same source, same evening as EXP-08.** Any systematic error
   common to both is invisible here. The one genuinely external check remains
   Stlkv's measurements on a different unit, and it covers only ranges 5–7.
-- **One centring pass per range.** If `fpga scope center` converged to a
-  different offset on a retry, the span could shift; no repeat-centring
-  variance was measured.
+- **Repeat-measurement noise is ~5%, comparable to the effect measured.** The
+  5c replicate bounds this: the design cannot resolve a cross-range
+  disagreement below roughly 5%. Part of that is the per-range re-centring,
+  whose run-to-run variance is not separately characterised.
 - **Nothing here touches the time axis**, which EXP-08 showed is not
   trustworthy.
 

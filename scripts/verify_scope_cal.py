@@ -175,7 +175,12 @@ def main():
                 continue
             corrected = (hi[ch] - fl[ch]) * k
             twopoint = (hi[ch] - lo[ch]) * k * (hi_mv / (hi_mv - lo_mv))
-            rows[ch][r] = (corrected, twopoint)
+            # Denominators in COUNTS, kept so the quantisation floor of each
+            # estimator can be computed below. Both are a difference of two
+            # integer-valued spans, so each carries about +/-2 counts.
+            rows[ch][r] = (corrected, twopoint,
+                           max(hi[ch] - fl[ch], 1.0),
+                           max(hi[ch] - lo[ch], 1.0))
             print(f" {r}  {ch} | {fl[ch]:6.1f} {lo[ch]:6.1f} {hi[ch]:6.1f} |"
                   f" {corrected:8.0f}mV | {twopoint:8.0f}mV | {k:6.2f} mV/ct")
 
@@ -185,14 +190,30 @@ def main():
         if len(rows[ch]) < 2:
             print(f"  CH{ch}: fewer than two calibrated ranges — nothing to compare")
             continue
-        for label, idx in (("floor-corrected", 0), ("two-point     ", 1)):
+        for label, idx, qidx in (("floor-corrected", 0, 2),
+                                 ("two-point     ", 1, 3)):
             vals = [rows[ch][r][idx] for r in sorted(rows[ch])]
             mean = statistics.mean(vals)
             spread = (max(vals) - min(vals)) / mean
-            verdict = "consistent" if spread < 0.15 else "INCONSISTENT"
+
+            # An estimator cannot resolve a disagreement smaller than its own
+            # quantisation. Each span is a difference of integer sample values,
+            # so the denominator carries about +/-2 counts; at range 7 the
+            # two-point denominator is ~12 counts, i.e. +/-17%, and calling
+            # that "INCONSISTENT" against a flat 15% threshold would be the
+            # instrument failing to know what it can detect. Compare the
+            # spread against the estimator's own floor instead.
+            quant = max(2.0 / rows[ch][r][qidx] for r in rows[ch])
+            limit = max(0.10, 1.5 * quant)
+            verdict = ("consistent" if spread <= limit
+                       else "INCONSISTENT")
+            note = "" if spread <= limit else "  <-- exceeds quantisation floor"
+
             print(f"  CH{ch} {label}: "
                   f"{' / '.join(f'{v:.0f}' for v in vals)} mVpp"
-                  f"   spread {spread * 100:4.1f}%  {verdict}"
+                  f"   spread {spread * 100:4.1f}%"
+                  f"  (quantisation floor {quant * 100:4.1f}%, limit "
+                  f"{limit * 100:4.1f}%)  {verdict}{note}"
                   f"   mean/commanded {mean / hi_mv:.3f}")
 
     sg.off(1)
