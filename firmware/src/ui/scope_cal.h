@@ -36,10 +36,13 @@
  *                amplitude set under-serving both ends of the sweep: too
  *                small to move range 9, big enough to clip range 4. The
  *                number is the right order of magnitude and nothing more.
- *   NONE         ranges 0-3. Both channels rail at every amplitude (means
- *                pinned at 0 / 235 / 250 / 255). Identical on both channels,
- *                so this is a property of the range table, not a channel
- *                fault. What these taps are for is still unknown.
+ *   NONE         ranges 0-3. Both channels rail. EXP-11 split this into two
+ *                different faults: 0/1/2 sit at 255 even with NO input and
+ *                after centring, so they are pinned rather than overdriven;
+ *                range 3 is a genuine sensitive row (~5.6 mV/count) that
+ *                clips because its offset cannot be centred — the injector
+ *                runs out of travel. Range 3 is therefore a firmware problem,
+ *                not a dead tap, and is the one worth chasing.
  *
  * A PROVISIONAL entry still returns a number, because "roughly 280 mV per
  * count" beats a raw count for a user trying to read a trace. A NONE entry

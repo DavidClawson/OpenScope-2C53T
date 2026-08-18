@@ -38,7 +38,15 @@ static const float mv_per_count[2][SCOPE_CAL_RANGE_COUNT] = {
  * tier is a statement about how well the two channels AGREE, so it cannot
  * differ between them.
  *
- *   r0-r3  NONE         railed on both channels at every amplitude
+ *   r0-r3  NONE         railed on both channels at every amplitude.
+ *                       EXP-11 (2026-08-18) says more: 0/1/2 sit at 255 with
+ *                       the input QUIET and after a centring pass, so they are
+ *                       not sensitive rows being overdriven. Range 3 IS a
+ *                       sensitive row (~5.6 mV/count, order of magnitude only)
+ *                       and its defect is OFFSET, not gain — the injector hits
+ *                       the bottom of its travel (DAC1 code 7, TMR13 code 3)
+ *                       and still cannot pull the mean off 235-250, so the
+ *                       waveform clips. Potentially fixable in firmware.
  *   r4     PROVISIONAL  channels differ by 48% (14.08 vs 9.49)
  *   r5     MEASURED     channels differ by 4.1%
  *   r6     MEASURED     channels differ by 2.9%
