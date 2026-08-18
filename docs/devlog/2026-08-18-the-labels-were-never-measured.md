@@ -166,17 +166,24 @@ range measured properly rescales the instrument.
 
 ## What is still not true
 
-The vertical axis is calibrated. The horizontal axis is not merely unscaled —
-it is not yet trustworthy. EXP-08 found that 100, 250, 500 and 1000 Hz all peak
-in bin 1 of the spectrum, and that span is identical across timebases
-0x08/0x10/0x11/0x12, so the timebase register is not changing what gets
-captured. Lag-1 autocorrelation is +0.99, so the record is strongly correlated
-rather than noise; its content is just a broad low-frequency hump that doesn't
-move when the input does.
+The vertical axis is calibrated. The horizontal axis is not — but see the
+correction below, because the reason turned out not to be the one we wrote down.
 
-Frequency, period in seconds, and any rise-time measurement all sit behind that.
-The badges continue to print period in *samples* and a blank for Hz, and now say
-so for a reason we can name rather than "no timebase yet".
+**Correction, same day.** This section originally said the horizontal axis was
+"not yet trustworthy", citing EXP-08's finding that 100, 250, 500 and 1000 Hz
+all peaked in bin 1. That finding is withdrawn: it was a bug in our own
+analysis script, which called `peaks(spectrum(v))` when `peaks()` already
+computes the spectrum internally. A double transform of a *clean synthetic
+tone* returns bin 1, magnitude 0.04, for any frequency — the reported signature
+reproduced with no hardware involved at all. The corroborating observation, that
+span was identical across timebases, was true but proved nothing: span is an
+amplitude statistic and is supposed to be rate-invariant. We read a
+non-observation as confirmation.
+
+Measured properly, the time axis works: at reg `0x01` = `0x10`, bin tracks
+frequency linearly from 100 Hz to 3.5 kHz with **R² = 0.9990** and a sample
+rate of **14,890 S/s**. Frequency and period-in-seconds are a calibration job
+now, not a blocked one. The full story is EXP-10.
 
 ## The pattern, again
 

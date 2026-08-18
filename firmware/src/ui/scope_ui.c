@@ -385,14 +385,20 @@ _Static_assert(SCOPE_CAL_RANGE_COUNT == VDIV_COUNT,
  * The volts wiring is DONE (Vpp = pp * k, Vrms = ac_rms * k, with k from
  * scope_cal_volts_per_count(ch, vdiv_idx), k == 0 meaning "show counts").
  *
- * Freq/Per still await a timebase, and that wait is now known to be longer
- * than "one line each". EXP-08 found the capture does not resolve frequency
- * at all: 100/250/500/1000 Hz all peak in bin 1, and span is identical across
- * timebases 0x08/0x10/0x11/0x12, so the timebase register is not changing
- * what is captured. The vertical axis is calibrated; the horizontal axis is
- * not merely unscaled but not yet trustworthy. Producing a Hz figure by
- * multiplying through an assumed sample rate would be exactly the invention
- * this function was written to remove.
+ * Freq/Per still await a timebase — but only a CALIBRATION, not a repair.
+ *
+ * EXP-08 reported that the capture "does not resolve frequency at all", every
+ * tone landing in bin 1. WITHDRAWN by EXP-10 (2026-08-18): that was a double
+ * FFT in the analysis script, which returns bin 1 for any input frequency.
+ * Measured with a single transform, bin tracks frequency linearly from 100 Hz
+ * to 3.5 kHz with R^2 = 0.9990 at reg 0x01 = 0x10, giving fs = 14,890 S/s.
+ *
+ * So the horizontal axis is a real time axis; what is missing is a per-code
+ * sample-rate table of the same kind scope_cal.c holds for volts, plus the
+ * plumbing to tell this function which reg-0x01 code is live. Until that
+ * exists, printing Hz would mean multiplying through an ASSUMED rate, which is
+ * the invention this function was written to remove. Period stays in samples
+ * and Freq stays blank on purpose.
  */
 static void draw_measurement_badges(const scope_state_t *ss, const theme_t *th)
 {

@@ -105,19 +105,36 @@ CH2 problem.
   entirely on the drive-isolation design plus the §4 cross-talk control — which
   is sound, but it is not what was designed, and printing a check without
   enforcing it is precisely how a rig ends up looking more controlled than it is.
-- **UNRESOLVED — the capture does not resolve frequency at this timebase.** A
-  250 Hz tone, and 100 / 500 / 1000 Hz too, all peak at **bin 1 with magnitude
-  ~0.1** where a coherent 36-count sine should show a line around 3. Follow-up
-  probe across timebases 0x08/0x10/0x11/0x12 at ranges 4 and 6: **span is
-  identical everywhere** (115.0 at range 4, ~36 at range 6, unchanged by
-  timebase) while lag-1 autocorrelation is **+0.99** at 0x10, +0.45 at 0x08.
-  So the record is strongly correlated — not random-phase noise — but its
-  content is a broad low-frequency hump whose bin does not move when the tone
-  does, and the timebase register does not change the span at all. This is
-  consistent with the known "rolling engine seam" / rate-control open question
-  and is a real defect in the **time** axis. It does **not** invalidate the
-  amplitude axis: span scales linearly with drive amplitude across five points
-  on every row, and the resulting gains match two independent measurements.
+- **WITHDRAWN 2026-08-18 (EXP-10): the "capture does not resolve frequency"
+  finding below is an artifact of this experiment's own analysis code, not a
+  property of the hardware.** `ladder2.py:44` called `peaks(spectrum(v), 1)`,
+  but `peaks()` calls `spectrum()` internally — so the record was transformed
+  **twice**. A double transform of a clean synthetic tone returns bin 1,
+  magnitude 0.04, for *every* input frequency; that is the reported signature
+  reproduced exactly, with no hardware involved. Re-measured on the same build
+  at the same timebase with a single transform: bin tracks frequency linearly
+  from 100 Hz to 3.5 kHz with **R² = 0.9990** and **fs = 14,890 S/s**. The
+  time axis works. The supporting observation that "span is identical across
+  timebases" was true but was never evidence for the claim — span is an
+  amplitude statistic and is *expected* to be invariant to sample rate. The
+  lag-1 autocorrelation figures were likewise valid and in fact **agree with a
+  working time axis** (at 14.9 kS/s a 250 Hz tone gives 59.6 samples/cycle, so
+  lag-1 = cos(2π/59.6) = 0.994, against the 0.99 measured). `bench.py` now
+  refuses a double transform outright. Original text kept below.
+
+  > A 250 Hz tone, and 100 / 500 / 1000 Hz too, all peak at **bin 1 with
+  > magnitude ~0.1** where a coherent 36-count sine should show a line around
+  > 3. Follow-up probe across timebases 0x08/0x10/0x11/0x12 at ranges 4 and 6:
+  > **span is identical everywhere** (115.0 at range 4, ~36 at range 6,
+  > unchanged by timebase) while lag-1 autocorrelation is **+0.99** at 0x10,
+  > +0.45 at 0x08. So the record is strongly correlated — not random-phase
+  > noise — but its content is a broad low-frequency hump whose bin does not
+  > move when the tone does, and the timebase register does not change the span
+  > at all. This is consistent with the known "rolling engine seam" /
+  > rate-control open question and is a real defect in the **time** axis. It
+  > does **not** invalidate the amplitude axis: span scales linearly with drive
+  > amplitude across five points on every row, and the resulting gains match
+  > two independent measurements.
 - **Common-mode risk between our own measurements.** EXP-06 and EXP-08 share
   this rig, so their agreement does not exclude a systematic error common to
   both. Stlkv's numbers, taken on another unit with another rig, are the check

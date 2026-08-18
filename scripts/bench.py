@@ -708,6 +708,27 @@ def spectrum(v: Sequence[float], detrend: bool = True) -> np.ndarray:
     x = np.asarray(v, dtype=float)
     if x.size < 8:
         raise BenchError("spectrum needs >= 8 samples, got %d" % x.size)
+
+    # Refuse a magnitude spectrum handed back in as if it were samples.
+    #
+    # peaks() and band() call spectrum() themselves, so `peaks(spectrum(v))`
+    # transforms twice. That is not a subtle error with a subtle symptom: the
+    # second transform of a clean tone returns bin 1, magnitude ~0.04, for ANY
+    # input frequency. It looked exactly like "the capture cannot resolve
+    # frequency", and it stood as a recorded hardware finding (EXP-08 s6, and
+    # from there CLAUDE.md) until EXP-10 reproduced it synthetically.
+    #
+    # The tell is unambiguous: rfft output has ODD length (n/2+1 for even n),
+    # is entirely non-negative, and has had DC zeroed by this function. A raw
+    # capture is 1024 samples — even — so this cannot fire on one.
+    if (x.size % 2 == 1 and x[0] == 0.0 and np.all(x >= 0.0)
+            and float(np.max(x)) > 0.0):
+        raise BenchError(
+            "spectrum() was handed what looks like a magnitude spectrum "
+            "(odd length %d, non-negative, DC exactly zero), not samples. "
+            "peaks() and band() already call spectrum() internally — pass the "
+            "RAW record: peaks(v), not peaks(spectrum(v))." % x.size)
+
     if detrend:
         x = x - x.mean()
     mag = np.abs(np.fft.rfft(x)) / x.size
@@ -1378,6 +1399,14 @@ def selftest() -> int:
          "(%d,%d) around %.1f" % (lo, hi, bin_of(250.0, 14600.0, n)))
     t.ok(abs(spectrum(sig)[0]) == 0.0, "DC bin is zeroed")
     t.raises(lambda: spectrum([1, 2, 3]), "spectrum() refuses a too-short window")
+    # The double-FFT guard. peaks(spectrum(v)) transformed twice and returned
+    # bin 1 / mag 0.04 for EVERY tone; that artifact was recorded as a hardware
+    # finding ("the capture cannot resolve frequency") until EXP-10 reproduced
+    # it synthetically. It must never be silently accepted again.
+    t.raises(lambda: peaks(spectrum(sig), 1),
+             "peaks(spectrum(v)) is refused, not silently double-transformed")
+    t.ok(peaks(np.concatenate([np.zeros(500), np.full(524, 255.0)]), 1)[0][0] >= 1,
+         "a railed capture starting at zero still analyses (guard needs odd length)")
 
     print("\n5. paired difference — drift cancellation and its control")
     clock = {"t": 0}
