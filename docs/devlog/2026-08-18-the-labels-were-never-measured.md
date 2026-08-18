@@ -103,6 +103,46 @@ one volts/div string in the system rather than three that can drift apart. And
 `fpga scope cal` dumps the whole table over the shell, so the number on the
 screen can be checked against the number in the source without a rebuild.
 
+## Then we checked it, in a way the bench had not
+
+The numbers going into that table came from a slope fit: vary the drive, hold
+the range fixed, regress. Every row is individually sound. But nothing in that
+design compares one range against another — a table can pass a per-range fit on
+every row and still be internally inconsistent, and that is the failure a user
+hits first, because changing range is the most common thing anyone does with a
+scope.
+
+So we ran the complementary test on the running device. Fix the signal, change
+the range, and ask whether the instrument reports the same voltage each time.
+Control first, as always: with the generator off, span sat at 5 and 3 counts;
+with it on, 49 and 51. The drive is what we are measuring.
+
+First pass came out at 9.4% spread on CH1 and 4.9% on CH2 — fine, but with a
+defect we caught before publishing it. Peak-to-peak span includes the noise
+floor *additively*, so `span x mV_per_count` over-reads by (floor x
+mV_per_count), and since mV/count changes 4x across the ladder that bias is
+range-dependent. It is precisely the bias the slope method was chosen to avoid,
+and reading a single amplitude quietly reintroduced it. The 1.083
+"measured/commanded" ratio that first pass produced looked like a source-scale
+error and was not one.
+
+Measuring the floor at each range and subtracting it:
+
+| channel | per-range volts (r5 / r6 / r7) | spread |
+|---|---|---|
+| CH1 | 1987 / 1933 / 1945 mVpp | **2.8%** |
+| CH2 | 2012 / 2002 / 1927 mVpp | **4.3%** |
+
+Three different range gains, one signal, agreement to a few percent on both
+channels — and a factor of three tighter than the uncorrected pass, which is
+itself evidence the floor really is additive. A second estimator that cancels
+the floor by differencing two amplitudes agrees with this one inside its
+(much larger) quantisation error.
+
+That is now four independent lines of evidence on ranges 5/6/7: the slope fit,
+EXP-06's mux-code sweep, Stlkv's numbers from another unit on another rig, and
+this. The MEASURED tier is earned.
+
 ## The one multiply we owe
 
 Every figure in that table traces back to an amplitude *commanded* from the
