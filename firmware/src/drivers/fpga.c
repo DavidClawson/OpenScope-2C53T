@@ -2386,6 +2386,17 @@ static void fpga_meter_poll_task(void *pv)
         vTaskDelay(pdMS_TO_TICKS(250));  /* ~4 Hz */
         if (fpga.initialized && current_mode == MODE_MULTIMETER &&
             !meter_transition_busy) {
+            if (fpga_meter_needs_activation) {
+                /* Stock's meter activation, sent once on entry rather than at
+                 * boot — a scope build never runs fpga_init's meter block. */
+                fpga_meter_needs_activation = false;
+                usart2_send_cmd(0x05, 0x08);  vTaskDelay(pdMS_TO_TICKS(10));
+                usart2_send_cmd(0x05, 0x09);  vTaskDelay(pdMS_TO_TICKS(10));
+                if (GPIOC->idt & (1U << 7)) usart2_send_cmd(0x05, 0x07);
+                else                        usart2_send_cmd(0x05, 0x0A);
+                vTaskDelay(pdMS_TO_TICKS(10));
+                usart2_send_cmd(0x05, 0x14);  vTaskDelay(pdMS_TO_TICKS(50));
+            }
             fpga_send_meter_poll_sequence(meter_submode);
         }
     }
@@ -2925,11 +2936,24 @@ void fpga_set_channel_mask(uint8_t mask)
  * every USART measurement this project ever took was made with the far end
  * switched off. A/B/A on the bench: HIGH -> 276 bytes received, LOW -> 0,
  * HIGH -> 276. */
+volatile bool fpga_meter_needs_activation = false;
+
 void fpga_set_meter_mux(bool enable)
 {
     GPIOC->cfghr = (GPIOC->cfghr & ~(0xFu << 12)) | (0x3u << 12);  /* PC11 PP 50MHz */
     if (enable) GPIOC->scr = (1u << 11);
     else        GPIOC->clr = (1u << 11);
+
+    /* PC11 alone is necessary but NOT sufficient — bench 2026-08-17: with PC11
+     * high the relay audibly clicks and the DMM screen still sits frozen,
+     * because a coldtrace build leaves USART2 disabled and skips stock's meter
+     * activation entirely (fpga_init bails before it, and the dvom/meter tasks
+     * are not created). So entering meter mode must also raise the bus and ask
+     * for the activation words; the poll task sends them, off the display
+     * task's back. Stock's mirror pair is 0x0800E360 (enter) / 0x0800E3E4
+     * (exit): UEN, dvom tasks, PC11, in that order. */
+    fpga_usart_scope_enable(enable);
+    if (enable) fpga_meter_needs_activation = true;
 }
 
 /* NOTE: deliberately OUTSIDE the FPGA_WARM_HANDOFF_TEST guard below. The debug
@@ -5068,7 +5092,16 @@ QueueHandle_t fpga_create_tasks(void)
      * paired by the Makefile target) and nothing may re-posture the FPGA out
      * of the scope mode stock left it in. */
     xTaskCreate(fpga_warmtest_acq_task, "fpga", 256, NULL, 3, &acq_task_handle);
-    (void)tx_task_handle; (void)rx_task_handle;
+    /* The meter tasks ARE created here now (2026-08-17). The comment above used
+     * to say USART2 is dark in these builds and nothing may re-posture the FPGA
+     * — the first half is no longer true by choice (PC11 + UEN now follow the UI
+     * mode) and the second is respected because every one of these tasks is
+     * gated on current_mode == MODE_MULTIMETER, so scope mode still sees a quiet
+     * wire. Without them PC11 high produces an audible relay click and a frozen
+     * DMM screen: nothing polls, nothing decodes. */
+    xTaskCreate(fpga_usart_tx_task,    "dvom_TX",   64,  NULL, 2, &tx_task_handle);
+    xTaskCreate(fpga_usart_rx_task,    "dvom_RX",   128, NULL, 3, &rx_task_handle);
+    xTaskCreate(fpga_meter_poll_task,  "meter_poll", 64, NULL, 2, NULL);
 #elif FPGA_USART_SILENT_SCOPE
     /* USART-silent scope test: create NO USART/meter tasks (dvom_TX/dvom_RX/
      * meter_poll) — they are the ongoing PA2/PA3 traffic we're eliminating — and

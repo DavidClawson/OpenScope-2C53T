@@ -966,6 +966,7 @@ uint32_t fpga_usart_baudr(void);
  * leaving those pins floating routes CH1 into both converters. */
 void    fpga_set_channel_mask(uint8_t mask);
 void    fpga_set_meter_mux(bool enable);
+extern volatile bool fpga_meter_needs_activation;
 
 void    fpga_acq_rearm_set(bool on);
 bool    fpga_acq_rearm_get(void);
