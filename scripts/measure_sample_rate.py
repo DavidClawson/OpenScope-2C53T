@@ -30,6 +30,23 @@ TWO CONSTRAINTS THAT WILL BITE, both confirmed on the bench (EXP-10)
    1-15 and the fit measures quantisation, not rate. Those need a
    higher-frequency generator.
 
+THE FOLD TEST IS NOT OPTIONAL (EXP-12)
+--------------------------------------
+An in-band R2 is NOT sufficient evidence for a sample rate. At reg 0x01 = 0x08
+a 14-tone sweep returned R2 0.9304 -- which reads as a decent fit -- on a record
+that is demonstrably incoherent: three consecutive reads of one unchanged tone
+gave peak bins [171, 132, 104], and two passes of the same sweep disagreed by
+7.6%.
+
+What caught it is the fold check. Above Nyquist a tone aliases to
+|f - round(f/fs)*fs|, a bin position FAR more sensitive to fs than the in-band
+slope is. A line through noise that happens to trend will pass the R2 test and
+fail this one. At 0x08 the predictions missed by up to 227 bins; the same test
+at 0x10, where fs is known to 0.5%, missed by at most 8.
+
+So `fit()` here reports read-to-read scatter, and `fold_check()` should be run
+before any rate is adopted.
+
 WHY THIS SCRIPT EXISTS
 ----------------------
 The previous answer to "does the time axis work" was "no" -- recorded in four
@@ -73,14 +90,53 @@ def read_acq():
     return v.astype(float)
 
 
+def fold_check(fs, reader, tones, tag):
+    """Verify that above-Nyquist tones land where `fs` says they must.
+
+    This is the test that separates a real sample rate from a plausible fit.
+    Returns the worst miss in bins; <= 12 is a pass at these record lengths.
+    """
+    print(f"    {tag} fold check (Nyquist {fs/2:.0f} Hz):", flush=True)
+    misses = []
+    for f in tones:
+        if f <= fs / 2:
+            continue
+        k = round(f / fs)
+        pred = int(round(1024.0 * abs(f - k * fs) / fs))
+        sg.sine(f, ch=1)
+        sg.amp(AMP, ch=1)
+        time.sleep(SETTLE)
+        b = int(statistics.median(
+            [peaks(reader(), 1)[0][0] for _ in range(3)]))
+        misses.append(abs(b - pred))
+        print(f"      {f:7.0f} Hz  predicted {pred:4d}  measured {b:4d}  "
+              f"miss {abs(b - pred):4d}", flush=True)
+    if not misses:
+        print("      (no tones above Nyquist — fold not tested)", flush=True)
+        return None
+    worst = max(misses)
+    print(f"      worst miss {worst} bins -> "
+          f"{'FOLD HOLDS' if worst <= 12 else 'FOLD FAILS, rate not trustworthy'}",
+          flush=True)
+    return worst
+
+
 def fit(freqs, reader, tag):
     rows = []
     for f in freqs:
         sg.sine(f, ch=1)
         sg.amp(AMP, ch=1)
         time.sleep(SETTLE)
-        v = reader()
-        b, m = peaks(v, 1)[0]
+        # Three reads, so read-to-read scatter is visible. An incoherent
+        # record still produces a bin; only the spread reveals it.
+        got = [peaks(reader(), 1)[0] for _ in range(3)]
+        bins = [g[0] for g in got]
+        b = int(statistics.median(bins))
+        m = float(statistics.median([g[1] for g in got]))
+        spread = max(bins) - min(bins)
+        if spread > 20:
+            print(f"      !! {f:.0f} Hz: reads {bins} spread {spread} bins — "
+                  "this record is not reproducing itself", flush=True)
         rows.append((f, b, m))
     fa = np.array([r[0] for r in rows], float)
     ba = np.array([r[1] for r in rows], float)
