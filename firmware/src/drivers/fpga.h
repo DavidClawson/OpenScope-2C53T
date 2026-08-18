@@ -182,6 +182,7 @@ typedef struct {
                                         * master (ESP32) via fpga_bus_release();
                                         * acq task stays off the bus while set */
     volatile uint16_t frame_count;     /* Data frame counter (0x5A 0xA5) */
+    volatile uint8_t  channel_mask;  /* Last applied PC1/PC2 code: 1=CH1 2=CH2 3=BOTH */
     volatile uint16_t echo_count;     /* Echo frame counter (0xAA 0x55) */
     volatile uint16_t tx_count;       /* TX commands sent */
     volatile uint16_t rx_byte_count;  /* Raw RX bytes received */
@@ -635,6 +636,28 @@ QueueHandle_t fpga_create_tasks(void);
 BaseType_t fpga_send_cmd(uint8_t cmd_high, uint8_t cmd_low);
 
 /*
+ * True when the dvom_TX drain task exists this boot.
+ *
+ * fpga_send_cmd() only ENQUEUES; the bytes reach PA2 when fpga_usart_tx_task
+ * pops them. Several bench builds (FPGA_USART_SILENT_SCOPE, warm-handoff,
+ * bus-released) deliberately create no such task, so the queue fills and
+ * nothing is ever transmitted while every caller sees pdTRUE. Any diagnostic
+ * that reports a send must consult this first — exp(02) on 2026-08-16 was
+ * recorded VOID because it did not.
+ */
+bool fpga_usart_tx_task_exists(void);
+
+/*
+ * Send one 2-byte command frame with the POLLED byte-level path, bypassing
+ * the TX queue and the drain task entirely. Blocking (10 bytes at 9600 baud
+ * plus TDC wait, ~11 ms) and safe to call with no scheduler.
+ *
+ * Note this still requires USART2 to be ENABLED (CTRL1 UEN/TE) — on a silent
+ * build see fpga_usart_scope_enable(true).
+ */
+void fpga_send_cmd_direct(uint8_t cmd_high, uint8_t cmd_low);
+
+/*
  * Trigger an SPI3 acquisition cycle.
  * mode: acquisition mode byte (1-9, maps to fpga_acq_mode_t + 1)
  *
@@ -924,5 +947,30 @@ void fpga_wire_scope_sequence(uint8_t bank_mode);
  * bank-emitter re-entry used during scope-mode experiments.
  */
 void fpga_stock_diag_reenter(void);
+
+/* ── Acquisition re-arm (stock's handshake) ──────────────────────────────
+ * Runtime toggle, so the A/B/A can run inside one boot with no reflash.
+ * `fpga rearm on|off` in the debug shell; `fpga rate <idx>` sets the reg-0x01
+ * value that the re-arm rewrites (0x08 = 5.00 MS/s, the config-time default).
+ * See the block comment above acq_rearm_enable in fpga.c for why this exists
+ * and what it is expected to fix. */
+/* USART2 late bring-up — see the block comment in fpga.c. `fpga usart on`
+ * enables it the way fpga_init would and reports CTRL1/BAUDR back so the
+ * precondition is verified, not assumed. */
+void     fpga_usart_scope_enable(bool on);
+uint32_t fpga_usart_ctrl1(void);
+uint32_t fpga_usart_baudr(void);
+
+/* Per-mode GPIO posture — see the block comment in fpga.c. The channel mask
+ * (1=CH1, 2=CH2, 3=BOTH) is a 2-bit code on PC1/PC2, NOT just SPI3 op 0x02;
+ * leaving those pins floating routes CH1 into both converters. */
+void    fpga_set_channel_mask(uint8_t mask);
+void    fpga_set_meter_mux(bool enable);
+extern volatile bool fpga_meter_needs_activation;
+
+void    fpga_acq_rearm_set(bool on);
+bool    fpga_acq_rearm_get(void);
+void    fpga_acq_rate_idx_set(uint8_t v);
+uint8_t fpga_acq_rate_idx_get(void);
 
 #endif /* FPGA_H */

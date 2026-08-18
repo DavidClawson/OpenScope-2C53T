@@ -1502,6 +1502,16 @@ static void fpga_scope_frontend_enables(void)
 /* Apply BOTH channels from their own volts/div indices. */
 static void fpga_set_scope_frontend_ranges(const scope_state_t *ss)
 {
+    /* Channel mask FIRST — it decides which converter each buffer is fed from,
+     * so applying ranges before it just attenuates the wrong path. Left
+     * floating this sits in mask 1 (CH1 into both buffers), which is what the
+     * "CH2 is dead" symptom actually was. */
+    {
+        bool c1 = (ss == NULL) || ss->ch1.enabled;
+        bool c2 = (ss != NULL) && ss->ch2.enabled;
+        fpga_set_channel_mask((c1 && c2) ? 3u : (c2 ? 2u : 1u));
+    }
+
     uint8_t r1 = (ss->ch1.vdiv_idx < VDIV_COUNT) ? ss->ch1.vdiv_idx : (VDIV_COUNT - 1);
     uint8_t r2 = (ss->ch2.vdiv_idx < VDIV_COUNT) ? ss->ch2.vdiv_idx : (VDIV_COUNT - 1);
 
@@ -2376,6 +2386,17 @@ static void fpga_meter_poll_task(void *pv)
         vTaskDelay(pdMS_TO_TICKS(250));  /* ~4 Hz */
         if (fpga.initialized && current_mode == MODE_MULTIMETER &&
             !meter_transition_busy) {
+            if (fpga_meter_needs_activation) {
+                /* Stock's meter activation, sent once on entry rather than at
+                 * boot — a scope build never runs fpga_init's meter block. */
+                fpga_meter_needs_activation = false;
+                usart2_send_cmd(0x05, 0x08);  vTaskDelay(pdMS_TO_TICKS(10));
+                usart2_send_cmd(0x05, 0x09);  vTaskDelay(pdMS_TO_TICKS(10));
+                if (GPIOC->idt & (1U << 7)) usart2_send_cmd(0x05, 0x07);
+                else                        usart2_send_cmd(0x05, 0x0A);
+                vTaskDelay(pdMS_TO_TICKS(10));
+                usart2_send_cmd(0x05, 0x14);  vTaskDelay(pdMS_TO_TICKS(50));
+            }
             fpga_send_meter_poll_sequence(meter_submode);
         }
     }
@@ -2865,12 +2886,181 @@ static void fpga_acquisition_task(void *pv)
     }
 }
 
+/* ── Per-mode GPIO posture (2026-08-17) ──────────────────────────────────
+ *
+ * SOLVED TWO MONTH-OLD SYMPTOMS. Stock applies a per-mode GPIO posture that our
+ * runtime never replicated. An MCU reset wipes it while the FPGA's SRAM config
+ * survives — which is exactly why the warm handoff (docs/experiments/
+ * 2026-08-17-03-warm-handoff-2x2.md) pointed at our runtime rather than at our
+ * bit-bang configuration.
+ *
+ * CHANNEL MASK — ms[0x14] (1 = CH1, 2 = CH2, 3 = BOTH) drives GPIO as well as
+ * SPI3 op 0x02. Decoded at stock 0x0802E202, then bench-confirmed A/B/A with a
+ * 100 Hz tone on the CH1 jack and 250 Hz on the CH2 jack:
+ *
+ *   mask 3  PC2 H, PC1 L   op04 = CH1 22.3   op05 = CH2 65.2   <- two channels
+ *   mask 1  PC2 H, PC1 H   op04 = CH1 22.5   op05 = CH1 21.8
+ *   mask 2  PC2 L, PC1 L   op04 = CH2 64.4   op05 = CH2 65.4
+ *
+ * We left PC1/PC2 FLOATING, which lands in mask 1 — CH1 routed into BOTH
+ * converters. That one fact explains every CH2 symptom we collected: both
+ * buffers carrying CH1 at full amplitude, CH1's attenuator moving both, CH2's
+ * relay bank moving neither, and two genuinely distinct converters (proved by a
+ * 2.6-code offset, t=-357) both fed from one source.
+ *
+ * We were ALREADY sending op 0x02 = 3 in the arm writes. The GPIO half is the
+ * load-bearing one, which is why every reg-0x02 sweep read as negative.
+ *
+ * ⚠ PC1/PC2 appear in older notes as "swept negative". That sweep PULSED them on
+ * an UNCONFIGURED part while hunting config entry — a different question
+ * entirely. Do not treat it as covering this.
+ */
+void fpga_set_channel_mask(uint8_t mask)
+{
+    /* Configure before driving: a scr/clr write to a floating input does
+     * nothing at all, which is the single most repeated measurement bug in this
+     * project's history. PC1 = CRL bits 7:4, PC2 = CRL bits 11:8. */
+    GPIOC->cfglr = (GPIOC->cfglr & ~0x00000FF0u) | 0x00000330u;   /* PC1,PC2 PP 50MHz */
+
+    switch (mask) {
+    case 1:  GPIOC->scr = (1u << 2); GPIOC->scr = (1u << 1); break;  /* CH1  */
+    case 2:  GPIOC->clr = (1u << 2); GPIOC->clr = (1u << 1); break;  /* CH2  */
+    default: GPIOC->scr = (1u << 2); GPIOC->clr = (1u << 1); break;  /* BOTH */
+    }
+    fpga.channel_mask = mask;
+}
+
+/* PC11 = meter MUX enable. Stock drives it HIGH in meter mode and LOW in scope
+ * mode, switching WITH the UI mode; ours pinned it LOW unconditionally
+ * (main.c, "PC11 LOW (scope)"), so the meter was dead in every scope build and
+ * every USART measurement this project ever took was made with the far end
+ * switched off. A/B/A on the bench: HIGH -> 276 bytes received, LOW -> 0,
+ * HIGH -> 276. */
+volatile bool fpga_meter_needs_activation = false;
+
+void fpga_set_meter_mux(bool enable)
+{
+    GPIOC->cfghr = (GPIOC->cfghr & ~(0xFu << 12)) | (0x3u << 12);  /* PC11 PP 50MHz */
+    if (enable) GPIOC->scr = (1u << 11);
+    else        GPIOC->clr = (1u << 11);
+
+    /* PC11 alone is necessary but NOT sufficient — bench 2026-08-17: with PC11
+     * high the relay audibly clicks and the DMM screen still sits frozen,
+     * because a coldtrace build leaves USART2 disabled and skips stock's meter
+     * activation entirely (fpga_init bails before it, and the dvom/meter tasks
+     * are not created). So entering meter mode must also raise the bus and ask
+     * for the activation words; the poll task sends them, off the display
+     * task's back. Stock's mirror pair is 0x0800E360 (enter) / 0x0800E3E4
+     * (exit): UEN, dvom tasks, PC11, in that order. */
+    fpga_usart_scope_enable(enable);
+    if (enable) fpga_meter_needs_activation = true;
+}
+
+/* NOTE: deliberately OUTSIDE the FPGA_WARM_HANDOFF_TEST guard below. The debug
+ * shell references these unconditionally, so guarding them broke `make guest`
+ * at link time (caught 2026-08-17). The state is two bytes; the guarded part is
+ * only the acquisition task's USE of it. */
+/* ── Stock's re-arm handshake (2026-08-17) ───────────────────────────────
+ *
+ * Stock does NOT free-run and read whenever it feels like it. Its acquisition
+ * loop is: gate on the timebase (op 0x01 blocks until enough samples have
+ * accumulated), read the 0x04/0x05 pair, then RE-ARM by writing reg 0x01 with
+ * the timebase index again. Decoded independently twice — from stock's op-01
+ * handler here, and by Stlkv on a second unit (issue #18, his section 6).
+ *
+ * Our acq task has always done the middle step only. Consequences we have
+ * actually measured, and expect this to fix:
+ *   - Stlkv counted capture glitches in the first ~26 us of the window in
+ *     124/168 frames: a sample drops off the plateau and recovers over ~10
+ *     samples, which no real signal can do. That is a buffer being read while
+ *     it is still being written.
+ *   - A free-running buffer can never be compared against itself, which is why
+ *     the op04-vs-op05 byte-identity test — the cheapest discriminator we have
+ *     for the CH2 fault — is currently impossible to run.
+ *
+ * RUNTIME-TOGGLEABLE ON PURPOSE. Every FPGA conclusion in this project that
+ * turned out to be wrong was a single-shot measurement with no control; the
+ * ones that held up were A/B/A. `fpga rearm on|off` flips this between reads
+ * with no reflash, so the same boot, the same probe and the same signal can
+ * produce both arms of the comparison.
+ *
+ * Default OFF: free-run is the bench-proven configuration that produced the
+ * cold-boot-to-live-trace result, and it stays the default until this is shown
+ * to be at least as good on hardware. */
+#ifndef FPGA_ACQ_REARM_DEFAULT
+#define FPGA_ACQ_REARM_DEFAULT 0
+#endif
+static volatile bool    acq_rearm_enable = (FPGA_ACQ_REARM_DEFAULT != 0);
+/* Reg 0x01 value currently in force. 0x08 = 5.00 MS/s, what the arm block
+ * writes at config time; the re-arm must rewrite THIS, not a constant, or it
+ * would silently undo any timebase the UI or the shell has selected. */
+static volatile uint8_t acq_rate_idx     = 0x08;
+
+/* ── USART2 late bring-up (2026-08-17) ───────────────────────────────────
+ *
+ * Coldtrace builds define FPGA_USART_SILENT_SCOPE, which leaves USART2 fully
+ * disabled (UEN clear) so the wire is electrically dark. That was necessary for
+ * the config-entry experiments and is now probably obsolete: config entry is
+ * solved, and stock's own order is USART2 DISABLED during config (Exp E dumped
+ * CTRL1=0x0000002c at the CONFIG_ENABLE instant — RE/TE/RDBFIEN set, UEN clear)
+ * and enabled only afterwards.
+ *
+ * Why this matters for CH2: stock's documented command table puts SCOPE CHANNEL
+ * CONFIGURATION on USART2, not SPI3 — cmd 0x01 is "Configure channel, Type 0
+ * (CH1) / Type 1 (CH2)", and 0x0B-0x11 are channel/trigger/timebase
+ * (FPGA_TASK_ANALYSIS.md). We have spent a month hunting a channel selector on
+ * SPI3 while the command that names itself "configure channel" lives on a bus
+ * this build switches off.
+ *
+ * A previous attempt brought USART2 up by hand-poking CTRL1 from the shell and
+ * saw no echo frame return. PA2 is configured as AF push-pull even under the
+ * silent flag, so that was not a pin artifact — but a hand poke is a weak
+ * instrument, so this does the bring-up the same way fpga_init does and REPORTS
+ * THE REGISTERS BACK so the precondition is verified rather than assumed. */
+void fpga_usart_scope_enable(bool on)
+{
+    if (on) {
+        USART2->ctrl1 = 0;
+        USART2->baudr = system_core_clock / 2 / FPGA_USART_BAUD;
+        USART2->ctrl1 |= (1 << 2);   /* RE      */
+        USART2->ctrl1 |= (1 << 3);   /* TE      */
+        USART2->ctrl1 |= (1 << 5);   /* RDBFIEN */
+        USART2->ctrl1 |= (1 << 13);  /* UEN     */
+        NVIC_SetPriority(USART2_IRQn, 5);
+        NVIC_EnableIRQ(USART2_IRQn);
+    } else {
+        NVIC_DisableIRQ(USART2_IRQn);
+        USART2->ctrl1 = 0;
+    }
+}
+
+uint32_t fpga_usart_ctrl1(void) { return USART2->ctrl1; }
+uint32_t fpga_usart_baudr(void) { return USART2->baudr; }
+
+void fpga_acq_rearm_set(bool on)      { acq_rearm_enable = on; }
+bool fpga_acq_rearm_get(void)         { return acq_rearm_enable; }
+void fpga_acq_rate_idx_set(uint8_t v) { acq_rate_idx = v; }
+uint8_t fpga_acq_rate_idx_get(void)   { return acq_rate_idx; }
+
 #if FPGA_WARM_HANDOFF_TEST
 /* Cooperative pause handshake for the continuous acquisition task below.
  * Protocol (see fpga_acq_pause): requester sets req, clears ack, then waits
  * for a FRESH ack — the task raises ack only at its park point, never inside
  * a CS frame. The task re-raises ack every parked cycle, so a stale ack from
  * a previous pause can never satisfy a new request. */
+
+/* One CS-framed scope-engine register write: opcode byte, value byte.
+ * Same shape as the five arm writes (fpga.c, FPGA_CONFIG_B_ARM block) — these
+ * are runtime opcodes on the configured user design, NOT Gowin config-port
+ * opcodes, and are bench-proven safe against a live design. */
+static void fpga_scope_write_reg(uint8_t reg, uint8_t val)
+{
+    SPI3_CS_ASSERT();
+    spi3_xfer(reg);
+    spi3_xfer(val);
+    SPI3_CS_DEASSERT();
+}
+
 static volatile bool acq_pause_req = false;
 static volatile bool acq_pause_ack = false;
 
@@ -3067,6 +3257,15 @@ static void fpga_warmtest_acq_task(void *pv)
                 fpga.spi3_timeout_count = 0;
             }
         }
+
+        /* RE-ARM (stock's shape; off by default, `fpga rearm on` to enable).
+         * Stock writes reg 0x01 with the timebase index after each 0x04/0x05
+         * pair, which completes the capture cycle and starts the next one.
+         * Placed AFTER the accept/reject logic so a rejected frame still
+         * re-arms — otherwise one bad read would wedge acquisition, which is
+         * the deadlock this task's fallback path exists to avoid. */
+        if (acq_rearm_enable)
+            fpga_scope_write_reg(0x01, acq_rate_idx);
 
         /* Bound the read rate lightly; the display's own 50 ms frame loop
          * caps rendering, so reading faster than it draws only costs SPI
@@ -4893,7 +5092,16 @@ QueueHandle_t fpga_create_tasks(void)
      * paired by the Makefile target) and nothing may re-posture the FPGA out
      * of the scope mode stock left it in. */
     xTaskCreate(fpga_warmtest_acq_task, "fpga", 256, NULL, 3, &acq_task_handle);
-    (void)tx_task_handle; (void)rx_task_handle;
+    /* The meter tasks ARE created here now (2026-08-17). The comment above used
+     * to say USART2 is dark in these builds and nothing may re-posture the FPGA
+     * — the first half is no longer true by choice (PC11 + UEN now follow the UI
+     * mode) and the second is respected because every one of these tasks is
+     * gated on current_mode == MODE_MULTIMETER, so scope mode still sees a quiet
+     * wire. Without them PC11 high produces an audible relay click and a frozen
+     * DMM screen: nothing polls, nothing decodes. */
+    xTaskCreate(fpga_usart_tx_task,    "dvom_TX",   64,  NULL, 2, &tx_task_handle);
+    xTaskCreate(fpga_usart_rx_task,    "dvom_RX",   128, NULL, 3, &rx_task_handle);
+    xTaskCreate(fpga_meter_poll_task,  "meter_poll", 64, NULL, 2, NULL);
 #elif FPGA_USART_SILENT_SCOPE
     /* USART-silent scope test: create NO USART/meter tasks (dvom_TX/dvom_RX/
      * meter_poll) — they are the ongoing PA2/PA3 traffic we're eliminating — and
@@ -4931,6 +5139,18 @@ BaseType_t fpga_send_cmd(uint8_t cmd_high, uint8_t cmd_low)
     /* Fallback to polled if queue not created yet */
     usart2_send_cmd(cmd_high, cmd_low);
     return pdTRUE;
+}
+
+bool fpga_usart_tx_task_exists(void)
+{
+    return tx_task_handle != NULL;
+}
+
+void fpga_send_cmd_direct(uint8_t cmd_high, uint8_t cmd_low)
+{
+    /* Straight to the polled byte pump — no queue, so nothing can swallow it
+     * on a build that never creates dvom_TX. */
+    usart2_send_cmd(cmd_high, cmd_low);
 }
 
 BaseType_t fpga_trigger_acquisition(uint8_t mode)

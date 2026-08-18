@@ -565,13 +565,17 @@ static void cmd_help(void)
         "help                            Show this help\r\n"
         "version                         Firmware info\r\n"
         "status                          FPGA & system status\r\n"
-        "usart tx <cmd_hi> <cmd_lo>      Send FPGA command (queued)\r\n"
+        "usart tx <cmd_hi> <cmd_lo>      Send FPGA command (queued, or direct if no dvom_TX)\r\n"
         "usart raw <10 hex bytes>       Send raw 10-byte USART frame\r\n"
         "  e.g.: usart raw 00 00 00 0B 01 00 00 00 00 0B\r\n"
-        "gpio set <port><pin> <0|1>      Set GPIO pin\r\n"
+        "gpio set <port><pin> <0|1>      Drive GPIO pin (REFUSES if pin is an input)\r\n"
         "  e.g.: gpio set B11 1\r\n"
+        "gpio mode <port><pin> <out|in>  Set pin direction (RMW of its CRL/CRH nibble)\r\n"
+        "  e.g.: gpio mode A6 out   (out = push-pull 50MHz, in = floating)\r\n"
         "gpio read <port><pin>           Read GPIO pin\r\n"
         "gpio scan                       Scan FPGA-related pins\r\n"
+        "bench snapshot                  Save frontend/FPGA pin modes+levels\r\n"
+        "bench restore                   Put that saved pin posture back (hermetic tests)\r\n"
         "buzzer test [ms]                Force continuity buzzer briefly\r\n"
         "mem read <addr> [count]         Read 32-bit words\r\n"
         "  e.g.: mem read 0x40021000 4\r\n"
@@ -591,6 +595,8 @@ static void cmd_help(void)
         "fpga frame <hi> <lo> [p1..p5 [ck]]  Build/send full 10-byte frame\r\n"
         "  e.g.: fpga frame 00 0B 01 00 00 00 00\r\n"
         "fpga diag clear                 Clear FPGA bench counters/state\r\n"
+        "fpga selftest                   Precondition table: SPI3 clk, IDCODE anchor,\r\n"
+        "                                USART2 state, every driven pin's mode+level\r\n"
         "fpga stock diag                Show stock-state bench shadow\r\n"
         "fpga stock clear               Reset stock-state bench shadow\r\n"
         "fpga stock set <9 bytes>       Set F68/F69/F6A/F6B/E1A/E1B/E1C/E1D/355\r\n"
@@ -610,8 +616,11 @@ static void cmd_help(void)
         "fpga wire words <w...>         Send final 16-bit wire words directly\r\n"
         "fpga wire entry [ch1|ch2|both] Send candidate scope-entry wire-word bank\r\n"
         "fpga wire scope [ch1|ch2|both] Wire-word entry + runtime scope blocks\r\n"
-        "fpga scope range <0-9> [1|2]    Apply coarse frontend range (per channel)\r\n"
+        "fpga scope range <0-9> <1|2|both>  Coarse frontend range; channel is MANDATORY\r\n"
         "fpga scope center [0-9]         Auto-center DAC1 (mid-scale) per range; all if omitted\r\n"
+        "fpga usart [on|off]             Bring USART2 up post-config; show CTRL1+RX\r\n"
+        "fpga rearm [on|off]             Stock post-read re-arm (reg01) A/B toggle\r\n"
+        "fpga rate [hexidx]              reg-0x01 rate index the re-arm rewrites\r\n"
         "fpga scope reinit               Re-apply scope frontend + FPGA cfg\r\n"
         "fpga meter reinit [submode]     Re-apply meter frontend + FPGA cfg\r\n"
         "fpga scope wake                 Meter wake preamble then scope cfg\r\n"
@@ -955,6 +964,51 @@ static void cmd_status(void)
     }
 }
 
+/* Can a byte actually leave PA2 right now?
+ *
+ * USART-silent builds (FPGA_USART_SILENT_SCOPE — coldtrace, warm handoff)
+ * configure USART2's registers but never set UEN/TE, so every send path in
+ * this shell, queued or polled, is a no-op that reports success. Print the
+ * refusal here once and let each command bail. */
+static bool usart_tx_wire_live(void)
+{
+    uint32_t ctrl1 = fpga_usart_ctrl1();
+    unsigned uen = (unsigned)((ctrl1 >> 13) & 1u);
+    unsigned ten = (unsigned)((ctrl1 >> 3) & 1u);
+
+    if (uen && ten) return true;
+
+    usb_debug_printf("REFUSED: USART2 is dark (CTRL1=%08lX UEN=%u TE=%u) — nothing can\r\n"
+                     "         leave PA2. This is a USART-silent build. Run `fpga usart on`\r\n"
+                     "         first, then re-issue this command.\r\n",
+                     (unsigned long)ctrl1, uen, ten);
+    return false;
+}
+
+/* Send one 2-byte command and report HOW it went out, not just that it did.
+ * Returns false when nothing was transmitted. */
+static bool usart_send_cmd_reporting(uint8_t cmd_hi, uint8_t cmd_lo)
+{
+    if (!usart_tx_wire_live()) return false;
+
+    if (!fpga_usart_tx_task_exists()) {
+        /* The queue has no consumer on this build — go straight out the
+         * polled path rather than parking the frame forever. */
+        fpga_send_cmd_direct(cmd_hi, cmd_lo);
+        usb_debug_printf("TX [%02X %02X]: sent DIRECT (polled) — dvom_TX drain task does not\r\n"
+                         "  exist on this build, so the queue would never have been emptied.\r\n",
+                         cmd_hi, cmd_lo);
+        return true;
+    }
+
+    if (fpga_send_cmd(cmd_hi, cmd_lo) != pdTRUE) {
+        usb_debug_printf("TX [%02X %02X]: QUEUE FULL — NOT SENT\r\n", cmd_hi, cmd_lo);
+        return false;
+    }
+    usb_debug_printf("TX [%02X %02X]: queued (dvom_TX will drain)\r\n", cmd_hi, cmd_lo);
+    return true;
+}
+
 static void cmd_usart_tx(const char *args)
 {
     /* Parse space-separated hex bytes, e.g. "00 09 00 00 00 00 00 00" */
@@ -980,11 +1034,21 @@ static void cmd_usart_tx(const char *args)
         return;
     }
 
-    /* Use fpga_send_cmd for the standard 2-byte command path */
-    BaseType_t ok = fpga_send_cmd(bytes[0], bytes[1]);
-    usb_debug_printf("TX [%02X %02X]: %s\r\n",
-                     bytes[0], bytes[1],
-                     ok == pdTRUE ? "queued" : "FULL");
+    /* Two ways this command used to lie, both of which have already voided a
+     * bench experiment (exp(02), 2026-08-16 — recorded VOID, not negative):
+     *
+     *   1. fpga_send_cmd() only ENQUEUES. On coldtrace/warm-handoff builds the
+     *      dvom_TX drain task is never created, so the frame sits in the queue
+     *      forever while this command prints "queued" and the operator reads
+     *      the absence of a reply as a measurement.
+     *   2. Those same builds leave USART2 disabled (CTRL1 UEN clear,
+     *      FPGA_USART_SILENT_SCOPE), so even the polled path cannot shift a
+     *      byte out of PA2.
+     *
+     * So: check the wire first and refuse when it is dark, and when only the
+     * drain task is missing, send on the polled path and SAY that is what
+     * happened. */
+    if (!usart_send_cmd_reporting(bytes[0], bytes[1])) return;
 
     /* Wait briefly for echo/response, then show last RX frame */
     vTaskDelay(pdMS_TO_TICKS(200));
@@ -1024,6 +1088,8 @@ static void cmd_usart_raw(const char *args)
                       "  Format: [hdr0][hdr1][cmd_hi][cmd_lo][p1][p2][p3][p4][p5][cksum]\r\n");
         return;
     }
+
+    if (!usart_tx_wire_live()) return;
 
     usb_debug_printf("TX raw:");
     for (int i = 0; i < 10; i++)
@@ -1086,6 +1152,8 @@ static void cmd_fpga_frame(const char *args)
         frame[9] = (uint8_t)((frame[2] + frame[3]) & 0xFF);
     }
 
+    if (!usart_tx_wire_live()) return;
+
     usb_debug_printf("TX frame:");
     for (int i = 0; i < 10; i++) {
         usb_debug_printf(" %02X", frame[i]);
@@ -1096,6 +1164,267 @@ static void cmd_fpga_frame(const char *args)
     fpga_send_raw_frame(frame);
     vTaskDelay(pdMS_TO_TICKS(200));
     fpga_diag_print_delta(&before);
+}
+
+/* ═══════════════════════════════════════════════════════════════════
+ * GPIO mode inspection — the instrument check `gpio set` never had
+ *
+ * WHY THIS EXISTS. `gpio set` writes scr/clr unconditionally. On a pin left
+ * as an INPUT those writes only pick a pull resistor; the pin is not driven,
+ * the command still prints "PA6 -> HIGH", and the experiment records a false
+ * negative. That has happened three separate times (PA6 and PD12 both boot as
+ * floating inputs; a stale PC12 HIGH from an earlier command silently killed
+ * the analog path so a later test measured a dead one).
+ *
+ * The cure is the same one the FPGA work already learned from the /2 reads
+ * and the floating MISO: never let a command report success for something it
+ * cannot actually have done. So `gpio set` now reads the pin's config nibble
+ * and REFUSES when the pin is not a plain output, and `gpio mode` exists to
+ * change it deliberately.
+ *
+ * Nibble layout (AT32 cfglr/cfghr, STM32F1-compatible — the docs and bench
+ * scripts in this repo call these registers CRL/CRH, so the shell does too):
+ *   bits[1:0] MODE  0 = input, 1 = out 10MHz, 2 = out 2MHz, 3 = out 50MHz
+ *   bits[3:2] CNF   input:  0 analog, 1 floating, 2 pull (up/down per ODT)
+ *                   output: 0 push-pull, 1 open-drain, 2 AF-PP, 3 AF-OD
+ * So nibble 0/4/8 = input, 1/2/3 = output PP, 5/6/7 = output OD, 9/A/B =
+ * AF push-pull, D/E/F = AF open-drain.
+ * ═══════════════════════════════════════════════════════════════════ */
+
+/* 'A'..'E' for a port pointer (GPIO blocks are 0x400 apart). */
+static char gpio_port_letter(gpio_type *port)
+{
+    return (char)('A' + (((uint32_t)port - (uint32_t)GPIOA) / 0x400));
+}
+
+/* &cfglr for pins 0-7, &cfghr for pins 8-15. */
+static volatile uint32_t *gpio_cfg_reg(gpio_type *port, uint8_t pin_no)
+{
+    return (pin_no < 8) ? &port->cfglr : &port->cfghr;
+}
+
+static const char *gpio_cfg_reg_name(uint8_t pin_no)
+{
+    return (pin_no < 8) ? "CRL" : "CRH";
+}
+
+static uint8_t gpio_cfg_nibble(gpio_type *port, uint8_t pin_no)
+{
+    return (uint8_t)((*gpio_cfg_reg(port, pin_no) >> ((pin_no & 7) * 4)) & 0xF);
+}
+
+/* Read-modify-write of ONLY this pin's nibble — the pattern the bench scripts
+ * have been doing by hand through `mem read`/`mem write`. */
+static void gpio_cfg_nibble_set(gpio_type *port, uint8_t pin_no, uint8_t nibble)
+{
+    volatile uint32_t *reg = gpio_cfg_reg(port, pin_no);
+    uint32_t shift = (uint32_t)(pin_no & 7) * 4;
+    *reg = (*reg & ~(0xFu << shift)) | (((uint32_t)nibble & 0xFu) << shift);
+}
+
+static bool gpio_mode_is_output(uint8_t nibble)  { return (nibble & 0x3) != 0; }
+static bool gpio_mode_is_af(uint8_t nibble)      { return gpio_mode_is_output(nibble) && (nibble & 0x8) != 0; }
+
+/* Human name for a nibble, rendered into a CALLER-OWNED buffer (>= 16 bytes)
+ * so two nibbles can be named in one printf — a shared static would alias and
+ * print the same mode twice. `odt_bit` only disambiguates pull-up vs pull-down
+ * on an input, where ODT selects the resistor rather than a drive level. */
+#define GPIO_MODE_NAME_LEN 16
+static const char *gpio_mode_name(uint8_t nibble, uint8_t odt_bit, char *out)
+{
+    static const char *const SPEED[4] = { "?", "10MHz", "2MHz", "50MHz" };
+    const char *cnf;
+
+    if (!gpio_mode_is_output(nibble)) {
+        switch ((nibble >> 2) & 0x3) {
+            case 0:  cnf = "analog in";   break;
+            case 1:  cnf = "floating in"; break;
+            case 2:  cnf = odt_bit ? "pull-up in" : "pull-down in"; break;
+            default: cnf = "reserved in"; break;
+        }
+        snprintf(out, GPIO_MODE_NAME_LEN, "%s", cnf);
+        return out;
+    }
+
+    cnf = ((nibble >> 2) & 0x3) == 0 ? "out PP" :
+          ((nibble >> 2) & 0x3) == 1 ? "out OD" :
+          ((nibble >> 2) & 0x3) == 2 ? "AF PP"  : "AF OD";
+    snprintf(out, GPIO_MODE_NAME_LEN, "%s %s", cnf, SPEED[nibble & 0x3]);
+    return out;
+}
+
+/* ═══════════════════════════════════════════════════════════════════
+ * Bench pin registry
+ *
+ * Every pin this firmware DRIVES on purpose. One list, used by three
+ * consumers so they cannot drift apart: `fpga selftest` (is the instrument
+ * sane before I trust a measurement?), `bench snapshot`/`bench restore`
+ * (did a previous experiment leak state into this one?), and the "we treat
+ * this as an output" claim that `fpga selftest` checks against reality.
+ *
+ * The ROLE strings are deliberately hedged where the project's own evidence
+ * is hedged — PB11 in particular (see cmd_gpio_scan). A table that asserts
+ * a pin's function more confidently than the evidence does is the same
+ * defect as printing an unmeasured value.
+ * ═══════════════════════════════════════════════════════════════════ */
+typedef struct {
+    gpio_type  *port;
+    uint8_t     pin_no;
+    const char *role;
+} bench_pin_t;
+
+static const bench_pin_t BENCH_PINS[] = {
+    { GPIOC, 12, "scope input coupling (HIGH = DC passes)" },
+    { GPIOE,  4, "CH1 attenuator ladder bit 0" },
+    { GPIOE,  5, "CH1 attenuator ladder bit 1" },
+    { GPIOE,  6, "CH1 attenuator ladder bit 2" },
+    { GPIOA, 15, "CH2 input relay (bench 2026-08-15)" },
+    { GPIOB, 11, "\"active mode\" — DISPUTED, likely CH2 attenuator" },
+    { GPIOB, 10, "gain select (CH2 bank)" },
+    { GPIOA, 10, "gain select (CH2 bank)" },
+    { GPIOA,  6, "analog frontend control (boots as FLOATING INPUT)" },
+    { GPIOC, 11, "meter MUX enable" },
+    { GPIOC,  6, "FPGA SPI enable (must be HIGH)" },
+    { GPIOB,  6, "FPGA SPI3 chip select (idle HIGH)" },
+    { GPIOD, 12, "coupling (bench 2026-08-15; boots as FLOATING INPUT)" },
+    { GPIOD, 13, "coupling (bench 2026-08-15)" },
+};
+#define BENCH_PIN_COUNT (sizeof(BENCH_PINS) / sizeof(BENCH_PINS[0]))
+
+/* One line of the pin table: mode nibble decoded, plus the LEVEL. For an
+ * output the meaningful level is what we drive (ODT); for an input it is what
+ * the world puts there (IDT). Both are printed so neither can be mistaken for
+ * the other — reading IDT on an output and calling it "what we set" is how a
+ * shorted relay line reads back as success. */
+static void bench_pin_print_row(const bench_pin_t *bp, bool flag_inputs)
+{
+    uint8_t nib = gpio_cfg_nibble(bp->port, bp->pin_no);
+    uint8_t odt = (bp->port->odt & (1u << bp->pin_no)) ? 1 : 0;
+    uint8_t idt = (bp->port->idt & (1u << bp->pin_no)) ? 1 : 0;
+    char mode[GPIO_MODE_NAME_LEN];
+
+    usb_debug_printf("  P%c%-2u  %s %X  %-13s  odt=%u idt=%u%s\r\n",
+                     gpio_port_letter(bp->port), bp->pin_no,
+                     gpio_cfg_reg_name(bp->pin_no), nib,
+                     gpio_mode_name(nib, odt, mode), odt, idt,
+                     (flag_inputs && !gpio_mode_is_output(nib))
+                         ? "   <== INPUT, but we drive it: writes are INERT"
+                         : (flag_inputs && gpio_mode_is_af(nib))
+                               ? "   <== ALT-FUNCTION: a peripheral owns it"
+                               : "");
+    usb_debug_printf("        %s\r\n", bp->role);
+}
+
+/* Saved GPIO posture, so an experiment can be made hermetic. */
+typedef struct {
+    uint8_t nibble;
+    uint8_t odt;
+} bench_pin_state_t;
+
+static bench_pin_state_t bench_snap[BENCH_PIN_COUNT];
+static bool              bench_snap_valid = false;
+
+static void cmd_bench_snapshot(void)
+{
+    usb_send_str("=== bench snapshot: frontend/FPGA pin posture saved ===\r\n");
+    for (unsigned i = 0; i < BENCH_PIN_COUNT; i++) {
+        bench_snap[i].nibble = gpio_cfg_nibble(BENCH_PINS[i].port, BENCH_PINS[i].pin_no);
+        bench_snap[i].odt    = (BENCH_PINS[i].port->odt & (1u << BENCH_PINS[i].pin_no)) ? 1 : 0;
+        bench_pin_print_row(&BENCH_PINS[i], false);
+    }
+    bench_snap_valid = true;
+}
+
+static void cmd_bench_restore(void)
+{
+    unsigned changed = 0;
+
+    if (!bench_snap_valid) {
+        usb_send_str("ERR: nothing snapshotted this boot — run `bench snapshot` first\r\n");
+        return;
+    }
+
+    usb_send_str("=== bench restore ===\r\n");
+    for (unsigned i = 0; i < BENCH_PIN_COUNT; i++) {
+        const bench_pin_t *bp = &BENCH_PINS[i];
+        uint8_t nib_now = gpio_cfg_nibble(bp->port, bp->pin_no);
+        uint8_t odt_now = (bp->port->odt & (1u << bp->pin_no)) ? 1 : 0;
+
+        if (nib_now == bench_snap[i].nibble && odt_now == bench_snap[i].odt) continue;
+
+        /* Level first, then mode: writing ODT while the pin is still an input
+         * only moves the pull, so the pin cannot glitch to the wrong drive
+         * level on the way back to being an output. */
+        if (bench_snap[i].odt) bp->port->scr = (uint16_t)(1u << bp->pin_no);
+        else                   bp->port->clr = (uint16_t)(1u << bp->pin_no);
+        gpio_cfg_nibble_set(bp->port, bp->pin_no, bench_snap[i].nibble);
+
+        usb_debug_printf("  P%c%-2u  %s %X odt=%u  ->  %s %X odt=%u\r\n",
+                         gpio_port_letter(bp->port), bp->pin_no,
+                         gpio_cfg_reg_name(bp->pin_no), nib_now, odt_now,
+                         gpio_cfg_reg_name(bp->pin_no), bench_snap[i].nibble,
+                         bench_snap[i].odt);
+        changed++;
+    }
+    usb_debug_printf("%u pin(s) restored, %u already matched\r\n",
+                     changed, (unsigned)BENCH_PIN_COUNT - changed);
+}
+
+/* `gpio mode <port><pin> out|in` — deliberate, single-pin read-modify-write of
+ * the config nibble. `out` = push-pull 50MHz (nibble 3, what gpio_init gives
+ * with GPIO_DRIVE_STRENGTH_STRONGER); `in` = floating input (nibble 4). */
+static void cmd_gpio_mode(const char *args)
+{
+    gpio_type *port;
+    uint16_t pin;
+    uint8_t pin_no, old_nib, new_nib, odt;
+    char old_name[GPIO_MODE_NAME_LEN], new_name[GPIO_MODE_NAME_LEN];
+    char pin_str[8];
+    const char *space = strchr(args, ' ');
+    int len;
+
+    if (!space) {
+        usb_send_str("Usage: gpio mode <port><pin> <out|in>\r\n"
+                     "  e.g.: gpio mode A6 out   (push-pull 50MHz, nibble 3)\r\n"
+                     "        gpio mode A6 in    (floating input, nibble 4)\r\n");
+        return;
+    }
+
+    len = space - args;
+    if (len >= (int)sizeof(pin_str)) { usb_send_str("ERR: bad pin\r\n"); return; }
+    memcpy(pin_str, args, len);
+    pin_str[len] = '\0';
+
+    if (parse_gpio(pin_str, &port, &pin) != 0) {
+        usb_send_str("ERR: bad pin (e.g. A7, B11, C6)\r\n");
+        return;
+    }
+    pin_no = (uint8_t)__builtin_ctz(pin);
+
+    while (*space == ' ') space++;
+    if      (strcmp(space, "out") == 0) new_nib = 0x3;
+    else if (strcmp(space, "in")  == 0) new_nib = 0x4;
+    else {
+        usb_send_str("ERR: mode must be 'out' (push-pull 50MHz) or 'in' (floating)\r\n");
+        return;
+    }
+
+    old_nib = gpio_cfg_nibble(port, pin_no);
+    odt = (port->odt & pin) ? 1 : 0;
+    (void)gpio_mode_name(old_nib, odt, old_name);
+    (void)gpio_mode_name(new_nib, odt, new_name);
+
+    if (gpio_mode_is_af(old_nib)) {
+        usb_debug_printf("WARN: P%c%u was alternate-function (%s %X = %s) — a peripheral\r\n"
+                         "      owned this pin and will now be disconnected from it.\r\n",
+                         gpio_port_letter(port), pin_no,
+                         gpio_cfg_reg_name(pin_no), old_nib, old_name);
+    }
+    gpio_cfg_nibble_set(port, pin_no, new_nib);
+
+    usb_debug_printf("P%c%u %s nibble %X (%s) -> %X (%s)\r\n",
+                     gpio_port_letter(port), pin_no, gpio_cfg_reg_name(pin_no),
+                     old_nib, old_name, new_nib, new_name);
 }
 
 static void cmd_gpio_set(const char *args)
@@ -1128,15 +1457,47 @@ static void cmd_gpio_set(const char *args)
         return;
     }
 
+    /* REFUSE rather than pretend. On an input pin scr/clr only picks a pull
+     * resistor — the pin is not driven — and three experiments have already
+     * been invalidated by this command reporting HIGH/LOW anyway. On an AF
+     * pin a peripheral owns the output and our write is equally inert. */
+    {
+        uint8_t pin_no = (uint8_t)__builtin_ctz(pin);
+        uint8_t nib = gpio_cfg_nibble(port, pin_no);
+        char mode[GPIO_MODE_NAME_LEN];
+
+        if (!gpio_mode_is_output(nib)) {
+            usb_debug_printf("REFUSED: P%c%u is a %s (%s nibble %X) — not driven.\r\n"
+                             "         Use `gpio mode %c%u out` first.\r\n",
+                             gpio_port_letter(port), pin_no,
+                             gpio_mode_name(nib, (port->odt & pin) ? 1 : 0, mode),
+                             gpio_cfg_reg_name(pin_no), nib,
+                             gpio_port_letter(port), pin_no);
+            return;
+        }
+        if (gpio_mode_is_af(nib)) {
+            usb_debug_printf("REFUSED: P%c%u is %s (%s nibble %X) — a peripheral drives it,\r\n"
+                             "         scr/clr writes are inert. Use `gpio mode %c%u out` to take it.\r\n",
+                             gpio_port_letter(port), pin_no,
+                             gpio_mode_name(nib, 0, mode),
+                             gpio_cfg_reg_name(pin_no), nib,
+                             gpio_port_letter(port), pin_no);
+            return;
+        }
+    }
+
     if (val)
         port->scr = pin;    /* Set */
     else
         port->clr = pin;    /* Clear */
 
-    usb_debug_printf("P%c%d -> %s\r\n",
-                     (int)('A' + ((uint32_t)port - (uint32_t)GPIOA) / 0x400),
+    /* Read back IDT: on a driven pin it is the pin itself, so a line clamped
+     * by the outside world shows up here instead of being reported as set. */
+    usb_debug_printf("P%c%d -> %s  (idt reads %u)\r\n",
+                     gpio_port_letter(port),
                      __builtin_ctz(pin),
-                     val ? "HIGH" : "LOW");
+                     val ? "HIGH" : "LOW",
+                     (port->idt & pin) ? 1u : 0u);
 }
 
 static void cmd_buzzer_test(const char *args)
@@ -1174,11 +1535,19 @@ static void cmd_gpio_read(const char *args)
         return;
     }
 
-    uint32_t val = (port->idt & pin) ? 1 : 0;
-    usb_debug_printf("P%c%d = %lu\r\n",
-                     (int)('A' + ((uint32_t)port - (uint32_t)GPIOA) / 0x400),
-                     __builtin_ctz(pin),
-                     val);
+    /* Print the MODE alongside the level. "PA6 = 0" on a floating input and on
+     * a driven-low output are the same three characters and mean entirely
+     * different things; the shell should not make the reader guess which. */
+    uint8_t pin_no = (uint8_t)__builtin_ctz(pin);
+    uint8_t nib = gpio_cfg_nibble(port, pin_no);
+    uint8_t odt = (port->odt & pin) ? 1 : 0;
+    char mode[GPIO_MODE_NAME_LEN];
+
+    usb_debug_printf("P%c%u = %u  [%s %X = %s, odt=%u]\r\n",
+                     gpio_port_letter(port), pin_no,
+                     (port->idt & pin) ? 1u : 0u,
+                     gpio_cfg_reg_name(pin_no), nib,
+                     gpio_mode_name(nib, odt, mode), odt);
 }
 
 static void cmd_gpio_scan(void)
@@ -1788,10 +2157,7 @@ static void cmd_fpga_cmd(const char *args)
     }
 
     fpga_diag_snapshot_take(&before);
-    BaseType_t ok = fpga_send_cmd((uint8_t)cmd_hi, (uint8_t)cmd_lo);
-    usb_debug_printf("FPGA cmd %02lX %02lX: %s\r\n",
-                     cmd_hi, cmd_lo,
-                     ok == pdTRUE ? "queued" : "FULL");
+    if (!usart_send_cmd_reporting((uint8_t)cmd_hi, (uint8_t)cmd_lo)) return;
 
     /* Wait for response */
     vTaskDelay(pdMS_TO_TICKS(200));
@@ -1831,32 +2197,110 @@ static void cmd_fpga_acq(const char *args)
     }
 }
 
+/* `fpga usart [on|off]` — bring USART2 up AFTER config (stock's order) and
+ * report the registers back. Coldtrace builds leave it dark; stock's channel
+ * configuration command lives on this bus. Prints RX counters so "did anything
+ * answer" is a number rather than an impression. */
+static void cmd_fpga_usart(const char *args)
+{
+    char buf[160];
+    while (*args == ' ') args++;
+    if      (strncmp(args, "on",  2) == 0) fpga_usart_scope_enable(true);
+    else if (strncmp(args, "off", 3) == 0) fpga_usart_scope_enable(false);
+    else if (*args) { usb_send_str("usage: fpga usart [on|off]\r\n"); return; }
+
+    uint32_t c1 = fpga_usart_ctrl1();
+    snprintf(buf, sizeof(buf),
+             "USART2 CTRL1=%08lX BAUDR=%08lX  UEN=%u TE=%u RE=%u RDBFIEN=%u\r\n"
+             "  rx_bytes=%u echo_frames=%u\r\n",
+             (unsigned long)c1, (unsigned long)fpga_usart_baudr(),
+             (unsigned)((c1 >> 13) & 1), (unsigned)((c1 >> 3) & 1),
+             (unsigned)((c1 >> 2) & 1),  (unsigned)((c1 >> 5) & 1),
+             (unsigned)fpga.rx_byte_count, (unsigned)fpga.echo_count);
+    usb_send_str(buf);
+}
+
+/* `fpga rearm [on|off]` — stock's post-read re-arm write (reg 0x01 <- rate idx).
+ * Runtime-toggleable so the comparison can be run A/B/A inside one boot: the
+ * same probe, the same signal, the same FPGA configuration, one variable. */
+static void cmd_fpga_rearm(const char *args)
+{
+    char buf[96];
+    while (*args == ' ') args++;
+    if (*args) {
+        if      (strncmp(args, "on",  2) == 0) fpga_acq_rearm_set(true);
+        else if (strncmp(args, "off", 3) == 0) fpga_acq_rearm_set(false);
+        else { usb_send_str("usage: fpga rearm [on|off]\r\n"); return; }
+    }
+    snprintf(buf, sizeof(buf), "acq re-arm %s (reg 01 <- 0x%02X after each 04/05 pair)\r\n",
+             fpga_acq_rearm_get() ? "ON" : "OFF", fpga_acq_rate_idx_get());
+    usb_send_str(buf);
+}
+
+/* `fpga rate [idx]` — the reg-0x01 value the re-arm rewrites. Setting it here
+ * keeps the re-arm from silently reverting a timebase chosen elsewhere. */
+static void cmd_fpga_rate(const char *args)
+{
+    char buf[80];
+    while (*args == ' ') args++;
+    if (*args) {
+        unsigned v = (unsigned)strtoul(args, NULL, 16);
+        if (v > 0xFF) { usb_send_str("usage: fpga rate <hex idx>\r\n"); return; }
+        fpga_acq_rate_idx_set((uint8_t)v);
+    }
+    snprintf(buf, sizeof(buf), "acq rate idx = 0x%02X\r\n", fpga_acq_rate_idx_get());
+    usb_send_str(buf);
+}
+
 static void cmd_fpga_scope_reinit(void)
 {
     fpga_request_scope_reinit();
     usb_send_str("Scope reinit queued\r\n");
 }
 
-/* `fpga scope range <n> [ch]` — apply coarse frontend range n (0-9) to one
- * channel (ch 1 or 2) or, with no channel given, to both. The two channels
+/* `fpga scope range <n> <1|2|both>` — apply coarse frontend range n (0-9) to
+ * one channel or, with the explicit `both` keyword, to both. The two channels
  * have independent relay banks (CH1 PC12/PE4/PE5/PE6, CH2 PA15/PB11/PB10/PA10)
  * driven from the same 10-case stock table. Coupling is NOT touched here — it
- * is PD12/PD13, set in the frontend init (bench 2026-08-15). */
+ * is PD12/PD13, set in the frontend init (bench 2026-08-15).
+ *
+ * The channel argument is MANDATORY and 1-based on purpose. It used to be
+ * optional, and anything that was not 1 or 2 — including a `0` typed by an
+ * experimenter who reasonably read the argument as 0-based — fell through to
+ * "both", drove both relay banks, and invalidated the run while printing a
+ * success line. Ambiguity now errors instead of guessing. */
 static void cmd_fpga_scope_range(const char *args)
 {
+    static const char USAGE[] =
+        "Usage: fpga scope range <0-9> <1|2|both>\r\n"
+        "  channel is MANDATORY and 1-BASED: 1 = CH1, 2 = CH2, both = CH1+CH2\r\n";
     uint32_t n = 0;
     uint32_t chn = 0;
-    uint8_t ch_sel = 0xFF;
+    uint8_t ch_sel;
     const char *space;
 
-    if (args == NULL || *args == '\0' || parse_int(args, &n) != 0) {
-        usb_send_str("Usage: fpga scope range <0-9> [1|2]\r\n");
+    if (args == NULL || *args == '\0' || parse_int(args, &n) != 0 || n > 9) {
+        usb_send_str(USAGE);
         return;
     }
 
     space = strchr(args, ' ');
-    if (space != NULL && parse_int(space + 1, &chn) == 0) {
-        if (chn == 1 || chn == 2) ch_sel = (uint8_t)(chn - 1);
+    if (space == NULL) {
+        usb_send_str("ERR: no channel given — refusing to assume.\r\n");
+        usb_send_str(USAGE);
+        return;
+    }
+    while (*space == ' ') space++;
+
+    if (strcmp(space, "both") == 0) {
+        ch_sel = 0xFF;
+    } else if (parse_int(space, &chn) == 0 && (chn == 1 || chn == 2)) {
+        ch_sel = (uint8_t)(chn - 1);
+    } else {
+        usb_debug_printf("ERR: bad channel '%s' — 1, 2 or both (there is no channel 0)\r\n",
+                         space);
+        usb_send_str(USAGE);
+        return;
     }
 
     fpga_scope_set_range_diag_ch(ch_sel, (uint8_t)n);
@@ -4847,6 +5291,109 @@ static void cmd_spi3_gowin(void)
                  "  The /2 pass is expected to be garbage; it is the negative control.\r\n");
 }
 
+/* ─── fpga selftest ────────────────────────────────────────────────────────
+ *
+ * ONE precondition table, printed before an experiment, so the instrument is
+ * verified rather than assumed. Every entry here is something that has, at
+ * least once, silently invalidated a measurement in this project:
+ *
+ *   SPI3 baud     reads at /2 are garbage (fpga.c:1564) — six weeks of this
+ *                 project ran on a status word sampled one bit early.
+ *   IDCODE anchor the only value on this bus with an independently known
+ *                 correct answer (0x0120681B, Gowin .fs preamble at file
+ *                 offset 0x4AD19). CLAUDE.md makes it mandatory: a stable
+ *                 wrong number is indistinguishable from a right one.
+ *   USART2        UEN clear on coldtrace builds, and the dvom_TX drain task
+ *                 absent, so "queued" frames never reach the wire.
+ *   pin modes     PA6 and PD12 boot as floating INPUTS; `gpio set` on them
+ *                 used to report success while driving nothing.
+ *
+ * STATUS (0x41) is deliberately NOT read here. On a configured part a config-
+ * port read desynchronises acquisition (Exp L, 2026-07-28), and this command
+ * is meant to be safe to run in the middle of a capture session. IDCODE is
+ * the safe anchor; its DISAPPEARANCE is itself the "configured" signature.
+ */
+static void cmd_fpga_selftest(void)
+{
+    volatile uint32_t *spi3_ctrl1 = (volatile uint32_t *)0x40003C00;
+    uint32_t ctrl1, usart_c1;
+    uint32_t br, id;
+    unsigned inert_pins = 0;
+    bool acq_parked;
+
+    usb_send_str("=== fpga selftest — instrument preconditions ===\r\n");
+
+    /* ---- SPI3 --------------------------------------------------------- */
+    ctrl1 = *spi3_ctrl1;
+    br = (ctrl1 >> 3) & 7u;
+    usb_debug_printf("[SPI3 ] CTRL1=%08lX  BR=%lu -> /%lu (%lu kHz)  SPE=%u MSTEN=%u CPOL=%u CPHA=%u\r\n",
+                     (unsigned long)ctrl1, (unsigned long)br,
+                     (unsigned long)(2u << br),
+                     (unsigned long)((system_core_clock / 2u) / (2u << br) / 1000u),
+                     (unsigned)((ctrl1 >> 6) & 1u), (unsigned)((ctrl1 >> 2) & 1u),
+                     (unsigned)((ctrl1 >> 1) & 1u), (unsigned)(ctrl1 & 1u));
+    if (br != 7u)
+        usb_send_str("        NOTE: SSPI *config-port* reads are only clean at /256 (BR=7);\r\n"
+                     "        at /2 MISO is latched one edge early (fpga.c:1564). The anchor\r\n"
+                     "        read below switches to /256 and restores CTRL1 afterwards.\r\n");
+
+    /* ---- IDCODE anchor ------------------------------------------------ */
+    acq_parked = fpga_acq_pause();
+    if (!acq_parked) {
+        usb_send_str("[anchr] SKIPPED — acq task would not park, so a read here would\r\n"
+                     "        interleave with its capture frames. Bus state UNVERIFIED.\r\n");
+    } else {
+        uint32_t saved = spi3_set_baud(7u);       /* /256 — the only valid read clock */
+        id = spi3_gowin_read_reg(0x11);           /* READ_IDCODE */
+        *spi3_ctrl1 &= ~(1u << 6);                /* SPE off before restoring CTRL1 */
+        *spi3_ctrl1 = saved;
+        fpga_acq_resume();
+
+        usb_debug_printf("[anchr] IDCODE(0x11) @/256 = 0x%08lX  %s\r\n",
+                         (unsigned long)id,
+                         id == 0x0120681BUL
+                             ? "== GW1N-2, read path ANCHORED (part UNCONFIGURED)"
+                             : (id == 0UL
+                                    ? "config port CLOSED — expected on a CONFIGURED part (Exp L)"
+                                    : "!= 0x0120681B and != 0 -> READ PATH NOT TRUSTWORTHY"));
+        if (id != 0x0120681BUL && id != 0UL)
+            usb_send_str("        Do not quote any SSPI value taken through this bus until the\r\n"
+                         "        anchor reads correctly.\r\n");
+    }
+    usb_send_str("        (STATUS 0x41 not read — it desyncs a running configured part.)\r\n");
+
+    /* ---- USART2 ------------------------------------------------------- */
+    usart_c1 = fpga_usart_ctrl1();
+    usb_debug_printf("[USART] CTRL1=%08lX BAUDR=%08lX  UEN=%u TE=%u RE=%u RDBFIEN=%u\r\n",
+                     (unsigned long)usart_c1, (unsigned long)fpga_usart_baudr(),
+                     (unsigned)((usart_c1 >> 13) & 1u), (unsigned)((usart_c1 >> 3) & 1u),
+                     (unsigned)((usart_c1 >> 2) & 1u), (unsigned)((usart_c1 >> 5) & 1u));
+    usb_debug_printf("        dvom_TX drain task: %s\r\n",
+                     fpga_usart_tx_task_exists()
+                         ? "present (queued sends will go out)"
+                         : "ABSENT — queued sends would never transmit; the shell now\r\n"
+                           "        falls back to the polled path and says so");
+    if (((usart_c1 >> 13) & 1u) == 0)
+        usb_send_str("        UEN CLEAR: the wire is dark. No USART command can reach the\r\n"
+                     "        FPGA, so silence is NOT a measurement. `fpga usart on` first.\r\n");
+
+    /* ---- driven pins -------------------------------------------------- */
+    usb_send_str("[pins ] pins this firmware drives (mode nibble / level):\r\n");
+    for (unsigned i = 0; i < BENCH_PIN_COUNT; i++) {
+        uint8_t nib = gpio_cfg_nibble(BENCH_PINS[i].port, BENCH_PINS[i].pin_no);
+        if (!gpio_mode_is_output(nib) || gpio_mode_is_af(nib)) inert_pins++;
+        bench_pin_print_row(&BENCH_PINS[i], true);
+    }
+
+    usb_debug_printf("\r\nverdict: %u of %u driven pins are NOT plain outputs — `gpio set` on\r\n"
+                     "         those is inert. %s\r\n",
+                     inert_pins, (unsigned)BENCH_PIN_COUNT,
+                     inert_pins ? "Fix with `gpio mode <pin> out` before measuring."
+                                : "Frontend posture is drivable.");
+    usb_send_str("         Snapshot before an experiment with `bench snapshot`, and put the\r\n"
+                 "         posture back with `bench restore` so it cannot leak into the next.\r\n");
+}
+
 /* spi3 scopetest [bank] — run the FULL runtime scope-capture sequence the
  * stock firmware uses, independent of the 0x3B bitstream config:
  *   1. send the scope-mode USART config (timebase/trigger/channel) — this is
@@ -5449,6 +5996,12 @@ static void dispatch_command(char *line)
         cmd_usart_tx(line + 9);
     } else if (strncmp(line, "gpio set ", 9) == 0) {
         cmd_gpio_set(line + 9);
+    } else if (strncmp(line, "gpio mode ", 10) == 0) {
+        cmd_gpio_mode(line + 10);
+    } else if (strcmp(line, "bench snapshot") == 0) {
+        cmd_bench_snapshot();
+    } else if (strcmp(line, "bench restore") == 0) {
+        cmd_bench_restore();
     } else if (strncmp(line, "gpio read ", 10) == 0) {
         cmd_gpio_read(line + 10);
     } else if (strcmp(line, "gpio scan") == 0) {
@@ -5491,6 +6044,8 @@ static void dispatch_command(char *line)
         cmd_fpga_frame(line + 11);
     } else if (strcmp(line, "fpga diag clear") == 0) {
         cmd_fpga_diag_clear();
+    } else if (strcmp(line, "fpga selftest") == 0) {
+        cmd_fpga_selftest();
 #if defined(FPGA_ALT_BITSTREAM)
     } else if (strncmp(line, "fpga dbgclk", 11) == 0) {
         cmd_fpga_dbgclk(line[11] == ' ' ? line + 12 : "");
@@ -5541,6 +6096,12 @@ static void dispatch_command(char *line)
         cmd_fpga_scope_range(line + 17);
     } else if (strncmp(line, "fpga scope center", 17) == 0) {
         cmd_fpga_scope_center(line[17] == ' ' ? line + 18 : "");
+    } else if (strncmp(line, "fpga usart", 10) == 0) {
+        cmd_fpga_usart(line[10] == ' ' ? line + 11 : "");
+    } else if (strncmp(line, "fpga rearm", 10) == 0) {
+        cmd_fpga_rearm(line[10] == ' ' ? line + 11 : "");
+    } else if (strncmp(line, "fpga rate", 9) == 0) {
+        cmd_fpga_rate(line[9] == ' ' ? line + 10 : "");
     } else if (strcmp(line, "fpga scope reinit") == 0) {
         cmd_fpga_scope_reinit();
     } else if (strncmp(line, "fpga meter reinit", 17) == 0) {

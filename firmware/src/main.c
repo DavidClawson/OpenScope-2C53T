@@ -421,6 +421,12 @@ static void vDisplayTask(void *pvParameters)
         static device_mode_t last_rendered_mode = (device_mode_t)0xFF;
         static uint32_t scope_entered_frame = 0;
         if (current_mode != last_rendered_mode) {
+            /* PC11 = meter MUX enable. Stock switches it WITH the mode (HIGH in
+             * meter mode, LOW in scope mode); we used to pin it LOW forever, so
+             * the meter was dead in every scope build and every USART
+             * measurement was taken with the far end switched off. Bench A/B/A
+             * 2026-08-17: HIGH -> 276 bytes returned, LOW -> 0, HIGH -> 276. */
+            fpga_set_meter_mux(current_mode == MODE_MULTIMETER);
             if (current_mode == MODE_OSCILLOSCOPE)
                 scope_entered_frame = frame;
             redraw_gate_invalidate(&scope_gate);

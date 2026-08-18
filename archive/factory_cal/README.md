@@ -81,3 +81,83 @@ Not yet decoded. Current reading: the stock RAM table it feeds
 change at `0x20000394` — which is the address the documented meter DAC formula already
 used for "upper bounds". Decoding is required for a *re-calibration* feature; it is **not**
 required to back this up or restore it byte-for-byte.
+
+## `unit_maksidze_mcu_settings_page_0x08006000.bin` — CROSS-UNIT COMPARISON, 2026-08-16
+
+4096 bytes, same region, from **a different physical 2C53T** (maksidze, issue #18),
+dumped with his own MCU-memory reader. sha256 `682069379cf36c6e282ee0afd971348f…`.
+
+This is the comparison `analysis_v120/factory_cal_truth_2026-08-14.md` was blocked on.
+The standing caution was that every unit *we* had dumped had already been reflashed by
+us, so "absent in our dumps" could not be distinguished from "absent on a pristine
+unit". A second, independently dumped device settles it.
+
+**229 of 4096 bytes differ, and they fall in exactly three regions — the same split
+the live-hardware verification above established:**
+
+| Region | Offsets | Differs | Reading |
+|---|---|---|---|
+| header / settings | `0x003–0x012` | 16 B | per-unit settings, expected |
+| **CALIBRATION** | `0x025–0x12E` | **266 B** | **per-device values — see below** |
+| garbage tail | `0x180–0x1FB` | 124 B | uninitialised staging buffer, means nothing |
+| erased | `0x1FC–0xFFF` | **0 B** | 3580 bytes of `0xFF`, byte-identical |
+
+**The calibration region is structured, not random.** It is an array of 16-bit LE
+pairs, in two groups whose values are plausible 12-bit DAC codes:
+
+| | group 1 (low, high) | group 2 (low, high) |
+|---|---|---|
+| unit #1 | 1598–1628, 1696–1717 | 3195–3221, 3283–3306 |
+| maksidze | 1639–1667, 1657–1705 | 3239–3268, 3230–3290 |
+
+Same layout, same clusters, different numbers — with unit #1 sitting systematically
+~30 codes below maksidze's and showing about twice the spread. That is what
+per-device factory calibration looks like, and it is not what a compiled-in default
+table looks like (the stock image's defaults are large values of a different shape).
+
+The pair structure matches the documented meter DAC path exactly: `CLAUDE.md` records
+cal tables at RAM `0x20000394` (upper bounds) and `0x20000358` (baselines), 2 bytes per
+entry, combined as `DAC = ((upper - baseline) / divisor) * (offset + 100) + baseline`
+and written to `0x40007408`. Pairs of (baseline, upper) per range is precisely the
+shape seen here.
+
+**Conclusion: per-device factory calibration DOES exist on this hardware, it lives in
+MCU internal flash at `0x08006000`, and it is confined to roughly `0x025–0x12E`.**
+Two independent units agree on layout and disagree on values. This is also the region
+our own app overwrites, so it must be preserved or archived before flashing a unit
+that has never been dumped.
+
+## THIRD UNIT + ARRAY ALIGNMENT SETTLED — 2026-08-17
+
+`unit_dendi_mcu_settings_page_0x08006000.bin` — a third unit, dumped by its owner and relayed
+by maksidze (issue #18, 2026-08-16). Diffs against the other two:
+
+| pair | differing bytes | of which in cal 0x025-0x12E |
+|---|---|---|
+| unit1 vs maksidze | 229 | 130 |
+| unit1 vs dendi    | 268 | 161 |
+| maksidze vs dendi | 184 | 162 |
+
+All three differ pairwise across essentially the whole calibration region while the erased
+remainder (0x1FC-0xFFF) stays byte-identical `0xFF`. Per-device factory calibration is
+established beyond the two-unit case.
+
+**Alignment/endianness pinned.** The array is little-endian `uint16` starting at page offset
+**0x026**. At that alignment 129/132 entries land inside 12-bit DAC range; the other three
+candidate alignments give ~7/132. (An earlier writeup quoted the same cluster values from a
+big-endian-at-0x025 read — coincidentally similar, but 0x026/LE is the correct parse.)
+
+**Structure: two blocks of 30 (baseline, upper) pairs.**
+
+| block | offsets | unit1 | maksidze | dendi |
+|---|---|---|---|---|
+| 1 | 0x038-0x0AE | 1598-1628 / 1696-1717 | 1639-1667 / 1657-1705 | 1509-1676 |
+| 2 | 0x0B0-0x126 | 3195-3221 / 3283-3306 | 3230-3290 | 3145-3282 |
+
+30 entries per table matches the decompiled RAM cal tables exactly — baselines at `0x20000358`,
+upper bounds at `0x20000394`, delta 0x3C = 60 bytes = 30 x uint16. Block 2 sits at roughly 2x
+block 1.
+
+Dendi's page carries a handful of out-of-range outliers (62808, 50862, 27857, 27887, 31944)
+scattered through otherwise well-formed entries; not yet explained, and worth keeping in mind
+before treating any single unit's page as a clean reference.
