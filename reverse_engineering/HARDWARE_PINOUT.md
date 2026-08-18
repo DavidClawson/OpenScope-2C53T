@@ -37,7 +37,7 @@
 | PA7 | Button matrix row | Input | Pull-up | -- | `peripheral_map.md`; `input_and_housekeeping` at 0x08039188 | CH2 button row pin |
 | PA8 | Button matrix row | Input | Pull-up | -- | `peripheral_map.md`; `input_and_housekeeping` | Right button row pin |
 | PA9 | USART1 TX | AF | -- | -- | Probed: dead (0 bytes) | Not used by stock USART firmware |
-| PA10 | Analog MUX control | Output | Push-pull | 50 MHz | `gpio_mux_porta_portb` at 0x08001A58 writes GPIOA bit 0x400; USART1 RX probed dead | Dual-use pad; not used as USART1 RX |
+| PA10 | **CH2 attenuator select S2** | Output | Push-pull | 50 MHz | `gpio_mux_porta_portb` at 0x08001A58 writes GPIOA bit 0x400; **bench-confirmed 2026-08-17** (see PB11) | 74HC4051 select line; dual-use pad, not USART1 RX |
 | PA11 | USB D- | AF | -- | -- | `usb_endpoint_handler` at 0x080278E4 | USB FS device |
 | PA12 | USB D+ | AF | -- | -- | `usb_endpoint_handler` at 0x080278E4 | USB FS device |
 | PA13 | SWDIO | AF | -- | -- | JTAG disabled via AFIO remap; SWD preserved | Debug header |
@@ -58,8 +58,8 @@
 | PB7 | Button (PRM) | Input | Pull-up | -- | `peripheral_map.md` | Direct GPIO, active-low |
 | PB8 | LCD backlight | Output | Push-pull | 50 MHz | `main.c` line 299; `FPGA_BOOT_SEQUENCE.md` | HIGH = backlight on |
 | PB9 | Buzzer / audio output (TMR4_CH4 PWM) | AF | AF push-pull | -- | Hardware probed under stock (issue #25, maksidze: waveform present exactly while the device beeps) + validated in custom firmware (`maksidze/DOOM-2C53T` `firmware/src/drivers/pwm_audio.c`, TMR4 CH4 PWM mode A) | Onboard piezo. NOT an analog-frontend or FPGA-config pin (retires the Exp E "PB9 AF-PP in stock" candidate) |
-| PB10 | Analog MUX control | Output | Push-pull | 50 MHz | `gpio_mux_porta_portb` at 0x08001A58 | 10-mode analog routing; USART3 TX probed dead |
-| PB11 | FPGA active mode | Output | Push-pull | 50 MHz | `FPGA_BOOT_SEQUENCE.md` step 52; `FUN_08037800` | HIGH = FPGA active measurement mode; set via GPIOB_BOP = 0x800 |
+| PB10 | **CH2 attenuator select S1** | Output | Push-pull | 50 MHz | `gpio_mux_porta_portb` at 0x08001A58; **bench-confirmed 2026-08-17** (see PB11) | 74HC4051 select line; USART3 TX probed dead |
+| PB11 | **CH2 attenuator select S0** | Output | Push-pull | 50 MHz | **CONFIRMED 2026-08-17 two ways**: bench slope-method gain ladder (PB11/PB10/PA10 moves the op05/CH2 buffer) + maksidze board tracing (issue #18) | Was recorded as "FPGA active mode" for months. The June capture's "PB11 HIGH 1 ms before the config handshake" was stock's range init running nearby, not an FPGA arm. Harmless to hold HIGH. 74HC4051 select line |
 | PB12 | SPI2 CS (flash) | Output | Push-pull | 50 MHz | `spi2_block_read` at 0x0802F048; hardware verified | Active LOW; Winbond W25Q128JV chip select |
 | PB13 | SPI2 SCK | AF | AF push-pull | 50 MHz | `peripheral_map.md`; hardware verified | SPI flash clock |
 | PB14 | SPI2 MISO | AF | Floating | -- | `spi2_transceive_byte` at 0x0802F0C4; hardware verified | SPI flash data in |
@@ -117,9 +117,9 @@
 | PE1 | Unknown | -- | -- | -- | | |
 | PE2 | Button matrix col | Output | Push-pull | 50 MHz | `peripheral_map.md` | Column for Right, Auto |
 | PE3 | Button matrix col | Output | Push-pull | 50 MHz | `peripheral_map.md` | Column for CH2, Down, Save |
-| PE4 | Analog front-end | Output | Push-pull | 50 MHz | `gpio_mux_portc_porte` at 0x080018A4 | Relay/MUX switching |
-| PE5 | Analog front-end | Output | Push-pull | 50 MHz | `gpio_mux_portc_porte` | Relay/MUX switching |
-| PE6 | Analog front-end | Output | Push-pull | 50 MHz | `gpio_mux_portc_porte` | Relay/MUX switching |
+| PE4 | **CH1 attenuator select S0** | Output | Push-pull | 50 MHz | `gpio_mux_portc_porte` at 0x080018A4; **bench-confirmed 2026-08-17** (moves the op04/CH1 buffer) | 74HC4051 select line. Gain ladder by code: 5=21.2, 7=42.0, 6=91.4, 2=108.8, 1=228.3, 3=491.7 mV/count; 0 and 4 grounded |
+| PE5 | **CH1 attenuator select S1** | Output | Push-pull | 50 MHz | `gpio_mux_portc_porte`; **bench-confirmed 2026-08-17** | 74HC4051 select line |
+| PE6 | **CH1 attenuator select S2** | Output | Push-pull | 50 MHz | `gpio_mux_portc_porte`; **bench-confirmed 2026-08-17** | 74HC4051 select line |
 | PE7 | EXMC D4 | AF | AF push-pull | 50 MHz | `lcd_gpio_init()` | LCD data bus |
 | PE8 | EXMC D5 | AF | AF push-pull | 50 MHz | `lcd_gpio_init()` | LCD data bus |
 | PE9 | EXMC D6 | AF | AF push-pull | 50 MHz | `lcd_gpio_init()` | LCD data bus |
@@ -206,7 +206,7 @@ Two 10-mode GPIO multiplexing functions control analog signal routing:
 | PA15 | MUX control | Writes to GPIOA BOP/BCR (0x40010810/0x40010814) |
 | PA10 | MUX control | Writes GPIOA bit 0x400 through BOP/BCR in `gpio_mux_porta_portb` |
 | PB10 | MUX control | Writes to GPIOB BOP/BCR (0x40010C10/0x40010C14) |
-| PB11 | MUX control / FPGA active | Dual use: MUX routing + FPGA active mode |
+| PB11 | CH2 attenuator select S0 | **NOT FPGA active mode** — corrected 2026-08-17, see the main table |
 
 **Port C/E MUX** (`gpio_mux_portc_porte` at 0x080018A4):
 
