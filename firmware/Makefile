@@ -797,6 +797,33 @@ guest-coldtrace: CFLAGS += -DGUEST_BUILD -DFPGA_WARM_HANDOFF_TEST=1 -DFPGA_USART
 guest-coldtrace: LDSCRIPT = ld/at32f403a_guest.ld
 guest-coldtrace: clean all
 
+# [CH2 OFFSET 2026-08-17] guest-coldtrace-ch2 — coldtrace plus a boot-time arm
+# of the CH2 vertical-offset reference (TMR13 CH1 PWM-DAC on PA6).
+#
+# EXP-06 measured CH1's full gain ladder (21.23 / 42.04 / 91.41 / 108.83 /
+# 228.30 / 491.67 mV per count, cross-checked against Stlkv's independent
+# numbers on another unit) but could only get ONE usable tap out of CH2: every
+# other mux code parked at a fixed DC level (mean 0, 232, 255, 26) and railed
+# regardless of drive amplitude. That is the signature of a missing vertical
+# offset, not a gain-table error. CH1's offset is DAC1 on PA4, which
+# fpga_init() arms mid-scale and `fpga scope center` tunes per range; CH2's is
+# a TMR13 PWM-DAC on PA6 that our firmware has never programmed.
+#
+# This target only sets FPGA_CH2_TRIGGER, which arms TMR13 at boot alongside
+# the DAC1 write. The runtime knobs (`trig2 raw`, `fpga scope center ch2`)
+# self-init and work on ANY build, so the experiment does NOT require this
+# target — flash it once the pin is confirmed and you want the arm at boot.
+#
+# ⚠ PA6 is DECODED, NOT CONFIRMED (HARDWARE_PINOUT.md: "candidate,
+# unconfirmed"). It is derived from stock's master_init TMR13 setup at
+# 0x0802B0FE and the C1DT write at 0x08008C3A (ripcord contract 38). Run the
+# CH1 DAC1 sweep as a positive control in the same session before believing a
+# negative here: if DAC1 moves CH1's mean and this moves nothing on CH2, the
+# pin is wrong — which is a clean result, not an ambiguous one.
+guest-coldtrace-ch2: CFLAGS += -DGUEST_BUILD -DFPGA_WARM_HANDOFF_TEST=1 -DFPGA_USART_SILENT_SCOPE=1 -DFPGA_CONFIG_B=1 -DFPGA_CONFIG_B_ARM=1 -DFPGA_CH2_TRIGGER=1
+guest-coldtrace-ch2: LDSCRIPT = ld/at32f403a_guest.ld
+guest-coldtrace-ch2: clean all
+
 # [LA 2026-08-15] guest-coldtrace-la — coldtrace with the bit-bang config clock
 # slowed (FPGA_BB_HALF_DELAY=60 nops per half period, ~1-2 MHz SCK) so a
 # 24 MS/s logic analyzer can decode the whole config sequence (issue #18:

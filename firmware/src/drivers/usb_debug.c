@@ -586,6 +586,8 @@ static void cmd_help(void)
         "flash wtest <addr> CONFIRM      Non-destructive write-primitive self-test (blank 4KB sector)\r\n"
         "trig raw <0-4095>               Write DAC1 (PA4) directly + sw trigger\r\n"
         "trig <range> <level>            Scope trigger DAC: range 0-9, level -100..100\r\n"
+        "trig2 raw <0-4095>              Write CH2 ref: TMR13 CH1 PWM-DAC (PA6)\r\n"
+        "trig2 <range> <level>           CH2 vertical-offset ref via the CH1 cal formula\r\n"
         "screen dump [shadow] [x y w h]  Dump text indexed4 LCD shadow\r\n"
         "screen dumpbin [x y w h]        Binary indexed4 LCD shadow dump\r\n"
         "screen shadow page [y]          Clear full-screen shadow capture\r\n"
@@ -617,7 +619,7 @@ static void cmd_help(void)
         "fpga wire entry [ch1|ch2|both] Send candidate scope-entry wire-word bank\r\n"
         "fpga wire scope [ch1|ch2|both] Wire-word entry + runtime scope blocks\r\n"
         "fpga scope range <0-9> <1|2|both>  Coarse frontend range; channel is MANDATORY\r\n"
-        "fpga scope center [0-9]         Auto-center DAC1 (mid-scale) per range; all if omitted\r\n"
+        "fpga scope center [ch2] [0-9]   Auto-center offset ref per range (CH1/DAC1 default); all if omitted\r\n"
         "fpga usart [on|off]             Bring USART2 up post-config; show CTRL1+RX\r\n"
         "fpga rearm [on|off]             Stock post-read re-arm (reg01) A/B toggle\r\n"
         "fpga rate [hexidx]              reg-0x01 rate index the re-arm rewrites\r\n"
@@ -1897,6 +1899,70 @@ static void cmd_scope_trig(const char *args)
                      code, code, (unsigned long)(mv / 1000), (unsigned long)(mv % 1000));
 }
 
+/*
+ * CH2 vertical-offset reference: TMR13 CH1 PWM-DAC on PA6.
+ *   trig2 raw <0-4095>     direct duty write to TMR13_C1DT
+ *   trig2 <range> <level>  same cal formula as CH1 (ripcord contract 38)
+ *
+ * WHY THIS EXISTS (2026-08-17). CH1's DAC1 (PA4) turned out to be a vertical-
+ * OFFSET injector, not a trigger threshold: `fpga scope center` centers CH1 by
+ * binary-searching DAC1 until the capture mean lands on 128, and that was
+ * bench-validated (648492a). The FPGA's actual trigger level is digital —
+ * SPI3 reg 0x08, an ADC code. CH2 has no DAC channel; stock drives its offset
+ * from a TMR13 CH1 PWM-DAC on PA6. Our firmware never programmed TMR13, which
+ * is the leading explanation for EXP-06: every CH2 mux tap parked at a fixed DC
+ * level and railed regardless of drive amplitude, so only one tap was usable.
+ *
+ * PA6's identity is DECODED, NOT CONFIRMED (HARDWARE_PINOUT.md marks it
+ * "candidate, unconfirmed"). The point of this command is to settle that on the
+ * bench, with the CH1 DAC1 sweep as the positive control in the same session:
+ * if sweeping DAC1 moves CH1's mean but sweeping this does not move CH2's, the
+ * pin is wrong and the failure is clean rather than ambiguous.
+ *
+ * scope_trigger_ch2_raw() self-inits, so this works on ANY build — no
+ * FPGA_CH2_TRIGGER flag needed. That flag only arms TMR13 at boot.
+ */
+static void cmd_scope_trig2(const char *args)
+{
+    char buf[48];
+    if (strlen(args) >= sizeof(buf)) { usb_send_str("Usage: trig2 raw <code> | trig2 <range> <level>\r\n"); return; }
+    strcpy(buf, args);
+
+    char *saveptr = NULL;
+    char *t1 = strtok_r(buf, " \t", &saveptr);
+    char *t2 = strtok_r(NULL, " \t", &saveptr);
+
+    scope_trigger_ch2_init();
+
+    if (t1 != NULL && strcmp(t1, "raw") == 0 && t2 != NULL) {
+        uint32_t code = 0;
+        if (parse_int(t2, &code) != 0) { usb_send_str("Usage: trig2 raw <0-4095>\r\n"); return; }
+        if (code > 4095) code = 4095;
+        scope_trigger_ch2_raw((uint16_t)code);
+    } else if (t1 != NULL && t2 != NULL) {
+        uint32_t r = 0, lv = 0; int level;
+        const char *ls = t2;
+        int neg = 0;
+        if (*ls == '-') { neg = 1; ls++; }
+        if (parse_int(t1, &r) != 0 || parse_int(ls, &lv) != 0) {
+            usb_send_str("Usage: trig2 <range 0-9> <level -100..100>\r\n"); return;
+        }
+        level = neg ? -(int)lv : (int)lv;
+        scope_trigger_ch2_set((int)r, level);
+    } else {
+        usb_send_str("Usage: trig2 raw <code> | trig2 <range> <level>\r\n");
+        return;
+    }
+
+    uint16_t code = scope_trigger_ch2_last();
+    /* Duty ratio against the stock ARR (4094). The RC-filtered mean at the pin
+     * is duty * 3.3V, so the arithmetic matches `trig`'s DAC1 line — but this
+     * is a PWM average, not a DAC output, so it is only valid once filtered. */
+    uint32_t mv = ((uint32_t)code * 3300u) / 4095u;
+    usb_debug_printf("TMR13_C1DT(PA6) = code %u (0x%03X)  duty ~%lu.%03lu V after RC\r\n",
+                     code, code, (unsigned long)(mv / 1000), (unsigned long)(mv % 1000));
+}
+
 static void cmd_screen_dump(const char *args)
 {
     char buf[64];
@@ -2341,14 +2407,15 @@ static uint8_t spi3_raw_xfer(uint8_t tx);
 #define SCOPE_CENTER_SETTLE_MS 480u  /* >= one ~430ms buffer fill after a DAC
                                         move, so the read is not stale         */
 
-/* One 0x04 CH1 read window; returns the mean of the first `nbytes` payload
- * bytes. Same framing as spi3_opread_window (one CS-LOW window, opcode + 2
- * filler bytes, then payload). Caller must already hold the acq pause. */
-static uint32_t scope_center_read_mean(uint32_t nbytes)
+/* One capture read window (opcode 0x04 = CH1 buffer, 0x05 = CH2); returns the
+ * mean of the first `nbytes` payload bytes. Same framing as spi3_opread_window
+ * (one CS-LOW window, opcode + 2 filler bytes, then payload). The two filler
+ * bytes are the header stock discards. Caller must already hold the acq pause. */
+static uint32_t scope_center_read_mean(uint8_t opcode, uint32_t nbytes)
 {
     uint32_t ssum = 0;
     GPIOB->clr = (1 << 6);                 /* CS assert (PB6 LOW)    */
-    (void)spi3_raw_xfer(0x04);
+    (void)spi3_raw_xfer(opcode);
     (void)spi3_raw_xfer(0xFF);
     (void)spi3_raw_xfer(0xFF);
     for (uint32_t i = 0; i < nbytes; i++)
@@ -2358,21 +2425,30 @@ static uint32_t scope_center_read_mean(uint32_t nbytes)
 }
 
 /* Average SCOPE_CENTER_AVG windows for a noise-robust mean. */
-static uint32_t scope_center_robust_mean(void)
+static uint32_t scope_center_robust_mean(uint8_t opcode)
 {
     uint32_t acc = 0;
     for (uint32_t k = 0; k < SCOPE_CENTER_AVG; k++) {
-        acc += scope_center_read_mean(SCOPE_CENTER_NBYTES);
+        acc += scope_center_read_mean(opcode, SCOPE_CENTER_NBYTES);
         vTaskDelay(pdMS_TO_TICKS(5));
     }
     return acc / SCOPE_CENTER_AVG;
 }
 
-/* Binary-search DAC1 for a CH1 mean of ~128. Assumes the range is already
- * applied and the acq task paused. Returns the best DAC1 found and its
- * resulting mean via *out_dac / *out_mean. */
-static void scope_center_one(uint16_t *out_dac, uint32_t *out_mean)
+/* Binary-search the channel's offset reference for a mean of ~128. Assumes the
+ * range is already applied and the acq task paused. `ch` is 1 or 2: CH1 drives
+ * DAC1 (PA4) and reads opcode 0x04; CH2 drives TMR13_C1DT (PA6, PWM-DAC) and
+ * reads 0x05. Returns the best code found and its resulting mean.
+ *
+ * The monotonic assumption below was measured for DAC1 on CH1. For CH2 it is
+ * ASSUMED, not verified — TMR13's channel polarity is active-low (stock sets
+ * CCTRL C1P), so the duty->voltage sense could invert. If a CH2 search
+ * converges on a rail, suspect the direction before suspecting the pin: sweep
+ * `trig2 raw` by hand and watch which way the mean moves. */
+static void scope_center_one(uint8_t ch, uint16_t *out_dac, uint32_t *out_mean)
 {
+    const uint8_t opcode = (ch == 2) ? 0x05u : 0x04u;
+
     uint16_t lo = 0, hi = 4095;
     uint16_t best_dac = 2048;
     uint32_t best_mean = 0;
@@ -2380,7 +2456,8 @@ static void scope_center_one(uint16_t *out_dac, uint32_t *out_mean)
 
     for (uint32_t it = 0; it < SCOPE_CENTER_ITERS; it++) {
         uint16_t mid = (uint16_t)((lo + hi) / 2);
-        scope_trigger_dac_raw(mid);
+        if (ch == 2) scope_trigger_ch2_raw(mid);
+        else         scope_trigger_dac_raw(mid);
         /* BUGFIX 2026-08-14 (round 2): the DAC moves fine, but the capture
          * buffer FREE-RUNS and takes ~430 ms to refill (1024 samples at
          * ~2.4 kS/s). A 10 ms settle read the STALE buffer (old, roughly-
@@ -2388,7 +2465,7 @@ static void scope_center_one(uint16_t *out_dac, uint32_t *out_mean)
          * the first "DAC init" fix was aimed at the wrong cause. Wait a full
          * buffer fill so the read reflects the NEW DC operating point. */
         vTaskDelay(pdMS_TO_TICKS(SCOPE_CENTER_SETTLE_MS));
-        uint32_t mean = scope_center_robust_mean();
+        uint32_t mean = scope_center_robust_mean(opcode);
         uint32_t err = (mean > SCOPE_CENTER_TARGET)
                        ? mean - SCOPE_CENTER_TARGET
                        : SCOPE_CENTER_TARGET - mean;
@@ -2405,15 +2482,41 @@ static void scope_center_one(uint16_t *out_dac, uint32_t *out_mean)
     *out_mean = best_mean;
 }
 
-/* `fpga scope center [0-9]` — auto-center DAC1 for one range (arg given) or
- * for every range 0..9 (no arg), one report line per range. */
+/* `fpga scope center [ch1|ch2] [0-9]` — auto-center the channel's vertical-
+ * offset reference for one range (arg given) or for every range 0..9 (no arg),
+ * one report line per range. Channel defaults to CH1, preserving the original
+ * bench-validated `fpga scope center [0-9]` usage byte-for-byte.
+ *
+ * The channel is a NAMED TOKEN, not a numeric suffix, deliberately. On
+ * 2026-08-17 `fpga scope range <n> 0` silently addressed BOTH channels because
+ * its channel argument was 1-based and 0 fell through to "both", which invalidated
+ * a whole relay test. A `center2` spelling would have been worse still: the
+ * dispatcher matches "fpga scope center" on 17 chars, so `center2` would have
+ * matched the CH1 handler with empty args and quietly swept all ten CH1 ranges. */
 static void cmd_fpga_scope_center(const char *args)
 {
-    bool all = (args == NULL || *args == '\0');
+    char buf[32];
+    uint8_t ch = 1;
+
+    if (args == NULL) args = "";
+    if (strlen(args) >= sizeof(buf)) {
+        usb_send_str("Usage: fpga scope center [ch1|ch2] [0-9]\r\n");
+        return;
+    }
+    strcpy(buf, args);
+
+    char *saveptr = NULL;
+    char *t1 = strtok_r(buf, " \t", &saveptr);
+    if (t1 != NULL && (strcmp(t1, "ch1") == 0 || strcmp(t1, "ch2") == 0)) {
+        ch = (t1[2] == '2') ? 2u : 1u;
+        t1 = strtok_r(NULL, " \t", &saveptr);
+    }
+
+    bool all = (t1 == NULL || *t1 == '\0');
     uint32_t n = 0;
 
-    if (!all && (parse_int(args, &n) != 0 || n > 9)) {
-        usb_send_str("Usage: fpga scope center [0-9]\r\n");
+    if (!all && (parse_int(t1, &n) != 0 || n > 9)) {
+        usb_send_str("Usage: fpga scope center [ch1|ch2] [0-9]\r\n");
         return;
     }
 
@@ -2427,18 +2530,28 @@ static void cmd_fpga_scope_center(const char *args)
      * DAC1, never spanning 0-255, so the binary search flailed around a fixed
      * operating point). `trig raw` calls it too — the DAC peripheral must be
      * enabled before raw writes take effect. */
-    scope_trigger_dac_init();
+    if (ch == 2) scope_trigger_ch2_init();
+    else         scope_trigger_dac_init();
 
     uint32_t first = all ? 0 : n;
     uint32_t last  = all ? 9 : n;
     for (uint32_t r = first; r <= last; r++) {
         uint16_t dac;
         uint32_t mean;
+        /* Deliberately applies the range to BOTH banks even when centering CH2:
+         * that is what the bench-validated CH1 path did (648492a), and the two
+         * frontends are independent, so restricting it would be an untested
+         * change to a working measurement for no measurable gain. */
         fpga_scope_set_range_diag((uint8_t)r);
         vTaskDelay(pdMS_TO_TICKS(20));     /* relay/frontend settle */
-        scope_center_one(&dac, &mean);
-        usb_debug_printf("range %lu: center DAC1=%u (mean=%lu)\r\n",
-                         (unsigned long)r, dac, (unsigned long)mean);
+        scope_center_one(ch, &dac, &mean);
+        /* Name the reference in the output: a bare "center=" line would read
+         * identically whichever channel ran, and a mislabelled log is how this
+         * project has repeatedly convinced itself of the wrong pin. */
+        usb_debug_printf("CH%u range %lu: center %s=%u (mean=%lu)\r\n",
+                         (unsigned)ch, (unsigned long)r,
+                         (ch == 2) ? "TMR13_C1DT" : "DAC1",
+                         dac, (unsigned long)mean);
     }
 
     fpga_acq_resume();
@@ -6014,6 +6127,8 @@ static void dispatch_command(char *line)
         cmd_mem_read(line + 9);
     } else if (strncmp(line, "mem write ", 10) == 0) {
         cmd_mem_write(line + 10);
+    } else if (strncmp(line, "trig2 ", 6) == 0) {
+        cmd_scope_trig2(line + 6);
     } else if (strncmp(line, "trig ", 5) == 0) {
         cmd_scope_trig(line + 5);
     } else if (strcmp(line, "flash jedec") == 0) {
