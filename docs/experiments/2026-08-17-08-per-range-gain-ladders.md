@@ -148,3 +148,24 @@ CH2 problem.
   bin-1 anomaly — it blocks timebase and any frequency measurement, though not
   volts/div; (4) build the cal table and wire counts->volts into `scope_measure`,
   starting with ranges 5-7 where the numbers are solid.
+
+**Update 2026-08-18 — follow-up (4) is DONE.** Landed as `firmware/src/ui/scope_cal.c`
+with the tiering above encoded (5/6/7 MEASURED, 4/8/9 PROVISIONAL, 0-3 NONE),
+per channel, and wired into the measurement badges, the status-bar volts/div and
+the volts/div popup. Two findings surfaced while wiring it:
+
+1. The two calibration constants this replaces — `scope_ui.c` range 2 -> 2.882
+   mV/count and range 8 -> 6.494 mV/count — are both contradicted by this sweep.
+   Range 2 rails and has no span; range 8 measures 279.05. Range 8 is the
+   power-on default, so the instrument's most-used number was ~43x out.
+   Withdrawn in place in `scope_cal.c`, not deleted.
+2. The nominal `vdiv_table` volts/div labels were never derived from any
+   measurement and are **2.7x-3.5x out** on ranges 5/6/7 against the renderer's
+   32 counts per division. The table is removed and every label is now derived
+   from the measured gain.
+
+The absolute-scale blind spot recorded above is now carried in the firmware as
+`SCOPE_CAL_SOURCE_SCALE`, applied at lookup rather than baked into the rows, so
+follow-up (2) becomes a one-constant edit once a trusted source is on the bench.
+`tests/test_scope_cal.c` asserts that every row is exactly the raw bench number
+times that shared constant, so hand-nudging a single row fails the build.

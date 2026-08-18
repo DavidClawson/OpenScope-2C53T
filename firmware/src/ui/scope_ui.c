@@ -16,6 +16,7 @@
 #include "theme.h"
 #include "scope_state.h"
 #include "scope_measure.h"
+#include "scope_cal.h"
 #include "math_channel.h"
 #include "persistence.h"
 #include "fpga.h"
@@ -331,25 +332,32 @@ static void fmt_volts(char *b, size_t n, float v)
 }
 
 /*
- * Per-range volts-per-ADC-count, from bench measurements on unit #1.
- * Returns 0.0f for any range we have NOT measured — the caller MUST then fall
- * back to honest ADC counts rather than invent a voltage. This is the whole
- * point of the split: a confident wrong number is worse than a raw count.
+ * Vertical calibration now lives in scope_cal.c, per CHANNEL as well as per
+ * range, because the two channels have different frontends and measure
+ * different gains on the same range index.
  *
- * CALIBRATED RANGES (bench, per-range-centered linear fits):
- *   idx 2 (20mV/div): 347 codes per volt -> 1 count = 1/347 V = 2.882 mV
- *   idx 8 (2V/div):   154 codes per volt -> 1 count = 1/154 V = 6.494 mV
- * ALL OTHER ranges (0,1,3,4,5,6,7,9) are UNKNOWN and await the full 10-range
- * calibration sweep; they return 0.0f and keep showing counts.
+ * WITHDRAWN 2026-08-18 — what used to be here was a two-case switch:
+ *     case 2: 1.0f/347.0f   ("20mV/div")
+ *     case 8: 1.0f/154.0f   ("2V/div")
+ * The five-amplitude sweep of 2026-08-17 contradicts both. Range 2 rails on
+ * both channels and yields no span at all; range 8 measures 279 mV/count, not
+ * 6.49. The full provenance and the reason the replacement is tiered rather
+ * than a flat table is in scope_cal.h.
+ *
+ * The compile-time check below is what keeps the volts/div label honest.
+ * SCOPE_CAL_COUNTS_PER_DIV is a claim about THIS renderer's geometry — the
+ * 26-pixel grid pitch against a 206-pixel plot showing 256 counts. If either
+ * changes, the label silently starts meaning something else, so make that a
+ * build failure instead.
  */
-static float scope_cal_volts_per_count(uint8_t vdiv_idx)
-{
-    switch (vdiv_idx) {
-    case 2:  return 1.0f / 347.0f;   /* 20mV/div */
-    case 8:  return 1.0f / 154.0f;   /* 2V/div (default range) */
-    default: return 0.0f;            /* uncalibrated -> show ADC counts */
-    }
-}
+_Static_assert((26 * 256 + SCOPE_H / 2) / SCOPE_H == (int)SCOPE_CAL_COUNTS_PER_DIV,
+               "grid pitch no longer matches SCOPE_CAL_COUNTS_PER_DIV — "
+               "the volts/div labels in the status bar would be wrong");
+
+/* The cal table is indexed by the frontend range index, so its length and
+ * the UI's range count are the same quantity counted twice. */
+_Static_assert(SCOPE_CAL_RANGE_COUNT == VDIV_COUNT,
+               "scope_cal range table length must match VDIV_COUNT");
 
 /*
  * Measurement badges.
@@ -361,12 +369,12 @@ static float scope_cal_volts_per_count(uint8_t vdiv_idx)
  * What is printed now is measured from the live record, in the units this
  * instrument can actually defend (see scope_measure.h):
  *
- *   Vpp / Vrms   VOLTS on the ranges we have a bench-measured volts-per-count
- *                for (currently vdiv_idx 2 = 20mV/div and 8 = 2V/div; see
- *                scope_cal_volts_per_count). On every other range we still
- *                have no cal, so those show honest ADC COUNTS ("Ncnt") rather
- *                than a plausible-but-invented voltage. The full 10-range
- *                sweep (dev plan §F2) will fill in the rest.
+ *   Vpp / Vrms   VOLTS wherever scope_cal.c has a bench-measured
+ *                volts-per-count for that CHANNEL on that range: ranges 4-9,
+ *                with 5/6/7 cross-validated three ways and 4/8/9 provisional.
+ *                Ranges 0-3 rail on both channels and have no gain at all, so
+ *                they still show honest ADC COUNTS ("Ncnt") rather than a
+ *                plausible-but-invented voltage.
  *   Duty         a pure ratio; invariant under any affine counts->volts
  *                mapping, so it is already correct and stays correct once
  *                calibration lands. Asserted in tests/test_scope_measure.c.
@@ -374,10 +382,17 @@ static float scope_cal_volts_per_count(uint8_t vdiv_idx)
  *   Freq         "--". Hz needs a known sample rate, i.e. a timebase, and
  *                this firmware has no timebase control at all (§F4).
  *
- * The volts wiring is now DONE (Vpp = pp * k, Vrms = ac_rms * k, with k from
- * scope_cal_volts_per_count(vdiv_idx), k == 0 meaning "show counts"). Freq/Per
- * still await a timebase: with a sample interval dt_s in hand it is one line
- * each, Freq = 1 / (period_samples * dt_s), Per(s) = period_samples * dt_s.
+ * The volts wiring is DONE (Vpp = pp * k, Vrms = ac_rms * k, with k from
+ * scope_cal_volts_per_count(ch, vdiv_idx), k == 0 meaning "show counts").
+ *
+ * Freq/Per still await a timebase, and that wait is now known to be longer
+ * than "one line each". EXP-08 found the capture does not resolve frequency
+ * at all: 100/250/500/1000 Hz all peak in bin 1, and span is identical across
+ * timebases 0x08/0x10/0x11/0x12, so the timebase register is not changing
+ * what is captured. The vertical axis is calibrated; the horizontal axis is
+ * not merely unscaled but not yet trustworthy. Producing a Hz figure by
+ * multiplying through an assumed sample rate would be exactly the invention
+ * this function was written to remove.
  */
 static void draw_measurement_badges(const scope_state_t *ss, const theme_t *th)
 {
@@ -399,7 +414,7 @@ static void draw_measurement_badges(const scope_state_t *ss, const theme_t *th)
     x += BADGE_W + 2;
 
     /* Calibrated ranges show volts; all others fall back to ADC counts. */
-    const float k1 = scope_cal_volts_per_count(ss->ch1.vdiv_idx);
+    const float k1 = scope_cal_volts_per_count(1u, ss->ch1.vdiv_idx);
 
     if (have1) {
         if (k1 > 0.0f) fmt_volts(buf, sizeof(buf), (float)m1.pp * k1);
@@ -442,7 +457,7 @@ static void draw_measurement_badges(const scope_state_t *ss, const theme_t *th)
     x += BADGE_W + 2;
 
     if (have2) {
-        const float k2 = scope_cal_volts_per_count(ss->ch2.vdiv_idx);
+        const float k2 = scope_cal_volts_per_count(2u, ss->ch2.vdiv_idx);
         if (k2 > 0.0f) fmt_volts(buf, sizeof(buf), (float)m2.pp * k2);
         else           fmt_counts(buf, sizeof(buf), m2.pp);
         draw_one_badge(x, y2, "CH2pp", buf, th->ch2, th);

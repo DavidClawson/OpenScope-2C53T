@@ -7,6 +7,7 @@
 #include "font.h"
 #include "theme.h"
 #include "scope_state.h"
+#include "scope_cal.h"
 #include "battery.h"
 #include "at32f403a_407.h"
 #include <stdio.h>
@@ -112,10 +113,21 @@ void draw_info_bar(void)
             const scope_state_t *ss = scope_state_get();
             char buf[24];
 
-            /* CH1: vdiv + coupling */
+            /*
+             * CH1: volts/div + coupling.
+             *
+             * The volts/div shown is DERIVED from the bench-measured gain for
+             * this channel on this range (scope_cal.h), not read out of
+             * vdiv_table. The nominal labels there ("5mV" ... "5V") were never
+             * traced to a measurement and are 2.7x-3.5x out on the three
+             * ranges we have cross-validated, so a range labelled "2V" was
+             * ruling a 2.8 V division. Uncalibrated ranges read "--", and
+             * provisional ones carry a leading '~'.
+             */
+            char vdiv1[12];
+            scope_cal_range_label(1u, ss->ch1.vdiv_idx, vdiv1, sizeof(vdiv1));
             snprintf(buf, sizeof(buf), "CH1:%s %s",
-                     vdiv_table[ss->ch1.vdiv_idx].label,
-                     coupling_labels[ss->ch1.coupling]);
+                     vdiv1, coupling_labels[ss->ch1.coupling]);
             font_draw_string(4, LCD_HEIGHT - 14, buf,
                              ss->ch1.enabled ? th->ch1 : th->text_secondary,
                              ib, &font_small);
@@ -131,10 +143,13 @@ void draw_info_bar(void)
             font_draw_string(155, LCD_HEIGHT - 14, buf,
                              th->text_primary, ib, &font_small);
 
-            /* CH2: vdiv + coupling */
+            /* CH2: volts/div + coupling. Per-channel by construction — CH2's
+             * frontend measures a different gain from CH1's on the same range
+             * index, which is why the label cannot come from a shared table. */
+            char vdiv2[12];
+            scope_cal_range_label(2u, ss->ch2.vdiv_idx, vdiv2, sizeof(vdiv2));
             snprintf(buf, sizeof(buf), "CH2:%s %s",
-                     vdiv_table[ss->ch2.vdiv_idx].label,
-                     coupling_labels[ss->ch2.coupling]);
+                     vdiv2, coupling_labels[ss->ch2.coupling]);
             font_draw_string(215, LCD_HEIGHT - 14, buf,
                              ss->ch2.enabled ? th->ch2 : th->text_secondary,
                              ib, &font_small);

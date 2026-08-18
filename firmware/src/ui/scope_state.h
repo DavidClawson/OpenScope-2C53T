@@ -62,7 +62,9 @@ typedef enum {
 /* Per-channel configuration */
 typedef struct {
     bool            enabled;
-    uint8_t         vdiv_idx;       /* Index into vdiv_table[] */
+    uint8_t         vdiv_idx;       /* Frontend range index, 0..VDIV_COUNT-1.
+                                     * Written straight to the attenuator bank;
+                                     * calibrated in scope_cal.c. */
     coupling_t      coupling;
     probe_t         probe;
     bool            bw_limit;       /* 20MHz bandwidth limit */
@@ -138,17 +140,14 @@ typedef struct {
  * Lookup tables (defined in scope_state.c)
  * ═══════════════════════════════════════════════════════════════════ */
 
-typedef struct {
-    const char *label;      /* Display string: "5mV", "10mV", ..., "10V" */
-    uint32_t    uv_per_div; /* Microvolts per division (for computation) */
-} vdiv_entry_t;
+/* vdiv_entry_t / vdiv_table removed 2026-08-18 — volts/div is measured, not
+ * nominal. See scope_cal.h and the note in scope_state.c. */
 
 typedef struct {
     const char *label;      /* Display string: "5ns", "10ns", ..., "50s" */
     uint32_t    ns_per_div; /* Nanoseconds per division (for computation) */
 } timebase_entry_t;
 
-extern const vdiv_entry_t     vdiv_table[VDIV_COUNT];
 extern const timebase_entry_t timebase_table[TIMEBASE_COUNT];
 
 extern const char *coupling_labels[COUPLING_COUNT];

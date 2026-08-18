@@ -43,6 +43,7 @@ C_SOURCES += src/ui/bode_ui.c
 C_SOURCES += src/ui/fuse_ui.c
 C_SOURCES += src/ui/scope_state.c
 C_SOURCES += src/ui/scope_measure.c
+C_SOURCES += src/ui/scope_cal.c
 C_SOURCES += src/tasks/input_handler.c
 C_SOURCES += src/tasks/measurement.c
 C_SOURCES += src/drivers/flash_fs.c
@@ -480,6 +481,18 @@ $(BUILD_DIR)/test_scope_measure: tests/test_scope_measure.c src/ui/scope_measure
 test-scope-measure: $(BUILD_DIR)/test_scope_measure
 	$<
 
+$(BUILD_DIR)/test_scope_cal: tests/test_scope_cal.c src/ui/scope_cal.c src/ui/scope_cal.h | $(BUILD_DIR)
+	$(HOST_CC) -std=gnu11 -Wall -Wextra -Isrc/ui $< src/ui/scope_cal.c -lm -o $@
+
+# Per-channel, per-range vertical calibration. Tests the PROPERTIES that stop
+# this table failing the way its two hardcoded predecessors did: uncalibrated
+# ranges must return exactly zero, out-of-domain channels must refuse rather
+# than clamp, the source-scale factor must reach every row uniformly (so one
+# calibrated measurement can rescale the instrument), and the MEASURED tier's
+# agreement/doubling claims must actually hold.
+test-scope-cal: $(BUILD_DIR)/test_scope_cal
+	$<
+
 # Settings persistence: config.c + settings_store.c against a NOR flash model
 # (erase sets 0xFF, program only clears bits, page programs cannot cross a page).
 # Proves the round trip, the fallbacks (first boot / torn record / bad checksum /
@@ -510,7 +523,7 @@ $(BUILD_DIR)/test_redraw_gate: tests/test_redraw_gate.c src/ui/redraw_gate.h | $
 test-redraw-gate: $(BUILD_DIR)/test_redraw_gate
 	$<
 
-.PHONY: all clean disasm size renode soak-test soak-quick flash flash-dfu bootloader flash-bootloader flash-all guest guest-warmtest guest-usart-silent emu test-meter-data test-meter-auto test-meter-voltage-wave test-fpga-meter-plan test-stock-meter-literals test-meter test-scope-measure test-redraw-gate test-config-persist guest-persist guest-caldump guest-coldtrace-slow guest-coldtrace-la guest-debugclk fpga-alt-header
+.PHONY: all clean disasm size renode soak-test soak-quick flash flash-dfu bootloader flash-bootloader flash-all guest guest-warmtest guest-usart-silent emu test-meter-data test-meter-auto test-meter-voltage-wave test-fpga-meter-plan test-stock-meter-literals test-meter test-scope-measure test-scope-cal test-redraw-gate test-config-persist guest-persist guest-caldump guest-coldtrace-slow guest-coldtrace-la guest-debugclk fpga-alt-header
 
 # ═══════════════════════════════════════════════════════════════════════════
 # BENCH / EXPERIMENT IMAGE INDEX                          (index added 2026-08-13)

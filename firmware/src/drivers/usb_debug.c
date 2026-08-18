@@ -43,6 +43,7 @@
 #include "meter_data.h"
 #include "ui.h"
 #include "../ui/scope_state.h"
+#include "../ui/scope_cal.h"
 #include "../ui/meter_voltage_wave.h"
 
 #include "fpga_cal_table.h"
@@ -620,6 +621,7 @@ static void cmd_help(void)
         "fpga wire scope [ch1|ch2|both] Wire-word entry + runtime scope blocks\r\n"
         "fpga scope range <0-9> <1|2|both>  Coarse frontend range; channel is MANDATORY\r\n"
         "fpga scope center [ch2] [0-9]   Auto-center offset ref per range (CH1/DAC1 default); all if omitted\r\n"
+        "fpga scope cal                  Dump the compiled vertical cal table (mV/count, V/div, tier)\r\n"
         "fpga usart [on|off]             Bring USART2 up post-config; show CTRL1+RX\r\n"
         "fpga rearm [on|off]             Stock post-read re-arm (reg01) A/B toggle\r\n"
         "fpga rate [hexidx]              reg-0x01 rate index the re-arm rewrites\r\n"
@@ -2480,6 +2482,49 @@ static void scope_center_one(uint8_t ch, uint16_t *out_dac, uint32_t *out_mean)
     }
     *out_dac = best_dac;
     *out_mean = best_mean;
+}
+
+/* `fpga scope cal` — print what the firmware believes about vertical scale.
+ *
+ * This exists so the number on the screen can be checked against the number
+ * in the source without a rebuild, and so a bench session can see at a glance
+ * which ranges are cross-validated and which are only provisional. It reads
+ * the table; it cannot change it. Recalibration is a source edit plus a
+ * rebuild, deliberately, because a runtime-adjustable gain that nobody
+ * records is how an instrument ends up lying with confidence.
+ */
+static void cmd_fpga_scope_cal(void)
+{
+    usb_send_str("vertical cal (bench unit #1, EXP-08 2026-08-17)\r\n");
+    usb_debug_printf("source scale %d.%03d  counts/div %d\r\n",
+                     (int)SCOPE_CAL_SOURCE_SCALE,
+                     (int)((SCOPE_CAL_SOURCE_SCALE - (int)SCOPE_CAL_SOURCE_SCALE)
+                           * 1000.0f + 0.5f),
+                     (int)SCOPE_CAL_COUNTS_PER_DIV);
+    usb_send_str("rng  CH1 uV/ct  CH1 V/div  CH2 uV/ct  CH2 V/div  tier\r\n");
+
+    for (uint8_t r = 0; r < SCOPE_CAL_RANGE_COUNT; r++) {
+        char l1[12], l2[12];
+        scope_cal_range_label(1u, r, l1, sizeof(l1));
+        scope_cal_range_label(2u, r, l2, sizeof(l2));
+
+        const scope_cal_tier_t t = scope_cal_get_tier(1u, r);
+        const char *tn = (t == SCOPE_CAL_MEASURED)    ? "measured"
+                       : (t == SCOPE_CAL_PROVISIONAL) ? "provisional"
+                                                      : "none (rails)";
+
+        /* Microvolts per count keeps this integer-only — the shell printf is
+         * not guaranteed to carry %f on every build. */
+        usb_debug_printf("%2u  %9lu  %9s  %9lu  %9s  %s\r\n",
+                         (unsigned)r,
+                         (unsigned long)(scope_cal_mv_per_count(1u, r) * 1000.0f + 0.5f),
+                         l1,
+                         (unsigned long)(scope_cal_mv_per_count(2u, r) * 1000.0f + 0.5f),
+                         l2,
+                         tn);
+    }
+
+    usb_send_str("volts are trustworthy; the time axis is NOT (EXP-08 s6)\r\n");
 }
 
 /* `fpga scope center [ch1|ch2] [0-9]` — auto-center the channel's vertical-
@@ -6209,6 +6254,8 @@ static void dispatch_command(char *line)
         cmd_fpga_wire_scope(line[15] == ' ' ? line + 16 : "");
     } else if (strncmp(line, "fpga scope range ", 17) == 0) {
         cmd_fpga_scope_range(line + 17);
+    } else if (strcmp(line, "fpga scope cal") == 0) {
+        cmd_fpga_scope_cal();
     } else if (strncmp(line, "fpga scope center", 17) == 0) {
         cmd_fpga_scope_center(line[17] == ' ' ? line + 18 : "");
     } else if (strncmp(line, "fpga usart", 10) == 0) {

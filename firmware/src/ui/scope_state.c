@@ -8,18 +8,20 @@
  * Lookup tables
  * ═══════════════════════════════════════════════════════════════════ */
 
-const vdiv_entry_t vdiv_table[VDIV_COUNT] = {
-    { "5mV",   5000 },
-    { "10mV",  10000 },
-    { "20mV",  20000 },
-    { "50mV",  50000 },
-    { "100mV", 100000 },
-    { "200mV", 200000 },
-    { "500mV", 500000 },
-    { "1V",    1000000 },
-    { "2V",    2000000 },
-    { "5V",    5000000 },
-};
+/*
+ * REMOVED 2026-08-18 — the nominal vdiv_table ("5mV", "10mV" ... "5V").
+ *
+ * Nothing ever derived those labels from a measurement, and the 2026-08-17
+ * bench sweep showed they were 2.7x-3.5x out on the three ranges we have
+ * cross-validated: the range labelled "2V" ruled a 2.8 V division. They are
+ * deleted rather than left unused because an unused table of plausible
+ * numbers is an invitation to wire it back up.
+ *
+ * Volts/div now comes from scope_cal.c, per channel as well as per range,
+ * derived as (measured mV/count) x (the renderer's counts per division).
+ * VDIV_COUNT survives as the range-index count and is still the bound on
+ * ch->vdiv_idx.
+ */
 
 const timebase_entry_t timebase_table[TIMEBASE_COUNT] = {
     { "5ns",   5 },
