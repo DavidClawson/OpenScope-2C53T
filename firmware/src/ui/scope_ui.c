@@ -319,6 +319,7 @@ static void fmt_tenths(char *b, size_t n, float v, const char *unit)
  * Frequency with automatic Hz/kHz/MHz ranging, integer math only.
  * Same constraint as fmt_volts: newlib-nano's "%f" prints nothing.
  */
+__attribute__((unused))
 static void fmt_hz(char *b, size_t n, float hz)
 {
     if (hz < 0.0f) hz = 0.0f;
@@ -337,6 +338,7 @@ static void fmt_hz(char *b, size_t n, float hz)
 /*
  * A duration in seconds, ranged us/ms/s. Integer math, as above.
  */
+__attribute__((unused))
 static void fmt_seconds(char *b, size_t n, float s)
 {
     if (s < 0.0f) s = 0.0f;
@@ -461,24 +463,25 @@ static void draw_measurement_badges(const scope_state_t *ss, const theme_t *th)
     uint16_t y1 = BADGE_ROW_Y;
 
     /*
-     * Hz, on the timebase codes that have a measured sample rate:
-     * Freq = fs / period_samples, both sides measured. Where the code has no
-     * rate this stays blank rather than estimated — see scope_timebase.h, and
-     * note that THREE different rates were published for code 0x08 before it
-     * turned out to have none at all.
+     * Freq stays BLANK, and the reason is no longer "no timebase".
+     *
+     * The sample rate now exists and is trustworthy (scope_timebase.c, R^2
+     * 0.98-0.999, fold-checked). Freq = fs / period_samples was wired up on
+     * 2026-08-18 and then removed the same evening, because the other factor
+     * is not good enough: scope_measure's rising-crossing period estimator
+     * finds spurious crossings, and the resulting frequency measured
+     * +1.6% to +112% high against a known drive (EXP-13). The error grows as
+     * the record holds fewer cycles, and it is much worse at codes 0x0F/0x0E
+     * than at 0x10 even at comparable cycle counts — so no simple cycle-count
+     * gate rescues it either.
+     *
+     * A frequency badge that is 40% out is precisely the "confident wrong
+     * number" this file's history is a catalogue of. It goes back on when the
+     * period estimator is fixed — most likely by taking the frequency from a
+     * spectral peak search instead of edge counting, which is how the sample
+     * rate itself was measured to 0.1%.
      */
-    if (have1 && m1.period_valid) {
-        const float hz = scope_timebase_hz_from_period(ss->timebase_idx,
-                                                       m1.period_samples);
-        if (hz > 0.0f) {
-            fmt_hz(buf, sizeof(buf), hz);
-            draw_one_badge(x, y1, "Freq", buf, th->ch1, th);
-        } else {
-            draw_one_badge(x, y1, "Freq", MEAS_NA, na, th);
-        }
-    } else {
-        draw_one_badge(x, y1, "Freq", MEAS_NA, na, th);
-    }
+    draw_one_badge(x, y1, "Freq", MEAS_NA, na, th);
     x += BADGE_W + 2;
 
     /* Calibrated ranges show volts; all others fall back to ADC counts. */
@@ -516,15 +519,15 @@ static void draw_measurement_badges(const scope_state_t *ss, const theme_t *th)
     uint16_t y2 = BADGE_ROW2_Y;
 
     if (have1 && m1.period_valid) {
-        /* Seconds where the rate is known, honest SAMPLES otherwise — the same
-         * contract the volts badges use for ADC counts. */
-        const float sps = scope_timebase_seconds_per_sample(ss->timebase_idx);
-        if (sps > 0.0f) {
-            fmt_seconds(buf, sizeof(buf), m1.period_samples * sps);
-        } else {
-            snprintf(buf, sizeof(buf), "%usmp",
-                     (unsigned)(m1.period_samples + 0.5f));
-        }
+        /*
+         * SAMPLES, not seconds — same reason as Freq above. The conversion is
+         * one multiply by scope_timebase_seconds_per_sample() and the rate is
+         * sound; it is period_samples itself that is 5-50% out (EXP-13).
+         * Quoting it in samples keeps it an honest count of what the estimator
+         * actually did, rather than dressing a bad number in real units.
+         */
+        snprintf(buf, sizeof(buf), "%usmp",
+                 (unsigned)(m1.period_samples + 0.5f));
         draw_one_badge(x, y2, "Per", buf, th->ch1, th);
     } else {
         draw_one_badge(x, y2, "Per", MEAS_NA, na, th);
