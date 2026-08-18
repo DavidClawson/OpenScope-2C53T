@@ -44,6 +44,7 @@
 #include "ui.h"
 #include "../ui/scope_state.h"
 #include "../ui/scope_cal.h"
+#include "../ui/scope_timebase.h"
 #include "../ui/meter_voltage_wave.h"
 
 #include "fpga_cal_table.h"
@@ -2524,7 +2525,23 @@ static void cmd_fpga_scope_cal(void)
                          tn);
     }
 
-    usb_send_str("volts are trustworthy; the time axis is NOT (EXP-08 s6)\r\n");
+    usb_send_str("\r\ntimebase (reg 0x01) -> sample rate\r\n");
+    usb_send_str("code    S/s    s/div   tier\r\n");
+    for (uint8_t c = 0; c < SCOPE_TIMEBASE_CODE_COUNT; c++) {
+        const float fs = scope_timebase_sample_rate(c);
+        if (fs <= 0.0f)
+            continue;                      /* skip the many unmeasured codes */
+        char lbl[12];
+        scope_timebase_label(c, lbl, sizeof(lbl));
+        const scope_tb_tier_t t = scope_timebase_get_tier(c);
+        usb_debug_printf("0x%02X  %7lu  %7s  %s\r\n",
+                         (unsigned)c, (unsigned long)(fs + 0.5f), lbl,
+                         (t == SCOPE_TB_MEASURED) ? "measured" : "provisional");
+    }
+    usb_send_str("codes not listed have no trustworthy rate: 0x08 is "
+                 "INCOHERENT (measured, reads do not reproduce);\r\n"
+                 "0x0A-0x0C need a faster source than ours; the rest were "
+                 "never measured. See scope_timebase.h\r\n");
 }
 
 /* `fpga scope center [ch1|ch2] [0-9]` — auto-center the channel's vertical-

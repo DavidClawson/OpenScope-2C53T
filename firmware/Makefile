@@ -44,6 +44,7 @@ C_SOURCES += src/ui/fuse_ui.c
 C_SOURCES += src/ui/scope_state.c
 C_SOURCES += src/ui/scope_measure.c
 C_SOURCES += src/ui/scope_cal.c
+C_SOURCES += src/ui/scope_timebase.c
 C_SOURCES += src/tasks/input_handler.c
 C_SOURCES += src/tasks/measurement.c
 C_SOURCES += src/drivers/flash_fs.c
@@ -493,6 +494,16 @@ $(BUILD_DIR)/test_scope_cal: tests/test_scope_cal.c src/ui/scope_cal.c src/ui/sc
 test-scope-cal: $(BUILD_DIR)/test_scope_cal
 	$<
 
+$(BUILD_DIR)/test_scope_timebase: tests/test_scope_timebase.c src/ui/scope_timebase.c src/ui/scope_timebase.h | $(BUILD_DIR)
+	$(HOST_CC) -std=gnu11 -Wall -Wextra -Isrc/ui $< src/ui/scope_timebase.c -lm -o $@
+
+# Horizontal calibration. Guards the same failure shape as the vertical table,
+# plus one specific to this axis: code 0x08 has had THREE published sample
+# rates and all three were fitted to an incoherent record, so the test fails
+# the build if any of them is re-entered.
+test-scope-timebase: $(BUILD_DIR)/test_scope_timebase
+	$<
+
 # Settings persistence: config.c + settings_store.c against a NOR flash model
 # (erase sets 0xFF, program only clears bits, page programs cannot cross a page).
 # Proves the round trip, the fallbacks (first boot / torn record / bad checksum /
@@ -501,11 +512,12 @@ test-scope-cal: $(BUILD_DIR)/test_scope_cal
 $(BUILD_DIR)/test_config_persist: tests/test_config_persist.c src/util/config.c src/util/config.h \
                                   src/util/settings_store.c src/util/settings_store.h \
                                   src/drivers/flash_regions.c src/drivers/flash_regions.h \
-                                  src/ui/theme.c src/ui/scope_state.c | $(BUILD_DIR)
+                                  src/ui/theme.c src/ui/scope_state.c \
+                                  src/ui/scope_cal.c src/ui/scope_timebase.c | $(BUILD_DIR)
 	$(HOST_CC) -std=c11 -Wall -Wextra -Werror -O1 -DSETTINGS_PERSIST_WRITES=1 \
 		-Isrc/util -Isrc/drivers -Isrc/ui -Isrc/dsp \
 		$< src/util/config.c src/util/settings_store.c src/drivers/flash_regions.c \
-		src/ui/theme.c src/ui/scope_state.c -o $@
+		src/ui/theme.c src/ui/scope_state.c src/ui/scope_cal.c src/ui/scope_timebase.c -o $@
 
 test-config-persist: $(BUILD_DIR)/test_config_persist
 	$<
@@ -523,7 +535,7 @@ $(BUILD_DIR)/test_redraw_gate: tests/test_redraw_gate.c src/ui/redraw_gate.h | $
 test-redraw-gate: $(BUILD_DIR)/test_redraw_gate
 	$<
 
-.PHONY: all clean disasm size renode soak-test soak-quick flash flash-dfu bootloader flash-bootloader flash-all guest guest-warmtest guest-usart-silent emu test-meter-data test-meter-auto test-meter-voltage-wave test-fpga-meter-plan test-stock-meter-literals test-meter test-scope-measure test-scope-cal test-redraw-gate test-config-persist guest-persist guest-caldump guest-coldtrace-slow guest-coldtrace-la guest-debugclk fpga-alt-header
+.PHONY: all clean disasm size renode soak-test soak-quick flash flash-dfu bootloader flash-bootloader flash-all guest guest-warmtest guest-usart-silent emu test-meter-data test-meter-auto test-meter-voltage-wave test-fpga-meter-plan test-stock-meter-literals test-meter test-scope-measure test-scope-cal test-scope-timebase test-redraw-gate test-config-persist guest-persist guest-caldump guest-coldtrace-slow guest-coldtrace-la guest-debugclk fpga-alt-header
 
 # ═══════════════════════════════════════════════════════════════════════════
 # BENCH / EXPERIMENT IMAGE INDEX                          (index added 2026-08-13)

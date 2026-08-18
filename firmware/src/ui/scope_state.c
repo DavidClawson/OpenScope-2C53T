@@ -23,29 +23,23 @@
  * ch->vdiv_idx.
  */
 
-const timebase_entry_t timebase_table[TIMEBASE_COUNT] = {
-    { "5ns",   5 },
-    { "10ns",  10 },
-    { "20ns",  20 },
-    { "50ns",  50 },
-    { "100ns", 100 },
-    { "200ns", 200 },
-    { "500ns", 500 },
-    { "1us",   1000 },
-    { "2us",   2000 },
-    { "5us",   5000 },
-    { "10us",  10000 },
-    { "20us",  20000 },
-    { "50us",  50000 },
-    { "100us", 100000 },
-    { "200us", 200000 },
-    { "500us", 500000 },
-    { "1ms",   1000000 },
-    { "2ms",   2000000 },
-    { "5ms",   5000000 },
-    { "10ms",  10000000 },
-    { "20ms",  20000000 },
-};
+/*
+ * REMOVED 2026-08-18 — the nominal timebase_table ("5ns" ... "20ms").
+ *
+ * Unlike vdiv_table, this one was NOT invented: on every code we have
+ * measured its labels are a CONSTANT 2.12-2.15x away from what our grid
+ * means, and at 16 samples per division they land within 6-8%. That is the
+ * signature of a real table belonging to a design that draws 16 samples per
+ * division, where ours draws 32. So it was right about the hardware and wrong
+ * about this renderer.
+ *
+ * It is removed rather than kept because a label that does not match the grid
+ * in front of it is the same defect either way, and an unused table of
+ * plausible numbers is an invitation to wire it back up. Time/div now comes
+ * from scope_timebase.c, derived as (samples per division) / (measured sample
+ * rate). TIMEBASE_COUNT survives as the code count and the bound on
+ * timebase_idx.
+ */
 
 const char *coupling_labels[COUPLING_COUNT] = { "DC", "AC", "GND" };
 const char *probe_labels[PROBE_COUNT] = { "1X", "10X" };

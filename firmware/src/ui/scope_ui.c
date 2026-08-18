@@ -17,6 +17,7 @@
 #include "scope_state.h"
 #include "scope_measure.h"
 #include "scope_cal.h"
+#include "scope_timebase.h"
 #include "math_channel.h"
 #include "persistence.h"
 #include "fpga.h"
@@ -315,6 +316,42 @@ static void fmt_tenths(char *b, size_t n, float v, const char *unit)
 }
 
 /*
+ * Frequency with automatic Hz/kHz/MHz ranging, integer math only.
+ * Same constraint as fmt_volts: newlib-nano's "%f" prints nothing.
+ */
+static void fmt_hz(char *b, size_t n, float hz)
+{
+    if (hz < 0.0f) hz = 0.0f;
+    if (hz < 1000.0f) {
+        const unsigned tenths = (unsigned)(hz * 10.0f + 0.5f);
+        snprintf(b, n, "%u.%uHz", tenths / 10u, tenths % 10u);
+    } else if (hz < 1000000.0f) {
+        const unsigned hundredths = (unsigned)(hz / 10.0f + 0.5f);
+        snprintf(b, n, "%u.%02ukHz", hundredths / 100u, hundredths % 100u);
+    } else {
+        const unsigned hundredths = (unsigned)(hz / 10000.0f + 0.5f);
+        snprintf(b, n, "%u.%02uMHz", hundredths / 100u, hundredths % 100u);
+    }
+}
+
+/*
+ * A duration in seconds, ranged us/ms/s. Integer math, as above.
+ */
+static void fmt_seconds(char *b, size_t n, float s)
+{
+    if (s < 0.0f) s = 0.0f;
+    if (s < 1e-3f) {
+        snprintf(b, n, "%uus", (unsigned)(s * 1e6f + 0.5f));
+    } else if (s < 1.0f) {
+        const unsigned hundredths_ms = (unsigned)(s * 1e5f + 0.5f);
+        snprintf(b, n, "%u.%02ums", hundredths_ms / 100u, hundredths_ms % 100u);
+    } else {
+        const unsigned hundredths = (unsigned)(s * 100.0f + 0.5f);
+        snprintf(b, n, "%u.%02us", hundredths / 100u, hundredths % 100u);
+    }
+}
+
+/*
  * Format a voltage with automatic mV/V ranging, integer math only (same
  * reason as fmt_tenths: newlib-nano's "%f" prints nothing). Sub-volt values
  * read as whole millivolts ("154mV"); at/above 1 V, two decimals ("1.66V").
@@ -358,6 +395,14 @@ _Static_assert((26 * 256 + SCOPE_H / 2) / SCOPE_H == (int)SCOPE_CAL_COUNTS_PER_D
  * the UI's range count are the same quantity counted twice. */
 _Static_assert(SCOPE_CAL_RANGE_COUNT == VDIV_COUNT,
                "scope_cal range table length must match VDIV_COUNT");
+
+/* The horizontal counterpart: one sample per screen column, vertical grid
+ * every 32 px, so a division is 32 samples. If either changes, the seconds/div
+ * label and every frequency silently start meaning something else. */
+_Static_assert(SCOPE_TIMEBASE_SAMPLES_PER_DIV == 32.0f,
+               "grid pitch no longer matches SCOPE_TIMEBASE_SAMPLES_PER_DIV");
+_Static_assert(SCOPE_TIMEBASE_CODE_COUNT == TIMEBASE_COUNT,
+               "timebase rate table length must match TIMEBASE_COUNT");
 
 /*
  * Measurement badges.
@@ -415,8 +460,25 @@ static void draw_measurement_badges(const scope_state_t *ss, const theme_t *th)
     uint16_t x = 2;
     uint16_t y1 = BADGE_ROW_Y;
 
-    /* No timebase => no Hz. Deliberately blank, not estimated. */
-    draw_one_badge(x, y1, "Freq", MEAS_NA, na, th);
+    /*
+     * Hz, on the timebase codes that have a measured sample rate:
+     * Freq = fs / period_samples, both sides measured. Where the code has no
+     * rate this stays blank rather than estimated — see scope_timebase.h, and
+     * note that THREE different rates were published for code 0x08 before it
+     * turned out to have none at all.
+     */
+    if (have1 && m1.period_valid) {
+        const float hz = scope_timebase_hz_from_period(ss->timebase_idx,
+                                                       m1.period_samples);
+        if (hz > 0.0f) {
+            fmt_hz(buf, sizeof(buf), hz);
+            draw_one_badge(x, y1, "Freq", buf, th->ch1, th);
+        } else {
+            draw_one_badge(x, y1, "Freq", MEAS_NA, na, th);
+        }
+    } else {
+        draw_one_badge(x, y1, "Freq", MEAS_NA, na, th);
+    }
     x += BADGE_W + 2;
 
     /* Calibrated ranges show volts; all others fall back to ADC counts. */
@@ -454,8 +516,15 @@ static void draw_measurement_badges(const scope_state_t *ss, const theme_t *th)
     uint16_t y2 = BADGE_ROW2_Y;
 
     if (have1 && m1.period_valid) {
-        snprintf(buf, sizeof(buf), "%usmp",
-                 (unsigned)(m1.period_samples + 0.5f));
+        /* Seconds where the rate is known, honest SAMPLES otherwise — the same
+         * contract the volts badges use for ADC counts. */
+        const float sps = scope_timebase_seconds_per_sample(ss->timebase_idx);
+        if (sps > 0.0f) {
+            fmt_seconds(buf, sizeof(buf), m1.period_samples * sps);
+        } else {
+            snprintf(buf, sizeof(buf), "%usmp",
+                     (unsigned)(m1.period_samples + 0.5f));
+        }
         draw_one_badge(x, y2, "Per", buf, th->ch1, th);
     } else {
         draw_one_badge(x, y2, "Per", MEAS_NA, na, th);

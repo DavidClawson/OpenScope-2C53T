@@ -8,6 +8,7 @@
 #include "theme.h"
 #include "scope_state.h"
 #include "scope_cal.h"
+#include "scope_timebase.h"
 #include "battery.h"
 #include "at32f403a_407.h"
 #include <stdio.h>
@@ -137,9 +138,16 @@ void draw_info_bar(void)
                              trigger_mode_labels[ss->trigger.mode],
                              th->success, ib, &font_small);
 
-            /* Timebase */
-            snprintf(buf, sizeof(buf), "H=%s",
-                     timebase_table[ss->timebase_idx].label);
+            /*
+             * Timebase, DERIVED from the measured sample rate and this
+             * renderer's 32 samples per division — not read out of
+             * timebase_table. Those nominal labels are a constant 2.12-2.15x
+             * away from what our grid means on every code we have measured.
+             * Codes with no measured rate read "--".
+             */
+            char tb[12];
+            scope_timebase_label(ss->timebase_idx, tb, sizeof(tb));
+            snprintf(buf, sizeof(buf), "H=%s", tb);
             font_draw_string(155, LCD_HEIGHT - 14, buf,
                              th->text_primary, ib, &font_small);
 

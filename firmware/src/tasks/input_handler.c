@@ -18,6 +18,7 @@
 #include "font.h"
 #include "scope_state.h"
 #include "scope_cal.h"
+#include "../ui/scope_timebase.h"
 #include "signal_gen.h"
 #include "theme.h"
 #include "math_channel.h"
@@ -655,8 +656,11 @@ uint8_t input_handle_button(button_id_t button, QueueHandle_t dq)
         }
         else if (current_mode == MODE_OSCILLOSCOPE) {
             scope_adjust_timebase(ss, -1);
-            snprintf(pb, sizeof(pb), "H=%s/div",
-                     timebase_table[ss->timebase_idx].label);
+            /* Same derived label the status bar shows — see
+             * scope_timebase.h. One time/div string in the system. */
+            char tb[12];
+            scope_timebase_label(ss->timebase_idx, tb, sizeof(tb));
+            snprintf(pb, sizeof(pb), "H=%s/div", tb);
             popup_and_redraw(dq, pb);
         }
         break;
@@ -713,8 +717,11 @@ uint8_t input_handle_button(button_id_t button, QueueHandle_t dq)
         }
         else if (current_mode == MODE_OSCILLOSCOPE) {
             scope_adjust_timebase(ss, 1);
-            snprintf(pb, sizeof(pb), "H=%s/div",
-                     timebase_table[ss->timebase_idx].label);
+            /* Same derived label the status bar shows — see
+             * scope_timebase.h. One time/div string in the system. */
+            char tb[12];
+            scope_timebase_label(ss->timebase_idx, tb, sizeof(tb));
+            snprintf(pb, sizeof(pb), "H=%s/div", tb);
             popup_and_redraw(dq, pb);
         }
         break;

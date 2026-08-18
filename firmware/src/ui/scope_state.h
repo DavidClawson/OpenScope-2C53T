@@ -131,7 +131,9 @@ typedef struct {
     channel_state_t ch1;
     channel_state_t ch2;
     trigger_state_t trigger;
-    uint8_t         timebase_idx;   /* Index into timebase_table[] */
+    uint8_t         timebase_idx;   /* SPI reg 0x01 timebase code, written
+                                     * straight to the FPGA; calibrated in
+                                     * scope_timebase.c. */
     bool            running;        /* Acquisition running/stopped */
     cursor_state_t  cursor;         /* Cursor measurement state */
 } scope_state_t;
@@ -143,12 +145,9 @@ typedef struct {
 /* vdiv_entry_t / vdiv_table removed 2026-08-18 — volts/div is measured, not
  * nominal. See scope_cal.h and the note in scope_state.c. */
 
-typedef struct {
-    const char *label;      /* Display string: "5ns", "10ns", ..., "50s" */
-    uint32_t    ns_per_div; /* Nanoseconds per division (for computation) */
-} timebase_entry_t;
+/* timebase_entry_t / timebase_table removed 2026-08-18 — time/div is derived
+ * from the measured sample rate. See scope_timebase.h and scope_state.c. */
 
-extern const timebase_entry_t timebase_table[TIMEBASE_COUNT];
 
 extern const char *coupling_labels[COUPLING_COUNT];
 extern const char *probe_labels[PROBE_COUNT];

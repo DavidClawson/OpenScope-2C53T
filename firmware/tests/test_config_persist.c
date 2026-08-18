@@ -37,6 +37,8 @@
 #include "config.h"
 #include "settings_store.h"
 #include "flash_regions.h"
+#include "scope_cal.h"
+#include "scope_timebase.h"
 #include "theme.h"
 #include "scope_state.h"
 #include "math_channel.h"
@@ -887,9 +889,34 @@ static void test_corrupt_record_cannot_produce_an_out_of_range_index(void)
     CHECK(ss->trigger.level <= 103 && ss->trigger.level >= -103,
           "trigger level %d not clamped", ss->trigger.level);
 
-    /* The tables really are indexable with what came out. */
-    CHECK(vdiv_table[ss->ch1.vdiv_idx].label != NULL, "vdiv table entry is bogus");
-    CHECK(timebase_table[ss->timebase_idx].label != NULL, "timebase table entry is bogus");
+    /*
+     * A restored index is usable by whatever consumes it.
+     *
+     * This used to index vdiv_table / timebase_table, both of which were
+     * removed on 2026-08-18 when volts/div and time/div became derived from
+     * bench measurements rather than nominal strings. The intent is unchanged
+     * — the consumers are. Both label calls must produce a NUL-terminated
+     * string for any index the store can hand back, including the ranges and
+     * codes that have no calibration (those legitimately return "--").
+     */
+    char lbl[16];
+    memset(lbl, 0x7F, sizeof(lbl));
+    scope_cal_range_label(1u, ss->ch1.vdiv_idx, lbl, sizeof(lbl));
+    CHECK(memchr(lbl, '\0', sizeof(lbl)) != NULL,
+          "restored ch1 vdiv index %u produced an unterminated label",
+          ss->ch1.vdiv_idx);
+
+    memset(lbl, 0x7F, sizeof(lbl));
+    scope_cal_range_label(2u, ss->ch2.vdiv_idx, lbl, sizeof(lbl));
+    CHECK(memchr(lbl, '\0', sizeof(lbl)) != NULL,
+          "restored ch2 vdiv index %u produced an unterminated label",
+          ss->ch2.vdiv_idx);
+
+    memset(lbl, 0x7F, sizeof(lbl));
+    scope_timebase_label(ss->timebase_idx, lbl, sizeof(lbl));
+    CHECK(memchr(lbl, '\0', sizeof(lbl)) != NULL,
+          "restored timebase code %u produced an unterminated label",
+          ss->timebase_idx);
 }
 
 /* If the settings region cannot be written — not blank, flash failing, table
