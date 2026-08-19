@@ -56,6 +56,7 @@ measurement worth trusting is one that can be re-run.
 USAGE
     python3 scripts/measure_sample_rate.py
 """
+import statistics
 import sys, time
 sys.path.insert(0, "/home/david/osc/scripts")
 import numpy as np
@@ -67,6 +68,32 @@ AMP = 2000
 
 sc = Scope()
 sg = Siggen()
+
+# ── the source must be told to deliver what it is asked for ──────────────
+#
+# Until 2026-08-19 this script fitted against the COMMANDED frequency while
+# the generator delivered 0.8250x that, so every rate it produced was 1.212x
+# too high -- including the 14,853 S/s published for code 0x10.
+#
+# Two things have to be right, and the second one bit on the first attempt:
+#   1. the generator must divide by its MEASURED loop rate, not by FS=40000;
+#   2. that rate must be measured in the SAME CHANNEL CONFIGURATION the sweep
+#      runs in.  Each channel in a waveform mode costs ~300 Hz of loop rate,
+#      so measuring with CH2 parked and then sweeping with it live (or the
+#      reverse) builds in a 0.9% error -- which is larger than the gap we are
+#      trying to resolve against Stlkv's rig.
+#
+# So: park CH2 and put CH1 in the mode the sweep uses FIRST, then measure.
+sg.off(2)
+sg.sine(1000, ch=1)
+_fs_hz, _fs_ratio = sg.fs(window=8.0)
+_div = sg.use_measured_fs(True, window=0.0)
+print(f"source: CH1 sine + CH2 parked -> DDS loop {_fs_hz:.1f} Hz "
+      f"({_fs_ratio:.4f} x nominal); set_freq divides by {_div:.1f}", flush=True)
+if not 0.5 < _fs_ratio < 1.05:
+    raise SystemExit("source rate ratio %.4f is not credible — stop and look"
+                     % _fs_ratio)
+
 print("build:", sc.version().strip().replace("\r\n", " | "), flush=True)
 
 sc.scope_range(RANGE, 1)
@@ -181,6 +208,14 @@ for code in (0x0F, 0x0E, 0x0D, 0x0C, 0x0B, 0x0A):
     time.sleep(SETTLE)
     print(f"  reg 0x01 = 0x{code:02X}", flush=True)
     fit([500, 1000, 2000, 3500, 4500], read_acq, f"  0x{code:02X} acq")
+
+# ── closing control: did the source hold its rate for the whole run? ─────
+sg.sine(1000, ch=1)
+_fs_end, _r_end = sg.fs(window=8.0)
+_drift = abs(_fs_end - _fs_hz) / _fs_hz
+print(f"\nsource at end: {_fs_end:.1f} Hz ({_r_end:.4f}) — drift {_drift*100:.2f}%  "
+      f"{'PASS' if _drift < 0.002 else 'FAIL — rates above are not traceable'}",
+      flush=True)
 
 sg.off(1)
 sc.timebase(0x10)

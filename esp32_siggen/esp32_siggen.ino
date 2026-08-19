@@ -38,6 +38,34 @@ volatile uint8_t  g_mid  [2] = { 128, 128 };      // center (~1.65 V)
 volatile uint8_t  g_duty [2] = { 128, 128 };      // square threshold (0..255)
 volatile uint8_t  g_dc   [2] = { 128, 128 };
 volatile int      g_deg  [2] = { 0, 0 };        // phase offset vs CH1, degrees
+volatile float    g_hz   [2] = { 0.0f, 0.0f };    // COMMANDED frequency, as asked for
+
+/*
+ * ---- achieved sample rate ------------------------------------------------
+ *
+ * FS above is an ASSUMPTION, not a measurement, and the loop below cannot
+ * actually hold it: it schedules the next sample as `now + 25us` AFTER the
+ * work has already been done, so the period is 25us plus however long two
+ * dacWrite() calls and a serial poll take.  The error does not average out.
+ *
+ * That matters far beyond this sketch.  Every frequency this generator has
+ * ever produced was reported to the rest of the project as the COMMANDED
+ * value, and every sample rate we have published for the 2C53T was fitted
+ * against those commanded values.  If the achieved rate is not 40 kHz, every
+ * one of those numbers carries the same multiplicative error.
+ *
+ * So: count samples, and let the ESP32's own crystal-derived micros() say
+ * what the rate really is.  `fs` reports it.  `usefs 1` makes set_freq use
+ * the measured rate so commanded and delivered agree.
+ *
+ * DEFAULT IS OFF.  Booting with usefs=0 keeps this instrument bit-identical
+ * to the one that took every previous measurement, so flashing this image
+ * does not silently invalidate the archive.
+ */
+volatile uint32_t g_nsamp   = 0;                  // samples emitted since t0
+static   uint32_t g_stat_t0 = 0;                  // micros() at window start
+static   double   g_fs_eff  = (double)FS;         // what set_freq divides by
+static   bool     g_usefs   = false;              // false = nominal, true = measured
 
 static uint8_t sinelut[256];
 
@@ -48,7 +76,8 @@ static inline uint8_t mv_to_counts(long mv) {
 
 static void set_freq(int ch, float hz) {
   if (hz < 0) hz = 0;
-  g_inc[ch] = (uint32_t)((double)hz * 4294967296.0 / (double)FS);   // 2^32 * hz / FS
+  g_hz[ch]  = hz;
+  g_inc[ch] = (uint32_t)((double)hz * 4294967296.0 / g_fs_eff);     // 2^32 * hz / FS
 }
 
 static inline uint8_t next_sample(int ch) {
@@ -115,6 +144,36 @@ static void print_pwm() {
                 (unsigned)ledcReadFreq(PWM_PIN));
 }
 
+// ---- achieved sample rate reporting ---------------------------------------
+
+static void fs_reset() { g_nsamp = 0; g_stat_t0 = (uint32_t)micros(); }
+
+static double fs_measured() {
+  uint32_t n  = g_nsamp;
+  uint32_t dt = (uint32_t)micros() - g_stat_t0;   /* wrap-safe for <71 min */
+  if (n < 2 || dt == 0) return 0.0;
+  return (double)n * 1000000.0 / (double)dt;
+}
+
+static void print_fs() {
+  double m = fs_measured();
+  if (m <= 0.0) { Serial.println("[fs] window too short - try again"); return; }
+  Serial.printf("[fs] nominal=%u  achieved=%.1f Hz  ratio=%.4f  n=%u  dt=%.2fs  set_freq uses %s\n",
+                (unsigned)FS, m, m / (double)FS, (unsigned)g_nsamp,
+                (double)((uint32_t)micros() - g_stat_t0) / 1e6,
+                g_usefs ? "MEASURED" : "nominal");
+}
+
+static void use_fs(bool on) {
+  double m = fs_measured();
+  if (on && m <= 0.0) { Serial.println("[fs] no measurement yet - refusing"); return; }
+  g_usefs  = on;
+  g_fs_eff = on ? m : (double)FS;
+  for (int ch = 0; ch < 2; ch++) set_freq(ch, g_hz[ch]);   /* re-derive both */
+  Serial.printf("[fs] set_freq now divides by %.1f (%s)\n",
+                g_fs_eff, on ? "MEASURED" : "nominal");
+}
+
 // ---- command parser -------------------------------------------------------
 static char linebuf[64];
 static uint8_t linelen = 0;
@@ -125,7 +184,8 @@ static const char *mode_name(int ch) {
 }
 
 static void print_channel(int ch) {
-  float hz = (double)g_inc[ch] * (double)FS / 4294967296.0;
+  float hz = g_hz[ch];   /* as commanded; back-computing it through FS would
+                          * hide exactly the error this sketch now measures */
   Serial.printf("[siggen] CH%d mode=%s  freq=%.1f Hz  amp=%d mVpp  mid=%d mV  duty=%d%%  phase=%d deg\n",
                 ch + 1, mode_name(ch), hz, (int)((long)g_amp[ch] * 3300 / 255),
                 (int)((long)g_mid[ch] * 3300 / 255), (int)((long)g_duty[ch] * 100 / 255),
@@ -174,8 +234,17 @@ static void handle_line(char *s) {
     pwm_set(atof(a1), a2 ? atoi(a2) : 50);
     print_pwm(); return;
   }
+  else if (!strcmp(cmd, "fs")) {
+    if (!a1)                      { print_fs(); return; }
+    if (!strcmp(a1, "reset"))     { fs_reset(); Serial.println("[fs] window reset"); return; }
+    print_fs(); return;
+  }
+  else if (!strcmp(cmd, "usefs")) {
+    if (!a1) { print_fs(); return; }
+    use_fs(atoi(a1) != 0); return;
+  }
   else if (!strcmp(cmd, "status") || !strcmp(cmd, "?") || !strcmp(cmd, "help")) {
-    print_channel(0); print_channel(1); print_pwm(); return;
+    print_channel(0); print_channel(1); print_pwm(); print_fs(); return;
   }
   else { Serial.printf("[siggen] ? unknown: %s\n", cmd); return; }
   print_channel(ch);
@@ -199,6 +268,7 @@ void setup() {
     set_freq(ch, 1000.0f);      // default 1 kHz
     g_mode[ch] = 1;             // sine on boot so both channels show a trace
   }
+  fs_reset();
   Serial.println("\n[siggen] ready — GPIO25->CH1, GPIO26->CH2, GPIO27=PWM, GND->ground.");
   print_channel(0); print_channel(1);
 }
@@ -212,6 +282,7 @@ void loop() {
     g_phase[1] += g_inc[1];
     dacWrite(DAC_PIN[0], next_sample(0));
     dacWrite(DAC_PIN[1], next_sample(1));
+    g_nsamp++;
   }
   poll_serial();
 }

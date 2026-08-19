@@ -142,7 +142,11 @@ CH2 problem.
 - **Absolute accuracy is untested.** The reference is the ESP32 siggen's
   *commanded* amplitude, never verified against a calibrated source. A constant
   scale error in the siggen would shift every row by the same factor and is
-  invisible here. Note the siggen's frequency readback has a known ~0.82 factor;
+  invisible here. (**2026-08-19:** that 0.82 is now measured and explained —
+  the source's DDS loop runs at 32,999 S/s, not the 40,000 it assumes; see
+  [EXP-14](2026-08-19-14-siggen-sample-rate.md). It moves FREQUENCY only, so
+  the gain numbers in this experiment are unaffected.) Note the siggen's
+  frequency readback has a known ~0.82 factor;
   no equivalent check has been done on its amplitude.
 - **DC/offset drift over the run** is not cancelled — the ladder is a plain
   sweep, not a paired A/B/A design.

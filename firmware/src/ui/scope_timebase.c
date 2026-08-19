@@ -18,6 +18,28 @@
  * 0.0f means "no trustworthy rate", and the three reasons for that are
  * genuinely different — see the tier table below. Do not collapse them.
  *
+ * RESCALED 2026-08-19 (EXP-14). Every rate here was previously 1.21x too high,
+ * because the fits used the frequency COMMANDED from the ESP32 source while the
+ * source delivered 0.8250x that. Its DDS loop reschedules from `now` after the
+ * work is done, so its real rate is whatever two dacWrite() calls cost — 32,999
+ * Hz against an assumed 40,000, measured against the ESP32's own crystal. The
+ * generator now measures and reports its loop rate, and the fits divide by the
+ * measured value. Consequences worth keeping in mind:
+ *
+ *   - the error was purely multiplicative, so the 1-2-5 SHAPE of this ladder,
+ *     every R^2, and every fold check were untouched. Only the scale moved.
+ *   - the corrected 0x10 lands 1.1% from Stlkv's independent figure (12,437),
+ *     measured on a different unit with a different generator and a completely
+ *     different method. That is this project's first cross-rig agreement on an
+ *     ABSOLUTE quantity.
+ *   - the round 1-2-5 ladder 12.5k / 25k / 50k / 125k sits inside our
+ *     run-to-run spread on all four codes and is very likely the truth, but it
+ *     is NOT written here. These are the measurements; fitting them to the
+ *     round numbers we suspect would be inventing data.
+ *
+ * The AMPLITUDE calibration in scope_cal.c is untouched by this — the loop-rate
+ * error moves frequency only. Absolute volts remain unverified.
+ *
  * WITHDRAWN 2026-08-18 (EXP-12): code 0x08 was published at 1.07 kS/s, then at
  * 1,660 S/s (EXP-10), then fitted at 1,414 and 1,526 S/s in two passes minutes
  * apart. All are artifacts. The record at 0x08 does not reproduce between
@@ -32,10 +54,10 @@ static const float sample_rate[SCOPE_TIMEBASE_CODE_COUNT] = {
     /* 0x0A */      0.0f,        /* source too slow to measure (R2 -1.03)   */
     /* 0x0B */      0.0f,        /* source too slow to measure (R2 -0.05)   */
     /* 0x0C */      0.0f,        /* source too slow to measure (R2  0.60)   */
-    /* 0x0D */      150706.0f,   /* R2 0.904 — provisional                  */
-    /* 0x0E */       62958.0f,   /* R2 0.980                                */
-    /* 0x0F */       30235.0f,   /* R2 0.990                                */
-    /* 0x10 */       14853.6f,   /* R2 0.999, five independent confirmations */
+    /* 0x0D */      119678.0f,   /* R2 0.947 — provisional                  */
+    /* 0x0E */       49056.0f,   /* R2 0.993                                */
+    /* 0x0F */       25736.0f,   /* R2 0.999                                */
+    /* 0x10 */       12575.0f,   /* R2 0.999, fold-checked, cross-rig 1.1%  */
     /* 0x11-0x14 */ 0.0f, 0.0f, 0.0f, 0.0f,
 };
 

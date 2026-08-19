@@ -39,7 +39,7 @@ static int failures = 0;
 static void test_measured_codes(void)
 {
     const struct { uint8_t code; float fs; } want[] = {
-        { 0x0E, 62958.0f }, { 0x0F, 30235.0f }, { 0x10, 14853.6f },
+        { 0x0E, 49056.0f }, { 0x0F, 25736.0f }, { 0x10, 12575.0f },
     };
 
     for (unsigned i = 0; i < 3; i++) {
@@ -76,6 +76,35 @@ static void test_code_08_stays_withdrawn(void)
           "code 0x08 must have no seconds/div");
     CHECK(scope_timebase_hz_from_period(0x08, 50.0f) == 0.0f,
           "code 0x08 must not yield a frequency");
+}
+
+static void test_precorrection_rates_stay_out(void)
+{
+    /*
+     * EXP-14: the first published ladder (150706 / 62958 / 30235 / 14853.6)
+     * was fitted against frequencies COMMANDED from a source that delivered
+     * 0.8250x them. The numbers were internally consistent, linear, and
+     * fold-checked — and every one was 1.21x too high. If a merge or a revert
+     * puts them back, fail here rather than on someone's bench.
+     */
+    const struct { uint8_t code; float bad; } gone[] = {
+        { 0x0D, 150706.0f }, { 0x0E, 62958.0f },
+        { 0x0F, 30235.0f },  { 0x10, 14853.6f },
+    };
+
+    for (unsigned i = 0; i < 4; i++) {
+        CHECK(fabsf(scope_timebase_sample_rate(gone[i].code) - gone[i].bad) > 1.0f,
+              "code 0x%02X is back at its pre-correction rate %.1f — the source "
+              "scale error has been reintroduced", gone[i].code,
+              (double)gone[i].bad);
+    }
+
+    /* And the corrected ladder must stay near the round 1-2-5 values that an
+     * independent rig reports, without being equal to them. */
+    CHECK(scope_timebase_sample_rate(0x10) > 11800.0f &&
+          scope_timebase_sample_rate(0x10) < 13200.0f,
+          "0x10 should sit near 12.5 kS/s, got %.1f",
+          (double)scope_timebase_sample_rate(0x10));
 }
 
 static void test_unmeasured_codes_return_zero(void)
@@ -125,24 +154,24 @@ static void test_labels(void)
 {
     char buf[16];
 
-    /* 14853.6 S/s, 32 samples/div -> 2.1544 ms/div. */
+    /* 12575 S/s, 32 samples/div -> 2.5447 ms/div. */
     scope_timebase_label(0x10, buf, sizeof(buf));
-    CHECK(strcmp(buf, "2.15ms") == 0,
-          "0x10 label should be derived as 2.15ms, got \"%s\"", buf);
+    CHECK(strcmp(buf, "2.54ms") == 0,
+          "0x10 label should be derived as 2.54ms, got \"%s\"", buf);
 
     /* And it must NOT be the nominal table's "1ms" — that is the whole point.
      * The nominal labels are a constant ~2.13x away on every measured code. */
     CHECK(strcmp(buf, "1ms") != 0, "0x10 must not still read as the nominal 1ms");
 
-    /* 30235 S/s -> 1.058 ms/div. */
+    /* 25736 S/s -> 1.243 ms/div. */
     scope_timebase_label(0x0F, buf, sizeof(buf));
-    CHECK(strcmp(buf, "1.06ms") == 0,
-          "0x0F label should be 1.06ms, got \"%s\"", buf);
+    CHECK(strcmp(buf, "1.24ms") == 0,
+          "0x0F label should be 1.24ms, got \"%s\"", buf);
 
-    /* 62958 S/s -> 508 us/div, sub-millisecond so microseconds. */
+    /* 49056 S/s -> 652 us/div, sub-millisecond so microseconds. */
     scope_timebase_label(0x0E, buf, sizeof(buf));
-    CHECK(strcmp(buf, "508us") == 0,
-          "0x0E label should be 508us, got \"%s\"", buf);
+    CHECK(strcmp(buf, "652us") == 0,
+          "0x0E label should be 652us, got \"%s\"", buf);
 
     /* Provisional carries the marker. */
     scope_timebase_label(0x0D, buf, sizeof(buf));
@@ -164,6 +193,7 @@ int main(void)
 {
     test_measured_codes();
     test_code_08_stays_withdrawn();
+    test_precorrection_rates_stay_out();
     test_unmeasured_codes_return_zero();
     test_out_of_range();
     test_derived_quantities();

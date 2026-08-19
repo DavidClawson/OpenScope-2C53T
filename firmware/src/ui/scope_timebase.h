@@ -22,6 +22,27 @@
  * SEARCH, and fit peak-bin against frequency through the origin —
  * bin = f * 1024/fs, so fs = 1024/slope.
  *
+ * "KNOWN FREQUENCY" IS AN ASSUMPTION, AND IT WAS WRONG UNTIL 2026-08-19
+ * --------------------------------------------------------------------
+ * Every rate in the first version of this file was 1.21x too high. The fits
+ * used the frequency ASKED FOR from the ESP32 source; the source delivered
+ * 0.8250x that, because its DDS loop reschedules from `now` after the work is
+ * already done, so its period is whatever two dacWrite() calls cost — 32,999
+ * S/s against an assumed 40,000. Nothing in the fit could see it: a
+ * multiplicative error in the source is a multiplicative error in fs, with the
+ * R^2, the linearity and the fold test all untouched.
+ *
+ * What caught it was somebody else's number. Stlkv's independent 2C23T-port
+ * rig reported rates a consistent ~1.2x BELOW ours, with the ratios between
+ * codes agreeing perfectly — the exact signature of a scale error in one of
+ * the two sources. The generator now measures its own loop against the ESP32
+ * crystal and reports it (`fs` / `usefs` in esp32_siggen.ino), and the
+ * corrected 0x10 lands 1.1% from Stlkv's figure.
+ *
+ * The rule this leaves behind: a source is an instrument, and an instrument
+ * that has never been checked against anything is not a reference. See
+ * docs/experiments/2026-08-19-14-siggen-sample-rate.md.
+ *
  * AN R^2 IS NOT ENOUGH, AND THAT IS NOT A THEORETICAL WORRY
  * ---------------------------------------------------------
  * At code 0x08 a 14-tone in-band sweep returned **R^2 = 0.9304** — which reads
@@ -41,13 +62,19 @@
  *
  * THE TIERS
  * ---------
- *   MEASURED     0x0E / 0x0F / 0x10. In-band R^2 of 0.98 or better, reads
- *                that reproduce exactly between passes. 0x10 is confirmed
- *                FIVE independent ways (four in-band fits across two read
- *                paths, plus the fold check).
- *   PROVISIONAL  0x0D. R^2 0.904 — the tone set is getting short relative to
- *                the rate, so the bins are small and quantisation dominates.
- *                Right order of magnitude, no better.
+ *   MEASURED     0x0E / 0x0F / 0x10. In-band R^2 of 0.99 or better against a
+ *                source whose own rate was measured in the same channel
+ *                configuration the sweep ran in, and confirmed stable to
+ *                0.01% across the run. 0x10 additionally passes the fold test
+ *                (worst miss 5.3 bins over five above-Nyquist tones, against
+ *                142 bins for the pre-correction rate) and agrees with an
+ *                independent rig to 1.1%.
+ *
+ *                Run-to-run spread is 0.02% at 0x10 but 3.5-4.8% at 0x0D-0x0F,
+ *                where our source's 4.5 kHz ceiling puts the tones in low bins
+ *                and quantisation dominates. Treat those three as +/-5%.
+ *   PROVISIONAL  0x0D. R^2 0.947, and the two lowest tones land in bins 1 and
+ *                3, which is not a measurement so much as a direction.
  *   NONE         everything else, for two DIFFERENT reasons that must not be
  *                conflated:
  *                  - 0x0A / 0x0B / 0x0C: not measurable with our current
@@ -71,14 +98,24 @@
  *
  * Worth recording, because it is a genuinely different situation from the
  * volts case: the nominal `timebase_table` labels ("5ns" ... "20ms") are a
- * CONSTANT 2.12-2.15x away from that on every code we have measured, and at
- * 16 samples per division they land within 6-8%. Unlike `vdiv_table` — which
- * was 2.7-3.5x out with no consistent factor and was simply invented — this
- * table appears to be real, and derived from a design that draws 16 samples
- * per division. That is evidence about STOCK's geometry, not a defect in ours;
- * 10 divisions across 320 px with one sample per column is a perfectly
- * ordinary layout. If the renderer's geometry is ever changed, change
+ * CONSTANT factor away from that on every code we have measured. Before the
+ * 2026-08-19 source correction that factor read as 2.12-2.15x; with the
+ * corrected rates it is 2.51-2.56x, i.e. the nominal labels are almost exactly
+ * 2.5x our s/div. Unlike `vdiv_table` — which was 2.7-3.5x out with NO
+ * consistent factor and was simply invented — this table is evidently real and
+ * describes a renderer that draws a different number of samples per division
+ * than ours does. That is a fact about STOCK's geometry, not a defect in ours.
+ * If the renderer's geometry is ever changed, change
  * SCOPE_TIMEBASE_SAMPLES_PER_DIV with it and the labels follow.
+ *
+ * A NOTE ON THE ROUND NUMBERS
+ * ---------------------------
+ * The measured ladder is very close to 12.5k / 25k / 50k / 125k S/s — a clean
+ * 1-2-5 sequence — and Stlkv's independent rig reports 12,437 / 25,000 /
+ * 125,000. The round values sit inside our run-to-run spread on every code, so
+ * they are probably the truth. They are deliberately NOT written into the
+ * table: what is stored is what was measured. Rounding measurements toward the
+ * answer we expect is how a table stops being evidence.
  */
 
 #ifndef SCOPE_TIMEBASE_H

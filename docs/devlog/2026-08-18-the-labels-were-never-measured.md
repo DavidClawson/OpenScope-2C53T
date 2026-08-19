@@ -147,6 +147,15 @@ this. The MEASURED tier is earned.
 
 Every figure in that table traces back to an amplitude *commanded* from the
 ESP32 signal generator. Nobody has ever checked it against a calibrated source.
+**[Updated 2026-08-19 — the 0.82 was chased down and it was ours.** The source
+delivers 0.8250x what it is asked for, because its DDS loop reschedules from
+`now` after the work is already done and free-runs at 32,999 S/s against an
+assumed 40,000. Every sample rate this project published was 1.21x too high;
+corrected, they land within 1.1% of an independent rig. See
+[EXP-14](../experiments/2026-08-19-14-siggen-sample-rate.md). The paragraph
+below stands as written — it was right to distrust the number, and the reason
+it gave was the correct one.]**
+
 Its frequency readback is already known to be about 0.82x out, so assuming its
 amplitude is exact would be optimistic.
 

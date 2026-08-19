@@ -669,10 +669,78 @@ class Siggen:
 
     def pwm_off(self, settle: float = 0.2) -> PwmStatus:
         text = self.send("pwm off", settle=settle)
+        # The sketch answers a bare "[pwm] off" here, NOT a status line, so
+        # parse_pwm_status returns None and this helper raised every time it
+        # was called.  Found 2026-08-19 while pinning the source rate.
+        if re.search(r"\[pwm\]\s*off", text):
+            return PwmStatus(False)
         st = parse_pwm_status(text)
         if st is None:
             raise BenchError("pwm off: no confirmation.  Reply:\n%s" % text.strip())
         return st
+
+    # -- achieved sample rate ---------------------------------------------
+
+    def fs(self, window: float = 0.0) -> tuple:
+        """The DDS loop's MEASURED sample rate, as ``(hz, ratio_to_nominal)``.
+
+        The sketch's ``FS = 40000`` is an assumption the loop cannot hold: it
+        reschedules from ``now`` after the work is already done, so the real
+        period is whatever two ``dacWrite`` calls cost.  Bench unit's ESP32
+        measures **32,999 Hz, ratio 0.8250**, stable to four digits over 36 s
+        and identical across sine/square/tri (DC differs by 0.9%, because that
+        path returns early -- never use DC as a timing reference).
+
+        This is the source of the ~0.82 factor that has shadowed every
+        frequency number in this project, and of the 1.2x gap against Stlkv's
+        rig.  See docs/experiments/2026-08-19-14-siggen-sample-rate.md.
+
+        **The rate depends on the CHANNEL CONFIGURATION** and is a clean
+        function of it -- each channel in a waveform mode costs ~300 Hz of loop
+        rate, because ``next_sample`` returns early for DC::
+
+            both sine   32,999.5 Hz   0.8250
+            sine + dc   33,298.8 Hz   0.8325
+            both dc     33,557.4 Hz   0.8389
+
+        Repeatable to five digits, and PWM does not affect it.  So measure the
+        rate in the SAME configuration the tones will be produced in -- taking
+        it before parking the unused channel builds in a 0.9% error.
+
+        ``window`` seconds, if given, restarts the count and waits, which is
+        what you want before quoting a number.
+        """
+        if window > 0:
+            self.send("fs reset", settle=0.1)
+            time.sleep(window)
+        text = self.send("fs", timeout=2.0, settle=0.1)
+        m = re.search(r"achieved=([0-9.]+)\s*Hz\s+ratio=([0-9.]+)", text)
+        if not m:
+            raise BenchError("siggen did not report an achieved rate.  Reply:\n%s"
+                             % text.strip())
+        return float(m.group(1)), float(m.group(2))
+
+    def use_measured_fs(self, on: bool = True, window: float = 6.0) -> float:
+        """Make ``set_freq`` divide by the MEASURED rate, so commanded ==
+        delivered.  Returns the divisor now in force.
+
+        Off by default on the device, deliberately: booting unchanged keeps the
+        generator bit-identical to the one that took every earlier measurement,
+        so flashing the reporting firmware does not silently rescale the
+        archive.  Turn it ON for any new absolute-frequency work.
+        """
+        if on and window > 0:
+            self.fs(window=window)          # need a measurement to adopt
+        text = self.send("usefs %d" % (1 if on else 0), timeout=2.0, settle=0.2)
+        m = re.search(r"divides by ([0-9.]+)\s*\((MEASURED|nominal)\)", text)
+        if not m:
+            raise BenchError("siggen did not confirm usefs %d.  Reply:\n%s"
+                             % (on, text.strip()))
+        want = "MEASURED" if on else "nominal"
+        if m.group(2) != want:
+            raise BenchError("siggen usefs: asked for %s, device reports %s"
+                             % (want, m.group(2)))
+        return float(m.group(1))
 
     # -- status ------------------------------------------------------------
 

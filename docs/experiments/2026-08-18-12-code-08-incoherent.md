@@ -1,5 +1,25 @@
 # EXP-12 — reg 0x01 = 0x08 has no sample rate to measure
 
+> **⚠ RESCALED 2026-08-19 by [EXP-14](2026-08-19-14-siggen-sample-rate.md).**
+> Every sample rate below is **1.21× too high.** The fits used the frequency
+> *commanded* from the ESP32 source; the source delivers **0.8250×** that,
+> because its DDS loop reschedules from `now` after the work is done and
+> free-runs at 32,999 S/s against an assumed 40,000. Measured against the
+> ESP32's own crystal, and corroborated by stock's frequency counter and by
+> Stlkv's independent rig.
+>
+> **Nothing else here is affected.** The error is purely multiplicative, so
+> every R², the linearity, the 1-2-5 shape of the ladder and both fold
+> conclusions stand exactly as written — the fold test in particular is
+> scale-invariant under this bug, since aliasing depends only on `f/fs` and
+> both carried the same factor. Multiply any rate below by 0.8250, or use the
+> re-measured values in `firmware/src/ui/scope_timebase.c`.
+>
+> Left in place rather than corrected, per the project's rule: a withdrawn
+> number stays visible with its reason.
+
+
+
 - **Date:** 2026-08-18
 - **Unit:** bench unit #1
 - **Build:** `make guest-coldtrace`, build stamp `Aug 17 2026 23:26:37`
