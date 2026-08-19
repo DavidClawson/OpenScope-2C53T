@@ -48,9 +48,11 @@
  * as 0.0f, and the reason is INCOHERENT rather than UNMEASURED.
  */
 static const float sample_rate[SCOPE_TIMEBASE_CODE_COUNT] = {
-    /* 0x00-0x07 */ 0.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f,
+    /* 0x00-0x05 */ 0.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f,
+    /* 0x06 */      0.0f,        /* INCOHERENT — see the block below      */
+    /* 0x07 */      0.0f,        /* INCOHERENT                            */
     /* 0x08 */      0.0f,        /* INCOHERENT — measured, no rate exists */
-    /* 0x09 */      0.0f,        /* never measured */
+    /* 0x09 */      0.0f,        /* INCOHERENT                            */
     /* 0x0A */      0.0f,        /* source too slow to measure (R2 -1.03)   */
     /* 0x0B */      0.0f,        /* source too slow to measure (R2 -0.05)   */
     /* 0x0C */      0.0f,        /* source too slow to measure (R2  0.60)   */
@@ -64,8 +66,19 @@ static const float sample_rate[SCOPE_TIMEBASE_CODE_COUNT] = {
 /*
  * Why each code is where it is. Three distinct kinds of "no":
  *
- *   0x08          INCOHERENT. Measured, and the record does not reproduce.
- *                 A statement about the device.
+ *   0x06-0x09     INCOHERENT. Measured, and the records do not reproduce.
+ *                 EXP-15 (2026-08-19) widened this from 0x08 alone: fitting all
+ *                 four codes gives 1,231 / 1,595 / 1,350 / 1,550 S/s — a 30%
+ *                 band — where a real ladder step is 2-2.5x, and 40 Hz lands on
+ *                 bin 28 in ALL FOUR. Read-to-read spread is 144-309 bins on a
+ *                 512-bin spectrum. A number that does not change when the code
+ *                 changes is not the device's rate; it is ours. Stlkv predicted
+ *                 exactly this on issue #18 before it was run.
+ *                 (His proposed MECHANISM — the fit returns our read cadence —
+ *                 is NOT established: a round-trip opread takes ~800 ms, but
+ *                 that is dominated by the hex dump over serial, and the SPI
+ *                 burst at /256 is ~17.5 ms, which would predict ~58 kS/s.
+ *                 Prediction confirmed, mechanism open.)
  *   0x0A-0x0C     UNMEASURABLE WITH OUR SOURCE. The ESP32 tops out near
  *                 4.5 kHz, which at these rates puts the tone in bins 1-15,
  *                 so the fit measures quantisation rather than rate. A
@@ -79,9 +92,11 @@ static const float sample_rate[SCOPE_TIMEBASE_CODE_COUNT] = {
  */
 static const scope_tb_tier_t tier_by_code[SCOPE_TIMEBASE_CODE_COUNT] = {
     SCOPE_TB_NONE, SCOPE_TB_NONE, SCOPE_TB_NONE, SCOPE_TB_NONE,
-    SCOPE_TB_NONE, SCOPE_TB_NONE, SCOPE_TB_NONE, SCOPE_TB_NONE,
+    SCOPE_TB_NONE, SCOPE_TB_NONE,
+    SCOPE_TB_NONE,          /* 0x06 incoherent   */
+    SCOPE_TB_NONE,          /* 0x07 incoherent   */
     SCOPE_TB_NONE,          /* 0x08 incoherent   */
-    SCOPE_TB_NONE,          /* 0x09 unmeasured   */
+    SCOPE_TB_NONE,          /* 0x09 incoherent   */
     SCOPE_TB_NONE,          /* 0x0A unmeasurable */
     SCOPE_TB_NONE,          /* 0x0B unmeasurable */
     SCOPE_TB_NONE,          /* 0x0C unmeasurable */
