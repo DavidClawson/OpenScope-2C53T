@@ -2538,10 +2538,17 @@ static void cmd_fpga_scope_cal(void)
                          (unsigned)c, (unsigned long)(fs + 0.5f), lbl,
                          (t == SCOPE_TB_MEASURED) ? "measured" : "provisional");
     }
-    usb_send_str("codes not listed have no trustworthy rate: 0x08 is "
-                 "INCOHERENT (measured, reads do not reproduce);\r\n"
-                 "0x0A-0x0C need a faster source than ours; the rest were "
-                 "never measured. See scope_timebase.h\r\n");
+    usb_send_str("codes not listed have no trustworthy rate, for three "
+                 "DIFFERENT reasons:\r\n"
+                 "  0x06-0x09  INCOHERENT — measured, and all four return the "
+                 "same ~1.2-1.6 kS/s\r\n"
+                 "             regardless of the code, with reads that do not "
+                 "reproduce (EXP-15).\r\n"
+                 "  0x0A-0x0C  need a faster source than ours — a statement "
+                 "about our bench,\r\n"
+                 "             not about the device.\r\n"
+                 "  the rest   never measured.\r\n"
+                 "See scope_timebase.h\r\n");
 }
 
 /* `fpga scope center [ch1|ch2] [0-9]` — auto-center the channel's vertical-

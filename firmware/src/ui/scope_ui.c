@@ -18,6 +18,7 @@
 #include "scope_measure.h"
 #include "scope_cal.h"
 #include "scope_timebase.h"
+#include "scope_freq.h"
 #include "math_channel.h"
 #include "persistence.h"
 #include "fpga.h"
@@ -60,6 +61,14 @@
 #define BADGE_ROW_Y     (SCOPE_BOT - BADGE_H - 2)
 #define BADGE_ROW2_Y    (BADGE_ROW_Y - BADGE_H - 1)
 #endif
+
+/*
+ * How many consecutive refusals the Freq badge holds its last reading for.
+ * At the measured ~46% refusal rate a hold of 8 frames makes a dropout
+ * visible only when the signal genuinely goes away, while still expiring
+ * fast enough that a removed probe blanks the badge within a second.
+ */
+#define FREQ_HOLD_FRAMES  8u
 
 /* Quick-change popup */
 #define POPUP_W         200
@@ -463,25 +472,62 @@ static void draw_measurement_badges(const scope_state_t *ss, const theme_t *th)
     uint16_t y1 = BADGE_ROW_Y;
 
     /*
-     * Freq stays BLANK, and the reason is no longer "no timebase".
+     * Freq — spectral, not edge-counted, and it declines rather than guess.
      *
-     * The sample rate now exists and is trustworthy (scope_timebase.c, R^2
-     * 0.98-0.999, fold-checked). Freq = fs / period_samples was wired up on
-     * 2026-08-18 and then removed the same evening, because the other factor
-     * is not good enough: scope_measure's rising-crossing period estimator
-     * finds spurious crossings, and the resulting frequency measured
-     * +1.6% to +112% high against a known drive (EXP-13). The error grows as
-     * the record holds fewer cycles, and it is much worse at codes 0x0F/0x0E
-     * than at 0x10 even at comparable cycle counts — so no simple cycle-count
-     * gate rescues it either.
+     * History, because it is the whole justification for the shape of this:
+     * Freq = fs / period_samples was wired up on 2026-08-18 and removed the
+     * same evening, measuring +1.6% to +112% against a known drive (EXP-13).
+     * The sample rate was never the problem; the rising-crossing period
+     * estimator found spurious crossings.
      *
-     * A frequency badge that is 40% out is precisely the "confident wrong
-     * number" this file's history is a catalogue of. It goes back on when the
-     * period estimator is fixed — most likely by taking the frequency from a
-     * spectral peak search instead of edge counting, which is how the sample
-     * rate itself was measured to 0.1%.
+     * EXP-16 then showed it was not the estimator either. Edge counting,
+     * autocorrelation and a spectral peak all failed on the SAME bench records
+     * and all succeeded on the same others: roughly a fifth to a half of
+     * capture records are TORN, with their spectral energy smeared over ~6
+     * bins. One record scored 0.380 coherence whole and 0.999 over its last
+     * half. Tearing does not track signal amplitude, so it cannot be screened
+     * out in advance — it has to be detected per record, which is exactly what
+     * scope_freq does. Against 72 bench captures it answers 54% of the time,
+     * is within 3.4% when it does, and is never wrong.
+     *
+     * The reading is HELD across a short run of refusals so the badge does not
+     * strobe at the tearing rate; after FREQ_HOLD_FRAMES consecutive refusals
+     * it blanks, because a stale number with no expiry is just a wrong number
+     * that used to be right.
      */
-    draw_one_badge(x, y1, "Freq", MEAS_NA, na, th);
+    {
+        static float    freq_hz;
+        static uint16_t freq_stale;
+
+        /* timebase_idx IS the reg-0x01 code — fpga_stock_timebase_byte()
+         * returns it unchanged, and status_bar.c reads it the same way. */
+        const float fs = scope_timebase_sample_rate(ss->timebase_idx);
+        scope_freq_t fr;
+
+        /* The acquisition buffer is `volatile` because the acq task fills it;
+         * the estimator only reads, and a torn read is already the thing it
+         * detects, so casting the qualifier away here is safe rather than
+         * merely convenient. */
+        _Static_assert(FPGA_ADC_BUF_SIZE == SCOPE_FREQ_MAX_N,
+                       "estimator window must match the capture buffer");
+
+        if (have1 && scope_freq_estimate((const uint8_t *)fpga_get_ch1_buf(),
+                                         FPGA_ADC_BUF_SIZE, fs, &fr)) {
+            freq_hz = fr.hz;
+            freq_stale = 0u;
+        } else if (freq_stale < FREQ_HOLD_FRAMES) {
+            freq_stale++;
+        } else {
+            freq_hz = 0.0f;
+        }
+
+        if (freq_hz > 0.0f) {
+            fmt_hz(buf, sizeof(buf), freq_hz);
+            draw_one_badge(x, y1, "Freq", buf, th->ch1, th);
+        } else {
+            draw_one_badge(x, y1, "Freq", MEAS_NA, na, th);
+        }
+    }
     x += BADGE_W + 2;
 
     /* Calibrated ranges show volts; all others fall back to ADC counts. */

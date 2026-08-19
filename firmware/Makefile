@@ -45,6 +45,7 @@ C_SOURCES += src/ui/scope_state.c
 C_SOURCES += src/ui/scope_measure.c
 C_SOURCES += src/ui/scope_cal.c
 C_SOURCES += src/ui/scope_timebase.c
+C_SOURCES += src/ui/scope_freq.c
 C_SOURCES += src/tasks/input_handler.c
 C_SOURCES += src/tasks/measurement.c
 C_SOURCES += src/drivers/flash_fs.c
@@ -504,6 +505,14 @@ $(BUILD_DIR)/test_scope_timebase: tests/test_scope_timebase.c src/ui/scope_timeb
 test-scope-timebase: $(BUILD_DIR)/test_scope_timebase
 	$<
 
+$(BUILD_DIR)/test_scope_freq: tests/test_scope_freq.c src/ui/scope_freq.c src/ui/scope_freq.h | $(BUILD_DIR)
+	$(HOST_CC) -std=gnu11 -O2 -Wall -Wextra -Isrc/ui $< src/ui/scope_freq.c -lm -o $@
+
+# Acceptance test for EXP-13, run against 72 REAL bench captures rather than
+# synthetic sines — a synthetic sine is the case that always worked.
+test-scope-freq: $(BUILD_DIR)/test_scope_freq
+	./$< tests/fixtures/scope_records.txt
+
 # Settings persistence: config.c + settings_store.c against a NOR flash model
 # (erase sets 0xFF, program only clears bits, page programs cannot cross a page).
 # Proves the round trip, the fallbacks (first boot / torn record / bad checksum /
@@ -535,7 +544,7 @@ $(BUILD_DIR)/test_redraw_gate: tests/test_redraw_gate.c src/ui/redraw_gate.h | $
 test-redraw-gate: $(BUILD_DIR)/test_redraw_gate
 	$<
 
-.PHONY: all clean disasm size renode soak-test soak-quick flash flash-dfu bootloader flash-bootloader flash-all guest guest-warmtest guest-usart-silent emu test-meter-data test-meter-auto test-meter-voltage-wave test-fpga-meter-plan test-stock-meter-literals test-meter test-scope-measure test-scope-cal test-scope-timebase test-redraw-gate test-config-persist guest-persist guest-caldump guest-coldtrace-slow guest-coldtrace-la guest-debugclk fpga-alt-header
+.PHONY: all clean disasm size renode soak-test soak-quick flash flash-dfu bootloader flash-bootloader flash-all guest guest-warmtest guest-usart-silent emu test-meter-data test-meter-auto test-meter-voltage-wave test-fpga-meter-plan test-stock-meter-literals test-meter test-scope-measure test-scope-cal test-scope-timebase test-scope-freq test-redraw-gate test-config-persist guest-persist guest-caldump guest-coldtrace-slow guest-coldtrace-la guest-debugclk fpga-alt-header
 
 # ═══════════════════════════════════════════════════════════════════════════
 # BENCH / EXPERIMENT IMAGE INDEX                          (index added 2026-08-13)
