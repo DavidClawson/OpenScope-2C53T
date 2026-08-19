@@ -985,6 +985,12 @@ bool    fpga_apply_timebase(uint8_t code);
  * 0x08 the arm block writes. */
 uint8_t fpga_timebase_reconcile_action(void);
 
+/* Make the display's timebase and SPI reg 0x01 agree. Called from the FPGA arm
+ * paths and — authoritatively — from main() right after settings_store_init(),
+ * which restores timebase_idx and would otherwise silently undo the arm-path
+ * call. Pre-scheduler only: takes no lock. */
+void    fpga_reconcile_timebase_after_arm(void);
+
 void    fpga_acq_rate_idx_set(uint8_t v);
 uint8_t fpga_acq_rate_idx_get(void);
 

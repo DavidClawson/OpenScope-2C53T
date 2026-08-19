@@ -3067,7 +3067,7 @@ uint8_t fpga_acq_rate_idx_get(void)   { return acq_rate_idx; }
  * the caller keeps the old rate, which is honest, where a torn write would
  * leave the hardware at an unknown rate the label could not describe. */
 static void fpga_scope_write_reg(uint8_t reg, uint8_t val);   /* below */
-static void fpga_reconcile_timebase_after_arm(void);          /* below */
+void fpga_reconcile_timebase_after_arm(void);                 /* below */
 
 bool fpga_apply_timebase(uint8_t code)
 {
@@ -3885,6 +3885,19 @@ uint8_t fpga_bitbang_config_sequence(void)
  *     months to get working.
  *
  * Caller must hold the SPI3 bus with a clock the FPGA accepts for writes.
+ *
+ * ALSO called from main() immediately after settings_store_init(). That is not
+ * belt-and-braces, it is required: settings_store_init() runs AFTER fpga_init()
+ * — deliberately, so the bench-validated config sequence keeps the electrical
+ * environment it was validated in — and it overwrites timebase_idx with the
+ * persisted value. So the in-fpga_init call can never win, and on the first
+ * flash it did not: the reconcile ran, reported "pulled", and the display still
+ * read 0x0A. The call after the restore is the authoritative one; the one in
+ * the arm path keeps acq_rate_idx honest about what the arm block wrote in
+ * case no settings record exists.
+ *
+ * Safe to call pre-scheduler: it takes no lock, and every caller runs before
+ * fpga_create_tasks(), so no acquisition task can be mid-frame on SPI3.
  */
 /* 0 = never ran, 1 = pushed the display's code to the FPGA, 2 = pulled the
  * display down to the arm block's 0x08. Reported by `fpga scope timebase`.
@@ -3900,7 +3913,7 @@ uint8_t fpga_timebase_reconcile_action(void)
     return fpga_tb_reconcile_action;
 }
 
-static void fpga_reconcile_timebase_after_arm(void)
+void fpga_reconcile_timebase_after_arm(void)
 {
     scope_state_t *ss = scope_state_get();
 

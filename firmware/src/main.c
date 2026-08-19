@@ -929,6 +929,17 @@ int main(void)
      * consumes the restored meter submode, and before the display task exists. */
     settings_store_init();
 
+    /* settings_store_init() just restored scope_state.timebase_idx. Push it at
+     * the FPGA so the axis label and the actual sample rate agree — without
+     * this the restore silently undoes the reconcile inside fpga_init(), which
+     * is exactly what the 2026-08-19 bench run showed (reconcile reported
+     * "pulled", display still read 0x0A). Must stay AFTER the restore and
+     * BEFORE fpga_create_tasks(), which is the point the acquisition task
+     * could start using SPI3. */
+#ifndef EMULATOR_BUILD
+    fpga_reconcile_timebase_after_arm();
+#endif
+
     /* Create queues */
     xDisplayQueue = xQueueCreate(20, sizeof(uint8_t));
     xInputQueue   = xQueueCreate(15, sizeof(button_id_t));
