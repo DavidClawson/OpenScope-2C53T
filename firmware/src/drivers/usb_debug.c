@@ -44,6 +44,7 @@
 #include "ui.h"
 #include "../ui/scope_state.h"
 #include "../ui/scope_cal.h"
+#include "../ui/scope_freq.h"
 #include "../ui/scope_timebase.h"
 #include "../ui/meter_voltage_wave.h"
 
@@ -623,6 +624,7 @@ static void cmd_help(void)
         "fpga scope range <0-9> <1|2|both>  Coarse frontend range; channel is MANDATORY\r\n"
         "fpga scope center [ch2] [0-9]   Auto-center offset ref per range (CH1/DAC1 default); all if omitted\r\n"
         "fpga scope cal                  Dump the compiled vertical cal table (mV/count, V/div, tier)\r\n"
+        "fpga scope freq [n]             Run the shipped frequency estimator n times, with diagnostics\r\n"
         "fpga usart [on|off]             Bring USART2 up post-config; show CTRL1+RX\r\n"
         "fpga rearm [on|off]             Stock post-read re-arm (reg01) A/B toggle\r\n"
         "fpga rate [hexidx]              reg-0x01 rate index the re-arm rewrites\r\n"
@@ -2483,6 +2485,60 @@ static void scope_center_one(uint8_t ch, uint16_t *out_dac, uint32_t *out_mean)
     }
     *out_dac = best_dac;
     *out_mean = best_mean;
+}
+
+/*
+ * `fpga scope freq [n]` — run the SHIPPED frequency estimator on the live
+ * acquisition buffer, n times, and report every outcome including refusals.
+ *
+ * This exists because reading a number off the LCD cannot distinguish "the
+ * estimator is right" from "the estimator is wrong and the badge is holding a
+ * stale value". It reports the diagnostics the badge throws away: sharpness,
+ * which window was used, and the interpolated bin.
+ */
+static void cmd_fpga_scope_freq(const char *args)
+{
+    uint32_t reps = 10;
+    if (args && *args) parse_int(args, &reps);
+    if (reps == 0u) reps = 1u;
+    if (reps > 100u) reps = 100u;
+
+    const scope_state_t *ss = scope_state_get();
+    const float fs = scope_timebase_sample_rate(ss->timebase_idx);
+
+    usb_debug_printf("timebase 0x%02X -> %lu S/s\r\n",
+                     (unsigned)ss->timebase_idx, (unsigned long)(fs + 0.5f));
+    if (fs <= 0.0f) {
+        usb_send_str("no trustworthy rate for this code — no frequency is "
+                     "derivable (see scope_timebase.h)\r\n");
+        return;
+    }
+
+    const volatile uint8_t *ch1 = fpga_get_ch1_buf();
+    if (!ch1) { usb_send_str("FPGA not initialized\r\n"); return; }
+
+    uint32_t answered = 0;
+    for (uint32_t i = 0; i < reps; i++) {
+        scope_freq_t r;
+        const bool ok = scope_freq_estimate((const uint8_t *)ch1,
+                                            FPGA_ADC_BUF_SIZE, fs, &r);
+        const uint32_t mhz = (uint32_t)(r.hz * 1000.0f + 0.5f);
+        usb_debug_printf("  %2lu  %-8s  %6lu.%03lu Hz  bin %4lu.%02lu  "
+                         "sharp %lu.%02lu  win %u\r\n",
+                         (unsigned long)i,
+                         ok ? "ANSWER" : "refuse",
+                         (unsigned long)(mhz / 1000u), (unsigned long)(mhz % 1000u),
+                         (unsigned long)r.bin,
+                         (unsigned long)((r.bin - (float)(uint32_t)r.bin) * 100.0f),
+                         (unsigned long)r.sharpness,
+                         (unsigned long)((r.sharpness -
+                                          (float)(uint32_t)r.sharpness) * 100.0f),
+                         r.window);
+        if (ok) answered++;
+        usb_delay_ms(60);
+    }
+    usb_debug_printf("answered %lu/%lu\r\n",
+                     (unsigned long)answered, (unsigned long)reps);
 }
 
 /* `fpga scope cal` — print what the firmware believes about vertical scale.
@@ -6303,6 +6359,8 @@ static void dispatch_command(char *line)
         cmd_fpga_scope_range(line + 17);
     } else if (strcmp(line, "fpga scope cal") == 0) {
         cmd_fpga_scope_cal();
+    } else if (strncmp(line, "fpga scope freq", 15) == 0) {
+        cmd_fpga_scope_freq(line[15] == ' ' ? line + 16 : "");
     } else if (strncmp(line, "fpga scope center", 17) == 0) {
         cmd_fpga_scope_center(line[17] == ' ' ? line + 18 : "");
     } else if (strncmp(line, "fpga usart", 10) == 0) {

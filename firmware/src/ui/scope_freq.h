@@ -33,25 +33,33 @@
  *   3. If the full record is not sharp, retry on its LAST HALF, which is the
  *      fresher end of a rolling buffer, and keep whichever is better.
  *   4. **Refuse** if the result is still not sharp, or if the peak sits below
- *      bin 6 — where a Hanning mainlobe is not separable from DC and a
- *      quantisation harmonic outranks the fundamental. Three of the four
- *      confidently-wrong answers in the bench set were exactly that.
+ *      bin 4 — where a Hanning mainlobe, which spans the peak +/- 2 bins, would
+ *      overlap DC. That is a signal-processing bound, not a fitted threshold,
+ *      which is why it is kept even though the current fixture set measures
+ *      bin 2.1 correctly: those records are clean, mean-removed sines with no
+ *      drift, so they cannot stress DC leakage at all.
  *
- * THE THRESHOLDS ARE MEASURED, NOT CHOSEN
- * ----------------------------------------
- * Swept against 72 bench records (two ranges, three timebase codes, five
- * frequencies, seven amplitudes, bench unit #1, 2026-08-19):
+ * THE THRESHOLDS, AND WHICH OF THEM ACTUALLY BINDS
+ * -------------------------------------------------
+ * Swept against 72 bench records re-captured through the FIXED dump (two
+ * ranges, three timebase codes, five frequencies, seven amplitudes, bench
+ * unit #1, 2026-08-19):
  *
- *     floor  min_bin   correct  WRONG  refused   worst error
- *      0.80        2        53      5       14        69.5%
- *      0.85        6        43      1       28         7.5%
- *      0.90        6        39      0       33         3.4%   <-- shipped
- *      0.92        6        32      0       40         3.4%
+ *     floor  min_bin   answered  WRONG  refused   worst error
+ *   0.70-0.90       2        70      0        2         3.9%
+ *   0.70-0.90       4        63      0        9         3.1%   <-- shipped
+ *   0.70-0.90       6        59      0       13         3.1%
  *
- * The shipped point answers 54% of the time and is within **3.4%** when it
- * does. Loosening the floor to 0.85 buys four more answers and one 7.5% error;
- * that trade was declined. EXP-13's conclusion stands: dressing a wrong number
- * in real units makes it more convincing, not more correct.
+ * **The sharpness floor no longer binds**: every value from 0.70 to 0.90 gives
+ * an identical result, because clean reads are essentially never torn — the
+ * records this refuses score 0.97-1.00. It is kept at 0.90 anyway, because it
+ * costs nothing on good data and is the only thing standing between a future
+ * slow-read regression and a silently wrong number. That is exactly the bug it
+ * was written for.
+ *
+ * min_bin is now the sole discriminator, and it is set from the window's
+ * mainlobe width rather than fitted to the data. The shipped point answers 88%
+ * of the time and is within **3.1%** when it does.
  *
  * A refusal is not a failure. It is the module correctly reporting that this
  * particular record cannot support a frequency, and the caller should hold the
@@ -81,9 +89,10 @@
 #define SCOPE_FREQ_MIN_SHARP    0.90f
 
 /* Below this bin (in FULL-RECORD terms, so the rule means the same thing
- * whichever window was used) a Hanning mainlobe overlaps DC and a quantisation
- * harmonic can outrank the fundamental. */
-#define SCOPE_FREQ_MIN_BIN      6.0f
+ * whichever window was used) the Hanning mainlobe — which spans the peak +/- 2
+ * bins — overlaps DC, and the interpolated peak is contending with leakage
+ * rather than measuring a tone. A bound from the window, not from a fit. */
+#define SCOPE_FREQ_MIN_BIN      4.0f
 
 typedef struct {
     float    hz;         /* 0.0f when the module declines                    */

@@ -156,8 +156,8 @@ static void test_bench_records(const char *path)
     /* Coverage is a quality target, not a correctness one — but a collapse to
      * near-zero answers would mean a regression that the `wrong == 0` check
      * alone would happily pass. Measured coverage was 39/72; allow slack. */
-    CHECK(answered >= 30,
-          "only %d of %d records answered — coverage regressed (was 39)",
+    CHECK(answered >= 55,
+          "only %d of %d records answered — coverage regressed (was 63)",
           answered, count);
 }
 

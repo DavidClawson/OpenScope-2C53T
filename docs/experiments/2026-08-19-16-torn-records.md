@@ -33,6 +33,45 @@
 > acquisition tears at all is now **open** and must be re-measured through the
 > fixed dump path. `cmd_spi3_read` now snapshots before printing.
 >
+> **SECOND CORRECTION, same evening, after the fix was flashed and the fixtures
+> re-captured through the honest path:**
+>
+> | | before fix | after fix |
+> |---|---|---|
+> | `spi3 read`, 12 reads of one tone | mean 0.520, **11/12 torn** | mean 0.997, **0/12 torn** |
+> | `spi3 opread`, same | mean 0.809, 7/12 torn | mean 0.803, 6/12 torn |
+>
+> **Acquisition does not tear.** The acq buffer reads at sharpness 0.996-0.999,
+> twelve for twelve. `opread` is unchanged because it already snapshotted — its
+> tearing is the FPGA lapping during its ~17.5 ms `/256` burst, which was
+> already documented as the reason not to use it above 30 kS/s.
+>
+> Re-running the threshold sweep on 72 records re-captured through the fixed
+> dump inverts the conclusions of §5d as well:
+>
+> | floor | min bin | answered | WRONG | refused | worst |
+> |---|---|---|---|---|---|
+> | 0.70-0.90 | 2 | 70 | 0 | 2 | 3.9% |
+> | **0.70-0.90** | **4** | **63** | **0** | **9** | **3.1%** |
+> | 0.70-0.90 | 6 | 59 | 0 | 13 | 3.1% |
+>
+> - **The sharpness floor no longer binds at all** — 0.70 and 0.90 give
+>   identical results, because clean records are never torn. It is kept at 0.90
+>   as a guard against exactly the slow-read regression that caused this.
+> - **The quantisation-harmonic mechanism in §5d is WITHDRAWN.** It was offered
+>   to explain three wrong answers below bin 6. On clean records those same
+>   cases answer correctly at bins 2.1 and 4.0 — the failures were tearing, not
+>   harmonics. `SCOPE_FREQ_MIN_BIN` is now 4 and justified by the Hanning
+>   mainlobe width (peak +/- 2 bins must clear DC), which is a property of the
+>   window rather than a number fitted to data.
+> - **The shipped estimator now answers 88% of the time**, within 3.1%, never
+>   wrong — against 54% before.
+>
+> So of EXP-16's three explanatory claims, **two were artifacts of the reader**
+> (the tearing rate, the harmonic mechanism) and one stands (a slow read tears a
+> record invisibly, which is why the detector earns its place). The module, the
+> test and the min-bin rule survive; the story around them did not.
+>
 > Left in place rather than rewritten, per the project's rule.
 
 
