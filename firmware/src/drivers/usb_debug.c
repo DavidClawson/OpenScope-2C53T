@@ -3071,10 +3071,33 @@ static void cmd_spi3_read(const char *args)
         return;
     }
 
+    /*
+     * SNAPSHOT FIRST. This used to hex-print `ch1[i]` straight out of the live
+     * acquisition buffer, one byte at a time, interleaved with USB output — so
+     * a full 1024-byte dump walked the buffer for ~270 ms while the acq task
+     * refilled it every ~29 ms, rewriting it about nine times underneath.
+     *
+     * The records that came out were spliced, and it was not subtle: 11 of 12
+     * consecutive dumps of one unchanged 500 Hz tone were spectrally torn
+     * (mean sharpness 0.520), against 7 of 12 for `spi3 opread`, which already
+     * snapshots. The tearing rate tracks READ DURATION, which is the signature
+     * of the reader, not the device.
+     *
+     * That artifact reached a published conclusion — EXP-16 originally reported
+     * "a fifth to a half of capture records are torn" as a property of
+     * acquisition. It was a property of this loop. Corrected 2026-08-19.
+     *
+     * Copy under one pass, then print at leisure. Static rather than stack:
+     * this runs on the shell task and 1 KB is more than it should borrow.
+     */
+    static uint8_t snap[FPGA_ADC_BUF_SIZE];
+    for (uint32_t i = 0; i < len; i++)
+        snap[i] = ch1[i];
+
     usb_debug_printf("CH1 buffer (%lu bytes):\r\n", len);
     for (uint32_t i = 0; i < len; i++) {
         if (i % 16 == 0) usb_debug_printf("%04lX:", i);
-        usb_debug_printf(" %02X", ch1[i]);
+        usb_debug_printf(" %02X", snap[i]);
         if (i % 16 == 15 || i == len - 1) usb_send_str("\r\n");
     }
 }

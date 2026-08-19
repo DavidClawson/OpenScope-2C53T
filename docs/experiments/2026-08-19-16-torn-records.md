@@ -1,5 +1,42 @@
 # EXP-16 — it was never the estimator: a fifth to a half of capture records are torn
 
+> **⚠ CORRECTED 2026-08-19, same day, by the measurement below.** The headline
+> claim — "a fifth to a half of capture records are torn" — attributed to
+> ACQUISITION something that is substantially an artifact of **how this
+> experiment read the buffer**.
+>
+> `cmd_spi3_read` hex-printed the live acquisition buffer one byte at a time,
+> interleaved with USB output, so a 1024-byte dump walked the buffer for ~270 ms
+> while the acq task refilled it every ~29 ms — rewriting it about nine times
+> underneath the read. Every fixture in §5 was captured that way.
+>
+> Measured directly, on one unchanged 500 Hz tone, twelve reads each:
+>
+> | path | read duration | mean sharpness | torn (<0.90) |
+> |---|---|---|---|
+> | `spi3 read` (live walk) | ~270 ms | 0.520 | **11/12** |
+> | `spi3 opread` (snapshots) | ~17.5 ms | 0.809 | 7/12 |
+> | acq task's own read (/2 SPI) | ~137 µs | not yet measured | predicted ~0 |
+>
+> **Tearing tracks READ DURATION**, which is the signature of the reader. At /2
+> the acq task's own read overwrites about two samples, so the badge — which
+> copies the buffer in ~50 µs — should see almost none of this.
+>
+> **What survives:** §5a is unaffected and is still the load-bearing result —
+> three unrelated estimators failing on the same records and succeeding on the
+> same others is exactly what a *reader-side* artifact predicts too. The
+> detector, the thresholds and the shipped module are all still correct, and
+> are now known to be tuned against pathologically bad data, i.e. conservative.
+> The min-bin rule and the quantisation-harmonic finding stand independently.
+>
+> **What is withdrawn:** the rate, and the attribution to acquisition. Whether
+> acquisition tears at all is now **open** and must be re-measured through the
+> fixed dump path. `cmd_spi3_read` now snapshots before printing.
+>
+> Left in place rather than rewritten, per the project's rule.
+
+
+
 - **Date:** 2026-08-19
 - **Unit:** bench unit #1, build `Aug 19 2026 10:44:58`
 - **Source:** ESP32 siggen with the EXP-14 correction on, so drive frequencies
