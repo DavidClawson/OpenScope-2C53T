@@ -105,7 +105,8 @@ static void test_bench_records(const char *path)
 
     uint8_t s[MAXN];
     int answered = 0, refused = 0, wrong = 0;
-    float worst = 0.0f;
+    int hi_bin = 0, hi_bin_bad = 0;
+    float worst = 0.0f, worst_hi = 0.0f;
 
     for (int rec = 0; rec < count; rec++) {
         int range, code, drive, span;
@@ -133,6 +134,25 @@ static void test_bench_records(const char *path)
         answered++;
         const float err = fabsf(r.hz - (float)drive) / (float)drive * 100.0f;
         if (err > worst) worst = err;
+
+        /*
+         * Stratify by bin. Relative precision of a peak search scales with
+         * bin number -- one bin of slop at bin 6 is 16%, at bin 60 it is 1.6%
+         * -- so a single global bound is dominated by the few records nearest
+         * the MIN_BIN floor and says almost nothing about the rest. Measured
+         * 2026-08-19 on held-out records: every error above 1% sat at bin ~6,
+         * and every record at bin >= 13 came in under 0.31%.
+         */
+        if (r.bin >= 13.0f) {
+            hi_bin++;
+            if (err > worst_hi) worst_hi = err;
+            if (err > 1.0f) {
+                hi_bin_bad++;
+                printf("  HI-BIN MISS: code 0x%02X bin %.1f, %d Hz -> %.1f Hz "
+                       "(%+.2f%%)\n", code, (double)r.bin, drive,
+                       (double)r.hz, (double)err);
+            }
+        }
         if (err > 5.0f) {
             wrong++;
             printf("  WRONG: range %d code 0x%02X span %d, %d Hz -> %.1f Hz "
@@ -145,6 +165,7 @@ static void test_bench_records(const char *path)
 
     printf("  bench records: %d answered, %d refused, %d wrong, worst %.1f%%\n",
            answered, refused, wrong, (double)worst);
+    printf("  of those, %d at bin >= 13: worst %.2f%%\n", hi_bin, (double)worst_hi);
 
     /* THE contract. The previous badge was reverted for producing confident
      * wrong numbers; producing none is acceptable, producing wrong ones is
@@ -153,11 +174,28 @@ static void test_bench_records(const char *path)
     CHECK(worst <= 5.0f, "worst error %.1f%% exceeds the 5%% contract",
           (double)worst);
 
+    /*
+     * The sharper contract, and the one that would catch a rate-table
+     * regression. EXP-17 corrected the sample rates by 0.7-2.9%; before that
+     * correction this bound was 3.1% and the errors were CONSTANT within each
+     * timebase code -- the signature of a wrong rate rather than a weak
+     * estimator. If a future edit puts a wrong rate back, the global 5% bound
+     * would still pass and this one would not.
+     */
+    CHECK(hi_bin_bad == 0,
+          "%d record(s) at bin >= 13 missed by more than 1%% — at those bins "
+          "the estimator resolves to ~0.3%%, so this points at the sample "
+          "rate, not the peak search", hi_bin_bad);
+    CHECK(hi_bin >= 30,
+          "only %d records landed at bin >= 13 — the fixture set no longer "
+          "exercises the well-resolved regime", hi_bin);
+
     /* Coverage is a quality target, not a correctness one — but a collapse to
      * near-zero answers would mean a regression that the `wrong == 0` check
      * alone would happily pass. Measured coverage was 39/72; allow slack. */
-    CHECK(answered >= 55,
-          "only %d of %d records answered — coverage regressed (was 63)",
+    CHECK(answered * 100 >= count * 80,
+          "only %d of %d records answered — coverage regressed (both fixture "
+          "sets measured 87-88%%)",
           answered, count);
 }
 
@@ -167,6 +205,15 @@ int main(int argc, char **argv)
                                   : "tests/fixtures/scope_records.txt";
     test_synthetic();
     test_bench_records(path);
+
+    /*
+     * The held-out set. MIN_BIN and the sharpness floor were swept on
+     * scope_records.txt, which makes that file training data; passing on it
+     * shows only that the tuning took. These records were captured
+     * afterwards at drive frequencies chosen to be disjoint from it.
+     */
+    if (argc <= 1)
+        test_bench_records("tests/fixtures/scope_records_heldout.txt");
 
     if (failures == 0) {
         printf("test_scope_freq: all checks passed\n");

@@ -537,7 +537,25 @@ class Scope:
         return self.cmd("version", timeout).strip()
 
     def timebase(self, index: int) -> str:
-        """Set the acquisition rate ladder (SPI3 register 0x01, low nibble)."""
+        """Set the timebase in BOTH the display state and reg 0x01.
+
+        Uses `fpga scope timebase`, NOT a raw `seq 01 XX`. The raw write
+        changes the hardware behind the display's back: the firmware carries
+        the current timebase in scope_state.timebase_idx (what labels the axis
+        and picks fs for the Freq badge) and in fpga.c's acq_rate_idx (what is
+        programmed into the register), and on 2026-08-19 these were found
+        diverging on a stock boot -- 0x0A on the display, 0x08 in the register.
+        Driving them apart from a bench script is how that stays hidden, so
+        this method drives them together.
+        """
+        return self.cmd(f"fpga scope timebase {index & 0xFF:02X}")
+
+    def timebase_raw(self, index: int) -> str:
+        """Write reg 0x01 directly, leaving the display state stale.
+
+        Only for deliberately testing the divergence above. If you want to
+        change the timebase, use timebase().
+        """
         return self.seq(0x01, index & 0xFF)
 
     def trigger_level(self, code: int) -> str:

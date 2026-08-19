@@ -2991,9 +2991,21 @@ void fpga_set_meter_mux(bool enable)
 #define FPGA_ACQ_REARM_DEFAULT 0
 #endif
 static volatile bool    acq_rearm_enable = (FPGA_ACQ_REARM_DEFAULT != 0);
-/* Reg 0x01 value currently in force. 0x08 = 5.00 MS/s, what the arm block
- * writes at config time; the re-arm must rewrite THIS, not a constant, or it
- * would silently undo any timebase the UI or the shell has selected. */
+/* Reg 0x01 value currently in force -- the ONE variable that mirrors the
+ * hardware register. 0x08 is what the arm block writes at config time; the
+ * re-arm must rewrite THIS, not a constant, or it would silently undo any
+ * timebase the UI or the shell has selected.
+ *
+ * 2026-08-19: that comment described an intent the code never implemented.
+ * The UI's timebase button wrote scope_state.timebase_idx and nothing else;
+ * this variable was reachable only from `fpga rate`. So the firmware carried
+ * TWO notions of "current timebase" -- one that labelled the axis and one
+ * that drove the hardware -- and they were observed diverging on a stock
+ * boot (0x0A on the display, 0x08 in the register). It stayed invisible only
+ * because both codes are in the uncalibrated band, so the label read "--".
+ * Once scope_timebase.c gave the labels real measured rates, the same bug
+ * would have printed a confident, wrong s/div. fpga_apply_timebase() below
+ * is now the single entry point, and the button calls it. */
 static volatile uint8_t acq_rate_idx     = 0x08;
 
 /* ── USART2 late bring-up (2026-08-17) ───────────────────────────────────
@@ -3041,6 +3053,29 @@ void fpga_acq_rearm_set(bool on)      { acq_rearm_enable = on; }
 bool fpga_acq_rearm_get(void)         { return acq_rearm_enable; }
 void fpga_acq_rate_idx_set(uint8_t v) { acq_rate_idx = v; }
 uint8_t fpga_acq_rate_idx_get(void)   { return acq_rate_idx; }
+
+/* See fpga.h. Push a timebase code to the hardware NOW and record it as the
+ * value in force, so the axis label and the sample rate cannot disagree.
+ *
+ * Writing immediately rather than leaving it to the re-arm is deliberate:
+ * acq_rearm_enable defaults OFF, so relying on the re-arm loop would mean the
+ * button still did nothing on a default build. Parking the acquisition task
+ * first is the same discipline every shell command that touches SPI3 uses --
+ * an interleaved CS frame corrupts both transfers. If the task will not park
+ * we skip the register write and report failure rather than risk the bus;
+ * the caller keeps the old rate, which is honest, where a torn write would
+ * leave the hardware at an unknown rate the label could not describe. */
+static void fpga_scope_write_reg(uint8_t reg, uint8_t val);   /* below */
+
+bool fpga_apply_timebase(uint8_t code)
+{
+    if (!fpga_acq_pause())
+        return false;
+    fpga_scope_write_reg(0x01, code);
+    acq_rate_idx = code;
+    fpga_acq_resume();
+    return true;
+}
 
 #if FPGA_WARM_HANDOFF_TEST
 /* Cooperative pause handshake for the continuous acquisition task below.

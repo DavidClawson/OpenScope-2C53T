@@ -625,6 +625,7 @@ static void cmd_help(void)
         "fpga scope center [ch2] [0-9]   Auto-center offset ref per range (CH1/DAC1 default); all if omitted\r\n"
         "fpga scope cal                  Dump the compiled vertical cal table (mV/count, V/div, tier)\r\n"
         "fpga scope freq [n]             Run the shipped frequency estimator n times, with diagnostics\r\n"
+        "fpga scope timebase [code]      Set timebase in BOTH display state and reg 0x01 (hex)\r\n"
         "fpga usart [on|off]             Bring USART2 up post-config; show CTRL1+RX\r\n"
         "fpga rearm [on|off]             Stock post-read re-arm (reg01) A/B toggle\r\n"
         "fpga rate [hexidx]              reg-0x01 rate index the re-arm rewrites\r\n"
@@ -2496,6 +2497,40 @@ static void scope_center_one(uint8_t ch, uint16_t *out_dac, uint32_t *out_mean)
  * stale value". It reports the diagnostics the badge throws away: sharpness,
  * which window was used, and the interpolated bin.
  */
+/* `fpga scope timebase [code]` — change the timebase the way the UI button
+ * does, i.e. through the single entry point that updates BOTH the display
+ * state and the hardware register. Writing reg 0x01 with a raw `seq 01 XX`
+ * changes the hardware behind the display's back and is how the divergence
+ * above goes unnoticed; this command exists so bench scripts do not have to
+ * reproduce that bug. */
+static void cmd_fpga_scope_timebase(const char *args)
+{
+    while (*args == ' ') args++;
+    scope_state_t *ss = scope_state_get();
+
+    if (*args) {
+        unsigned v = (unsigned)strtoul(args, NULL, 16);
+        if (v >= SCOPE_TIMEBASE_CODE_COUNT) {
+            usb_debug_printf("usage: fpga scope timebase <hex code 00-%02X>\r\n",
+                             SCOPE_TIMEBASE_CODE_COUNT - 1);
+            return;
+        }
+        ss->timebase_idx = (uint8_t)v;
+        if (!fpga_apply_timebase((uint8_t)v)) {
+            usb_send_str("acq task would not park — reg 0x01 NOT written\r\n");
+            return;
+        }
+    }
+
+    char lbl[12];
+    scope_timebase_label(ss->timebase_idx, lbl, sizeof(lbl));
+    usb_debug_printf("timebase 0x%02X (reg 0x01 = 0x%02X)  %lu S/s  %s/div\r\n",
+                     (unsigned)ss->timebase_idx,
+                     (unsigned)fpga_acq_rate_idx_get(),
+                     (unsigned long)(scope_timebase_sample_rate(ss->timebase_idx) + 0.5f),
+                     lbl);
+}
+
 static void cmd_fpga_scope_freq(const char *args)
 {
     uint32_t reps = 10;
@@ -2505,9 +2540,23 @@ static void cmd_fpga_scope_freq(const char *args)
 
     const scope_state_t *ss = scope_state_get();
     const float fs = scope_timebase_sample_rate(ss->timebase_idx);
+    const uint8_t in_force = fpga_acq_rate_idx_get();
 
-    usb_debug_printf("timebase 0x%02X -> %lu S/s\r\n",
-                     (unsigned)ss->timebase_idx, (unsigned long)(fs + 0.5f));
+    usb_debug_printf("timebase 0x%02X -> %lu S/s  (reg 0x01 in force: 0x%02X)\r\n",
+                     (unsigned)ss->timebase_idx, (unsigned long)(fs + 0.5f),
+                     (unsigned)in_force);
+
+    /* The whole point of printing both: on 2026-08-19 these were found to
+     * disagree on a stock boot (display 0x0A, hardware 0x08), which would
+     * have made every derived Hz wrong by the ratio of the two rates. A
+     * frequency computed from the wrong rate is not worth printing. */
+    if (in_force != ss->timebase_idx) {
+        usb_send_str("MISMATCH: the display's timebase is not the one the "
+                     "hardware is sampling at — refusing to derive a "
+                     "frequency. Use `fpga scope timebase <code>`.\r\n");
+        return;
+    }
+
     if (fs <= 0.0f) {
         usb_send_str("no trustworthy rate for this code — no frequency is "
                      "derivable (see scope_timebase.h)\r\n");
@@ -6361,6 +6410,8 @@ static void dispatch_command(char *line)
         cmd_fpga_scope_cal();
     } else if (strncmp(line, "fpga scope freq", 15) == 0) {
         cmd_fpga_scope_freq(line[15] == ' ' ? line + 16 : "");
+    } else if (strncmp(line, "fpga scope timebase", 19) == 0) {
+        cmd_fpga_scope_timebase(line[19] == ' ' ? line + 20 : "");
     } else if (strncmp(line, "fpga scope center", 17) == 0) {
         cmd_fpga_scope_center(line[17] == ' ' ? line + 18 : "");
     } else if (strncmp(line, "fpga usart", 10) == 0) {

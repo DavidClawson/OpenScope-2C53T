@@ -508,10 +508,12 @@ test-scope-timebase: $(BUILD_DIR)/test_scope_timebase
 $(BUILD_DIR)/test_scope_freq: tests/test_scope_freq.c src/ui/scope_freq.c src/ui/scope_freq.h | $(BUILD_DIR)
 	$(HOST_CC) -std=gnu11 -O2 -Wall -Wextra -Isrc/ui $< src/ui/scope_freq.c -lm -o $@
 
-# Acceptance test for EXP-13, run against 72 REAL bench captures rather than
+# Acceptance test for EXP-13, run against REAL bench captures rather than
 # synthetic sines — a synthetic sine is the case that always worked.
+# With no argument it runs BOTH fixture sets: the tuned one, and the held-out
+# one whose drive frequencies were chosen after the thresholds were fixed.
 test-scope-freq: $(BUILD_DIR)/test_scope_freq
-	./$< tests/fixtures/scope_records.txt
+	./$<
 
 # Settings persistence: config.c + settings_store.c against a NOR flash model
 # (erase sets 0xFF, program only clears bits, page programs cannot cross a page).

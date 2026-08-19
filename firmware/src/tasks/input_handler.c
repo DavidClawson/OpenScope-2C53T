@@ -656,11 +656,18 @@ uint8_t input_handle_button(button_id_t button, QueueHandle_t dq)
         }
         else if (current_mode == MODE_OSCILLOSCOPE) {
             scope_adjust_timebase(ss, -1);
-            /* Same derived label the status bar shows — see
-             * scope_timebase.h. One time/div string in the system. */
+            /* Push it to the FPGA. Before 2026-08-19 this line did not exist
+             * and the button only relabelled the axis while the hardware kept
+             * sampling at whatever the arm block left in reg 0x01 — so the
+             * derived s/div below was a confident, wrong number. If the write
+             * fails the rate did NOT change, so say so rather than print a
+             * label for a rate that is not in force. */
+            const bool tb_ok = fpga_apply_timebase(ss->timebase_idx);
             char tb[12];
             scope_timebase_label(ss->timebase_idx, tb, sizeof(tb));
-            snprintf(pb, sizeof(pb), "H=%s/div", tb);
+            /* Short on purpose: pb is 24 bytes and a truncated warning is
+             * worse than a terse one. */
+            snprintf(pb, sizeof(pb), tb_ok ? "H=%s/div" : "H=%s NOT SET", tb);
             popup_and_redraw(dq, pb);
         }
         break;
@@ -717,11 +724,18 @@ uint8_t input_handle_button(button_id_t button, QueueHandle_t dq)
         }
         else if (current_mode == MODE_OSCILLOSCOPE) {
             scope_adjust_timebase(ss, 1);
-            /* Same derived label the status bar shows — see
-             * scope_timebase.h. One time/div string in the system. */
+            /* Push it to the FPGA. Before 2026-08-19 this line did not exist
+             * and the button only relabelled the axis while the hardware kept
+             * sampling at whatever the arm block left in reg 0x01 — so the
+             * derived s/div below was a confident, wrong number. If the write
+             * fails the rate did NOT change, so say so rather than print a
+             * label for a rate that is not in force. */
+            const bool tb_ok = fpga_apply_timebase(ss->timebase_idx);
             char tb[12];
             scope_timebase_label(ss->timebase_idx, tb, sizeof(tb));
-            snprintf(pb, sizeof(pb), "H=%s/div", tb);
+            /* Short on purpose: pb is 24 bytes and a truncated warning is
+             * worse than a terse one. */
+            snprintf(pb, sizeof(pb), tb_ok ? "H=%s/div" : "H=%s NOT SET", tb);
             popup_and_redraw(dq, pb);
         }
         break;

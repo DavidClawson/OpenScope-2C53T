@@ -970,6 +970,15 @@ extern volatile bool fpga_meter_needs_activation;
 
 void    fpga_acq_rearm_set(bool on);
 bool    fpga_acq_rearm_get(void);
+/* Apply a timebase code (SPI reg 0x01) to the hardware and record it as the
+ * value in force. This is the ONLY correct way to change the sample rate:
+ * writing scope_state.timebase_idx alone relabels the axis without touching
+ * the FPGA, which is exactly the divergence found on 2026-08-19.
+ *
+ * Returns false if the acquisition task would not park, in which case NOTHING
+ * was written and the previous rate is still in force. */
+bool    fpga_apply_timebase(uint8_t code);
+
 void    fpga_acq_rate_idx_set(uint8_t v);
 uint8_t fpga_acq_rate_idx_get(void);
 

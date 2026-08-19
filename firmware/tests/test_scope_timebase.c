@@ -39,7 +39,7 @@ static int failures = 0;
 static void test_measured_codes(void)
 {
     const struct { uint8_t code; float fs; } want[] = {
-        { 0x0E, 49056.0f }, { 0x0F, 25736.0f }, { 0x10, 12575.0f },
+        { 0x0E, 49930.1f }, { 0x0F, 24979.1f }, { 0x10, 12490.0f },
     };
 
     for (unsigned i = 0; i < 3; i++) {
@@ -105,6 +105,43 @@ static void test_precorrection_rates_stay_out(void)
           scope_timebase_sample_rate(0x10) < 13200.0f,
           "0x10 should sit near 12.5 kS/s, got %.1f",
           (double)scope_timebase_sample_rate(0x10));
+
+    /*
+     * EXP-17: the pre-EXP-17 ladder is ALSO out, for the same reason as the
+     * pre-EXP-14 one. It was internally consistent and fold-checked, and it
+     * was still 0.7-2.9% off per code -- an error that could not be seen
+     * until the estimator was pointed at a known drive. Superseded values do
+     * not get to come back on a merge.
+     */
+    const struct { uint8_t code; float bad; } superseded[] = {
+        { 0x0E, 49056.0f }, { 0x0F, 25736.0f }, { 0x10, 12575.0f },
+    };
+    for (unsigned i = 0; i < 3; i++) {
+        CHECK(fabsf(scope_timebase_sample_rate(superseded[i].code) -
+                    superseded[i].bad) > 1.0f,
+              "code 0x%02X is back at its pre-EXP-17 rate %.1f",
+              superseded[i].code, (double)superseded[i].bad);
+    }
+
+    /*
+     * And the ladder must stay MEASURED, not rounded. If someone "tidies"
+     * these to 12500/25000/50000 the table stops being evidence -- the
+     * agreement with the round ladder is the finding, so writing the round
+     * ladder in would make the finding unfalsifiable.
+     */
+    const struct { uint8_t code; float round_val; } tidy[] = {
+        { 0x0E, 50000.0f }, { 0x0F, 25000.0f }, { 0x10, 12500.0f },
+    };
+    for (unsigned i = 0; i < 3; i++) {
+        const float got = scope_timebase_sample_rate(tidy[i].code);
+        CHECK(got != tidy[i].round_val,
+              "code 0x%02X was rounded to the expected %.0f — these rows must "
+              "hold what was measured", tidy[i].code, (double)tidy[i].round_val);
+        CHECK(fabsf(got / tidy[i].round_val - 1.0f) < 0.01f,
+              "code 0x%02X drifted >1%% from the round ladder it should be "
+              "converging on (%.1f vs %.0f)", tidy[i].code,
+              (double)got, (double)tidy[i].round_val);
+    }
 }
 
 static void test_unmeasured_codes_return_zero(void)
@@ -154,24 +191,24 @@ static void test_labels(void)
 {
     char buf[16];
 
-    /* 12575 S/s, 32 samples/div -> 2.5447 ms/div. */
+    /* 12490 S/s, 32 samples/div -> 2.5620 ms/div. */
     scope_timebase_label(0x10, buf, sizeof(buf));
-    CHECK(strcmp(buf, "2.54ms") == 0,
-          "0x10 label should be derived as 2.54ms, got \"%s\"", buf);
+    CHECK(strcmp(buf, "2.56ms") == 0,
+          "0x10 label should be derived as 2.56ms, got \"%s\"", buf);
 
     /* And it must NOT be the nominal table's "1ms" — that is the whole point.
      * The nominal labels are a constant ~2.13x away on every measured code. */
     CHECK(strcmp(buf, "1ms") != 0, "0x10 must not still read as the nominal 1ms");
 
-    /* 25736 S/s -> 1.243 ms/div. */
+    /* 24979 S/s -> 1.281 ms/div. */
     scope_timebase_label(0x0F, buf, sizeof(buf));
-    CHECK(strcmp(buf, "1.24ms") == 0,
-          "0x0F label should be 1.24ms, got \"%s\"", buf);
+    CHECK(strcmp(buf, "1.28ms") == 0,
+          "0x0F label should be 1.28ms, got \"%s\"", buf);
 
-    /* 49056 S/s -> 652 us/div, sub-millisecond so microseconds. */
+    /* 49930 S/s -> 641 us/div, sub-millisecond so microseconds. */
     scope_timebase_label(0x0E, buf, sizeof(buf));
-    CHECK(strcmp(buf, "652us") == 0,
-          "0x0E label should be 652us, got \"%s\"", buf);
+    CHECK(strcmp(buf, "641us") == 0,
+          "0x0E label should be 641us, got \"%s\"", buf);
 
     /* Provisional carries the marker. */
     scope_timebase_label(0x0D, buf, sizeof(buf));

@@ -56,12 +56,65 @@ static const float sample_rate[SCOPE_TIMEBASE_CODE_COUNT] = {
     /* 0x0A */      0.0f,        /* source too slow to measure (R2 -1.03)   */
     /* 0x0B */      0.0f,        /* source too slow to measure (R2 -0.05)   */
     /* 0x0C */      0.0f,        /* source too slow to measure (R2  0.60)   */
-    /* 0x0D */      119678.0f,   /* R2 0.947 — provisional                  */
-    /* 0x0E */       49056.0f,   /* R2 0.993                                */
-    /* 0x0F */       25736.0f,   /* R2 0.999                                */
-    /* 0x10 */       12575.0f,   /* R2 0.999, fold-checked, cross-rig 1.1%  */
+    /* 0x0D */      119678.0f,   /* provisional — NOT re-measured, see below */
+    /* 0x0E */       49930.1f,   /* EXP-17 slope fit, n=37, SE 31 S/s       */
+    /* 0x0F */       24979.1f,   /* EXP-17 slope fit, n=29, SE 10 S/s       */
+    /* 0x10 */       12490.0f,   /* EXP-17 slope fit, n=49, SE  2 S/s       */
     /* 0x11-0x14 */ 0.0f, 0.0f, 0.0f, 0.0f,
 };
+
+/*
+ * REVISED 2026-08-19 (EXP-17). The three measured rates moved by +1.78% /
+ * -2.94% / -0.68%. The revision came out of validating the frequency
+ * estimator, not out of looking for it: applied to a KNOWN drive, the
+ * estimator's error was not scattered, it was constant within each timebase
+ * code and different BETWEEN codes.
+ *
+ * That pattern is what assigns blame. A source-scale error -- the EXP-14 bug,
+ * where the generator delivered 0.825x what it was told -- multiplies every
+ * commanded frequency by one factor, so it moves every code the same
+ * direction by the same amount. Here 0x0E needed +1.8% and 0x0F needed -2.9%,
+ * opposite signs, which no single source factor can produce. And within one
+ * code the error held constant from bin 6.8 to bin 246, a 36:1 span, so it is
+ * not an interpolation artifact either (that varies with fractional bin).
+ *
+ * Method: 66 records (two ranges, five drive frequencies, two reps), peak
+ * located by the shipped estimator, then fs from a least-squares fit of bin
+ * against drive frequency. The fit is deliberately free-intercept rather than
+ * through the origin, because the intercept turns out to be real: -0.045 bins,
+ * the SAME on all three codes, a small fixed bias in parabolic interpolation
+ * over a Hanning magnitude spectrum. It is worth only 0.03-0.11% here, but
+ * fitting through the origin would have folded it into the slope.
+ *
+ * Four checks, all independent of the fit itself:
+ *   - two DISJOINT drive sets (100/250/500/1000/2000 and 150/330/700/1500/
+ *     3000 Hz) agree to 0.00%, 0.03% and 0.24%;
+ *   - all three land within 0.14% of the round 1-2-5 ladder 12.5k/25k/50k;
+ *   - averaging per-point ratios instead of fitting agrees to 0.11%;
+ *   - 0x10 against Stlkv's independent rig (12,437 S/s, different unit,
+ *     generator, firmware and method) improves from +1.11% to +0.43%.
+ *
+ * The last one is the one that matters: it is out-of-sample. Nothing in this
+ * fit knows about his number, and the correction moved toward it.
+ *
+ * The round ladder is STILL NOT WRITTEN HERE, for the reason it was not
+ * written in EXP-14: 12,490 is what was measured and 12,500 is what was
+ * expected, and a table that records expectations is not evidence. The
+ * agreement is now close enough that the ladder is almost certainly the
+ * design intent -- but "almost certainly" belongs in a comment, not in a
+ * float that later work will treat as data.
+ *
+ * Why the first ladder was wrong is NOT established. The leading candidate is
+ * that it was fitted partly on torn records: it swept through `spi3 opread`,
+ * whose ~17.5 ms /256 burst lets the engine lap the buffer, and which still
+ * tears 6 reads in 12 (EXP-16). This fit used `spi3 read`, which after the
+ * 2026-08-19 snapshot fix tears 0 in 12. That is a plausible mechanism and
+ * nothing more; it has not been tested by re-fitting the old data.
+ *
+ * 0x0D (119,678 S/s) was NOT re-measured -- the bench source cannot reach far
+ * enough above it to place a peak usefully. It very likely carries a similar
+ * error and stays PROVISIONAL.
+ */
 
 /*
  * Why each code is where it is. Three distinct kinds of "no":
