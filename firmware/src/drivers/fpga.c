@@ -28,6 +28,7 @@
 #include "scope_trigger.h"
 #include "../ui/ui.h"
 #include "../ui/scope_state.h"
+#include "../ui/scope_timebase.h"
 #include "../ui/meter_voltage_wave.h"
 #include "at32f403a_407.h"
 #include "FreeRTOS.h"
@@ -4236,6 +4237,39 @@ uint8_t fpga_spi3_config_sequence(const fpga_cfg_seq_opts_t *opt)
     for (unsigned i = 0; i < 4; i++)
         fpga.scope_status[i] = spi3_xfer(0xFF);
     SPI3_CS_DEASSERT();
+
+    /*
+     * Reconcile the display's timebase with the register the arm block just
+     * wrote. Before 2026-08-19 nothing did this, so a stock boot came up with
+     * the display on 0x0A and the hardware on 0x08 and no way to notice.
+     *
+     * The arm sequence above is NOT touched — it is the bench-proven block
+     * from the 2026-08-13 cold-boot bring-up and it stays byte-identical.
+     * This runs after it, and only in one of two directions:
+     *
+     *   - persisted code has a MEASURED rate  -> push it to the hardware, so a
+     *     user's timebase choice survives a power cycle;
+     *   - persisted code has no rate          -> pull the display down to the
+     *     0x08 the arm block wrote. There is nothing to preserve (neither code
+     *     can be labelled) and moving the hardware would be change for its own
+     *     sake on the one path that took months to get working.
+     *
+     * Either way boot ends self-consistent, which is the property that was
+     * missing.
+     */
+    {
+        scope_state_t *ss = scope_state_get();
+        if (scope_timebase_sample_rate(ss->timebase_idx) > 0.0f) {
+            SPI3_CS_ASSERT();
+            spi3_xfer(0x01);
+            spi3_xfer(ss->timebase_idx);
+            SPI3_CS_DEASSERT();
+            acq_rate_idx = ss->timebase_idx;
+        } else {
+            ss->timebase_idx = 0x08;
+            acq_rate_idx     = 0x08;
+        }
+    }
 
     spi3_set_br(0);                      /* restore /2 (60MHz) for normal acq */
 
