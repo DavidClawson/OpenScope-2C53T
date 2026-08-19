@@ -979,6 +979,12 @@ bool    fpga_acq_rearm_get(void);
  * was written and the previous rate is still in force. */
 bool    fpga_apply_timebase(uint8_t code);
 
+/* What the boot-time timebase reconcile did: 0 = never ran (the arm path in
+ * this build does not call it — that was a real bug on 2026-08-19), 1 = pushed
+ * the display's persisted code to the FPGA, 2 = pulled the display down to the
+ * 0x08 the arm block writes. */
+uint8_t fpga_timebase_reconcile_action(void);
+
 void    fpga_acq_rate_idx_set(uint8_t v);
 uint8_t fpga_acq_rate_idx_get(void);
 

@@ -3067,6 +3067,7 @@ uint8_t fpga_acq_rate_idx_get(void)   { return acq_rate_idx; }
  * the caller keeps the old rate, which is honest, where a torn write would
  * leave the hardware at an unknown rate the label could not describe. */
 static void fpga_scope_write_reg(uint8_t reg, uint8_t val);   /* below */
+static void fpga_reconcile_timebase_after_arm(void);          /* below */
 
 bool fpga_apply_timebase(uint8_t code)
 {
@@ -3852,6 +3853,7 @@ uint8_t fpga_bitbang_config_sequence(void)
             fpga.scope_status[i] = spi3_xfer(0xFF);
         SPI3_CS_DEASSERT();
     }
+    fpga_reconcile_timebase_after_arm();
     spi3_set_br(0);                      /* restore /2 for normal acquisition */
 #endif
 
@@ -3859,6 +3861,62 @@ uint8_t fpga_bitbang_config_sequence(void)
     return fpga.cfg_status_reg[3];
 }
 #endif /* FPGA_CONFIG_B */
+
+/*
+ * Reconcile the display's timebase with the register the arm block just wrote.
+ * Before 2026-08-19 nothing did this, so a stock boot came up with the display
+ * on 0x0A and the hardware on 0x08 and no way to notice.
+ *
+ * MUST be called from EVERY arm path. There are two — the hardware-SPI one in
+ * fpga_spi3_config_sequence() and the bit-bang one under FPGA_CONFIG_B_ARM —
+ * and the first attempt patched only the first, which is dead code in the
+ * shipping guest-coldtrace build. The device reported the mismatch unchanged;
+ * that is the whole reason `fpga scope freq` prints both codes.
+ *
+ * The arm sequences themselves are NOT touched: they are the bench-proven
+ * 2026-08-13 cold-boot bring-up and stay byte-identical. This runs after, and
+ * only in one of two directions:
+ *
+ *   - persisted code has a MEASURED rate -> push it to the hardware, so a
+ *     user's timebase choice survives a power cycle;
+ *   - persisted code has no rate         -> pull the display down to the 0x08
+ *     the arm block wrote. Neither code can be labelled, so moving the
+ *     hardware would be change for its own sake on the one path that took
+ *     months to get working.
+ *
+ * Caller must hold the SPI3 bus with a clock the FPGA accepts for writes.
+ */
+/* 0 = never ran, 1 = pushed the display's code to the FPGA, 2 = pulled the
+ * display down to the arm block's 0x08. Reported by `fpga scope timebase`.
+ *
+ * This exists because the first version of this fix was placed in ONE of the
+ * two arm paths and the other is what the shipping build uses. It compiled,
+ * it was correct, and it never executed. "Did this code path run" was only
+ * answerable by inference from a symptom; now it is a readable fact. */
+static volatile uint8_t fpga_tb_reconcile_action;
+
+uint8_t fpga_timebase_reconcile_action(void)
+{
+    return fpga_tb_reconcile_action;
+}
+
+static void fpga_reconcile_timebase_after_arm(void)
+{
+    scope_state_t *ss = scope_state_get();
+
+    if (scope_timebase_sample_rate(ss->timebase_idx) > 0.0f) {
+        SPI3_CS_ASSERT();
+        spi3_xfer(0x01);
+        spi3_xfer(ss->timebase_idx);
+        SPI3_CS_DEASSERT();
+        acq_rate_idx = ss->timebase_idx;
+        fpga_tb_reconcile_action = 1u;
+    } else {
+        ss->timebase_idx = 0x08;
+        acq_rate_idx     = 0x08;
+        fpga_tb_reconcile_action = 2u;
+    }
+}
 
 uint8_t fpga_spi3_config_sequence(const fpga_cfg_seq_opts_t *opt)
 {
@@ -4238,38 +4296,7 @@ uint8_t fpga_spi3_config_sequence(const fpga_cfg_seq_opts_t *opt)
         fpga.scope_status[i] = spi3_xfer(0xFF);
     SPI3_CS_DEASSERT();
 
-    /*
-     * Reconcile the display's timebase with the register the arm block just
-     * wrote. Before 2026-08-19 nothing did this, so a stock boot came up with
-     * the display on 0x0A and the hardware on 0x08 and no way to notice.
-     *
-     * The arm sequence above is NOT touched — it is the bench-proven block
-     * from the 2026-08-13 cold-boot bring-up and it stays byte-identical.
-     * This runs after it, and only in one of two directions:
-     *
-     *   - persisted code has a MEASURED rate  -> push it to the hardware, so a
-     *     user's timebase choice survives a power cycle;
-     *   - persisted code has no rate          -> pull the display down to the
-     *     0x08 the arm block wrote. There is nothing to preserve (neither code
-     *     can be labelled) and moving the hardware would be change for its own
-     *     sake on the one path that took months to get working.
-     *
-     * Either way boot ends self-consistent, which is the property that was
-     * missing.
-     */
-    {
-        scope_state_t *ss = scope_state_get();
-        if (scope_timebase_sample_rate(ss->timebase_idx) > 0.0f) {
-            SPI3_CS_ASSERT();
-            spi3_xfer(0x01);
-            spi3_xfer(ss->timebase_idx);
-            SPI3_CS_DEASSERT();
-            acq_rate_idx = ss->timebase_idx;
-        } else {
-            ss->timebase_idx = 0x08;
-            acq_rate_idx     = 0x08;
-        }
-    }
+    fpga_reconcile_timebase_after_arm();
 
     spi3_set_br(0);                      /* restore /2 (60MHz) for normal acq */
 

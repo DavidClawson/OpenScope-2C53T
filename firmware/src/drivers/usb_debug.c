@@ -2522,6 +2522,14 @@ static void cmd_fpga_scope_timebase(const char *args)
         }
     }
 
+    static const char *const recon[] = {
+        "NEVER RAN — this build's arm path does not call it",
+        "pushed the persisted code to the FPGA",
+        "pulled the display down to the arm block's 0x08",
+    };
+    const uint8_t ra = fpga_timebase_reconcile_action();
+    usb_debug_printf("boot reconcile: %s\r\n", recon[ra < 3u ? ra : 0u]);
+
     char lbl[12];
     scope_timebase_label(ss->timebase_idx, lbl, sizeof(lbl));
     usb_debug_printf("timebase 0x%02X (reg 0x01 = 0x%02X)  %lu S/s  %s/div\r\n",
