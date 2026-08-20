@@ -563,132 +563,9 @@ static bool fpga_send_cmd_timed(uint8_t cmd_hi, uint8_t cmd_lo, uint32_t delay_m
  * Command Handlers
  * ═══════════════════════════════════════════════════════════════════ */
 
-static void cmd_help(void)
-{
-    usb_send_str(
-        "\r\n=== OpenScope 2C53T Debug Shell ===\r\n"
-        "help                            Show this help\r\n"
-        "version                         Firmware info\r\n"
-        "status                          FPGA & system status\r\n"
-        "usart tx <cmd_hi> <cmd_lo>      Send FPGA command (queued, or direct if no dvom_TX)\r\n"
-        "usart raw <10 hex bytes>       Send raw 10-byte USART frame\r\n"
-        "  e.g.: usart raw 00 00 00 0B 01 00 00 00 00 0B\r\n"
-        "gpio set <port><pin> <0|1>      Drive GPIO pin (REFUSES if pin is an input)\r\n"
-        "  e.g.: gpio set B11 1\r\n"
-        "gpio mode <port><pin> <out|in>  Set pin direction (RMW of its CRL/CRH nibble)\r\n"
-        "  e.g.: gpio mode A6 out   (out = push-pull 50MHz, in = floating)\r\n"
-        "gpio read <port><pin>           Read GPIO pin\r\n"
-        "gpio scan                       Scan FPGA-related pins\r\n"
-        "bench snapshot                  Save frontend/FPGA pin modes+levels\r\n"
-        "bench restore                   Put that saved pin posture back (hermetic tests)\r\n"
-        "buzzer test [ms]                Force continuity buzzer briefly\r\n"
-        "mem read <addr> [count]         Read 32-bit words\r\n"
-        "  e.g.: mem read 0x40021000 4\r\n"
-        "mem write <addr> <value>        Write 32-bit word\r\n"
-        "flash jedec                     Read external W25Q128 JEDEC ID\r\n"
-        "flash read <addr> <len>         Read external flash bytes (max 256)\r\n"
-        "flash dump <addr> <len>         Stream external flash bytes (max 4096)\r\n"
-        "flash wtest <addr> CONFIRM      Non-destructive write-primitive self-test (blank 4KB sector)\r\n"
-        "trig raw <0-4095>               Write DAC1 (PA4) directly + sw trigger\r\n"
-        "trig <range> <level>            Scope trigger DAC: range 0-9, level -100..100\r\n"
-        "trig2 raw <0-4095>              Write CH2 ref: TMR13 CH1 PWM-DAC (PA6)\r\n"
-        "trig2 <range> <level>           CH2 vertical-offset ref via the CH1 cal formula\r\n"
-        "screen dump [shadow] [x y w h]  Dump text indexed4 LCD shadow\r\n"
-        "screen dumpbin [x y w h]        Binary indexed4 LCD shadow dump\r\n"
-        "screen shadow page [y]          Clear full-screen shadow capture\r\n"
-        "fpga cmd <hi> <lo>              Send FPGA command bytes\r\n"
-        "  e.g.: fpga cmd 0 9   (sends 0x00 0x09)\r\n"
-        "        fpga cmd 0x0509 (sends 0x05 0x09)\r\n"
-        "fpga frame <hi> <lo> [p1..p5 [ck]]  Build/send full 10-byte frame\r\n"
-        "  e.g.: fpga frame 00 0B 01 00 00 00 00\r\n"
-        "fpga diag clear                 Clear FPGA bench counters/state\r\n"
-        "fpga selftest                   Precondition table: SPI3 clk, IDCODE anchor,\r\n"
-        "                                USART2 state, every driven pin's mode+level\r\n"
-        "fpga stock diag                Show stock-state bench shadow\r\n"
-        "fpga stock clear               Reset stock-state bench shadow\r\n"
-        "fpga stock set <9 bytes>       Set F68/F69/F6A/F6B/E1A/E1B/E1C/E1D/355\r\n"
-        "fpga stock preset <4|5 bytes>  Set F68/F69/F6A/F6B [355]\r\n"
-        "fpga stock base2               Seed visible state 2 scope posture\r\n"
-        "fpga stock state5 [E1B] [E1D]  Seed visible state 5 editor posture\r\n"
-        "fpga stock state6 [E1B] [E1D]  Seed visible state 6 pre-entry posture\r\n"
-        "fpga stock prev                Drive stock-like adjust-prev family\r\n"
-        "fpga stock next                Drive stock-like adjust-next family\r\n"
-        "fpga stock select              Stage single detail selection\r\n"
-        "fpga stock toggle              Toggle staged detail bitmap\r\n"
-        "fpga stock commit              Walk E1C 0->2->1->0x2B commit path\r\n"
-        "fpga stock consume             Consume packed state-9 preset path\r\n"
-        "fpga stock bridge fixed        Probe post-13/14 fixed 0x0501 path\r\n"
-        "fpga stock bridge dynamic [ch1|ch2|both]  Probe post-13/14 0x050x path\r\n"
-        "fpga stock reenter             Re-enter scope path with staged shadow\r\n"
-        "fpga wire words <w...>         Send final 16-bit wire words directly\r\n"
-        "fpga wire entry [ch1|ch2|both] Send candidate scope-entry wire-word bank\r\n"
-        "fpga wire scope [ch1|ch2|both] Wire-word entry + runtime scope blocks\r\n"
-        "fpga scope range <0-9> <1|2|both>  Coarse frontend range; channel is MANDATORY\r\n"
-        "fpga scope center [ch2] [0-9]   Auto-center offset ref per range (CH1/DAC1 default); all if omitted\r\n"
-        "fpga scope cal                  Dump the compiled vertical cal table (mV/count, V/div, tier)\r\n"
-        "fpga scope freq [n]             Run the shipped frequency estimator n times, with diagnostics\r\n"
-        "fpga scope measure [reps]       Badge values raw (uV/permille/mHz) for bench validation\r\n"
-        "fpga scope vdiv <1|2> <0-9>     Set volts/div range: display AND relays together\r\n"
-        "fpga scope timebase [code]      Set timebase in BOTH display state and reg 0x01 (hex)\r\n"
-        "settings                        Persistence status: bound, load result, writes, failures\r\n"
-        "fpga usart [on|off]             Bring USART2 up post-config; show CTRL1+RX\r\n"
-        "fpga rearm [on|off]             Stock post-read re-arm (reg01) A/B toggle\r\n"
-        "fpga rate [hexidx]              reg-0x01 rate index the re-arm rewrites\r\n"
-        "fpga scope reinit               Re-apply scope frontend + FPGA cfg\r\n"
-        "fpga meter reinit [submode]     Re-apply meter frontend + FPGA cfg\r\n"
-        "fpga scope wake                 Meter wake preamble then scope cfg\r\n"
-        "fpga scope acqmode              Send stock-like 0x20/0x21 block\r\n"
-        "fpga scope beat [count] [ms]    Send stock-like cmd-3 heartbeat(s)\r\n"
-        "fpga scope entry <8 bytes>      Reset + send 0x01,0B..11 params\r\n"
-        "fpga scope timing <5 bytes>     Send 0x20,0x21,0x26..0x28 params\r\n"
-        "fpga scope trig <4 bytes>       Send 0x07/0x0A,0x16..0x19\r\n"
-        "mode meter [submode] [layout]   Switch UI + FPGA to DMM frontend\r\n"
-        "mode scope                      Switch UI + FPGA to scope frontend\r\n"
-        "mode startup [scope|meter]      Get/set Settings > Startup on Boot\r\n"
-        "meter dump [delay_ms]           Show parsed DMM/UI/raw frame state\r\n"
-        "meter autoscan [settle_ms]      Probe DMM submodes and select best live mode\r\n"
-        "meter auto [start|status|cancel] Async DMM function auto-select\r\n"
-        "meter trace                     One machine-readable DMM producer record\r\n"
-        "meter frontend                  Show DMM analog frontend GPIO state\r\n"
-        "meter probe-tail [auto|07|0a]   Override stock PC7-gated DMM tail for diagnostics\r\n"
-        "meter boot-sequence [ms]        Replay stock DMM boot word order + trace\r\n"
-        "meter pc11-timing [lo hi]       Probe DMM PC11 gate timing + trace\r\n"
-        "meter mux-arms <ce> <ab> [ms]   Apply stock mux arms, poll, trace\r\n"
-        "meter mux-stream [count] [ms]   Stream DMM frames plus frontend GPIOs\r\n"
-        "meter stream [count] [delay_ms] Print compact DMM frame stream\r\n"
-        "meter adc-snapshot              Show read-only DMM waveform sampler state\r\n"
-        "ui dump                         Show current UI mode/redraw state\r\n"
-        "meter wave                      Show DMM voltage waveform sample stats\r\n"
-        "meter wave reset                Reset DMM waveform diagnostics\r\n"
-        "meter wave sampler [on|off]     Enable/disable experimental SPI3 sampler\r\n"
-        "meter wave path [direct|preacq] Get/set DMM waveform SPI path\r\n"
-        "meter wave selector [auto|N]    DMM wave selector byte\r\n"
-        "meter wave preacq [auto|N]      DMM wave pre-acq byte\r\n"
-        "fpga acq [mode]                 Trigger SPI3 acquisition\r\n"
-#if defined(FPGA_ALT_BITSTREAM)
-        "fpga dbgclk <count> [half_us]   debugclk image: N rising edges on PC6 (=N samples)\r\n"
-        "fpga dbgarm [low_ms]            debugclk image: re-arm via PB11 low->high (run_enable)\r\n"
-#endif
-        "spi3 read [len]                 Raw SPI3 read + hex dump\r\n"
-        "spi3 xfer <hex...>              Send arbitrary MOSI bytes, dump MISO\r\n"
-        "spi3 seq <b..> | <b..>          xfer w/ mid-sequence CS pulse at '|'\r\n"
-        "fpga reinit [br][gap][close][f0|1|2][u<ms>][a-e<pin>][s2|sd[h|l]][tc<n>] Replay cfg\r\n"
-        "    f=prelude frame: 0 split(stock) 1 combined 2 merge15+3B; u=pre-upload gap; k<br>=cmd-phase clk div; tc<n>=trailing clocks\r\n"
-        "    pe=probe SYSTEM_EDIT_MODE after 0x15 (STATUS@/256); rl=send 0x3C RELOAD before prelude; reports 0x41 STATUS\r\n"
-        "spi3 acqread                    Read CH1/CH2 via real 0x04/0x05 protocol\r\n"
-        "spi3 opread <op> [len [dump]]   One read window under any opcode + stats\r\n"
-        "spi3 opsweep [a b [len]]        Sweep read opcodes (BSRAM_1/2 hunt, Step 0b)\r\n"
-        "spi3 armtest [pb11|pc6]         Pulse FPGA run/re-arm pin, re-cfg, acqread\r\n"
-        "spi3 gowin                      Read+decode Gowin ID/USERCODE/STATUS regs\r\n"
-        "spi3 scopetest [bank]           Full scope seq: USART cfg->PC0->0x04/05 read\r\n"
-        "spi3 acqtest                    Decomposer Phase 20 validation test\r\n"
-        "spi3 stock-readback             Stock case-8 SPI3 readback; not DMM proof\r\n"
-        "spi3 h2txdiag                   Replay H2 TX + sample MISO; no ACK/apply proof\r\n"
-        "reboot bootloader               Reboot into USB HID updater\r\n"
-        "uptime                          Show uptime\r\n"
-        "\r\n"
-    );
-}
+/* cmd_help is defined next to the command table at the bottom of the file —
+ * it renders the per-row help strings, so it must live after the table. */
+static void cmd_help(void);
 
 static uint16_t count_non_ff_bytes(const uint8_t *bytes, uint8_t len)
 {
@@ -6486,6 +6363,334 @@ static void cmd_spi3_stock_readback(void)
  * Command Dispatcher
  * ═══════════════════════════════════════════════════════════════════ */
 
+/* Extracted from the old dispatch chain (was an inline block). SPI3 claim/
+ * release is handled by the dispatcher via SC_SPI3. */
+static void cmd_spi3_probe(void)
+{
+    /* Bit-bang SPI3 probe: disable SPI peripheral, manually toggle
+     * SCK and read MISO to test if the FPGA drives the line. This pokes the
+     * SPI3 registers directly, so an unparked acq task would corrupt far
+     * more than one frame — SC_SPI3 on the table row handles the park. */
+    usb_send_str("=== SPI3 Bit-Bang Probe ===\r\n");
+
+    /* Read PB4 (MISO) idle state */
+    uint32_t miso_idle = (GPIOB->idt & (1 << 4)) ? 1 : 0;
+    usb_debug_printf("MISO idle (CS high): %lu\r\n", miso_idle);
+
+    /* Assert CS (PB6 LOW) */
+    GPIOB->clr = (1 << 6);
+    for (volatile int d = 0; d < 1000; d++);  /* brief delay */
+    uint32_t miso_cs = (GPIOB->idt & (1 << 4)) ? 1 : 0;
+    usb_debug_printf("MISO after CS assert: %lu\r\n", miso_cs);
+
+    /* Try reading through SPI peripheral */
+    volatile uint32_t *spi_sts = (volatile uint32_t *)0x40003C08;
+    volatile uint32_t *spi_dt  = (volatile uint32_t *)0x40003C0C;
+
+    /* Clear any pending RX data */
+    if (*spi_sts & 0x01) { (void)*spi_dt; }
+
+    /* Send 0x00 and read response */
+    uint32_t timeout = 100000;
+    while (!(*spi_sts & 0x02) && --timeout);  /* Wait TXE */
+    *spi_dt = 0x00;  /* Send dummy byte */
+    timeout = 100000;
+    while (!(*spi_sts & 0x01) && --timeout);  /* Wait RXNE */
+    uint8_t rx = (uint8_t)*spi_dt;
+    usb_debug_printf("SPI3 xfer(0x00) = 0x%02X (timeout=%lu)\r\n", rx, timeout);
+
+    /* Send 0x05 (FPGA query cmd) */
+    timeout = 100000;
+    while (!(*spi_sts & 0x02) && --timeout);
+    *spi_dt = 0x05;
+    timeout = 100000;
+    while (!(*spi_sts & 0x01) && --timeout);
+    rx = (uint8_t)*spi_dt;
+    usb_debug_printf("SPI3 xfer(0x05) = 0x%02X (timeout=%lu)\r\n", rx, timeout);
+
+    /* Send another 0x00 */
+    timeout = 100000;
+    while (!(*spi_sts & 0x02) && --timeout);
+    *spi_dt = 0x00;
+    timeout = 100000;
+    while (!(*spi_sts & 0x01) && --timeout);
+    rx = (uint8_t)*spi_dt;
+    usb_debug_printf("SPI3 xfer(0x00) = 0x%02X (timeout=%lu)\r\n", rx, timeout);
+
+    /* Deassert CS */
+    GPIOB->scr = (1 << 6);
+    usb_debug_printf("SPI3 STS: 0x%08lX  CTRL1: 0x%08lX\r\n",
+                     *spi_sts, *(volatile uint32_t *)0x40003C00);
+
+    /* Also check PC6 state */
+    usb_debug_printf("PC6 (SPI enable): %d\r\n",
+                     (GPIOC->idt & (1 << 6)) ? 1 : 0);
+}
+
+/* ═══════════════════════════════════════════════════════════════════
+ * Shell command table (2026-08-20; audit item 8.9)
+ *
+ * Replaces the ~110-entry if/strcmp dispatch chain. Each row binds ONE
+ * command to its handler, its bus-safety requirement and its help text, so
+ * the three can never drift apart again — the P0.1 fix had to hand-wrap
+ * eleven dispatch entries in spi3_shell_claim(); here that is one flag.
+ *
+ * Matching: a row matches when its name is a whole-word prefix of the line
+ * (next char is NUL/space/tab). The dispatcher picks the LONGEST matching
+ * name, so ordering in this table carries no semantics and near-miss pairs
+ * ("meter auto" / "meter autoscan", "trig" / "trig2") cannot shadow each
+ * other. Flags:
+ *   SC_EXACT    command takes no arguments; trailing text = no match
+ *               (falls through to "Unknown command", as before).
+ *   SC_NEEDARGS command requires arguments; a bare name prints the row's
+ *               help instead of running the handler — this preserves the
+ *               old chain's "trailing space required" contract and matters
+ *               because parse_int("") SUCCEEDS with 0, so e.g. a bare
+ *               "fpga cmd" would otherwise send 0x00 0x00 at the FPGA.
+ *   SC_SPI3     handler drives the raw SPI3 bus: the dispatcher parks the
+ *               acquisition task around the call (audit P0.1).
+ *
+ * Adding a command = adding ONE row (CMD_A if the handler takes an args
+ * string, CMD_V if it takes void). Help is part of the row; keep the
+ * left-aligned name+argspec column at 32 chars like the rows around it.
+ * ═══════════════════════════════════════════════════════════════════ */
+typedef struct {
+    const char *name;                    /* full command word(s) */
+    void (*fn_args)(const char *args);   /* exactly one of these two is set */
+    void (*fn_void)(void);
+    uint8_t flags;
+    const char *help;                    /* preformatted line(s); NULL = alias row */
+} shell_cmd_t;
+
+#define SC_EXACT    0x01u
+#define SC_NEEDARGS 0x02u
+#define SC_SPI3     0x04u
+
+#define CMD_A(name, fn, flags, help)  { name, fn, NULL, flags, help }
+#define CMD_V(name, fn, flags, help)  { name, NULL, fn, flags, help }
+
+static const shell_cmd_t shell_cmds[] = {
+    CMD_V("help", cmd_help, SC_EXACT,
+          "help                            Show this help\r\n"),
+    CMD_V("?", cmd_help, SC_EXACT,
+          NULL /* alias */),
+    CMD_V("version", cmd_version, SC_EXACT,
+          "version                         Firmware info\r\n"),
+    CMD_V("status", cmd_status, SC_EXACT,
+          "status                          FPGA & system status\r\n"),
+    CMD_A("usart raw", cmd_usart_raw, SC_NEEDARGS,
+          "usart raw <10 hex bytes>       Send raw 10-byte USART frame\r\n" "  e.g.: usart raw 00 00 00 0B 01 00 00 00 00 0B\r\n"),
+    CMD_A("usart tx", cmd_usart_tx, SC_NEEDARGS,
+          "usart tx <cmd_hi> <cmd_lo>      Send FPGA command (queued, or direct if no dvom_TX)\r\n"),
+    CMD_A("gpio set", cmd_gpio_set, SC_NEEDARGS,
+          "gpio set <port><pin> <0|1>      Drive GPIO pin (REFUSES if pin is an input)\r\n" "  e.g.: gpio set B11 1\r\n"),
+    CMD_A("gpio mode", cmd_gpio_mode, SC_NEEDARGS,
+          "gpio mode <port><pin> <out|in>  Set pin direction (RMW of its CRL/CRH nibble)\r\n" "  e.g.: gpio mode A6 out   (out = push-pull 50MHz, in = floating)\r\n"),
+    CMD_V("bench snapshot", cmd_bench_snapshot, SC_EXACT,
+          "bench snapshot                  Save frontend/FPGA pin modes+levels\r\n"),
+    CMD_V("bench restore", cmd_bench_restore, SC_EXACT,
+          "bench restore                   Put that saved pin posture back (hermetic tests)\r\n"),
+    CMD_A("gpio read", cmd_gpio_read, SC_NEEDARGS,
+          "gpio read <port><pin>           Read GPIO pin\r\n"),
+    CMD_V("gpio scan", cmd_gpio_scan, SC_EXACT,
+          "gpio scan                       Scan FPGA-related pins\r\n"),
+    CMD_A("buzzer test", cmd_buzzer_test, 0,
+          "buzzer test [ms]                Force continuity buzzer briefly\r\n"),
+    CMD_A("mem read", cmd_mem_read, SC_NEEDARGS,
+          "mem read <addr> [count]         Read 32-bit words\r\n" "  e.g.: mem read 0x40021000 4\r\n"),
+    CMD_A("mem write", cmd_mem_write, SC_NEEDARGS,
+          "mem write <addr> <value>        Write 32-bit word\r\n"),
+    CMD_A("trig2", cmd_scope_trig2, SC_NEEDARGS,
+          "trig2 raw <0-4095>              Write CH2 ref: TMR13 CH1 PWM-DAC (PA6)\r\n" "trig2 <range> <level>           CH2 vertical-offset ref via the CH1 cal formula\r\n"),
+    CMD_A("trig", cmd_scope_trig, SC_NEEDARGS,
+          "trig raw <0-4095>               Write DAC1 (PA4) directly + sw trigger\r\n" "trig <range> <level>            Scope trigger DAC: range 0-9, level -100..100\r\n"),
+    CMD_V("flash jedec", cmd_flash_jedec, SC_EXACT,
+          "flash jedec                     Read external W25Q128 JEDEC ID\r\n"),
+    CMD_A("flash read", cmd_flash_read, SC_NEEDARGS,
+          "flash read <addr> <len>         Read external flash bytes (max 256)\r\n"),
+    CMD_A("flash dump", cmd_flash_dump, SC_NEEDARGS,
+          "flash dump <addr> <len>         Stream external flash bytes (max 4096)\r\n"),
+    CMD_A("flash wtest", cmd_flash_wtest, SC_NEEDARGS,
+          "flash wtest <addr> CONFIRM      Non-destructive write-primitive self-test (blank 4KB sector)\r\n"),
+    CMD_V("flash diag", cmd_flash_diag, SC_EXACT,
+          "flash diag                      W25Q SR1/SR2/SR3 + WEL-latch check\r\n"),
+    CMD_A("screen dump", cmd_screen_dump, 0,
+          "screen dump [shadow] [x y w h]  Dump text indexed4 LCD shadow\r\n"),
+    CMD_A("screen dumpbin", cmd_screen_dumpbin, 0,
+          "screen dumpbin [x y w h]        Binary indexed4 LCD shadow dump\r\n"),
+    CMD_A("screen shadow", cmd_screen_shadow, 0,
+          "screen shadow page [y]          Clear full-screen shadow capture\r\n"),
+    CMD_A("fpga cmd", cmd_fpga_cmd, SC_NEEDARGS,
+          "fpga cmd <hi> <lo>              Send FPGA command bytes\r\n" "  e.g.: fpga cmd 0 9   (sends 0x00 0x09)\r\n" "        fpga cmd 0x0509 (sends 0x05 0x09)\r\n"),
+    CMD_A("fpga frame", cmd_fpga_frame, SC_NEEDARGS,
+          "fpga frame <hi> <lo> [p1..p5 [ck]]  Build/send full 10-byte frame\r\n" "  e.g.: fpga frame 00 0B 01 00 00 00 00\r\n"),
+    CMD_V("fpga diag clear", cmd_fpga_diag_clear, SC_EXACT,
+          "fpga diag clear                 Clear FPGA bench counters/state\r\n"),
+    CMD_V("fpga selftest", cmd_fpga_selftest, SC_EXACT,
+          "fpga selftest                   Precondition table: SPI3 clk, IDCODE anchor,\r\n" "                                USART2 state, every driven pin's mode+level\r\n"),
+#if defined(FPGA_ALT_BITSTREAM)
+    CMD_A("fpga dbgclk", cmd_fpga_dbgclk, 0,
+          "fpga dbgclk <count> [half_us]   debugclk image: N rising edges on PC6 (=N samples)\r\n"),
+    CMD_A("fpga dbgarm", cmd_fpga_dbgarm, 0,
+          "fpga dbgarm [low_ms]            debugclk image: re-arm via PB11 low->high (run_enable)\r\n"),
+#endif
+    CMD_V("fpga busrelease", cmd_fpga_bus_release, SC_EXACT,
+          "fpga busrelease                 Hand SPI3 to an external master (one-way, EXPERIMENTAL)\r\n"),
+    CMD_V("fpga stock diag", cmd_fpga_stock_diag, SC_EXACT,
+          "fpga stock diag                Show stock-state bench shadow\r\n"),
+    CMD_V("fpga stock clear", cmd_fpga_stock_clear, SC_EXACT,
+          "fpga stock clear               Reset stock-state bench shadow\r\n"),
+    CMD_A("fpga stock set", cmd_fpga_stock_set, SC_NEEDARGS,
+          "fpga stock set <9 bytes>       Set F68/F69/F6A/F6B/E1A/E1B/E1C/E1D/355\r\n"),
+    CMD_A("fpga stock preset", cmd_fpga_stock_preset, SC_NEEDARGS,
+          "fpga stock preset <4|5 bytes>  Set F68/F69/F6A/F6B [355]\r\n"),
+    CMD_V("fpga stock base2", cmd_fpga_stock_base2, SC_EXACT,
+          "fpga stock base2               Seed visible state 2 scope posture\r\n"),
+    CMD_A("fpga stock state5", cmd_fpga_stock_state5, 0,
+          "fpga stock state5 [E1B] [E1D]  Seed visible state 5 editor posture\r\n"),
+    CMD_A("fpga stock state6", cmd_fpga_stock_state6, 0,
+          "fpga stock state6 [E1B] [E1D]  Seed visible state 6 pre-entry posture\r\n"),
+    CMD_V("fpga stock prev", cmd_fpga_stock_prev, SC_EXACT,
+          "fpga stock prev                Drive stock-like adjust-prev family\r\n"),
+    CMD_V("fpga stock next", cmd_fpga_stock_next, SC_EXACT,
+          "fpga stock next                Drive stock-like adjust-next family\r\n"),
+    CMD_V("fpga stock select", cmd_fpga_stock_select, SC_EXACT,
+          "fpga stock select              Stage single detail selection\r\n"),
+    CMD_V("fpga stock toggle", cmd_fpga_stock_toggle, SC_EXACT,
+          "fpga stock toggle              Toggle staged detail bitmap\r\n"),
+    CMD_V("fpga stock commit", cmd_fpga_stock_commit, SC_EXACT,
+          "fpga stock commit              Walk E1C 0->2->1->0x2B commit path\r\n"),
+    CMD_V("fpga stock consume", cmd_fpga_stock_consume, SC_EXACT,
+          "fpga stock consume             Consume packed state-9 preset path\r\n"),
+    CMD_V("fpga stock bridge fixed", cmd_fpga_stock_bridge_fixed, SC_EXACT,
+          "fpga stock bridge fixed        Probe post-13/14 fixed 0x0501 path\r\n"),
+    CMD_A("fpga stock bridge dynamic", cmd_fpga_stock_bridge_dynamic, 0,
+          "fpga stock bridge dynamic [ch1|ch2|both]  Probe post-13/14 0x050x path\r\n"),
+    CMD_V("fpga stock reenter", cmd_fpga_stock_reenter, SC_EXACT,
+          "fpga stock reenter             Re-enter scope path with staged shadow\r\n"),
+    CMD_A("fpga wire words", cmd_fpga_wire_words, SC_NEEDARGS,
+          "fpga wire words <w...>         Send final 16-bit wire words directly\r\n"),
+    CMD_A("fpga wire entry", cmd_fpga_wire_entry, 0,
+          "fpga wire entry [ch1|ch2|both] Send candidate scope-entry wire-word bank\r\n"),
+    CMD_A("fpga wire scope", cmd_fpga_wire_scope, 0,
+          "fpga wire scope [ch1|ch2|both] Wire-word entry + runtime scope blocks\r\n"),
+    CMD_A("fpga scope range", cmd_fpga_scope_range, SC_NEEDARGS,
+          "fpga scope range <0-9> <1|2|both>  Coarse frontend range; channel is MANDATORY\r\n"),
+    CMD_V("fpga scope cal", cmd_fpga_scope_cal, SC_EXACT,
+          "fpga scope cal                  Dump the compiled vertical cal table (mV/count, V/div, tier)\r\n"),
+    CMD_A("fpga scope vdiv", cmd_fpga_scope_vdiv, 0,
+          "fpga scope vdiv <1|2> <0-9>     Set volts/div range: display AND relays together\r\n"),
+    CMD_A("fpga scope measure", cmd_fpga_scope_measure, 0,
+          "fpga scope measure [reps]       Badge values raw (uV/permille/mHz) for bench validation\r\n"),
+    CMD_A("fpga scope freq", cmd_fpga_scope_freq, 0,
+          "fpga scope freq [n]             Run the shipped frequency estimator n times, with diagnostics\r\n"),
+    CMD_V("settings", cmd_settings, SC_EXACT,
+          "settings                        Persistence status: bound, load result, writes, failures\r\n"),
+    CMD_A("fpga scope timebase", cmd_fpga_scope_timebase, 0,
+          "fpga scope timebase [code]      Set timebase in BOTH display state and reg 0x01 (hex)\r\n"),
+    CMD_A("fpga scope center", cmd_fpga_scope_center, 0,
+          "fpga scope center [ch2] [0-9]   Auto-center offset ref per range (CH1/DAC1 default); all if omitted\r\n"),
+    CMD_A("fpga usart", cmd_fpga_usart, 0,
+          "fpga usart [on|off]             Bring USART2 up post-config; show CTRL1+RX\r\n"),
+    CMD_A("fpga rearm", cmd_fpga_rearm, 0,
+          "fpga rearm [on|off]             Stock post-read re-arm (reg01) A/B toggle\r\n"),
+    CMD_A("fpga rate", cmd_fpga_rate, 0,
+          "fpga rate [hexidx]              reg-0x01 rate index the re-arm rewrites\r\n"),
+    CMD_V("fpga scope reinit", cmd_fpga_scope_reinit, SC_EXACT,
+          "fpga scope reinit               Re-apply scope frontend + FPGA cfg\r\n"),
+    CMD_A("fpga meter reinit", cmd_fpga_meter_reinit, 0,
+          "fpga meter reinit [submode]     Re-apply meter frontend + FPGA cfg\r\n"),
+    CMD_V("fpga scope wake", cmd_fpga_scope_wake, SC_EXACT,
+          "fpga scope wake                 Meter wake preamble then scope cfg\r\n"),
+    CMD_V("fpga scope acqmode", cmd_fpga_scope_acqmode, SC_EXACT,
+          "fpga scope acqmode              Send stock-like 0x20/0x21 block\r\n"),
+    CMD_A("fpga scope beat", cmd_fpga_scope_beat, 0,
+          "fpga scope beat [count] [ms]    Send stock-like cmd-3 heartbeat(s)\r\n"),
+    CMD_A("fpga scope entry", cmd_fpga_scope_entry, SC_NEEDARGS,
+          "fpga scope entry <8 bytes>      Reset + send 0x01,0B..11 params\r\n"),
+    CMD_A("fpga scope timing", cmd_fpga_scope_timing, SC_NEEDARGS,
+          "fpga scope timing <5 bytes>     Send 0x20,0x21,0x26..0x28 params\r\n"),
+    CMD_A("fpga scope trig", cmd_fpga_scope_trig, SC_NEEDARGS,
+          "fpga scope trig <4 bytes>       Send 0x07/0x0A,0x16..0x19\r\n"),
+    CMD_A("mode", cmd_mode, 0,
+          "mode meter [submode] [layout]   Switch UI + FPGA to DMM frontend\r\n" "mode scope                      Switch UI + FPGA to scope frontend\r\n" "mode startup [scope|meter]      Get/set Settings > Startup on Boot\r\n"),
+    CMD_A("meter dump", cmd_meter_dump, 0,
+          "meter dump [delay_ms]           Show parsed DMM/UI/raw frame state\r\n"),
+    CMD_A("meter autoscan", cmd_meter_autoscan, 0,
+          "meter autoscan [settle_ms]      Probe DMM submodes and select best live mode\r\n"),
+    CMD_A("meter auto", cmd_meter_auto_async, 0,
+          "meter auto [start|status|cancel] Async DMM function auto-select\r\n"),
+    CMD_V("meter trace", cmd_meter_trace, SC_EXACT,
+          "meter trace                     One machine-readable DMM producer record\r\n"),
+    CMD_V("meter frontend", cmd_meter_frontend, SC_EXACT,
+          "meter frontend                  Show DMM analog frontend GPIO state\r\n"),
+    CMD_A("meter probe-tail", cmd_meter_probe_tail, 0,
+          "meter probe-tail [auto|07|0a]   Override stock PC7-gated DMM tail for diagnostics\r\n"),
+    CMD_A("meter boot-sequence", cmd_meter_boot_sequence, 0,
+          "meter boot-sequence [ms]        Replay stock DMM boot word order + trace\r\n"),
+    CMD_A("meter pc11-timing", cmd_meter_pc11_timing, 0,
+          "meter pc11-timing [lo hi]       Probe DMM PC11 gate timing + trace\r\n"),
+    CMD_A("meter mux-arms", cmd_meter_mux_arms, SC_NEEDARGS,
+          "meter mux-arms <ce> <ab> [ms]   Apply stock mux arms, poll, trace\r\n"),
+    CMD_A("meter mux-stream", cmd_meter_mux_stream, 0,
+          "meter mux-stream [count] [ms]   Stream DMM frames plus frontend GPIOs\r\n"),
+    CMD_A("meter stream", cmd_meter_stream, 0,
+          "meter stream [count] [delay_ms] Print compact DMM frame stream\r\n"),
+    CMD_V("meter adc-snapshot", cmd_meter_adc_snapshot, SC_EXACT,
+          "meter adc-snapshot              Show read-only DMM waveform sampler state\r\n"),
+    CMD_V("ui dump", cmd_ui_dump, SC_EXACT,
+          "ui dump                         Show current UI mode/redraw state\r\n"),
+    CMD_A("meter wave", cmd_meter_wave_args, 0,
+          "meter wave                      Show DMM voltage waveform sample stats\r\n" "meter wave reset                Reset DMM waveform diagnostics\r\n" "meter wave sampler [on|off]     Enable/disable experimental SPI3 sampler\r\n" "meter wave path [direct|preacq] Get/set DMM waveform SPI path\r\n" "meter wave selector [auto|N]    DMM wave selector byte\r\n" "meter wave preacq [auto|N]      DMM wave pre-acq byte\r\n"),
+    CMD_A("fpga acq", cmd_fpga_acq, 0,
+          "fpga acq [mode]                 Trigger SPI3 acquisition\r\n"),
+    CMD_A("fpga reinit", cmd_fpga_reinit, SC_SPI3,
+          "fpga reinit [br][gap][close][f0|1|2][u<ms>][a-e<pin>][s2|sd[h|l]][tc<n>] Replay cfg\r\n" "    f=prelude frame: 0 split(stock) 1 combined 2 merge15+3B; u=pre-upload gap; k<br>=cmd-phase clk div; tc<n>=trailing clocks\r\n" "    pe=probe SYSTEM_EDIT_MODE after 0x15 (STATUS@/256); rl=send 0x3C RELOAD before prelude; reports 0x41 STATUS\r\n"),
+    CMD_A("spi3 xfer", cmd_spi3_xfer, SC_SPI3,
+          "spi3 xfer <hex...>              Send arbitrary MOSI bytes, dump MISO\r\n"),
+    CMD_A("spi3 seq", cmd_spi3_seq, SC_SPI3,
+          "spi3 seq <b..> | <b..>          xfer w/ mid-sequence CS pulse at '|'\r\n"),
+    CMD_A("spi3 read", cmd_spi3_read, 0,
+          "spi3 read [len]                 Raw SPI3 read + hex dump\r\n"),
+    CMD_V("reboot bootloader", cmd_reboot_bootloader, SC_EXACT,
+          "reboot bootloader               Reboot into USB HID updater\r\n"),
+    CMD_V("spi3 acqread", cmd_spi3_acqread, SC_EXACT | SC_SPI3,
+          "spi3 acqread                    Read CH1/CH2 via real 0x04/0x05 protocol\r\n"),
+    CMD_A("spi3 opread", cmd_spi3_opread, 0,
+          "spi3 opread <op> [len [dump]]   One read window under any opcode + stats\r\n"),
+    CMD_A("spi3 opsweep", cmd_spi3_opsweep, 0,
+          "spi3 opsweep [a b [len]]        Sweep read opcodes (BSRAM_1/2 hunt, Step 0b)\r\n"),
+    CMD_A("spi3 armtest", cmd_spi3_armtest, SC_SPI3,
+          "spi3 armtest [pb11|pc6]         Pulse FPGA run/re-arm pin, re-cfg, acqread\r\n"),
+    CMD_V("spi3 gowin", cmd_spi3_gowin, SC_EXACT | SC_SPI3,
+          "spi3 gowin                      Read+decode Gowin ID/USERCODE/STATUS regs\r\n"),
+    CMD_A("spi3 scopetest", cmd_spi3_scopetest, SC_SPI3,
+          "spi3 scopetest [bank]           Full scope seq: USART cfg->PC0->0x04/05 read\r\n"),
+    CMD_V("spi3 acqtest", cmd_spi3_acqtest, SC_EXACT | SC_SPI3,
+          "spi3 acqtest                    Decomposer Phase 20 validation test\r\n"),
+    CMD_V("spi3 stock-readback", cmd_spi3_stock_readback, SC_EXACT | SC_SPI3,
+          "spi3 stock-readback             Stock case-8 SPI3 readback; not DMM proof\r\n"),
+    CMD_V("spi3 h2txdiag", cmd_spi3_h2txdiag, SC_EXACT | SC_SPI3,
+          "spi3 h2txdiag                   Replay H2 TX + sample MISO; no ACK/apply proof\r\n"),
+    CMD_V("spi3 h2verify", cmd_spi3_h2txdiag, SC_EXACT | SC_SPI3,
+          NULL /* alias */),
+    CMD_V("spi3 probe", cmd_spi3_probe, SC_EXACT | SC_SPI3,
+          "spi3 probe                      Bit-bang MISO probe; pokes SPI3 registers directly\r\n"),
+    CMD_V("uptime", cmd_uptime, SC_EXACT,
+          "uptime                          Show uptime\r\n"),
+    { NULL, NULL, NULL, 0, NULL }   /* terminator */
+};
+
+static void cmd_help(void)
+{
+    usb_send_str("\r\n=== OpenScope 2C53T Debug Shell ===\r\n");
+    for (const shell_cmd_t *c = shell_cmds; c->name != NULL; c++) {
+        if (c->help != NULL)
+            usb_send_str(c->help);
+    }
+    usb_send_str("\r\n");
+}
+
 static void dispatch_command(char *line)
 {
     /* Strip trailing \r\n */
@@ -6495,335 +6700,48 @@ static void dispatch_command(char *line)
 
     if (len == 0) return;
 
-    /* Match command and dispatch */
-    if (strcmp(line, "help") == 0 || strcmp(line, "?") == 0) {
-        cmd_help();
-    } else if (strcmp(line, "version") == 0) {
-        cmd_version();
-    } else if (strcmp(line, "status") == 0) {
-        cmd_status();
-    } else if (strncmp(line, "usart raw ", 10) == 0) {
-        cmd_usart_raw(line + 10);
-    } else if (strncmp(line, "usart tx ", 9) == 0) {
-        cmd_usart_tx(line + 9);
-    } else if (strncmp(line, "gpio set ", 9) == 0) {
-        cmd_gpio_set(line + 9);
-    } else if (strncmp(line, "gpio mode ", 10) == 0) {
-        cmd_gpio_mode(line + 10);
-    } else if (strcmp(line, "bench snapshot") == 0) {
-        cmd_bench_snapshot();
-    } else if (strcmp(line, "bench restore") == 0) {
-        cmd_bench_restore();
-    } else if (strncmp(line, "gpio read ", 10) == 0) {
-        cmd_gpio_read(line + 10);
-    } else if (strcmp(line, "gpio scan") == 0) {
-        cmd_gpio_scan();
-    } else if (strcmp(line, "buzzer test") == 0) {
-        cmd_buzzer_test("");
-    } else if (strncmp(line, "buzzer test ", 12) == 0) {
-        cmd_buzzer_test(line + 12);
-    } else if (strncmp(line, "mem read ", 9) == 0) {
-        cmd_mem_read(line + 9);
-    } else if (strncmp(line, "mem write ", 10) == 0) {
-        cmd_mem_write(line + 10);
-    } else if (strncmp(line, "trig2 ", 6) == 0) {
-        cmd_scope_trig2(line + 6);
-    } else if (strncmp(line, "trig ", 5) == 0) {
-        cmd_scope_trig(line + 5);
-    } else if (strcmp(line, "flash jedec") == 0) {
-        cmd_flash_jedec();
-    } else if (strncmp(line, "flash read ", 11) == 0) {
-        cmd_flash_read(line + 11);
-    } else if (strncmp(line, "flash dump ", 11) == 0) {
-        cmd_flash_dump(line + 11);
-    } else if (strncmp(line, "flash wtest ", 12) == 0) {
-        cmd_flash_wtest(line + 12);
-    } else if (strcmp(line, "flash diag") == 0) {
-        cmd_flash_diag();
-    } else if (strcmp(line, "screen dump") == 0) {
-        cmd_screen_dump("");
-    } else if (strncmp(line, "screen dump ", 12) == 0) {
-        cmd_screen_dump(line + 12);
-    } else if (strcmp(line, "screen dumpbin") == 0) {
-        cmd_screen_dumpbin("");
-    } else if (strncmp(line, "screen dumpbin ", 15) == 0) {
-        cmd_screen_dumpbin(line + 15);
-    } else if (strcmp(line, "screen shadow") == 0) {
-        cmd_screen_shadow("");
-    } else if (strncmp(line, "screen shadow ", 14) == 0) {
-        cmd_screen_shadow(line + 14);
-    } else if (strncmp(line, "fpga cmd ", 9) == 0) {
-        cmd_fpga_cmd(line + 9);
-    } else if (strncmp(line, "fpga frame ", 11) == 0) {
-        cmd_fpga_frame(line + 11);
-    } else if (strcmp(line, "fpga diag clear") == 0) {
-        cmd_fpga_diag_clear();
-    } else if (strcmp(line, "fpga selftest") == 0) {
-        cmd_fpga_selftest();
-#if defined(FPGA_ALT_BITSTREAM)
-    } else if (strncmp(line, "fpga dbgclk", 11) == 0) {
-        cmd_fpga_dbgclk(line[11] == ' ' ? line + 12 : "");
-    } else if (strncmp(line, "fpga dbgarm", 11) == 0) {
-        cmd_fpga_dbgarm(line[11] == ' ' ? line + 12 : "");
-#endif
-    } else if (strcmp(line, "fpga busrelease") == 0) {
-        cmd_fpga_bus_release();
-    } else if (strcmp(line, "fpga stock diag") == 0) {
-        cmd_fpga_stock_diag();
-    } else if (strcmp(line, "fpga stock clear") == 0) {
-        cmd_fpga_stock_clear();
-    } else if (strncmp(line, "fpga stock set ", 15) == 0) {
-        cmd_fpga_stock_set(line + 15);
-    } else if (strncmp(line, "fpga stock preset ", 18) == 0) {
-        cmd_fpga_stock_preset(line + 18);
-    } else if (strcmp(line, "fpga stock base2") == 0) {
-        cmd_fpga_stock_base2();
-    } else if (strncmp(line, "fpga stock state5", 17) == 0) {
-        cmd_fpga_stock_state5(line[17] == ' ' ? line + 18 : "");
-    } else if (strncmp(line, "fpga stock state6", 17) == 0) {
-        cmd_fpga_stock_state6(line[17] == ' ' ? line + 18 : "");
-    } else if (strcmp(line, "fpga stock prev") == 0) {
-        cmd_fpga_stock_prev();
-    } else if (strcmp(line, "fpga stock next") == 0) {
-        cmd_fpga_stock_next();
-    } else if (strcmp(line, "fpga stock select") == 0) {
-        cmd_fpga_stock_select();
-    } else if (strcmp(line, "fpga stock toggle") == 0) {
-        cmd_fpga_stock_toggle();
-    } else if (strcmp(line, "fpga stock commit") == 0) {
-        cmd_fpga_stock_commit();
-    } else if (strcmp(line, "fpga stock consume") == 0) {
-        cmd_fpga_stock_consume();
-    } else if (strcmp(line, "fpga stock bridge fixed") == 0) {
-        cmd_fpga_stock_bridge_fixed();
-    } else if (strncmp(line, "fpga stock bridge dynamic", 25) == 0) {
-        cmd_fpga_stock_bridge_dynamic(line[25] == ' ' ? line + 26 : "");
-    } else if (strcmp(line, "fpga stock reenter") == 0) {
-        cmd_fpga_stock_reenter();
-    } else if (strncmp(line, "fpga wire words ", 16) == 0) {
-        cmd_fpga_wire_words(line + 16);
-    } else if (strncmp(line, "fpga wire entry", 15) == 0) {
-        cmd_fpga_wire_entry(line[15] == ' ' ? line + 16 : "");
-    } else if (strncmp(line, "fpga wire scope", 15) == 0) {
-        cmd_fpga_wire_scope(line[15] == ' ' ? line + 16 : "");
-    } else if (strncmp(line, "fpga scope range ", 17) == 0) {
-        cmd_fpga_scope_range(line + 17);
-    } else if (strcmp(line, "fpga scope cal") == 0) {
-        cmd_fpga_scope_cal();
-    } else if (strncmp(line, "fpga scope vdiv", 15) == 0) {
-        cmd_fpga_scope_vdiv(line[15] == ' ' ? line + 16 : "");
-    } else if (strncmp(line, "fpga scope measure", 18) == 0) {
-        cmd_fpga_scope_measure(line[18] == ' ' ? line + 19 : "");
-    } else if (strncmp(line, "fpga scope freq", 15) == 0) {
-        cmd_fpga_scope_freq(line[15] == ' ' ? line + 16 : "");
-    } else if (strcmp(line, "settings") == 0) {
-        cmd_settings();
-    } else if (strncmp(line, "fpga scope timebase", 19) == 0) {
-        cmd_fpga_scope_timebase(line[19] == ' ' ? line + 20 : "");
-    } else if (strncmp(line, "fpga scope center", 17) == 0) {
-        cmd_fpga_scope_center(line[17] == ' ' ? line + 18 : "");
-    } else if (strncmp(line, "fpga usart", 10) == 0) {
-        cmd_fpga_usart(line[10] == ' ' ? line + 11 : "");
-    } else if (strncmp(line, "fpga rearm", 10) == 0) {
-        cmd_fpga_rearm(line[10] == ' ' ? line + 11 : "");
-    } else if (strncmp(line, "fpga rate", 9) == 0) {
-        cmd_fpga_rate(line[9] == ' ' ? line + 10 : "");
-    } else if (strcmp(line, "fpga scope reinit") == 0) {
-        cmd_fpga_scope_reinit();
-    } else if (strncmp(line, "fpga meter reinit", 17) == 0) {
-        cmd_fpga_meter_reinit(line[17] == ' ' ? line + 18 : "");
-    } else if (strcmp(line, "fpga scope wake") == 0) {
-        cmd_fpga_scope_wake();
-    } else if (strcmp(line, "fpga scope acqmode") == 0) {
-        cmd_fpga_scope_acqmode();
-    } else if (strncmp(line, "fpga scope beat", 15) == 0) {
-        cmd_fpga_scope_beat(line[15] == ' ' ? line + 16 : "");
-    } else if (strncmp(line, "fpga scope entry ", 17) == 0) {
-        cmd_fpga_scope_entry(line + 17);
-    } else if (strncmp(line, "fpga scope timing ", 18) == 0) {
-        cmd_fpga_scope_timing(line + 18);
-    } else if (strncmp(line, "fpga scope trig ", 16) == 0) {
-        cmd_fpga_scope_trig(line + 16);
-    } else if (strncmp(line, "mode", 4) == 0 && (line[4] == '\0' || line[4] == ' ' || line[4] == '\t')) {
-        const char *args = line + 4;
-        while (*args == ' ' || *args == '\t') args++;
-        cmd_mode(args);
-    } else if (strcmp(line, "meter dump") == 0) {
-        cmd_meter_dump("");
-    } else if (strncmp(line, "meter dump ", 11) == 0) {
-        cmd_meter_dump(line + 11);
-    } else if (strcmp(line, "meter autoscan") == 0) {
-        cmd_meter_autoscan("");
-    } else if (strncmp(line, "meter autoscan ", 15) == 0) {
-        cmd_meter_autoscan(line + 15);
-    } else if (strcmp(line, "meter auto") == 0) {
-        cmd_meter_auto_async("");
-    } else if (strncmp(line, "meter auto ", 11) == 0) {
-        cmd_meter_auto_async(line + 11);
-    } else if (strcmp(line, "meter trace") == 0) {
-        cmd_meter_trace();
-    } else if (strcmp(line, "meter frontend") == 0) {
-        cmd_meter_frontend();
-    } else if (strcmp(line, "meter probe-tail") == 0) {
-        cmd_meter_probe_tail("");
-    } else if (strncmp(line, "meter probe-tail ", 17) == 0) {
-        cmd_meter_probe_tail(line + 17);
-    } else if (strcmp(line, "meter boot-sequence") == 0) {
-        cmd_meter_boot_sequence("");
-    } else if (strncmp(line, "meter boot-sequence ", 20) == 0) {
-        cmd_meter_boot_sequence(line + 20);
-    } else if (strcmp(line, "meter pc11-timing") == 0) {
-        cmd_meter_pc11_timing("");
-    } else if (strncmp(line, "meter pc11-timing ", 18) == 0) {
-        cmd_meter_pc11_timing(line + 18);
-    } else if (strncmp(line, "meter mux-arms ", 15) == 0) {
-        cmd_meter_mux_arms(line + 15);
-    } else if (strcmp(line, "meter mux-stream") == 0) {
-        cmd_meter_mux_stream("");
-    } else if (strncmp(line, "meter mux-stream ", 17) == 0) {
-        cmd_meter_mux_stream(line + 17);
-    } else if (strcmp(line, "meter stream") == 0) {
-        cmd_meter_stream("");
-    } else if (strncmp(line, "meter stream ", 13) == 0) {
-        cmd_meter_stream(line + 13);
-    } else if (strcmp(line, "meter adc-snapshot") == 0) {
-        cmd_meter_adc_snapshot();
-    } else if (strcmp(line, "ui dump") == 0) {
-        cmd_ui_dump();
-    } else if (strcmp(line, "meter wave") == 0) {
-        cmd_meter_wave_args("");
-    } else if (strncmp(line, "meter wave ", 11) == 0) {
-        cmd_meter_wave_args(line + 11);
-    } else if (strncmp(line, "fpga acq", 8) == 0) {
-        cmd_fpga_acq(line[8] == ' ' ? line + 9 : "");
-    } else if (strncmp(line, "fpga reinit", 11) == 0) {
-        /* spi3_shell_claim (P0.1): the whole config sequence rides SPI3. */
-        if (spi3_shell_claim()) {
-            cmd_fpga_reinit(line[11] == ' ' ? line + 12 : "");
-            fpga_acq_resume();
+    /* Longest whole-word-prefix match over the table (see table comment). */
+    const shell_cmd_t *best = NULL;
+    size_t best_len = 0;
+    for (const shell_cmd_t *c = shell_cmds; c->name != NULL; c++) {
+        size_t n = strlen(c->name);
+        if (strncmp(line, c->name, n) != 0)
+            continue;
+        char next = line[n];
+        if (next != '\0' && next != ' ' && next != '\t')
+            continue;                     /* word boundary required */
+        if ((c->flags & SC_EXACT) && next != '\0')
+            continue;                     /* takes no arguments */
+        if (n > best_len) {
+            best = c;
+            best_len = n;
         }
-    } else if (strncmp(line, "spi3 xfer", 9) == 0) {
-        if (spi3_shell_claim()) {
-            cmd_spi3_xfer(line[9] == ' ' ? line + 10 : "");
-            fpga_acq_resume();
-        }
-    } else if (strncmp(line, "spi3 seq", 8) == 0) {
-        if (spi3_shell_claim()) {
-            cmd_spi3_seq(line[8] == ' ' ? line + 9 : "");
-            fpga_acq_resume();
-        }
-    } else if (strncmp(line, "spi3 read", 9) == 0) {
-        /* Memory-only (reads the acq task's published buffer) — no claim. */
-        cmd_spi3_read(line[9] == ' ' ? line + 10 : "");
-    } else if (strcmp(line, "reboot bootloader") == 0) {
-        cmd_reboot_bootloader();
-    } else if (strcmp(line, "spi3 acqread") == 0) {
-        if (spi3_shell_claim()) {
-            cmd_spi3_acqread();
-            fpga_acq_resume();
-        }
-    } else if (strncmp(line, "spi3 opread", 11) == 0) {
-        cmd_spi3_opread(line[11] == ' ' ? line + 12 : "");
-    } else if (strncmp(line, "spi3 opsweep", 12) == 0) {
-        cmd_spi3_opsweep(line[12] == ' ' ? line + 13 : "");
-    } else if (strncmp(line, "spi3 armtest", 12) == 0) {
-        if (spi3_shell_claim()) {
-            cmd_spi3_armtest(line[12] == ' ' ? line + 13 : "");
-            fpga_acq_resume();
-        }
-    } else if (strcmp(line, "spi3 gowin") == 0) {
-        if (spi3_shell_claim()) {
-            cmd_spi3_gowin();
-            fpga_acq_resume();
-        }
-    } else if (strncmp(line, "spi3 scopetest", 14) == 0) {
-        if (spi3_shell_claim()) {
-            cmd_spi3_scopetest(line[14] == ' ' ? line + 15 : "");
-            fpga_acq_resume();
-        }
-    } else if (strcmp(line, "spi3 acqtest") == 0) {
-        if (spi3_shell_claim()) {
-            cmd_spi3_acqtest();
-            fpga_acq_resume();
-        }
-    } else if (strcmp(line, "spi3 stock-readback") == 0) {
-        if (spi3_shell_claim()) {
-            cmd_spi3_stock_readback();
-            fpga_acq_resume();
-        }
-    } else if (strcmp(line, "spi3 h2txdiag") == 0 ||
-               strcmp(line, "spi3 h2verify") == 0) {
-        if (spi3_shell_claim()) {
-            cmd_spi3_h2txdiag();
-            fpga_acq_resume();
-        }
-    } else if (strcmp(line, "spi3 probe") == 0) {
-        /* Bit-bang SPI3 probe: disable SPI peripheral, manually toggle
-         * SCK and read MISO to test if the FPGA drives the line.
-         * spi3_shell_claim (P0.1): this block pokes the SPI peripheral's
-         * registers directly, so an unparked acq task would corrupt far
-         * more than one frame. */
-        if (!spi3_shell_claim()) return;
-        usb_send_str("=== SPI3 Bit-Bang Probe ===\r\n");
-
-        /* Read PB4 (MISO) idle state */
-        uint32_t miso_idle = (GPIOB->idt & (1 << 4)) ? 1 : 0;
-        usb_debug_printf("MISO idle (CS high): %lu\r\n", miso_idle);
-
-        /* Assert CS (PB6 LOW) */
-        GPIOB->clr = (1 << 6);
-        for (volatile int d = 0; d < 1000; d++);  /* brief delay */
-        uint32_t miso_cs = (GPIOB->idt & (1 << 4)) ? 1 : 0;
-        usb_debug_printf("MISO after CS assert: %lu\r\n", miso_cs);
-
-        /* Try reading through SPI peripheral */
-        volatile uint32_t *spi_sts = (volatile uint32_t *)0x40003C08;
-        volatile uint32_t *spi_dt  = (volatile uint32_t *)0x40003C0C;
-
-        /* Clear any pending RX data */
-        if (*spi_sts & 0x01) { (void)*spi_dt; }
-
-        /* Send 0x00 and read response */
-        uint32_t timeout = 100000;
-        while (!(*spi_sts & 0x02) && --timeout);  /* Wait TXE */
-        *spi_dt = 0x00;  /* Send dummy byte */
-        timeout = 100000;
-        while (!(*spi_sts & 0x01) && --timeout);  /* Wait RXNE */
-        uint8_t rx = (uint8_t)*spi_dt;
-        usb_debug_printf("SPI3 xfer(0x00) = 0x%02X (timeout=%lu)\r\n", rx, timeout);
-
-        /* Send 0x05 (FPGA query cmd) */
-        timeout = 100000;
-        while (!(*spi_sts & 0x02) && --timeout);
-        *spi_dt = 0x05;
-        timeout = 100000;
-        while (!(*spi_sts & 0x01) && --timeout);
-        rx = (uint8_t)*spi_dt;
-        usb_debug_printf("SPI3 xfer(0x05) = 0x%02X (timeout=%lu)\r\n", rx, timeout);
-
-        /* Send another 0x00 */
-        timeout = 100000;
-        while (!(*spi_sts & 0x02) && --timeout);
-        *spi_dt = 0x00;
-        timeout = 100000;
-        while (!(*spi_sts & 0x01) && --timeout);
-        rx = (uint8_t)*spi_dt;
-        usb_debug_printf("SPI3 xfer(0x00) = 0x%02X (timeout=%lu)\r\n", rx, timeout);
-
-        /* Deassert CS */
-        GPIOB->scr = (1 << 6);
-        usb_debug_printf("SPI3 STS: 0x%08lX  CTRL1: 0x%08lX\r\n",
-                         *spi_sts, *(volatile uint32_t *)0x40003C00);
-
-        /* Also check PC6 state */
-        usb_debug_printf("PC6 (SPI enable): %d\r\n",
-                         (GPIOC->idt & (1 << 6)) ? 1 : 0);
-        fpga_acq_resume();
-    } else if (strcmp(line, "uptime") == 0) {
-        cmd_uptime();
-    } else {
-        usb_debug_printf("Unknown command: '%s'  (type 'help')\r\n", line);
     }
+
+    if (best == NULL) {
+        usb_debug_printf("Unknown command: '%s'  (type 'help')\r\n", line);
+        return;
+    }
+
+    const char *args = line + best_len;
+    while (*args == ' ' || *args == '\t') args++;
+
+    if ((best->flags & SC_NEEDARGS) && *args == '\0') {
+        usb_send_str("Missing arguments. Usage:\r\n");
+        if (best->help != NULL)
+            usb_send_str(best->help);
+        return;
+    }
+
+    if (best->flags & SC_SPI3) {
+        if (!spi3_shell_claim())
+            return;
+        if (best->fn_args) best->fn_args(args); else best->fn_void();
+        fpga_acq_resume();
+        return;
+    }
+
+    if (best->fn_args) best->fn_args(args); else best->fn_void();
 }
 
 /* ═══════════════════════════════════════════════════════════════════

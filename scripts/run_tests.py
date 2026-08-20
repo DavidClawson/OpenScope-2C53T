@@ -51,6 +51,7 @@ SUITES = (
     "test_stock_hybrid_power_hold_patch.py",
     "test_stock_settings.py",
     "test_stock_settings_diff.py",
+    "test_shell_table.py",
     "test_firmware_build.py",
 )
 
