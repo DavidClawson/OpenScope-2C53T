@@ -42,6 +42,19 @@ bytes on GPIO. Bit-bang it, hold the run/enable lines for the engine arm, and th
 device boots from cold into a live scope on open firmware. See the
 [2026-08-13 entry](2026-08-13-cold-boot-to-scope.md).
 
-The main thread now is a *feature*, not a wall: **timebase control**, so the scope
-can display waveforms across the frequency range instead of just tracking slow
-levels.
+Timebase control is now **solved and measured** — it is SPI3 register `0x01`, a
+1-2-5 rate ladder, eight codes calibrated and agreeing with an independent rig on
+a different unit. Both scope axes carry real numbers as of 2026-08-19.
+
+The main thread now is **wiring the layer above acquisition**: the FFT, math,
+measurement and decoder code that is written, host-tested, and still fed
+synthetic input. The [feature maturity table](../../README.md#feature-maturity)
+tracks how far each one has actually been taken.
+
+Recent entries worth reading for method rather than result:
+
+- [The labels were never measured](2026-08-18-the-labels-were-never-measured.md) — a
+  volts/div table that nothing had ever derived from anything.
+- [The popup wasn't flickering. It was the flicker.](2026-08-19-the-popup-was-the-flash.md) —
+  a true comment in the wrong place becomes a decision, and fixing an
+  observability bug is how you find the bug underneath it.
