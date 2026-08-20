@@ -3066,8 +3066,24 @@ uint8_t fpga_acq_rate_idx_get(void)   { return acq_rate_idx; }
  * we skip the register write and report failure rather than risk the bus;
  * the caller keeps the old rate, which is honest, where a torn write would
  * leave the hardware at an unknown rate the label could not describe. */
-static void fpga_scope_write_reg(uint8_t reg, uint8_t val);   /* below */
 void fpga_reconcile_timebase_after_arm(void);                 /* below */
+
+/* One CS-framed scope-engine register write: opcode byte, value byte.
+ * Same shape as the five arm writes (fpga.c, FPGA_CONFIG_B_ARM block) — these
+ * are runtime opcodes on the configured user design, NOT Gowin config-port
+ * opcodes, and are bench-proven safe against a live design.
+ * Defined OUTSIDE the FPGA_WARM_HANDOFF_TEST block deliberately: its callers
+ * (fpga_apply_timebase below) exist in every build, and in non-warmtest
+ * builds only reach it behind fpga_acq_pause(), whose constant-false stub
+ * dead-codes the call — leaving the definition inside the block produced a
+ * "used but never defined" warning on app/emu/guest builds. */
+static void fpga_scope_write_reg(uint8_t reg, uint8_t val)
+{
+    SPI3_CS_ASSERT();
+    spi3_xfer(reg);
+    spi3_xfer(val);
+    SPI3_CS_DEASSERT();
+}
 
 bool fpga_apply_timebase(uint8_t code)
 {
@@ -3107,17 +3123,6 @@ bool fpga_apply_vdiv(uint8_t ch, uint8_t idx)
  * a CS frame. The task re-raises ack every parked cycle, so a stale ack from
  * a previous pause can never satisfy a new request. */
 
-/* One CS-framed scope-engine register write: opcode byte, value byte.
- * Same shape as the five arm writes (fpga.c, FPGA_CONFIG_B_ARM block) — these
- * are runtime opcodes on the configured user design, NOT Gowin config-port
- * opcodes, and are bench-proven safe against a live design. */
-static void fpga_scope_write_reg(uint8_t reg, uint8_t val)
-{
-    SPI3_CS_ASSERT();
-    spi3_xfer(reg);
-    spi3_xfer(val);
-    SPI3_CS_DEASSERT();
-}
 
 static volatile bool acq_pause_req = false;
 static volatile bool acq_pause_ack = false;
