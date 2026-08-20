@@ -82,7 +82,7 @@ reviewable promotion-ladder spec per feature.
 | Freq badge | **S3** | Spectral, with a held-out fixture and a bin-stratified assertion. Refuses on torn records instead of guessing; answers ~87% of bench captures and has never been wrong on them. |
 | Vpp / Vrms / Duty / Period badges | **S1** | Computed from real samples. Never validated against a known source, so treat the volts as provisional in the same way the vertical scale is. |
 | Trigger level | **S1** | Digital, SPI3 register `0x08`, an ADC code. Re-armed at boot. |
-| Settings persistence | **S2** | Real, to the external flash, via an append log. **Documented gap:** a change carries only if a further button press or an orderly power-off follows it — pull the power right after a change and it is lost. |
+| Settings persistence | **S2** | Commissioned on hardware 2026-08-20: first record ever written to the W25Q, then restored — and pushed into the FPGA — across three consecutive power cycles. Until that day every write was refused by a build-time interlock (`SETTINGS_PERSIST_WRITES=0`) no bench build had ever enabled, so this row previously said "real" while zero records existed — the matrix's first *over*statement. **Documented gap** (still true): a change carries only if a later button press or an orderly power-off follows it. |
 | Multimeter | **S1** | Works, and is accurate within a few percent on DCV and resistance — but **not in `guest-coldtrace`**, which holds USART2 dark. The two do not currently coexist. |
 | Signal generator | **S1** | Reachable; output has never been characterised against an instrument. |
 | Screenshot capture (BMP) | **S1** | Has a call site and writes to flash. |

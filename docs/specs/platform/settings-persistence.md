@@ -1,9 +1,13 @@
 # Spec: Settings persistence that actually persists
 
 **Track:** platform
-**Stage now:** S2, with an **open defect** — the boot reconcile has never once
-been observed to restore a persisted timebase (three consecutive failures,
-2026-08-19, including one committed through a documented immediate-flush point)
+**Stage now:** S2 — repaired and commissioned 2026-08-20. The "open defect"
+this spec shipped with lasted one bench session: writes were refused by a
+build-time interlock (`SETTINGS_PERSIST_WRITES=0`, `config.h`) whose
+supervised commissioning step had never been run. First record written,
+restored and pushed to the FPGA across three consecutive power cycles; the
+default is now 1 and every build persists. See the devlog,
+`2026-08-20-the-interlock-nobody-threw.md`.
 **Champion:** DavidClawson
 
 ## What it is
@@ -39,7 +43,7 @@ lands on the arm block's 0x08 either way).
 
 | To reach | Criterion (checkable) |
 |---|---|
-| S2 (repair) | Flash 5e659f2; read `settings` before and after a change + power cycle. The five fields must localise the failure to the write half or the load half. Then fix that half. Done when: change timebase → orderly power-off → boot prints `boot reconcile: pushed the persisted code` and the display shows the persisted code. Three consecutive passes (the failure was three consecutive, so the pass must be too). |
+| ~~S2 (repair)~~ | **DONE 2026-08-20.** The diagnostic localised it in four halving steps (region blank → detection works → flush fires → `flash wtest` green → `config.h:204`). Root cause was neither half broken: a commissioning interlock nobody had thrown. Three consecutive restore passes on unit #1, matching the three consecutive failures. |
 | S3 | Host test over the append-log encode/decode with corrupted-record and torn-write cases; on-device: a scripted `bench.py` change→cycle→verify loop as an acceptance test. Negative control: a build with the write path stubbed must fail the loop. |
 | S4 | Kill the settle-window foot-gun: either write-through on every change (measure flash wear first) or make the 2 s window flush on *every* screen exit, so "a change carries only if a later button press follows" stops being a sentence users need to read. |
 

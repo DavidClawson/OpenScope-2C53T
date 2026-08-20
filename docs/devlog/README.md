@@ -58,3 +58,7 @@ Recent entries worth reading for method rather than result:
 - [The popup wasn't flickering. It was the flicker.](2026-08-19-the-popup-was-the-flash.md) —
   a true comment in the wrong place becomes a decision, and fixing an
   observability bug is how you find the bug underneath it.
+- [The interlock nobody threw](2026-08-20-the-interlock-nobody-threw.md) — a
+  well-built safety gate with no commissioning date is a latent outage, and
+  the diagnostic that finally opened it had to un-conflate "refused by
+  choice" from "failed" — a lie the gated code itself had warned about.

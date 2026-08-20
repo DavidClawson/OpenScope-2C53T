@@ -768,11 +768,12 @@ guest-configB-arm: clean all
 # stays with OK: climbing, the readout works but the engine is still unarmed.
 # [LIVE] THE shippable rig. Cold boot -> configured FPGA -> live capture,
 #        bench-confirmed 2026-08-13. Start here when in doubt.
-# [LIVE] guest-persist — guest-coldtrace PLUS runtime settings persistence.
-# SETTINGS_PERSIST_WRITES defaults to 0 everywhere else (see src/util/config.h):
-# this is the ONLY build that writes the W25Q at runtime. Nothing in this
-# project has ever done that on hardware, so treat the first run as a
-# supervised bench step:
+# [LIVE] guest-persist — HISTORICAL: guest-coldtrace PLUS runtime settings
+# persistence. The supervised bench check below PASSED on 2026-08-20 (unit #1:
+# first record written, restored across three consecutive power cycles), so
+# SETTINGS_PERSIST_WRITES now defaults to 1 (src/util/config.h) and EVERY
+# build persists — this target is redundant but kept so the procedure that
+# commissioned the first runtime W25Q writer stays on record:
 #   1. Dump 0xF10000-0xF1FFFF first and confirm it is 0xFF-blank on the unit.
 #   2. Cold-boot check: config entry must still reach CFG:0003F460 (DONE_FINAL).
 #      settings_store_init() runs after fpga_init() so it should not perturb it.

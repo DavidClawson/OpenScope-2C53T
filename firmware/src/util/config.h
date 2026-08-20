@@ -154,10 +154,22 @@ bool config_deserialize(device_config_t *cfg, const uint8_t *buf, uint32_t buf_s
  * different unit or firmware revision claims those clusters is unverified.
  * Worst case there is losing settings or a screenshot, not calibration.
  *
- * It is off anyway because the failure is asymmetric: low probability, and —
+ * It stayed off because the failure is asymmetric: low probability, and —
  * until a factory-cal backup exists — no recovery path if the reasoning above
- * is wrong somewhere. Flip it on with `make guest-persist` for the supervised
- * bench check, and change this default only once that has passed on hardware.
+ * is wrong somewhere. The flip condition was: run the supervised bench check
+ * (`make guest-persist`), and change this default only once it passed.
+ *
+ * IT PASSED — 2026-08-20, bench unit #1. First record ever written (one
+ * 56-byte record at 0xF10000, verified raw over the shell), restored and
+ * pushed to the FPGA across THREE consecutive power cycles, byte-identical
+ * no-op elision confirmed across each power-off flush, and `flash wtest`
+ * green. The default is therefore now 1. The interlock did its job in both
+ * directions, at a price: between 2026-08-13 and 2026-08-20 nobody ran the
+ * commissioning step, every flush on every bench build silently refused, and
+ * a bench session blamed the write path — because the store's status counted
+ * this CHOSEN refusal as a write FAILURE, the exact conflation the paragraph
+ * below warned against, and nothing printed writes_enabled until the
+ * `settings` shell command grew the line on 2026-08-20.
  *
  * With writes disabled config_save() returns false and counts saves_disabled,
  * NOT saves_failed. A refusal we chose is not a failure we suffered, and any
@@ -165,7 +177,7 @@ bool config_deserialize(device_config_t *cfg, const uint8_t *buf, uint32_t buf_s
  * getting burned by.
  */
 #ifndef SETTINGS_PERSIST_WRITES
-#define SETTINGS_PERSIST_WRITES 0
+#define SETTINGS_PERSIST_WRITES 1
 #endif
 
 /* ── Persistence ─────────────────────────────────────────────────────

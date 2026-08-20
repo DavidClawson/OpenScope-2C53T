@@ -2533,6 +2533,23 @@ static void cmd_settings(void)
     usb_debug_printf("write failures: %lu\r\n", (unsigned long)st->write_failures);
     usb_debug_printf("changes seen  : %lu\r\n", (unsigned long)st->changes_seen);
     usb_debug_printf("live timebase : 0x%02X\r\n", (unsigned)ss->timebase_idx);
+
+    /* The store's "write failures" above conflates a refusal we chose with a
+     * failure we suffered — config.h:162 warns about exactly that lie, and on
+     * 2026-08-20 it cost a bench session: three power-cycle tests blamed the
+     * write path when the build had writes disabled. These lines make the
+     * distinction unmissable. */
+    const config_persist_stats_t *cs = config_persist_stats();
+    usb_debug_printf("writes enabled: %s\r\n",
+                     cs->writes_enabled
+                         ? "YES (SETTINGS_PERSIST_WRITES=1)"
+                         : "NO - SETTINGS_PERSIST_WRITES=0 in this build "
+                           "(default is 1 since the 2026-08-20 bench pass)");
+    usb_debug_printf("saves ok/fail/disabled: %lu/%lu/%lu  last save status: %ld\r\n",
+                     (unsigned long)cs->saves_ok,
+                     (unsigned long)cs->saves_failed,
+                     (unsigned long)cs->saves_disabled,
+                     (long)cs->last_save_status);
     usb_send_str("(a change carries only if a later button press or an "
                  "orderly power-off follows it - see settings_store.h)\r\n");
 }
