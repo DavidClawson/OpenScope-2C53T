@@ -43,6 +43,7 @@
 #include "meter_data.h"
 #include "ui.h"
 #include "../ui/scope_state.h"
+#include "../util/settings_store.h"
 #include "../ui/scope_cal.h"
 #include "../ui/scope_freq.h"
 #include "../ui/scope_timebase.h"
@@ -626,6 +627,7 @@ static void cmd_help(void)
         "fpga scope cal                  Dump the compiled vertical cal table (mV/count, V/div, tier)\r\n"
         "fpga scope freq [n]             Run the shipped frequency estimator n times, with diagnostics\r\n"
         "fpga scope timebase [code]      Set timebase in BOTH display state and reg 0x01 (hex)\r\n"
+        "settings                        Persistence status: bound, load result, writes, failures\r\n"
         "fpga usart [on|off]             Bring USART2 up post-config; show CTRL1+RX\r\n"
         "fpga rearm [on|off]             Stock post-read re-arm (reg01) A/B toggle\r\n"
         "fpga rate [hexidx]              reg-0x01 rate index the re-arm rewrites\r\n"
@@ -2497,6 +2499,44 @@ static void scope_center_one(uint8_t ch, uint16_t *out_dac, uint32_t *out_mean)
  * stale value". It reports the diagnostics the badge throws away: sharpness,
  * which window was used, and the interpolated bin.
  */
+/*
+ * `settings` — why did the boot reconcile say what it said?
+ *
+ * Added 2026-08-19 after three consecutive power cycles reported "pulled the
+ * display down to the arm block's 0x08", i.e. the restored timebase had no
+ * measured rate — including one run where the change was committed through a
+ * documented immediate-flush point (a mode switch). That is either a write
+ * that never reached flash or a load that never came back, and NOTHING ON THE
+ * DEVICE DISTINGUISHED THEM: settings_store_status_t has carried
+ * storage_bound, load_result, writes, write_failures and changes_seen since
+ * the store was written, and no caller ever read them.
+ *
+ * Same shape as the /2 SSPI reads, the floating MISO and the invented
+ * volts/div labels: a conclusion drawn from one bit, while the instrument that
+ * would have settled it already existed and was simply never wired up.
+ */
+static void cmd_settings(void)
+{
+    const settings_store_status_t *st = settings_store_get_status();
+    const scope_state_t *ss = scope_state_get();
+
+    if (st == NULL) {
+        usb_send_str("settings: no status\r\n");
+        return;
+    }
+
+    usb_debug_printf("storage bound : %s\r\n",
+                     st->storage_bound ? "YES" : "NO - nothing can persist");
+    usb_debug_printf("boot load     : %s\r\n",
+                     config_load_result_name(st->load_result));
+    usb_debug_printf("writes ok     : %lu\r\n", (unsigned long)st->writes);
+    usb_debug_printf("write failures: %lu\r\n", (unsigned long)st->write_failures);
+    usb_debug_printf("changes seen  : %lu\r\n", (unsigned long)st->changes_seen);
+    usb_debug_printf("live timebase : 0x%02X\r\n", (unsigned)ss->timebase_idx);
+    usb_send_str("(a change carries only if a later button press or an "
+                 "orderly power-off follows it - see settings_store.h)\r\n");
+}
+
 /* `fpga scope timebase [code]` — change the timebase the way the UI button
  * does, i.e. through the single entry point that updates BOTH the display
  * state and the hardware register. Writing reg 0x01 with a raw `seq 01 XX`
@@ -6418,6 +6458,8 @@ static void dispatch_command(char *line)
         cmd_fpga_scope_cal();
     } else if (strncmp(line, "fpga scope freq", 15) == 0) {
         cmd_fpga_scope_freq(line[15] == ' ' ? line + 16 : "");
+    } else if (strcmp(line, "settings") == 0) {
+        cmd_settings();
     } else if (strncmp(line, "fpga scope timebase", 19) == 0) {
         cmd_fpga_scope_timebase(line[19] == ' ' ? line + 20 : "");
     } else if (strncmp(line, "fpga scope center", 17) == 0) {
