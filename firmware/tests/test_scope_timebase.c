@@ -51,6 +51,41 @@ static void test_measured_codes(void)
               "code 0x%02X should be MEASURED", want[i].code);
     }
 
+    /*
+     * EXP-18: the four slow codes, which had never been swept because every
+     * session worked downward from 0x10. They are the best-resolved rows in
+     * the table (R2 1.0000 each).
+     */
+    const struct { uint8_t code; float fs; } slow[] = {
+        { 0x11, 4990.8f }, { 0x12, 2494.9f },
+        { 0x13, 1250.4f }, { 0x14, 500.2f },
+    };
+    for (unsigned i = 0; i < 4; i++) {
+        CHECK(fabsf(scope_timebase_sample_rate(slow[i].code) - slow[i].fs) < 1.0f,
+              "code 0x%02X: expected %.1f S/s, got %.1f", slow[i].code,
+              (double)slow[i].fs,
+              (double)scope_timebase_sample_rate(slow[i].code));
+        CHECK(scope_timebase_get_tier(slow[i].code) == SCOPE_TB_MEASURED,
+              "code 0x%02X should be MEASURED", slow[i].code);
+    }
+
+    /*
+     * The ladder is 1-2.5-5, NOT uniform x2 -- predicting 6,250 for 0x11 by
+     * assuming each step doubles was wrong by 25%. Encode the real shape so a
+     * future "correction" toward a uniform ladder fails here.
+     */
+    const struct { uint8_t lo, hi; float ratio; } steps[] = {
+        { 0x14, 0x13, 2.5f }, { 0x13, 0x12, 2.0f }, { 0x12, 0x11, 2.0f },
+        { 0x11, 0x10, 2.5f }, { 0x10, 0x0F, 2.0f }, { 0x0F, 0x0E, 2.0f },
+    };
+    for (unsigned i = 0; i < 6; i++) {
+        const float got = scope_timebase_sample_rate(steps[i].hi) /
+                          scope_timebase_sample_rate(steps[i].lo);
+        CHECK(fabsf(got - steps[i].ratio) < 0.05f,
+              "0x%02X/0x%02X should step by %.1fx, got %.3fx",
+              steps[i].hi, steps[i].lo, (double)steps[i].ratio, (double)got);
+    }
+
     /* The ladder roughly doubles downward; a transcription slip that swapped
      * two rows would break this. */
     CHECK(scope_timebase_sample_rate(0x0F) > 1.8f * scope_timebase_sample_rate(0x10),
@@ -146,7 +181,7 @@ static void test_precorrection_rates_stay_out(void)
 
 static void test_unmeasured_codes_return_zero(void)
 {
-    const uint8_t none[] = { 0, 1, 5, 7, 9, 0x0A, 0x0B, 0x0C, 0x11, 0x14 };
+    const uint8_t none[] = { 0, 1, 5, 7, 9, 0x0A, 0x0B, 0x0C };
 
     for (unsigned i = 0; i < sizeof(none) / sizeof(none[0]); i++) {
         CHECK(scope_timebase_sample_rate(none[i]) == 0.0f,
@@ -210,7 +245,10 @@ static void test_labels(void)
     CHECK(strcmp(buf, "641us") == 0,
           "0x0E label should be 641us, got \"%s\"", buf);
 
-    /* Provisional carries the marker. */
+    /* Provisional carries the marker. 0x0D was re-measured in EXP-18 (R2
+     * 0.9997, up from 0.947) but stays provisional: at ~124 kS/s the bench
+     * source only reaches bin 25, so it is the least-resolved row and misses
+     * the round ladder by 1.07% where every other code is inside 0.2%. */
     scope_timebase_label(0x0D, buf, sizeof(buf));
     CHECK(buf[0] == '~', "0x0D is PROVISIONAL and must be marked, got \"%s\"", buf);
 

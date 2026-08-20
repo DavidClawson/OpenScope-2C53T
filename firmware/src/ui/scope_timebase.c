@@ -56,11 +56,14 @@ static const float sample_rate[SCOPE_TIMEBASE_CODE_COUNT] = {
     /* 0x0A */      0.0f,        /* source too slow to measure (R2 -1.03)   */
     /* 0x0B */      0.0f,        /* source too slow to measure (R2 -0.05)   */
     /* 0x0C */      0.0f,        /* source too slow to measure (R2  0.60)   */
-    /* 0x0D */      119678.0f,   /* provisional — NOT re-measured, see below */
+    /* 0x0D */     123662.7f,   /* EXP-18 R2 0.9997 — provisional, bins 4-25 */
     /* 0x0E */       49930.1f,   /* EXP-17 slope fit, n=37, SE 31 S/s       */
     /* 0x0F */       24979.1f,   /* EXP-17 slope fit, n=29, SE 10 S/s       */
     /* 0x10 */       12490.0f,   /* EXP-17 slope fit, n=49, SE  2 S/s       */
-    /* 0x11-0x14 */ 0.0f, 0.0f, 0.0f, 0.0f,
+    /* 0x11 */        4990.8f,   /* EXP-18 R2 1.0000                        */
+    /* 0x12 */        2494.9f,   /* EXP-18 R2 1.0000, fold-tested           */
+    /* 0x13 */        1250.4f,   /* EXP-18 R2 1.0000                        */
+    /* 0x14 */         500.2f,   /* EXP-18 R2 1.0000                        */
 };
 
 /*
@@ -117,6 +120,52 @@ static const float sample_rate[SCOPE_TIMEBASE_CODE_COUNT] = {
  */
 
 /*
+ * EXTENDED 2026-08-19 (EXP-18). The calibrated ladder went from 4 codes to 8.
+ *
+ * Codes 0x11-0x14 had never been swept. Every earlier session worked downward
+ * from 0x10 and treated the unmeasured codes as a block, but the ones ABOVE
+ * 0x10 are SLOWER, which makes them EASIER to measure than anything already
+ * done -- more cycles per record, higher bins, better resolved. They were not
+ * hard. Nobody had looked.
+ *
+ *   0x11  4,990.8   R2 1.0000
+ *   0x12  2,494.9   R2 1.0000, fold-tested
+ *   0x13  1,250.4   R2 1.0000
+ *   0x14    500.2   R2 1.0000
+ *
+ * THE LADDER IS 1-2.5-5, NOT UNIFORM x2. Predicted 6,250 for 0x11 by assuming
+ * each step doubles; measured 4,990.8. The real sequence is
+ * 500 / 1250 / 2500 / 5000 / 12500 / 25000 / 50000 / 125000 -- ratios
+ * 2.5, 2, 2, 2.5, 2, 2, 2.5. Every measured code lands within 0.2% of it,
+ * except 0x0D (see below). Prediction beaten by measurement, again, and in
+ * the direction that matters: the wrong prediction was the round-looking one.
+ *
+ * FOLD TEST at 0x12 (Nyquist 1,247 Hz): five tones from 1.4 to 3.0 kHz land
+ * where 2,494.9 S/s says they alias to, worst miss 2.4 bins of 512. Aliasing
+ * depends only on f/fs, so this is scale-invariant -- it tests the rate, not
+ * the arithmetic that produced it.
+ *
+ * 0x0D RE-MEASURED, and it is the first evidence for EXP-17's untested
+ * mechanism. The old 119,678 came from a sweep through `spi3 opread`, whose
+ * slow /256 burst lets the engine lap the buffer (6 reads in 12 torn). Read
+ * instead through `spi3 read` -- 0 in 12 torn since the snapshot fix -- the
+ * same code gives 123,662.7 with R2 going 0.947 -> 0.9997, and its distance
+ * from the round 125,000 drops from -4.26% to -1.07%. EXP-17 could only offer
+ * torn records as a plausible story; this is a controlled-ish test of it (same
+ * code, same rig, different read path) and it went the predicted way.
+ *
+ * It stays PROVISIONAL regardless: at ~124 kS/s the bench source only reaches
+ * bin 25, so this is the least-resolved code in the table and -1.07% is a
+ * bigger miss than every other code by a factor of five.
+ *
+ * NOT CHASED, worth recording: the INCOHERENT band 0x06-0x09 fitted to
+ * 1,231 / 1,595 / 1,350 / 1,550 S/s -- all close to 0x13's 1,250. If the rate
+ * field is narrower than the codes we write, or those codes select roll mode
+ * rather than a rate, that would explain both the clustering and why the
+ * numbers do not reproduce. Untested.
+ */
+
+/*
  * Why each code is where it is. Three distinct kinds of "no":
  *
  *   0x06-0x09     INCOHERENT. Measured, and the records do not reproduce.
@@ -157,7 +206,10 @@ static const scope_tb_tier_t tier_by_code[SCOPE_TIMEBASE_CODE_COUNT] = {
     SCOPE_TB_MEASURED,      /* 0x0E              */
     SCOPE_TB_MEASURED,      /* 0x0F              */
     SCOPE_TB_MEASURED,      /* 0x10              */
-    SCOPE_TB_NONE, SCOPE_TB_NONE, SCOPE_TB_NONE, SCOPE_TB_NONE,
+    SCOPE_TB_MEASURED,      /* 0x11 EXP-18       */
+    SCOPE_TB_MEASURED,      /* 0x12 EXP-18       */
+    SCOPE_TB_MEASURED,      /* 0x13 EXP-18       */
+    SCOPE_TB_MEASURED,      /* 0x14 EXP-18       */
 };
 
 float scope_timebase_sample_rate(uint8_t code)
