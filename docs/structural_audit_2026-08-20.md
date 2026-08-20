@@ -27,6 +27,10 @@ before "fixing" anything in its list.
 > raw `spi3` shell command while the scope runs (parks cleanly, no desync),
 > and a settings save/power-cycle round trip (the write path now verifies).
 > The text below is kept as written, as the record of what was found.
+>
+> **Also landed same day:** the P3/8.9 shell command table (`4a612a7`) —
+> dispatch, bus-safety flag and help now live in one row per command,
+> guarded by `scripts/test_shell_table.py` (negative-controlled).
 
 ### P0.1 [V] SPI3 has no real ownership — the park is a no-op in default builds
 `fpga.c` `fpga_acq_pause()`: in every non-warmtest build the body is
