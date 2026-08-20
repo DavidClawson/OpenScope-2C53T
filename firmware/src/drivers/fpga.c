@@ -5398,12 +5398,21 @@ BaseType_t fpga_send_cmd(uint8_t cmd_high, uint8_t cmd_low)
     if (!fpga.initialized) return pdFALSE;
 
     /* Use interrupt-driven TX via the dvom_TX task queue.
-     * Non-blocking send — don't stall the calling task. */
-    if (usart_tx_queue != NULL) {
+     * Non-blocking send — don't stall the calling task.
+     * The scheduler-state check matters (audit 2026-08-20, P0.5): main()
+     * enters the boot mode (fpga_set_meter_mode / fpga_enter_scope_mode)
+     * AFTER fpga_create_tasks() but BEFORE vTaskStartScheduler(), so the
+     * queue exists with no consumer running — a long mode-entry sequence
+     * silently overflowed the depth-10 queue and truncated mid-sequence.
+     * Pre-scheduler, send polled instead (safe: the ISR TX engine cannot be
+     * mid-frame before the scheduler starts). fpga_timed_send_cmd() has
+     * always carried this same guard. */
+    if (usart_tx_queue != NULL &&
+        xTaskGetSchedulerState() == taskSCHEDULER_RUNNING) {
         uint16_t item = ((uint16_t)cmd_high << 8) | cmd_low;
         return xQueueSend(usart_tx_queue, &item, 0);  /* non-blocking */
     }
-    /* Fallback to polled if queue not created yet */
+    /* Fallback to polled if queue not created yet / scheduler not started */
     usart2_send_cmd(cmd_high, cmd_low);
     return pdTRUE;
 }

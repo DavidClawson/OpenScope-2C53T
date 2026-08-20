@@ -20,6 +20,14 @@ before "fixing" anything in its list.
 
 ## P0 — produces wrong data or wrong behavior today
 
+> **STATUS 2026-08-20 (same day): ALL FIVE P0 ITEMS ARE FIXED IN CODE.**
+> P0.3 + P0.4 in `9d22750`; P0.1 + P0.2 in `ec8da20`; P0.5 in the commit
+> after it. Host suites green throughout. **Bench validation pending** —
+> the next flash should confirm: coldtrace boot → live trace → badges → one
+> raw `spi3` shell command while the scope runs (parks cleanly, no desync),
+> and a settings save/power-cycle round trip (the write path now verifies).
+> The text below is kept as written, as the record of what was found.
+
 ### P0.1 [V] SPI3 has no real ownership — the park is a no-op in default builds
 `fpga.c` `fpga_acq_pause()`: in every non-warmtest build the body is
 `return true;` with a comment arguing the queue-driven task only acts on
