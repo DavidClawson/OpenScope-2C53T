@@ -42,6 +42,10 @@ typedef enum {
 #ifdef FEATURE_FFT
     DCMD_DRAW_FFT,
 #endif
+    /* Not a real command: what the display task rewrites a received command
+     * to while ui_modal_active, so it falls through to `default:` untouched.
+     * Never send this. */
+    DCMD_NONE_MODAL_DROP = 0xFE,
 } display_cmd_t;
 
 /* Button IDs */
@@ -107,6 +111,11 @@ extern volatile uint8_t       fuse_type;           /* fuse_type_t: ATO, Mini, et
 extern volatile uint8_t       fuse_rating_idx;     /* Index into fuse table for selected type */
 extern volatile uint8_t       fuse_view;           /* FUSE_VIEW_DETAIL/MULTI/SCAN */
 extern volatile float         fuse_scan_threshold_mv; /* Pass/fail threshold in mV */
+
+/* Modal overlay lock (defined in main.c) — while true the display task
+ * renders nothing, so an overlay drawn from another task survives. Owner
+ * must clear it and send DCMD_REDRAW_ALL to hand the screen back. */
+extern volatile bool          ui_modal_active;
 
 /* Scope feature toggles (defined in main.c) */
 extern volatile bool          math_enabled;

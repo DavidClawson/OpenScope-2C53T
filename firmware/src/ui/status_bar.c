@@ -186,9 +186,34 @@ void draw_info_bar(void)
     }
 }
 
-/* Draw the splash screen */
+/* Boot splash.
+ *
+ * If a generated splash_image.h exists (see scripts/generate_splash.py — any
+ * PNG/JPG dropped at firmware/assets/splash.png, letterboxed to 320x240 and
+ * RLE-compressed at build-prep time), draw that. Otherwise fall back to the
+ * original text splash, so the build never depends on the asset pipeline. */
+#if defined(__has_include)
+#  if __has_include("splash_image.h")
+#    include "splash_image.h"
+#  endif
+#endif
+
 void draw_splash(void)
 {
+#ifdef SPLASH_IMAGE_H
+    /* Stream the RLE image straight into one full-screen window. Records are
+     * (uint8 run, uint16 LE color); runs cross row boundaries freely. */
+    lcd_set_window(0, 0, SPLASH_IMAGE_WIDTH, SPLASH_IMAGE_HEIGHT);
+    const uint8_t *p   = splash_image_rle;
+    const uint8_t *end = splash_image_rle + sizeof(splash_image_rle);
+    while (p + 3 <= end) {
+        uint8_t  run   = p[0];
+        uint16_t color = (uint16_t)(p[1] | ((uint16_t)p[2] << 8));
+        p += 3;
+        while (run--)
+            lcd_write_data(color);
+    }
+#else
     lcd_clear(COLOR_BLACK);
 
     /* Title - large font, centered */
@@ -200,7 +225,7 @@ void draw_splash(void)
                             COLOR_WHITE, COLOR_BLACK, &font_medium);
 
     /* Hardware info */
-    font_draw_string_center(LCD_WIDTH / 2, 125, "GD32F307 | FreeRTOS",
+    font_draw_string_center(LCD_WIDTH / 2, 125, "AT32F403A | FreeRTOS",
                             COLOR_GRAY, COLOR_BLACK, &font_small);
     font_draw_string_center(LCD_WIDTH / 2, 142, "ST7789V 320x240",
                             COLOR_GRAY, COLOR_BLACK, &font_small);
@@ -210,4 +235,5 @@ void draw_splash(void)
                             COLOR_DARK_GRAY, COLOR_BLACK, &font_small);
     font_draw_string_center(LCD_WIDTH / 2, 206, "DavidClawson/OpenScope-2C53T",
                             COLOR_DARK_GRAY, COLOR_BLACK, &font_small);
+#endif
 }

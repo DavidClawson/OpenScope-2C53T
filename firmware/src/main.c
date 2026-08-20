@@ -76,6 +76,14 @@ volatile uint8_t       fuse_rating_idx = 4;          /* Default to 10A (index 4 
 volatile uint8_t       fuse_view = 0;                /* FUSE_VIEW_DETAIL */
 volatile float         fuse_scan_threshold_mv = 0.5f; /* Pass/fail threshold */
 
+/* Modal overlay lock. While true, the display task suppresses ALL rendering
+ * (queue commands are drained and dropped, periodic repaints skipped) so an
+ * overlay painted from another task — currently only the BTN_POWER shutdown
+ * countdown in input_handler.c — stays on screen instead of being overdrawn
+ * by the next scope frame. The overlay owner clears the flag and sends
+ * DCMD_REDRAW_ALL to hand the screen back. */
+volatile bool          ui_modal_active = false;
+
 /* Scope feature toggles */
 volatile bool          math_enabled = false;
 volatile uint8_t       math_op = 0;        /* MATH_ADD */
@@ -402,9 +410,11 @@ static void vDisplayTask(void *pvParameters)
     uint8_t cmd;
     uint32_t frame = 0;
 
-    /* Show splash screen for 2 seconds */
-    draw_splash();
-    vTaskDelay(pdMS_TO_TICKS(2000));
+    /* The splash is already on screen — main() paints it before the backlight
+     * comes up and before the FPGA config sequence, so by the time this task
+     * runs it has typically been visible for seconds. Hold it briefly for
+     * builds where init is fast (emulator, warm boots), then move on. */
+    vTaskDelay(pdMS_TO_TICKS(750));
 
     /* Initial draw */
     lcd_clear(COLOR_BLACK);
@@ -439,8 +449,16 @@ static void vDisplayTask(void *pvParameters)
             last_rendered_mode = current_mode;
         }
 
-        /* Check for commands (non-blocking with short timeout for animation) */
+        /* Check for commands (non-blocking with short timeout for animation).
+         * While a modal overlay owns the screen (ui_modal_active), commands
+         * are still drained — senders must never block — but dropped instead
+         * of rendered: one frame painted here would overdraw the overlay,
+         * which is exactly the countdown flicker this flag exists to stop.
+         * The overlay owner ends with DCMD_REDRAW_ALL, which repaints
+         * everything a dropped command would have. */
         if (xQueueReceive(xDisplayQueue, &cmd, pdMS_TO_TICKS(50)) == pdTRUE) {
+            if (ui_modal_active)
+                cmd = DCMD_NONE_MODAL_DROP;
             switch (cmd) {
             case DCMD_DRAW_SPLASH:
                 draw_splash();
@@ -546,7 +564,18 @@ static void vDisplayTask(void *pvParameters)
          * flicker from the full-area lcd_fill_rect + repaint sequence.
          * The meter was gated then; scope and siggen were gated on
          * 2026-08-13 (B2) via redraw_gate.h — see the epoch functions
-         * above. All three data modes are now gated the same way. */
+         * above. All three data modes are now gated the same way.
+         *
+         * ui_modal_active suppresses this whole section: while the shutdown
+         * countdown (or any future modal) owns the screen, a live scope
+         * would otherwise overdraw it within one 50 ms tick — the "flashing
+         * countdown" bug (2026-08-20). Acquisition heartbeats pause with it;
+         * three seconds of paused re-arm is harmless and resumes on the
+         * DCMD_REDRAW_ALL that ends every modal. */
+        if (ui_modal_active) {
+            frame++;
+            continue;
+        }
         if (current_mode == MODE_OSCILLOSCOPE) {
             const scope_state_t *ss_anim = scope_state_get();
             if (ss_anim->running) {
@@ -789,9 +818,14 @@ int main(void)
     GPIOC->clr   = (1u << 11);                                    /* PC11 LOW (scope) */
 #endif
 
-    /* PB8 = LCD backlight ON */
+    /* PB8 = LCD backlight — configured as output but held LOW (dark) until
+     * the panel has been initialized and the first frame painted. Raising it
+     * here used to light the ST7789V's uninitialized GRAM for the entire LCD
+     * init window (~0.7 s of visible static at every boot). The pin floats
+     * during the bootloader, so drive it LOW explicitly for a deterministic
+     * dark panel; it goes HIGH right after draw_splash() below. */
     GPIOB->cfghr = (GPIOB->cfghr & ~(0xF << 0)) | (0x3 << 0); /* PB8 push-pull 50MHz */
-    GPIOB->scr = (1 << 8);
+    GPIOB->clr = (1 << 8);
 #endif
 
     /* Initialize battery ADC (PB1) */
@@ -854,7 +888,17 @@ int main(void)
     }
 
     wdt_counter_reload();
-    /* LCD init complete — UI will be drawn by FreeRTOS display task */
+
+    /* First frame, then light the backlight. Painting before PB8 goes HIGH is
+     * what eliminates the boot static (uninitialized GRAM was visible from
+     * the moment the backlight rose until the display task's first draw).
+     * Drawing the splash HERE — not in the display task — also means the
+     * multi-second FPGA config sequence below runs behind the logo instead of
+     * behind garbage. The display task takes over rendering from this point. */
+    draw_splash();
+#ifndef EMULATOR_BUILD
+    GPIOB->scr = (1 << 8);  /* PB8 = backlight ON, panel already showing splash */
+#endif
 
 #if CAL_DUMP_MODE
     /* `make guest-caldump` only. Reports MCU flash 0x08006000..0x08006FFF —

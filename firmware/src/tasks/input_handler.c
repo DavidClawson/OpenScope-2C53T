@@ -800,16 +800,23 @@ uint8_t input_handle_button(button_id_t button, QueueHandle_t dq)
                 while (1) { }
             }
 
-            /* Draw "Hold to power off" overlay */
-            lcd_fill_rect(60, 80, 200, 80, bg);
-            lcd_fill_rect(61, 81, 198, 78, bg);
-            font_draw_string_center(160, 88, "Hold to power off",
-                                    th->warning, bg, &font_medium);
+            /* Claim the screen. The display task keeps repainting live modes
+             * every 50 ms tick, so an overlay drawn inline from this task was
+             * overdrawn within one frame in scope mode ("flashing countdown",
+             * 2026-08-20). ui_modal_active makes the display task drop all
+             * rendering; the short delay lets a frame already in flight
+             * finish before we paint over it. */
+            ui_modal_active = true;
+            vTaskDelay(pdMS_TO_TICKS(120));
 
-            /* Countdown 3..2..1 while POWER button held */
+            /* Countdown 3..2..1 while POWER button held. The full overlay is
+             * repainted each second (cheap: one rect + two strings) so even a
+             * frame that slipped past the modal claim heals within 1 s. */
             for (int countdown = 3; countdown > 0; countdown--) {
                 char digit[2] = { '0' + countdown, '\0' };
-                lcd_fill_rect(140, 115, 40, 30, bg);
+                lcd_fill_rect(60, 80, 200, 80, bg);
+                font_draw_string_center(160, 88, "Hold to power off",
+                                        th->warning, bg, &font_medium);
                 font_draw_string_center(160, 115, digit,
                                         th->text_primary, bg, &font_large);
 
@@ -818,7 +825,8 @@ uint8_t input_handle_button(button_id_t button, QueueHandle_t dq)
                     vTaskDelay(pdMS_TO_TICKS(50));
                     /* PC8 active LOW — if released, cancel */
                     if (GPIOC->idt & (1U << 8)) {
-                        /* Button released — cancel, redraw */
+                        /* Button released — cancel, hand the screen back */
+                        ui_modal_active = false;
                         send_cmd(dq, DCMD_REDRAW_ALL);
                         goto power_done;
                     }
