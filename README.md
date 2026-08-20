@@ -20,7 +20,7 @@ The FNIRSI 2C53T is a capable $75 handheld 3-in-1 instrument held back by buggy 
 
 ## Current Status
 
-**Custom firmware runs on real hardware, and it captures.** On 2026-08-13, bench unit #1 powered on into this firmware, configured the FPGA over SSPI (status `0x00039020` → `0x0003F460`, `DONE_FINAL` set), armed the capture engine, and drew live traces from real ADC data on both channels — reproducibly across power cycles. Active development has moved from *getting data at all* to **timebase control and calibration**, i.e. making the captured data mean something.
+**Custom firmware runs on real hardware, and it captures.** On 2026-08-13, bench unit #1 powered on into this firmware, configured the FPGA over SSPI (status `0x00039020` → `0x0003F460`, `DONE_FINAL` set), armed the capture engine, and drew live traces from real ADC data on both channels — reproducibly across power cycles. Both axes now carry measured numbers: per-range volts/div on both channels (2026-08-18) and eight measured sample rates on the timebase ladder (2026-08-19), each cross-checked against an independent rig. Active development has moved to **wiring the layer above acquisition** — the FFT, math and measurement code that is written and tested but still fed synthetic input.
 
 ### Seeing live waveforms today
 
@@ -40,53 +40,65 @@ Three caveats, stated plainly:
 - **It is not the default `make guest` boot path yet.** Folding it in is on the roadmap.
 
 ### Working on hardware today
-- **Live oscilloscope capture from a cold boot** (`guest-coldtrace` build only) — MCU-driven FPGA configuration, engine arm, and per-channel `0x04`/`0x05` readout feeding the scope trace
+
+The short version; see [Feature maturity](#feature-maturity) below for how far each one has actually been taken.
+
+- **Live oscilloscope capture from a cold boot** (`guest-coldtrace` only) — MCU-driven FPGA configuration, engine arm, and per-channel `0x04`/`0x05` readout
+- **Measured volts/div and time/div**, with uncalibrated ranges labelled `--` rather than guessed
 - 4 navigable UI modes: oscilloscope, multimeter, signal generator, settings
-- 4 color themes (Dark Blue, Classic Green, High Contrast, Night Red)
-- Variable-width bitmap fonts at 4 sizes (12/16/24/48px)
-- FreeRTOS with display + input tasks
-- 15/15 button matrix scanning at 500Hz
-- Battery monitor with percentage, USB charge detection, low-battery auto-off
-- Soft power management (3-2-1 countdown shutdown)
-- Watchdog and health monitoring
+- 4 color themes, variable-width bitmap fonts at 4 sizes
+- FreeRTOS with display + input tasks; 15/15 button matrix at 500 Hz
+- Settings that survive a power cycle, to external flash
+- Battery monitor, soft power management, watchdog and health monitoring
 - USB HID bootloader for closed-case firmware updates
-- FPGA USART communication (bidirectional, meter data flowing)
+- FPGA USART communication (meter data flowing — but not in the capture build)
 
-### Written but not usable yet — read this before getting excited
+### Feature maturity
 
-Capture starting to work on 2026-08-13 did **not** light up the feature list below. Nothing above the acquisition layer was ever wired to the ADC, so these split into two groups, and neither means "works".
+Every feature sits at one of five stages. The stages are cumulative, and the
+last two exist because this project has repeatedly shipped a number that was
+plausible, stable and wrong.
 
-**Reachable in the UI, but running on synthetic input.** You can navigate to these screens and they will draw something. What they draw is not your signal.
+| | Stage | What it means |
+|---|---|---|
+| **S0** | Written | Code and host tests exist. Nothing on the device reaches it — it is compiled and garbage-collected out of the image, or it draws from a synthetic source. |
+| **S1** | Wired | Reachable on the device and fed by real hardware data. |
+| **S2** | Measured | Checked on the bench against a known input, with the number and the method written up in [`docs/experiments/`](docs/experiments/). |
+| **S3** | Guarded | A regression test would catch it breaking — ideally with a negative control, or data held out from whatever was tuned. |
+| **S4** | Polished | The UX has been considered: legible, responsive, and honest when it cannot answer. |
 
-| Feature | What it's actually fed |
-|---|---|
-| FFT spectrum analyzer + waterfall | A synthetic 1 kHz square wave generated on the spot (`scope_ui.c:1295`, `:1477`) |
-| Math channels (CH1+CH2, CH1−CH2, CH1×CH2, invert) | A hardcoded sine lookup table and square wave (`scope_ui.c:688`) |
-| Bode plot | A generated demo response of a 1st-order low-pass (`bode_ui.c:45`) |
-| Scope measurement badges (Freq / Vpp / Vrms / Duty / Period) | **Nothing — they are literal strings** (`scope_ui.c:266`) |
+Nothing is at S4 yet.
 
-**Code exists with host tests, but has no call site in the firmware.** These are compiled and then garbage-collected out of the image. There is no way to reach them from the UI at all:
+| Feature | Stage | Where it actually stands |
+|---|---|---|
+| Cold-boot FPGA configuration | **S2** | Bit-banged SSPI only. The same bytes through the SPI3 peripheral are still silently discarded. |
+| Live capture, CH1 | **S2** | Reproducible across power cycles on one unit. |
+| Live capture, CH2 | **S1** | One usable attenuator tap; every other code parks at a fixed level. Its vertical offset reference (TMR13 CH1 PWM on PA6) has never been programmed, which is the leading explanation. |
+| Vertical scale (volts/div) | **S3** | Ranges 5/6/7 measured and cross-validated four ways; 4/8/9 provisional and marked `~`; 0–3 rail and return `0.0`, with callers falling back to ADC counts. **Absolute scale is unverified** — every gain traces to an amplitude commanded from an unchecked source. One constant fixes it when a trusted source arrives. |
+| Horizontal scale (time/div) | **S3** | 8 of 21 timebase codes measured; the rest show `--` rather than a guess. The UI button reaches the FPGA as of 2026-08-19 — before that it moved a label and nothing else. |
+| Freq badge | **S3** | Spectral, with a held-out fixture and a bin-stratified assertion. Refuses on torn records instead of guessing; answers ~87% of bench captures and has never been wrong on them. |
+| Vpp / Vrms / Duty / Period badges | **S1** | Computed from real samples. Never validated against a known source, so treat the volts as provisional in the same way the vertical scale is. |
+| Trigger level | **S1** | Digital, SPI3 register `0x08`, an ADC code. Re-armed at boot. |
+| Settings persistence | **S2** | Real, to the external flash, via an append log. **Documented gap:** a change carries only if a further button press or an orderly power-off follows it — pull the power right after a change and it is lost. |
+| Multimeter | **S1** | Works, and is accurate within a few percent on DCV and resistance — but **not in `guest-coldtrace`**, which holds USART2 dark. The two do not currently coexist. |
+| Signal generator | **S1** | Reachable; output has never been characterised against an instrument. |
+| Screenshot capture (BMP) | **S1** | Has a call site and writes to flash. |
+| Rendering path | **S1** | Flicker-free column compositor with a redraw gate. The scope trace **autoscales** to fill the band, so the vertical graticule does not currently mean the volts/div the status bar prints. |
+| FFT spectrum + waterfall | **S0** | Fed a synthetic 1 kHz square wave generated on the spot. |
+| Math channels | **S0** | Fed a hardcoded sine LUT and square wave. |
+| Bode plot | **S0** | A generated demo response of a first-order low-pass. |
+| Protocol decoders (UART/SPI/I2C/CAN/K-Line) | **S0** | No call sites. |
+| Auto-measurements | **S0** | `measurement_compute()` has no caller. |
+| XY / roll / trend / mask testing | **S0** | No call sites. |
+| `modules/` | **S0** | Four empty directories. No schema, no loader, no content. |
 
-- Protocol decoders (UART, SPI, I2C, CAN, K-Line/KWP2000) — no call sites
-- Auto-measurements — `measurement_compute()` has zero call sites
-- Persistence, XY mode, roll mode, trend plotting, mask/pass-fail testing
-- Screenshot capture (BMP) — no caller
-- Config save/load with checksum — `config_save()` has no callers and writes to a **static RAM buffer** (`config.c:142`); the filesystem layer under it is still a stub, so **nothing persists across a power cycle**
-- `modules/` is four empty directories. There is no schema, no loader, and no content.
+### Sharp edges — read before trusting the screen
 
-The signal generator and component tester are reachable from the UI; their output has not been characterized against instruments, so treat them as unverified rather than working.
-
-Wiring this layer to real acquisition is the work that follows timebase and calibration — the DSP is genuinely written and tested, it just has nothing real plugged into it.
-
-### What does not work yet
-
-- **Timebase — the main thread now.** The build never sets an FPGA sample rate, so every sweep is the same ~microsecond snapshot. Slow signals render as a moving level; a 1 Hz square is crisp, a 2 Hz sine stair-steps, 50 Hz and up freezes to a stuck level. Netlist analysis of the stock bitstream says there is **no rate-control register in the capture path at all**, which points the fix at MCU-side read pacing rather than an FPGA divisor — that is the current investigation.
-- **⚠️ The measurement badges on the scope screen are fake.** Freq, Vpp, Vrms, Duty and Period render as fixed strings — `1.00kHz`, `707mV`, `50.0%`, `1.00ms` — hardcoded at `scope_ui.c:266`. They look exactly like live measurements and they are not connected to anything. `measurement_compute()` exists, is tested, and is never called. **Do not read a number off the scope screen and believe it.**
-- **Per-range vertical calibration is a placeholder.** Baseline ~55, trace clips at the top of the plot. Needs known signals at known amplitudes on a bench, which is a maintainer-only task.
-- **CH2's trigger reference is decoded but unverified.** Stock drives it from a TMR13 CH1 PWM-DAC on PA6 (`C1DT @ 0x40001C34`), which our firmware historically never programmed. The bring-up exists behind `make guest-warmtest-ch2` and PA6's identity has not been confirmed on hardware, so treat CH2 triggering as unproven.
-- **Only the bit-banged configuration path works.** Config succeeds when the SSPI handshake is bit-banged on GPIO; the same bytes through the SPI3 hardware peripheral still get silently discarded (`0x00039020`, `DONE_FINAL` clear). We ran the obvious single-variable test on 2026-08-13 — the `0x05` ERASE_SRAM frame that the two paths disagree about — and **it made no difference**, so the cause is somewhere in our SPI3 setup or framing, not the prelude contents. Stock configures the same part over hardware SPI, so this is a real unexplained gap and not a property of the peripheral.
-- **Rendering is slow in places.** The FFT waterfall repaints by issuing one fill per pixel column (20,480 draw calls per frame) and visibly rasters across the screen; the scope and signal-generator screens still repaint unconditionally rather than on change. A rendering pass is queued.
-- **The USB CDC debug shell does not enumerate on every build.** On our bench unit it correlates exactly with which configuration path the image uses, but the mechanism is unestablished. It is a diagnostic channel, not a user feature, and the LCD debug overlay covers the same ground.
+- **The vertical graticule is not the volts/div label.** The renderer autoscales every frame from the buffer's own min/max, a deliberate choice from when we had no measured gains and no offset control. The volts/div in the status bar is now genuinely measured, so the two disagree. Reconciling them is queued.
+- **Absolute vertical scale is uncalibrated.** All gains are relative to a bench source that has never been checked against a reference. Any error is uniform and recoverable with one constant.
+- **Only the bit-banged configuration path works.** Stock configures the same part over hardware SPI, so this is an unexplained gap, not a property of the peripheral.
+- **The USB CDC debug shell does not enumerate on every build.** It correlates exactly with which configuration path the image uses; the mechanism is unestablished. It is a diagnostic channel, not a user feature.
+- **The FFT waterfall repaints by issuing one fill per pixel column** — 20,480 draw calls per frame — and visibly rasters.
 
 The story of how we got here — including the six weeks lost to a mis-clocked register read, and the several confident hypotheses that turned out to be wrong — is in the [devlog](docs/devlog/).
 
@@ -283,8 +295,13 @@ For four months a GW1N-UV2 that had auto-booted its own resident design answered
 
 **Still genuinely open, if Gowin internals are your thing:** why the *hardware-SPI* path fails when the identical bytes bit-banged succeed — and when stock configures the same part over hardware SPI. We eliminated the obvious prelude difference (`0x05` ERASE_SRAM) by direct test.
 
-### 3. Timebase and acquisition timing — the new highest-value ask
-Capture works; making it display a waveform does not. Analysis of the stock bitstream's netlist says there is **no sample-rate register in the FPGA's capture path** — every write enable and address-counter clock enable is tied high — which means the timebase must be MCU-side pacing, and stock's pacer looks like TMR3 with a 9-entry 1-2-5 period table. If you have a 2C53T and a logic analyzer, captures of stock's **runtime** command traffic while sweeping the timebase knob (it rides on USART, which the boot-time SPI capture couldn't see) would settle this quickly. See [FPGA Protocol](reverse_engineering/FPGA_PROTOCOL_COMPLETE.md) for the command table.
+### 3. ~~Timebase and acquisition timing~~ ✅ SOLVED — and the netlist analysis was wrong
+The old ask here said netlist analysis showed **no sample-rate register in the FPGA's capture path**, so the timebase had to be MCU-side pacing. That was wrong. The timebase is SPI3 register `0x01`, and its low nibble selects a 1-2-5 rate ladder; eight codes are now measured (500 S/s to ~124 kS/s), cross-checked against an independent rig on a different unit that lands on the same ladder. Writeups: [EXP-17](docs/experiments/2026-08-19-17-the-timebase-button-did-nothing.md), [EXP-18](docs/experiments/2026-08-19-18-the-slow-codes-nobody-looked-at.md).
+
+**What is still open here:** codes `0x0A`–`0x0C` (predicted 250k / 500k / 1.25M S/s) are beyond our bench source, and `0x06`–`0x09` return incoherent fits that all cluster near 1.25 kS/s — consistent with the rate field being narrower than the codes we write, or with those codes selecting roll mode. Untested.
+
+### 3b. A calibrated signal source — the highest-value ask now
+Every vertical gain in this firmware traces to an amplitude *commanded* from a bench generator that has never been checked against a reference, and we found out the hard way that the same generator was delivering 0.825× its commanded **frequency**. The relative numbers are cross-validated and solid; the absolute scale is one unknown constant. If you have a 2C53T and a calibrated source, a handful of known amplitudes at known frequencies would close it — `python3 scripts/verify_scope_cal.py` exists to consume exactly that.
 
 ### 4. Board variant documentation
 We've confirmed one board revision (V1.4) and one user has reported a different layout with no version marking. If your 2C53T looks different from [our photos](docs/images/), photos of your PCB (top and bottom) are extremely valuable — especially near the FPGA, SPI flash, and analog frontend.
