@@ -68,8 +68,9 @@ concrete.
 
 | Feature | Stage | Spec | Next |
 |---|---|---|---|
-| Settings persistence | S2 (open defect) | [settings-persistence](platform/settings-persistence.md) | Repair: flash the `settings` diagnostic (5e659f2), localise write-vs-load, fix that half |
-| Screenshot capture | S1 | — | S2: pull a BMP off the device and look at it |
+| Settings persistence | S2 (commissioned 2026-08-20) | [settings-persistence](platform/settings-persistence.md) | S3: the "bug" was an unthrown build interlock (`c57394c`); next is a power-cycle regression check in the bench script + surfacing `saves_failed` in the UI. Audit P0.4 (silent W25Q write failure) is the open honesty gap |
+| Screenshot capture | S1 | — | S2: pull a BMP off the device and look at it (note audit P3: BTN_SAVE currently shows "SAVED #n" without writing anything) |
+| Structural hardening | plan exists | [audit 2026-08-20](../structural_audit_2026-08-20.md) | P0 ladder: SPI3 timeout-as-success, W25Q silent-success, bus ownership, torn capture buffers, pre-scheduler queue overflow |
 | Rendering path | S1 | — | Compositor + redraw gate landed 2026-08-19; S3 guard exists for the gate; graticule question above is the S4 item |
 | USB CDC shell | S1 (build-dependent) | — | Enumeration correlates exactly with which FPGA config path the build runs — replicated on a second unit (PR #13); mechanism unestablished — research thread |
 | PC export / remote view | S-none | — | Issue #10 ask; wishlist Appendix B has the format lead |
