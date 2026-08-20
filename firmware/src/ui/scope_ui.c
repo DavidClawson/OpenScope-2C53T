@@ -83,6 +83,12 @@
 static char popup_text[32] = "";
 static uint8_t popup_frames = 0;  /* Countdown: show for N frames then dismiss */
 
+/* Has the box been painted for THIS popup? The incremental path paints it
+ * once and then leaves it alone (see draw_scope_live_frame's hole); the full
+ * path repaints it every frame anyway. Without this, every live frame would
+ * repaint the box and the text would strobe at the capture rate. */
+static bool popup_painted = false;
+
 #define POPUP_DURATION 10  /* ~500ms at 20fps */
 
 void scope_show_popup(const char *text)
@@ -94,6 +100,7 @@ void scope_show_popup(const char *text)
     }
     popup_text[i] = '\0';
     popup_frames = POPUP_DURATION;
+    popup_painted = false;
 }
 
 bool scope_popup_active(void)
@@ -610,11 +617,8 @@ static void draw_measurement_badges(const scope_state_t *ss, const theme_t *th)
  * Quick-change popup overlay
  * ═══════════════════════════════════════════════════════════════════ */
 
-static void draw_popup(const theme_t *th)
+static void draw_popup_box(const theme_t *th)
 {
-    if (popup_frames == 0) return;
-    popup_frames--;
-
     /* Dark box with border */
     lcd_fill_rect(POPUP_X, POPUP_Y, POPUP_W, POPUP_H, th->background);
     /* Top/bottom border */
@@ -627,6 +631,36 @@ static void draw_popup(const theme_t *th)
     /* Centered text */
     font_draw_string_center(LCD_WIDTH / 2, POPUP_Y + 10, popup_text,
                             th->text_primary, th->background, &font_large);
+    popup_painted = true;
+}
+
+static void draw_popup(const theme_t *th)
+{
+    if (popup_frames == 0) return;
+    popup_frames--;
+    draw_popup_box(th);
+}
+
+/*
+ * Popup upkeep for the flicker-free path.
+ *
+ * Until 2026-08-19 an active popup set `q.force`, which pinned the renderer
+ * to the full clear-then-redraw for the popup's whole ~500 ms life — so the
+ * cost of showing a two-word box was ten full-screen blanks, and the box
+ * itself strobed along with the trace. The popup was not flickering despite
+ * the redraw; it was causing it.
+ *
+ * Now the compositor treats the popup rectangle as a hole (it is the one
+ * layer it cannot recompute per pixel, because of the glyphs), paints the box
+ * exactly once, and repaints the band underneath on the first frame after the
+ * countdown expires. No full redraw is needed at either end.
+ */
+void scope_popup_overlay_tick(void)
+{
+    if (popup_frames == 0) return;
+    if (!popup_painted)
+        draw_popup_box(theme_get());
+    popup_frames--;
 }
 
 /* ═══════════════════════════════════════════════════════════════════
@@ -640,26 +674,69 @@ static void draw_popup(const theme_t *th)
  * a visualisation autoscale, NOT a volts reference; the Vpp/Vrms badges carry
  * the calibrated volts separately. Consecutive samples are connected with a
  * vertical span so the trace reads as a continuous line, not dots. */
-static void draw_channel_autofit(const volatile uint8_t *buf, uint16_t color,
-                                 int16_t y_top, int16_t y_bot)
+/*
+ * THE vertical transform. Both renderers go through this.
+ *
+ * They did not, until 2026-08-19. The full path autoscaled from the buffer's
+ * own min/max while the compositor used a fixed (v-128)/256 about mid-screen,
+ * over a shorter band, with the channel position offset applied in one and
+ * ignored in the other. Same samples, two different places on the glass — so
+ * the trace JUMPED whenever the renderer changed, which on the bench looked
+ * like "the trace goes back to the bottom after the popup". It hid for a week
+ * because a popup or a cursor forced the full path and everything else was
+ * the demo waveform.
+ *
+ * Two copies of a transform that are supposed to agree will not stay agreeing.
+ * One copy, two callers.
+ */
+typedef struct {
+    bool    on;
+    int16_t y_top, y_bot;
+    int     h, span;
+    uint8_t mn;
+} autofit_t;
+
+static void autofit_prep(autofit_t *a, const volatile uint8_t *buf,
+                         int16_t y_top, int16_t y_bot)
 {
     uint16_t n = (LCD_WIDTH < 512u) ? (uint16_t)LCD_WIDTH : 512u;
     uint8_t mn = 255, mx = 0;
     for (uint16_t x = 0; x < n; x++) {
-        uint8_t s = buf[x];
-        if (s < mn) mn = s;
-        if (s > mx) mx = s;
+        uint8_t sv = buf[x];
+        if (sv < mn) mn = sv;
+        if (sv > mx) mx = sv;
     }
     int span = (int)mx - (int)mn;
     if (span < 8) span = 8;                 /* don't zoom pure noise to full band */
     int h = (int)(y_bot - y_top) - 3;       /* usable height, small margin */
     if (h < 4) h = 4;
+
+    a->on    = true;
+    a->y_top = y_top;
+    a->y_bot = y_bot;
+    a->h     = h;
+    a->span  = span;
+    a->mn    = mn;
+}
+
+static inline int16_t autofit_y(const autofit_t *a, uint8_t v)
+{
+    int yy = (int)(a->y_bot - 2) - ((int)((int)v - a->mn) * a->h) / a->span;
+    if (yy < a->y_top) yy = a->y_top;
+    if (yy >= a->y_bot) yy = a->y_bot - 1;
+    return (int16_t)yy;
+}
+
+static void draw_channel_autofit(const volatile uint8_t *buf, uint16_t color,
+                                 int16_t y_top, int16_t y_bot)
+{
+    uint16_t n = (LCD_WIDTH < 512u) ? (uint16_t)LCD_WIDTH : 512u;
+    autofit_t a;
+    autofit_prep(&a, buf, y_top, y_bot);
+
     int16_t prev_y = -1;
     for (uint16_t x = 0; x < n; x++) {
-        int yy = (int)(y_bot - 2) - ((int)((int)buf[x] - mn) * h) / span;
-        if (yy < y_top) yy = y_top;
-        if (yy >= y_bot) yy = y_bot - 1;
-        int16_t y = (int16_t)yy;
+        int16_t y = autofit_y(&a, buf[x]);
         if (prev_y >= 0) {                  /* connect prev..cur vertically */
             int16_t a = prev_y < y ? prev_y : y;
             int16_t b = prev_y < y ? y : prev_y;
@@ -1505,23 +1582,52 @@ void draw_scope_live_frame(void)
      * live band. Anchor to the badges and both cases are covered. */
     const uint16_t band_bot = BADGE_ROW2_Y;
     const uint16_t band_h = band_bot - SCOPE_TOP;
+    (void)band_h;
 
     /* Trigger dotted line, exactly as draw_trigger_indicator places it. */
     int16_t trig_y = SCOPE_MID_Y - ss->trigger.level;
     if (trig_y < SCOPE_TOP + 2) trig_y = SCOPE_TOP + 2;
     if (trig_y > SCOPE_BOT - 3) trig_y = SCOPE_BOT - 3;
 
-    const int16_t off1 = ss->ch1.position;
-    const int16_t off2 = ss->ch2.position;
+    /* Autofit exactly as the full path does, including its band split, so a
+     * change of renderer never moves the trace. The transform runs against
+     * SCOPE_BOT even though this function only PAINTS down to band_bot: the
+     * full path draws the trace over that strip and then paints the badges on
+     * top, so matching its geometry means matching its y_bot, not its visible
+     * extent.
+     *
+     * The channel position offset is deliberately NOT applied. The full path
+     * ignores it, and against an autoscaled trace it has no meaning — keeping
+     * it here is what let the two paths disagree in the first place. */
     const bool en1 = ss->ch1.enabled;
     const bool en2 = ss->ch2.enabled;
 
+    autofit_t a1 = { false, 0, 0, 0, 8, 0 };
+    autofit_t a2 = { false, 0, 0, 0, 8, 0 };
+    if (en1 && en2) {
+        autofit_prep(&a1, b1, SCOPE_TOP, SCOPE_MID_Y - 1);
+        autofit_prep(&a2, b2, SCOPE_MID_Y + 1, SCOPE_BOT);
+    } else if (en1) {
+        autofit_prep(&a1, b1, SCOPE_TOP, SCOPE_BOT);
+    } else if (en2) {
+        autofit_prep(&a2, b2, SCOPE_TOP, SCOPE_BOT);
+    }
+
     int16_t p1 = 0, p2 = 0;  /* previous column's y — vertical continuity */
 
+    /* Popup hole, clamped into the band so a future move of either rectangle
+     * cannot produce an inverted or out-of-band window. */
+    bool     hole     = (popup_frames > 0);
+    uint16_t hole_top = POPUP_Y;
+    uint16_t hole_bot = POPUP_Y + POPUP_H;
+    if (hole_top < SCOPE_TOP) hole_top = SCOPE_TOP;
+    if (hole_bot > band_bot)  hole_bot = band_bot;
+    if (hole_top >= hole_bot) hole = false;
+
     for (uint16_t x = 0; x < LCD_WIDTH; x++) {
-        /* Same y-transform as the full path (scope_ui.c real-data plot). */
-        int16_t y1 = SCOPE_MID_Y - (((int16_t)b1[x] - 128) * SCOPE_H / 256) - off1;
-        int16_t y2 = SCOPE_MID_Y - (((int16_t)b2[x] - 128) * SCOPE_H / 256) - off2;
+        /* One transform, shared with the full path — see autofit_prep. */
+        int16_t y1 = a1.on ? autofit_y(&a1, b1[x]) : (int16_t)SCOPE_MID_Y;
+        int16_t y2 = a2.on ? autofit_y(&a2, b2[x]) : (int16_t)SCOPE_MID_Y;
 
         /* 2-px dot plus a span to the previous sample, so steep edges draw
          * as connected verticals instead of the full path's dotted gaps. */
@@ -1535,14 +1641,33 @@ void draw_scope_live_frame(void)
         p1 = y1;
         p2 = y2;
 
-        lcd_set_window(x, SCOPE_TOP, 1, band_h);
-        for (uint16_t y = SCOPE_TOP; y < band_bot; y++) {
+        /* The popup is a HOLE in the live band, not a layer: its glyphs are
+         * the one thing this compositor cannot recompute per pixel, so the
+         * column is emitted as up to two segments that step around the box.
+         * When the countdown ends the hole closes and the very next live
+         * frame paints the band back over it — no full repaint at either
+         * end, which is the whole point of the change. */
+        uint16_t seg_top[2], seg_bot[2];
+        uint8_t  nseg = 1;
+        seg_top[0] = SCOPE_TOP;
+        seg_bot[0] = band_bot;
+        if (hole && x >= POPUP_X && x < POPUP_X + POPUP_W) {
+            seg_bot[0] = hole_top;
+            seg_top[1] = hole_bot;
+            seg_bot[1] = band_bot;
+            nseg = 2;
+        }
+
+        for (uint8_t sg = 0; sg < nseg; sg++) {
+        if (seg_bot[sg] <= seg_top[sg]) continue;
+        lcd_set_window(x, seg_top[sg], 1, (uint16_t)(seg_bot[sg] - seg_top[sg]));
+        for (uint16_t y = seg_top[sg]; y < seg_bot[sg]; y++) {
             uint16_t c;
             /* Z-order matches the full path: CH2 painted after CH1 there,
              * so CH2 wins here; trace over trigger line over grid. */
-            if (en2 && (int16_t)y >= lo2 && (int16_t)y <= hi2)
+            if (a2.on && (int16_t)y >= lo2 && (int16_t)y <= hi2)
                 c = th->ch2;
-            else if (en1 && (int16_t)y >= lo1 && (int16_t)y <= hi1)
+            else if (a1.on && (int16_t)y >= lo1 && (int16_t)y <= hi1)
                 c = th->ch1;
             else if ((int16_t)y == trig_y && (x & 3u) == 0 && x < LCD_WIDTH - 6)
                 c = th->trigger;
@@ -1554,6 +1679,7 @@ void draw_scope_live_frame(void)
             else
                 c = th->background;
             lcd_write_data(c);
+        }
         }
     }
 

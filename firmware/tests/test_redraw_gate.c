@@ -371,8 +371,10 @@ static void check_state_change_always_draws(bool verbose)
 
 static void check_popup_runs_at_tick_rate(bool verbose)
 {
-    /* draw_popup() decrements its countdown once per draw, so the popup
-     * needs a draw every tick or it lingers. `force` covers that. */
+    /* The popup countdown decrements once per DRAW, so it needs a draw every
+     * tick or it lingers. This is the compositor-UNAVAILABLE case (demo
+     * trace, cursors on, FFT views), where main.c still sets `force` and the
+     * full path both paints the box and steps the countdown. */
     redraw_gate_t g = { 0, 0, 0, false, false };
     redraw_query_t q = { 0, 0xBBBB, false, true, false, false,
                          FW_FULL_MIN, FW_ANIM_TICK, FW_IDLE_TICK };
@@ -383,8 +385,48 @@ static void check_popup_runs_at_tick_rate(bool verbose)
         if (redraw_gate_step(&g, &q) == REDRAW_FULL) drew++;
     }
 
-    if (verbose) printf("  popup active: %u/10 full draws\n", drew);
+    if (verbose) printf("  popup active, no compositor: %u/10 full draws\n", drew);
     CHECK(drew == 10, "popup must draw every tick, got %u/10", drew);
+}
+
+static void check_popup_rides_the_compositor(bool verbose)
+{
+    /*
+     * REGRESSION GUARD, 2026-08-19. Until this date main.c set
+     * `q.force = scope_popup_active()` unconditionally, which pinned the
+     * renderer to the full clear-then-redraw for the popup's entire ~500 ms
+     * life. Showing a two-word box therefore blanked the whole screen ten
+     * times, and the box strobed along with the trace — the bench report was
+     * "the numbers flash too fast to read".
+     *
+     * The policy now: when the compositor is available the popup rides on it
+     * as an overlay (main.c marks it as new_data so a live frame runs every
+     * tick, and draw_scope_live_frame steps around the box). So a popup over
+     * a live trace must produce ten INCREMENTAL frames and NOT ONE full
+     * repaint. If someone reinstates the unconditional force, this fails.
+     */
+    redraw_gate_t g = { 0, 0, 0, false, false };
+    /* frame, epoch, new_data, force, incremental_ok, animating, ... */
+    redraw_query_t q = { 0, 0xBBBB, true, false, true, false,
+                         FW_FULL_MIN, FW_ANIM_TICK, FW_IDLE_TICK };
+
+    /* Prime, exactly as entering the screen does. */
+    redraw_gate_step(&g, &q);
+
+    uint32_t live = 0, full = 0;
+    for (uint32_t f = 1; f <= 10; f++) {
+        q.frame = f;
+        redraw_action_t a = redraw_gate_step(&g, &q);
+        if (a == REDRAW_INCREMENTAL) live++;
+        if (a == REDRAW_FULL)        full++;
+    }
+
+    if (verbose)
+        printf("  popup over live trace: %u incremental, %u full\n", live, full);
+    CHECK(live == 10, "popup over a live trace must draw incrementally every "
+                      "tick, got %u/10", live);
+    CHECK(full == 0, "a popup over a live trace must not force ANY full "
+                     "repaint — that is the screen flash, got %u", full);
 }
 
 static void check_screen_entry_always_draws(bool verbose)
@@ -471,6 +513,7 @@ static int run_all_checks(bool verbose)
     check_demo_animation_preserved(verbose);
     check_state_change_always_draws(verbose);
     check_popup_runs_at_tick_rate(verbose);
+    check_popup_rides_the_compositor(verbose);
     check_screen_entry_always_draws(verbose);
     check_siggen_clamped_presses(verbose);
     check_frame_counter_wrap(verbose);

@@ -156,6 +156,13 @@ void draw_scope_live_frame(void);  /* flicker-free trace-band update; falls
                                       cursors (see main.c scope branch) */
 void scope_show_popup(const char *text);
 bool scope_popup_active(void);
+
+/* Advance the quick-change popup on the flicker-free render path, painting the
+ * box once on the frame it first appears. draw_scope_live_frame() steps the
+ * trace band around the popup rectangle, so the box is never repainted while
+ * it is up and the band restores itself once the countdown ends. Only the
+ * incremental path needs this; the full path's draw_popup() does both jobs. */
+void scope_popup_overlay_tick(void);
 #ifdef FEATURE_FFT
 void draw_fft_screen(void);
 void draw_split_screen(uint32_t frame);

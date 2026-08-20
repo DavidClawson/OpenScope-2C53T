@@ -350,8 +350,12 @@ static bool scope_incremental_available(const scope_state_t *s)
 #ifdef FEATURE_FFT
     if (scope_view != SCOPE_VIEW_TIME) return false;
 #endif
-    return !scope_popup_active()
-           && scope_acquisition_ready()
+    /* A popup no longer disqualifies the compositor. It used to, and that is
+     * what made every timebase change blank the whole screen ten times over:
+     * the popup pinned the renderer to the full clear-then-redraw for its
+     * entire life. draw_scope_live_frame() now steps around the popup box.
+     * Cursors still force the full path — only it draws them. */
+    return scope_acquisition_ready()
            && s->cursor.mode == CURSOR_OFF;
 #endif
 }
@@ -374,6 +378,7 @@ static void scope_render(uint32_t frame, redraw_action_t action)
     if (action == REDRAW_INCREMENTAL) {
         ui_scope_live_draws++;
         draw_scope_live_frame();
+        scope_popup_overlay_tick();
         return;
     }
 #endif
@@ -584,9 +589,19 @@ static void vDisplayTask(void *pvParameters)
                 redraw_query_t q;
                 q.frame            = frame;
                 q.epoch            = scope_ui_epoch(ss_anim);
-                q.new_data         = new_data;
-                q.force            = scope_popup_active();
+                /* A live popup counts as new data so the compositor runs on
+                 * every 50 ms tick while it is up. POPUP_DURATION is measured
+                 * in DRAWS, and on the incremental path draws follow capture,
+                 * so a quiet input would otherwise stretch a 500 ms popup to
+                 * ten seconds. This keeps the popup on wall-clock without
+                 * reintroducing a single full repaint. */
+                q.new_data         = new_data || scope_popup_active();
                 q.incremental_ok   = scope_incremental_available(ss_anim);
+                /* Only the full path can show a popup when the compositor is
+                 * unavailable (demo trace, cursors on, FFT views). When it IS
+                 * available the popup rides along as an overlay, so forcing
+                 * here would reinstate exactly the flashing this replaced. */
+                q.force            = scope_popup_active() && !q.incremental_ok;
                 /* Both of these genuinely produce new pixels every tick
                  * from `frame` alone: the synthetic demo waveform (only
                  * drawn before the first real sample) and the
