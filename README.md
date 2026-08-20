@@ -67,7 +67,10 @@ plausible, stable and wrong.
 | **S3** | Guarded | A regression test would catch it breaking — ideally with a negative control, or data held out from whatever was tuned. |
 | **S4** | Polished | The UX has been considered: legible, responsive, and honest when it cannot answer. |
 
-Nothing is at S4 yet.
+Nothing is at S4 yet. This table is the backward-looking half — where each
+feature stands. The forward half — what would promote each one, and what
+should exist that doesn't — lives in [`docs/specs/`](docs/specs/), one
+reviewable promotion-ladder spec per feature.
 
 | Feature | Stage | Where it actually stands |
 |---|---|---|
@@ -90,7 +93,7 @@ Nothing is at S4 yet.
 | Protocol decoders (UART/SPI/I2C/CAN/K-Line) | **S0** | No call sites. |
 | Auto-measurements | **S0** | `measurement_compute()` has no caller. |
 | XY / roll / trend / mask testing | **S0** | No call sites. |
-| `modules/` | **S0** | Four empty directories. No schema, no loader, no content. |
+| `modules/` | **S0** | 17 guided-procedure files across four trades, with a provisional schema ([`modules/README.md`](modules/README.md)) — but no loader: nothing in the firmware reads them. |
 
 ### Sharp edges — read before trusting the screen
 

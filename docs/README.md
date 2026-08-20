@@ -8,7 +8,8 @@ Open-source replacement firmware for the FNIRSI 2C53T handheld oscilloscope / mu
 
 ## Top-Level
 
-- [Roadmap](roadmap.md) — What works, what's in progress, what's planned
+- [Feature specs](specs/) — the plan: one promotion-ladder spec per feature, plus the catalog of what's missing and the community-demand audit
+- [Roadmap](roadmap.md) — design sections only (region layer, user cal, stretch tracks); status moved to the README maturity matrix + specs
 - [Button Manual](button_manual.md) — Physical button layout, navigation, emulator key bindings
 - [Hardware Test Protocol](hardware_test_protocol.md) — First-flash and subsystem verification checklist
 

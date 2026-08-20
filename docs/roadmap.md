@@ -1,56 +1,21 @@
 # Roadmap
 
-## What Works on Hardware
+## Status sections superseded (2026-08-20)
 
-Everything in this section runs on the real FNIRSI 2C53T, tested on AT32F403A @ 240MHz.
+This file used to open with three status sections ("What Works on Hardware",
+"Implemented and Tested (Awaiting Real Data)", "In Progress"). They were prose
+copies of a table that now exists properly, and they had drifted — "Implemented
+and Tested" described S0 code with no call sites as if it were done, which is
+this project's characteristic failure written into its own roadmap.
 
-- **Custom firmware boots and runs** — FreeRTOS scheduler with display + input tasks
-- **LCD driver** — ST7789V via 16-bit EXMC, variable-width bitmap fonts (4 sizes from SF Pro + Menlo)
-- **4 UI modes** — Oscilloscope, multimeter, signal generator, settings — all navigable via buttons
-- **4 color themes** — Dark Blue, Classic Green, High Contrast, Night Red — switchable in settings
-- **Button matrix** — 15/15 buttons hardware-confirmed, bidirectional 4x3 scan at 500Hz via TMR3 ISR
-- **Battery monitor** — PB1 ADC with 16-sample averaging, percentage display, USB charge detection ("CHG"), low-battery auto-off at 3.3V
-- **Power management** — PC9 hold, PB8 backlight, POWER button 3-2-1 countdown shutdown
-- **USB HID bootloader** — Closed-case firmware updates via `make flash`, LCD status screen, auto-reboot after flash
-- **FPGA USART** — Bidirectional 9600 baud communication, meter data flowing
-- **Watchdog + health monitoring** — Task stack checking, fault recovery
-- **Emulator** — Renode full-system emulation + SDL3 native LCD viewer with interactive buttons
+Status now lives in exactly two places:
 
-## Implemented and Tested (Awaiting Real Data)
+- **Where each feature stands:** [`README.md` § Feature maturity](../README.md#feature-maturity)
+- **What promotes it, and what's missing entirely:** [`docs/specs/`](specs/)
 
-These features are written in C, unit-tested, and integrated into the firmware build. They currently run on synthetic demo waveforms because FPGA SPI3 data acquisition isn't connected yet. Once live ADC data flows, these light up.
-
-| Feature | Tests | Notes |
-|---------|-------|-------|
-| FFT spectrum analyzer | 19 | 4096-point, 5 windows (Hann, Hamming, Blackman, Blackman-Harris, flat-top), averaging, max hold, harmonic labeling |
-| Waterfall / spectrogram | — | Time-frequency display |
-| Split view (time + freq) | — | Simultaneous waveform and spectrum |
-| Protocol decoders | 132 | UART (async), SPI (CPOL/CPHA), I2C (debounced), CAN (full frame + CRC), K-Line/KWP2000 |
-| Math channels | 5 | CH1+CH2, CH1-CH2, CH1*CH2, invert A, invert B |
-| Auto-measurements | 18 | Frequency, period, Vpp, Vrms, Vavg, duty cycle, rise/fall time |
-| Persistence display | 8 | 5 decay modes, anti-aliased phosphor rendering |
-| DDS signal generator | 25 | 4 waveforms (sine, square, triangle, sawtooth), sub-Hz resolution |
-| Bode plot | — | Log/linear sweep, quadrature demodulation, gain + phase |
-| Component tester | — | Resistor, capacitor, ESR, diode, continuity (no inductance yet) |
-| XY mode / Lissajous | — | CH1 vs CH2 scatter plot |
-| Roll mode | — | Continuous scroll for slow signals |
-| Trend plot | — | Measurement over time (min/max/avg auto-scale) |
-| Mask / pass-fail | — | Template comparison with tolerance bounds |
-| Config save/load | 10 | Checksum-verified settings persistence |
-| Screenshot capture | 6 | BMP to SPI flash |
-| Shared memory pool | — | Saves ~152KB RAM via buffer reuse |
-
-## In Progress
-
-**✅ FPGA config entry + data acquisition — SOLVED 2026-08-13.** The two-month blocker
-is broken: our firmware now brings the Gowin FPGA up from a cold boot (bit-bang SSPI
-loader, not the hardware-SPI peripheral), arms the capture engine, and reads live ADC
-data — a cold-boot-to-live-scope on open firmware. See the devlog
-`2026-08-13-cold-boot-to-scope.md`. **The current critical path is now a feature, not
-a wall: timebase control** — the build captures ~µs sweeps with no configurable sample
-rate, so it tracks slow signals but aliases audio-frequency ones. Next: send the FPGA
-timebase commands (`0x0F/0x10/0x11`), wire up the timebase buttons, and calibrate.
-Detail in `docs/bench_plan_2026-08-14.md`.
+The sections below survive because they are *design*, not status — the W25Q
+region layer, the user-calibration mode, memory headroom, and the stretch
+tracks. `docs/dev_plan_2026-08-13.md` §C1 links here for the region layer.
 
 ## Future Plans
 
