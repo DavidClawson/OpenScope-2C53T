@@ -157,21 +157,42 @@ static void flash_fs_raw_read_nolock(uint32_t addr, uint8_t *buf, uint32_t len)
 #define W25Q_PAGE_SIZE         256u
 #define W25Q_SECTOR_SIZE       4096u
 #define W25Q_STATUS_BUSY       0x01u
+#define W25Q_STATUS_WEL        0x02u
 
 /* The 4KB read-modify-write scratch (stock kept it permanently at RAM 0x200012c0).
  * We have only ~5KB of MSP-stack headroom over BSS, so a permanent 4KB static buffer
  * starves the boot stack and crashes the app — instead the public write_block wrapper
  * heap-allocates this on demand (it is never called at boot or in a hot loop). */
 
-static void raw_write_enable(void)   /* FUN_0802f344 */
+/* ── Write-path honesty (audit 2026-08-20, P0.4) ─────────────────────────
+ * Until 2026-08-20 every function below was void and the public wrappers
+ * returned FLASH_FS_OK unconditionally — a failed erase/program was reported
+ * as success, and settings_store would then mark the save persisted and never
+ * retry. The W25Q128JV has NO program/erase-fail bits in SR1 (that is other
+ * vendors), so honesty comes from three checks instead:
+ *   1. WEL actually latched after WREN (catches write-protect; a dead bus
+ *      reading 0xFF sneaks past this one — see 3);
+ *   2. the BUSY poll reached idle before its bounded guard expired;
+ *   3. read-back verification in the public wrappers — the ground truth that
+ *      catches everything, dead bus included. */
+
+static bool raw_write_enable(void)   /* FUN_0802f344 + WEL confirm */
 {
     SPI_FLASH_CS_ASSERT();
     flash_fs_raw_spi_xfer(W25Q_CMD_WREN);
     raw_spi_settle();
     SPI_FLASH_CS_DEASSERT();
+
+    SPI_FLASH_CS_ASSERT();
+    flash_fs_raw_spi_xfer(W25Q_CMD_RDSR);
+    uint8_t sr1 = flash_fs_raw_spi_xfer(0xFF);
+    SPI_FLASH_CS_DEASSERT();
+    /* 0xFF is either a dead bus (xfer timeout sentinel) or an SR1 with every
+     * bit set including BUSY — refused either way. */
+    return (sr1 != 0xFFu) && (sr1 & W25Q_STATUS_WEL) != 0u;
 }
 
-static void raw_wait_busy(void)      /* FUN_0802f11c: poll RDSR until BUSY clears */
+static bool raw_wait_busy(void)      /* FUN_0802f11c: poll RDSR until BUSY clears */
 {
     SPI_FLASH_CS_ASSERT();
     flash_fs_raw_spi_xfer(W25Q_CMD_RDSR);
@@ -182,11 +203,15 @@ static void raw_wait_busy(void)      /* FUN_0802f11c: poll RDSR until BUSY clear
     uint32_t guard = 20000000u;
     while ((flash_fs_raw_spi_xfer(0xFF) & W25Q_STATUS_BUSY) && --guard) { }
     SPI_FLASH_CS_DEASSERT();
+    return guard != 0u;   /* false = still busy at guard expiry: erase/program
+                             did not complete (or the bus is dead) */
 }
 
-static void raw_sector_erase_nolock(uint32_t addr)   /* FUN_0802ee9c */
+static bool raw_sector_erase_nolock(uint32_t addr)   /* FUN_0802ee9c */
 {
-    raw_write_enable();
+    if (!raw_write_enable()) {
+        return false;
+    }
     SPI_FLASH_CS_ASSERT();
     flash_fs_raw_spi_xfer(W25Q_CMD_SECTOR_ERASE);
     flash_fs_raw_spi_xfer((uint8_t)(addr >> 16));
@@ -194,13 +219,15 @@ static void raw_sector_erase_nolock(uint32_t addr)   /* FUN_0802ee9c */
     flash_fs_raw_spi_xfer((uint8_t)(addr));
     raw_spi_settle();
     SPI_FLASH_CS_DEASSERT();
-    raw_wait_busy();
+    return raw_wait_busy();
 }
 
 /* Program within a single 256B page (len ≤ 256, no page crossing). FUN_0802f36c. */
-static void raw_page_program_nolock(uint32_t addr, const uint8_t *data, uint32_t len)
+static bool raw_page_program_nolock(uint32_t addr, const uint8_t *data, uint32_t len)
 {
-    raw_write_enable();
+    if (!raw_write_enable()) {
+        return false;
+    }
     SPI_FLASH_CS_ASSERT();
     flash_fs_raw_spi_xfer(W25Q_CMD_PAGE_PROGRAM);
     flash_fs_raw_spi_xfer((uint8_t)(addr >> 16));
@@ -211,27 +238,51 @@ static void raw_page_program_nolock(uint32_t addr, const uint8_t *data, uint32_t
     }
     raw_spi_settle();
     SPI_FLASH_CS_DEASSERT();
-    raw_wait_busy();
+    return raw_wait_busy();
+}
+
+/* Read back [addr, addr+len) and compare. data == NULL means "expect erased"
+ * (all 0xFF). Small stack chunks — this runs on tasks with tight stacks. */
+static bool raw_verify_nolock(uint32_t addr, const uint8_t *data, uint32_t len)
+{
+    uint8_t buf[32];
+    uint32_t off = 0;
+    while (off < len) {
+        uint32_t n = len - off;
+        if (n > sizeof(buf)) n = sizeof(buf);
+        flash_fs_raw_read_nolock(addr + off, buf, n);
+        for (uint32_t i = 0; i < n; i++) {
+            uint8_t want = data ? data[off + i] : 0xFFu;
+            if (buf[i] != want) {
+                return false;
+            }
+        }
+        off += n;
+    }
+    return true;
 }
 
 /* Split a write across 256B page boundaries. FUN_0802f2ac. Range must be erased. */
-static void raw_program_nolock(uint32_t addr, const uint8_t *data, uint32_t len)
+static bool raw_program_nolock(uint32_t addr, const uint8_t *data, uint32_t len)
 {
     uint32_t chunk = W25Q_PAGE_SIZE - (addr & 0xFF);
     if (len < chunk) chunk = len;
     while (len) {
-        raw_page_program_nolock(addr, data, chunk);
+        if (!raw_page_program_nolock(addr, data, chunk)) {
+            return false;
+        }
         addr += chunk;
         data += chunk;
         len  -= chunk;
         chunk = (len > W25Q_PAGE_SIZE) ? W25Q_PAGE_SIZE : len;
     }
+    return true;
 }
 
 /* Smart write at 4KB-sector granularity (FUN_0802f16c): read the sector, and if
  * any target byte is not already 0xFF, erase + overlay + rewrite the full sector
  * (preserving the rest); otherwise program in place. Safe for arbitrary addr/len. */
-static void raw_write_block_nolock(uint32_t addr, const uint8_t *data, uint32_t len,
+static bool raw_write_block_nolock(uint32_t addr, const uint8_t *data, uint32_t len,
                                    uint8_t *sector_buf)
 {
     uint32_t sector = addr >> 12;
@@ -243,13 +294,24 @@ static void raw_write_block_nolock(uint32_t addr, const uint8_t *data, uint32_t 
         uint32_t i;
         for (i = 0; i < chunk && sector_buf[off + i] == 0xFF; i++) { }
         if (i < chunk) {                       /* needs erase */
-            raw_sector_erase_nolock(sector << 12);
+            if (!raw_sector_erase_nolock(sector << 12)) {
+                return false;
+            }
             for (i = 0; i < chunk; i++) {
                 sector_buf[off + i] = data[i];
             }
-            raw_program_nolock(sector << 12, sector_buf, W25Q_SECTOR_SIZE);
+            /* Verify the WHOLE rewritten sector, not just the caller's bytes:
+             * the RMW preserved region can fail to restore too, and a caller
+             * has no way to notice that. */
+            if (!raw_program_nolock(sector << 12, sector_buf, W25Q_SECTOR_SIZE) ||
+                !raw_verify_nolock(sector << 12, sector_buf, W25Q_SECTOR_SIZE)) {
+                return false;
+            }
         } else {                                /* already erased: program in place */
-            raw_program_nolock((sector << 12) | off, data, chunk);
+            if (!raw_program_nolock((sector << 12) | off, data, chunk) ||
+                !raw_verify_nolock((sector << 12) | off, data, chunk)) {
+                return false;
+            }
         }
         if (chunk == len) break;
         sector += 1;
@@ -258,6 +320,7 @@ static void raw_write_block_nolock(uint32_t addr, const uint8_t *data, uint32_t 
         len  -= chunk;
         chunk = (len > W25Q_SECTOR_SIZE) ? W25Q_SECTOR_SIZE : len;
     }
+    return true;
 }
 
 /* ═══════════════════════════════════════════════════════════════════
@@ -487,10 +550,16 @@ flash_fs_error_t flash_fs_raw_sector_erase(uint32_t addr)
         return FLASH_FS_ERR_MUTEX;
     }
 
-    raw_sector_erase_nolock(addr & ~(W25Q_SECTOR_SIZE - 1u));
+    uint32_t base = addr & ~(W25Q_SECTOR_SIZE - 1u);
+    flash_fs_error_t err = FLASH_FS_OK;
+    if (!raw_sector_erase_nolock(base)) {
+        err = FLASH_FS_ERR_WRITE;
+    } else if (!raw_verify_nolock(base, NULL, W25Q_SECTOR_SIZE)) {
+        err = FLASH_FS_ERR_VERIFY;   /* "erased" but not reading 0xFF */
+    }
 
     xSemaphoreGive(fs_mutex);
-    return FLASH_FS_OK;
+    return err;
 }
 
 flash_fs_error_t flash_fs_raw_program(uint32_t addr, const void *data, uint32_t len)
@@ -514,10 +583,15 @@ flash_fs_error_t flash_fs_raw_program(uint32_t addr, const void *data, uint32_t 
         return FLASH_FS_ERR_MUTEX;
     }
 
-    raw_program_nolock(addr, (const uint8_t *)data, len);
+    flash_fs_error_t err = FLASH_FS_OK;
+    if (!raw_program_nolock(addr, (const uint8_t *)data, len)) {
+        err = FLASH_FS_ERR_WRITE;
+    } else if (!raw_verify_nolock(addr, (const uint8_t *)data, len)) {
+        err = FLASH_FS_ERR_VERIFY;
+    }
 
     xSemaphoreGive(fs_mutex);
-    return FLASH_FS_OK;
+    return err;
 }
 
 flash_fs_error_t flash_fs_raw_status_diag(uint8_t out[4])
@@ -538,7 +612,7 @@ flash_fs_error_t flash_fs_raw_status_diag(uint8_t out[4])
         SPI_FLASH_CS_DEASSERT();
     }
     /* WREN, then re-read SR1 — bit1 (WEL) must become 1 if write-enable latches. */
-    raw_write_enable();
+    (void)raw_write_enable();
     SPI_FLASH_CS_ASSERT();
     flash_fs_raw_spi_xfer(0x05);
     out[3] = flash_fs_raw_spi_xfer(0xFF);
@@ -576,11 +650,13 @@ flash_fs_error_t flash_fs_raw_write_block(uint32_t addr, const void *data, uint3
         return FLASH_FS_ERR_MUTEX;
     }
 
-    raw_write_block_nolock(addr, (const uint8_t *)data, len, sector_buf);
+    bool ok = raw_write_block_nolock(addr, (const uint8_t *)data, len, sector_buf);
 
     xSemaphoreGive(fs_mutex);
     vPortFree(sector_buf);
-    return FLASH_FS_OK;
+    /* Verification runs inside the nolock core (whole rewritten sector on the
+     * RMW path), so a false here is already "did not stick", write or verify. */
+    return ok ? FLASH_FS_OK : FLASH_FS_ERR_WRITE;
 }
 
 /* ═══════════════════════════════════════════════════════════════════

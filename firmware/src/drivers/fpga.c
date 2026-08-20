@@ -360,6 +360,16 @@ void fpga_stock_diag_seed_preset(uint8_t visible_state,
  * Full-duplex SPI3 byte exchange.
  * Sends tx_byte, returns the byte received simultaneously.
  * Matches stock firmware's optimized TXE/RXNE polling pattern.
+ *
+ * On poll expiry this returns 0xFF — indistinguishable from a genuine
+ * all-ones byte, which is the project's signature defect shape (a stable
+ * plausible wrong number). It cannot return a status without changing every
+ * call site, so instead each expiry bumps fpga.spi3_hw_timeouts; bulk readers
+ * snapshot that counter around their read loop and refuse to publish a frame
+ * whose bytes were partly fabricated (audit 2026-08-20, P0.3). In practice
+ * the flags are MCU-side (master clocks regardless of the FPGA), so expiries
+ * mean the SPI peripheral itself is wedged/disabled — rare, and exactly when
+ * a confident flat trace would be the worst possible output.
  */
 static uint8_t spi3_xfer(uint8_t tx_byte)
 {
@@ -368,14 +378,14 @@ static uint8_t spi3_xfer(uint8_t tx_byte)
     /* Wait for TX buffer empty */
     timeout = 100000;
     while (!(FPGA_SPI->sts & SPI_I2S_TDBE_FLAG)) {
-        if (--timeout == 0) return 0xFF;
+        if (--timeout == 0) { fpga.spi3_hw_timeouts++; return 0xFF; }
     }
     FPGA_SPI->dt = tx_byte;
 
     /* Wait for RX buffer not empty */
     timeout = 100000;
     while (!(FPGA_SPI->sts & SPI_I2S_RDBF_FLAG)) {
-        if (--timeout == 0) return 0xFF;
+        if (--timeout == 0) { fpga.spi3_hw_timeouts++; return 0xFF; }
     }
     return (uint8_t)FPGA_SPI->dt;
 }
@@ -2677,6 +2687,25 @@ static void fpga_meter_adc_sampler_task(void *pv)
  * all same value) because it hasn't been told what to acquire.
  */
 
+/* Publish (or refuse) one completed acquisition frame. `hw_to_before` is the
+ * spi3_hw_timeouts snapshot taken before the frame's first spi3_xfer: if the
+ * counter moved, at least one byte in the buffers is a fabricated timeout
+ * 0xFF, not bus data — keep the previous good frame and count the failure so
+ * SPI3_BACKOFF_THRESHOLD can actually engage. Constant-but-real data still
+ * publishes (a flat line from a quiet input is genuine diagnostic info; a
+ * flat line from a wedged SPI peripheral is a lie). Audit 2026-08-20, P0.3. */
+static void fpga_acq_publish(uint16_t hw_to_before)
+{
+    if (fpga.spi3_hw_timeouts != hw_to_before) {
+        fpga.spi3_timeout_count++;
+        fpga.spi3_total_timeouts++;
+        return;
+    }
+    fpga.spi3_ok_count++;
+    fpga.spi3_timeout_count = 0;
+    data_ready = true;
+}
+
 static void fpga_acquisition_task(void *pv)
 {
     (void)pv;
@@ -2751,6 +2780,14 @@ static void fpga_acquisition_task(void *pv)
 
         fpga.spi3_probing = true;
 
+        /* Snapshot the hw-timeout counter for this whole acquisition (both
+         * transactions): fpga_acq_publish() refuses the frame if it moved.
+         * Until 2026-08-20 every case below counted OK unconditionally
+         * ("Always count as OK for now"), which made 1024 fabricated 0xFF
+         * bytes render as a confident flat trace and left the backoff above
+         * unreachable from this path (audit P0.3). */
+        uint16_t hw_to_before = fpga.spi3_hw_timeouts;
+
         /*
          * SPI3 Acquisition Protocol (stock firmware fpga_task_annotated.c):
          *
@@ -2824,12 +2861,9 @@ static void fpga_acquisition_task(void *pv)
                 fpga.diag_data_varies = varies;
             }
 
-            /* Always count as OK for now — we need to see what the FPGA
-             * sends even if it's constant data. The display will show a
-             * flat line for constant data, which is diagnostic info. */
-            fpga.spi3_ok_count++;
-            fpga.spi3_timeout_count = 0;
-            data_ready = true;
+            /* Constant data still publishes (diagnostic info — see
+             * fpga_acq_publish); frames with fabricated timeout bytes don't. */
+            fpga_acq_publish(hw_to_before);
             break;
         }
 
@@ -2852,9 +2886,7 @@ static void fpga_acquisition_task(void *pv)
                 fpga.ch2_buf[i] = (uint8_t)cal;
             }
 
-            fpga.spi3_ok_count++;
-            fpga.spi3_timeout_count = 0;
-            data_ready = true;
+            fpga_acq_publish(hw_to_before);
             break;
         }
 
@@ -2871,9 +2903,7 @@ static void fpga_acquisition_task(void *pv)
 
             /* TODO: store roll samples into circular buffer properly */
 
-            fpga.spi3_ok_count++;
-            fpga.spi3_timeout_count = 0;
-            data_ready = true;
+            fpga_acq_publish(hw_to_before);
             break;
         }
 
@@ -3282,6 +3312,7 @@ static void fpga_warmtest_acq_task(void *pv)
         edges_consumed = fpga.pc0_edges;   /* consume BEFORE reading: an edge
                                               during our read is a new capture
                                               and belongs to the next cycle */
+        uint16_t hw_to_before = fpga.spi3_hw_timeouts;
         uint8_t s1 = fpga_warmtest_read_channel(0x04, fpga.ch1_buf);
         uint8_t s2 = fpga_warmtest_read_channel(0x05, fpga.ch2_buf);
 
@@ -3304,7 +3335,12 @@ static void fpga_warmtest_acq_task(void *pv)
          * stock discards only two bytes, so that byte is sample[0], and on
          * this board it reads mid-scale (0x7C/0x79) and never 0x01. The term
          * was therefore always false here — dropping it changes nothing. */
-        if (marker || varies) {
+        /* Third gate term (audit 2026-08-20, P0.3): the marker/varies gate
+         * catches an all-0xFF dead bus, but a poll expiry PARTWAY through a
+         * read yields a frame that is half real data, half fabricated 0xFF —
+         * which "varies" and would pass. If spi3_hw_timeouts moved during the
+         * two reads, at least one byte is fabricated: reject. */
+        if ((marker || varies) && fpga.spi3_hw_timeouts == hw_to_before) {
             fpga.spi3_ok_count++;
             fpga.spi3_timeout_count = 0;
             data_ready = true;

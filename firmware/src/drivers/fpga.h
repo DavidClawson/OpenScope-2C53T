@@ -297,6 +297,9 @@ typedef struct {
     volatile uint16_t spi3_ok_count;       /* Successful acquisitions */
     volatile uint16_t spi3_timeout_count;  /* Consecutive timeouts (resets on success) */
     volatile uint16_t spi3_total_timeouts; /* Lifetime timeout count */
+    volatile uint16_t spi3_hw_timeouts;    /* Lifetime spi3_xfer poll expiries — each one
+                                              means a returned byte was fabricated 0xFF,
+                                              not bus data (audit 2026-08-20, P0.3) */
     volatile uint8_t  spi3_first_byte;     /* First byte from last probe */
     volatile bool     spi3_probing;        /* Currently attempting acquisition */
 

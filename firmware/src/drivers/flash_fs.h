@@ -11,6 +11,8 @@ typedef enum {
     FLASH_FS_ERR_WRITE,
     FLASH_FS_ERR_READ,
     FLASH_FS_ERR_RENAME,
+    FLASH_FS_ERR_VERIFY,   /* write completed but read-back does not match
+                              (audit 2026-08-20, P0.4) */
 } flash_fs_error_t;
 
 /* Initialize filesystem with mutex protection. Call once from main(). */
