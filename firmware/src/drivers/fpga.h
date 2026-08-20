@@ -688,6 +688,15 @@ bool fpga_data_ready(void);
 const volatile uint8_t *fpga_get_ch1_buf(void);
 const volatile uint8_t *fpga_get_ch2_buf(void);
 
+/* Frame generation for tear-checked reads of the ch1/ch2 buffers (audit
+ * 2026-08-20, P0.2). Even = stable, odd = commit in progress. A consumer
+ * that needs exact numbers (measurements, freq estimation) reads gen,
+ * consumes, re-reads: unchanged-and-even means no commit landed mid-read.
+ * The commit window is two 1 KB memcpys (~10 µs), so one retry almost
+ * always suffices; bound the loop anyway. Stuck at 0 = staging alloc
+ * failed and writes are in-place (pre-fix behavior). */
+uint32_t fpga_acq_frame_generation(void);
+
 extern volatile bool     fpga_meter_adc_sampler_enabled;
 extern volatile bool     fpga_meter_adc_use_preacq;
 extern volatile int16_t  fpga_meter_adc_selector_override;

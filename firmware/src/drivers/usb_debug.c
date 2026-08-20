@@ -5100,6 +5100,22 @@ static uint8_t spi3_raw_xfer(uint8_t tx)
     return (uint8_t)*dt;
 }
 
+/* Claim the SPI3 bus for a raw shell command (audit 2026-08-20, P0.1).
+ * The acquisition task runs at priority 3, ABOVE this shell task at 2, so
+ * without a park it preempts any spi3_raw_xfer sequence mid-CS-window and
+ * both transfers interleave into garbage — a live source of bad experimental
+ * data before 2026-08-20. Used at the DISPATCH level around every command
+ * that drives the bus raw; pair with fpga_acq_resume() after the command
+ * returns (dispatch-level pairing survives the commands' early returns). */
+static bool spi3_shell_claim(void)
+{
+    if (!fpga_acq_pause()) {
+        usb_send_str("ERR: SPI3 busy — acquisition task would not park\r\n");
+        return false;
+    }
+    return true;
+}
+
 static void cmd_spi3_acqtest(void)
 {
     usb_send_str("=== SPI3 Acquisition Path Test (Decomposer Phase 20) ===\r\n\r\n");
@@ -5399,8 +5415,11 @@ static void cmd_spi3_xfer(const char *args)
  * MISO layout per frame: [resp0][resp1][resp2] then ~1023 unsigned samples.
  * Reports PC0 before/after, the 3 status bytes, the first 16 samples, and
  * min/max/mean of the sample region — enough to tell a real waveform from a
- * flat line (feed the siggen into CH1 for a known signal). Read-only probe;
- * does not touch the acquisition task. */
+ * flat line (feed the siggen into CH1 for a known signal). Read-only at the
+ * FPGA, but it DRIVES THE SHARED SPI3 BUS — the old claim here that it "does
+ * not touch the acquisition task" was false (audit 2026-08-20, P0.1): the
+ * acq task preempts this task mid-CS-window unless parked. All callers now
+ * run under the dispatch-level spi3_shell_claim(). */
 static void cmd_spi3_acqread_one(uint8_t opcode)
 {
     uint8_t first16[16];
@@ -6678,37 +6697,73 @@ static void dispatch_command(char *line)
     } else if (strncmp(line, "fpga acq", 8) == 0) {
         cmd_fpga_acq(line[8] == ' ' ? line + 9 : "");
     } else if (strncmp(line, "fpga reinit", 11) == 0) {
-        cmd_fpga_reinit(line[11] == ' ' ? line + 12 : "");
+        /* spi3_shell_claim (P0.1): the whole config sequence rides SPI3. */
+        if (spi3_shell_claim()) {
+            cmd_fpga_reinit(line[11] == ' ' ? line + 12 : "");
+            fpga_acq_resume();
+        }
     } else if (strncmp(line, "spi3 xfer", 9) == 0) {
-        cmd_spi3_xfer(line[9] == ' ' ? line + 10 : "");
+        if (spi3_shell_claim()) {
+            cmd_spi3_xfer(line[9] == ' ' ? line + 10 : "");
+            fpga_acq_resume();
+        }
     } else if (strncmp(line, "spi3 seq", 8) == 0) {
-        cmd_spi3_seq(line[8] == ' ' ? line + 9 : "");
+        if (spi3_shell_claim()) {
+            cmd_spi3_seq(line[8] == ' ' ? line + 9 : "");
+            fpga_acq_resume();
+        }
     } else if (strncmp(line, "spi3 read", 9) == 0) {
+        /* Memory-only (reads the acq task's published buffer) — no claim. */
         cmd_spi3_read(line[9] == ' ' ? line + 10 : "");
     } else if (strcmp(line, "reboot bootloader") == 0) {
         cmd_reboot_bootloader();
     } else if (strcmp(line, "spi3 acqread") == 0) {
-        cmd_spi3_acqread();
+        if (spi3_shell_claim()) {
+            cmd_spi3_acqread();
+            fpga_acq_resume();
+        }
     } else if (strncmp(line, "spi3 opread", 11) == 0) {
         cmd_spi3_opread(line[11] == ' ' ? line + 12 : "");
     } else if (strncmp(line, "spi3 opsweep", 12) == 0) {
         cmd_spi3_opsweep(line[12] == ' ' ? line + 13 : "");
     } else if (strncmp(line, "spi3 armtest", 12) == 0) {
-        cmd_spi3_armtest(line[12] == ' ' ? line + 13 : "");
+        if (spi3_shell_claim()) {
+            cmd_spi3_armtest(line[12] == ' ' ? line + 13 : "");
+            fpga_acq_resume();
+        }
     } else if (strcmp(line, "spi3 gowin") == 0) {
-        cmd_spi3_gowin();
+        if (spi3_shell_claim()) {
+            cmd_spi3_gowin();
+            fpga_acq_resume();
+        }
     } else if (strncmp(line, "spi3 scopetest", 14) == 0) {
-        cmd_spi3_scopetest(line[14] == ' ' ? line + 15 : "");
+        if (spi3_shell_claim()) {
+            cmd_spi3_scopetest(line[14] == ' ' ? line + 15 : "");
+            fpga_acq_resume();
+        }
     } else if (strcmp(line, "spi3 acqtest") == 0) {
-        cmd_spi3_acqtest();
+        if (spi3_shell_claim()) {
+            cmd_spi3_acqtest();
+            fpga_acq_resume();
+        }
     } else if (strcmp(line, "spi3 stock-readback") == 0) {
-        cmd_spi3_stock_readback();
+        if (spi3_shell_claim()) {
+            cmd_spi3_stock_readback();
+            fpga_acq_resume();
+        }
     } else if (strcmp(line, "spi3 h2txdiag") == 0 ||
                strcmp(line, "spi3 h2verify") == 0) {
-        cmd_spi3_h2txdiag();
+        if (spi3_shell_claim()) {
+            cmd_spi3_h2txdiag();
+            fpga_acq_resume();
+        }
     } else if (strcmp(line, "spi3 probe") == 0) {
         /* Bit-bang SPI3 probe: disable SPI peripheral, manually toggle
-         * SCK and read MISO to test if the FPGA drives the line. */
+         * SCK and read MISO to test if the FPGA drives the line.
+         * spi3_shell_claim (P0.1): this block pokes the SPI peripheral's
+         * registers directly, so an unparked acq task would corrupt far
+         * more than one frame. */
+        if (!spi3_shell_claim()) return;
         usb_send_str("=== SPI3 Bit-Bang Probe ===\r\n");
 
         /* Read PB4 (MISO) idle state */
@@ -6763,6 +6818,7 @@ static void dispatch_command(char *line)
         /* Also check PC6 state */
         usb_debug_printf("PC6 (SPI enable): %d\r\n",
                          (GPIOC->idt & (1 << 6)) ? 1 : 0);
+        fpga_acq_resume();
     } else if (strcmp(line, "uptime") == 0) {
         cmd_uptime();
     } else {

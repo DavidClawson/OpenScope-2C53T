@@ -306,13 +306,20 @@ static bool measure_live_channel(const volatile uint8_t *buf,
     if (!fpga_data_ready() || buf == NULL)
         return false;
 
-    /* Cast away volatile for the analysis pass: the acquisition task may
-     * refill this buffer underneath us, but a torn read costs at most a few
-     * samples out of 1024 in a statistic — strictly less wrong than the
-     * rendering path, which plots the same buffer unsynchronised already.
-     * Anything stronger needs double-buffering in fpga.c, which is not this
-     * file's to change. */
-    scope_measure_record((const uint8_t *)buf, FPGA_ADC_BUF_SIZE, m);
+    /* Tear-checked read (audit 2026-08-20, P0.2). fpga.c now stages each
+     * capture and commits it in a ~10 µs window bracketed by the frame
+     * generation counter (odd = commit in progress); a commit landing inside
+     * our analysis pass would splice two frames through every statistic, so
+     * re-run the pass when the generation moved. Commits arrive at ≤ ~34 Hz,
+     * so the second attempt virtually always stands; after three, accept the
+     * torn result (pre-fix behavior) rather than spin. The volatile cast is
+     * safe because the generation check is what detects concurrent writes. */
+    for (int attempt = 0; attempt < 3; attempt++) {
+        uint32_t g0 = fpga_acq_frame_generation();
+        scope_measure_record((const uint8_t *)buf, FPGA_ADC_BUF_SIZE, m);
+        if ((g0 & 1u) == 0u && fpga_acq_frame_generation() == g0)
+            break;
+    }
     return m->valid;
 }
 
@@ -503,14 +510,25 @@ static void draw_measurement_badges(const scope_state_t *ss, const theme_t *th)
         scope_freq_t fr;
 
         /* The acquisition buffer is `volatile` because the acq task fills it;
-         * the estimator only reads, and a torn read is already the thing it
-         * detects, so casting the qualifier away here is safe rather than
-         * merely convenient. */
+         * the estimator only reads, and its coherence gate refuses torn
+         * records anyway — so an MCU-side tear was never able to produce a
+         * WRONG number here, only a refusal. The generation retry (P0.2)
+         * recovers those refusals: a commit landing mid-estimate re-runs the
+         * estimate on the settled frame instead of burning a hold frame. */
         _Static_assert(FPGA_ADC_BUF_SIZE == SCOPE_FREQ_MAX_N,
                        "estimator window must match the capture buffer");
 
-        if (have1 && scope_freq_estimate((const uint8_t *)fpga_get_ch1_buf(),
-                                         FPGA_ADC_BUF_SIZE, fs, &fr)) {
+        bool fe = false;
+        if (have1) {
+            for (int attempt = 0; attempt < 3; attempt++) {
+                uint32_t g0 = fpga_acq_frame_generation();
+                fe = scope_freq_estimate((const uint8_t *)fpga_get_ch1_buf(),
+                                         FPGA_ADC_BUF_SIZE, fs, &fr);
+                if ((g0 & 1u) == 0u && fpga_acq_frame_generation() == g0)
+                    break;
+            }
+        }
+        if (fe) {
             freq_hz = fr.hz;
             freq_stale = 0u;
         } else if (freq_stale < FREQ_HOLD_FRAMES) {

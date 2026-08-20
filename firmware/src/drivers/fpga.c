@@ -2687,20 +2687,79 @@ static void fpga_meter_adc_sampler_task(void *pv)
  * all same value) because it hasn't been told what to acquire.
  */
 
+/* Cooperative pause handshake, shared by BOTH acquisition tasks (the
+ * queue-driven one below and the warm-handoff continuous one). Protocol (see
+ * fpga_acq_pause): requester sets req, clears ack, then waits for a FRESH
+ * ack — the task raises ack only at its park point, never inside a CS frame,
+ * and re-raises it every parked cycle so a stale ack from a previous pause
+ * can never satisfy a new request. Moved out of the warm-handoff #if on
+ * 2026-08-20 (audit P0.1): the queue-driven task is periodically active too
+ * (display heartbeat every 7 frames), so it needs a real park as well. */
+static volatile bool acq_pause_req = false;
+static volatile bool acq_pause_ack = false;
+
+/* ── Torn-frame fix (audit 2026-08-20, P0.2) ─────────────────────────────
+ * ch1_buf/ch2_buf used to be written IN PLACE, byte-by-byte, over the whole
+ * SPI read (~275 µs at /2, tens of ms at slow clocks) while the lower-
+ * priority display task read them — a preempting capture spliced two frames
+ * through every badge, freq estimate and rendered trace. Now the SPI read
+ * lands in heap staging (allocated in fpga_create_tasks; heap not BSS — the
+ * main-stack headroom over BSS is ~2 KB, see flash_fs.c's identical note)
+ * and is committed by two memcpys (~10 µs) bracketed by acq_frame_gen:
+ * odd = commit in progress. Readers that need exact numbers re-read until
+ * the generation is even and unchanged; the renderer accepts the residual
+ * ~10 µs window as a rare one-frame cosmetic. Side benefit: REJECTED frames
+ * (validity gate, hw-timeout refusal) no longer touch the published buffers
+ * at all. If staging allocation ever failed, writes fall back in place —
+ * old behavior, generation counter simply never advances. */
+static volatile uint32_t acq_frame_gen = 0;
+static uint8_t *acq_stage_ch1 = NULL;
+static uint8_t *acq_stage_ch2 = NULL;
+
+uint32_t fpga_acq_frame_generation(void)
+{
+    return acq_frame_gen;
+}
+
+static volatile uint8_t *acq_write_ch1(void)
+{
+    return acq_stage_ch1 ? acq_stage_ch1 : fpga.ch1_buf;
+}
+
+static volatile uint8_t *acq_write_ch2(void)
+{
+    return acq_stage_ch2 ? acq_stage_ch2 : fpga.ch2_buf;
+}
+
+static void fpga_acq_frames_commit(void)
+{
+    if (acq_stage_ch1 == NULL || acq_stage_ch2 == NULL)
+        return;   /* in-place fallback: nothing to copy */
+    acq_frame_gen++;                                   /* odd: committing */
+    memcpy((void *)fpga.ch1_buf, acq_stage_ch1, FPGA_ADC_BUF_SIZE);
+    memcpy((void *)fpga.ch2_buf, acq_stage_ch2, FPGA_ADC_BUF_SIZE);
+    acq_frame_gen++;                                   /* even: stable */
+}
+
 /* Publish (or refuse) one completed acquisition frame. `hw_to_before` is the
  * spi3_hw_timeouts snapshot taken before the frame's first spi3_xfer: if the
  * counter moved, at least one byte in the buffers is a fabricated timeout
  * 0xFF, not bus data — keep the previous good frame and count the failure so
  * SPI3_BACKOFF_THRESHOLD can actually engage. Constant-but-real data still
  * publishes (a flat line from a quiet input is genuine diagnostic info; a
- * flat line from a wedged SPI peripheral is a lie). Audit 2026-08-20, P0.3. */
-static void fpga_acq_publish(uint16_t hw_to_before)
+ * flat line from a wedged SPI peripheral is a lie). Audit 2026-08-20, P0.3.
+ * `commit_frames` is false for triggers that never staged sample data (roll
+ * mode) — committing there would republish whatever the staging last held,
+ * including a previously REJECTED frame. */
+static void fpga_acq_publish(uint16_t hw_to_before, bool commit_frames)
 {
     if (fpga.spi3_hw_timeouts != hw_to_before) {
         fpga.spi3_timeout_count++;
         fpga.spi3_total_timeouts++;
         return;
     }
+    if (commit_frames)
+        fpga_acq_frames_commit();
     fpga.spi3_ok_count++;
     fpga.spi3_timeout_count = 0;
     data_ready = true;
@@ -2716,8 +2775,20 @@ static void fpga_acquisition_task(void *pv)
     #define SPI3_BACKOFF_MS         2000
 
     for (;;) {
+        /* Park point for fpga_acq_pause() (audit 2026-08-20, P0.1). The queue
+         * wait below is bounded (was portMAX_DELAY) purely so a pause request
+         * posted while the queue is idle still gets acked within ~100 ms;
+         * triggers themselves are unaffected. Always between CS frames. */
+        if (acq_pause_req) {
+            acq_pause_ack = true;
+            vTaskDelay(pdMS_TO_TICKS(10));
+            continue;
+        }
+
         /* Wait for trigger from input/housekeeping or timer */
-        xQueueReceive(spi3_acq_queue, &trigger_byte, portMAX_DELAY);
+        if (xQueueReceive(spi3_acq_queue, &trigger_byte,
+                          pdMS_TO_TICKS(100)) != pdTRUE)
+            continue;
 
         if (!fpga.initialized) continue;
 
@@ -2831,6 +2902,8 @@ static void fpga_acquisition_task(void *pv)
             {
                 uint8_t first_raw = 0;
                 uint8_t varies = 0;
+                volatile uint8_t *w1 = acq_write_ch1();
+                volatile uint8_t *w2 = acq_write_ch2();
 
                 for (int i = 0; i < 512; i++) {
                     uint8_t ch1_raw = spi3_xfer(0xFF);
@@ -2854,8 +2927,8 @@ static void fpga_acquisition_task(void *pv)
                     if (ch2_cal < 0) ch2_cal = 0;
                     if (ch2_cal > 255) ch2_cal = 255;
 
-                    fpga.ch1_buf[i] = (uint8_t)ch1_cal;
-                    fpga.ch2_buf[i] = (uint8_t)ch2_cal;
+                    w1[i] = (uint8_t)ch1_cal;
+                    w2[i] = (uint8_t)ch2_cal;
                 }
 
                 fpga.diag_data_varies = varies;
@@ -2863,7 +2936,7 @@ static void fpga_acquisition_task(void *pv)
 
             /* Constant data still publishes (diagnostic info — see
              * fpga_acq_publish); frames with fabricated timeout bytes don't. */
-            fpga_acq_publish(hw_to_before);
+            fpga_acq_publish(hw_to_before, true);
             break;
         }
 
@@ -2871,22 +2944,24 @@ static void fpga_acquisition_task(void *pv)
         {
             /* Stock firmware case 3: reads 0x800 bytes.
              * Same protocol — 0xFF command, then bulk read. */
+            volatile uint8_t *w1 = acq_write_ch1();
+            volatile uint8_t *w2 = acq_write_ch2();
             for (int i = 0; i < FPGA_ADC_BUF_SIZE; i++) {
                 uint8_t raw = spi3_xfer(0xFF);
                 int16_t cal = (int16_t)raw + (int16_t)FPGA_ADC_OFFSET;
                 if (cal < 0) cal = 0;
                 if (cal > 255) cal = 255;
-                fpga.ch1_buf[i] = (uint8_t)cal;
+                w1[i] = (uint8_t)cal;
             }
             for (int i = 0; i < FPGA_ADC_BUF_SIZE; i++) {
                 uint8_t raw = spi3_xfer(0xFF);
                 int16_t cal = (int16_t)raw + (int16_t)FPGA_ADC_OFFSET;
                 if (cal < 0) cal = 0;
                 if (cal > 255) cal = 255;
-                fpga.ch2_buf[i] = (uint8_t)cal;
+                w2[i] = (uint8_t)cal;
             }
 
-            fpga_acq_publish(hw_to_before);
+            fpga_acq_publish(hw_to_before, true);
             break;
         }
 
@@ -2903,7 +2978,7 @@ static void fpga_acquisition_task(void *pv)
 
             /* TODO: store roll samples into circular buffer properly */
 
-            fpga_acq_publish(hw_to_before);
+            fpga_acq_publish(hw_to_before, false);   /* no staged frame */
             break;
         }
 
@@ -3147,15 +3222,8 @@ bool fpga_apply_vdiv(uint8_t ch, uint8_t idx)
 }
 
 #if FPGA_WARM_HANDOFF_TEST
-/* Cooperative pause handshake for the continuous acquisition task below.
- * Protocol (see fpga_acq_pause): requester sets req, clears ack, then waits
- * for a FRESH ack — the task raises ack only at its park point, never inside
- * a CS frame. The task re-raises ack every parked cycle, so a stale ack from
- * a previous pause can never satisfy a new request. */
-
-
-static volatile bool acq_pause_req = false;
-static volatile bool acq_pause_ack = false;
+/* (Pause-handshake flags acq_pause_req/ack live above fpga_acq_publish now —
+ * shared by both acquisition tasks since 2026-08-20, audit P0.1.) */
 
 /* PC0 (FPGA data-ready, active LOW) falling-edge counter. A polled level
  * read cannot see a short deassert pulse, which is exactly what made every
@@ -3313,8 +3381,13 @@ static void fpga_warmtest_acq_task(void *pv)
                                               during our read is a new capture
                                               and belongs to the next cycle */
         uint16_t hw_to_before = fpga.spi3_hw_timeouts;
-        uint8_t s1 = fpga_warmtest_read_channel(0x04, fpga.ch1_buf);
-        uint8_t s2 = fpga_warmtest_read_channel(0x05, fpga.ch2_buf);
+        /* Reads land in staging, not the published buffers (P0.2): a frame
+         * the gate below rejects never reaches the display, and an accepted
+         * one is committed atomically in fpga_acq_frames_commit(). */
+        volatile uint8_t *w1 = acq_write_ch1();
+        volatile uint8_t *w2 = acq_write_ch2();
+        uint8_t s1 = fpga_warmtest_read_channel(0x04, w1);
+        uint8_t s2 = fpga_warmtest_read_channel(0x05, w2);
 
         /* Anchor the success flags on frame validity — a fully dead bus
          * reads 0xFF everywhere (pull-up idle / spi3_xfer timeout), which
@@ -3328,7 +3401,7 @@ static void fpga_warmtest_acq_task(void *pv)
         bool marker = (s1 == 0x80) || (s2 == 0x80);
         bool varies = false;
         for (int i = 1; i < 1024; i++) {
-            if (fpga.ch1_buf[i] != fpga.ch1_buf[0]) { varies = true; break; }
+            if (w1[i] != w1[0]) { varies = true; break; }
         }
         /* The old third gate term tested acq_hdr_ch1[2]==0x01 as a stock
          * "buffer-valid" flag. Refuted 2026-08-15 by stock's own dispatch:
@@ -3341,6 +3414,7 @@ static void fpga_warmtest_acq_task(void *pv)
          * which "varies" and would pass. If spi3_hw_timeouts moved during the
          * two reads, at least one byte is fabricated: reject. */
         if ((marker || varies) && fpga.spi3_hw_timeouts == hw_to_before) {
+            fpga_acq_frames_commit();
             fpga.spi3_ok_count++;
             fpga.spi3_timeout_count = 0;
             data_ready = true;
@@ -3374,19 +3448,22 @@ static void fpga_warmtest_acq_task(void *pv)
 }
 #endif /* FPGA_WARM_HANDOFF_TEST */
 
-/* See fpga.h. In builds without the continuous acquisition task there is
- * nothing to park, so pause trivially succeeds (the queue-driven task only
- * touches SPI3 on explicit triggers, which the shell user controls). */
+/* See fpga.h. Real in EVERY build since 2026-08-20 (audit P0.1). The old
+ * non-warmtest body was `return true` — justified by "the queue-driven task
+ * only touches SPI3 on explicit triggers, which the shell user controls",
+ * which was false: the display loop's fpga_scope_heartbeat() posts a trigger
+ * every 7 frames whenever the scope is running, so every shell command that
+ * 'parked' was unprotected on the shared bus in default builds. */
 bool fpga_acq_pause(void)
 {
-#if FPGA_WARM_HANDOFF_TEST
     if (acq_task_handle == NULL)
         return true;
     acq_pause_req = true;
     acq_pause_ack = false;      /* demand a FRESH ack from the park point */
-    /* Worst-case ack latency = one full loop pass: the trigger-mode edge wait
-     * (≤FPGA_NORMAL_TRIG_WAIT_MS) + two 1026-byte reads + 10 ms. 1 s is
-     * comfortable margin. */
+    /* Worst-case ack latency = one full loop pass. Warm-handoff task: the
+     * trigger-mode edge wait (≤FPGA_NORMAL_TRIG_WAIT_MS) + two 1026-byte
+     * reads + 10 ms. Queue task: one acquisition (≤ a few ms) or the 100 ms
+     * bounded queue wait. 1 s is comfortable margin for both. */
     for (int i = 0; i < 100; i++) {
         if (acq_pause_ack)
             return true;
@@ -3394,16 +3471,11 @@ bool fpga_acq_pause(void)
     }
     acq_pause_req = false;      /* don't leave a half-armed request behind */
     return false;
-#else
-    return true;
-#endif
 }
 
 void fpga_acq_resume(void)
 {
-#if FPGA_WARM_HANDOFF_TEST
     acq_pause_req = false;
-#endif
 }
 
 /* ═══════════════════════════════════════════════════════════════════
@@ -5261,6 +5333,20 @@ QueueHandle_t fpga_create_tasks(void)
     usart_tx_queue = xQueueCreate(10, sizeof(uint16_t));
     spi3_acq_queue = xQueueCreate(15, sizeof(uint8_t));
     meter_rx_queue = xQueueCreate(8, sizeof(fpga_meter_rx_event_t));
+
+    /* P0.2 frame staging (see fpga_acq_frames_commit). Heap, not BSS — the
+     * boot-stack headroom over BSS is ~2 KB (flash_fs.c has the same note).
+     * A failed alloc falls back to the pre-2026-08-20 in-place writes. */
+    acq_stage_ch1 = (uint8_t *)pvPortMalloc(FPGA_ADC_BUF_SIZE);
+    acq_stage_ch2 = (uint8_t *)pvPortMalloc(FPGA_ADC_BUF_SIZE);
+    if (acq_stage_ch1 == NULL || acq_stage_ch2 == NULL) {
+        if (acq_stage_ch1) { vPortFree(acq_stage_ch1); }
+        if (acq_stage_ch2) { vPortFree(acq_stage_ch2); }
+        acq_stage_ch1 = acq_stage_ch2 = NULL;
+    } else {
+        memset(acq_stage_ch1, 128, FPGA_ADC_BUF_SIZE);   /* mid-scale */
+        memset(acq_stage_ch2, 128, FPGA_ADC_BUF_SIZE);
+    }
 
 #if FPGA_BUS_RELEASED_BOOT
     /* Bus-released boot: create NO auto-tasks — the MCU has handed SPI3 to an
