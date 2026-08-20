@@ -536,6 +536,16 @@ class Scope:
         running is part of the measurement, not metadata."""
         return self.cmd("version", timeout).strip()
 
+    def vdiv(self, ch: int, index: int) -> str:
+        """Set a channel's volts/div range in BOTH display state and relays.
+
+        Uses `fpga scope vdiv`, NOT `fpga scope range`. The raw form drives
+        the relay bank behind the display's back, so the badge's counts->volts
+        k stays at the OLD range — exactly how EXP-19's first grid run got
+        fourteen refusals: the harness moved the hardware and the badge never
+        heard. Same lesson as timebase()/timebase_raw() below."""
+        return self.cmd(f"fpga scope vdiv {ch} {index}")
+
     def timebase(self, index: int) -> str:
         """Set the timebase in BOTH the display state and reg 0x01.
 

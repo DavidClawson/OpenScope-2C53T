@@ -80,7 +80,7 @@ reviewable promotion-ladder spec per feature.
 | Vertical scale (volts/div) | **S3** | Ranges 5/6/7 measured and cross-validated four ways; 4/8/9 provisional and marked `~`; 0–3 rail and return `0.0`, with callers falling back to ADC counts. **Absolute scale is unverified** — every gain traces to an amplitude commanded from an unchecked source. One constant fixes it when a trusted source arrives. |
 | Horizontal scale (time/div) | **S3** | 8 of 21 timebase codes measured; the rest show `--` rather than a guess. The UI button reaches the FPGA as of 2026-08-19 — before that it moved a label and nothing else. |
 | Freq badge | **S3** | Spectral, with a held-out fixture and a bin-stratified assertion. Refuses on torn records instead of guessing; answers ~87% of bench captures and has never been wrong on them. |
-| Vpp / Vrms / Duty / Period badges | **S1** | Computed from real samples. Never validated against a known source, so treat the volts as provisional in the same way the vertical scale is. |
+| Vpp / Vrms / Period badges | **S2** | Bench-validated against a commanded sine, 3 ranges × 2 codes (EXP-19, 2026-08-20): Vrms within 3.8%, frequency-derived Period within 0.2%, Vpp within 7% with a small residual positive bias (peak detection reads high on a noisy record even after percentile trimming — Vrms is the number to trust). Same-source circularity means this is pipeline+linearity, not absolute volts. Duty passed its host battery but has not faced a commanded duty cycle yet. |
 | Trigger level | **S1** | Digital, SPI3 register `0x08`, an ADC code. Re-armed at boot. |
 | Settings persistence | **S2** | Commissioned on hardware 2026-08-20: first record ever written to the W25Q, then restored — and pushed into the FPGA — across three consecutive power cycles. Until that day every write was refused by a build-time interlock (`SETTINGS_PERSIST_WRITES=0`) no bench build had ever enabled, so this row previously said "real" while zero records existed — the matrix's first *over*statement. **Documented gap** (still true): a change carries only if a later button press or an orderly power-off follows it. |
 | Multimeter | **S1** | Works, and is accurate within a few percent on DCV and resistance — but **not in `guest-coldtrace`**, which holds USART2 dark. The two do not currently coexist. |
@@ -91,7 +91,7 @@ reviewable promotion-ladder spec per feature.
 | Math channels | **S0** | Fed a hardcoded sine LUT and square wave. |
 | Bode plot | **S0** | A generated demo response of a first-order low-pass. |
 | Protocol decoders (UART/SPI/I2C/CAN/K-Line) | **S0** | No call sites. |
-| Auto-measurements | **S0** | `measurement_compute()` has no caller. |
+| Auto-measurements engine (`measurement_compute`) | **S0** | Still has no caller — superseded by `scope_measure.c`, which drives the badges above. Its one unique quantity (rise/fall time) is unwired; the rest is scheduled for deletion (see the spec). |
 | XY / roll / trend / mask testing | **S0** | No call sites. |
 | `modules/` | **S0** | 17 guided-procedure files across four trades, with a provisional schema ([`modules/README.md`](modules/README.md)) — but no loader: nothing in the firmware reads them. |
 

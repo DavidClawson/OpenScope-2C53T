@@ -34,6 +34,8 @@ void scope_measure_record(const uint8_t *samples, uint16_t n,
     uint8_t  smax = samples[0];
     uint64_t sum = 0;
     uint64_t sum_sq = 0;
+    uint16_t hist[256];
+    memset(hist, 0, sizeof(hist));
 
     for (uint16_t i = 0; i < n; i++) {
         uint8_t s = samples[i];
@@ -41,6 +43,7 @@ void scope_measure_record(const uint8_t *samples, uint16_t n,
         if (s > smax) smax = s;
         sum    += s;
         sum_sq += (uint64_t)s * (uint64_t)s;
+        hist[s]++;
     }
 
     out->valid = true;
@@ -48,6 +51,23 @@ void scope_measure_record(const uint8_t *samples, uint16_t n,
     out->max   = smax;
     out->pp    = (uint8_t)(smax - smin);
     out->mean  = (float)sum / (float)n;
+
+    /* Robust peak-to-peak: walk the histogram in from both ends until 0.5%
+     * of the samples (n/200, at least 1) have been discarded on each side,
+     * then take the span of what remains. See the header for why: raw
+     * max-min is inflated by the noise tails, measured at +4..+10% of a
+     * commanded amplitude in EXP-19. O(256), no second pass over samples. */
+    {
+        uint16_t trim = (uint16_t)(n / 200u);
+        if (trim == 0u) trim = 1u;
+
+        uint16_t lo = smin, hi = smax;
+        uint32_t acc = 0;
+        while (lo < hi && acc + hist[lo] <= trim) { acc += hist[lo]; lo++; }
+        acc = 0;
+        while (hi > lo && acc + hist[hi] <= trim) { acc += hist[hi]; hi--; }
+        out->pp_robust = (uint8_t)(hi - lo);
+    }
 
     /* Variance about the mean, computed as E[x^2] - E[x]^2 in integer form
      * (n*sum_sq - sum^2) / n^2 so the subtraction happens before any

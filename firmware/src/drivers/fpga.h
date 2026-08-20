@@ -979,6 +979,12 @@ bool    fpga_acq_rearm_get(void);
  * was written and the previous rate is still in force. */
 bool    fpga_apply_timebase(uint8_t code);
 
+/* Vertical sibling of fpga_apply_timebase (EXP-19): drive channel ch's
+ * (1 or 2) frontend relay bank to range idx. The caller owns updating
+ * scope_state's vdiv_idx, same split as the timebase pair. Returns false on
+ * a bad argument; relays are then untouched. */
+bool    fpga_apply_vdiv(uint8_t ch, uint8_t idx);
+
 /* What the boot-time timebase reconcile did: 0 = never ran (the arm path in
  * this build does not call it — that was a real bug on 2026-08-19), 1 = pushed
  * the display's persisted code to the FPGA, 2 = pulled the display down to the
@@ -990,6 +996,7 @@ uint8_t fpga_timebase_reconcile_action(void);
  * which restores timebase_idx and would otherwise silently undo the arm-path
  * call. Pre-scheduler only: takes no lock. */
 void    fpga_reconcile_timebase_after_arm(void);
+void    fpga_reconcile_frontend_after_arm(void);
 
 void    fpga_acq_rate_idx_set(uint8_t v);
 uint8_t fpga_acq_rate_idx_get(void);

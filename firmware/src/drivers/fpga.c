@@ -3079,6 +3079,27 @@ bool fpga_apply_timebase(uint8_t code)
     return true;
 }
 
+/* Vertical sibling of fpga_apply_timebase(), for the same vintage of bug
+ * found the same way (EXP-19, 2026-08-20: every Vpp in the badge-validation
+ * grid refused). The UI's vdiv button mutated scope_state.vdiv_idx and
+ * NOTHING else — the exact shape of the decorative timebase button (EXP-17):
+ * since the labels became measured (2026-08-18), pressing it changed the
+ * printed volts/div AND the counts->volts k while the relay bank stayed put,
+ * i.e. a confidently wrong voltage. Relay writes are plain GPIO — no SPI3
+ * frame — so no acq park is needed here.
+ *
+ * NOTE this drives the RELAYS only. The new range's vertical-offset
+ * operating point is wherever DAC1 (CH1) / TMR13 (CH2) last left it, so the
+ * trace can sit off-centre or clip until a re-center (`fpga scope center`).
+ * Gain quantities (Vpp/Vrms) are offset-independent short of clipping. */
+bool fpga_apply_vdiv(uint8_t ch, uint8_t idx)
+{
+    if ((ch != 1u && ch != 2u) || idx >= VDIV_COUNT)
+        return false;
+    fpga_scope_set_range_diag_ch((uint8_t)(ch - 1u), idx);
+    return true;
+}
+
 #if FPGA_WARM_HANDOFF_TEST
 /* Cooperative pause handshake for the continuous acquisition task below.
  * Protocol (see fpga_acq_pause): requester sets req, clears ack, then waits
@@ -3929,6 +3950,16 @@ void fpga_reconcile_timebase_after_arm(void)
         acq_rate_idx     = 0x08;
         fpga_tb_reconcile_action = 2u;
     }
+}
+
+/* Vertical sibling of the reconcile above: fpga_init() applies the frontend
+ * relays from scope_state BEFORE settings_store_init() restores it, so a
+ * persisted volts/div would relabel the axis and change the counts->volts k
+ * at boot while the relays stayed at the defaults. Re-applying from the
+ * restored state closes the gap (EXP-19, 2026-08-20). */
+void fpga_reconcile_frontend_after_arm(void)
+{
+    fpga_set_scope_frontend_ranges(scope_state_get());
 }
 
 uint8_t fpga_spi3_config_sequence(const fpga_cfg_seq_opts_t *opt)

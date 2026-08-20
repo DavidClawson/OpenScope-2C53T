@@ -247,6 +247,25 @@ static int battery(measure_fn f)
     bad += chk("dither: NOT level_valid", !m.level_valid);
     bad += chk("dither: no duty claimed", m.duty_pct == 0.0f);
 
+    /* --- Case 6b: robust pp vs impulse noise (EXP-19) ------------------
+     * The bench measured raw max-min inflated +4..+10% of the commanded
+     * amplitude by noise tails. Model it: a clean square (mass AT the
+     * levels, so trimming must cost nothing) plus 4 impulse outliers.
+     * Raw pp must see the outliers (that is what raw means) and pp_robust
+     * must not — and on the CLEAN record the two must agree exactly. */
+    gen_square(buf, N, 25, 50.0f, 88, 168);
+    f(buf, N, &m);
+    bad += chk("clean square: pp_robust == pp", m.pp_robust == m.pp);
+    gen_sine(buf2, N, 256, 50.0f, 128.0f, 0.0f);
+    f(buf2, N, &m2);
+    bad += chk("clean sine: pp_robust within 2 of pp",
+               m2.pp >= m2.pp_robust && (m2.pp - m2.pp_robust) <= 2);
+    gen_square(buf, N, 25, 50.0f, 88, 168);
+    buf[13] = 255; buf[400] = 0; buf[700] = 250; buf[901] = 3;
+    f(buf, N, &m);
+    bad += chk("impulses: raw pp inflated to 255", m.pp == 255);
+    bad += chk("impulses: pp_robust holds at 80", m.pp_robust == 80);
+
     /* --- Case 7: degenerate inputs are refused, not guessed ----------- */
     f(NULL, N, &m);
     bad += chk("NULL record: invalid", !m.valid);

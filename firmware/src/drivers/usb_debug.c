@@ -46,6 +46,7 @@
 #include "../util/settings_store.h"
 #include "../ui/scope_cal.h"
 #include "../ui/scope_freq.h"
+#include "../ui/scope_measure.h"
 #include "../ui/scope_timebase.h"
 #include "../ui/meter_voltage_wave.h"
 
@@ -626,6 +627,8 @@ static void cmd_help(void)
         "fpga scope center [ch2] [0-9]   Auto-center offset ref per range (CH1/DAC1 default); all if omitted\r\n"
         "fpga scope cal                  Dump the compiled vertical cal table (mV/count, V/div, tier)\r\n"
         "fpga scope freq [n]             Run the shipped frequency estimator n times, with diagnostics\r\n"
+        "fpga scope measure [reps]       Badge values raw (uV/permille/mHz) for bench validation\r\n"
+        "fpga scope vdiv <1|2> <0-9>     Set volts/div range: display AND relays together\r\n"
         "fpga scope timebase [code]      Set timebase in BOTH display state and reg 0x01 (hex)\r\n"
         "settings                        Persistence status: bound, load result, writes, failures\r\n"
         "fpga usart [on|off]             Bring USART2 up post-config; show CTRL1+RX\r\n"
@@ -2332,6 +2335,39 @@ static void cmd_fpga_scope_reinit(void)
     usb_send_str("Scope reinit queued\r\n");
 }
 
+/* `fpga scope vdiv <1|2> <0-9>` — the vdiv BUTTON's path from the shell:
+ * updates scope_state (label + counts->volts k) AND drives the relay bank
+ * through fpga_apply_vdiv(), the single entry point. This is to `fpga scope
+ * range` what `fpga scope timebase` is to a raw `seq 01 XX`: the raw form
+ * changes the hardware behind the display's back and exists only for
+ * deliberately testing that divergence (EXP-19). */
+static void cmd_fpga_scope_vdiv(const char *args)
+{
+    uint32_t chn = 0, n = 0;
+    const char *space = args ? strchr(args, ' ') : NULL;
+    if (!args || parse_int(args, &chn) != 0 || (chn != 1u && chn != 2u) ||
+        !space) {
+        usb_send_str("Usage: fpga scope vdiv <1|2> <0-9>\r\n");
+        return;
+    }
+    while (*space == ' ') space++;
+    if (parse_int(space, &n) != 0 || n > 9u) {
+        usb_send_str("Usage: fpga scope vdiv <1|2> <0-9>\r\n");
+        return;
+    }
+    if (!fpga_apply_vdiv((uint8_t)chn, (uint8_t)n)) {
+        usb_send_str("vdiv: relay apply failed\r\n");
+        return;
+    }
+    scope_state_t *ss = scope_state_get();
+    channel_state_t *c = (chn == 1u) ? &ss->ch1 : &ss->ch2;
+    c->vdiv_idx = (uint8_t)n;
+    char vd[12];
+    scope_cal_range_label((uint8_t)chn, (uint8_t)n, vd, sizeof(vd));
+    usb_debug_printf("vdiv CH%lu = range %lu (%s/div)\r\n",
+                     (unsigned long)chn, (unsigned long)n, vd);
+}
+
 /* `fpga scope range <n> <1|2|both>` — apply coarse frontend range n (0-9) to
  * one channel or, with the explicit `both` keyword, to both. The two channels
  * have independent relay banks (CH1 PC12/PE4/PE5/PE6, CH2 PA15/PB11/PB10/PA10)
@@ -2378,6 +2414,8 @@ static void cmd_fpga_scope_range(const char *args)
     }
 
     fpga_scope_set_range_diag_ch(ch_sel, (uint8_t)n);
+    usb_send_str("(raw relay drive — display state and counts->volts k NOT "
+                 "updated; use `fpga scope vdiv`)\r\n");
     usb_debug_printf("scope frontend range = %lu on %s\r\n",
                      (unsigned long)n,
                      ch_sel == 0 ? "CH1" : (ch_sel == 1 ? "CH2" : "CH1+CH2"));
@@ -2653,6 +2691,85 @@ static void cmd_fpga_scope_freq(const char *args)
     }
     usb_debug_printf("answered %lu/%lu\r\n",
                      (unsigned long)answered, (unsigned long)reps);
+}
+
+/* `fpga scope measure [reps]` — print what the measurement badges compute,
+ * raw and machine-parseable: one line per fresh record. This is the bench
+ * instrument for EXP-19 badge validation, and it deliberately calls the SAME
+ * sources the badges call (scope_measure_record, scope_cal_volts_per_count,
+ * scope_timebase_sample_rate, scope_freq_estimate) rather than reimplementing
+ * any of them — two implementations of one quantity is the two-renderers bug.
+ *
+ * Integer-only output (shell printf carries no %f): voltages in MICROVOLTS,
+ * duty in permille, period in samples x100, frequency in mHz. A field the
+ * instrument refuses (k = 0, no rate, estimator declined) prints "-" so a
+ * refusal can never be confused with a measured zero. */
+static void cmd_fpga_scope_measure(const char *args)
+{
+    uint32_t reps = 5;
+    if (args && *args) parse_int(args, &reps);
+    if (reps == 0u) reps = 1u;
+    if (reps > 50u) reps = 50u;
+
+    const scope_state_t *ss = scope_state_get();
+    const float fs = scope_timebase_sample_rate(ss->timebase_idx);
+    const uint8_t in_force = fpga_acq_rate_idx_get();
+    const bool tb_ok = (in_force == ss->timebase_idx) && (fs > 0.0f);
+    const float k1 = scope_cal_volts_per_count(1u, ss->ch1.vdiv_idx);
+    const float k2 = scope_cal_volts_per_count(2u, ss->ch2.vdiv_idx);
+
+    usb_debug_printf("badge sources: rng1=%u k1_uV=%lu  rng2=%u k2_uV=%lu  "
+                     "tb=0x%02X inforce=0x%02X fs=%lu\r\n",
+                     (unsigned)ss->ch1.vdiv_idx,
+                     (unsigned long)(k1 * 1e6f + 0.5f),
+                     (unsigned)ss->ch2.vdiv_idx,
+                     (unsigned long)(k2 * 1e6f + 0.5f),
+                     (unsigned)ss->timebase_idx, (unsigned)in_force,
+                     (unsigned long)(fs + 0.5f));
+    if (in_force != ss->timebase_idx)
+        usb_send_str("TB MISMATCH: frequency suppressed (see fpga scope freq)\r\n");
+
+    const volatile uint8_t *ch1 = fpga_get_ch1_buf();
+    const volatile uint8_t *ch2 = fpga_get_ch2_buf();
+    if (!ch1) { usb_send_str("FPGA not initialized\r\n"); return; }
+
+    for (uint32_t i = 0; i < reps; i++) {
+        scope_measure_t m1, m2;
+        scope_measure_record((const uint8_t *)ch1, FPGA_ADC_BUF_SIZE, &m1);
+        scope_measure_record(ch2 ? (const uint8_t *)ch2 : NULL,
+                             ch2 ? FPGA_ADC_BUF_SIZE : 0u, &m2);
+
+        char vpp1[12] = "-", vrms1[12] = "-", per[12] = "-", f[16] = "-";
+        char vpp2[12] = "-";
+        if (k1 > 0.0f) {
+            snprintf(vpp1, sizeof vpp1, "%lu",
+                     (unsigned long)((float)m1.pp_robust * k1 * 1e6f + 0.5f));
+            snprintf(vrms1, sizeof vrms1, "%lu",
+                     (unsigned long)(m1.ac_rms * k1 * 1e6f + 0.5f));
+        }
+        if (m1.period_valid)
+            snprintf(per, sizeof per, "%lu",
+                     (unsigned long)(m1.period_samples * 100.0f + 0.5f));
+        if (tb_ok) {
+            scope_freq_t fr;
+            if (scope_freq_estimate((const uint8_t *)ch1, FPGA_ADC_BUF_SIZE,
+                                    fs, &fr))
+                snprintf(f, sizeof f, "%lu",
+                         (unsigned long)(fr.hz * 1000.0f + 0.5f));
+        }
+        if (m2.valid && k2 > 0.0f)
+            snprintf(vpp2, sizeof vpp2, "%lu",
+                     (unsigned long)((float)m2.pp_robust * k2 * 1e6f + 0.5f));
+
+        usb_debug_printf("M %2lu pp1=%u ppr1=%u Vpp1_uV=%s Vrms1_uV=%s duty1_pm=%lu "
+                         "per1_smp100=%s f1_mHz=%s pp2=%u Vpp2_uV=%s\r\n",
+                         (unsigned long)i, (unsigned)m1.pp,
+                         (unsigned)m1.pp_robust, vpp1, vrms1,
+                         (unsigned long)(m1.level_valid
+                                         ? m1.duty_pct * 10.0f + 0.5f : 0.0f),
+                         per, f, (unsigned)m2.pp, vpp2);
+        usb_delay_ms(60);
+    }
 }
 
 /* `fpga scope cal` — print what the firmware believes about vertical scale.
@@ -6473,6 +6590,10 @@ static void dispatch_command(char *line)
         cmd_fpga_scope_range(line + 17);
     } else if (strcmp(line, "fpga scope cal") == 0) {
         cmd_fpga_scope_cal();
+    } else if (strncmp(line, "fpga scope vdiv", 15) == 0) {
+        cmd_fpga_scope_vdiv(line[15] == ' ' ? line + 16 : "");
+    } else if (strncmp(line, "fpga scope measure", 18) == 0) {
+        cmd_fpga_scope_measure(line[18] == ' ' ? line + 19 : "");
     } else if (strncmp(line, "fpga scope freq", 15) == 0) {
         cmd_fpga_scope_freq(line[15] == ' ' ? line + 16 : "");
     } else if (strcmp(line, "settings") == 0) {

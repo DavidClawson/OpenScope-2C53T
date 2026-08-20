@@ -64,6 +64,16 @@ typedef struct {
     uint8_t  min;
     uint8_t  max;
     uint8_t  pp;            /* max - min                                     */
+    /* pp with 0.5% of samples trimmed from each end of the DISTRIBUTION
+     * before taking the extremes. `pp` is an extreme-value statistic: over a
+     * 1024-sample noisy 8-bit record the noise tails inflate both ends, and
+     * EXP-19 measured that inflation at +4..+10% of commanded amplitude,
+     * shrinking as amplitude grows — the additive signature. Trimming is
+     * shape-safe for the waveforms this instrument shows: sines (arcsine
+     * density, mass AT the extremes) and squares (mass at the levels) lose
+     * nothing; a pure triangle loses ~1% by construction. Use THIS for any
+     * voltage the user reads; keep `pp` for validity thresholds. */
+    uint8_t  pp_robust;
     float    mean;          /* DC level                                      */
     float    ac_rms;        /* RMS about the mean (mean removed)             */
 

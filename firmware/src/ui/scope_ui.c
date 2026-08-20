@@ -354,7 +354,6 @@ static void fmt_hz(char *b, size_t n, float hz)
 /*
  * A duration in seconds, ranged us/ms/s. Integer math, as above.
  */
-__attribute__((unused))
 static void fmt_seconds(char *b, size_t n, float s)
 {
     if (s < 0.0f) s = 0.0f;
@@ -441,27 +440,20 @@ _Static_assert(SCOPE_TIMEBASE_CODE_COUNT == TIMEBASE_COUNT,
  *   Duty         a pure ratio; invariant under any affine counts->volts
  *                mapping, so it is already correct and stays correct once
  *                calibration lands. Asserted in tests/test_scope_measure.c.
- *   Per          SAMPLES per cycle, measured between mid-level crossings.
- *   Freq         "--". Hz needs a known sample rate, i.e. a timebase, and
- *                this firmware has no timebase control at all (§F4).
+ *   Freq         Hz from the SPECTRAL estimator (scope_freq.c) on measured
+ *                timebase codes; declines rather than guess, with a short
+ *                hold (see below). "--" on unmeasured codes.
+ *   Per          SECONDS as 1/Freq while the spectral estimate stands;
+ *                otherwise SAMPLES between mid-level crossings, never
+ *                converted, because that crossing period is 5-50% out
+ *                (EXP-13) and a bad number in real units reads as true.
  *
- * The volts wiring is DONE (Vpp = pp * k, Vrms = ac_rms * k, with k from
- * scope_cal_volts_per_count(ch, vdiv_idx), k == 0 meaning "show counts").
- *
- * Freq/Per still await a timebase — but only a CALIBRATION, not a repair.
- *
- * EXP-08 reported that the capture "does not resolve frequency at all", every
- * tone landing in bin 1. WITHDRAWN by EXP-10 (2026-08-18): that was a double
- * FFT in the analysis script, which returns bin 1 for any input frequency.
- * Measured with a single transform, bin tracks frequency linearly from 100 Hz
- * to 3.5 kHz with R^2 = 0.9990 at reg 0x01 = 0x10, giving fs = 14,890 S/s.
- *
- * So the horizontal axis is a real time axis; what is missing is a per-code
- * sample-rate table of the same kind scope_cal.c holds for volts, plus the
- * plumbing to tell this function which reg-0x01 code is live. Until that
- * exists, printing Hz would mean multiplying through an ASSUMED rate, which is
- * the invention this function was written to remove. Period stays in samples
- * and Freq stays blank on purpose.
+ * The wiring is Vpp = pp * k, Vrms = ac_rms * k, with k from
+ * scope_cal_volts_per_count(ch, vdiv_idx), k == 0 meaning "show counts";
+ * Hz needs the measured rate table in scope_timebase.c (EXP-17/18) and the
+ * reg-0x01 code actually in force. `fpga scope measure` prints these same
+ * quantities raw for the bench, from the same sources, so what EXP-19
+ * validates is what the screen shows.
  */
 static void draw_measurement_badges(const scope_state_t *ss, const theme_t *th)
 {
@@ -502,10 +494,9 @@ static void draw_measurement_badges(const scope_state_t *ss, const theme_t *th)
      * it blanks, because a stale number with no expiry is just a wrong number
      * that used to be right.
      */
+    static float    freq_hz;
+    static uint16_t freq_stale;
     {
-        static float    freq_hz;
-        static uint16_t freq_stale;
-
         /* timebase_idx IS the reg-0x01 code — fpga_stock_timebase_byte()
          * returns it unchanged, and status_bar.c reads it the same way. */
         const float fs = scope_timebase_sample_rate(ss->timebase_idx);
@@ -541,8 +532,10 @@ static void draw_measurement_badges(const scope_state_t *ss, const theme_t *th)
     const float k1 = scope_cal_volts_per_count(1u, ss->ch1.vdiv_idx);
 
     if (have1) {
-        if (k1 > 0.0f) fmt_volts(buf, sizeof(buf), (float)m1.pp * k1);
-        else           fmt_counts(buf, sizeof(buf), m1.pp);
+        /* pp_robust, not pp: raw max-min is noise-inflated by +4..+10% of
+         * the commanded amplitude (EXP-19) — see scope_measure.h. */
+        if (k1 > 0.0f) fmt_volts(buf, sizeof(buf), (float)m1.pp_robust * k1);
+        else           fmt_counts(buf, sizeof(buf), m1.pp_robust);
         draw_one_badge(x, y1, "Vpp", buf, th->ch1, th);
     } else {
         draw_one_badge(x, y1, "Vpp", MEAS_NA, na, th);
@@ -571,14 +564,21 @@ static void draw_measurement_badges(const scope_state_t *ss, const theme_t *th)
     x = 2;
     uint16_t y2 = BADGE_ROW2_Y;
 
-    if (have1 && m1.period_valid) {
+    if (freq_hz > 0.0f) {
         /*
-         * SAMPLES, not seconds — same reason as Freq above. The conversion is
-         * one multiply by scope_timebase_seconds_per_sample() and the rate is
-         * sound; it is period_samples itself that is 5-50% out (EXP-13).
-         * Quoting it in samples keeps it an honest count of what the estimator
-         * actually did, rather than dressing a bad number in real units.
+         * SECONDS, derived as 1/Freq from the SPECTRAL estimate above — the
+         * one estimator this project trusts (S3: held-out fixture, never
+         * wrong on 72 bench records). NOT from period_samples: the
+         * mid-level-crossing period is 5-50% out (EXP-13), which is why it
+         * was never dressed in real units. Same hold/expiry as the Freq
+         * badge, so the two can never disagree on the screen.
          */
+        fmt_seconds(buf, sizeof(buf), 1.0f / freq_hz);
+        draw_one_badge(x, y2, "Per", buf, th->ch1, th);
+    } else if (have1 && m1.period_valid) {
+        /* No trustworthy Hz (unmeasured code, or the estimator declined and
+         * the hold expired): fall back to the crossing count in honest
+         * SAMPLES, never converted (EXP-13). */
         snprintf(buf, sizeof(buf), "%usmp",
                  (unsigned)(m1.period_samples + 0.5f));
         draw_one_badge(x, y2, "Per", buf, th->ch1, th);
@@ -589,8 +589,8 @@ static void draw_measurement_badges(const scope_state_t *ss, const theme_t *th)
 
     if (have2) {
         const float k2 = scope_cal_volts_per_count(2u, ss->ch2.vdiv_idx);
-        if (k2 > 0.0f) fmt_volts(buf, sizeof(buf), (float)m2.pp * k2);
-        else           fmt_counts(buf, sizeof(buf), m2.pp);
+        if (k2 > 0.0f) fmt_volts(buf, sizeof(buf), (float)m2.pp_robust * k2);
+        else           fmt_counts(buf, sizeof(buf), m2.pp_robust);
         draw_one_badge(x, y2, "CH2pp", buf, th->ch2, th);
     } else {
         draw_one_badge(x, y2, "CH2pp", MEAS_NA, na, th);

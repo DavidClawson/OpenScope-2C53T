@@ -953,6 +953,10 @@ int main(void)
      * could start using SPI3. */
 #ifndef EMULATOR_BUILD
     fpga_reconcile_timebase_after_arm();
+    /* Same reconcile for the vertical axis: fpga_init() applied the frontend
+     * relays before the restore, so push the restored vdiv indices out too
+     * (EXP-19, 2026-08-20). */
+    fpga_reconcile_frontend_after_arm();
 #endif
 
     /* Create queues */

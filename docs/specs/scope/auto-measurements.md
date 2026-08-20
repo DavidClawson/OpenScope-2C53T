@@ -1,7 +1,13 @@
 # Spec: Auto-measurements in real units
 
 **Track:** scope
-**Stage now:** S1 (badges compute from real samples; volts/seconds withheld)
+**Stage now:** S2 — bench-validated 2026-08-20 (EXP-19). Vrms ≤3.8%, Period
+(as 1/Freq) ≤0.2%, Vpp ≤7% with a documented residual bias; refusals verified
+on-device. The validation found and fixed three bugs on the way: the vdiv
+button was the timebase button's decorative twin (relays never driven, no
+boot reconcile), the harness repeated EXP-14's fs-configuration mistake, and
+raw max−min Vpp is noise-inflated — replaced by percentile-trimmed
+`pp_robust`. See `docs/experiments/2026-08-20-19-badge-validation.md`.
 **Champion:** DavidClawson
 
 ## What it is
@@ -48,7 +54,7 @@ are stale — those items are done.
 
 | To reach | Criterion (checkable) |
 |---|---|
-| S2 | Vpp and Vrms of a bench-driven sine match the commanded amplitude within the cal table's stated uncertainty, and period matches the commanded frequency within the timebase table's, on ≥2 measured ranges × ≥2 measured codes. Writeup in `docs/experiments/`. On any unmeasured range/code the badge shows `--`, verified on-device. |
+| ~~S2~~ | **DONE 2026-08-20** (EXP-19): 3 ranges × 2 codes, Vrms ≤3.8%, f ≤0.2%, refusal controls 3/3. Two r7@0x12 rows flagged with an ADC-wander hypothesis and a stated test. Open questions 1 was decided as recommended: `scope_measure.c` stays the engine. |
 | S3 | Host regression over captured records (reuse `scripts/capture_scope_records.py` fixtures) with a **negative control**: perturbing a cal row or rate must make the test fail, in the same spirit as `test_scope_timebase.c`. |
 | S4 | Badge strip is legible at a glance; user can choose which measurements show; provisional ranges keep their `~` marker in the badge, not just the status bar. |
 

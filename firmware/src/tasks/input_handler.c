@@ -523,13 +523,21 @@ uint8_t input_handle_button(button_id_t button, QueueHandle_t dq)
         else if (current_mode == MODE_OSCILLOSCOPE) {
             channel_state_t *ch = (active_channel == 0) ? &ss->ch1 : &ss->ch2;
             scope_adjust_vdiv(ch, 1);
+            /* Push it to the RELAYS. Before 2026-08-20 (EXP-19) this line did
+             * not exist and the button only changed the label and the
+             * counts->volts k while the frontend stayed at the boot range —
+             * the decorative-timebase-button bug (EXP-17), on the axis where
+             * it prints a confidently wrong VOLTAGE. */
+            const bool vd_ok = fpga_apply_vdiv((uint8_t)(active_channel + 1),
+                                               ch->vdiv_idx);
             /* Same derived label the status bar shows — see scope_cal.h.
              * Two different volts/div strings for one range would be worse
              * than the wrong one we replaced. */
             char vd[12];
             scope_cal_range_label((uint8_t)(active_channel + 1),
                                   ch->vdiv_idx, vd, sizeof(vd));
-            snprintf(pb, sizeof(pb), "CH%d %s/div", active_channel + 1, vd);
+            snprintf(pb, sizeof(pb), vd_ok ? "CH%d %s/div" : "CH%d %s NOT SET",
+                     active_channel + 1, vd);
             popup_and_redraw(dq, pb);
         }
         else if (current_mode == MODE_MULTIMETER &&
@@ -578,13 +586,21 @@ uint8_t input_handle_button(button_id_t button, QueueHandle_t dq)
         else if (current_mode == MODE_OSCILLOSCOPE) {
             channel_state_t *ch = (active_channel == 0) ? &ss->ch1 : &ss->ch2;
             scope_adjust_vdiv(ch, -1);
+            /* Push it to the RELAYS. Before 2026-08-20 (EXP-19) this line did
+             * not exist and the button only changed the label and the
+             * counts->volts k while the frontend stayed at the boot range —
+             * the decorative-timebase-button bug (EXP-17), on the axis where
+             * it prints a confidently wrong VOLTAGE. */
+            const bool vd_ok = fpga_apply_vdiv((uint8_t)(active_channel + 1),
+                                               ch->vdiv_idx);
             /* Same derived label the status bar shows — see scope_cal.h.
              * Two different volts/div strings for one range would be worse
              * than the wrong one we replaced. */
             char vd[12];
             scope_cal_range_label((uint8_t)(active_channel + 1),
                                   ch->vdiv_idx, vd, sizeof(vd));
-            snprintf(pb, sizeof(pb), "CH%d %s/div", active_channel + 1, vd);
+            snprintf(pb, sizeof(pb), vd_ok ? "CH%d %s/div" : "CH%d %s NOT SET",
+                     active_channel + 1, vd);
             popup_and_redraw(dq, pb);
         }
         else if (current_mode == MODE_MULTIMETER &&
