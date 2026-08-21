@@ -17,6 +17,7 @@
 #include "cdc_desc.h"
 #include "dfu_boot.h"
 #include "flash_fs.h"
+#include "fw_loader.h"
 #include "rtt.h"
 #include "continuity_buzzer.h"
 
@@ -6454,6 +6455,78 @@ static void cmd_spi3_probe(void)
  * string, CMD_V if it takes void). Help is part of the row; keep the
  * left-aligned name+argspec column at 32 chars like the rows around it.
  * ═══════════════════════════════════════════════════════════════════ */
+/* ── fwload / fwstat / fwapply — image loading over this shell ──────────
+ * The state machine and every flash touch live in fw_loader.c; these
+ * handlers are parsing and printing only. The RX rerouting that feeds the
+ * transfer is in vUsbDebugTask below. */
+
+static const char *fwl_err_name(fw_loader_error_t e)
+{
+    switch (e) {
+    case FW_LOADER_ERR_NONE:    return "none";
+    case FW_LOADER_ERR_SIZE:    return "size (need even 8192..391168)";
+    case FW_LOADER_ERR_FLASH:   return "staging flash write/verify";
+    case FW_LOADER_ERR_CRC:     return "crc mismatch";
+    case FW_LOADER_ERR_VECTOR:  return "vector table not app-shaped";
+    case FW_LOADER_ERR_TIMEOUT: return "rx went silent; run fwload again";
+    }
+    return "?";
+}
+
+static void fwl_print_status(void)
+{
+    static const char *names[] = { "IDLE", "RECEIVING", "STAGED", "ERROR" };
+    char buf[112];
+    snprintf(buf, sizeof(buf), "fwload: %s %lu/%lu crc=%08lX err=%s\r\n",
+             names[fw_loader_state()],
+             (unsigned long)fw_loader_bytes(),
+             (unsigned long)fw_loader_expected(),
+             (unsigned long)fw_loader_crc_announced(),
+             fwl_err_name(fw_loader_error()));
+    usb_send_str(buf);
+}
+
+static void cmd_fwload(const char *args)
+{
+    char *end = NULL;
+    unsigned long size = strtoul(args, &end, 10);
+    unsigned long crc = (end && *end) ? strtoul(end, NULL, 16) : 0;
+    if (end == args || crc == 0) {
+        usb_send_str("usage: fwload <size bytes, decimal> <crc32 hex>\r\n"
+                     "       then stream exactly that many raw bytes\r\n");
+        return;
+    }
+    if (!fw_loader_begin((uint32_t)size, (uint32_t)crc)) {
+        fwl_print_status();
+        return;
+    }
+    char buf[64];
+    snprintf(buf, sizeof(buf), "GO %lu bytes, crc %08lX expected\r\n",
+             size, crc);
+    usb_send_str(buf);
+}
+
+static void cmd_fwstat(void)
+{
+    fwl_print_status();
+}
+
+static void cmd_fwapply(void)
+{
+    if (fw_loader_state() != FW_LOADER_STAGED) {
+        usb_send_str("nothing staged — fwload first\r\n");
+        fwl_print_status();
+        return;
+    }
+    usb_send_str("applying: erase+program+verify from RAM, then jump.\r\n"
+                 "this port disappears now; the device does NOT reboot —\r\n"
+                 "the new image starts directly. recovery = MENU+Power IAP.\r\n");
+    vTaskDelay(pdMS_TO_TICKS(300));   /* let the goodbye reach the host */
+    if (!fw_loader_apply()) {
+        fwl_print_status();           /* only reached on a refused apply */
+    }
+}
+
 typedef struct {
     const char *name;                    /* full command word(s) */
     void (*fn_args)(const char *args);   /* exactly one of these two is set */
@@ -6478,6 +6551,13 @@ static const shell_cmd_t shell_cmds[] = {
           "version                         Firmware info\r\n"),
     CMD_V("status", cmd_status, SC_EXACT,
           "status                          FPGA & system status\r\n"),
+    CMD_A("fwload", cmd_fwload, SC_NEEDARGS,
+          "fwload <size> <crc32hex>        Stage a firmware image over this port\r\n"
+          "  then stream exactly <size> raw bytes (scripts/cdc_flash.py does both)\r\n"),
+    CMD_V("fwstat", cmd_fwstat, SC_EXACT,
+          "fwstat                          Staging state / byte count / verdict\r\n"),
+    CMD_V("fwapply", cmd_fwapply, SC_EXACT,
+          "fwapply                         Install the staged image over the app slot\r\n"),
     CMD_A("usart raw", cmd_usart_raw, SC_NEEDARGS,
           "usart raw <10 hex bytes>       Send raw 10-byte USART frame\r\n" "  e.g.: usart raw 00 00 00 0B 01 00 00 00 00 0B\r\n"),
     CMD_A("usart tx", cmd_usart_tx, SC_NEEDARGS,
@@ -6870,7 +6950,24 @@ static void vUsbDebugTask(void *pvParameters)
             } else {
                 uint16_t rx_len = usb_vcp_get_rxdata(&usb_core_dev, rx_buf);
                 if (rx_len > 0) {
-                    shell_feed(rx_buf, rx_len, true);
+                    if (fw_loader_active()) {
+                        /* Raw image bytes for fw_loader — no echo, no line
+                         * editor. Progress every 64 KB so a long transfer
+                         * is visibly alive without flooding the port. */
+                        uint32_t before = fw_loader_bytes();
+                        fw_loader_feed(rx_buf, rx_len);
+                        if ((fw_loader_bytes() >> 16) != (before >> 16)) {
+                            char pbuf[24];
+                            snprintf(pbuf, sizeof(pbuf), "..%luK\r\n",
+                                     (unsigned long)(fw_loader_bytes() >> 10));
+                            usb_send_str(pbuf);
+                        }
+                        if (!fw_loader_active()) {
+                            fwl_print_status();  /* staged or failed — say so */
+                        }
+                    } else {
+                        shell_feed(rx_buf, rx_len, true);
+                    }
                     did_work = true;
                 }
             }
@@ -6881,6 +6978,16 @@ static void vUsbDebugTask(void *pvParameters)
 #else
         (void)rx_buf; (void)usb_banner_sent; (void)usb_settle;
 #endif
+
+        /* Age the fw_loader RX-silence timeout, and report if it fires —
+         * the poll is what turns a wedged transfer back into a live shell. */
+        {
+            bool was_loading = fw_loader_active();
+            fw_loader_poll();
+            if (was_loading && !fw_loader_active()) {
+                fwl_print_status();
+            }
+        }
 
         if (!did_work) {
             vTaskDelay(pdMS_TO_TICKS(10));

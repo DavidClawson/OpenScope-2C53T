@@ -66,6 +66,7 @@ C_SOURCES += src/drivers/meter_data.c
 C_SOURCES += src/drivers/meter_auto.c
 C_SOURCES += src/drivers/meter_autoselect.c
 C_SOURCES += src/drivers/usb_debug.c
+C_SOURCES += src/drivers/fw_loader.c
 C_SOURCES += src/drivers/rtt.c
 C_SOURCES += src/drivers/fault.c
 C_SOURCES += src/dsp/signal_gen.c
@@ -495,6 +496,16 @@ $(BUILD_DIR)/test_scope_cal: tests/test_scope_cal.c src/ui/scope_cal.c src/ui/sc
 test-scope-cal: $(BUILD_DIR)/test_scope_cal
 	$<
 
+$(BUILD_DIR)/test_fw_loader: tests/test_fw_loader.c src/drivers/fw_loader.c src/drivers/fw_loader.h | $(BUILD_DIR)
+	$(HOST_CC) -std=gnu11 -Wall -Wextra -DFW_LOADER_HOST_TEST -Isrc/drivers $< src/drivers/fw_loader.c -o $@
+
+# CDC firmware loader: tests the gates between a byte stream and an erased
+# app slot (size/CRC/vector/timeout), the staging byte-exactness, and that
+# apply() refuses anything not STAGED. The RAM installer itself is compiled
+# out on the host and is validated on hardware.
+test-fw-loader: $(BUILD_DIR)/test_fw_loader
+	$<
+
 $(BUILD_DIR)/test_scope_timebase: tests/test_scope_timebase.c src/ui/scope_timebase.c src/ui/scope_timebase.h | $(BUILD_DIR)
 	$(HOST_CC) -std=gnu11 -Wall -Wextra -Isrc/ui $< src/ui/scope_timebase.c -lm -o $@
 
@@ -546,7 +557,7 @@ $(BUILD_DIR)/test_redraw_gate: tests/test_redraw_gate.c src/ui/redraw_gate.h | $
 test-redraw-gate: $(BUILD_DIR)/test_redraw_gate
 	$<
 
-.PHONY: all clean disasm size renode soak-test soak-quick flash flash-dfu bootloader flash-bootloader flash-all guest guest-warmtest guest-usart-silent emu test-meter-data test-meter-auto test-meter-voltage-wave test-fpga-meter-plan test-stock-meter-literals test-meter test-scope-measure test-scope-cal test-scope-timebase test-scope-freq test-redraw-gate test-config-persist guest-persist guest-caldump guest-coldtrace-slow guest-coldtrace-la guest-debugclk fpga-alt-header
+.PHONY: all clean disasm size renode soak-test soak-quick flash flash-dfu bootloader flash-bootloader flash-all guest guest-warmtest guest-usart-silent emu test-meter-data test-meter-auto test-meter-voltage-wave test-fpga-meter-plan test-stock-meter-literals test-meter test-scope-measure test-scope-cal test-scope-timebase test-fw-loader test-scope-freq test-redraw-gate test-config-persist guest-persist guest-caldump guest-coldtrace-slow guest-coldtrace-la guest-debugclk fpga-alt-header
 
 # ═══════════════════════════════════════════════════════════════════════════
 # BENCH / EXPERIMENT IMAGE INDEX                          (index added 2026-08-13)
