@@ -6464,11 +6464,12 @@ static const char *fwl_err_name(fw_loader_error_t e)
 {
     switch (e) {
     case FW_LOADER_ERR_NONE:    return "none";
-    case FW_LOADER_ERR_SIZE:    return "size (need even 8192..391168)";
-    case FW_LOADER_ERR_FLASH:   return "staging flash write/verify";
+    case FW_LOADER_ERR_SIZE:    return "size (need even 8192..757760)";
+    case FW_LOADER_ERR_FLASH:   return "w25q erase/write/read";
     case FW_LOADER_ERR_CRC:     return "crc mismatch";
     case FW_LOADER_ERR_VECTOR:  return "vector table not app-shaped";
     case FW_LOADER_ERR_TIMEOUT: return "rx went silent; run fwload again";
+    case FW_LOADER_ERR_NO_IMAGE: return "slot holds no valid image";
     }
     return "?";
 }
@@ -6476,13 +6477,18 @@ static const char *fwl_err_name(fw_loader_error_t e)
 static void fwl_print_status(void)
 {
     static const char *names[] = { "IDLE", "RECEIVING", "STAGED", "ERROR" };
-    char buf[112];
-    snprintf(buf, sizeof(buf), "fwload: %s %lu/%lu crc=%08lX err=%s\r\n",
+    char buf[160];
+    snprintf(buf, sizeof(buf),
+             "fwload: %s slot=%c %lu/%lu crc=%08lX err=%s\r\n"
+             "cache:  A=%lu/%08lX B=%lu/%08lX\r\n",
              names[fw_loader_state()],
+             fw_loader_slot() ? 'b' : 'a',
              (unsigned long)fw_loader_bytes(),
              (unsigned long)fw_loader_expected(),
              (unsigned long)fw_loader_crc_announced(),
-             fwl_err_name(fw_loader_error()));
+             fwl_err_name(fw_loader_error()),
+             (unsigned long)fw_loader_slot_size(0), (unsigned long)fw_loader_slot_crc(0),
+             (unsigned long)fw_loader_slot_size(1), (unsigned long)fw_loader_slot_crc(1));
     usb_send_str(buf);
 }
 
@@ -6490,19 +6496,26 @@ static void cmd_fwload(const char *args)
 {
     char *end = NULL;
     unsigned long size = strtoul(args, &end, 10);
-    unsigned long crc = (end && *end) ? strtoul(end, NULL, 16) : 0;
+    char *end2 = NULL;
+    unsigned long crc = (end && *end) ? strtoul(end, &end2, 16) : 0;
+    uint8_t slot = 1; /* default: slot b — "the other firmware" by custom */
+    if (end2 != NULL) {
+        while (*end2 == ' ') end2++;
+        if (*end2 == 'a' || *end2 == 'A') slot = 0;
+        else if (*end2 == 'b' || *end2 == 'B') slot = 1;
+    }
     if (end == args || crc == 0) {
-        usb_send_str("usage: fwload <size bytes, decimal> <crc32 hex>\r\n"
+        usb_send_str("usage: fwload <size bytes, decimal> <crc32 hex> [a|b]\r\n"
                      "       then stream exactly that many raw bytes\r\n");
         return;
     }
-    if (!fw_loader_begin((uint32_t)size, (uint32_t)crc)) {
+    if (!fw_loader_begin((uint32_t)size, (uint32_t)crc, slot)) {
         fwl_print_status();
         return;
     }
-    char buf[64];
-    snprintf(buf, sizeof(buf), "GO %lu bytes, crc %08lX expected\r\n",
-             size, crc);
+    char buf[72];
+    snprintf(buf, sizeof(buf), "GO %lu bytes to slot %c, crc %08lX expected\r\n",
+             size, slot ? 'b' : 'a', crc);
     usb_send_str(buf);
 }
 
@@ -6511,10 +6524,30 @@ static void cmd_fwstat(void)
     fwl_print_status();
 }
 
+static void cmd_fwswap(const char *args)
+{
+    uint8_t slot;
+    while (*args == ' ') args++;
+    if (*args == 'a' || *args == 'A') slot = 0;
+    else if (*args == 'b' || *args == 'B') slot = 1;
+    else {
+        usb_send_str("usage: fwswap a|b   (install a cached image, no transfer)\r\n");
+        fwl_print_status();
+        return;
+    }
+    usb_send_str("verifying slot, then: erase+program+verify from RAM and\r\n"
+                 "SYSTEM RESET into the image. keep USB attached (it carries\r\n"
+                 "the rail through the reset). recovery = MENU+Power IAP.\r\n");
+    vTaskDelay(pdMS_TO_TICKS(300));
+    if (!fw_loader_install_slot(slot)) {
+        fwl_print_status();
+    }
+}
+
 static void cmd_fwapply(void)
 {
     if (fw_loader_state() != FW_LOADER_STAGED) {
-        usb_send_str("nothing staged — fwload first\r\n");
+        usb_send_str("nothing staged — fwload first (or fwswap a|b)\r\n");
         fwl_print_status();
         return;
     }
@@ -6553,12 +6586,14 @@ static const shell_cmd_t shell_cmds[] = {
     CMD_V("status", cmd_status, SC_EXACT,
           "status                          FPGA & system status\r\n"),
     CMD_A("fwload", cmd_fwload, SC_NEEDARGS,
-          "fwload <size> <crc32hex>        Stage a firmware image over this port\r\n"
+          "fwload <size> <crc32hex> [a|b]  Stage an image into W25Q cache slot a/b\r\n"
           "  then stream exactly <size> raw bytes (scripts/cdc_flash.py does both)\r\n"),
     CMD_V("fwstat", cmd_fwstat, SC_EXACT,
           "fwstat                          Staging state / byte count / verdict\r\n"),
     CMD_V("fwapply", cmd_fwapply, SC_EXACT,
           "fwapply                         Install the staged image over the app slot\r\n"),
+    CMD_A("fwswap", cmd_fwswap, SC_NEEDARGS,
+          "fwswap a|b                      Install a cached image (no transfer needed)\r\n"),
     CMD_A("usart raw", cmd_usart_raw, SC_NEEDARGS,
           "usart raw <10 hex bytes>       Send raw 10-byte USART frame\r\n" "  e.g.: usart raw 00 00 00 0B 01 00 00 00 00 0B\r\n"),
     CMD_A("usart tx", cmd_usart_tx, SC_NEEDARGS,

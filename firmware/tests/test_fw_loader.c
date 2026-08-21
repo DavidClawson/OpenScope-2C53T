@@ -24,8 +24,8 @@
 #include <string.h>
 #include <stdlib.h>
 
-/* Simulated 1 MB part for fw_loader.c (FW_LOADER_HOST_TEST). */
-uint8_t fw_loader_test_flash[0x100000];
+/* Simulated 2 MB fwcache region (chip 0xD00000..0xF00000). */
+uint8_t fw_loader_test_w25q[0x200000];
 
 static int failures = 0;
 
@@ -72,10 +72,11 @@ static void feed_in_chunks(const uint8_t *img, uint32_t size, uint16_t chunk)
 
 static void test_size_gate(void)
 {
-    CHECK(!fw_loader_begin(0, 0x1234), "size 0 must be refused");
-    CHECK(!fw_loader_begin(8193, 0x1234), "odd size must be refused");
-    CHECK(!fw_loader_begin(4096, 0x1234), "size < 8192 must be refused");
-    CHECK(!fw_loader_begin(391170, 0x1234), "size > staging must be refused");
+    CHECK(!fw_loader_begin(0, 0x1234, 1), "size 0 must be refused");
+    CHECK(!fw_loader_begin(8193, 0x1234, 1), "odd size must be refused");
+    CHECK(!fw_loader_begin(4096, 0x1234, 1), "size < 8192 must be refused");
+    CHECK(!fw_loader_begin(757762, 0x1234, 1), "size > app ceiling must be refused");
+    CHECK(!fw_loader_begin(20000, 0x1234, 2), "slot 2 must be refused");
     CHECK(fw_loader_error() == FW_LOADER_ERR_SIZE, "err must be SIZE");
     CHECK(!fw_loader_active(), "a refused begin must not activate RX routing");
 }
@@ -87,7 +88,7 @@ static void test_happy_path(void)
     make_image(img, SZ);
     uint32_t crc = crc32_ref(img, SZ);
 
-    CHECK(fw_loader_begin(SZ, crc), "begin must accept a sane image");
+    CHECK(fw_loader_begin(SZ, crc, 1), "begin must accept a sane image");
     CHECK(fw_loader_active(), "must be receiving");
     /* 63 is deliberately not a divisor of anything: pages fill unevenly. */
     feed_in_chunks(img, SZ, 63);
@@ -95,9 +96,14 @@ static void test_happy_path(void)
           "valid stream must stage (state=%d err=%d)",
           fw_loader_state(), fw_loader_error());
     CHECK(!fw_loader_active(), "routing must return to the shell when done");
-    CHECK(memcmp(&fw_loader_test_flash[0x080A0000u - 0x08000000u], img, SZ) == 0,
-          "staged bytes must be byte-exact");
+    CHECK(memcmp(&fw_loader_test_w25q[0x00E01000u - 0x00D00000u], img, SZ) == 0,
+          "staged bytes must be byte-exact in slot B");
+    CHECK(fw_loader_slot_size(1) == SZ, "slot B manifest must carry the size");
+    CHECK(fw_loader_slot_crc(1) == crc, "slot B manifest must carry the crc");
+    CHECK(fw_loader_slot_size(0) == 0, "slot A must stay empty");
     CHECK(fw_loader_apply(), "apply must accept a STAGED image (host no-op)");
+    CHECK(fw_loader_install_slot(1), "fwswap of a valid cached slot must pass");
+    CHECK(!fw_loader_install_slot(0), "fwswap of an empty slot must refuse");
 }
 
 static void test_crc_gate(void)
@@ -108,13 +114,15 @@ static void test_crc_gate(void)
     uint32_t crc = crc32_ref(img, SZ);
     img[9000] ^= 0x40;   /* corrupt AFTER computing the announced CRC */
 
-    CHECK(fw_loader_begin(SZ, crc), "begin ok");
+    CHECK(fw_loader_begin(SZ, crc, 0), "begin ok");
     feed_in_chunks(img, SZ, 512);
     CHECK(fw_loader_state() == FW_LOADER_ERROR &&
           fw_loader_error() == FW_LOADER_ERR_CRC,
           "one flipped bit must land in ERROR/CRC (state=%d err=%d)",
           fw_loader_state(), fw_loader_error());
     CHECK(!fw_loader_apply(), "apply must refuse a CRC-failed stage");
+    CHECK(fw_loader_slot_size(0) == 0,
+          "a CRC-failed intake must leave slot A without a manifest");
 }
 
 static void test_vector_gate(void)
@@ -126,7 +134,7 @@ static void test_vector_gate(void)
     make_image(img, SZ);
     uint32_t bad_sp = 0x08007000u;
     memcpy(img, &bad_sp, 4);
-    CHECK(fw_loader_begin(SZ, crc32_ref(img, SZ)), "begin ok");
+    CHECK(fw_loader_begin(SZ, crc32_ref(img, SZ), 1), "begin ok");
     feed_in_chunks(img, SZ, 2048);
     CHECK(fw_loader_error() == FW_LOADER_ERR_VECTOR, "flash-shaped SP must fail");
 
@@ -134,7 +142,7 @@ static void test_vector_gate(void)
     make_image(img, SZ);
     uint32_t bad_pc = 0x08000101u;
     memcpy(img + 4, &bad_pc, 4);
-    CHECK(fw_loader_begin(SZ, crc32_ref(img, SZ)), "begin ok");
+    CHECK(fw_loader_begin(SZ, crc32_ref(img, SZ), 1), "begin ok");
     feed_in_chunks(img, SZ, 2048);
     CHECK(fw_loader_error() == FW_LOADER_ERR_VECTOR, "bootloader PC must fail");
 
@@ -142,7 +150,7 @@ static void test_vector_gate(void)
     make_image(img, SZ);
     uint32_t even_pc = 0x08007310u;
     memcpy(img + 4, &even_pc, 4);
-    CHECK(fw_loader_begin(SZ, crc32_ref(img, SZ)), "begin ok");
+    CHECK(fw_loader_begin(SZ, crc32_ref(img, SZ), 1), "begin ok");
     feed_in_chunks(img, SZ, 2048);
     CHECK(fw_loader_error() == FW_LOADER_ERR_VECTOR, "even PC must fail");
 }
@@ -154,7 +162,7 @@ static void test_timeout_recovers(void)
     make_image(img, SZ);
     uint32_t crc = crc32_ref(img, SZ);
 
-    CHECK(fw_loader_begin(SZ, crc), "begin ok");
+    CHECK(fw_loader_begin(SZ, crc, 1), "begin ok");
     fw_loader_feed(img, 1000);          /* partial, then silence */
     for (int i = 0; i < 400; ++i)
         fw_loader_poll();
@@ -165,7 +173,7 @@ static void test_timeout_recovers(void)
     CHECK(!fw_loader_active(), "timeout must return routing to the shell");
 
     /* And a full retry succeeds from that state. */
-    CHECK(fw_loader_begin(SZ, crc), "retry begin ok");
+    CHECK(fw_loader_begin(SZ, crc, 1), "retry begin ok");
     feed_in_chunks(img, SZ, 4096);
     CHECK(fw_loader_state() == FW_LOADER_STAGED, "retry must stage");
 }

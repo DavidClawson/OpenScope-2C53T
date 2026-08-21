@@ -7,14 +7,15 @@ sends `fwapply`. On apply the device installs the image and SYSTEM-RESETS into
 it — a clean boot. The CDC port disappears; that is success, not a crash. Keep
 USB attached: the cable carries the power rail through the reset.
 
-The staging region caps images at ~382 KB. This tool therefore CANNOT
-round-trip this firmware's own ~600 KB image yet (see fw_loader.h); it exists
-to swap in other 0x08007000-linked images (e.g. the 2C23T port) and back out
-via their own update paths. Recovery from anything: MENU+Power stock IAP.
+Images stage into a 1 MB W25Q cache slot (a or b, default b), so this
+firmware's own ~600 KB image round-trips fine, and so does the 2C23T port's.
+A staged slot persists: `fwswap a|b` in the shell installs a cached image
+later with no transfer at all. Recovery from anything: MENU+Power stock IAP
+(nothing in this path can write below 0x08007000).
 
 Usage:
   python3 scripts/cdc_flash.py <image.bin> [--port /dev/cu.usbmodemXXX]
-                               [--stage-only]
+                               [--slot a|b] [--stage-only]
 """
 
 import argparse
@@ -51,6 +52,8 @@ def main() -> None:
     ap = argparse.ArgumentParser()
     ap.add_argument("image")
     ap.add_argument("--port", default=None)
+    ap.add_argument("--slot", choices=["a", "b"], default="b",
+                    help="W25Q cache slot to stage into (default b)")
     ap.add_argument("--stage-only", action="store_true",
                     help="stage and verify, but do not apply")
     args = ap.parse_args()
@@ -67,7 +70,7 @@ def main() -> None:
         time.sleep(0.3)
         s.reset_input_buffer()
 
-        s.write(f"fwload {len(data)} {crc:08X}\r\n".encode())
+        s.write(f"fwload {len(data)} {crc:08X} {args.slot}\r\n".encode())
         got = read_until(s, b"GO ", 5.0)
         if b"GO " not in got:
             sys.exit("device did not accept fwload")
@@ -75,15 +78,20 @@ def main() -> None:
         t0 = time.time()
         for off in range(0, len(data), 2048):
             s.write(data[off:off + 2048])
-            # drain progress lines so the OS buffer never backs up
+            # drain progress lines so the OS buffer never backs up — and
+            # STOP at the first ERROR verdict: pushing the rest of a binary
+            # image into a shell that already gave up feeds it as garbage
+            # command lines.
             chunk = s.read(4096)
             if chunk:
                 sys.stdout.write(chunk.decode(errors="replace"))
                 sys.stdout.flush()
+                if b"ERROR" in chunk:
+                    sys.exit("\ndevice reported an error mid-stream — aborted")
         rate = len(data) / max(time.time() - t0, 1e-3) / 1024
         print(f"\nstreamed in {time.time() - t0:.1f}s ({rate:.0f} KB/s)")
 
-        got = read_until(s, b"fwload:", 10.0)
+        got = read_until(s, b"fwload:", 30.0)
         if b"STAGED" not in got:
             sys.exit("staging did not verify — see the verdict above")
 
