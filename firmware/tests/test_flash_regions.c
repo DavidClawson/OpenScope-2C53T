@@ -329,7 +329,10 @@ static void test_write_to_readonly_region_is_refused(void)
     CHECK_ST(flash_regions_write_abs(0x000000u, data, 1), FLASH_REGION_ERR_READ_ONLY);
     CHECK_ST(flash_regions_write_abs(0x1FFFFFu, data, 1), FLASH_REGION_ERR_READ_ONLY);
     CHECK_ST(flash_regions_write_abs(0x200000u, data, 1), FLASH_REGION_ERR_READ_ONLY);
-    CHECK_ST(flash_regions_write_abs(0xEFFFFFu, data, 1), FLASH_REGION_ERR_READ_ONLY);
+    /* uservol's tail moved when the fwcache region was carved out of it
+     * (2026-08-22): its last byte is now 0xCFFFFF, and 0xD00000+ is the RW
+     * firmware-image cache — deliberately writable, asserted elsewhere. */
+    CHECK_ST(flash_regions_write_abs(0xCFFFFFu, data, 1), FLASH_REGION_ERR_READ_ONLY);
     CHECK_ST(flash_regions_write_abs(0xFFF000u, data, 1), FLASH_REGION_ERR_READ_ONLY);
 
     CHECK(model.programs == 0, "%u programs issued against read-only flash", model.programs);
