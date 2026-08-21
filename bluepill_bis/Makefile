@@ -21,8 +21,12 @@ build/rig.bin: build/rig.elf
 build:
 	mkdir -p build
 
+# CPUTAPID 0 disables OpenOCD's IDCODE check: most Blue Pills carry F103
+# clones (bench unit reads 0x2ba01477, CS32-class, vs genuine 0x1ba01477).
+# Fine for BIS-1/BIS-2 sequence work; already noted as a BIS-3 waveform caveat.
 flash: build/rig.elf
-	openocd -f interface/stlink.cfg -f target/stm32f1x.cfg \
+	openocd -f interface/stlink.cfg -c "set CPUTAPID 0" \
+	        -f target/stm32f1x.cfg \
 	        -c "program build/rig.elf verify reset exit"
 
 clean:
