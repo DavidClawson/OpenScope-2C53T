@@ -185,18 +185,30 @@ static void pins_bitbang(void)
 /* ── hardware SPI transport (port of fpga.c spi3_*) ──────────────────── */
 static void spi_set_br(uint8_t br)
 {
-    /* Mode 3, master, MSB-first, 8-bit, SSM/SSI, BR[5:3] */
+    /* Wait for any in-flight byte to finish before touching CR1. Reconfiguring
+     * (or clearing SPE) while BSY corrupts the F1 SPI state machine and wedges
+     * the next transfer — this is why leg 'a' (a read AFTER the prelude's last
+     * xfer) hung while leg 'i' (a read with nothing in flight) did not. BSY is
+     * only meaningful with SPE set, which holds every time this is called after
+     * the first configure; on the cold first call SR reads 0 and this is a
+     * no-op. Mode 3, master, MSB-first, 8-bit, SSM/SSI, BR[5:3]. */
+    if (SPI1_CR1 & (1u << 6))
+        while (SPI1_SR & (1u << 7)) {}           /* BSY */
     SPI1_CR1 = 0;
     SPI1_CR1 = (1u << 9) | (1u << 8) | (1u << 2) | (1u << 1) | (1u << 0)
              | ((uint32_t)(br & 7u) << 3);
     SPI1_CR1 |= (1u << 6);                       /* SPE */
 }
 
+/* Timeout-guarded, like fpga.c spi3_xfer: a stuck bus returns 0xFF instead of
+ * hanging the rig (a hang looks identical to a dead target over UART). */
 static uint8_t spi_xfer(uint8_t tx)
 {
-    while (!(SPI1_SR & (1u << 1))) {}            /* TXE */
+    volatile uint32_t to = 200000;
+    while (!(SPI1_SR & (1u << 1))) if (--to == 0) return 0xFF;   /* TXE */
     SPI1_DR = tx;
-    while (!(SPI1_SR & (1u << 0))) {}            /* RXNE */
+    to = 200000;
+    while (!(SPI1_SR & (1u << 0))) if (--to == 0) return 0xFF;   /* RXNE */
     return (uint8_t)SPI1_DR;
 }
 
