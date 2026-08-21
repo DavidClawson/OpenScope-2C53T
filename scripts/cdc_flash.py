@@ -3,8 +3,9 @@
 
 Host half of firmware/src/drivers/fw_loader.c: sends `fwload <size> <crc32>`,
 streams the raw image, waits for the STAGED verdict, then (unless --stage-only)
-sends `fwapply`. The device does not reboot on apply — the new image is
-started directly, so the CDC port disappears; that is success, not a crash.
+sends `fwapply`. On apply the device installs the image and SYSTEM-RESETS into
+it — a clean boot. The CDC port disappears; that is success, not a crash. Keep
+USB attached: the cable carries the power rail through the reset.
 
 The staging region caps images at ~382 KB. This tool therefore CANNOT
 round-trip this firmware's own ~600 KB image yet (see fw_loader.h); it exists
@@ -92,7 +93,7 @@ def main() -> None:
 
         s.write(b"fwapply\r\n")
         read_until(s, b"recovery", 5.0)
-        print("\napply sent. The port drops when the new image takes over.")
+        print("\napply sent. The device resets into the new image now.")
 
 
 if __name__ == "__main__":

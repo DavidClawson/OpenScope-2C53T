@@ -22,7 +22,9 @@
  *                           passed the size gate, the CRC check and a vector
  *                           table sanity check. Copies staged -> app slot in
  *                           a RAM function with IRQs off, verifies by
- *                           read-back, and jumps to the new image.
+ *                           read-back, and SYSTEM-RESETS into the new image
+ *                           (a cross-firmware jump without a reset was bench-
+ *                           tried and half-bricks — see fw_loader.c).
  *
  * SAFETY POSTURE
  * --------------

@@ -6518,9 +6518,10 @@ static void cmd_fwapply(void)
         fwl_print_status();
         return;
     }
-    usb_send_str("applying: erase+program+verify from RAM, then jump.\r\n"
-                 "this port disappears now; the device does NOT reboot —\r\n"
-                 "the new image starts directly. recovery = MENU+Power IAP.\r\n");
+    usb_send_str("applying: erase+program+verify from RAM, then SYSTEM RESET\r\n"
+                 "into the new image (a clean boot, not a jump). this port\r\n"
+                 "drops now. keep USB attached — it carries the rail through\r\n"
+                 "the reset. recovery = MENU+Power IAP.\r\n");
     vTaskDelay(pdMS_TO_TICKS(300));   /* let the goodbye reach the host */
     if (!fw_loader_apply()) {
         fwl_print_status();           /* only reached on a refused apply */

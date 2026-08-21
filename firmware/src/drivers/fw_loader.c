@@ -410,25 +410,24 @@ static void fwl_ram_install(uint32_t src, uint32_t dst, uint32_t size)
         }
     }
 
-    /* Success: hand the CPU to the new image the way our own startup would
-     * receive it — SysTick off, every IRQ disabled and pending-cleared,
-     * VTOR at the new table. */
-    *(volatile uint32_t *)0xE000E010u = 0;
-    for (uint32_t i = 0; i < 8u; ++i) {
-        *(volatile uint32_t *)(0xE000E180u + i * 4u) = 0xFFFFFFFFu;
-        *(volatile uint32_t *)(0xE000E280u + i * 4u) = 0xFFFFFFFFu;
-    }
-    *(volatile uint32_t *)0xE000ED08u = dst;
-    __asm__ volatile(
-        "dsb\n"
-        "isb\n"
-        "ldr r0, [%0]\n"
-        "ldr r1, [%0, #4]\n"
-        "msr msp, r0\n"
-        "bx r1\n"
-        :
-        : "r"(dst)
-        : "r0", "r1", "memory");
+    /* Success: SYSTEM RESET, deliberately not a jump.
+     *
+     * The first bench run of this loader jumped straight into the new
+     * image (VTOR + MSP + bx, the 2C23T port's shape) and the result was a
+     * half-alive device: USB serviced by interrupts, main loop dead,
+     * screen dark. The port gets away with that jump because it leaps
+     * from its OWN firmware into its own next version — the peripheral
+     * posture on arrival is one its init was written under. A CROSS-
+     * firmware jump hands the new image whatever this firmware's RTOS,
+     * timers and USB stack were doing at that instant, and no init
+     * sequence owes correctness under that.
+     *
+     * A reset hands it the one state every firmware's startup is actually
+     * written for. The factory IAP then boots the app slot as on any
+     * power-up. Cost: the power rail must survive PC9 dropping during the
+     * reset — true whenever USB powers the board, and fwapply is by
+     * construction always run on the cable the image just arrived over. */
+    *(volatile uint32_t *)0xE000ED0Cu = 0x05FA0004u;   /* AIRCR SYSRESETREQ */
 
 dead:
     /* Unreachable on success. The rail stays held so the unit does not
