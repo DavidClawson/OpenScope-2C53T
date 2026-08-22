@@ -1555,17 +1555,56 @@ void draw_xy_screen(void)
         return;
     }
 
-    /* Connect (CH1[i], CH2[i]) samples into a continuous locus; Y inverted
-     * so positive is up. Time-adjacent samples are adjacent on the curve, so
-     * the polyline is the actual X-Y trajectory. */
-    uint16_t ppx = 0, ppy = 0;
+    /* Coherent snapshot. With connected lines a torn frame draws a stray chord
+     * across the figure (odd generation = acq commit in progress), so copy
+     * both buffers under a stable, unchanged even generation. Static, not
+     * stack — 2 KB. */
+    static uint8_t xs[FPGA_ADC_BUF_SIZE];
+    static uint8_t ys[FPGA_ADC_BUF_SIZE];
+    for (int t = 0; t < 4; t++) {
+        uint32_t g0 = fpga_acq_frame_generation();
+        memcpy(xs, (const void *)xb, FPGA_ADC_BUF_SIZE);
+        memcpy(ys, (const void *)yb, FPGA_ADC_BUF_SIZE);
+        if ((g0 & 1u) == 0u && fpga_acq_frame_generation() == g0)
+            break;
+    }
+
+    /* Auto-centre on each channel's midpoint with a SHARED scale (equal
+     * aspect, so a 1:1 90-deg figure stays a circle). Fixes the off-centre
+     * plot a fixed 0..255 mapping gives when the DC operating point is not
+     * mid-scale. */
+    uint8_t xmin = 255, xmax = 0, ymin = 255, ymax = 0;
     for (uint16_t i = 0; i < FPGA_ADC_BUF_SIZE; i++) {
-        uint16_t px = x0 + (uint16_t)(((uint32_t)xb[i] * span) / 255u);
-        uint16_t py = y0 + span - (uint16_t)(((uint32_t)yb[i] * span) / 255u);
-        if (i > 0)
-            xy_line((int)ppx, (int)ppy, (int)px, (int)py, th->ch1);
-        else
-            lcd_set_pixel(px, py, th->ch1);
+        if (xs[i] < xmin) xmin = xs[i];
+        if (xs[i] > xmax) xmax = xs[i];
+        if (ys[i] < ymin) ymin = ys[i];
+        if (ys[i] > ymax) ymax = ys[i];
+    }
+    const int xmid = (xmin + xmax) / 2;
+    const int ymid = (ymin + ymax) / 2;
+    int rng = (xmax - xmin) > (ymax - ymin) ? (xmax - xmin) : (ymax - ymin);
+    if (rng < 4) rng = 4;                        /* flat / no-signal guard */
+    const int half   = side / 2 - 6;             /* fill to a small margin  */
+    const int chord  = side / 3;                 /* skip strays longer than */
+    const int xl = (int)x0, xh = (int)x0 + (int)side - 1;
+    const int yl = (int)y0, yh = (int)y0 + (int)side - 1;
+
+    int ppx = 0, ppy = 0;
+    for (uint16_t i = 0; i < FPGA_ADC_BUF_SIZE; i++) {
+        int px = (int)cx + ((int)xs[i] - xmid) * half * 2 / rng;
+        int py = (int)cy - ((int)ys[i] - ymid) * half * 2 / rng;  /* Y up */
+        if (px < xl) px = xl; else if (px > xh) px = xh;
+        if (py < yl) py = yl; else if (py > yh) py = yh;
+        if (i > 0) {
+            int adx = px > ppx ? px - ppx : ppx - px;
+            int ady = py > ppy ? py - ppy : ppy - py;
+            if (adx < chord && ady < chord)       /* drop stray teleports */
+                xy_line(ppx, ppy, px, py, th->ch1);
+            else
+                lcd_set_pixel((uint16_t)px, (uint16_t)py, th->ch1);
+        } else {
+            lcd_set_pixel((uint16_t)px, (uint16_t)py, th->ch1);
+        }
         ppx = px;
         ppy = py;
     }
