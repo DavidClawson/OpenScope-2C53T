@@ -39,6 +39,10 @@ persist_mode_t persist_get_mode(void);
  * color_index: 0=CH1(yellow), 1=CH2(cyan) */
 void persist_add_trace(const uint16_t *y_values, uint8_t color_index);
 
+/* Add a single full-intensity point at buffer coords (x: 0..PERSIST_WIDTH-1,
+ * y: 0..PERSIST_HEIGHT-1). For X-Y / arbitrary-locus plotting. */
+void persist_add_point(uint16_t x, uint16_t y);
+
 /* Apply decay to the persistence buffer (call once per frame) */
 void persist_decay(void);
 
