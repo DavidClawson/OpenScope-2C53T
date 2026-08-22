@@ -637,9 +637,15 @@ static void vDisplayTask(void *pvParameters)
                  * from `frame` alone: the synthetic demo waveform (only
                  * drawn before the first real sample) and the
                  * persistence overlay (which decays once per draw). */
-                q.animating        = !scope_acquisition_ready() || persist_enabled;
+                /* X-Y draws its own phosphor decay every frame, so it must
+                 * tick at the fast floor (200 ms) rather than the 1 s anim
+                 * cadence — otherwise the trail fades in visible 1 s steps. */
+                q.animating        = !scope_acquisition_ready() || persist_enabled
+                                     || scope_view == SCOPE_VIEW_XY;
                 q.full_min_frames  = SCOPE_FULL_MIN_FRAMES;
-                q.anim_tick_frames = SCOPE_ANIM_TICK_FRAMES;
+                q.anim_tick_frames = (scope_view == SCOPE_VIEW_XY)
+                                     ? SCOPE_FULL_MIN_FRAMES
+                                     : SCOPE_ANIM_TICK_FRAMES;
                 q.idle_tick_frames = q.incremental_ok ? SCOPE_IDLE_LIVE_FRAMES
                                                       : SCOPE_IDLE_FULL_FRAMES;
 

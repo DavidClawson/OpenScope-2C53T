@@ -1502,8 +1502,8 @@ static void draw_scope_debug(const theme_t *th)
  * a continuous trace, the way an analog scope draws X-Y.
  * ═══════════════════════════════════════════════════════════════════ */
 
-/* Bresenham segment for the X-Y polyline. */
-static void xy_line(int x0, int y0, int x1, int y1, uint16_t color)
+/* Bresenham segment written into the persistence buffer (buffer coords). */
+static void xy_line_persist(int x0, int y0, int x1, int y1)
 {
     int dx = x1 - x0, dy = y1 - y0;
     int sx = dx < 0 ? -1 : 1, sy = dy < 0 ? -1 : 1;
@@ -1511,7 +1511,7 @@ static void xy_line(int x0, int y0, int x1, int y1, uint16_t color)
     if (dy < 0) dy = -dy;
     int err = (dx > dy ? dx : -dy) / 2, e2;
     for (;;) {
-        lcd_set_pixel((uint16_t)x0, (uint16_t)y0, color);
+        persist_add_point((uint16_t)x0, (uint16_t)y0);
         if (x0 == x1 && y0 == y1) break;
         e2 = err;
         if (e2 > -dx) { err -= dy; x0 += sx; }
@@ -1522,99 +1522,81 @@ static void xy_line(int x0, int y0, int x1, int y1, uint16_t color)
 void draw_xy_screen(void)
 {
     const theme_t *th = theme_get();
+    const uint16_t side = SCOPE_H;                 /* square side, 206 px */
+    const uint16_t x0   = (LCD_WIDTH - side) / 2;  /* centred: 57 */
+    const uint16_t y0   = SCOPE_TOP;               /* 18 */
+    const uint16_t cx   = x0 + side / 2;
+    const uint16_t cy   = y0 + side / 2;
 
-    /* Bring up both offset DACs once: DAC1 (PA4) for CH1, TMR13/PA6 for CH2.
-     * op05 is a dead buffer until CH2's ref is armed. Baselines are servo'd
-     * to mid-scale below. */
-    static bool xy_dac_init = false;
+    /* One-time bring-up: offset DACs (CH1 DAC1 + CH2 TMR13/PA6) and the shared
+     * persistence buffer, borrowed here for the phosphor trail (X-Y and the
+     * time-domain persistence overlay never run at once). */
+    static bool xy_init = false;
     static int  xy_dac1 = 2048, xy_dac2 = 2048;
-    if (!xy_dac_init) {
+    if (!xy_init) {
         scope_trigger_dac_init();
         scope_trigger_ch2_init();
         scope_trigger_dac_raw((uint16_t)xy_dac1);
         scope_trigger_ch2_raw((uint16_t)xy_dac2);
-        xy_dac_init = true;
+        if (!persist_is_initialized()) persist_init();
+        persist_set_mode(PERSIST_LOW);             /* short phosphor tail */
+        persist_clear();
+        xy_init = true;
     }
 
-    const uint16_t side = SCOPE_H;                 /* square side, 206 px  */
-    const uint16_t x0   = (LCD_WIDTH - side) / 2;  /* centred: 57          */
-    const uint16_t y0   = SCOPE_TOP;               /* 18                   */
-    const uint16_t span = side - 1;
-
-    lcd_fill_rect(0, SCOPE_TOP, LCD_WIDTH, SCOPE_H, th->background);
-
-    /* Centre cross-hairs. */
-    const uint16_t cx = x0 + side / 2;
-    const uint16_t cy = y0 + side / 2;
-    for (uint16_t y = y0; y < y0 + side; y++) lcd_set_pixel(cx, y, th->grid);
-    for (uint16_t x = x0; x < x0 + side; x++) lcd_set_pixel(x, cy, th->grid);
-
-    font_draw_string(4, SCOPE_TOP + 2, "X-Y  CH1:X CH2:Y",
-                     th->text_secondary, th->background, &font_small);
+    /* Margins + title: background repaint of the strips either side of the
+     * square (also wipes a prior view on entry). The square is streamed from
+     * the persistence buffer below and never blanks, so there is no flash. */
+    lcd_fill_rect(0, SCOPE_TOP, x0, SCOPE_H, th->background);
+    lcd_fill_rect((uint16_t)(x0 + side), SCOPE_TOP,
+                  (uint16_t)(LCD_WIDTH - (x0 + side)), SCOPE_H, th->background);
+    font_draw_string(4, SCOPE_TOP + 2, "X-Y", th->text_secondary,
+                     th->background, &font_small);
 
     const volatile uint8_t *xb = fpga_get_ch1_buf();
     const volatile uint8_t *yb = fpga_get_ch2_buf();
-    if (!fpga_data_ready() || xb == NULL || yb == NULL) {
-        font_draw_string_center(LCD_WIDTH / 2, SCOPE_MID_Y, "X-Y: no signal",
-                                th->warning, th->background, &font_small);
-        return;
-    }
+    const bool have = fpga_data_ready() && xb != NULL && yb != NULL
+                      && persist_is_initialized();
 
-    /* Coherent snapshot. With connected lines a torn frame draws a stray chord
-     * across the figure (odd generation = acq commit in progress), so copy
-     * both buffers under a stable, unchanged even generation. Static, not
-     * stack — 2 KB. */
-    static uint8_t xs[FPGA_ADC_BUF_SIZE];
-    static uint8_t ys[FPGA_ADC_BUF_SIZE];
-    for (int t = 0; t < 4; t++) {
-        uint32_t g0 = fpga_acq_frame_generation();
-        memcpy(xs, (const void *)xb, FPGA_ADC_BUF_SIZE);
-        memcpy(ys, (const void *)yb, FPGA_ADC_BUF_SIZE);
-        if ((g0 & 1u) == 0u && fpga_acq_frame_generation() == g0)
-            break;
-    }
+    persist_decay();                     /* fade the whole buffer once per frame */
 
-    /* Auto-centre on each channel's midpoint with a SHARED scale (equal
-     * aspect, so a 1:1 90-deg figure stays a circle). Fixes the off-centre
-     * plot a fixed 0..255 mapping gives when the DC operating point is not
-     * mid-scale. */
-    uint8_t xmin = 255, xmax = 0, ymin = 255, ymax = 0;
-    for (uint16_t i = 0; i < FPGA_ADC_BUF_SIZE; i++) {
-        if (xs[i] < xmin) xmin = xs[i];
-        if (xs[i] > xmax) xmax = xs[i];
-        if (ys[i] < ymin) ymin = ys[i];
-        if (ys[i] > ymax) ymax = ys[i];
-    }
-    const int xmid_raw = (xmin + xmax) / 2;
-    const int ymid_raw = (ymin + ymax) / 2;
-    int rng_raw = (xmax - xmin) > (ymax - ymin) ? (xmax - xmin) : (ymax - ymin);
-    if (rng_raw < 4) rng_raw = 4;                /* flat / no-signal guard */
+    if (have) {
+        /* Coherent snapshot (odd generation = acq commit in progress). */
+        static uint8_t xs[FPGA_ADC_BUF_SIZE];
+        static uint8_t ys[FPGA_ADC_BUF_SIZE];
+        for (int t = 0; t < 4; t++) {
+            uint32_t g0 = fpga_acq_frame_generation();
+            memcpy(xs, (const void *)xb, FPGA_ADC_BUF_SIZE);
+            memcpy(ys, (const void *)yb, FPGA_ADC_BUF_SIZE);
+            if ((g0 & 1u) == 0u && fpga_acq_frame_generation() == g0)
+                break;
+        }
 
-    /* Smoothed auto-scale: a rounded EMA (alpha = 1/8) of the centre and span,
-     * so the figure holds still instead of breathing on per-frame min/max
-     * jitter, and a single outlier sample can't jerk the whole scale — yet it
-     * still follows a real gain/offset change over ~1 s. Seeded on first draw
-     * so it snaps to the signal instead of ramping from a default. */
-    static int xmid = 128, ymid = 128, rng = 64;
-    static bool xy_seeded = false;
-    if (!xy_seeded) {
-        xmid = xmid_raw; ymid = ymid_raw; rng = rng_raw;
-        xy_seeded = true;
-    } else {
-        xmid += ((xmid_raw - xmid) + (xmid_raw >= xmid ? 4 : -4)) / 8;
-        ymid += ((ymid_raw - ymid) + (ymid_raw >= ymid ? 4 : -4)) / 8;
-        rng  += ((rng_raw  - rng ) + (rng_raw  >= rng  ? 4 : -4)) / 8;
-    }
-    if (rng < 4) rng = 4;
+        uint8_t xmin = 255, xmax = 0, ymin = 255, ymax = 0;
+        for (uint16_t i = 0; i < FPGA_ADC_BUF_SIZE; i++) {
+            if (xs[i] < xmin) xmin = xs[i];
+            if (xs[i] > xmax) xmax = xs[i];
+            if (ys[i] < ymin) ymin = ys[i];
+            if (ys[i] > ymax) ymax = ys[i];
+        }
+        const int xmid_raw = (xmin + xmax) / 2;
+        const int ymid_raw = (ymin + ymax) / 2;
+        int rng_raw = (xmax - xmin) > (ymax - ymin) ? (xmax - xmin) : (ymax - ymin);
+        if (rng_raw < 4) rng_raw = 4;
 
-    /* Auto-centre servo: nudge each offset DAC so the channel baseline sits at
-     * ADC mid-scale (128), keeping the swing in the frontend's linear region
-     * (fixes the low-end compression that flattens the figure). ~8 DAC codes
-     * move the mean 1 count; gain 5 with a dead-band converges in a few frames
-     * and then rests. Replaces the buggy on-device `center` command. */
-    {
-        int e1 = 128 - xmid_raw;
-        int e2 = 128 - ymid_raw;
+        /* Smoothed auto-scale: rounded EMA (alpha 1/8) of centre and span. */
+        static int xmid = 128, ymid = 128, rng = 64;
+        static bool seeded = false;
+        if (!seeded) { xmid = xmid_raw; ymid = ymid_raw; rng = rng_raw; seeded = true; }
+        else {
+            xmid += ((xmid_raw - xmid) + (xmid_raw >= xmid ? 4 : -4)) / 8;
+            ymid += ((ymid_raw - ymid) + (ymid_raw >= ymid ? 4 : -4)) / 8;
+            rng  += ((rng_raw  - rng ) + (rng_raw  >= rng  ? 4 : -4)) / 8;
+        }
+        if (rng < 4) rng = 4;
+
+        /* Auto-centre servo on the offset DACs (baseline -> ADC mid-scale). */
+        int e1 = 128 - xmid_raw, e2 = 128 - ymid_raw;
         if (e1 > 4 || e1 < -4) {
             xy_dac1 += e1 * 5;
             if (xy_dac1 < 0) xy_dac1 = 0; else if (xy_dac1 > 4095) xy_dac1 = 4095;
@@ -1625,32 +1607,60 @@ void draw_xy_screen(void)
             if (xy_dac2 < 0) xy_dac2 = 0; else if (xy_dac2 > 4095) xy_dac2 = 4095;
             scope_trigger_ch2_raw((uint16_t)xy_dac2);
         }
-    }
 
-    const int half   = side / 2 - 6;             /* fill to a small margin  */
-    const int chord  = side / 3;                 /* skip strays longer than */
-    const int xl = (int)x0, xh = (int)x0 + (int)side - 1;
-    const int yl = (int)y0, yh = (int)y0 + (int)side - 1;
-
-    int ppx = 0, ppy = 0;
-    for (uint16_t i = 0; i < FPGA_ADC_BUF_SIZE; i++) {
-        int px = (int)cx + ((int)xs[i] - xmid) * half * 2 / rng;
-        int py = (int)cy - ((int)ys[i] - ymid) * half * 2 / rng;  /* Y up */
-        if (px < xl) px = xl; else if (px > xh) px = xh;
-        if (py < yl) py = yl; else if (py > yh) py = yh;
-        if (i > 0) {
-            int adx = px > ppx ? px - ppx : ppx - px;
-            int ady = py > ppy ? py - ppy : ppy - py;
-            if (adx < chord && ady < chord)       /* drop stray teleports */
-                xy_line(ppx, ppy, px, py, th->ch1);
-            else
-                lcd_set_pixel((uint16_t)px, (uint16_t)py, th->ch1);
-        } else {
-            lcd_set_pixel((uint16_t)px, (uint16_t)py, th->ch1);
+        /* Plot into the persistence buffer, buffer coords (x 0..319,
+         * y 0..PERSIST_HEIGHT-1 = screen y - SCOPE_TOP). Y inverted. */
+        const int half  = side / 2 - 6;
+        const int chord = side / 3;
+        const int xl = (int)x0, xh = (int)x0 + (int)side - 1;
+        const int yl = 0,       yh = (int)side - 1;
+        const int cyb = (int)cy - (int)SCOPE_TOP;
+        int pbx = 0, pby = 0;
+        for (uint16_t i = 0; i < FPGA_ADC_BUF_SIZE; i++) {
+            int bx = (int)cx + ((int)xs[i] - xmid) * half * 2 / rng;
+            int by = cyb - ((int)ys[i] - ymid) * half * 2 / rng;
+            if (bx < xl) bx = xl; else if (bx > xh) bx = xh;
+            if (by < yl) by = yl; else if (by > yh) by = yh;
+            if (i > 0) {
+                int adx = bx > pbx ? bx - pbx : pbx - bx;
+                int ady = by > pby ? by - pby : pby - by;
+                if (adx < chord && ady < chord)
+                    xy_line_persist(pbx, pby, bx, by);
+                else
+                    persist_add_point((uint16_t)bx, (uint16_t)by);
+            } else {
+                persist_add_point((uint16_t)bx, (uint16_t)by);
+            }
+            pbx = bx; pby = by;
         }
-        ppx = px;
-        ppy = py;
     }
+
+    /* Stream the square from the persistence buffer, compositing the centre
+     * axes. Empty pixels -> background, so faded points erase cleanly and the
+     * square is repainted with no blank phase (no flash). */
+    const uint8_t *pb = persist_get_buffer();
+    uint16_t xy_row[SCOPE_H];            /* stack, not BSS — one row of the square */
+    const int cxr = (int)cx - (int)x0;      /* centre col within the square */
+    const int cyr = (int)cy - (int)y0;      /* centre row within the square */
+    for (int ry = 0; ry < (int)side; ry++) {
+        for (int rx = 0; rx < (int)side; rx++) {
+            uint8_t inten = pb ? pb[ry * PERSIST_WIDTH + (int)x0 + rx] : 0;
+            uint16_t c;
+            if (inten)
+                c = persist_intensity_to_color_ch1(inten);
+            else if (rx == cxr || ry == cyr)
+                c = th->grid;
+            else
+                c = th->background;
+            xy_row[rx] = c;
+        }
+        lcd_set_window(x0, (uint16_t)(y0 + ry), side, 1);
+        lcd_write_pixels(xy_row, side);
+    }
+
+    if (!have)
+        font_draw_string_center(LCD_WIDTH / 2, SCOPE_MID_Y, "X-Y: no signal",
+                                th->warning, th->background, &font_small);
 }
 
 void draw_scope_screen(uint32_t frame)
