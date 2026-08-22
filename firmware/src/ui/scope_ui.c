@@ -1580,10 +1580,27 @@ void draw_xy_screen(void)
         if (ys[i] < ymin) ymin = ys[i];
         if (ys[i] > ymax) ymax = ys[i];
     }
-    const int xmid = (xmin + xmax) / 2;
-    const int ymid = (ymin + ymax) / 2;
-    int rng = (xmax - xmin) > (ymax - ymin) ? (xmax - xmin) : (ymax - ymin);
-    if (rng < 4) rng = 4;                        /* flat / no-signal guard */
+    const int xmid_raw = (xmin + xmax) / 2;
+    const int ymid_raw = (ymin + ymax) / 2;
+    int rng_raw = (xmax - xmin) > (ymax - ymin) ? (xmax - xmin) : (ymax - ymin);
+    if (rng_raw < 4) rng_raw = 4;                /* flat / no-signal guard */
+
+    /* Smoothed auto-scale: a rounded EMA (alpha = 1/8) of the centre and span,
+     * so the figure holds still instead of breathing on per-frame min/max
+     * jitter, and a single outlier sample can't jerk the whole scale — yet it
+     * still follows a real gain/offset change over ~1 s. Seeded on first draw
+     * so it snaps to the signal instead of ramping from a default. */
+    static int xmid = 128, ymid = 128, rng = 64;
+    static bool xy_seeded = false;
+    if (!xy_seeded) {
+        xmid = xmid_raw; ymid = ymid_raw; rng = rng_raw;
+        xy_seeded = true;
+    } else {
+        xmid += ((xmid_raw - xmid) + (xmid_raw >= xmid ? 4 : -4)) / 8;
+        ymid += ((ymid_raw - ymid) + (ymid_raw >= ymid ? 4 : -4)) / 8;
+        rng  += ((rng_raw  - rng ) + (rng_raw  >= rng  ? 4 : -4)) / 8;
+    }
+    if (rng < 4) rng = 4;
     const int half   = side / 2 - 6;             /* fill to a small margin  */
     const int chord  = side / 3;                 /* skip strays longer than */
     const int xl = (int)x0, xh = (int)x0 + (int)side - 1;
