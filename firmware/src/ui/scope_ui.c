@@ -1496,10 +1496,29 @@ static void draw_scope_debug(const theme_t *th)
  * from the shell — so this view arms it once on first entry. Square plot
  * area (side = SCOPE_H) so frequency ratios are not distorted.
  *
- * v1 reads the volatile buffers directly (no tear-check copy): a frame the
- * acq task is mid-updating just displaces a few scatter points, which is
- * cosmetically negligible here.
+ * Reads the volatile buffers directly (no tear-check copy): a frame the
+ * acq task is mid-updating just displaces a few points, cosmetically
+ * negligible here. Consecutive samples are connected so the locus reads as
+ * a continuous trace, the way an analog scope draws X-Y.
  * ═══════════════════════════════════════════════════════════════════ */
+
+/* Bresenham segment for the X-Y polyline. */
+static void xy_line(int x0, int y0, int x1, int y1, uint16_t color)
+{
+    int dx = x1 - x0, dy = y1 - y0;
+    int sx = dx < 0 ? -1 : 1, sy = dy < 0 ? -1 : 1;
+    if (dx < 0) dx = -dx;
+    if (dy < 0) dy = -dy;
+    int err = (dx > dy ? dx : -dy) / 2, e2;
+    for (;;) {
+        lcd_set_pixel((uint16_t)x0, (uint16_t)y0, color);
+        if (x0 == x1 && y0 == y1) break;
+        e2 = err;
+        if (e2 > -dx) { err -= dy; x0 += sx; }
+        if (e2 <  dy) { err += dx; y0 += sy; }
+    }
+}
+
 void draw_xy_screen(void)
 {
     const theme_t *th = theme_get();
@@ -1536,13 +1555,19 @@ void draw_xy_screen(void)
         return;
     }
 
-    /* Plot (CH1[i], CH2[i]); Y inverted so positive is up.  2x2-ish dots. */
+    /* Connect (CH1[i], CH2[i]) samples into a continuous locus; Y inverted
+     * so positive is up. Time-adjacent samples are adjacent on the curve, so
+     * the polyline is the actual X-Y trajectory. */
+    uint16_t ppx = 0, ppy = 0;
     for (uint16_t i = 0; i < FPGA_ADC_BUF_SIZE; i++) {
         uint16_t px = x0 + (uint16_t)(((uint32_t)xb[i] * span) / 255u);
         uint16_t py = y0 + span - (uint16_t)(((uint32_t)yb[i] * span) / 255u);
-        lcd_set_pixel(px, py, th->ch1);
-        if (px + 1u < x0 + side) lcd_set_pixel(px + 1u, py, th->ch1);
-        if (py + 1u < y0 + side) lcd_set_pixel(px, py + 1u, th->ch1);
+        if (i > 0)
+            xy_line((int)ppx, (int)ppy, (int)px, (int)py, th->ch1);
+        else
+            lcd_set_pixel(px, py, th->ch1);
+        ppx = px;
+        ppy = py;
     }
 }
 
