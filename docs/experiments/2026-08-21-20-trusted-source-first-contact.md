@@ -1,5 +1,20 @@
 # EXP-20 — first trusted source on the bench: USB control both ways, timebase confirmed, vertical SCALE ≈ 0.90 (preliminary)
 
+> **✅ CORRECTED, same session (later that evening): the DC-path negative in §3
+> is WITHDRAWN, and SCALE is now confirmed a THIRD way.** With the JDS6600's
+> *controllable* DC offset (verified encoding: reg 27/28, 1000 = 0 V, 1 LSB =
+> 10 mV) as a clean DC source, a sweep 0→2.8 V DC-coupled at range 7 tracks the
+> capture **mean linearly, no railing** (DC gain **77.28 mV/ct**). A 1.616 V
+> offset reads mean ≈ 102 — exactly where the linear fit predicts, **not** the
+> rail. So the AA battery's "rail at 1.6 V" was an ARTIFACT (almost certainly
+> the generator still connected to CH1, fighting the battery), NOT a DC-path
+> limitation. **The DC path reads absolute DC fine.** And its gain (77.28)
+> matches the *AC* range-7 gain (78.12) to ~1 %, so DC and AC paths share a
+> gain — a third independent read on **SCALE ≈ 0.87** (AC r6 0.919 / AC r7
+> 0.884 / DC r7 0.874). Still uncommitted: the JDS6600 offset DAC is the same
+> ~1–2 % class as its amplitude, so this is stronger internal consistency, not
+> yet metrology-grade. See §3 note.
+
 - **Date:** 2026-08-21
 - **Unit:** bench unit #1
 - **Build:** running image (`version` = Build Aug 20 2026 14:59:16), CDC shell up
@@ -72,7 +87,10 @@ cross-range agreement 3.9%.
   spread means part of the discrepancy is the range6:range7 *ratio* in the
   table, not a pure uniform scale. Range 6 (bigger counts, less quantization) is
   the more reliable single number at 0.919.
-- **The AA battery could not calibrate the vertical scale — the DC path rails.**
+- **[WITHDRAWN — see top banner. The DC path does NOT rail; a controllable
+  offset sweep reads DC linearly at 77.28 mV/ct and 1.616 V lands at mean 102.
+  The battery rail was an artifact of the generator being co-connected.]**
+  ~~The AA battery could not calibrate the vertical scale — the DC path rails.~~
   1.616 V DC, DC-coupled (PC12 HIGH), **saturates the ADC at code 255 at every
   usable range (5/6/7)**, and a full DAC1 offset sweep (0→4095, `trig raw`) does
   **not** budge it. So it is not the offset DAC; the DC path itself has a large
