@@ -1,5 +1,31 @@
 # EXP-12 — reg 0x01 = 0x08 has no sample rate to measure
 
+> **✅ RESOLVED 2026-08-21 by Stlkv on a SECOND UNIT ([#18](https://github.com/DavidClawson/OpenScope-2C53T/issues/18#issuecomment-5375510909)).**
+> `0x08` **does** have a sample rate — **~5.0 MS/s** — and this experiment could
+> not see it because it **inverted its own premise.** Section 6 assumed `0x08`
+> ran at ~1.5 kS/s and reasoned from there that "a 35 ms `opread` cannot lap a
+> 575 ms buffer, so lapping is not in play." At 5 MS/s that is exactly backwards:
+> the window is **~205 µs**, a 35 ms `opread` at /256 laps it **~170×**, and a
+> lapped buffer is precisely what produces the [171, 132, 104]-bin disagreement
+> between consecutive reads reported in §5b. The withdrawn ~1.4–1.5 kS/s figures
+> were the **misfit of a shredded record**, not a real rate.
+>
+> Stlkv measured it on v0.3.0 (release `openscope-2c53t-v0.3.0-coldtrace.bin`,
+> sha256 `5940704e…`), **our firmware, our on-device crossing estimator**, on a
+> unit this project has never touched: every `measure` rep at `0x08` returned a
+> period, and two input frequencies 20 kHz apart agreed within 4% (4.57M / 4.75M)
+> — a coherent, uniformly-sampled record. His **acq-task read** takes a coherent
+> snapshot of one buffer; `opread` at /256 does not. **Best absolute = 5.00 MS/s**
+> from his port's whole-window period count (T16 = 1600 at 50 kHz, ratios exact).
+> §7 explicitly left "Stlkv's 5 MSa/s is correct" un-excluded; it is now
+> **established**, and the mechanism our own read path was blind to is understood.
+>
+> **What still stands:** that `opread` cannot be used to fit a fast rate (this is
+> the confirmation of that, not a retraction); that R² over a narrow in-band
+> sweep is insufficient evidence for a rate; and the fold test as the cheap
+> sensitive check. What is **withdrawn** is the title's claim — `0x08` has a rate,
+> we just could not reach it through `opread`.
+
 > **⚠ RESCALED 2026-08-19 by [EXP-14](2026-08-19-14-siggen-sample-rate.md).**
 > Every sample rate below is **1.21× too high.** The fits used the frequency
 > *commanded* from the ESP32 source; the source delivers **0.8250×** that,

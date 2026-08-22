@@ -27,11 +27,16 @@ a trusted source is on the bench." Tonight a JDS6600 arrived.
 - **JDS6600** (`/dev/ttyUSB0`): read/write over its ASCII register protocol.
   Read back the exact front-panel state (`:r21=0` sine, `:r23=1000000,0` =
   10.000 kHz, `:r25=5000` = 5.000 V, `:r27=1000` = 0 offset, `:r29=500` = 50%).
-- **PROTOCOL QUIRK, load-bearing:** the **amplitude write requires a trailing
-  period** — `:w25=2500.` takes, `:w25=2500` returns `:ok` and is silently
-  no-op'd. Frequency writes (`:w23=...`) do *not* need it. Missing this froze
-  amplitude at a stale 20 V for the first sweep attempt (see §3). A JDS6600
-  driver added to `bench.py` must bake this in.
+- **WRITE FORMAT (not a quirk — the documented format):** the JDS6600 protocol
+  specifies writes as `:w25=<value>.<CR><LF>` — **the trailing period is part of
+  the spec**, on every write. `:w25=2500.` takes; `:w25=2500` (no period)
+  returns `:ok` and is silently no-op'd. The real asymmetry is that the
+  *frequency* register tolerates the omission (lenient parsing), which is what
+  first misled us into thinking amplitude needed something special — it doesn't;
+  the period was simply missing. Missing it froze amplitude at a stale 20 V for
+  the first sweep attempt (see §3). Documented on the sigrok wiki
+  (https://sigrok.org/wiki/Joy-IT_JDS6600) and in a maintained Python lib
+  (WimDH/JDS6600); a `bench.py` driver should just emit the period on every write.
 
 ### 2b. Timebase 0x0E confirmed against a trusted source
 
@@ -82,7 +87,8 @@ cross-range agreement 3.9%.
 ## 4. Conclusion
 
 - **Bankable now:** USB control both ways; `0x0E = 49,930 S/s` confirmed against
-  a trusted source; JDS6600 amplitude-write trailing-period quirk.
+  a trusted source; JDS6600 writes take the documented `:w..=X.` trailing-period
+  format (freq writes tolerate its omission, amplitude does not).
 - **Preliminary:** `SCOPE_CAL_SOURCE_SCALE ≈ 0.90` (ESP32 gains over-read ~10%),
   from the JDS AC sweep. Left uncommitted at `1.0f`.
 - **Open:** DC path cannot read absolute DC (rails at 1.6 V, DAC1 can't recover);
