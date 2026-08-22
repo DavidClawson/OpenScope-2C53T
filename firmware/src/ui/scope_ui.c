@@ -22,6 +22,7 @@
 #include "math_channel.h"
 #include "persistence.h"
 #include "fpga.h"
+#include "scope_trigger.h"
 #include "at32f403a_407.h"  /* GPIO port reads in the debug overlay */
 #include <stdio.h>
 #include <math.h>
@@ -1480,6 +1481,70 @@ static void draw_scope_debug(const theme_t *th)
 }
 
 #endif /* SCOPE_DEBUG_OVERLAY */
+
+/* ═══════════════════════════════════════════════════════════════════
+ * X-Y (Lissajous) view — CH1 drives X, CH2 drives Y
+ *
+ * Plots the two ADC buffers against each other instead of against time:
+ * op04 (CH1) -> horizontal, op05 (CH2) -> vertical. The buffers come from
+ * one synchronised acquisition and were bench-confirmed time-aligned
+ * (~20 deg phase spread, EXP-21 2026-08-21), so (ch1[i], ch2[i]) is a
+ * single instant and a Lissajous figure renders coherently.
+ *
+ * CH2's readout is a dead buffer until its vertical-offset reference
+ * (TMR13 CH1 PWM-DAC on PA6) is armed — the same thing `trig2 raw` does
+ * from the shell — so this view arms it once on first entry. Square plot
+ * area (side = SCOPE_H) so frequency ratios are not distorted.
+ *
+ * v1 reads the volatile buffers directly (no tear-check copy): a frame the
+ * acq task is mid-updating just displaces a few scatter points, which is
+ * cosmetically negligible here.
+ * ═══════════════════════════════════════════════════════════════════ */
+void draw_xy_screen(void)
+{
+    const theme_t *th = theme_get();
+
+    /* Arm CH2's offset reference once — op05 is all-zero without it. */
+    static bool xy_ch2_armed = false;
+    if (!xy_ch2_armed) {
+        scope_trigger_ch2_init();
+        scope_trigger_ch2_raw(2048);      /* mid-scale: centres CH2 */
+        xy_ch2_armed = true;
+    }
+
+    const uint16_t side = SCOPE_H;                 /* square side, 206 px  */
+    const uint16_t x0   = (LCD_WIDTH - side) / 2;  /* centred: 57          */
+    const uint16_t y0   = SCOPE_TOP;               /* 18                   */
+    const uint16_t span = side - 1;
+
+    lcd_fill_rect(0, SCOPE_TOP, LCD_WIDTH, SCOPE_H, th->background);
+
+    /* Centre cross-hairs. */
+    const uint16_t cx = x0 + side / 2;
+    const uint16_t cy = y0 + side / 2;
+    for (uint16_t y = y0; y < y0 + side; y++) lcd_set_pixel(cx, y, th->grid);
+    for (uint16_t x = x0; x < x0 + side; x++) lcd_set_pixel(x, cy, th->grid);
+
+    font_draw_string(4, SCOPE_TOP + 2, "X-Y  CH1:X CH2:Y",
+                     th->text_secondary, th->background, &font_small);
+
+    const volatile uint8_t *xb = fpga_get_ch1_buf();
+    const volatile uint8_t *yb = fpga_get_ch2_buf();
+    if (!fpga_data_ready() || xb == NULL || yb == NULL) {
+        font_draw_string_center(LCD_WIDTH / 2, SCOPE_MID_Y, "X-Y: no signal",
+                                th->warning, th->background, &font_small);
+        return;
+    }
+
+    /* Plot (CH1[i], CH2[i]); Y inverted so positive is up.  2x2-ish dots. */
+    for (uint16_t i = 0; i < FPGA_ADC_BUF_SIZE; i++) {
+        uint16_t px = x0 + (uint16_t)(((uint32_t)xb[i] * span) / 255u);
+        uint16_t py = y0 + span - (uint16_t)(((uint32_t)yb[i] * span) / 255u);
+        lcd_set_pixel(px, py, th->ch1);
+        if (px + 1u < x0 + side) lcd_set_pixel(px + 1u, py, th->ch1);
+        if (py + 1u < y0 + side) lcd_set_pixel(px, py + 1u, th->ch1);
+    }
+}
 
 void draw_scope_screen(uint32_t frame)
 {

@@ -381,6 +381,8 @@ static void scope_render(uint32_t frame, redraw_action_t action)
                                               draw_split_screen(frame); return; }
     if (scope_view == SCOPE_VIEW_WATERFALL) { ui_scope_full_draws++;
                                               draw_waterfall_screen();  return; }
+    if (scope_view == SCOPE_VIEW_XY)        { ui_scope_full_draws++;
+                                              draw_xy_screen();         return; }
 #endif
 #ifndef EMULATOR_BUILD
     if (action == REDRAW_INCREMENTAL) {

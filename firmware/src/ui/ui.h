@@ -75,6 +75,7 @@ typedef enum {
     SCOPE_VIEW_FFT,
     SCOPE_VIEW_SPLIT,
     SCOPE_VIEW_WATERFALL,
+    SCOPE_VIEW_XY,          /* Lissajous: CH1 -> X, CH2 -> Y */
     SCOPE_VIEW_COUNT
 } scope_view_t;
 #endif
@@ -176,6 +177,7 @@ void scope_popup_overlay_tick(void);
 void draw_fft_screen(void);
 void draw_split_screen(uint32_t frame);
 void draw_waterfall_screen(void);
+void draw_xy_screen(void);
 #endif
 
 /* meter_ui.c */
