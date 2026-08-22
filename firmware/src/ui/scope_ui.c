@@ -1523,12 +1523,17 @@ void draw_xy_screen(void)
 {
     const theme_t *th = theme_get();
 
-    /* Arm CH2's offset reference once — op05 is all-zero without it. */
-    static bool xy_ch2_armed = false;
-    if (!xy_ch2_armed) {
+    /* Bring up both offset DACs once: DAC1 (PA4) for CH1, TMR13/PA6 for CH2.
+     * op05 is a dead buffer until CH2's ref is armed. Baselines are servo'd
+     * to mid-scale below. */
+    static bool xy_dac_init = false;
+    static int  xy_dac1 = 2048, xy_dac2 = 2048;
+    if (!xy_dac_init) {
+        scope_trigger_dac_init();
         scope_trigger_ch2_init();
-        scope_trigger_ch2_raw(2048);      /* mid-scale: centres CH2 */
-        xy_ch2_armed = true;
+        scope_trigger_dac_raw((uint16_t)xy_dac1);
+        scope_trigger_ch2_raw((uint16_t)xy_dac2);
+        xy_dac_init = true;
     }
 
     const uint16_t side = SCOPE_H;                 /* square side, 206 px  */
@@ -1601,6 +1606,27 @@ void draw_xy_screen(void)
         rng  += ((rng_raw  - rng ) + (rng_raw  >= rng  ? 4 : -4)) / 8;
     }
     if (rng < 4) rng = 4;
+
+    /* Auto-centre servo: nudge each offset DAC so the channel baseline sits at
+     * ADC mid-scale (128), keeping the swing in the frontend's linear region
+     * (fixes the low-end compression that flattens the figure). ~8 DAC codes
+     * move the mean 1 count; gain 5 with a dead-band converges in a few frames
+     * and then rests. Replaces the buggy on-device `center` command. */
+    {
+        int e1 = 128 - xmid_raw;
+        int e2 = 128 - ymid_raw;
+        if (e1 > 4 || e1 < -4) {
+            xy_dac1 += e1 * 5;
+            if (xy_dac1 < 0) xy_dac1 = 0; else if (xy_dac1 > 4095) xy_dac1 = 4095;
+            scope_trigger_dac_raw((uint16_t)xy_dac1);
+        }
+        if (e2 > 4 || e2 < -4) {
+            xy_dac2 += e2 * 5;
+            if (xy_dac2 < 0) xy_dac2 = 0; else if (xy_dac2 > 4095) xy_dac2 = 4095;
+            scope_trigger_ch2_raw((uint16_t)xy_dac2);
+        }
+    }
+
     const int half   = side / 2 - 6;             /* fill to a small margin  */
     const int chord  = side / 3;                 /* skip strays longer than */
     const int xl = (int)x0, xh = (int)x0 + (int)side - 1;
