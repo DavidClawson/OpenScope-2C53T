@@ -7068,7 +7068,7 @@ static void vUsbDebugTask(void *pvParameters)
         /* The drain waits on the same 3 s of silence the loader does: a host
          * that aborted and walked away must not cost the operator a shell. */
         if (fwl_discard > 0 && !did_work) {
-            if (++fwl_discard_idle >= 300u) {
+            if (++fwl_discard_idle >= FW_LOADER_TIMEOUT_POLLS) {
                 fwl_discard = 0;
                 fwl_discard_idle = 0;
                 usb_send_str("fwload: stopped waiting for the aborted image; "

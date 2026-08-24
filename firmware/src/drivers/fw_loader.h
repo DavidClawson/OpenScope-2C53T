@@ -52,6 +52,12 @@
 #include <stdbool.h>
 #include <stdint.h>
 
+/* Shell-task loop iterations of RX silence before a transfer is declared dead
+ * (~10 ms per idle iteration => ~3 s). Public because the shell task ages a
+ * second deadline against it — the drain of an aborted image — and the two
+ * must not drift apart. */
+#define FW_LOADER_TIMEOUT_POLLS 300u
+
 typedef enum {
     FW_LOADER_IDLE = 0,
     FW_LOADER_RECEIVING,

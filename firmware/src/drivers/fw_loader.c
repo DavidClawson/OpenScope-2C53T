@@ -55,9 +55,9 @@ enum {
     FWL_DATA_OFF    = FWL_SECTOR,
     FWL_DATA_MAX    = FWL_APP_CEILING - FWL_APP_BASE,   /* 740 KB */
 
-    /* Shell-task loop iterations of RX silence before a transfer is
-     * declared dead (~10 ms per idle iteration => ~3 s). */
-    FWL_TIMEOUT_POLLS = 300u,
+    /* See FW_LOADER_TIMEOUT_POLLS in the header — the shell task ages the
+     * drain of an aborted image against the same number. */
+    FWL_TIMEOUT_POLLS = FW_LOADER_TIMEOUT_POLLS,
 };
 
 #define FWL_MANIFEST_MAGIC 0x31435746u /* 'FWC1' little-endian */
