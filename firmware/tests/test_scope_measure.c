@@ -111,6 +111,44 @@ static void broken_no_hysteresis(const uint8_t *s, uint16_t n,
                         ? (float)(last - first) / (float)(rising - 1) : 0.0f;
 }
 
+/* Variant C: the pre-#26 period estimator — integer crossing indices, and the
+ * i==0 "rising edge" of a record that starts mid-high-phase counted as a
+ * period anchor. That spurious edge inflates (rising-1) and drags the period
+ * LOW, worst when few periods fit the window. This is the exact code that
+ * shipped before the sub-sample-crossing fix; it must visibly drift. */
+static void broken_integer_crossing(const uint8_t *s, uint16_t n,
+                                    scope_measure_t *o)
+{
+    scope_measure_record(s, n, o);
+    if (!o->valid || !o->level_valid) return;
+
+    uint16_t mid2  = (uint16_t)o->min + (uint16_t)o->max;
+    uint16_t hyst2 = (uint16_t)(o->pp / 4u);
+    if (hyst2 < 2u) hyst2 = 2u;
+    uint16_t hi_thr2 = (uint16_t)(mid2 + hyst2);
+    uint16_t lo_thr2 = (mid2 > hyst2) ? (uint16_t)(mid2 - hyst2) : 0u;
+
+    int state = 0;
+    uint16_t rising = 0, first = 0, last = 0;
+    for (uint16_t i = 0; i < n; i++) {
+        uint16_t s2 = (uint16_t)(2u * (uint16_t)s[i]);
+        if (state == 0) {
+            if (s2 >= hi_thr2) {
+                state = 1;
+                if (rising == 0) first = i;
+                last = i; rising++;
+            }
+        } else if (s2 <= lo_thr2) {
+            state = 0;
+        }
+    }
+    o->cycles = rising;
+    o->cycles_valid = (rising >= 2u);
+    o->period_valid = o->cycles_valid;
+    o->period_samples = o->cycles_valid
+                        ? (float)(last - first) / (float)(rising - 1u) : 0.0f;
+}
+
 /* ── Signal generators ────────────────────────────────────────────────── */
 
 static uint8_t clamp8(float v)
@@ -148,6 +186,18 @@ static void gen_sine(uint8_t *b, uint16_t n, uint16_t period,
 static void gen_const(uint8_t *b, uint16_t n, uint8_t v)
 {
     memset(b, v, n);
+}
+
+/* Sine with a NON-INTEGER period (samples/cycle) and a start phase, so the
+ * crossings fall between samples — the case an integer-index estimator gets
+ * wrong. phase = pi/2 starts the record at the peak, mid-high-phase. */
+static void gen_sine_f(uint8_t *b, uint16_t n, float period, float amp,
+                       float offset, float phase)
+{
+    for (uint16_t i = 0; i < n; i++) {
+        float v = offset + amp * sinf(2.0f * (float)M_PI * (float)i / period + phase);
+        b[i] = clamp8(v);
+    }
 }
 
 /* Apply the affine map an uncalibrated->calibrated vertical path would. */
@@ -277,6 +327,57 @@ static int battery(measure_fn f)
     return bad;
 }
 
+/*
+ * Period-bias sweep (issue #26). A fixed-period sine, recorded starting at the
+ * peak so the window opens mid-high-phase, at periods-per-window from ~40 down
+ * to ~5. The shipped estimator must stay within a tight bound at every count;
+ * the pre-fix integer estimator must drift LOW and worsen as periods thin out.
+ * If the control did not drift, the sweep would prove nothing.
+ */
+static int test_period_sweep(void)
+{
+    static uint8_t buf[N];
+    int bad = 0;
+
+    /* Non-integer so crossings never land on a sample (the integer case is the
+     * one that accidentally works). */
+    const float P[]  = { 25.6f, 34.13f, 51.2f, 102.4f, 170.67f, 204.8f };
+    const int   NP   = (int)(sizeof(P) / sizeof(P[0]));
+    float worst_real = 0.0f, worst_ctrl_few = 0.0f;
+
+    printf("period sweep (record starts high; true P vs recovered):\n");
+    for (int k = 0; k < NP; k++) {
+        gen_sine_f(buf, N, P[k], 90.0f, 128.0f, (float)M_PI * 0.5f);
+
+        scope_measure_t mr, mi;
+        scope_measure_record(buf, N, &mr);
+        broken_integer_crossing(buf, N, &mi);
+
+        float er = fabsf(mr.period_samples - P[k]) / P[k] * 100.0f;
+        float ei = fabsf(mi.period_samples - P[k]) / P[k] * 100.0f;
+        if (er > worst_real) worst_real = er;
+        if (P[k] >= 170.0f && ei > worst_ctrl_few) worst_ctrl_few = ei;
+
+        printf("   P=%7.2f (%2.0f/win): real %8.3f (%+.2f%%)   int %8.3f (%+.2f%%)\n",
+               (double)P[k], (double)(N / P[k]),
+               (double)mr.period_samples, (double)er,
+               (double)mi.period_samples, (double)ei);
+
+        char what[64];
+        snprintf(what, sizeof(what), "P=%.1f: real period within 0.5%%", (double)P[k]);
+        bad += chk(what, mr.period_valid && er < 0.5f);
+    }
+
+    /* Negative control: the pre-fix estimator has to drift, or the assertions
+     * above are testing nothing. At ~5-6 periods the spurious i==0 anchor costs
+     * ~1/K, i.e. several percent. */
+    bad += chk("integer estimator drifts >2% at ~5-6 periods (control)",
+               worst_ctrl_few > 2.0f);
+    printf("   worst real %.2f%%, worst integer @ few periods %.2f%%\n",
+           (double)worst_real, (double)worst_ctrl_few);
+    return bad;
+}
+
 int main(int argc, char **argv)
 {
     g_verbose = (argc > 1 && strcmp(argv[1], "-v") == 0);
@@ -299,6 +400,12 @@ int main(int argc, char **argv)
     printf("   %d failed check(s) -> %s\n\n", b_bad,
            b_bad > 0 ? "control OK (test can fail)" : "*** CONTROL FAILED ***");
     if (b_bad == 0) fail = 1;
+
+    printf("period-bias sweep (issue #26)\n");
+    int sweep_bad = test_period_sweep();
+    printf("   %d failed check(s) -> %s\n\n", sweep_bad,
+           sweep_bad == 0 ? "PASS" : "*** FAIL ***");
+    if (sweep_bad) fail = 1;
 
     printf(fail ? "RESULT: FAIL\n" : "RESULT: PASS\n");
     return fail;

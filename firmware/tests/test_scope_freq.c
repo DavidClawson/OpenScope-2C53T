@@ -59,6 +59,25 @@ static void test_synthetic(void)
           (double)r.sharpness);
     CHECK(r.window == MAXN, "a clean record must not need the half-window");
 
+    /* A clean 50% square at 500 Hz, 12,575 S/s: same fundamental bin as the
+     * sine above (40.7). An ideal square's fundamental carries only 8/pi^2 =
+     * 0.811 of the total power, so the old mainlobe-only sharpness capped here
+     * at ~0.81 and refused every square, however clean (issue #27). The
+     * harmonic-aware metric counts the odd-harmonic mainlobes as signal, so a
+     * clean square now clears the 0.90 gate. These checks have teeth: revert
+     * the harmonic logic and sharpness drops back to ~0.81, failing both. */
+    for (int i = 0; i < MAXN; i++) {
+        double ph = fmod(500.0 * i / 12575.0, 1.0);
+        s[i] = (ph < 0.5) ? 210 : 46;
+    }
+    CHECK(scope_freq_estimate(s, MAXN, 12575.0f, &r),
+          "a clean square must be accepted (issue #27)");
+    CHECK(fabsf(r.hz - 500.0f) < 5.0f,
+          "clean 500 Hz square read as %.1f Hz", (double)r.hz);
+    CHECK(r.sharpness >= 0.90f,
+          "harmonic-aware sharpness must clear the gate for a square, got %.3f "
+          "(mainlobe-only would be ~0.81)", (double)r.sharpness);
+
     /* DC: no frequency exists, and inventing one is the failure mode this
      * whole module is a response to. */
     memset(s, 128, sizeof(s));

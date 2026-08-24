@@ -853,8 +853,13 @@ class JDS6600:
         return self._ser.read(4000).decode("ascii", "replace")
 
     def read_raw(self, reg: int) -> str:
-        """Value string after ``:rNN=`` (trailing '.' stripped)."""
-        pfx = ":r%d=" % reg
+        """Value string after ``:rNN=`` (trailing '.' stripped).
+
+        Register numbers are two digits in the JDS6600 protocol: a read of
+        register 0 is queried and echoed as ``:r00=``, not ``:r0=``.  Padding
+        to two digits is a no-op for the 20-30 range but is what makes the
+        single-digit registers (waveform-independent config) parse at all."""
+        pfx = ":r%02d=" % reg
         resp = self._txn(pfx)
         for ln in resp.splitlines():
             if ln.startswith(pfx):
@@ -864,7 +869,7 @@ class JDS6600:
 
     def write_raw(self, reg: int, value: str) -> None:
         """Send ``:wNN=value.`` (period ALWAYS emitted) and confirm ``:ok``."""
-        resp = self._txn(":w%d=%s." % (reg, value))
+        resp = self._txn(":w%02d=%s." % (reg, value))
         if ":ok" not in resp.lower():
             raise BenchError("JDS6600 w%d=%s: no :ok in reply:\n%s"
                              % (reg, value, resp.strip() or "<empty>"))
