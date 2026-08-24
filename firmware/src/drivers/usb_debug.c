@@ -6499,10 +6499,22 @@ static void cmd_fwload(const char *args)
     char *end2 = NULL;
     unsigned long crc = (end && *end) ? strtoul(end, &end2, 16) : 0;
     uint8_t slot = 1; /* default: slot b — "the other firmware" by custom */
+    bool slot_bad = false;
     if (end2 != NULL) {
         while (*end2 == ' ') end2++;
         if (*end2 == 'a' || *end2 == 'A') slot = 0;
         else if (*end2 == 'b' || *end2 == 'B') slot = 1;
+        else if (*end2 != '\0') slot_bad = true;
+    }
+    /* An argument that is present but is neither a nor b used to fall back to
+     * the default and arm the intake anyway: `fwload <size> <crc> c` put the
+     * shell into raw mode while the operator was still reading the reply, and
+     * the next line they typed went into the image instead of the parser.
+     * (Wedged the 2C23T port that way on 2026-08-24 — same parser, same trap.)
+     * Refusing costs nothing: cdc_flash.py never sends anything but a or b. */
+    if (slot_bad) {
+        usb_send_str("fwload: ERROR slot must be a or b\r\n");
+        return;
     }
     if (end == args || crc == 0) {
         usb_send_str("usage: fwload <size bytes, decimal> <crc32 hex> [a|b]\r\n"
@@ -6927,6 +6939,15 @@ static void vUsbDebugTask(void *pvParameters)
     bool usb_banner_sent = false;
     bool rtt_banner_sent = false;
     uint32_t usb_settle = 0;
+    /* When a transfer dies mid-stream the host still has bytes in flight, and
+     * without this they land in shell_feed() and are parsed as command lines —
+     * a binary typed at the prompt. cdc_flash.py stops at the first chunk
+     * carrying ERROR, so the tail is short, but any other host makes it long.
+     * Swallow exactly what the aborted image still owed, and give up on the
+     * wait after the same silence the loader itself uses, so a host that never
+     * sends the rest cannot leave the shell deaf to the operator. */
+    uint32_t fwl_discard = 0;
+    uint32_t fwl_discard_idle = 0;
 
     for (;;) {
         bool did_work = false;
@@ -7000,6 +7021,25 @@ static void vUsbDebugTask(void *pvParameters)
                         }
                         if (!fw_loader_active()) {
                             fwl_print_status();  /* staged or failed — say so */
+                            if (fw_loader_state() == FW_LOADER_ERROR) {
+                                uint32_t owed = fw_loader_expected() -
+                                                fw_loader_bytes();
+                                fwl_discard = owed;
+                                fwl_discard_idle = 0;
+                            }
+                        }
+                    } else if (fwl_discard > 0) {
+                        uint32_t drop = rx_len < fwl_discard ? rx_len
+                                                             : fwl_discard;
+                        fwl_discard -= drop;
+                        fwl_discard_idle = 0;
+                        if (fwl_discard == 0) {
+                            usb_send_str("fwload: aborted image drained; "
+                                         "shell is listening again\r\n");
+                        }
+                        if (rx_len > drop) {
+                            shell_feed(rx_buf + drop,
+                                       (uint16_t)(rx_len - drop), true);
                         }
                     } else {
                         shell_feed(rx_buf, rx_len, true);
@@ -7022,6 +7062,17 @@ static void vUsbDebugTask(void *pvParameters)
             fw_loader_poll();
             if (was_loading && !fw_loader_active()) {
                 fwl_print_status();
+            }
+        }
+
+        /* The drain waits on the same 3 s of silence the loader does: a host
+         * that aborted and walked away must not cost the operator a shell. */
+        if (fwl_discard > 0 && !did_work) {
+            if (++fwl_discard_idle >= 300u) {
+                fwl_discard = 0;
+                fwl_discard_idle = 0;
+                usb_send_str("fwload: stopped waiting for the aborted image; "
+                             "shell is listening again\r\n");
             }
         }
 
