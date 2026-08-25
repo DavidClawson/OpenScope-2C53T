@@ -2512,6 +2512,44 @@ static void cmd_fpga_scope_timebase(const char *args)
                      lbl);
 }
 
+/* `fpga scope graticule [auto|true|toggle]` — the M3 seam. Choose whether the
+ * live trace is drawn at TRUE volts/div (one grid division == the volts/div the
+ * status bar prints, on calibrated ranges) or AUTOFIT (scaled to fill the band,
+ * so the grid is a position reference only). Autofit at boot; this flips it on
+ * the bench without a rebuild. True scale needs a centred baseline, so it also
+ * prints which ranges will honour it and the reminder to center first. */
+static void cmd_fpga_scope_graticule(const char *args)
+{
+    while (*args == ' ') args++;
+    scope_state_t *ss = scope_state_get();
+
+    if (strncmp(args, "true", 4) == 0)        ss->true_scale = true;
+    else if (strncmp(args, "auto", 4) == 0)   ss->true_scale = false;
+    else if (strncmp(args, "toggle", 6) == 0) ss->true_scale = !ss->true_scale;
+    else if (*args) {
+        usb_send_str("usage: fpga scope graticule [auto|true|toggle]\r\n");
+        return;
+    }
+
+    usb_debug_printf("graticule: %s\r\n",
+                     ss->true_scale ? "TRUE SCALE (grid == volts/div)"
+                                    : "autofit (grid == position only)");
+    if (ss->true_scale) {
+        char l1[12], l2[12];
+        scope_cal_range_label(1u, ss->ch1.vdiv_idx, l1, sizeof(l1));
+        scope_cal_range_label(2u, ss->ch2.vdiv_idx, l2, sizeof(l2));
+        usb_debug_printf("  CH1 rng %u -> %s/div %s\r\n",
+                         (unsigned)ss->ch1.vdiv_idx, l1,
+                         scope_cal_true_scale_ok(1u, ss->ch1.vdiv_idx)
+                             ? "" : "(no cal -> autofit)");
+        usb_debug_printf("  CH2 rng %u -> %s/div %s\r\n",
+                         (unsigned)ss->ch2.vdiv_idx, l2,
+                         scope_cal_true_scale_ok(2u, ss->ch2.vdiv_idx)
+                             ? "" : "(no cal -> autofit)");
+        usb_send_str("  center the baseline first: `fpga scope center`\r\n");
+    }
+}
+
 static void cmd_fpga_scope_freq(const char *args)
 {
     uint32_t reps = 10;
@@ -2639,13 +2677,25 @@ static void cmd_fpga_scope_measure(const char *args)
             snprintf(vpp2, sizeof vpp2, "%lu",
                      (unsigned long)((float)m2.pp_robust * k2 * 1e6f + 0.5f));
 
+        /* Edge timing in SAMPLES x100 (M4). "-" when no clean edge was found,
+         * same convention as per1. Kept in samples, not seconds: multiply by
+         * 1/fs on the host when a rate is in force. */
+        char rise[12] = "-", fall[12] = "-";
+        if (m1.rise_valid)
+            snprintf(rise, sizeof rise, "%lu",
+                     (unsigned long)(m1.rise_samples * 100.0f + 0.5f));
+        if (m1.fall_valid)
+            snprintf(fall, sizeof fall, "%lu",
+                     (unsigned long)(m1.fall_samples * 100.0f + 0.5f));
+
         usb_debug_printf("M %2lu pp1=%u ppr1=%u Vpp1_uV=%s Vrms1_uV=%s duty1_pm=%lu "
-                         "per1_smp100=%s f1_mHz=%s pp2=%u Vpp2_uV=%s\r\n",
+                         "per1_smp100=%s f1_mHz=%s rise1_smp100=%s fall1_smp100=%s "
+                         "pp2=%u Vpp2_uV=%s\r\n",
                          (unsigned long)i, (unsigned)m1.pp,
                          (unsigned)m1.pp_robust, vpp1, vrms1,
                          (unsigned long)(m1.level_valid
                                          ? m1.duty_pct * 10.0f + 0.5f : 0.0f),
-                         per, f, (unsigned)m2.pp, vpp2);
+                         per, f, rise, fall, (unsigned)m2.pp, vpp2);
         usb_delay_ms(60);
     }
 }
@@ -6584,6 +6634,8 @@ static const shell_cmd_t shell_cmds[] = {
           "fpga scope measure [reps]       Badge values raw (uV/permille/mHz) for bench validation\r\n"),
     CMD_A("fpga scope freq", cmd_fpga_scope_freq, 0,
           "fpga scope freq [n]             Run the shipped frequency estimator n times, with diagnostics\r\n"),
+    CMD_A("fpga scope graticule", cmd_fpga_scope_graticule, 0,
+          "fpga scope graticule [auto|true|toggle]  Trace at true volts/div vs autofit-to-band\r\n"),
     CMD_V("settings", cmd_settings, SC_EXACT,
           "settings                        Persistence status: bound, load result, writes, failures\r\n"),
     CMD_A("fpga scope timebase", cmd_fpga_scope_timebase, 0,

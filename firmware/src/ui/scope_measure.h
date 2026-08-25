@@ -87,6 +87,23 @@ typedef struct {
     bool     cycles_valid;  /* level_valid && >= 2 crossings                 */
     float    period_samples;/* samples per cycle, first->last crossing       */
     bool     period_valid;
+
+    /* Edge timing — in SAMPLES, never seconds (same rule as period_samples).
+     *
+     * rise_samples: 10%->90% span on the FIRST clean rising edge.
+     * fall_samples: 90%->10% span on the FIRST clean falling edge.
+     *
+     * This is the one quantity the retired measurement_compute() engine
+     * (src/tasks/measurement.c) produced that nothing else here did. It now
+     * lives in this module, in the instrument's honest horizontal unit, gated
+     * on level_valid like duty and cycles. The 10/90 references are taken from
+     * the TRIMMED span [pp_robust], so a few noise-tail outliers do not stretch
+     * them. Multiply by the sample interval for seconds the day a timebase
+     * exists — the same one-multiply wiring job as period_samples. */
+    float    rise_samples;
+    bool     rise_valid;
+    float    fall_samples;
+    bool     fall_valid;
 } scope_measure_t;
 
 /*

@@ -143,6 +143,19 @@ float scope_cal_volts_per_count(uint8_t ch, uint8_t range_idx);
 scope_cal_tier_t scope_cal_get_tier(uint8_t ch, uint8_t range_idx);
 
 /*
+ * May the renderer draw this (channel, range) at TRUE vertical scale — i.e.
+ * make one grid division mean exactly scope_cal_volts_per_div()?
+ *
+ * True-scale rendering fixes the sample->pixel slope at SCOPE_CAL_COUNTS_PER_DIV
+ * counts per division; that is only honest when a volts/div actually exists for
+ * the range. This returns nonzero exactly when it does (MEASURED or
+ * PROVISIONAL). On a NONE range it returns 0 and the renderer MUST fall back to
+ * its own-min/max autofit, whose graticule has no volts meaning — the same
+ * counts-vs-volts contract every other consumer of this module honours.
+ */
+int scope_cal_true_scale_ok(uint8_t ch, uint8_t range_idx);
+
+/*
  * Volts per screen division, derived from the measured gain and the
  * renderer's counts-per-division. This is the number the status bar should
  * show, because it is the number the grid actually means. Returns 0.0f when

@@ -52,6 +52,11 @@ void scope_measure_record(const uint8_t *samples, uint16_t n,
     out->pp    = (uint8_t)(smax - smin);
     out->mean  = (float)sum / (float)n;
 
+    /* Trimmed extremes, filled by the robust-pp walk below and reused by the
+     * rise/fall edge references in pass 4. Default to the raw extremes so they
+     * are always defined. */
+    uint8_t rob_lo = smin, rob_hi = smax;
+
     /* Robust peak-to-peak: walk the histogram in from both ends until 0.5%
      * of the samples (n/200, at least 1) have been discarded on each side,
      * then take the span of what remains. See the header for why: raw
@@ -67,6 +72,8 @@ void scope_measure_record(const uint8_t *samples, uint16_t n,
         acc = 0;
         while (hi > lo && acc + hist[hi] <= trim) { acc += hist[hi]; hi--; }
         out->pp_robust = (uint8_t)(hi - lo);
+        rob_lo = (uint8_t)lo;
+        rob_hi = (uint8_t)hi;
     }
 
     /* Variance about the mean, computed as E[x^2] - E[x]^2 in integer form
@@ -223,6 +230,60 @@ void scope_measure_record(const uint8_t *samples, uint16_t n,
             uint16_t span = (uint16_t)(last_rise - first_rise);
             if (span > 0u)
                 out->duty_pct = (float)above_c * 100.0f / (float)span;
+        }
+    }
+
+    /* ── Pass 4: edge rise / fall time, in SAMPLES ─────────────────────
+     *
+     * 10%->90% on the first clean rising edge, 90%->10% on the first clean
+     * falling edge. This retires src/tasks/measurement.c: rise/fall time was
+     * the only quantity that engine computed which this module did not, and it
+     * did it in fabricated volts-and-seconds (a hardcoded 3.3/32768 scale and a
+     * caller-supplied sample_rate this board does not have). Here it is in the
+     * unit the instrument actually observes.
+     *
+     * The 10/90 references come from the TRIMMED span [rob_lo, rob_hi], not the
+     * raw extremes, so a handful of noise-tail samples cannot stretch the
+     * levels and shorten every edge — the same reasoning as pp_robust. Each
+     * crossing is linearly interpolated between its bracketing samples;
+     * (level - prev) / (cur - prev) is correct for both directions of travel.
+     * Only the first edge of each kind is reported: with an unknown, possibly
+     * sub-cycle window, averaging edges of different quality would be a worse
+     * number than one clean one. */
+    {
+        float lo = (float)rob_lo, hi = (float)rob_hi;
+        float amp = hi - lo;
+        if (amp >= 1.0f) {
+            float l10 = lo + 0.10f * amp;
+            float l90 = lo + 0.90f * amp;
+            float rise_start = -1.0f, rise_end = -1.0f;
+            float fall_start = -1.0f, fall_end = -1.0f;
+
+            for (uint16_t i = 1; i < n; i++) {
+                float prev = (float)samples[i - 1];
+                float cur  = (float)samples[i];
+
+                if (rise_start < 0.0f && prev < l10 && cur >= l10)
+                    rise_start = (float)(i - 1u) + (l10 - prev) / (cur - prev);
+                if (rise_start >= 0.0f && rise_end < 0.0f &&
+                    prev < l90 && cur >= l90)
+                    rise_end = (float)(i - 1u) + (l90 - prev) / (cur - prev);
+
+                if (fall_start < 0.0f && prev > l90 && cur <= l90)
+                    fall_start = (float)(i - 1u) + (l90 - prev) / (cur - prev);
+                if (fall_start >= 0.0f && fall_end < 0.0f &&
+                    prev > l10 && cur <= l10)
+                    fall_end = (float)(i - 1u) + (l10 - prev) / (cur - prev);
+            }
+
+            if (rise_start >= 0.0f && rise_end >= rise_start) {
+                out->rise_samples = rise_end - rise_start;
+                out->rise_valid   = true;
+            }
+            if (fall_start >= 0.0f && fall_end >= fall_start) {
+                out->fall_samples = fall_end - fall_start;
+                out->fall_valid   = true;
+            }
         }
     }
 }
