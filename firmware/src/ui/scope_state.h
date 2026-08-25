@@ -136,6 +136,19 @@ typedef struct {
                                      * scope_timebase.c. */
     bool            running;        /* Acquisition running/stopped */
     cursor_state_t  cursor;         /* Cursor measurement state */
+
+    /* Vertical graticule mode. false (default) = AUTOFIT: each channel's trace
+     * is scaled from its own min/max to fill the band, so the grid is a
+     * position reference, not a volts reference. true = TRUE SCALE: the trace
+     * is drawn at a FIXED SCOPE_CAL_COUNTS_PER_DIV counts per division, so one
+     * grid division means exactly the volts/div the status bar prints — but
+     * only on ranges scope_cal calls usable; a NONE range always autofits.
+     *
+     * Off by default because true scale needs the baseline centred (DAC1/PA4
+     * for CH1, TMR13/PA6 for CH2, via `fpga scope center`); uncentred, a
+     * DC-offset trace sits off-screen, which is honest but surprising. Toggle
+     * on the bench with `fpga scope graticule true`. */
+    bool            true_scale;
 } scope_state_t;
 
 /* ═══════════════════════════════════════════════════════════════════

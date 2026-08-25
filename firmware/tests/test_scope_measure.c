@@ -378,6 +378,71 @@ static int test_period_sweep(void)
     return bad;
 }
 
+/* Trapezoid with linear edges of KNOWN width, for the rise/fall pass (M4).
+ * One cycle: R-sample rise lo->hi, H hold at hi, F-sample fall hi->lo, rest at
+ * lo. A linear 0..R ramp crosses the 10% and 90% levels at 0.1R and 0.9R, so
+ * the 10->90 rise span is exactly 0.8R samples (and the fall 0.8F) — a
+ * closed-form target the pass must hit. */
+static void gen_trapezoid(uint8_t *b, uint16_t n, uint16_t period,
+                          uint16_t R, uint16_t H, uint16_t F,
+                          uint8_t lo, uint8_t hi)
+{
+    for (uint16_t i = 0; i < n; i++) {
+        uint16_t p = (uint16_t)(i % period);
+        float v;
+        if (p < R)                v = lo + (float)(hi - lo) * (float)p / (float)R;
+        else if (p < R + H)       v = hi;
+        else if (p < R + H + F)   v = hi - (float)(hi - lo) *
+                                        (float)(p - (R + H)) / (float)F;
+        else                      v = lo;
+        int iv = (int)(v + 0.5f);
+        if (iv < 0) iv = 0;
+        if (iv > 255) iv = 255;
+        b[i] = (uint8_t)iv;
+    }
+}
+
+/* rise/fall (M4): known widths, honest SAMPLES, and affine-invariant. */
+static int test_edge_timing(void)
+{
+    static uint8_t buf[N], buf2[N];
+    scope_measure_t m, m2;
+    int bad = 0;
+
+    const uint16_t R = 20, H = 30, F = 40;
+    gen_trapezoid(buf, N, 128, R, H, F, 40, 210);
+    scope_measure_record(buf, N, &m);
+
+    bad += chk("trapezoid: valid + level_valid", m.valid && m.level_valid);
+    bad += chk("rise time found", m.rise_valid);
+    bad += chk("fall time found", m.fall_valid);
+    bad += chk("rise ~ 0.8*R samples", near(m.rise_samples, 0.8f * R, 1.5f));
+    bad += chk("fall ~ 0.8*F samples", near(m.fall_samples, 0.8f * F, 1.5f));
+    if (g_verbose)
+        printf("      rise=%.2f (want %.1f)  fall=%.2f (want %.1f)\n",
+               (double)m.rise_samples, 0.8 * R,
+               (double)m.fall_samples, 0.8 * F);
+
+    /* Honest-units negative control: rise/fall are in SAMPLES, so an affine
+     * y = a*x + b (a > 0) on the samples must not change them — the same
+     * property that lets duty and period be shown before vertical cal exists.
+     * Halve the amplitude and lift it: the edges keep their sample widths. */
+    for (uint16_t i = 0; i < N; i++)
+        buf2[i] = (uint8_t)(buf[i] / 2 + 20);
+    scope_measure_record(buf2, N, &m2);
+    bad += chk("rise invariant under y=x/2+20",
+               m2.rise_valid && near(m2.rise_samples, m.rise_samples, 1.0f));
+    bad += chk("fall invariant under y=x/2+20",
+               m2.fall_valid && near(m2.fall_samples, m.fall_samples, 1.0f));
+
+    /* Silence: a flat record has no edges to time. */
+    gen_const(buf, N, 128);
+    scope_measure_record(buf, N, &m);
+    bad += chk("flat record: no rise/fall", !m.rise_valid && !m.fall_valid);
+
+    return bad;
+}
+
 int main(int argc, char **argv)
 {
     g_verbose = (argc > 1 && strcmp(argv[1], "-v") == 0);
@@ -406,6 +471,12 @@ int main(int argc, char **argv)
     printf("   %d failed check(s) -> %s\n\n", sweep_bad,
            sweep_bad == 0 ? "PASS" : "*** FAIL ***");
     if (sweep_bad) fail = 1;
+
+    printf("edge rise/fall timing (M4 — retires measurement.c)\n");
+    int edge_bad = test_edge_timing();
+    printf("   %d failed check(s) -> %s\n\n", edge_bad,
+           edge_bad == 0 ? "PASS" : "*** FAIL ***");
+    if (edge_bad) fail = 1;
 
     printf(fail ? "RESULT: FAIL\n" : "RESULT: PASS\n");
     return fail;

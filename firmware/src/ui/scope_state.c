@@ -83,6 +83,10 @@ void scope_state_init(scope_state_t *s)
     /* Running */
     s->running = true;
 
+    /* Graticule: autofit by default (see scope_state.h). True scale is opt-in
+     * from the shell because it needs a centred baseline first. */
+    s->true_scale = false;
+
     /* Cursor defaults */
     s->cursor.mode   = CURSOR_OFF;
     s->cursor.active = CURSOR_SEL_V1;

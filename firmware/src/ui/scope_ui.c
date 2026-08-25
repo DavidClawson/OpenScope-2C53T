@@ -768,6 +768,48 @@ static void draw_channel_autofit(const volatile uint8_t *buf, uint16_t color,
     }
 }
 
+/* Fixed-scale ("true volts/div") render — the graticule-honesty path (M3).
+ *
+ * Maps sample -> y at a CONSTANT 256/SCOPE_H counts per pixel, the exact
+ * inverse of the geometry the grid and the status bar already assume:
+ * SCOPE_CAL_COUNTS_PER_DIV counts per 26 px division (the _Static_assert below
+ * ties the two together, so they cannot drift). Unlike autofit this does NOT
+ * rescale to the band height, so one division on the glass is worth exactly the
+ * volts/div scope_cal_volts_per_div() prints — that equality is the entire
+ * point.
+ *
+ * The trace is positioned by the real ADC value about `center` (ADC mid-scale,
+ * where `fpga scope center` parks a centred baseline). An uncentred DC offset
+ * therefore shifts the whole trace and can push it past the band; that is the
+ * honest behaviour of a real scope at a fixed volts/div, and it is why this
+ * path is opt-in (scope_state.true_scale, default off) rather than the default.
+ * In split (both-channel) mode the slope still uses the full SCOPE_H, so the
+ * volts/div is identical to single-channel mode and a large signal clips at the
+ * half-band edge exactly as it should. */
+static void draw_channel_fixed(const volatile uint8_t *buf, uint16_t color,
+                               int16_t y_top, int16_t y_bot, uint8_t center)
+{
+    uint16_t n = (LCD_WIDTH < 512u) ? (uint16_t)LCD_WIDTH : 512u;
+    int16_t  y_mid = (int16_t)((y_top + y_bot) / 2);
+
+    int16_t prev_y = -1;
+    for (uint16_t x = 0; x < n; x++) {
+        int yy = (int)y_mid - ((int)buf[x] - (int)center) * SCOPE_H / 256;
+        if (yy < y_top)   yy = y_top;
+        if (yy >= y_bot)  yy = y_bot - 1;
+        int16_t y = (int16_t)yy;
+        if (prev_y >= 0) {
+            int16_t a = prev_y < y ? prev_y : y;
+            int16_t b = prev_y < y ? y : prev_y;
+            for (int16_t v = a; v <= b; v++)
+                lcd_set_pixel(x, (uint16_t)v, color);
+        } else {
+            lcd_set_pixel(x, (uint16_t)y, color);
+        }
+        prev_y = y;
+    }
+}
+
 void draw_demo_waveform(uint32_t frame)
 {
     const theme_t *th = theme_get();
@@ -802,13 +844,25 @@ void draw_demo_waveform(uint32_t frame)
          * a single live channel gets the whole area. */
         bool c1 = ss->ch1.enabled && ch1_buf != NULL;
         bool c2 = ss->ch2.enabled && ch2_buf != NULL;
+
+        /* True-scale only where the range has a real volts/div; a NONE range
+         * always autofits (its grid has no volts meaning to honour). Default
+         * ss->true_scale == false keeps every build on autofit unless toggled
+         * from the shell. */
+        bool fx1 = ss->true_scale && scope_cal_true_scale_ok(1u, ss->ch1.vdiv_idx);
+        bool fx2 = ss->true_scale && scope_cal_true_scale_ok(2u, ss->ch2.vdiv_idx);
+
         if (c1 && c2) {
-            draw_channel_autofit(ch1_buf, th->ch1, SCOPE_TOP, SCOPE_MID_Y - 1);
-            draw_channel_autofit(ch2_buf, th->ch2, SCOPE_MID_Y + 1, SCOPE_BOT);
+            if (fx1) draw_channel_fixed(ch1_buf, th->ch1, SCOPE_TOP, SCOPE_MID_Y - 1, 128u);
+            else     draw_channel_autofit(ch1_buf, th->ch1, SCOPE_TOP, SCOPE_MID_Y - 1);
+            if (fx2) draw_channel_fixed(ch2_buf, th->ch2, SCOPE_MID_Y + 1, SCOPE_BOT, 128u);
+            else     draw_channel_autofit(ch2_buf, th->ch2, SCOPE_MID_Y + 1, SCOPE_BOT);
         } else if (c1) {
-            draw_channel_autofit(ch1_buf, th->ch1, SCOPE_TOP, SCOPE_BOT);
+            if (fx1) draw_channel_fixed(ch1_buf, th->ch1, SCOPE_TOP, SCOPE_BOT, 128u);
+            else     draw_channel_autofit(ch1_buf, th->ch1, SCOPE_TOP, SCOPE_BOT);
         } else if (c2) {
-            draw_channel_autofit(ch2_buf, th->ch2, SCOPE_TOP, SCOPE_BOT);
+            if (fx2) draw_channel_fixed(ch2_buf, th->ch2, SCOPE_TOP, SCOPE_BOT, 128u);
+            else     draw_channel_autofit(ch2_buf, th->ch2, SCOPE_TOP, SCOPE_BOT);
         }
         return;
     }
