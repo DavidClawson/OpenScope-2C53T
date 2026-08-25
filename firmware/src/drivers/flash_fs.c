@@ -30,7 +30,19 @@ static bool              raw_spi_ready = false;
 #define SPI_FLASH_SPI       ((spi_type *)SPI2_BASE)
 #define SPI_FLASH_SIZE      FLASH_FS_RAW_MAX_ADDR
 #define SPI_FLASH_CS_ASSERT()   (GPIOB->clr = GPIO_PINS_12)
-#define SPI_FLASH_CS_DEASSERT() (GPIOB->scr = GPIO_PINS_12)
+/* Deassert then hold CS high for >= tSHSL. A W25Q needs CS to rise for a
+ * minimum time between commands to register deselection; back-to-back
+ * transactions (WREN then RDSR/erase/program) with only a few instructions
+ * of CS-high time violate this, and the flash mis-frames the second command
+ * and leaves MISO undriven (reads 0xFF). Reads survived because a read is one
+ * self-contained transaction; every WRITE path is WREN-then-command and was
+ * failing at the RDSR inside raw_write_enable. ~1 us here, negligible vs a
+ * page program or sector erase. */
+#define SPI_FLASH_CS_DEASSERT()                                              \
+    do {                                                                     \
+        GPIOB->scr = GPIO_PINS_12;                                           \
+        for (volatile uint32_t _cs_hi = 0; _cs_hi < 120u; _cs_hi++) { }      \
+    } while (0)
 
 /* Mutex timeout: 5 seconds should be more than enough for any
  * single filesystem operation on SPI flash. */
