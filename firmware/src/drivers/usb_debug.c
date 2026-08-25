@@ -7022,9 +7022,18 @@ static void vUsbDebugTask(void *pvParameters)
                         if (!fw_loader_active()) {
                             fwl_print_status();  /* staged or failed — say so */
                             if (fw_loader_state() == FW_LOADER_ERROR) {
-                                uint32_t owed = fw_loader_expected() -
-                                                fw_loader_bytes();
-                                fwl_discard = owed;
+                                /* The host has sent `before + rx_len` bytes
+                                 * so far — the tail of THIS packet is already
+                                 * off the wire even when the loader refused
+                                 * it, so `expected - bytes()` would over-
+                                 * count and the drain would eat up to a
+                                 * packet of the operator's next keystrokes.
+                                 * Count what is still in flight instead. */
+                                uint32_t sent = before + rx_len;
+                                fwl_discard =
+                                    sent < fw_loader_expected()
+                                        ? fw_loader_expected() - sent
+                                        : 0;
                                 fwl_discard_idle = 0;
                             }
                         }
@@ -7062,6 +7071,17 @@ static void vUsbDebugTask(void *pvParameters)
             fw_loader_poll();
             if (was_loading && !fw_loader_active()) {
                 fwl_print_status();
+                /* A timeout kills the transfer too, and a host that merely
+                 * stalled (>3 s of silence mid-image) may well resume: arm
+                 * the same drain the feed-path error arms, or the rest of
+                 * the image lands in shell_feed() as command lines. No
+                 * packet is in flight here, so expected - received is the
+                 * exact figure. A host that is truly gone costs one more
+                 * 3 s drain expiry, which reports itself. */
+                if (fw_loader_state() == FW_LOADER_ERROR) {
+                    fwl_discard = fw_loader_expected() - fw_loader_bytes();
+                    fwl_discard_idle = 0;
+                }
             }
         }
 

@@ -441,6 +441,19 @@ RF static void fwl_ram_install(uint32_t src, uint32_t size)
     }
 
     for (uint32_t addr = FWL_APP_BASE; addr < end; addr += FWL_PAGE_SIZE) {
+        /* Feed the FWDGT (cmd register, reload key). This firmware runs the
+         * watchdog with a hard 3.0 s timeout (watchdog.c), normally fed by
+         * the 500 ms health task — which died with `cpsid i` above. The
+         * install is 10-20 s, so without a feed the dog fires mid-erase and,
+         * the vector page going first, resets into an unbootable slot.
+         * One feed per 2 KB page keeps us far under 3 s. RAM-safe: a single
+         * volatile MMIO store, no flash, no libcalls; feeding a never-armed
+         * FWDGT is a no-op. Found by DavidClawson in review. The bench
+         * round-trips on unit #2 never tripped it for two reasons, neither
+         * of them margin: GUEST_BUILD skips watchdog_init() (main.c), and
+         * the 2C23T port arms no watchdog at all. Release builds arm it. */
+        *(volatile uint32_t *)0x40003000u = 0x0000AAAAu;
+
         uint8_t bank1 = addr >= 0x08080000u;
         volatile uint32_t *sts =
             (volatile uint32_t *)(bank1 ? 0x4002204Cu : 0x4002200Cu);
