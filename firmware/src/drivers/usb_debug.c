@@ -18,6 +18,7 @@
 #include "dfu_boot.h"
 #include "flash_fs.h"
 #include "fw_loader.h"
+#include "cal_backup.h"
 #include "rtt.h"
 #include "continuity_buzzer.h"
 
@@ -1745,6 +1746,80 @@ restore:
 }
 
 /*
+ * Factory-cal self-protection (src/util/cal_backup.c).
+ *   cal status              report the MCU cal page and the W25Q backup
+ *   cal backup              copy the MCU cal page to the W25Q (safe: W25Q only)
+ *   cal restore [force] CONFIRM   write the W25Q backup back to MCU flash
+ * Restore refuses to overwrite a programmed (precious) page unless `force`.
+ */
+static void cmd_cal_status(void)
+{
+    cal_backup_report_t r;
+    if (cal_backup_status(&r) != CAL_BK_OK) {
+        usb_send_str("cal status: read failed\r\n");
+        return;
+    }
+    usb_debug_printf("live  @0x%08lX  %-14s crc=0x%08lX\r\n",
+                     (unsigned long)CAL_BACKUP_SRC_ADDR,
+                     cal_page_class_str(r.live_class),
+                     (unsigned long)r.live_crc);
+    if (!r.backup_present) {
+        usb_send_str("backup: region unreadable\r\n");
+    } else if (r.backup_status != CAL_REC_OK) {
+        usb_debug_printf("backup: %s (no valid record)\r\n",
+                         cal_rec_status_str(r.backup_status));
+    } else {
+        usb_debug_printf("backup: valid v%u  payload_crc=0x%08lX  src=0x%08lX\r\n",
+                         (unsigned)r.backup_version,
+                         (unsigned long)r.backup_payload_crc,
+                         (unsigned long)r.backup_src_addr);
+        usb_debug_printf("match : %s\r\n", r.match ? "yes (live == backup)"
+                                                   : "NO (live differs from backup)");
+    }
+}
+
+static void cmd_cal_backup(void)
+{
+    cal_bk_status_t st = cal_backup_store();
+    usb_debug_printf("cal backup: %s\r\n", cal_bk_status_str(st));
+    if (st == CAL_BK_ERR_LIVE_BLANK) {
+        usb_send_str("  (MCU page is blank/zeroed — nothing to preserve, existing backup kept)\r\n");
+    }
+}
+
+static void cmd_cal_restore(const char *args)
+{
+    char abuf[40];
+    char *saveptr = NULL;
+    bool force = false;
+    const char *confirm = NULL;
+
+    if (strlen(args) >= sizeof(abuf)) {
+        usb_send_str("Usage: cal restore [force] CONFIRM\r\n"); return;
+    }
+    strcpy(abuf, args);
+    char *t1 = strtok_r(abuf, " \t", &saveptr);
+    char *t2 = strtok_r(NULL, " \t", &saveptr);
+    if (t1 != NULL && strcmp(t1, "force") == 0) {
+        force = true;
+        confirm = t2;
+    } else {
+        confirm = t1;
+    }
+    if (confirm == NULL || strcmp(confirm, "CONFIRM") != 0) {
+        usb_send_str("Refused: append CONFIRM. This WRITES MCU flash 0x08006000.\r\n"
+                     "  cal restore CONFIRM        (refuses over a programmed page)\r\n"
+                     "  cal restore force CONFIRM  (overwrites a programmed page)\r\n");
+        return;
+    }
+    cal_bk_status_t st = cal_backup_restore(force);
+    usb_debug_printf("cal restore%s: %s\r\n", force ? " force" : "", cal_bk_status_str(st));
+    if (st == CAL_BK_ERR_LIVE_PRECIOUS) {
+        usb_send_str("  live page holds data — use 'cal restore force CONFIRM' only if you are sure\r\n");
+    }
+}
+
+/*
  * Scope trigger-comparator DAC (faithful reimpl of stock FUN_080018a4 CH1 path).
  *   trig raw <0-4095>     direct 12-bit DAC1 write + software trigger
  *   trig <range> <level>  full cal-formula path; range 0-9, level -100..+100
@@ -2513,6 +2588,69 @@ static void cmd_fpga_scope_timebase(const char *args)
                      lbl);
 }
 
+/* `fpga scope graticule [auto|true|toggle]` — the M3 seam. Choose whether the
+ * live trace is drawn at TRUE volts/div (one grid division == the volts/div the
+ * status bar prints, on calibrated ranges) or AUTOFIT (scaled to fill the band,
+ * so the grid is a position reference only). Autofit at boot; this flips it on
+ * the bench without a rebuild. True scale needs a centred baseline, so it also
+ * prints which ranges will honour it and the reminder to center first. */
+static void cmd_fpga_scope_graticule(const char *args)
+{
+    while (*args == ' ') args++;
+    scope_state_t *ss = scope_state_get();
+
+    if (strncmp(args, "true", 4) == 0)        ss->true_scale = true;
+    else if (strncmp(args, "auto", 4) == 0)   ss->true_scale = false;
+    else if (strncmp(args, "toggle", 6) == 0) ss->true_scale = !ss->true_scale;
+    else if (*args) {
+        usb_send_str("usage: fpga scope graticule [auto|true|toggle]\r\n");
+        return;
+    }
+
+    usb_debug_printf("graticule: %s\r\n",
+                     ss->true_scale ? "TRUE SCALE (grid == volts/div)"
+                                    : "autofit (grid == position only)");
+    if (ss->true_scale) {
+        char l1[12], l2[12];
+        scope_cal_range_label(1u, ss->ch1.vdiv_idx, l1, sizeof(l1));
+        scope_cal_range_label(2u, ss->ch2.vdiv_idx, l2, sizeof(l2));
+        usb_debug_printf("  CH1 rng %u -> %s/div %s\r\n",
+                         (unsigned)ss->ch1.vdiv_idx, l1,
+                         scope_cal_true_scale_ok(1u, ss->ch1.vdiv_idx)
+                             ? "" : "(no cal -> autofit)");
+        usb_debug_printf("  CH2 rng %u -> %s/div %s\r\n",
+                         (unsigned)ss->ch2.vdiv_idx, l2,
+                         scope_cal_true_scale_ok(2u, ss->ch2.vdiv_idx)
+                             ? "" : "(no cal -> autofit)");
+        usb_send_str("  center the baseline first: `fpga scope center`\r\n");
+    }
+}
+
+/* `fpga scope softtrig [on|off|toggle]` — the software display trigger. When on
+ * (default), each frame's render window starts on the trigger source's level
+ * crossing so a periodic trace stands still; off free-runs from sample 0 (the
+ * old "dancing"). Handy for A/B on the bench: off = dances, on = locked. */
+static void cmd_fpga_scope_softtrig(const char *args)
+{
+    while (*args == ' ') args++;
+    scope_state_t *ss = scope_state_get();
+
+    if (strncmp(args, "on", 2) == 0)          ss->soft_trigger = true;
+    else if (strncmp(args, "off", 3) == 0)    ss->soft_trigger = false;
+    else if (strncmp(args, "toggle", 6) == 0) ss->soft_trigger = !ss->soft_trigger;
+    else if (*args) {
+        usb_send_str("usage: fpga scope softtrig [on|off|toggle]\r\n");
+        return;
+    }
+
+    usb_debug_printf("softtrig: %s   (level=%d px, %s, src=CH%d)\r\n",
+                     ss->soft_trigger ? "ON (trace locked to trigger)"
+                                      : "off (free-run / dancing)",
+                     (int)ss->trigger.level,
+                     ss->trigger.edge == TRIG_RISING ? "rising" : "falling",
+                     ss->trigger.source == TRIG_SRC_CH2 ? 2 : 1);
+}
+
 static void cmd_fpga_scope_freq(const char *args)
 {
     uint32_t reps = 10;
@@ -2640,13 +2778,25 @@ static void cmd_fpga_scope_measure(const char *args)
             snprintf(vpp2, sizeof vpp2, "%lu",
                      (unsigned long)((float)m2.pp_robust * k2 * 1e6f + 0.5f));
 
+        /* Edge timing in SAMPLES x100 (M4). "-" when no clean edge was found,
+         * same convention as per1. Kept in samples, not seconds: multiply by
+         * 1/fs on the host when a rate is in force. */
+        char rise[12] = "-", fall[12] = "-";
+        if (m1.rise_valid)
+            snprintf(rise, sizeof rise, "%lu",
+                     (unsigned long)(m1.rise_samples * 100.0f + 0.5f));
+        if (m1.fall_valid)
+            snprintf(fall, sizeof fall, "%lu",
+                     (unsigned long)(m1.fall_samples * 100.0f + 0.5f));
+
         usb_debug_printf("M %2lu pp1=%u ppr1=%u Vpp1_uV=%s Vrms1_uV=%s duty1_pm=%lu "
-                         "per1_smp100=%s f1_mHz=%s pp2=%u Vpp2_uV=%s\r\n",
+                         "per1_smp100=%s f1_mHz=%s rise1_smp100=%s fall1_smp100=%s "
+                         "pp2=%u Vpp2_uV=%s\r\n",
                          (unsigned long)i, (unsigned)m1.pp,
                          (unsigned)m1.pp_robust, vpp1, vrms1,
                          (unsigned long)(m1.level_valid
                                          ? m1.duty_pct * 10.0f + 0.5f : 0.0f),
-                         per, f, (unsigned)m2.pp, vpp2);
+                         per, f, rise, fall, (unsigned)m2.pp, vpp2);
         usb_delay_ms(60);
     }
 }
@@ -6642,6 +6792,12 @@ static const shell_cmd_t shell_cmds[] = {
           "flash wtest <addr> CONFIRM      Non-destructive write-primitive self-test (blank 4KB sector)\r\n"),
     CMD_V("flash diag", cmd_flash_diag, SC_EXACT,
           "flash diag                      W25Q SR1/SR2/SR3 + WEL-latch check\r\n"),
+    CMD_V("cal status", cmd_cal_status, SC_EXACT,
+          "cal status                      Factory-cal page + W25Q backup state\r\n"),
+    CMD_V("cal backup", cmd_cal_backup, SC_EXACT,
+          "cal backup                      Copy MCU factory-cal page to W25Q (safe)\r\n"),
+    CMD_A("cal restore", cmd_cal_restore, SC_NEEDARGS,
+          "cal restore [force] CONFIRM     Write W25Q backup back to MCU flash 0x08006000\r\n"),
     CMD_A("screen dump", cmd_screen_dump, 0,
           "screen dump [shadow] [x y w h]  Dump text indexed4 LCD shadow\r\n"),
     CMD_A("screen dumpbin", cmd_screen_dumpbin, 0,
@@ -6712,6 +6868,10 @@ static const shell_cmd_t shell_cmds[] = {
           "fpga scope measure [reps]       Badge values raw (uV/permille/mHz) for bench validation\r\n"),
     CMD_A("fpga scope freq", cmd_fpga_scope_freq, 0,
           "fpga scope freq [n]             Run the shipped frequency estimator n times, with diagnostics\r\n"),
+    CMD_A("fpga scope graticule", cmd_fpga_scope_graticule, 0,
+          "fpga scope graticule [auto|true|toggle]  Trace at true volts/div vs autofit-to-band\r\n"),
+    CMD_A("fpga scope softtrig", cmd_fpga_scope_softtrig, 0,
+          "fpga scope softtrig [on|off|toggle]      Lock trace to trigger crossing vs free-run\r\n"),
     CMD_V("settings", cmd_settings, SC_EXACT,
           "settings                        Persistence status: bound, load result, writes, failures\r\n"),
     CMD_A("fpga scope timebase", cmd_fpga_scope_timebase, 0,

@@ -204,10 +204,40 @@ static void test_labels(void)
     CHECK(small[2] == '\0', "label must NUL-terminate within a 3-byte buffer");
 }
 
+/* The true-scale render gate (M3) must agree, range for range, with whether a
+ * volts/div exists: calibrated -> render true scale; NONE / out-of-domain ->
+ * autofit. If these two ever disagree, the grid would claim a volts/div the
+ * badges refuse to print (or vice versa) — the exact class of inconsistency
+ * scope_cal exists to prevent. */
+static void test_true_scale_gate_matches_calibration(void)
+{
+    for (uint8_t ch = 1; ch <= 2; ch++) {
+        for (uint8_t r = 0; r < SCOPE_CAL_RANGE_COUNT; r++) {
+            int ok   = scope_cal_true_scale_ok(ch, r);
+            int cal  = scope_cal_volts_per_count(ch, r) > 0.0f;
+            CHECK(!!ok == cal,
+                  "ch%u r%u: true_scale_ok(%d) must match has-cal(%d)",
+                  ch, r, ok, cal);
+        }
+        /* Ranges 0-3 rail -> must autofit; 5/6/7 are MEASURED -> true scale. */
+        for (uint8_t r = 0; r <= 3; r++)
+            CHECK(!scope_cal_true_scale_ok(ch, r),
+                  "ch%u r%u: railed range must NOT render true scale", ch, r);
+        for (uint8_t r = 5; r <= 7; r++)
+            CHECK(scope_cal_true_scale_ok(ch, r),
+                  "ch%u r%u: measured range must render true scale", ch, r);
+    }
+    /* Out-of-domain is a refusal, same as everywhere else in this module. */
+    CHECK(!scope_cal_true_scale_ok(0, 6), "ch0 must not render true scale");
+    CHECK(!scope_cal_true_scale_ok(1, SCOPE_CAL_RANGE_COUNT),
+          "range past the end must not render true scale");
+}
+
 int main(void)
 {
     test_uncalibrated_ranges_return_zero();
     test_out_of_domain_arguments();
+    test_true_scale_gate_matches_calibration();
     test_source_scale_is_uniform();
     test_measured_tier_claims_hold();
     test_provisional_ranges_still_produce_a_number();

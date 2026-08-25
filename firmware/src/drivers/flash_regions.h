@@ -103,6 +103,7 @@ typedef enum {
     FLASH_REGION_SETTINGS,     /* append: our saved settings                    */
     FLASH_REGION_MODULES,      /* rw: module data assets                        */
     FLASH_REGION_SCRATCH,      /* rw: streaming screenshot / general scratch    */
+    FLASH_REGION_FACTORY_CAL_BACKUP, /* rw: MCU factory-cal page mirror (cal_backup.c) */
     FLASH_REGION_TAIL,         /* RO: final sector, programmed, purpose unknown */
     FLASH_REGION_COUNT
 } flash_region_id_t;

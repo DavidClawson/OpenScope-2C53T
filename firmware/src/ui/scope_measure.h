@@ -87,6 +87,23 @@ typedef struct {
     bool     cycles_valid;  /* level_valid && >= 2 crossings                 */
     float    period_samples;/* samples per cycle, first->last crossing       */
     bool     period_valid;
+
+    /* Edge timing — in SAMPLES, never seconds (same rule as period_samples).
+     *
+     * rise_samples: 10%->90% span on the FIRST clean rising edge.
+     * fall_samples: 90%->10% span on the FIRST clean falling edge.
+     *
+     * This is the one quantity the retired measurement_compute() engine
+     * (src/tasks/measurement.c) produced that nothing else here did. It now
+     * lives in this module, in the instrument's honest horizontal unit, gated
+     * on level_valid like duty and cycles. The 10/90 references are taken from
+     * the TRIMMED span [pp_robust], so a few noise-tail outliers do not stretch
+     * them. Multiply by the sample interval for seconds the day a timebase
+     * exists — the same one-multiply wiring job as period_samples. */
+    float    rise_samples;
+    bool     rise_valid;
+    float    fall_samples;
+    bool     fall_valid;
 } scope_measure_t;
 
 /*
@@ -97,5 +114,23 @@ typedef struct {
  */
 void scope_measure_record(const uint8_t *samples, uint16_t n,
                           scope_measure_t *out);
+
+/*
+ * Software edge-trigger for display stability.
+ *
+ * Scan buf[0..max_start] for the first sample that crosses `threshold` in the
+ * chosen direction (rising: low->high; falling: high->low) AFTER first being
+ * "armed" by `hyst` counts on the far side. The arm step is a Schmitt gate: it
+ * rejects noise wiggles sitting right on the threshold, so a clean periodic
+ * signal triggers once per cycle at a repeatable phase.
+ *
+ * Returns that index (>= 0), or -1 if no qualifying crossing exists in the
+ * search span — the caller then draws from 0 (free-run), which is exactly what
+ * a real scope's AUTO mode does when the level sits outside the signal.
+ *
+ * Pure and side-effect-free; never reads past buf[max_start]. Host-tested.
+ */
+int scope_measure_find_trigger(const uint8_t *buf, uint16_t max_start,
+                               uint8_t threshold, bool rising, uint8_t hyst);
 
 #endif /* SCOPE_MEASURE_H */

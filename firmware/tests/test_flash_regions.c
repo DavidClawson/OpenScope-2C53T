@@ -382,22 +382,25 @@ static void test_reads_from_readonly_regions_still_work(void)
 static void test_write_crossing_into_readonly_neighbour_fails_closed(void)
 {
     fresh();
-    const flash_region_t *scratch = R(FLASH_REGION_SCRATCH);
+    /* The last writable region before the read-only tail sector. (Was scratch;
+     * a dedicated cal-backup region now sits between scratch and tail, so this
+     * is the region whose end abuts read-only flash.) */
+    const flash_region_t *last_rw = R(FLASH_REGION_FACTORY_CAL_BACKUP);
     uint8_t *snap = snapshot();
 
-    /* Start 8 bytes before the end of scratch and run 64 bytes: the tail lands
-     * in the read-only tail sector. Nothing at all may be written — not even
-     * the 8 bytes that are legal. */
+    /* Start 8 bytes before the end of that region and run 64 bytes: the tail
+     * lands in the read-only tail sector. Nothing at all may be written — not
+     * even the 8 bytes that are legal. */
     uint8_t data[64];
     memset(data, 0x11, sizeof data);
-    uint32_t addr = scratch->start + scratch->length - 8u;
+    uint32_t addr = last_rw->start + last_rw->length - 8u;
 
     CHECK_ST(flash_regions_write_abs(addr, data, sizeof data), FLASH_REGION_ERR_READ_ONLY);
     CHECK(model.programs == 0, "partial write leaked %u programs", model.programs);
     CHECK(unchanged_since(snap), "a boundary-crossing write modified flash");
 
     /* Same shape via the region-relative API: past the end of the region. */
-    CHECK_ST(flash_region_write(FLASH_REGION_SCRATCH, scratch->length - 8u, data, sizeof data),
+    CHECK_ST(flash_region_write(FLASH_REGION_FACTORY_CAL_BACKUP, last_rw->length - 8u, data, sizeof data),
              FLASH_REGION_ERR_BOUNDS);
     CHECK(model.programs == 0, "region-relative overrun still programmed");
     CHECK(unchanged_since(snap), "region-relative overrun modified flash");

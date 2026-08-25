@@ -40,6 +40,7 @@ extern void system_clock_config(void);
 #include "meter_voltage_wave.h"
 #include "flash_fs.h"
 #include "settings_store.h"
+#include "cal_backup.h"
 #include "usb_debug.h"
 #include "rtt.h"
 #include "fault.h"
@@ -995,6 +996,15 @@ int main(void)
      * And BEFORE the fpga_set_meter_mode(meter_submode) call below, which
      * consumes the restored meter submode, and before the display task exists. */
     settings_store_init();
+
+#if defined(CAL_BACKUP_AUTO_RESTORE) && CAL_BACKUP_AUTO_RESTORE
+    /* OFF by default. Manual `cal restore` is the primary path. Even when built
+     * in, this only acts when the live MCU cal page reads blank/zeroed AND a
+     * valid W25Q backup exists — a programmed page is never overwritten
+     * automatically (cal_backup_should_auto_restore). Placed after
+     * settings_store_init() so the W25Q region layer is bound. */
+    (void)cal_backup_maybe_auto_restore();
+#endif
 
     /* settings_store_init() just restored scope_state.timebase_idx. Push it at
      * the FPGA so the axis label and the actual sample rate agree — without

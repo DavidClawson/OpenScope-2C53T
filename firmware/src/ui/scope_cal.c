@@ -116,6 +116,15 @@ float scope_cal_volts_per_div(uint8_t ch, uint8_t range_idx)
     return scope_cal_volts_per_count(ch, range_idx) * SCOPE_CAL_COUNTS_PER_DIV;
 }
 
+int scope_cal_true_scale_ok(uint8_t ch, uint8_t range_idx)
+{
+    /* Same gate the labels and badges use: a range has a volts meaning exactly
+     * when its gain is > 0. Deriving it from the gain (not the tier table)
+     * keeps the two from drifting apart, for the same reason
+     * scope_cal_get_tier() does. */
+    return scope_cal_volts_per_count(ch, range_idx) > 0.0f;
+}
+
 void scope_cal_range_label(uint8_t ch, uint8_t range_idx, char *out, uint32_t n)
 {
     if (out == NULL || n == 0u)
