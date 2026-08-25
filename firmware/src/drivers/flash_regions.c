@@ -74,7 +74,14 @@ const flash_region_t flash_region_table[FLASH_REGION_COUNT] = {
     [FLASH_REGION_USER_CAL] = { "usercal",  0xF00000u, 0x010000u, FLASH_REGION_KIND_APPEND   },
     [FLASH_REGION_SETTINGS] = { "settings", 0xF10000u, 0x010000u, FLASH_REGION_KIND_APPEND   },
     [FLASH_REGION_MODULES]  = { "modules",  0xF20000u, 0x080000u, FLASH_REGION_KIND_RW       },
-    [FLASH_REGION_SCRATCH]  = { "scratch",  0xFA0000u, 0x05F000u, FLASH_REGION_KIND_RW       },
+    /* scratch loses its top 8 KB to the cal-backup region below (0x05F000 ->
+     * 0x05D000). 8 KB out of ~380 KB of general scratch is negligible; the
+     * factory-cal mirror needs its own default-deny region so a screenshot
+     * stream can never reach it. */
+    [FLASH_REGION_SCRATCH]  = { "scratch",  0xFA0000u, 0x05D000u, FLASH_REGION_KIND_RW       },
+    /* Factory-cal backup — a 4 KB record (header + the MCU 0x08006000 page) in
+     * 2 dedicated sectors abutting the RO tail. See src/util/cal_backup.c. */
+    [FLASH_REGION_FACTORY_CAL_BACKUP] = { "calbackup", 0xFFD000u, 0x002000u, FLASH_REGION_KIND_RW },
     [FLASH_REGION_TAIL]     = { "tail",     0xFFF000u, 0x001000u, FLASH_REGION_KIND_READONLY },
 };
 

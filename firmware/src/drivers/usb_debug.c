@@ -17,6 +17,7 @@
 #include "cdc_desc.h"
 #include "dfu_boot.h"
 #include "flash_fs.h"
+#include "cal_backup.h"
 #include "rtt.h"
 #include "continuity_buzzer.h"
 
@@ -1740,6 +1741,80 @@ restore:
             for (uint32_t i = 0; i < sizeof(b); i++) if (b[i] != 0xFF) { blank = false; break; }
         }
         usb_debug_printf("%s: sector restored to 0xFF\r\n", blank ? "PASS" : "FAIL");
+    }
+}
+
+/*
+ * Factory-cal self-protection (src/util/cal_backup.c).
+ *   cal status              report the MCU cal page and the W25Q backup
+ *   cal backup              copy the MCU cal page to the W25Q (safe: W25Q only)
+ *   cal restore [force] CONFIRM   write the W25Q backup back to MCU flash
+ * Restore refuses to overwrite a programmed (precious) page unless `force`.
+ */
+static void cmd_cal_status(void)
+{
+    cal_backup_report_t r;
+    if (cal_backup_status(&r) != CAL_BK_OK) {
+        usb_send_str("cal status: read failed\r\n");
+        return;
+    }
+    usb_debug_printf("live  @0x%08lX  %-14s crc=0x%08lX\r\n",
+                     (unsigned long)CAL_BACKUP_SRC_ADDR,
+                     cal_page_class_str(r.live_class),
+                     (unsigned long)r.live_crc);
+    if (!r.backup_present) {
+        usb_send_str("backup: region unreadable\r\n");
+    } else if (r.backup_status != CAL_REC_OK) {
+        usb_debug_printf("backup: %s (no valid record)\r\n",
+                         cal_rec_status_str(r.backup_status));
+    } else {
+        usb_debug_printf("backup: valid v%u  payload_crc=0x%08lX  src=0x%08lX\r\n",
+                         (unsigned)r.backup_version,
+                         (unsigned long)r.backup_payload_crc,
+                         (unsigned long)r.backup_src_addr);
+        usb_debug_printf("match : %s\r\n", r.match ? "yes (live == backup)"
+                                                   : "NO (live differs from backup)");
+    }
+}
+
+static void cmd_cal_backup(void)
+{
+    cal_bk_status_t st = cal_backup_store();
+    usb_debug_printf("cal backup: %s\r\n", cal_bk_status_str(st));
+    if (st == CAL_BK_ERR_LIVE_BLANK) {
+        usb_send_str("  (MCU page is blank/zeroed — nothing to preserve, existing backup kept)\r\n");
+    }
+}
+
+static void cmd_cal_restore(const char *args)
+{
+    char abuf[40];
+    char *saveptr = NULL;
+    bool force = false;
+    const char *confirm = NULL;
+
+    if (strlen(args) >= sizeof(abuf)) {
+        usb_send_str("Usage: cal restore [force] CONFIRM\r\n"); return;
+    }
+    strcpy(abuf, args);
+    char *t1 = strtok_r(abuf, " \t", &saveptr);
+    char *t2 = strtok_r(NULL, " \t", &saveptr);
+    if (t1 != NULL && strcmp(t1, "force") == 0) {
+        force = true;
+        confirm = t2;
+    } else {
+        confirm = t1;
+    }
+    if (confirm == NULL || strcmp(confirm, "CONFIRM") != 0) {
+        usb_send_str("Refused: append CONFIRM. This WRITES MCU flash 0x08006000.\r\n"
+                     "  cal restore CONFIRM        (refuses over a programmed page)\r\n"
+                     "  cal restore force CONFIRM  (overwrites a programmed page)\r\n");
+        return;
+    }
+    cal_bk_status_t st = cal_backup_restore(force);
+    usb_debug_printf("cal restore%s: %s\r\n", force ? " force" : "", cal_bk_status_str(st));
+    if (st == CAL_BK_ERR_LIVE_PRECIOUS) {
+        usb_send_str("  live page holds data — use 'cal restore force CONFIRM' only if you are sure\r\n");
     }
 }
 
@@ -6514,6 +6589,12 @@ static const shell_cmd_t shell_cmds[] = {
           "flash wtest <addr> CONFIRM      Non-destructive write-primitive self-test (blank 4KB sector)\r\n"),
     CMD_V("flash diag", cmd_flash_diag, SC_EXACT,
           "flash diag                      W25Q SR1/SR2/SR3 + WEL-latch check\r\n"),
+    CMD_V("cal status", cmd_cal_status, SC_EXACT,
+          "cal status                      Factory-cal page + W25Q backup state\r\n"),
+    CMD_V("cal backup", cmd_cal_backup, SC_EXACT,
+          "cal backup                      Copy MCU factory-cal page to W25Q (safe)\r\n"),
+    CMD_A("cal restore", cmd_cal_restore, SC_NEEDARGS,
+          "cal restore [force] CONFIRM     Write W25Q backup back to MCU flash 0x08006000\r\n"),
     CMD_A("screen dump", cmd_screen_dump, 0,
           "screen dump [shadow] [x y w h]  Dump text indexed4 LCD shadow\r\n"),
     CMD_A("screen dumpbin", cmd_screen_dumpbin, 0,
