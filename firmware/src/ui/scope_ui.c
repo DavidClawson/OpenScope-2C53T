@@ -22,6 +22,7 @@
 #include "math_channel.h"
 #include "persistence.h"
 #include "fpga.h"
+#include "FreeRTOS.h"   /* pvPortMalloc — the X-Y snapshot buffers */
 #include "scope_trigger.h"
 #include "at32f403a_407.h"  /* GPIO port reads in the debug overlay */
 #include <stdio.h>
@@ -1555,15 +1556,28 @@ void draw_xy_screen(void)
 
     const volatile uint8_t *xb = fpga_get_ch1_buf();
     const volatile uint8_t *yb = fpga_get_ch2_buf();
-    const bool have = fpga_data_ready() && xb != NULL && yb != NULL
-                      && persist_is_initialized();
+    bool have = fpga_data_ready() && xb != NULL && yb != NULL
+                && persist_is_initialized();
+
+    /* Snapshot buffers live on the FreeRTOS heap, not in .bss: these 2 KB
+     * put the guest-flavour links over the RAM ceiling (make guest stopped
+     * linking at 352 B over on main alone, before fw_loader's buffers even
+     * joined it — #29). Allocated once, on first X-Y frame with data, and
+     * kept; on this heap (32 KB, ~14 KB measured free) the failure path is
+     * decorative, but it fails to "no snapshot", never to a null deref. */
+    static uint8_t *xy_xs, *xy_ys;
+    if (have && (xy_xs == NULL || xy_ys == NULL)) {
+        if (xy_xs == NULL) xy_xs = pvPortMalloc(FPGA_ADC_BUF_SIZE);
+        if (xy_ys == NULL) xy_ys = pvPortMalloc(FPGA_ADC_BUF_SIZE);
+        if (xy_xs == NULL || xy_ys == NULL) have = false;
+    }
 
     persist_decay();                     /* fade the whole buffer once per frame */
 
     if (have) {
         /* Coherent snapshot (odd generation = acq commit in progress). */
-        static uint8_t xs[FPGA_ADC_BUF_SIZE];
-        static uint8_t ys[FPGA_ADC_BUF_SIZE];
+        uint8_t *const xs = xy_xs;
+        uint8_t *const ys = xy_ys;
         for (int t = 0; t < 4; t++) {
             uint32_t g0 = fpga_acq_frame_generation();
             memcpy(xs, (const void *)xb, FPGA_ADC_BUF_SIZE);
