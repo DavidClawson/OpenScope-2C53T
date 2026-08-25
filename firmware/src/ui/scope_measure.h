@@ -115,4 +115,22 @@ typedef struct {
 void scope_measure_record(const uint8_t *samples, uint16_t n,
                           scope_measure_t *out);
 
+/*
+ * Software edge-trigger for display stability.
+ *
+ * Scan buf[0..max_start] for the first sample that crosses `threshold` in the
+ * chosen direction (rising: low->high; falling: high->low) AFTER first being
+ * "armed" by `hyst` counts on the far side. The arm step is a Schmitt gate: it
+ * rejects noise wiggles sitting right on the threshold, so a clean periodic
+ * signal triggers once per cycle at a repeatable phase.
+ *
+ * Returns that index (>= 0), or -1 if no qualifying crossing exists in the
+ * search span — the caller then draws from 0 (free-run), which is exactly what
+ * a real scope's AUTO mode does when the level sits outside the signal.
+ *
+ * Pure and side-effect-free; never reads past buf[max_start]. Host-tested.
+ */
+int scope_measure_find_trigger(const uint8_t *buf, uint16_t max_start,
+                               uint8_t threshold, bool rising, uint8_t hyst);
+
 #endif /* SCOPE_MEASURE_H */

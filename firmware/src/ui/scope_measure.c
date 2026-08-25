@@ -287,3 +287,42 @@ void scope_measure_record(const uint8_t *samples, uint16_t n,
         }
     }
 }
+
+/* ── Software display trigger ──────────────────────────────────────────
+ *
+ * See the header for the contract. The arm/fire split is what makes this a
+ * trigger rather than a bare comparator: on a noisy signal a plain "first
+ * sample >= threshold" fires on the first stray sample, and the phase it
+ * returns walks with the noise. Requiring the signal to first sit `hyst`
+ * counts on the far side means it fires on the genuine edge, once per cycle,
+ * at the same phase every frame — which is the whole point of triggering.
+ */
+int scope_measure_find_trigger(const uint8_t *buf, uint16_t max_start,
+                               uint8_t threshold, bool rising, uint8_t hyst)
+{
+    if (buf == NULL)
+        return -1;
+
+    int thr = (int)threshold;
+    int lo  = thr - (int)hyst; if (lo < 0)   lo = 0;
+    int hi  = thr + (int)hyst; if (hi > 255) hi = 255;
+
+    bool armed = false;
+    for (uint32_t i = 0; i <= (uint32_t)max_start; i++) {
+        int s = (int)buf[i];
+        if (rising) {
+            if (!armed) {
+                if (s <= lo) armed = true;
+            } else if (s >= thr) {
+                return (int)i;
+            }
+        } else {
+            if (!armed) {
+                if (s >= hi) armed = true;
+            } else if (s <= thr) {
+                return (int)i;
+            }
+        }
+    }
+    return -1;
+}

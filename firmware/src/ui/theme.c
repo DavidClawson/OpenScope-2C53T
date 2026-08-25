@@ -13,8 +13,8 @@ static const theme_t themes[THEME_COUNT] = {
     /* THEME_DARK_BLUE — original FNIRSI default */
     {
         .background      = 0x0000, /* black */
-        .grid            = 0x18C3, /* dark gray */
-        .grid_center     = 0x3186, /* lighter gray */
+        .grid            = 0x39E7, /* mid gray (raised for readability) */
+        .grid_center     = 0x5AEB, /* lighter gray */
         .ch1             = 0xFFE0, /* yellow */
         .ch2             = 0x07FF, /* cyan */
         .trigger         = 0x07E0, /* green */
@@ -30,8 +30,8 @@ static const theme_t themes[THEME_COUNT] = {
     /* THEME_CLASSIC_GREEN — Tektronix-style */
     {
         .background      = 0x0000, /* black */
-        .grid            = 0x0320, /* dark green */
-        .grid_center     = 0x0540, /* medium green */
+        .grid            = 0x0480, /* dark green (raised for readability) */
+        .grid_center     = 0x06C0, /* medium green */
         .ch1             = 0x07E0, /* bright green */
         .ch2             = 0x07FF, /* cyan */
         .trigger         = 0xFFE0, /* yellow */
@@ -64,8 +64,8 @@ static const theme_t themes[THEME_COUNT] = {
     /* THEME_NIGHT_RED — dark environment */
     {
         .background      = 0x0000, /* black */
-        .grid            = 0x3000, /* dark red */
-        .grid_center     = 0x5000, /* medium dark red */
+        .grid            = 0x5800, /* dark red (raised for readability) */
+        .grid_center     = 0x7800, /* medium dark red */
         .ch1             = 0xF800, /* red */
         .ch2             = 0xFBE0, /* orange */
         .trigger         = 0xF800, /* red */

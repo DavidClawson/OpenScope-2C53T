@@ -2625,6 +2625,31 @@ static void cmd_fpga_scope_graticule(const char *args)
     }
 }
 
+/* `fpga scope softtrig [on|off|toggle]` — the software display trigger. When on
+ * (default), each frame's render window starts on the trigger source's level
+ * crossing so a periodic trace stands still; off free-runs from sample 0 (the
+ * old "dancing"). Handy for A/B on the bench: off = dances, on = locked. */
+static void cmd_fpga_scope_softtrig(const char *args)
+{
+    while (*args == ' ') args++;
+    scope_state_t *ss = scope_state_get();
+
+    if (strncmp(args, "on", 2) == 0)          ss->soft_trigger = true;
+    else if (strncmp(args, "off", 3) == 0)    ss->soft_trigger = false;
+    else if (strncmp(args, "toggle", 6) == 0) ss->soft_trigger = !ss->soft_trigger;
+    else if (*args) {
+        usb_send_str("usage: fpga scope softtrig [on|off|toggle]\r\n");
+        return;
+    }
+
+    usb_debug_printf("softtrig: %s   (level=%d px, %s, src=CH%d)\r\n",
+                     ss->soft_trigger ? "ON (trace locked to trigger)"
+                                      : "off (free-run / dancing)",
+                     (int)ss->trigger.level,
+                     ss->trigger.edge == TRIG_RISING ? "rising" : "falling",
+                     ss->trigger.source == TRIG_SRC_CH2 ? 2 : 1);
+}
+
 static void cmd_fpga_scope_freq(const char *args)
 {
     uint32_t reps = 10;
@@ -6717,6 +6742,8 @@ static const shell_cmd_t shell_cmds[] = {
           "fpga scope freq [n]             Run the shipped frequency estimator n times, with diagnostics\r\n"),
     CMD_A("fpga scope graticule", cmd_fpga_scope_graticule, 0,
           "fpga scope graticule [auto|true|toggle]  Trace at true volts/div vs autofit-to-band\r\n"),
+    CMD_A("fpga scope softtrig", cmd_fpga_scope_softtrig, 0,
+          "fpga scope softtrig [on|off|toggle]      Lock trace to trigger crossing vs free-run\r\n"),
     CMD_V("settings", cmd_settings, SC_EXACT,
           "settings                        Persistence status: bound, load result, writes, failures\r\n"),
     CMD_A("fpga scope timebase", cmd_fpga_scope_timebase, 0,

@@ -810,6 +810,58 @@ static void draw_channel_fixed(const volatile uint8_t *buf, uint16_t color,
     }
 }
 
+/* Software display trigger — the fix for the free-running "dancing" trace.
+ *
+ * Real scopes hold a waveform still by starting every sweep at the same point
+ * on the wave: the moment the signal crosses a chosen level going a chosen
+ * direction. We do that in software here — find that crossing in the trigger
+ * source buffer and return its index, so the render window starts on a
+ * repeatable phase. The offset is applied to BOTH channels so they stay
+ * time-aligned. It never distorts the samples: it only chooses WHERE the drawn
+ * window begins, so amplitude and frequency are untouched.
+ *
+ * 0 = free-run (disabled, NULL buffer, or no crossing found). "No crossing" is
+ * the normal outcome when the level sits outside the signal, and free-running
+ * then is exactly AUTO-mode behaviour.
+ */
+static uint16_t scope_soft_trigger_offset(const scope_state_t *ss,
+                                          const volatile uint8_t *src_buf)
+{
+    if (!ss->soft_trigger || src_buf == NULL)
+        return 0;
+
+    uint16_t draw_n = (LCD_WIDTH < 512u) ? (uint16_t)LCD_WIDTH : 512u;
+    if (FPGA_ADC_BUF_SIZE <= draw_n)
+        return 0;                                 /* no slack to slide */
+    uint16_t max_start = (uint16_t)(FPGA_ADC_BUF_SIZE - draw_n);
+
+    /* Auto-level: base the threshold at the SIGNAL'S OWN midline, not a fixed
+     * ADC 128. The capture is frequently not centred (e.g. mean 84, range
+     * 34..136 on the bench), so a fixed 128 sits up near the peak where the
+     * slope is shallow and the crossing jitters frame to frame — which reads on
+     * screen as the trace dancing. The 50% level (min+max)/2 is the steep
+     * mid-slope crossing and locks cleanly regardless of DC offset;
+     * trigger.level then shifts it up/down from there (true-scale slope:
+     * SCOPE_H px == 256 counts). */
+    uint8_t mn = 255, mx = 0;
+    for (uint16_t i = 0; i < FPGA_ADC_BUF_SIZE; i++) {
+        uint8_t s = src_buf[i];
+        if (s < mn) mn = s;
+        if (s > mx) mx = s;
+    }
+    if ((int)mx - (int)mn < 8)
+        return 0;                                 /* ~flat: nothing to lock to */
+
+    int thr = ((int)mn + (int)mx) / 2 + ((int)ss->trigger.level * 256) / SCOPE_H;
+    if (thr < (int)mn + 1) thr = (int)mn + 1;     /* keep it inside the signal */
+    if (thr > (int)mx - 1) thr = (int)mx - 1;
+
+    int idx = scope_measure_find_trigger((const uint8_t *)src_buf, max_start,
+                                         (uint8_t)thr,
+                                         ss->trigger.edge == TRIG_RISING, 3u);
+    return (idx > 0) ? (uint16_t)idx : 0u;
+}
+
 void draw_demo_waveform(uint32_t frame)
 {
     const theme_t *th = theme_get();
@@ -845,6 +897,16 @@ void draw_demo_waveform(uint32_t frame)
         bool c1 = ss->ch1.enabled && ch1_buf != NULL;
         bool c2 = ss->ch2.enabled && ch2_buf != NULL;
 
+        /* Software trigger: find the phase on the trigger SOURCE channel and
+         * shift both channels' render windows by the same offset, so the trace
+         * stops free-running (dancing) while staying time-aligned. */
+        const volatile uint8_t *trig_src =
+            (ss->trigger.source == TRIG_SRC_CH2 && ch2_buf) ? ch2_buf :
+            (ch1_buf ? ch1_buf : ch2_buf);
+        uint16_t toff = scope_soft_trigger_offset(ss, trig_src);
+        const volatile uint8_t *b1 = (ch1_buf != NULL) ? ch1_buf + toff : NULL;
+        const volatile uint8_t *b2 = (ch2_buf != NULL) ? ch2_buf + toff : NULL;
+
         /* True-scale only where the range has a real volts/div; a NONE range
          * always autofits (its grid has no volts meaning to honour). Default
          * ss->true_scale == false keeps every build on autofit unless toggled
@@ -853,16 +915,16 @@ void draw_demo_waveform(uint32_t frame)
         bool fx2 = ss->true_scale && scope_cal_true_scale_ok(2u, ss->ch2.vdiv_idx);
 
         if (c1 && c2) {
-            if (fx1) draw_channel_fixed(ch1_buf, th->ch1, SCOPE_TOP, SCOPE_MID_Y - 1, 128u);
-            else     draw_channel_autofit(ch1_buf, th->ch1, SCOPE_TOP, SCOPE_MID_Y - 1);
-            if (fx2) draw_channel_fixed(ch2_buf, th->ch2, SCOPE_MID_Y + 1, SCOPE_BOT, 128u);
-            else     draw_channel_autofit(ch2_buf, th->ch2, SCOPE_MID_Y + 1, SCOPE_BOT);
+            if (fx1) draw_channel_fixed(b1, th->ch1, SCOPE_TOP, SCOPE_MID_Y - 1, 128u);
+            else     draw_channel_autofit(b1, th->ch1, SCOPE_TOP, SCOPE_MID_Y - 1);
+            if (fx2) draw_channel_fixed(b2, th->ch2, SCOPE_MID_Y + 1, SCOPE_BOT, 128u);
+            else     draw_channel_autofit(b2, th->ch2, SCOPE_MID_Y + 1, SCOPE_BOT);
         } else if (c1) {
-            if (fx1) draw_channel_fixed(ch1_buf, th->ch1, SCOPE_TOP, SCOPE_BOT, 128u);
-            else     draw_channel_autofit(ch1_buf, th->ch1, SCOPE_TOP, SCOPE_BOT);
+            if (fx1) draw_channel_fixed(b1, th->ch1, SCOPE_TOP, SCOPE_BOT, 128u);
+            else     draw_channel_autofit(b1, th->ch1, SCOPE_TOP, SCOPE_BOT);
         } else if (c2) {
-            if (fx2) draw_channel_fixed(ch2_buf, th->ch2, SCOPE_TOP, SCOPE_BOT, 128u);
-            else     draw_channel_autofit(ch2_buf, th->ch2, SCOPE_TOP, SCOPE_BOT);
+            if (fx2) draw_channel_fixed(b2, th->ch2, SCOPE_TOP, SCOPE_BOT, 128u);
+            else     draw_channel_autofit(b2, th->ch2, SCOPE_TOP, SCOPE_BOT);
         }
         return;
     }
@@ -1823,6 +1885,19 @@ void draw_scope_live_frame(void)
     const volatile uint8_t *b2 = fpga_get_ch2_buf();
 
     if (!b1 || !b2) return;
+
+    /* Software trigger — THIS is the per-frame live path, so this is where the
+     * free-run "dancing" actually happens. Shift both channels' render window
+     * to the trigger source's crossing, using the same helper and offset as the
+     * full path (draw_demo_waveform) so the two renderers stay in phase. Both
+     * channels shift by the same amount to stay time-aligned. */
+    {
+        const volatile uint8_t *trig_src =
+            (ss->trigger.source == TRIG_SRC_CH2) ? b2 : b1;
+        uint16_t toff = scope_soft_trigger_offset(ss, trig_src);
+        b1 += toff;
+        b2 += toff;
+    }
 
     /* The live band stops where fixed furniture begins: the debug strip
      * (debug builds) or the measurement badge rows. Those regions repaint

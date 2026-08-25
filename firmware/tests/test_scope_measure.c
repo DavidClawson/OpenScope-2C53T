@@ -443,6 +443,77 @@ static int test_edge_timing(void)
     return bad;
 }
 
+/* Software display trigger (the "dancing trace" fix). The property that matters
+ * is phase-lock: two records of the same wave at different phase, each aligned
+ * to its own trigger, must overlay. Plus a hysteresis control — without it the
+ * trigger fires on threshold noise and the returned phase walks. */
+static int test_soft_trigger(void)
+{
+    int bad = 0;
+    uint8_t buf[N];
+
+    /* Clean sine about 128, starting at the midline heading DOWN (phase pi).
+     * First RISING crossing of 128 is half a period in (256/2 = 128). */
+    gen_sine_f(buf, N, 256.0f, 50.0f, 128.0f, (float)M_PI);
+    int idx = scope_measure_find_trigger(buf, N - 320, 128, true, 3);
+    bad += chk("rising: crossing found", idx > 0);
+    bad += chk("rising: near half period", idx >= 118 && idx <= 138);
+    if (idx > 0)
+        bad += chk("rising: really crosses up at idx",
+                   buf[idx] >= 128 && buf[idx - 1] < 128);
+
+    /* Falling edge on the same record fires almost immediately (starts at 128
+     * heading down). */
+    int idxf = scope_measure_find_trigger(buf, N - 320, 128, false, 3);
+    bad += chk("falling: crossing found", idxf >= 0);
+    if (idxf > 0)
+        bad += chk("falling: really crosses down at idx",
+                   buf[idxf] <= 128 && buf[idxf - 1] > 128);
+
+    /* No qualifying crossing -> -1 (level above the peak; and a flat record). */
+    bad += chk("level above peak -> -1",
+               scope_measure_find_trigger(buf, N - 320, 250, true, 3) == -1);
+    gen_const(buf, N, 128);
+    bad += chk("flat record -> -1",
+               scope_measure_find_trigger(buf, N - 320, 128, true, 3) == -1);
+
+    /* PHASE LOCK: same wave, two different start phases. After aligning each to
+     * its own trigger index, the windows must overlay sample-for-sample. */
+    uint8_t wa[N], wb[N];
+    gen_sine_f(wa, N, 200.0f, 50.0f, 128.0f, 0.0f);
+    gen_sine_f(wb, N, 200.0f, 50.0f, 128.0f, 1.3f);
+    int ia = scope_measure_find_trigger(wa, N - 320, 128, true, 3);
+    int ib = scope_measure_find_trigger(wb, N - 320, 128, true, 3);
+    bad += chk("phaselock: both trigger", ia > 0 && ib > 0);
+    if (ia > 0 && ib > 0) {
+        int maxd = 0;
+        for (int x = 0; x < 180; x++) {
+            int d = (int)wa[ia + x] - (int)wb[ib + x];
+            if (d < 0) d = -d;
+            if (d > maxd) maxd = d;
+        }
+        bad += chk("phaselock: aligned windows overlay (<=6)", maxd <= 6);
+    }
+
+    /* HYSTERESIS CONTROL: threshold noise (127/129 straddle) ahead of the real
+     * rising ramp. With hysteresis the trigger waits for the genuine edge in
+     * [50,90]; with hyst=0 it fires on the first straddle sample near index 1.
+     * If those two are NOT different, hysteresis is doing nothing and this test
+     * would pass a broken implementation. */
+    for (int i = 0; i < N; i++) {
+        if (i < 50)      buf[i] = (i & 1) ? 129 : 127;
+        else if (i < 91) buf[i] = (uint8_t)(110 + (i - 50)); /* ramp 110->150 */
+        else             buf[i] = 150;
+    }
+    int idx_h = scope_measure_find_trigger(buf, N - 320, 128, true, 3);
+    int idx_0 = scope_measure_find_trigger(buf, N - 320, 128, true, 0);
+    bad += chk("hyst: fires on real edge, not noise", idx_h >= 50 && idx_h <= 90);
+    bad += chk("hyst CONTROL: hyst=0 fires early on noise", idx_0 >= 0 && idx_0 < 10);
+    bad += chk("hyst CONTROL: the two differ", idx_h != idx_0);
+
+    return bad;
+}
+
 int main(int argc, char **argv)
 {
     g_verbose = (argc > 1 && strcmp(argv[1], "-v") == 0);
@@ -477,6 +548,12 @@ int main(int argc, char **argv)
     printf("   %d failed check(s) -> %s\n\n", edge_bad,
            edge_bad == 0 ? "PASS" : "*** FAIL ***");
     if (edge_bad) fail = 1;
+
+    printf("software display trigger (stop the free-run dancing)\n");
+    int trig_bad = test_soft_trigger();
+    printf("   %d failed check(s) -> %s\n\n", trig_bad,
+           trig_bad == 0 ? "PASS" : "*** FAIL ***");
+    if (trig_bad) fail = 1;
 
     printf(fail ? "RESULT: FAIL\n" : "RESULT: PASS\n");
     return fail;

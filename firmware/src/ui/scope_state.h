@@ -149,6 +149,14 @@ typedef struct {
      * DC-offset trace sits off-screen, which is honest but surprising. Toggle
      * on the bench with `fpga scope graticule true`. */
     bool            true_scale;
+
+    /* Software display trigger. true (default) = each frame's render window is
+     * shifted to start on the trigger source's level crossing (edge/level/source
+     * from `trigger`), so a periodic trace stands still instead of free-running.
+     * false = draw from sample 0 every frame (the old free-run "dancing"). When
+     * no crossing is found the render free-runs regardless, which is AUTO-mode
+     * behaviour. Toggle on the bench with `fpga scope softtrig`. */
+    bool            soft_trigger;
 } scope_state_t;
 
 /* ═══════════════════════════════════════════════════════════════════
