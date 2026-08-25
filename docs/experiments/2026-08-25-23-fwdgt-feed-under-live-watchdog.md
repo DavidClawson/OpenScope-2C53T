@@ -1,4 +1,4 @@
-# EXP-20 — fw_loader's per-page FWDGT feed survives a real install under a live 3.0 s watchdog
+# EXP-23 — fw_loader's per-page FWDGT feed survives a real install under a live 3.0 s watchdog
 
 - **Date:** 2026-08-25
 - **Unit:** bench unit #2 (Stlkv)

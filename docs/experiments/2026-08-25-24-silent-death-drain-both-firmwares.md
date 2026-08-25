@@ -1,4 +1,4 @@
-# EXP-21 — a transfer that goes silent >3 s arms the drain; both firmwares, both branches
+# EXP-24 — a transfer that goes silent >3 s arms the drain; both firmwares, both branches
 
 - **Date:** 2026-08-25
 - **Unit:** bench unit #2 (Stlkv)
