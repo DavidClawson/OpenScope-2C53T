@@ -62,7 +62,7 @@ __all__ = [
     # transports
     "Transport", "SerialTransport", "ScriptedTransport",
     # devices
-    "Scope", "Siggen", "SiggenStatus", "PwmStatus", "OpreadStats",
+    "Scope", "Siggen", "JDS6600", "SiggenStatus", "PwmStatus", "OpreadStats",
     # parsing
     "parse_dump", "parse_opread_stats", "parse_siggen_status", "parse_pwm_status",
     # analysis
@@ -788,6 +788,163 @@ class Siggen:
         result: dict = dict(out)
         result["pwm"] = pwm if pwm is not None else PwmStatus(False)
         return result
+
+
+# ---------------------------------------------------------------------------
+# JDS6600 — the trusted bench signal generator (register protocol)
+# ---------------------------------------------------------------------------
+
+class JDS6600:
+    """Driver for the JDS6600 DDS generator over its USB CH340 serial link.
+
+    A DIFFERENT INSTRUMENT from :class:`Siggen`.  Siggen is the ESP32 sketch
+    whose loop free-runs at 0.825x commanded (EXP-14); this is a commercial DDS
+    generator that is **crystal-accurate in FREQUENCY** (it confirmed timebase
+    0x0E to 0.1 %, EXP-20) but only ~1-2 % in amplitude.  Use it as the
+    frequency reference; treat its amplitude as good-but-not-metrology.
+
+    Protocol: ASCII registers, ``:rNN=`` to read, ``:wNN=value.`` to write.
+    **The trailing period is part of the documented write format**
+    (https://sigrok.org/wiki/Joy-IT_JDS6600) and this class always emits it.  A
+    write WITHOUT it returns ``:ok`` and is silently ignored on the amplitude
+    register -- precisely the "stable plausible wrong number" this module exists
+    to prevent (EXP-20 lost a whole sweep to it) -- so every setter here READS
+    BACK and raises if the value did not take.
+
+    Registers: 20 output enable (a,b); 21/22 waveform; 23/24 frequency
+    (Hz x 100, unit field 0); 25/26 amplitude (mV, == Vpp); 27/28 offset
+    (1000 = 0 V, observed 1 LSB = 10 mV -- verify per firmware); 29/30 duty
+    (0.1 %).
+    """
+
+    #: Known-good waveform codes.  Codes >= 2 are firmware-dependent on the
+    #: JDS6600 family; pass a raw int when in doubt.
+    WAVE = {"sine": 0, "square": 1, "triangle": 2, "tri": 2}
+
+    def __init__(self, port: Optional[str] = "/dev/ttyUSB0", baud: int = 115200,
+                 settle: float = 0.35, ser=None):
+        if ser is not None:
+            self._ser = ser                      # injected fake, for tests
+        else:
+            import serial  # lazy, like SerialTransport, so bare `import bench` works
+            if isinstance(port, str) and any(c in port for c in "*?["):
+                port = _autodetect((port,))
+            try:
+                self._ser = serial.Serial(port, baud, timeout=0.6)
+            except Exception as exc:
+                raise BenchError("cannot open JDS6600 on %s: %s" % (port, exc)) from exc
+        self.port = port
+        self._settle = settle
+        time.sleep(0.2)
+        self._ser.reset_input_buffer()
+
+    def close(self) -> None:
+        try:
+            self._ser.close()
+        except Exception:
+            pass
+
+    # -- raw register I/O --------------------------------------------------
+
+    def _txn(self, line: str, wait: float = 0.3) -> str:
+        self._ser.reset_input_buffer()
+        self._ser.write((line + "\r\n").encode())
+        time.sleep(wait)
+        return self._ser.read(4000).decode("ascii", "replace")
+
+    def read_raw(self, reg: int) -> str:
+        """Value string after ``:rNN=`` (trailing '.' stripped).
+
+        Register numbers are two digits in the JDS6600 protocol: a read of
+        register 0 is queried and echoed as ``:r00=``, not ``:r0=``.  Padding
+        to two digits is a no-op for the 20-30 range but is what makes the
+        single-digit registers (waveform-independent config) parse at all."""
+        pfx = ":r%02d=" % reg
+        resp = self._txn(pfx)
+        for ln in resp.splitlines():
+            if ln.startswith(pfx):
+                return ln[len(pfx):].rstrip(".").strip()
+        raise BenchError("JDS6600 r%d: no '%s' line in reply:\n%s"
+                         % (reg, pfx, resp.strip() or "<empty>"))
+
+    def write_raw(self, reg: int, value: str) -> None:
+        """Send ``:wNN=value.`` (period ALWAYS emitted) and confirm ``:ok``."""
+        resp = self._txn(":w%02d=%s." % (reg, value))
+        if ":ok" not in resp.lower():
+            raise BenchError("JDS6600 w%d=%s: no :ok in reply:\n%s"
+                             % (reg, value, resp.strip() or "<empty>"))
+        time.sleep(self._settle)
+
+    def _write_checked(self, reg: int, value: str, expect: str) -> str:
+        """Write, then read back; raise if the register did not become ``expect``.
+
+        This is the whole point of the class -- a JDS6600 answers ``:ok`` to a
+        write it then ignores (missing period, out-of-range value), so success
+        is proven by readback, never by the ack."""
+        self.write_raw(reg, value)
+        got = self.read_raw(reg)
+        if got != expect:
+            raise BenchError(
+                "JDS6600 w%d: wrote %s, reads back %r (expected %r) -- the write "
+                "did not take (trailing period? value out of range?)"
+                % (reg, value, got, expect))
+        return got
+
+    @staticmethod
+    def _ch_reg(base1: int, ch: int) -> int:
+        if ch not in (1, 2):
+            raise BenchError("JDS6600 channel must be 1 or 2, got %r" % (ch,))
+        return base1 + (ch - 1)
+
+    # -- setters (channel is 1 or 2) --------------------------------------
+
+    def output(self, ch1: bool, ch2: bool) -> None:
+        """Enable/disable the two channel outputs (written as ``a,b``)."""
+        s = "%d,%d" % (int(bool(ch1)), int(bool(ch2)))
+        self._write_checked(20, s, s)
+
+    def waveform(self, wave, ch: int = 1) -> None:
+        code = self.WAVE.get(wave, wave) if isinstance(wave, str) else wave
+        self._write_checked(self._ch_reg(21, ch), str(code), str(code))
+
+    def freq(self, hz: float, ch: int = 1) -> None:
+        """Frequency in Hz (crystal-accurate).  Encoded as Hz x 100, unit 0."""
+        s = "%d,0" % int(round(hz * 100))
+        self._write_checked(self._ch_reg(23, ch), s, s)
+
+    def amp(self, vpp: float, ch: int = 1) -> None:
+        """Amplitude in volts peak-to-peak (JDS 'amplitude' == Vpp, EXP-20)."""
+        mv = int(round(vpp * 1000))
+        if not 0 <= mv <= 20000:
+            raise BenchError("JDS6600 amp %.3f V out of 0..20 Vpp" % vpp)
+        self._write_checked(self._ch_reg(25, ch), str(mv), str(mv))
+
+    def offset(self, volts: float, ch: int = 1) -> None:
+        """DC offset in volts.  Register 1000 = 0 V, observed 1 LSB = 10 mV."""
+        code = int(round(1000 + volts * 100))
+        if not 0 <= code <= 2000:
+            raise BenchError("JDS6600 offset %.2f V out of range" % volts)
+        self._write_checked(self._ch_reg(27, ch), str(code), str(code))
+
+    def duty(self, pct: float, ch: int = 1) -> None:
+        s = str(int(round(pct * 10)))
+        self._write_checked(self._ch_reg(29, ch), s, s)
+
+    # -- state save / restore ---------------------------------------------
+
+    _STATE_REGS = (20, 21, 22, 23, 24, 25, 26, 27, 28, 29, 30)
+
+    def state(self) -> dict:
+        """Snapshot the key registers as ``{reg: raw_string}`` for :meth:`restore`."""
+        return {r: self.read_raw(r) for r in self._STATE_REGS}
+
+    def restore(self, snap: dict) -> None:
+        """Put a snapshot back; register 20 (output) written LAST."""
+        for r in self._STATE_REGS:
+            if r != 20 and r in snap:
+                self._write_checked(r, snap[r], snap[r])
+        if 20 in snap:
+            self._write_checked(20, snap[20], snap[20])
 
 
 # ---------------------------------------------------------------------------

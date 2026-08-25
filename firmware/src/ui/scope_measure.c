@@ -122,7 +122,10 @@ void scope_measure_record(const uint8_t *samples, uint16_t n,
 
         int state = 0;              /* 0 = below/unknown, 1 = above */
         uint16_t rising = 0;
-        uint16_t first_rise = 0, last_rise = 0;
+        uint16_t first_rise = 0, last_rise = 0;   /* integer, for duty span   */
+        float    pc_first = 0.0f, pc_last = 0.0f; /* interpolated crossings   */
+        uint16_t pc_count = 0;                    /* genuine crossings only   */
+        uint16_t prev_s2 = (uint16_t)(2u * (uint16_t)samples[0]);
 
         for (uint16_t i = 0; i < n; i++) {
             uint16_t s2 = (uint16_t)(2u * (uint16_t)samples[i]);
@@ -132,11 +135,37 @@ void scope_measure_record(const uint8_t *samples, uint16_t n,
                     if (rising == 0) first_rise = i;
                     last_rise = i;
                     rising++;
+
+                    /* Sub-sample crossing (issue #26). The integer index i is
+                     * the first sample AT OR ABOVE hi_thr2 — rounded up to the
+                     * sample after the true crossing. That sub-sample bias is
+                     * the same on the first and last edge only on AVERAGE; with
+                     * few periods in the window it does not cancel, the span
+                     * reads short, and the period reads low (Stlkv measured
+                     * -0.4% at ~40 periods worsening to -5% at ~6, #18). Locate
+                     * where the signal actually crossed hi_thr2 between i-1 and
+                     * i and use that fractional index for the span instead.
+                     *
+                     * A rise at i == 0 is the record starting mid-high-phase,
+                     * not a threshold crossing: it still counts as a cycle
+                     * (rising++ above) but it must NOT anchor the period, or its
+                     * integer index would be mixed with interpolated ones and
+                     * reintroduce a whole-sample error. Every rise at i > 0 is a
+                     * genuine crossing (the previous sample was below hi_thr2). */
+                    if (i > 0u && s2 > prev_s2) {
+                        float frac = (float)((int)hi_thr2 - (int)prev_s2) /
+                                     (float)((int)s2 - (int)prev_s2);
+                        float cross = (float)(i - 1u) + frac;
+                        if (pc_count == 0u) pc_first = cross;
+                        pc_last = cross;
+                        pc_count++;
+                    }
                 }
             } else {
                 if (s2 <= lo_thr2)
                     state = 0;
             }
+            prev_s2 = s2;
         }
 
         /* One crossing only tells you where the record happened to start
@@ -152,8 +181,16 @@ void scope_measure_record(const uint8_t *samples, uint16_t n,
              * unit this instrument can honestly quote. Multiply by the
              * sample interval to get seconds the day a timebase exists;
              * that one multiplication is the entire wiring job. */
-            out->period_samples = (float)(last_rise - first_rise) /
-                                  (float)(rising - 1u);
+            if (pc_count >= 2u) {
+                out->period_samples = (pc_last - pc_first) /
+                                      (float)(pc_count - 1u);
+            } else {
+                /* Fewer than two genuine crossings (e.g. a record that starts
+                 * high and holds one clean cycle) — fall back to the integer
+                 * span, which is all the information present. */
+                out->period_samples = (float)(last_rise - first_rise) /
+                                      (float)(rising - 1u);
+            }
             out->period_valid = (out->period_samples > 0.0f);
 
             /* ── Duty, recomputed over WHOLE CYCLES ────────────────────

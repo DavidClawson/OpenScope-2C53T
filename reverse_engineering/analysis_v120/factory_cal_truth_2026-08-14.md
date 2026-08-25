@@ -567,3 +567,34 @@ Every table in §5, §6 and §8 is reproducible from `archive/` contents alone. 
 most important input is `archive/factory_iap_bootloader_2C53T.bin` at offset `0x6000`,
 length `0x800`; parent sha256
 `0c9ec7d642d233ea09c87274867ad3460e1dbec37c4332f7edb8f836175630c7`.
+
+---
+
+## Correction 2026-08-25 (maksidze, issue #28): the 30-entry dimension is 3 banks × 10 ranges, and the word packing is per-channel
+
+§5.1 above described two 30-word halves split by "value regime" and called them
+A-low/A-high/B-low/B-high. maksidze's static decode of the stock runtime refines
+this with proof from the code paths that actually *consume* the table:
+
+- **`FUN_080018A4` (flash `0x080088A4`, CH1) writes DAC1 `0x40007408`;
+  `FUN_08001A58` (CH2) writes `TMR13_C1DT 0x40001C34`.** These are the CH1 (PA4)
+  and CH2 (PA6/TMR13) vertical-offset references — confirmed on the bench this
+  month (CH2 readout is dead until TMR13 is armed via `trig2 raw`).
+- So the two RAM families are **CH1 vs CH2**, and in the packed flash word
+  **`bits 0..15 = CH1`, `bits 16..31 = CH2`**. The `0x78` stride between the two
+  30-word blocks is **baseline endpoint → upper endpoint**, NOT channel→channel.
+- Each 30-entry block is **3 calibration banks × 10 vertical ranges**, the bank
+  chosen at runtime by timebase/mode:
+  - bank 0: `timebase >= 5`
+  - bank 1: `timebase < 5 && (timebase == 4 || mode == 3)`
+  - bank 2: `timebase < 4 && mode != 3`
+- Minimum correct model for any factory-cal restore is therefore
+  **`[channel][bank][range][endpoint]`** (2×3×10×2), not one `(low,high)` pair
+  per range. Page offsets, `i = bank*10 + range`:
+  `baseline_word = LE32(page + 0x038 + 4*i)`, `upper_word = LE32(page + 0x0B0 + 4*i)`.
+- The two words at page `0x128`/`0x12C` remain unmapped.
+
+Bank selection is **proven by the code**; the electrical reason for three regimes
+is not yet measured — a queued bench test (hold range+position, cross the 4/5
+timebase boundary and the mode==3 path, watch DAC1/TMR13 jump to the predicted
+bank). Full decode: issue #28, maksidze, 2026-08-25.

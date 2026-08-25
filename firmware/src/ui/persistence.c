@@ -73,6 +73,13 @@ void persist_add_trace(const uint16_t *y_values, uint8_t color_index)
     }
 }
 
+void persist_add_point(uint16_t x, uint16_t y)
+{
+    if (!persist_buf || x >= PERSIST_WIDTH || y >= PERSIST_HEIGHT)
+        return;
+    persist_buf[y * PERSIST_WIDTH + x] = 255;
+}
+
 void persist_decay(void)
 {
     uint8_t decay;
