@@ -244,6 +244,26 @@ static bool readonly_regions_intact(const uint8_t *snap)
     return true;
 }
 
+/* A hostile table: the real geometry with the one region the settings writer
+ * targets swapped for a read-only stand-in.
+ *
+ * Derived from flash_region_table[] rather than written out by hand. The
+ * hand-written version indexed four entries by designated initializer and
+ * passed a literal count of 4, so inserting a region mid-enum left a zeroed
+ * hole at the inserted id and made the array longer than the count claimed:
+ * the structural self-check then refused the table, and two tests that have
+ * nothing to do with the new region failed for a reason neither of them is
+ * about. FLASH_REGION_FWCACHE did exactly that. Copying the real table keeps
+ * these fixtures honest whatever the enum grows next. */
+static const flash_region_t *hostile_settings_readonly(void)
+{
+    static flash_region_t hostile[FLASH_REGION_COUNT];
+    memcpy(hostile, flash_region_table, sizeof hostile);
+    hostile[FLASH_REGION_SETTINGS].name = "factory";
+    hostile[FLASH_REGION_SETTINGS].kind = FLASH_REGION_KIND_READONLY;
+    return hostile;
+}
+
 /* A factory-fresh device with the region layer bound. */
 static void fresh_device(void)
 {
@@ -573,20 +593,15 @@ static void test_completely_corrupt_log_falls_back_to_defaults(void)
  * and the layer is the only thing standing in the way. */
 static void test_writer_cannot_reach_a_readonly_region(void)
 {
-    /* A table where the id config.c writes to (FLASH_REGION_SETTINGS == 3)
-     * is READ-ONLY and holds "factory calibration". */
-    static const flash_region_t hostile[] = {
-        [FLASH_REGION_SYSVOL]   = { "sysvol",   0x000000u, 0x010000u, FLASH_REGION_KIND_READONLY },
-        [FLASH_REGION_USERVOL]  = { "uservol",  0x010000u, 0x010000u, FLASH_REGION_KIND_READONLY },
-        [FLASH_REGION_USER_CAL] = { "usercal",  0x020000u, 0x010000u, FLASH_REGION_KIND_APPEND   },
-        [FLASH_REGION_SETTINGS] = { "factory",  0x030000u, 0x010000u, FLASH_REGION_KIND_READONLY },
-    };
-
+    /* A table where the id config.c writes to (FLASH_REGION_SETTINGS) is
+     * READ-ONLY and holds "factory calibration". */
     model_blank();
-    memset(model.mem + 0x030000u, 0x5A, 301);      /* irreplaceable content in a read-only region */
+    /* irreplaceable content in a read-only region */
+    memset(model.mem + settings_start(), 0x5A, 301);
     config_persist_stats_reset();
     model_counters_reset();
-    CHECK(flash_regions_init_table(&model_backend, hostile, 4) == FLASH_REGION_OK,
+    CHECK(flash_regions_init_table(&model_backend, hostile_settings_readonly(),
+                                   FLASH_REGION_COUNT) == FLASH_REGION_OK,
           "hostile table should be structurally valid");
     uint8_t *snap = snapshot();
 
@@ -600,7 +615,8 @@ static void test_writer_cannot_reach_a_readonly_region(void)
     CHECK(model.programs == 0, "%u programs reached read-only flash", model.programs);
     CHECK(model.erases == 0, "%u erases reached read-only flash", model.erases);
     CHECK(unchanged_since(snap), "read-only flash content changed");
-    CHECK(model.mem[0x030000u] == 0x5A && model.mem[0x030000u + 300] == 0x5A,
+    CHECK(model.mem[settings_start()] == 0x5A &&
+          model.mem[settings_start() + 300] == 0x5A,
           "the stand-in factory calibration was damaged");
     CHECK(config_persist_stats()->saves_failed == 5, "refusals not counted");
     CHECK(config_persist_stats()->last_save_status == (int32_t)FLASH_REGION_ERR_READ_ONLY,
@@ -925,15 +941,10 @@ static void test_corrupt_record_cannot_produce_an_out_of_range_index(void)
  * ~100 ms of SPI2 traffic per keypress achieving nothing. */
 static void test_a_failing_write_is_not_retried_on_every_press(void)
 {
-    static const flash_region_t hostile[] = {
-        [FLASH_REGION_SYSVOL]   = { "sysvol",   0x000000u, 0x010000u, FLASH_REGION_KIND_READONLY },
-        [FLASH_REGION_USERVOL]  = { "uservol",  0x010000u, 0x010000u, FLASH_REGION_KIND_READONLY },
-        [FLASH_REGION_USER_CAL] = { "usercal",  0x020000u, 0x010000u, FLASH_REGION_KIND_APPEND   },
-        [FLASH_REGION_SETTINGS] = { "factory",  0x030000u, 0x010000u, FLASH_REGION_KIND_READONLY },
-    };
     model_blank();
     config_persist_stats_reset();
-    CHECK(flash_regions_init_table(&model_backend, hostile, 4) == FLASH_REGION_OK,
+    CHECK(flash_regions_init_table(&model_backend, hostile_settings_readonly(),
+                                   FLASH_REGION_COUNT) == FLASH_REGION_OK,
           "hostile table should be structurally valid");
 
     theme_init(THEME_DARK_BLUE);

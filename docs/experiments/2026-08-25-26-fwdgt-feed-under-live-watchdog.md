@@ -1,6 +1,10 @@
-# EXP-23 — fw_loader's per-page FWDGT feed survives a real install under a live 3.0 s watchdog
+# EXP-26 — fw_loader's per-page FWDGT feed survives a real install under a live 3.0 s watchdog
 
 - **Date:** 2026-08-25
+- **Renumbered 2026-08-26:** was EXP-23 on this branch (and EXP-20 before
+  `629c701`). `main` took 23 for the config-transport bisect runbook the same
+  day, so this one moved rather than upstream's. PR #29's comment of
+  2026-08-25 cites the old filename.
 - **Unit:** bench unit #2 (Stlkv)
 - **Build:** `make guest-coldtrace` at commit `8c8778e`, **plus one local
   bench-only edit**: the `#ifndef GUEST_BUILD` guard around `watchdog_init()`
