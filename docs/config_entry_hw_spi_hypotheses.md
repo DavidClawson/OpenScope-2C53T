@@ -289,6 +289,21 @@ watched. The only instrument that can see it is the **logic analyzer (H7)**.
 
 ### H7 — the logic-analyzer session (the path forward)
 
+**PART 1 DONE 2026-08-26 (EXP-31) — our HW-SPI wire is byte-perfect; the wall is
+NOT on the SPI3 bus.** Captured our failing hardware-SPI config on an anchored-open
+port (IDCODE `0x0120681B`), fired on demand from the CDC shell via the new
+`fpga busreacquire` + `fpga reinit … pe k7` path on `guest-bringup` (config port
+pristine, CDC alive). On the wire: correct bytes (`05 → 12 → 15 → 3B` + real Gowin
+`.fs` payload), clean mode-3 SCK at 444 kHz, correct CS-split framing with the
+intended 100 ms gaps; the FPGA drives MISO the whole time but streams *only* its
+status word `00039020` — no config ack, no error, no state change; `EDIT_MODE(bit7)`
+stays clear. **Every SPI3 transport defect is now excluded at the physical layer**,
+matching apicula: an auto-booted GW1N ignores CONFIG_ENABLE on the wire alone.
+Capture `reverse_engineering/captures/h7_hwspi_config_openport_2026-08-26.sr`;
+writeup `docs/experiments/2026-08-26-31-h7-hwspi-config-wire-view.md`. **Remaining
+H7 work = PART 2: the off-SPI3 co-signal (RECONFIG_N route) — probe non-SPI channels
+during a stock boot.**
+
 Not "confirm the gapless edges" — the real value is **catching a co-signal the
 issue-#18 capture (SPI3-only) was blind to.** Plan:
 

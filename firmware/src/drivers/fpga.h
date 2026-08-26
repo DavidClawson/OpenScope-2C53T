@@ -740,6 +740,16 @@ void fpga_set_active(bool active);
 void fpga_bus_release(void);
 
 /*
+ * Re-acquire the SPI3 bus after fpga_bus_release() (H7, 2026-08-26).
+ * Restores PB3(SCK)/PB5(MOSI) to SPI3 AF, PB4(MISO) to input pull-up (stock's
+ * defined idle level), PB6(CS) to GPIO output HIGH, re-programs CTRL1/CTRL2/SPE,
+ * stages PC6 HIGH, and clears fpga.bus_released. Lets a guest-bringup boot (which
+ * leaves the FPGA config port pristine + CDC alive) hand the bus back to the MCU
+ * so `fpga reinit` can drive the failing hardware-SPI prelude on demand.
+ */
+void fpga_spi3_bus_reacquire(void);
+
+/*
  * Cooperative acquisition pause (Step 0b, bench plan 2026-08-14).
  *
  * Parks the continuous warm-handoff/coldtrace acquisition task BETWEEN CS

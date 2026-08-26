@@ -5675,6 +5675,65 @@ void fpga_bus_release(void)
     GPIOC->scr = PC6_MASK;                       /* PC6 HIGH */
 }
 
+/* Re-acquire the SPI3 bus the MCU released in fpga_bus_release() — a faithful
+ * mirror of the fpga_init() SPI3 pin+peripheral block (fpga.c ~4740-4966), so a
+ * guest-bringup boot (config port left pristine, no acq flooding, CDC alive) can
+ * hand the bus back and let `fpga reinit` drive the failing hardware-SPI prelude
+ * on demand for an LA capture (H7). No-op if the bus was never released. */
+void fpga_spi3_bus_reacquire(void)
+{
+    gpio_init_type gpio_cfg;
+    gpio_default_para_init(&gpio_cfg);
+
+    crm_periph_clock_enable(CRM_SPI3_PERIPH_CLOCK, TRUE);
+
+    /* PB3 = SPI3_SCK: AF push-pull, 10MHz slew (matches stock, H6). */
+    gpio_cfg.gpio_pins = GPIO_PINS_3;
+    gpio_cfg.gpio_mode = GPIO_MODE_MUX;
+    gpio_cfg.gpio_out_type = GPIO_OUTPUT_PUSH_PULL;
+    gpio_cfg.gpio_drive_strength = GPIO_DRIVE_STRENGTH_STRONGER;
+    gpio_init(GPIOB, &gpio_cfg);
+
+    /* PB4 = SPI3_MISO: input PULL-UP — stock's defined idle level (Exp E), so an
+     * undriven line reads a clean 0xFF instead of floating noise on the capture. */
+    gpio_cfg.gpio_pins = GPIO_PINS_4;
+    gpio_cfg.gpio_mode = GPIO_MODE_INPUT;
+    gpio_cfg.gpio_pull = GPIO_PULL_UP;
+    gpio_init(GPIOB, &gpio_cfg);
+    gpio_cfg.gpio_pull = GPIO_PULL_NONE;   /* restore shared struct default */
+
+    /* PB5 = SPI3_MOSI: AF push-pull. */
+    gpio_cfg.gpio_pins = GPIO_PINS_5;
+    gpio_cfg.gpio_mode = GPIO_MODE_MUX;
+    gpio_cfg.gpio_out_type = GPIO_OUTPUT_PUSH_PULL;
+    gpio_cfg.gpio_drive_strength = GPIO_DRIVE_STRENGTH_STRONGER;
+    gpio_init(GPIOB, &gpio_cfg);
+
+    /* PB6 = SPI3_CS: GPIO output push-pull, idle HIGH. */
+    gpio_cfg.gpio_pins = GPIO_PINS_6;
+    gpio_cfg.gpio_mode = GPIO_MODE_OUTPUT;
+    gpio_cfg.gpio_out_type = GPIO_OUTPUT_PUSH_PULL;
+    gpio_cfg.gpio_drive_strength = GPIO_DRIVE_STRENGTH_STRONGER;
+    gpio_init(GPIOB, &gpio_cfg);
+    SPI3_CS_DEASSERT();
+
+    /* PC6 = FPGA SPI enable HIGH (bus_release already staged it, re-assert). */
+    gpio_cfg.gpio_pins = GPIO_PINS_6;
+    gpio_cfg.gpio_mode = GPIO_MODE_OUTPUT;
+    gpio_cfg.gpio_out_type = GPIO_OUTPUT_PUSH_PULL;
+    gpio_cfg.gpio_drive_strength = GPIO_DRIVE_STRENGTH_STRONGER;
+    gpio_init(GPIOC, &gpio_cfg);
+    GPIOC->scr = PC6_MASK;
+
+    /* SPI3 CTRL1/CTRL2/SPE — identical to fpga_init (mode 3, master, /2, SW CS). */
+    FPGA_SPI->ctrl1 = (1 << 0) | (1 << 1) | (1 << 2) | (1 << 8) | (1 << 9);
+    FPGA_SPI->ctrl2 = 0x03;
+    FPGA_SPI->ctrl1 |= (1 << 6);   /* SPE = 1 */
+
+    fpga.bus_released = false;
+    fpga.spi3_active  = true;
+}
+
 void fpga_scope_reinit(void)
 {
 #if FPGA_WARM_HANDOFF_TEST

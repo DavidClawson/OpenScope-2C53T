@@ -2959,6 +2959,15 @@ static void cmd_fpga_bus_release(void)
     usb_send_str("  ESP32 may now drive SSPI. Re-flash/power-cycle to reclaim.\r\n");
 }
 
+static void cmd_fpga_bus_reacquire(void)
+{
+    fpga_spi3_bus_reacquire();
+    usb_send_str("SPI3 bus REACQUIRED by MCU.\r\n");
+    usb_send_str("  PB3(SCK)/PB5(MOSI) -> SPI3 AF, PB6(CS) -> GPIO out HIGH.\r\n");
+    usb_send_str("  PB4(MISO) input pull-up (stock idle), PC6=HIGH, SPE=1.\r\n");
+    usb_send_str("  Config port left untouched. `fpga reinit` now drives it.\r\n");
+}
+
 static void cmd_fpga_stock_diag(void)
 {
     fpga_stock_diag_print();
@@ -6263,6 +6272,14 @@ static void cmd_fpga_dbgarm(const char *args)
  * Defaults match the stock-captured timing: br=0 (/2), gap=100ms, close=600ms. */
 static void cmd_fpga_reinit(const char *args)
 {
+    /* guest-bringup leaves the bus released (PB3/5/6 Hi-Z, SPE off). reinit means
+     * "take the bus and configure", so reacquire it first — otherwise the whole
+     * handshake clocks into a dead wire (H7, 2026-08-26). No-op on other builds. */
+    if (fpga.bus_released) {
+        fpga_spi3_bus_reacquire();
+        usb_send_str("reinit: bus was released -> reacquired SPI3 (PB3/4/5/6, SPE)\r\n");
+    }
+
     fpga_cfg_seq_opts_t opt = {
         .upload_br = 0, .prelude_gap_ms = 100, .post_close_ms = 600, .arm_pb11 = 1,
         .reset_port = 0, .reset_pin = 0, .reset_low_ms = 10,
@@ -6692,6 +6709,8 @@ static const shell_cmd_t shell_cmds[] = {
 #endif
     CMD_V("fpga busrelease", cmd_fpga_bus_release, SC_EXACT,
           "fpga busrelease                 Hand SPI3 to an external master (one-way, EXPERIMENTAL)\r\n"),
+    CMD_V("fpga busreacquire", cmd_fpga_bus_reacquire, SC_EXACT,
+          "fpga busreacquire               Take SPI3 back after busrelease (H7 capture prep)\r\n"),
     CMD_V("fpga stock diag", cmd_fpga_stock_diag, SC_EXACT,
           "fpga stock diag                Show stock-state bench shadow\r\n"),
     CMD_V("fpga stock clear", cmd_fpga_stock_clear, SC_EXACT,
