@@ -5873,6 +5873,23 @@ static void cmd_spi3_gowin(void)
                  "  The /2 pass is expected to be garbage; it is the negative control.\r\n");
 }
 
+/* spi3 edgecap [reps] — EXP-37 LA edge-capture. Emits [reps] identical 0x15
+ * CONFIG_ENABLE frames over AF hardware-SPI3 (/256), a 60ms gap, then [reps] over
+ * GPIO bit-bang — same pins/rate/frame, drive type the only variable. Isolated
+ * frames; does NOT configure. Arm sigrok (D0=SCK/D1=MISO/D2=MOSI/D3=CS) BEFORE
+ * running, then diff the two bursts. */
+static void cmd_spi3_edgecap(const char *args)
+{
+    uint32_t reps = 16;
+    if (args && *args) reps = (uint32_t)strtoul(args, NULL, 0);
+    if (reps == 0 || reps > 255) reps = 16;
+    usb_debug_printf("edgecap: %lu AF 0x15 frames (/256), 60ms gap, %lu bit-bang 0x15 frames\r\n",
+                     reps, reps);
+    usb_send_str("  emitting now — capture window should be armed on D0=SCK D1=MISO D2=MOSI D3=CS\r\n");
+    fpga_edgecap_15((uint8_t)reps);
+    usb_send_str("edgecap: done. AF burst | gap | GPIO burst are in the capture.\r\n");
+}
+
 /* ─── fpga selftest ────────────────────────────────────────────────────────
  *
  * ONE precondition table, printed before an experiment, so the instrument is
@@ -6884,6 +6901,8 @@ static const shell_cmd_t shell_cmds[] = {
           "spi3 armtest [pb11|pc6]         Pulse FPGA run/re-arm pin, re-cfg, acqread\r\n"),
     CMD_V("spi3 gowin", cmd_spi3_gowin, SC_EXACT | SC_SPI3,
           "spi3 gowin                      Read+decode Gowin ID/USERCODE/STATUS regs\r\n"),
+    CMD_A("spi3 edgecap", cmd_spi3_edgecap, SC_SPI3,
+          "spi3 edgecap [reps]             EXP-37: AF vs bit-bang 0x15 frames for LA edge-diff\r\n"),
     CMD_A("spi3 scopetest", cmd_spi3_scopetest, SC_SPI3,
           "spi3 scopetest [bank]           Full scope seq: USART cfg->PC0->0x04/05 read\r\n"),
     CMD_V("spi3 acqtest", cmd_spi3_acqtest, SC_EXACT | SC_SPI3,

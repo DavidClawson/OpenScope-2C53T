@@ -5771,6 +5771,62 @@ void fpga_spi3_bus_reacquire(void)
     fpga.spi3_active  = true;
 }
 
+/* EXP-37 (2026-08-26) — LA edge-capture rig. Emits the SAME logical CONFIG_ENABLE
+ * frame (CS-high dummy 0x00, CS-low 0x15 0x00) N times over AF hardware-SPI3 at
+ * /256, then a gap, then N times over GPIO bit-bang at ~470kHz. Same pins, same
+ * rate, same frame — drive type (AF vs GPIO push-pull) is the ONLY variable.
+ * Arm sigrok (D0=SCK/D1=MISO/D2=MOSI/D3=CS) and diff the two bursts.
+ *
+ * NOTE: this fires ISOLATED 0x15 frames — no 05/12 prelude — so it does NOT
+ * configure anything; it exists purely to photograph the SCK/MOSI/CS waveform of
+ * a 0x15 frame under each drive. `reps` frames per group, ~2ms apart; 60ms gap
+ * between the AF and GPIO bursts as a marker. */
+void fpga_edgecap_15(uint8_t reps)
+{
+    gpio_init_type gpio_cfg;
+    gpio_default_para_init(&gpio_cfg);
+    if (reps == 0) reps = 16;
+
+    if (fpga.bus_released) fpga_spi3_bus_reacquire();
+
+    /* --- Group 1: AF-driven 0x15 frames at /256 (~470kHz, decodable) --- */
+    spi3_set_br(7);
+    for (uint8_t i = 0; i < reps; i++) {
+        (void)spi3_xfer(0x00);          /* CS-HIGH dummy (mirrors bb_cmd16) */
+        SPI3_CS_ASSERT();
+        (void)spi3_xfer(0x15);
+        (void)spi3_xfer(0x00);
+        SPI3_CS_DEASSERT();
+        fpga_scope_delay_ms(2);
+    }
+
+    fpga_scope_delay_ms(60);            /* gap marker between the two bursts */
+
+    /* --- Switch PB3(SCK)/PB5(MOSI)/PB6(CS) to GPIO push-pull, PB4 floating in,
+     *     mode-3 idle (SCK/CS high, MOSI low) — exactly the bit-bang posture. */
+    FPGA_SPI->ctrl1 &= ~(1u << 6);      /* SPE off: peripheral releases the pins */
+    GPIOB->scr = BB_SCK | BB_CS;
+    GPIOB->clr = BB_MOSI;
+    gpio_cfg.gpio_pins = BB_SCK | BB_MOSI | BB_CS;
+    gpio_cfg.gpio_mode = GPIO_MODE_OUTPUT;
+    gpio_cfg.gpio_out_type = GPIO_OUTPUT_PUSH_PULL;
+    gpio_cfg.gpio_drive_strength = GPIO_DRIVE_STRENGTH_STRONGER;
+    gpio_init(GPIOB, &gpio_cfg);
+    gpio_cfg.gpio_pins = BB_MISO;
+    gpio_cfg.gpio_mode = GPIO_MODE_INPUT;
+    gpio_cfg.gpio_pull = GPIO_PULL_NONE;
+    gpio_init(GPIOB, &gpio_cfg);
+
+    /* --- Group 2: GPIO bit-bang 0x15 frames (rate = FPGA_BB_HALF_DELAY) --- */
+    for (uint8_t i = 0; i < reps; i++) {
+        bb_cmd16(0x15, 0x00);           /* CS-HIGH dummy + CS↓ 15 00 CS↑ */
+        fpga_scope_delay_ms(2);
+    }
+
+    /* Restore AF bus so later shell commands work. */
+    fpga_spi3_bus_reacquire();
+}
+
 void fpga_scope_reinit(void)
 {
 #if FPGA_WARM_HANDOFF_TEST

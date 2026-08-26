@@ -6,7 +6,14 @@
   `make guest-bringup-bb-slow` (`FPGA_BB_HALF_DELAY=250` → bit-bang SCK ~470 kHz,
   `fpga configbb`).
 - **Status:** CLOSED — the cleanest isolation yet. **Rate is excluded on both
-  transports; GPIO drive configures where AF drive walls, at a matched ~470 kHz.**
+  transports; GPIO drive configures where AF drive walls.**
+- **⚠ RATE CORRECTION (EXP-37, same day):** the slowed bit-bang here
+  (`FPGA_BB_HALF_DELAY=250`) was measured on the LA at **34 kHz, not ~470 kHz**
+  (the estimate below was ~14× off). The config RESULT stands (slowed GPIO
+  bit-bang configures, DONE_FINAL `0003F460`); only the "matched ~470 kHz"
+  phrasing is wrong. Correct reading: GPIO configures at 34 kHz and at fast rate
+  (~MHz); AF walls at 470 kHz / 1.9 MHz / 60 MHz — GPIO's working range straddles
+  AF's failing range, so outcome tracks DRIVE TYPE, not rate. See EXP-37 §2.
 
 ## 1. Question
 

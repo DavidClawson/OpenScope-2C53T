@@ -768,6 +768,12 @@ void fpga_bus_release(void);
  */
 void fpga_spi3_bus_reacquire(void);
 
+/* EXP-37: LA edge-capture. Emits `reps` (0 => 16) identical 0x15 CONFIG_ENABLE
+ * frames over AF hardware-SPI3 (/256), a 60ms gap, then `reps` over GPIO bit-bang
+ * — same pins/rate/frame, drive type the only variable. Isolated frames; does NOT
+ * configure. Arm sigrok (D0=SCK/D1=MISO/D2=MOSI/D3=CS) before calling. */
+void fpga_edgecap_15(uint8_t reps);
+
 /*
  * Cooperative acquisition pause (Step 0b, bench plan 2026-08-14).
  *
