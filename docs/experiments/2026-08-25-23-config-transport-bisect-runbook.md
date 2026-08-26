@@ -233,11 +233,21 @@ Two hard limits of the Blue Pill rig, both found while preparing this runbook:
   `dev_plan_2026-08-21.md`) — whichever suspect wins here is the leading
   candidate for that mechanism too.
 
-## Appendix A — ready firmware gap knob (do NOT apply blind; bench-validate)
+## Appendix A — firmware gap knob (IMPLEMENTED 2026-08-25)
 
-For the on-2C53T gapless-vs-gapped payload test only. Mirror of
-`FPGA_BB_HALF_DELAY`, defaulting to 0 = byte-unchanged from the shipping path,
-inserted into the `0x3B` upload loop of `fpga_spi3_config_sequence`:
+**Status: landed.** `FPGA_HW_UPLOAD_GAP_NOPS` is in `spi3_pump_h2_record`
+(`fpga.c`), default 0 = the gapless double-buffered pump, byte-identical to the
+shipping path (which bit-bangs and never calls this). Build+read via
+`make guest-configA-gap GAP=<n>` — overlay forced on, so the `CFG:… D…` verdict
+reads off the LCD without CDC (this is a hardware-SPI build; those lose USB CDC).
+Sweep `GAP` for ~1.4 µs at 240 MHz (~100–350). `D1` ⇒ the gapless FIFO stream
+was the wall and a gapped hardware-SPI path configures ~100× faster than
+bit-bang; `D0` ⇒ gaps are not the variable either. The RAM ceiling that blocked
+every `guest-config*` link (352 B over on `main` alone) was cleared by
+`6880b96` (X-Y snapshot buffers → heap), cherry-picked ahead of #29.
+
+Original sketch, for reference. Mirror of `FPGA_BB_HALF_DELAY`, defaulting to
+0 = byte-unchanged from the shipping path, inserted into the `0x3B` upload loop:
 
 ```c
 /* Inter-byte gap for the hardware-SPI 0x3B payload, to test the BIS-3

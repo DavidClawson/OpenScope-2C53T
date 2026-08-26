@@ -558,7 +558,7 @@ $(BUILD_DIR)/test_redraw_gate: tests/test_redraw_gate.c src/ui/redraw_gate.h | $
 test-redraw-gate: $(BUILD_DIR)/test_redraw_gate
 	$<
 
-.PHONY: all clean disasm size renode soak-test soak-quick flash flash-dfu bootloader flash-bootloader flash-all guest guest-warmtest guest-usart-silent emu test-meter-data test-meter-auto test-meter-voltage-wave test-fpga-meter-plan test-stock-meter-literals test-meter test-scope-measure test-scope-cal test-scope-timebase test-fw-loader test-scope-freq test-redraw-gate test-config-persist guest-persist guest-caldump guest-coldtrace-slow guest-coldtrace-la guest-debugclk fpga-alt-header
+.PHONY: all clean disasm size renode soak-test soak-quick flash flash-dfu bootloader flash-bootloader flash-all guest guest-warmtest guest-usart-silent emu test-meter-data test-meter-auto test-meter-voltage-wave test-fpga-meter-plan test-stock-meter-literals test-meter test-scope-measure test-scope-cal test-scope-timebase test-fw-loader test-scope-freq test-redraw-gate test-config-persist guest-persist guest-caldump guest-coldtrace-slow guest-coldtrace-la guest-debugclk guest-configA-gap guest-configA-csdummy guest-configA-gapless fpga-alt-header
 
 # ═══════════════════════════════════════════════════════════════════════════
 # BENCH / EXPERIMENT IMAGE INDEX                          (index added 2026-08-13)
@@ -726,6 +726,43 @@ guest-configA: CFLAGS += -DGUEST_BUILD -DFPGA_USART_SILENT_SCOPE=1 -DFPGA_CONFIG
 guest-configA: LDSCRIPT = ld/at32f403a_guest.ld
 guest-configA: clean all
 
+# BIS-3 gap test (2026-08-25): guest-configA PLUS an inter-byte gap inserted into
+# the hardware-SPI 0x3B payload (FPGA_HW_UPLOAD_GAP_NOPS). Tests the ONE transport
+# difference byte-fidelity was blind to: hardware SPI streams the payload gaplessly
+# from the FIFO, bit-bang leaves ~1.4 us inter-byte gaps. Clock RATE was already
+# excluded (2026-06-12 BR sweep /16==/2); this varies the GAP on the same fast
+# clock. Overlay forced on so the CFG: line is readable WITHOUT CDC (this is a
+# hardware-SPI build; per the build-type correlation those lose USB CDC).
+#
+# Sweep GAP for ~1.4 us at 240 MHz (~100-350): `make guest-configA-gap GAP=200`.
+# READ: LCD overlay CFG: line. D1 = DONE_FINAL set -> the gapless FIFO stream was
+# the wall, and a gapped hardware-SPI path configures ~100x faster than bit-bang.
+# D0 = gaps are not the variable either; weight shifts back to prelude/state.
+# Zero-hardware arm of the config-transport bisect (runs on unit #1, no Tang Nano).
+GAP ?= 200
+guest-configA-gap: CFLAGS += -DGUEST_BUILD -DFPGA_USART_SILENT_SCOPE=1 -DFPGA_CONFIG_A=1 -DFPGA_HW_UPLOAD_GAP_NOPS=$(GAP) -DSCOPE_DEBUG_OVERLAY
+guest-configA-gap: LDSCRIPT = ld/at32f403a_guest.ld
+guest-configA-gap: clean all
+
+# H2 (the converged lead — docs/config_entry_hw_spi_hypotheses.md): re-add
+# bb_cmd16's / stock's CS-HIGH 0x00 dummy byte before each HW-SPI prelude frame.
+# READ: LCD overlay CFG: line on a COLD FPGA (unplug/replug), anchor A0.
+#   D1 / A-1 / demo trace gone => the removed CS-high clocks WERE the error.
+#   D0 A0                      => H2 walls; fall back to -settle / -idle / LA.
+guest-configA-csdummy: CFLAGS += -DGUEST_BUILD -DFPGA_USART_SILENT_SCOPE=1 -DFPGA_CONFIG_A=1 -DFPGA_HW_CS_DUMMY=1 -DSCOPE_DEBUG_OVERLAY
+guest-configA-csdummy: LDSCRIPT = ld/at32f403a_guest.ld
+guest-configA-csdummy: clean all
+
+# Post-H6 suspect (a): clock the mode-0 prelude frames (05/12/15) GAPLESSLY —
+# no mid-frame SCK idle between each command byte and its 0x00 — matching both
+# working transports (bit-bang + stock). LAST untested firmware axis after H1-H6.
+# READ: LCD overlay CFG: line on a COLD FPGA (unplug/replug), anchor A0.
+#   D1 / A-1 / demo trace gone => the intra-frame polled stall WAS the wall.
+#   D0 A0                      => cadence excluded; firmware exhausted => LA (H7).
+guest-configA-gapless: CFLAGS += -DGUEST_BUILD -DFPGA_USART_SILENT_SCOPE=1 -DFPGA_CONFIG_A=1 -DFPGA_HW_PRELUDE_GAPLESS=1 -DSCOPE_DEBUG_OVERLAY
+guest-configA-gapless: LDSCRIPT = ld/at32f403a_guest.ld
+guest-configA-gapless: clean all
+
 # 0x05-omit test (2026-08-13, issue #18): the HARDWARE-SPI config path with the
 # 0x05 ERASE_SRAM frame skipped, so the prelude is 0x12 INIT_ADDR -> 0x15
 # CONFIG_ENABLE. This is the single-variable experiment maksidze proposed and we
@@ -742,7 +779,7 @@ guest-configA: clean all
 # bit-banging 115,638 bytes. 00039020 / D0 = unchanged wall -> 0x05 is not the
 # variable and the bit-bang/AF difference is what matters.
 # [LIVE] Other arm of the same open bisect: hardware-SPI with 0x05 omitted.
-guest-config05: CFLAGS += -DGUEST_BUILD -DFPGA_USART_SILENT_SCOPE=1 -DFPGA_OMIT_05=1
+guest-config05: CFLAGS += -DGUEST_BUILD -DFPGA_USART_SILENT_SCOPE=1 -DFPGA_OMIT_05=1 -DSCOPE_DEBUG_OVERLAY
 guest-config05: LDSCRIPT = ld/at32f403a_guest.ld
 guest-config05: clean all
 

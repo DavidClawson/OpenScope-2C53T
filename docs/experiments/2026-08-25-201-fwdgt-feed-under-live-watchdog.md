@@ -1,10 +1,14 @@
-# EXP-26 — fw_loader's per-page FWDGT feed survives a real install under a live 3.0 s watchdog
+# EXP-201 — fw_loader's per-page FWDGT feed survives a real install under a live 3.0 s watchdog
 
 - **Date:** 2026-08-25
-- **Renumbered 2026-08-26:** was EXP-23 on this branch (and EXP-20 before
-  `629c701`). `main` took 23 for the config-transport bisect runbook the same
-  day, so this one moved rather than upstream's. PR #29's comment of
-  2026-08-25 cites the old filename.
+- **Numbering:** unit #2's writeups take the **201+ block** from 2026-08-26 on,
+  so the two benches stop colliding. This one was EXP-20, then EXP-23, then
+  EXP-26 within a day — each time `main` had already published an experiment
+  under the number, because upstream generates them faster than we do. A
+  reserved block ends the race; the sequence below 200 stays upstream's.
+  PR #29's comment of 2026-08-25 cites this file as `…-23-…`. The earlier
+  EXP-25 (tSHSL replicated on unit #2) keeps its number: it is cited and
+  answered in the thread, and it does not collide.
 - **Unit:** bench unit #2 (Stlkv)
 - **Build:** `make guest-coldtrace` at commit `8c8778e`, **plus one local
   bench-only edit**: the `#ifndef GUEST_BUILD` guard around `watchdog_init()`

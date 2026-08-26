@@ -1,12 +1,11 @@
-# EXP-27 — a transfer that goes silent >3 s arms the drain; both firmwares, both branches
+# EXP-202 — a transfer that goes silent >3 s arms the drain; both firmwares, both branches
 
 - **Date:** 2026-08-25
-- **Renumbered 2026-08-26:** was EXP-24 on this branch (and EXP-21 before
-  `629c701`). `main` took 24 for the software display trigger the same day, so
-  this one moved rather than upstream's. PR #29's comment of 2026-08-25 cites
-  the old filename.
+- **Numbering:** unit #2's writeups take the **201+ block** from 2026-08-26 on
+  (see EXP-201 for why). This one was EXP-21, then EXP-24, then EXP-27. PR
+  #29's comment of 2026-08-25 cites this file as `…-24-…`.
 - **Unit:** bench unit #2 (Stlkv)
-- **Build:** this firmware: `make guest-coldtrace` at `8c8778e` (+ EXP-26's
+- **Build:** this firmware: `make guest-coldtrace` at `8c8778e` (+ EXP-201's
   bench-only watchdog edit, irrelevant here); 2C23T port: its commit `008e36e`,
   131 148 B, crc32 `1624067E`.
 - **Status:** CONFIRMED

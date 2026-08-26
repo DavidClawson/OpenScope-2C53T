@@ -1,6 +1,8 @@
-# EXP-28 — the `cdc-fwload` + `main` merge boots on unit #2; cal backup and the heap-allocated X-Y buffers measured
+# EXP-203 — the `cdc-fwload` + `main` merge boots on unit #2; cal backup and the heap-allocated X-Y buffers measured
 
 - **Date:** 2026-08-26
+- **Numbering:** unit #2's writeups take the **201+ block** (see EXP-201). This
+  one was briefly EXP-28, which `main` had already taken.
 - **Unit:** bench unit #2 (Stlkv), factory bootloader
 - **Build:** `make guest-coldtrace` at merge commit `ea932d7` (this branch merged with `main` at `857802e`). 604 336 B, crc32 `BB211CBE`, sha256 `2f9698fe…`, banner `Build: Aug 26 2026 08:34:54`.
 - **Status:** CONFIRMED
