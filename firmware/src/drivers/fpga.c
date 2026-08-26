@@ -4276,8 +4276,14 @@ uint8_t fpga_spi3_config_sequence(const fpga_cfg_seq_opts_t *opt)
      * garbage at /2, clean at /256), so the prelude/close/status all run at
      * opt->cmd_br here; only the bulk 0x3B payload switches to opt->upload_br
      * and then returns to cmd_br for the close/status reads. Restored to /2 at
-     * function exit. */
-    spi3_set_br(opt->cmd_br);
+     * function exit.
+     *
+     * single_br (EXP-34): skip this entirely. spi3_set_br() toggles SPE off/on,
+     * and this call fires BEFORE the 05/12/15 prelude — the one pre-0x15 SPE
+     * glitch stock never produces (stock sets BR once at SPI3 init and leaves
+     * it). Leaving it out runs the whole transaction at the caller's divider
+     * (fpga_init leaves /2 = stock's rate) with SPE untouched through 0x15. */
+    if (!opt->single_br) spi3_set_br(opt->cmd_br);
 
     /* Re-capture SPI3 CTRL1 HERE, at the config-frame clock (S1 overlay field).
      * fpga_init captured it at Step-4 init time (always the /2 default), so a
@@ -4491,14 +4497,14 @@ uint8_t fpga_spi3_config_sequence(const fpga_cfg_seq_opts_t *opt)
      * opened by 15 00; modes 0/1 open a fresh CS frame here. */
     if (opt->prelude_frame_mode != 2) SPI3_CS_ASSERT();
     fpga.init_hs[10] = spi3_xfer(0x3B);  /* open upload */
-    spi3_set_br(opt->upload_br);
+    if (!opt->single_br) spi3_set_br(opt->upload_br);  /* EXP-34: keep SPE untouched */
     fpga.h2_rx_00_count = 0;
     fpga.h2_rx_ff_count = 0;
     fpga.h2_rx_other_count = 0;
     fpga.h2_close_rx_len = 0;
     memset((void *)fpga.h2_close_rx, 0, sizeof(fpga.h2_close_rx));
     spi3_pump_h2_record(fpga_h2_cal_table, FPGA_H2_CAL_TABLE_SIZE);
-    spi3_set_br(opt->cmd_br);            /* back to command clock for close/status */
+    if (!opt->single_br) spi3_set_br(opt->cmd_br);  /* EXP-34: keep SPE untouched */
     /* Trailing clocks: Gowin runs the CRC-check / DONE / wakeup on CCLK cycles
      * AFTER the last config byte. Our sequence sent none; rosenrot00's working
      * 2C23T SPI loader clocks ~200 dummy 0x00 here. Stay inside the upload CS

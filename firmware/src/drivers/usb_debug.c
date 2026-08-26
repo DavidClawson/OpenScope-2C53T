@@ -6349,10 +6349,13 @@ static void cmd_fpga_reinit(const char *args)
                                          * with reset-port c (a..e) above */
                 opt.cmd_br = (uint32_t)strtoul(tk + 1, NULL, 0);
             } else if (tk[0] == 's') {  /* strap-hold: s2[h|l]=PD2, sd[h|l]=PD12+13
-                                         * (default HIGH = stock). GPIO-audit lead. */
+                                         * (default HIGH = stock). GPIO-audit lead.
+                                         * sb = single-BR (EXP-34): no SPE toggle
+                                         * through the config transaction. */
                 uint8_t lvl = (tk[2] == 'l') ? 2 : 1;
                 if (tk[1] == '2')      opt.strap_pd2    = lvl;
                 else if (tk[1] == 'd') opt.strap_pd1213 = lvl;
+                else if (tk[1] == 'b') opt.single_br    = 1;
             } else if (tk[0] == 't' && tk[1] == 'c') {  /* tc<N> = trailing clocks
                                          * after bitstream, before 0x3A (sibling ~200) */
                 opt.trailing_clocks = (uint16_t)strtoul(tk + 2, NULL, 0);
@@ -6384,6 +6387,8 @@ static void cmd_fpga_reinit(const char *args)
     if (opt.trailing_clocks)
         usb_debug_printf("reinit: trailing_clocks=%u (after bitstream, before 0x3A)\r\n",
                          opt.trailing_clocks);
+    if (opt.single_br)
+        usb_send_str("reinit: SINGLE-BR — no spi3_set_br/SPE toggle through the transaction (EXP-34)\r\n");
 
     uint8_t close = fpga_spi3_config_sequence(&opt);
 

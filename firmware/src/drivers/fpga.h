@@ -594,6 +594,19 @@ typedef struct {
                                *     answer is the prelude, not the bit-bang — and we
                                *     get a config path ~100x faster than bit-banging
                                *     115,638 bytes. Applies to all prelude_frame_modes. */
+    uint8_t  single_br;       /* 1 = NEVER call spi3_set_br() during the config
+                               *     transaction (prelude → upload → close), so SPE
+                               *     is toggled ZERO times between fpga_init and the
+                               *     0x3A close — exactly like stock, which sets BR
+                               *     once at init and never touches it again. The
+                               *     sequence runs at whatever divider the caller
+                               *     already programmed (fpga_init leaves /2). Our
+                               *     normal path toggles SPE via spi3_set_br() BEFORE
+                               *     the prelude (fpga.c:4280) — a pre-0x15 glitch
+                               *     stock never produces (EXP-34). Post-0x15
+                               *     measurement reads (probe_edit, 0x41 STATUS) still
+                               *     switch to /256; they are downstream of the wall
+                               *     and cannot retro-cause it. */
 } fpga_cfg_seq_opts_t;
 
 /* Run the full SPI3 config handshake. Returns the 0x3A close status byte
