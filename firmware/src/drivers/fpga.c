@@ -410,6 +410,23 @@ static void fpga_h2_record_close_rx(uint8_t rx_byte)
     }
 }
 
+/* Inter-byte gap for the hardware-SPI 0x3B payload — the BIS-3 test knob.
+ *
+ * The rig dry-run (2026-08-20) measured the one transport difference byte-level
+ * fidelity was blind to: hardware SPI streams the payload GAPLESSLY from the
+ * FIFO, while the bit-bang loader that broke the wall leaves ~1.4 us inter-byte
+ * gaps. Clock RATE was already excluded (2026-06-12 BR sweep: /16 == /2), so
+ * this varies the GAP instead, on the same fast intra-byte clock. When
+ * FPGA_HW_UPLOAD_GAP_NOPS > 0 the pump below fully completes each byte, then
+ * idles that many nops before the next — reproducing the bit-bang gap on the
+ * hardware-SPI transport. 0 = the gapless double-buffered pump, byte-identical
+ * to the shipping path (which is bit-bang anyway and never calls this). Size a
+ * value to ~1.4 us at 240 MHz via `make guest-configA-gap GAP=<n>`. Appendix A
+ * of docs/experiments/2026-08-25-23-config-transport-bisect-runbook.md. */
+#ifndef FPGA_HW_UPLOAD_GAP_NOPS
+#define FPGA_HW_UPLOAD_GAP_NOPS 0
+#endif
+
 /* Double-buffered SPI3 pump for the H2 upload (per GitHub issue #11, Lanchon).
  *
  * spi3_xfer()'s order — wait TDBE, write, wait RDBF, read — only queues
@@ -440,6 +457,27 @@ static void spi3_pump_h2_record(const uint8_t *tx, uint32_t n)
         return;
 
     volatile uint32_t timeout;
+
+#if FPGA_HW_UPLOAD_GAP_NOPS > 0
+    /* Gapped path (BIS-3): complete each byte, then idle the bus. Sacrifices
+     * the double-buffer on purpose — the gap IS the variable under test. */
+    for (uint32_t i = 0; i < n; i++) {
+        timeout = 100000;
+        while (!(FPGA_SPI->sts & SPI_I2S_TDBE_FLAG)) {
+            if (--timeout == 0) break;
+        }
+        FPGA_SPI->dt = tx[i];
+
+        timeout = 100000;
+        while (!(FPGA_SPI->sts & SPI_I2S_RDBF_FLAG)) {
+            if (--timeout == 0) break;
+        }
+        fpga_h2_record_body_rx((timeout == 0) ? 0xFF : (uint8_t)FPGA_SPI->dt);
+
+        for (volatile uint32_t g = 0; g < FPGA_HW_UPLOAD_GAP_NOPS; g++)
+            __asm__ volatile("nop");
+    }
+#else
     uint32_t i = 0;
 
     timeout = 100000;
@@ -467,6 +505,7 @@ static void spi3_pump_h2_record(const uint8_t *tx, uint32_t n)
         if (--timeout == 0) break;
     }
     fpga_h2_record_body_rx((timeout == 0) ? 0xFF : (uint8_t)FPGA_SPI->dt);
+#endif
 }
 
 /* Set the SPI3 baud-rate divider (CTRL1 bits [5:3]) on the fly. Requires
