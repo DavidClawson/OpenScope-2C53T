@@ -749,7 +749,7 @@ guest-configA-gap: clean all
 # bit-banging 115,638 bytes. 00039020 / D0 = unchanged wall -> 0x05 is not the
 # variable and the bit-bang/AF difference is what matters.
 # [LIVE] Other arm of the same open bisect: hardware-SPI with 0x05 omitted.
-guest-config05: CFLAGS += -DGUEST_BUILD -DFPGA_USART_SILENT_SCOPE=1 -DFPGA_OMIT_05=1
+guest-config05: CFLAGS += -DGUEST_BUILD -DFPGA_USART_SILENT_SCOPE=1 -DFPGA_OMIT_05=1 -DSCOPE_DEBUG_OVERLAY
 guest-config05: LDSCRIPT = ld/at32f403a_guest.ld
 guest-config05: clean all
 
