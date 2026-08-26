@@ -390,6 +390,44 @@ static uint8_t spi3_xfer(uint8_t tx_byte)
     return (uint8_t)FPGA_SPI->dt;
 }
 
+/* [H-gapless] Send two bytes back-to-back with NO inter-byte stall — the
+ * double-buffered idiom of spi3_pump_h2_record(), for a 2-byte prelude frame.
+ *
+ * WHY: our normal spi3_xfer() waits for RDBF (the byte's RX to land) BEFORE it
+ * queues the next tx byte. By then the shift register has drained, so SCK idles
+ * between the two bytes of a frame even though CS stays LOW — an intra-frame
+ * clock stall. Both working transports avoid it: the bit-bang bb_xfer() clocks
+ * bit-to-bit continuously and bb_cmd16() sends a frame's bytes back-to-back, and
+ * stock's unrolled loop reloads the FIFO tight. This helper primes b1 the moment
+ * TDBE frees (before b0's RX drains), so the register reloads back-to-back and
+ * the frame clocks continuously. Captures both RX bytes so init_hs[] stays valid.
+ * See docs/config_entry_hw_spi_hypotheses.md (post-H6 suspect (a): intra-frame
+ * polled-cadence stall). EXP-26 only ever ADDED gaps; this REMOVES the stall. */
+static void spi3_xfer2_gapless(uint8_t b0, uint8_t b1, uint8_t *r0, uint8_t *r1)
+{
+    volatile uint32_t timeout;
+    uint8_t rx0 = 0xFF, rx1 = 0xFF;
+
+    timeout = 100000;
+    while (!(FPGA_SPI->sts & SPI_I2S_TDBE_FLAG)) { if (--timeout == 0) break; }
+    FPGA_SPI->dt = b0;
+
+    timeout = 100000;
+    while (!(FPGA_SPI->sts & SPI_I2S_TDBE_FLAG)) { if (--timeout == 0) break; }
+    FPGA_SPI->dt = b1;                    /* primed before b0's RX drains */
+
+    timeout = 100000;
+    while (!(FPGA_SPI->sts & SPI_I2S_RDBF_FLAG)) { if (--timeout == 0) break; }
+    rx0 = (uint8_t)FPGA_SPI->dt;
+
+    timeout = 100000;
+    while (!(FPGA_SPI->sts & SPI_I2S_RDBF_FLAG)) { if (--timeout == 0) break; }
+    rx1 = (uint8_t)FPGA_SPI->dt;
+
+    if (r0) *r0 = rx0;
+    if (r1) *r1 = rx1;
+}
+
 static void fpga_h2_record_body_rx(uint8_t rx_byte)
 {
     if (rx_byte == 0x00U) {
@@ -425,6 +463,32 @@ static void fpga_h2_record_close_rx(uint8_t rx_byte)
  * of docs/experiments/2026-08-25-23-config-transport-bisect-runbook.md. */
 #ifndef FPGA_HW_UPLOAD_GAP_NOPS
 #define FPGA_HW_UPLOAD_GAP_NOPS 0
+#endif
+
+/* [H2] Re-add the CS-HIGH dummy byte before each HW-SPI prelude frame, mirroring
+ * the WORKING bit-bang bb_cmd16's `(void)bb_xfer(0)` (8 SCK edges, CS deasserted,
+ * then assert). The HW-SPI path removed this as "harmful" (~L4195) yet BOTH known
+ * working transports do it every frame: our bit-bang bb_cmd16, AND stock's SPI3
+ * config path (decoded from machine code — CS-HIGH 0x00 dummy before 05/12/15/3B,
+ * flash 0x0802D5E8-0x0802DB28). Our failing HW path is the only one that deleted
+ * it. spi3_xfer() clocks 8 SCK edges even with CS high (the peripheral clocks on
+ * DT write regardless of the software-GPIO CS), so this is an exact functional
+ * mirror. 0 = shipping path byte-identical. Test: `make guest-configA-csdummy`.
+ * See docs/config_entry_hw_spi_hypotheses.md (H2 — the converged lead). */
+#ifndef FPGA_HW_CS_DUMMY
+#define FPGA_HW_CS_DUMMY 0
+#endif
+
+/* [H-gapless / post-H6 suspect (a)] Clock each mode-0 prelude frame's two bytes
+ * GAPLESSLY via spi3_xfer2_gapless() instead of the stalling spi3_xfer(), so SCK
+ * does not idle between the command byte and its 0x00 param inside the CS-LOW
+ * frame — matching the continuous clocking of both working transports (bit-bang
+ * + stock). This is the LAST untested firmware axis after H1-H6: register/byte/
+ * framing are all excluded, so the only firmware-reachable difference left is the
+ * intra-frame cadence our polled peripheral introduces. 0 = shipping path
+ * (spi3_xfer, stalling). Test: `make guest-configA-gapless`. Mode-0 only. */
+#ifndef FPGA_HW_PRELUDE_GAPLESS
+#define FPGA_HW_PRELUDE_GAPLESS 0
 #endif
 
 /* Double-buffered SPI3 pump for the H2 upload (per GitHub issue #11, Lanchon).
@@ -4287,6 +4351,9 @@ uint8_t fpga_spi3_config_sequence(const fpga_cfg_seq_opts_t *opt)
      *   2 merge    : CS↓05 00↑ | CS↓12 00↑ | CS↓15 00 3B <table>↑  (15 shares upload frame)
      * init_hs[] capture indices are identical across all three. */
     if (opt->prelude_frame_mode == 1) {
+#if FPGA_HW_CS_DUMMY
+        (void)spi3_xfer(0x00);          /* [H2] CS-HIGH dummy, mirrors bb_cmd16 */
+#endif
         SPI3_CS_ASSERT();
         if (!opt->omit_05) {
             fpga.init_hs[1] = spi3_xfer(0x05);
@@ -4302,9 +4369,16 @@ uint8_t fpga_spi3_config_sequence(const fpga_cfg_seq_opts_t *opt)
          * at their zero-init value, which is how the bench tells the frame was
          * not sent (a real 0x05 frame records the MISO bytes here). */
         if (!opt->omit_05) {
+#if FPGA_HW_CS_DUMMY
+            (void)spi3_xfer(0x00);      /* [H2] CS-HIGH dummy, mirrors bb_cmd16 */
+#endif
             SPI3_CS_ASSERT();
+#if FPGA_HW_PRELUDE_GAPLESS
+            spi3_xfer2_gapless(0x05, 0x00, &fpga.init_hs[1], &fpga.init_hs[2]);
+#else
             fpga.init_hs[1] = spi3_xfer(0x05);
             fpga.init_hs[2] = spi3_xfer(0x00);
+#endif
             SPI3_CS_DEASSERT();
         }
         cfg_trace_capture(opt, 1);   /* T1: after ERASE_SRAM (or in place of it) */
@@ -4327,14 +4401,24 @@ uint8_t fpga_spi3_config_sequence(const fpga_cfg_seq_opts_t *opt)
         }
 
         /* [2] 12 00 */
+#if FPGA_HW_CS_DUMMY
+        (void)spi3_xfer(0x00);          /* [H2] CS-HIGH dummy, mirrors bb_cmd16 */
+#endif
         SPI3_CS_ASSERT();
+#if FPGA_HW_PRELUDE_GAPLESS
+        spi3_xfer2_gapless(0x12, 0x00, &fpga.init_hs[4], &fpga.init_hs[5]);
+#else
         fpga.init_hs[4] = spi3_xfer(0x12);
         fpga.init_hs[5] = spi3_xfer(0x00);
+#endif
         SPI3_CS_DEASSERT();
         cfg_trace_capture(opt, 2);   /* T2: after INIT_ADDR */
         fpga_scope_delay_ms(opt->prelude_gap_ms);
 
         /* [3] 15 00 — own frame (mode 0) or held LOW into the upload (mode 2) */
+#if FPGA_HW_CS_DUMMY
+        (void)spi3_xfer(0x00);          /* [H2] CS-HIGH dummy, mirrors bb_cmd16 */
+#endif
         SPI3_CS_ASSERT();
 #if FPGA_SPIN_AT_CONFIG_ENABLE
         /* Experiment E (2026-07-27): park forever with the bus in EXACTLY the
@@ -4346,8 +4430,15 @@ uint8_t fpga_spi3_config_sequence(const fpga_cfg_seq_opts_t *opt)
          * must not reset us mid-dump. */
         for (;;) { wdt_counter_reload(); }
 #endif
+#if FPGA_HW_PRELUDE_GAPLESS
+        /* The primary variable: clock 0x15 and its 0x00 back-to-back, no mid-frame
+         * SCK idle. CS is untouched by the helper, so this is correct for mode 0
+         * (own frame) and mode 2 (held LOW into the upload) alike. */
+        spi3_xfer2_gapless(0x15, 0x00, &fpga.init_hs[7], &fpga.init_hs[8]);
+#else
         fpga.init_hs[7] = spi3_xfer(0x15);
         fpga.init_hs[8] = spi3_xfer(0x00);
+#endif
         if (opt->prelude_frame_mode != 2) {
             SPI3_CS_DEASSERT();
             cfg_trace_capture(opt, 3);   /* T3: after CONFIG_ENABLE */
@@ -4649,7 +4740,9 @@ void fpga_init(void)
      * PB3/PB4/PB5 map to SPI3, not SPI4. */
     crm_periph_clock_enable(CRM_SPI3_PERIPH_CLOCK, TRUE);
 
-    /* PB3 = SPI3_SCK: AF push-pull, 50MHz */
+    /* PB3 = SPI3_SCK: AF push-pull. GPIO_DRIVE_STRENGTH_STRONGER (=0x01) yields
+     * CRL nibble 0x9 = MODE[1:0]=01 = 10 MHz slew — matches stock's PB3 exactly
+     * (Exp E/R SWD dump; H6, 2026-08-25). NOT 50 MHz as an earlier comment said. */
     gpio_cfg.gpio_pins = GPIO_PINS_3;
     gpio_cfg.gpio_mode = GPIO_MODE_MUX;
     gpio_cfg.gpio_out_type = GPIO_OUTPUT_PUSH_PULL;
