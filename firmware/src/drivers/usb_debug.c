@@ -2968,6 +2968,40 @@ static void cmd_fpga_bus_reacquire(void)
     usb_send_str("  Config port left untouched. `fpga reinit` now drives it.\r\n");
 }
 
+/* fpga configbb — run the GPIO bit-bang SSPI config on demand (H7 step 1).
+ * Fires the SAME bit-bang loader coldtrace uses at boot, but from the shell on
+ * guest-bringup-bb, so bit-bang (succeeds) and hardware-SPI (`fpga reinit`, fails)
+ * run from ONE build with identical off-SPI pin state. If bit-bang hits DONE_FINAL
+ * here, the wall is in the SPI3 clocking character (LA-diffable), not off-bus.
+ * Needs a cold/open port (power-cycle first); a successful config CLOSES the port,
+ * so re-run only after another power cycle. */
+static void cmd_fpga_configbb(void)
+{
+#if FPGA_CONFIG_B
+    usb_send_str("bit-bang SSPI config (05-less V0.4 framing) — firing...\r\n");
+    (void)fpga_bitbang_config_sequence();
+    uint32_t sr = ((uint32_t)fpga.cfg_status_reg[0] << 24) |
+                  ((uint32_t)fpga.cfg_status_reg[1] << 16) |
+                  ((uint32_t)fpga.cfg_status_reg[2] << 8) |
+                  (uint32_t)fpga.cfg_status_reg[3];
+    usb_debug_printf("post-upload STATUS(0x41): %02X %02X %02X %02X (raw=%08lX)\r\n",
+                     fpga.cfg_status_reg[0], fpga.cfg_status_reg[1],
+                     fpga.cfg_status_reg[2], fpga.cfg_status_reg[3], sr);
+    usb_debug_printf("  DONE_FINAL(bit13)=%s  flags:%s%s%s%s\r\n",
+                     (sr & (1u << 13)) ? "YES -- CONFIG TOOK" : "no -- the wall",
+                     (sr & (1u << 0))  ? " CRC_ERR" : "",
+                     (sr & (1u << 2))  ? " ID_FAIL" : "",
+                     (sr & (1u << 12)) ? " GWVLD"   : "",
+                     (sr & (1u << 15)) ? " READY"   : "");
+    usb_debug_printf("  close IDCODE(0x11)=%s (silent=port CLOSED=configured)\r\n",
+                     fpga.probe_id_bit_close == 0 ? "0x0120681B ANSWERS (still open)"
+                                                  : "silent/unanchored");
+#else
+    usb_send_str("configbb: not compiled — rebuild with FPGA_CONFIG_B "
+                 "(make guest-bringup-bb)\r\n");
+#endif
+}
+
 static void cmd_fpga_stock_diag(void)
 {
     fpga_stock_diag_print();
@@ -6711,6 +6745,8 @@ static const shell_cmd_t shell_cmds[] = {
           "fpga busrelease                 Hand SPI3 to an external master (one-way, EXPERIMENTAL)\r\n"),
     CMD_V("fpga busreacquire", cmd_fpga_bus_reacquire, SC_EXACT,
           "fpga busreacquire               Take SPI3 back after busrelease (H7 capture prep)\r\n"),
+    CMD_V("fpga configbb", cmd_fpga_configbb, SC_EXACT,
+          "fpga configbb                   Run GPIO bit-bang SSPI config on demand (H7 step 1)\r\n"),
     CMD_V("fpga stock diag", cmd_fpga_stock_diag, SC_EXACT,
           "fpga stock diag                Show stock-state bench shadow\r\n"),
     CMD_V("fpga stock clear", cmd_fpga_stock_clear, SC_EXACT,

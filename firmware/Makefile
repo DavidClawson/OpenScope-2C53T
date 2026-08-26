@@ -403,6 +403,16 @@ guest-bringup: CFLAGS += -DGUEST_BUILD -DFPGA_BUS_RELEASED_BOOT=1 -DFPGA_USART_S
 guest-bringup: LDSCRIPT = ld/at32f403a_guest.ld
 guest-bringup: clean all
 
+# H7 step 1 (2026-08-26): guest-bringup PLUS FPGA_CONFIG_B so the bit-bang loader
+# is COMPILED (not run at boot — BUS_RELEASED_BOOT still takes the early-return
+# branch). Gives `fpga configbb` to fire bit-bang on demand and `fpga reinit` to
+# fire hardware-SPI on demand, from ONE build with identical off-SPI pin state —
+# the clean on-board A/B of bit-bang-success vs HW-SPI-failure. CDC stays up
+# (no config at boot). See docs/experiments/2026-08-26-31-*.
+guest-bringup-bb: CFLAGS += -DGUEST_BUILD -DFPGA_BUS_RELEASED_BOOT=1 -DFPGA_USART_SILENT_SCOPE=1 -DFPGA_CONFIG_B=1
+guest-bringup-bb: LDSCRIPT = ld/at32f403a_guest.ld
+guest-bringup-bb: clean all
+
 # Flash app via USB HID bootloader (bootloader must be running)
 flash: $(BUILD_DIR)/$(TARGET).bin
 	python3 ../scripts/flash_preflight.py hid-app --image $< --address 0x08004000
@@ -547,7 +557,7 @@ $(BUILD_DIR)/test_redraw_gate: tests/test_redraw_gate.c src/ui/redraw_gate.h | $
 test-redraw-gate: $(BUILD_DIR)/test_redraw_gate
 	$<
 
-.PHONY: all clean disasm size renode soak-test soak-quick flash flash-dfu bootloader flash-bootloader flash-all guest guest-warmtest guest-usart-silent emu test-meter-data test-meter-auto test-meter-voltage-wave test-fpga-meter-plan test-stock-meter-literals test-meter test-scope-measure test-scope-cal test-scope-timebase test-scope-freq test-redraw-gate test-config-persist guest-persist guest-caldump guest-coldtrace-slow guest-coldtrace-la guest-debugclk guest-configA-gap guest-configA-csdummy guest-configA-gapless fpga-alt-header
+.PHONY: all clean disasm size renode soak-test soak-quick flash flash-dfu bootloader flash-bootloader flash-all guest guest-warmtest guest-usart-silent emu test-meter-data test-meter-auto test-meter-voltage-wave test-fpga-meter-plan test-stock-meter-literals test-meter test-scope-measure test-scope-cal test-scope-timebase test-scope-freq test-redraw-gate test-config-persist guest-persist guest-caldump guest-coldtrace-slow guest-coldtrace-la guest-debugclk guest-configA-gap guest-configA-csdummy guest-configA-gapless guest-bringup guest-bringup-bb guest-coldtrace-hwspi fpga-alt-header
 
 # ═══════════════════════════════════════════════════════════════════════════
 # BENCH / EXPERIMENT IMAGE INDEX                          (index added 2026-08-13)
@@ -871,6 +881,14 @@ guest-coldtrace-usart: clean all
 guest-coldtrace: CFLAGS += -DGUEST_BUILD -DFPGA_WARM_HANDOFF_TEST=1 -DFPGA_USART_SILENT_SCOPE=1 -DFPGA_CONFIG_B=1 -DFPGA_CONFIG_B_ARM=1
 guest-coldtrace: LDSCRIPT = ld/at32f403a_guest.ld
 guest-coldtrace: clean all
+
+# H7 confirmation (2026-08-26): coldtrace's warm-handoff + live-readout pipeline,
+# but config via HARDWARE-SPI at /2 (stock's write rate) instead of bit-bang. Tests
+# whether HW-SPI /2 config is a REAL config (live trace) — the shell A/B showed it
+# closes the port where /256 walls. NOT FPGA_CONFIG_B (that is the bit-bang path).
+guest-coldtrace-hwspi: CFLAGS += -DGUEST_BUILD -DFPGA_WARM_HANDOFF_TEST=1 -DFPGA_USART_SILENT_SCOPE=1 -DFPGA_CONFIG_A_HWSPI=1
+guest-coldtrace-hwspi: LDSCRIPT = ld/at32f403a_guest.ld
+guest-coldtrace-hwspi: clean all
 
 # [CH2 OFFSET 2026-08-17] guest-coldtrace-ch2 — coldtrace plus a boot-time arm
 # of the CH2 vertical-offset reference (TMR13 CH1 PWM-DAC on PA6).

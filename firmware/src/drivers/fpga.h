@@ -600,6 +600,12 @@ typedef struct {
  * (stock: 0xF8). Fills fpga.init_hs[], fpga.h2_close_status, fpga.scope_status[]. */
 uint8_t fpga_spi3_config_sequence(const fpga_cfg_seq_opts_t *opt);
 
+/* GPIO bit-bang SSPI config (2C23T-V0.4 transplant, FPGA_CONFIG_B). Owns
+ * PB3/4/5/6 as GPIO for the handshake, then restores PB3/4/5 to SPI3 AF.
+ * Returns cfg_status_reg[3]; populates fpga.cfg_status_reg[] (post-upload STATUS)
+ * and fpga.probe_id_bit_close. Only defined under FPGA_CONFIG_B. */
+uint8_t fpga_bitbang_config_sequence(void);
+
 /* ═══════════════════════════════════════════════════════════════════
  * API
  * ═══════════════════════════════════════════════════════════════════ */

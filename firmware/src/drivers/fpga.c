@@ -864,6 +864,15 @@ static void spi3_pump_h2_record(const uint8_t *tx, uint32_t n)
 #define FPGA_BUS_RELEASED_BOOT  0
 #endif
 
+/* H7 confirmation (2026-08-26): configure over HARDWARE-SPI at /2 (stock's write
+ * rate) inside the warm-handoff/coldtrace branch, then arm + run the live readout.
+ * The shell A/B showed HW-SPI config at /2 CLOSES the port (configured signature)
+ * where /256 walls; this build tests whether that is a REAL config by looking for
+ * a live trace. `make guest-coldtrace-hwspi`. */
+#ifndef FPGA_CONFIG_A_HWSPI
+#define FPGA_CONFIG_A_HWSPI  0
+#endif
+
 static void spi3_set_br(uint32_t br)
 {
     FPGA_SPI->ctrl1 &= ~(1u << 6);              /* SPE = 0 */
@@ -5074,6 +5083,28 @@ void fpga_init(void)
      * Step 4, so the engine-arm co-enables are asserted when the FPGA_CONFIG_B_ARM
      * writes fire inside the sequence. `make guest-coldtrace`. */
     fpga_bitbang_config_sequence();
+#elif FPGA_CONFIG_A_HWSPI
+    /* H7 confirmation: HARDWARE-SPI config at /2 (stock's write rate), then the
+     * same five-write arm coldtrace uses. If the demo trace latches off, HW-SPI
+     * config-entry works and the wall was write-rate (/256) all along. */
+    fpga_spi3_config_sequence(&(fpga_cfg_seq_opts_t){
+        .upload_br = 0,          /* /2 (60MHz) — stock's upload rate */
+        .cmd_br    = 0,          /* /2 (60MHz) — stock's prelude WRITE rate */
+        .prelude_gap_ms = 100,
+        .post_close_ms  = 600,
+        .arm_pb11  = 1,
+        .probe_edit = 1,
+    });
+    /* Five-write engine arm (coldtrace's FPGA_CONFIG_B_ARM burst), at /256 —
+     * runtime opcodes on the now-configured user design. PB11/PC6 already HIGH. */
+    fpga_scope_delay_ms(600);
+    spi3_set_br(7);
+    fpga_scope_write_reg(0x01, 0x08);
+    fpga_scope_write_reg(0x02, 0x03);
+    fpga_scope_write_reg(0x06, 0x00);
+    fpga_scope_write_reg(0x07, 0x00);
+    fpga_scope_write_reg(0x08, 0xAD);
+    spi3_set_br(0);              /* back to /2 for acquisition */
 #endif
 
     /* PC0 = FPGA data-ready, active LOW. Nothing else in the image ever
