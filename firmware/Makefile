@@ -413,6 +413,16 @@ guest-bringup-bb: CFLAGS += -DGUEST_BUILD -DFPGA_BUS_RELEASED_BOOT=1 -DFPGA_USAR
 guest-bringup-bb: LDSCRIPT = ld/at32f403a_guest.ld
 guest-bringup-bb: clean all
 
+# EXP-36 (2026-08-26): guest-bringup-bb with the bit-bang SCK SLOWED to ~470kHz
+# (FPGA_BB_HALF_DELAY=250) so `fpga configbb` clocks at AF's /256 rate. AF walls
+# at /2, /64 AND /256 (rate excluded for AF). If a slowed GPIO bit-bang STILL
+# configures, then at a MATCHED ~470kHz rate GPIO drive configures where AF drive
+# walls -> the differentiator is GPIO-vs-AF electrical drive, not rate. If it
+# fails, bit-bang's success is rate-dependent and the framing changes.
+guest-bringup-bb-slow: CFLAGS += -DGUEST_BUILD -DFPGA_BUS_RELEASED_BOOT=1 -DFPGA_USART_SILENT_SCOPE=1 -DFPGA_CONFIG_B=1 -DFPGA_BB_HALF_DELAY=250
+guest-bringup-bb-slow: LDSCRIPT = ld/at32f403a_guest.ld
+guest-bringup-bb-slow: clean all
+
 # EXP-33 (2026-08-26): guest-bringup-bb but the on-demand `fpga configbb` uses
 # stock's EXACT bit-bang framing (WITH 0x05, 100ms gaps, no prelude reads,
 # immediate close) via FPGA_CONFIG_B_FAITHFUL. Forks "framing" vs "GPIO-vs-AF
@@ -567,7 +577,7 @@ $(BUILD_DIR)/test_redraw_gate: tests/test_redraw_gate.c src/ui/redraw_gate.h | $
 test-redraw-gate: $(BUILD_DIR)/test_redraw_gate
 	$<
 
-.PHONY: all clean disasm size renode soak-test soak-quick flash flash-dfu bootloader flash-bootloader flash-all guest guest-warmtest guest-usart-silent emu test-meter-data test-meter-auto test-meter-voltage-wave test-fpga-meter-plan test-stock-meter-literals test-meter test-scope-measure test-scope-cal test-scope-timebase test-scope-freq test-redraw-gate test-config-persist guest-persist guest-caldump guest-coldtrace-slow guest-coldtrace-la guest-debugclk guest-configA-gap guest-configA-csdummy guest-configA-gapless guest-bringup guest-bringup-bb guest-coldtrace-hwspi guest-bringup-bb-faithful fpga-alt-header
+.PHONY: all clean disasm size renode soak-test soak-quick flash flash-dfu bootloader flash-bootloader flash-all guest guest-warmtest guest-usart-silent emu test-meter-data test-meter-auto test-meter-voltage-wave test-fpga-meter-plan test-stock-meter-literals test-meter test-scope-measure test-scope-cal test-scope-timebase test-scope-freq test-redraw-gate test-config-persist guest-persist guest-caldump guest-coldtrace-slow guest-coldtrace-la guest-debugclk guest-configA-gap guest-configA-csdummy guest-configA-gapless guest-bringup guest-bringup-bb guest-bringup-bb-slow guest-coldtrace-hwspi guest-bringup-bb-faithful fpga-alt-header
 
 # ═══════════════════════════════════════════════════════════════════════════
 # BENCH / EXPERIMENT IMAGE INDEX                          (index added 2026-08-13)
