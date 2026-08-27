@@ -5162,7 +5162,15 @@ void fpga_init(void)
      * and cannot disturb the FPGA. ⚠ Drives PA6 as AF PWM — confirm on the bench
      * that PA6 is really the CH2 reference and not a conflicting frontend line. */
     scope_trigger_ch2_init();
-    scope_trigger_ch2_raw(2048);
+    /* Arm at the code that CENTERS CH2, not raw mid-scale. DAC1 (CH1) centers at
+     * 2048 because it is a true 12-bit DAC — 2048 is mid voltage. TMR13 is a
+     * PWM-DAC through an RC filter, so its centering code is NOT 2048: bench
+     * unit #1, range 5 (2026-08-27, JDS6600 on CH2) measured 2048->mean 65,
+     * 3072->mean 195, which interpolates to ADC 128 at code 2544. Arming 2048
+     * left CH2 at mean ~65 (low, looked like "railed noise" with no signal);
+     * 2544 boots CH2 centered, mirroring CH1's fixed-arm pattern. The runtime
+     * `fpga scope center ch2` servo refines this per-range / per-unit. */
+    scope_trigger_ch2_raw(2544);
 #endif
 
     /* Frontend relays — bench run 3 (2026-08-12, first live capture): the
