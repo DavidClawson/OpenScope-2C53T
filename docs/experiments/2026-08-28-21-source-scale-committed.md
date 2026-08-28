@@ -82,3 +82,40 @@ unaffected. **No table rows were hand-edited** — the whole point of the one-co
 - The ~3% CH1/CH2 row inconsistency at r6 (42.95 vs 41.71) is real EXP-08 noise; the channels
   are identical, so those two rows *should* be nearly equal. A future re-measure could tighten
   them, but the test forbids hand-editing.
+
+## On-device end-to-end confirmation (same session, after flashing 0.92)
+
+Flashed `guest-coldtrace-ch2` (Build Aug 28 2026 11:52) and validated through the
+firmware's own measurement path — `fpga scope measure` reads the acq-task buffer
+(`fpga_get_ch1_buf`, the same buffer the scope UI renders) → `scope_measure_record`
+→ `scope_cal_volts_per_count` (0.92 applied). JDS CH1 → scope CH1, `fpga scope vdiv 1 6`
+(sets relay AND cal index — NOT `fpga scope range`, which is raw-relay-only and leaves
+the cal index stale), timebase 0x10, centered per point, 0 V DC offset:
+
+| commanded | device Vpp | error | clip? |
+|---|---|---|---|
+| 2.0 V | 2.015 V | +0.8% | no |
+| 3.0 V | 2.964 V | -1.2% | no |
+| 4.0 V | 4.030 V | +0.8% | no |
+
+`k1_uV=39514` on the device = 42.95 × 0.92 confirmed. All errors within the JDS's own
+~1-2% amplitude accuracy. **The calibration is validated through the real firmware path,
+not just host span math.**
+
+### Red herring cleared: opread vs acq buffer AGREE
+An early 5 V reading looked like the acq path under-read opread by 16% (pp 108 vs span
+129). It was not a path bug: at 5 V the baseline sat at mean ~207, so the sine **clipped
+the top rail at 255** and the span truncated. opread and the acq buffer report the SAME
+span at every amplitude (2 V 52/50, 3 V 77/75, 4 V 95/94, 4.5 V 102/101, 5 V 108/108) —
+the display and the calibration use consistent counts.
+
+### Two pre-existing bugs surfaced (NOT calibration, filed for follow-up)
+1. **Centering servo is erratic.** `fpga scope center ch1 6` landed at mean 82 / 211 /
+   127 across identical calls instead of reliably hitting 128. When it lands high, large
+   amplitudes clip the top rail (the entire 5 V clipping story). This caps usable vertical
+   range and should be chased next — likely the warm-handoff acq task re-arming DAC1 to its
+   own mid-scale value after the servo sets it.
+2. **`fpga scope range` vs `fpga scope vdiv`.** `range` drives the relay only and leaves
+   `ss->chN.vdiv_idx` (the cal index) stale; `vdiv` sets both. Using `range` for a
+   measurement applies the wrong range's gain to the hardware (seen here: range-5 gain on
+   range-6 hardware → half-scale reading). Documented in the handler, easy to trip.
