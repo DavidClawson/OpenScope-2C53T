@@ -116,11 +116,32 @@ extern "C" {
 
 /*
  * Correction for the calibration source's true-vs-commanded amplitude.
- * 1.0f = "we are taking the ESP32 siggen at its word", which is the current
- * state and is NOT a verified claim. See the header comment above before
- * changing this, and change ONLY this rather than individual table rows.
+ *
+ * 0.92f, measured against a JDS6600 (crystal-referenced, ~1-2% amplitude
+ * accuracy) — the raw table above was taken through the ESP32 siggen, which
+ * over-reads gain ~8%, so every reported voltage at 1.0f was ~8% high.
+ *
+ * Provenance (two sessions, one-source-into-both, timebase 0x10, centered,
+ * slope fit of span vs commanded Vpp):
+ *   - EXP-20 (2026-08-21): CH1 r6 0.919, r7 0.884, DC r7 0.874.
+ *   - EXP-21 (2026-08-28): JDS *CH1* driven into BOTH scope inputs in turn.
+ *       raw slopes r6: CH1 25.2, CH2 25.3 cts/Vpp — identical to 0.4%, so the
+ *       two frontends respond the same and ONE shared scale is correct; the
+ *       earlier apparent ~5% CH1/CH2 gap was the generator's own channel
+ *       mismatch, not the device. Per-channel SCALE r6 0.924 / 0.948,
+ *       r5 0.943 / 0.966.
+ * CH1 r6 reproduced across the two sessions to 0.5% (0.919 vs 0.924). The
+ * grand center across ranges is ~0.92; the ~0.874-0.966 spread is within the
+ * source's amplitude accuracy plus a mild range trend, and a single constant
+ * cannot fully reconcile the stored table's own CH1-vs-CH2 row inconsistency
+ * (42.95 vs 41.71 at r6, ~3%). Correcting a measured, reproduced ~8% error
+ * with a constant good to ~2% is strictly better than leaving it uncorrected.
+ *
+ * Absolute scale is still limited by the JDS's amplitude accuracy; a
+ * lab-grade source would refine (not overturn) this. See the header comment
+ * above before changing, and change ONLY this rather than individual rows.
  */
-#define SCOPE_CAL_SOURCE_SCALE     1.0f
+#define SCOPE_CAL_SOURCE_SCALE     0.92f
 
 typedef enum {
     SCOPE_CAL_NONE = 0,     /* unusable range — caller must show ADC counts */
