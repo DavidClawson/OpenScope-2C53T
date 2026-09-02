@@ -2394,14 +2394,12 @@ static uint8_t spi3_raw_xfer(uint8_t tx);
  * above. The operator must keep the input quiet/DC while this runs (no AC
  * signal) — it averages a static level.
  *
- * Diagnostic / bench only — it does NOT touch the normal acquisition path.
- * The continuous acquisition task is parked with fpga_acq_pause() for the
- * whole command so our CS-framed reads never interleave with its capture
- * frames (same hazard class as `spi3 opread` / `spi3 opsweep`).
+ * Diagnostic / bench only. It runs with the acq task LIVE (it reads the acq
+ * task's RAM buffer, not SPI3, so there is no bus contention) — the task must
+ * keep running to refresh that buffer at each new DC operating point.
  */
 #define SCOPE_CENTER_TARGET   128u   /* ADC mid-scale code we center on    */
-#define SCOPE_CENTER_NBYTES   256u   /* payload bytes averaged per read     */
-#define SCOPE_CENTER_AVG      2u     /* reads averaged to knock down noise  */
+#define SCOPE_CENTER_AVG      2u     /* buffer medians averaged per step    */
 #define SCOPE_CENTER_ITERS    11u    /* binary-search steps over 0..4095    */
 #define SCOPE_CENTER_SETTLE_MS 480u  /* >= one ~430ms buffer fill after a DAC
                                         move, so the read is not stale         */
@@ -2410,28 +2408,43 @@ static uint8_t spi3_raw_xfer(uint8_t tx);
  * mean of the first `nbytes` payload bytes. Same framing as spi3_opread_window
  * (one CS-LOW window, opcode + 2 filler bytes, then payload). The two filler
  * bytes are the header stock discards. Caller must already hold the acq pause. */
-static uint32_t scope_center_read_mean(uint8_t opcode, uint32_t nbytes)
+/*
+ * Median of the acq task's LIVE RAM buffer via an 8-bit histogram.
+ *
+ * Two design choices, both learned on the bench (2026-08-28/29):
+ *
+ * 1. MEDIAN, not mean. The old servo optimised the arithmetic mean, which a
+ *    clipped AC signal biases toward the OPEN rail: at large amplitude the sine
+ *    clips the top, the mean reads < 128, the search raises DAC1, that clips
+ *    MORE, and it runs away to a rail (0.5 Vpp centred perfectly at 2415/128,
+ *    but 4 Vpp diverged to 3071). The median equals the DC baseline regardless
+ *    of one-rail clipping until more than half the samples clip, and stays
+ *    monotonic in DAC1, so the binary search converges at any amplitude.
+ *
+ * 2. Read the RAM buffer the RUNNING acq task keeps fresh, NOT a direct SPI3
+ *    opread with the acq task paused. The capture buffer is a rolling window;
+ *    with acq paused nothing re-arms it, so after a DAC step it FREEZES holding
+ *    a bimodal old+new mix and no statistic recovers the new operating point
+ *    (bench: dac=3071 read 120, frozen, while its true settled level is 207).
+ *    The acq task re-arms and commits continuously, so its buffer tracks the
+ *    DAC — that is exactly the path `spi3 acqread` reads, which settles in
+ *    ~350 ms. Centering therefore runs with acq LIVE and reads RAM (no SPI3
+ *    from this side, so no bus contention).
+ */
+static uint32_t scope_center_buf_median(uint8_t ch)
 {
-    uint32_t ssum = 0;
-    GPIOB->clr = (1 << 6);                 /* CS assert (PB6 LOW)    */
-    (void)spi3_raw_xfer(opcode);
-    (void)spi3_raw_xfer(0xFF);
-    (void)spi3_raw_xfer(0xFF);
-    for (uint32_t i = 0; i < nbytes; i++)
-        ssum += spi3_raw_xfer(0xFF);
-    GPIOB->scr = (1 << 6);                 /* CS deassert (PB6 HIGH) */
-    return nbytes ? ssum / nbytes : 0;
-}
-
-/* Average SCOPE_CENTER_AVG windows for a noise-robust mean. */
-static uint32_t scope_center_robust_mean(uint8_t opcode)
-{
-    uint32_t acc = 0;
-    for (uint32_t k = 0; k < SCOPE_CENTER_AVG; k++) {
-        acc += scope_center_read_mean(opcode, SCOPE_CENTER_NBYTES);
-        vTaskDelay(pdMS_TO_TICKS(5));
+    const volatile uint8_t *b = (ch == 2) ? fpga_get_ch2_buf()
+                                          : fpga_get_ch1_buf();
+    if (b == NULL) return 128;
+    uint16_t hist[256] = {0};
+    for (uint32_t i = 0; i < FPGA_ADC_BUF_SIZE; i++)
+        hist[b[i]]++;
+    uint32_t half = FPGA_ADC_BUF_SIZE / 2u, cum = 0;
+    for (uint32_t v = 0; v < 256; v++) {
+        cum += hist[v];
+        if (cum >= half) return v;
     }
-    return acc / SCOPE_CENTER_AVG;
+    return 128;
 }
 
 /* Binary-search the channel's offset reference for a mean of ~128. Assumes the
@@ -2444,10 +2457,25 @@ static uint32_t scope_center_robust_mean(uint8_t opcode)
  * CCTRL C1P), so the duty->voltage sense could invert. If a CH2 search
  * converges on a rail, suspect the direction before suspecting the pin: sweep
  * `trig2 raw` by hand and watch which way the mean moves. */
+/*
+ * Settle the acq buffer after a DAC step: the running acq task re-commits its
+ * RAM buffer every ~33 ms poll, and the operating point settles in ~350 ms
+ * (bench), so wait a generous fixed budget then average a couple of RAM-buffer
+ * medians to knock down per-frame noise.
+ */
+static uint32_t scope_center_settle_level(uint8_t ch)
+{
+    vTaskDelay(pdMS_TO_TICKS(SCOPE_CENTER_SETTLE_MS));
+    uint32_t acc = 0;
+    for (uint32_t k = 0; k < SCOPE_CENTER_AVG; k++) {
+        acc += scope_center_buf_median(ch);
+        vTaskDelay(pdMS_TO_TICKS(60));
+    }
+    return acc / SCOPE_CENTER_AVG;
+}
+
 static void scope_center_one(uint8_t ch, uint16_t *out_dac, uint32_t *out_mean)
 {
-    const uint8_t opcode = (ch == 2) ? 0x05u : 0x04u;
-
     uint16_t lo = 0, hi = 4095;
     uint16_t best_dac = 2048;
     uint32_t best_mean = 0;
@@ -2457,24 +2485,21 @@ static void scope_center_one(uint8_t ch, uint16_t *out_dac, uint32_t *out_mean)
         uint16_t mid = (uint16_t)((lo + hi) / 2);
         if (ch == 2) scope_trigger_ch2_raw(mid);
         else         scope_trigger_dac_raw(mid);
-        /* BUGFIX 2026-08-14 (round 2): the DAC moves fine, but the capture
-         * buffer FREE-RUNS and takes ~430 ms to refill (1024 samples at
-         * ~2.4 kS/s). A 10 ms settle read the STALE buffer (old, roughly-
-         * centered DC ~130) every iteration, so the search never converged —
-         * the first "DAC init" fix was aimed at the wrong cause. Wait a full
-         * buffer fill so the read reflects the NEW DC operating point. */
-        vTaskDelay(pdMS_TO_TICKS(SCOPE_CENTER_SETTLE_MS));
-        uint32_t mean = scope_center_robust_mean(opcode);
-        uint32_t err = (mean > SCOPE_CENTER_TARGET)
-                       ? mean - SCOPE_CENTER_TARGET
-                       : SCOPE_CENTER_TARGET - mean;
+        /* Wait for the running acq task to re-commit its RAM buffer at the new
+         * DC operating point, then read the settled median from that buffer.
+         * (The old paused-SPI path froze the rolling buffer mid-transition —
+         * see scope_center_buf_median.) */
+        uint32_t level = scope_center_settle_level(ch);
+        uint32_t err = (level > SCOPE_CENTER_TARGET)
+                       ? level - SCOPE_CENTER_TARGET
+                       : SCOPE_CENTER_TARGET - level;
         if (err < best_err) {
             best_err = err;
             best_dac = mid;
-            best_mean = mean;
+            best_mean = level;
         }
-        if (mean < SCOPE_CENTER_TARGET) lo = mid;   /* need higher DAC1 */
-        else                            hi = mid;   /* need lower  DAC1 */
+        if (level < SCOPE_CENTER_TARGET) lo = mid;   /* need higher DAC1 */
+        else                             hi = mid;   /* need lower  DAC1 */
         if (hi - lo <= 1) break;
     }
     *out_dac = best_dac;
@@ -2904,10 +2929,10 @@ static void cmd_fpga_scope_center(const char *args)
         return;
     }
 
-    if (!fpga_acq_pause()) {
-        usb_send_str("ERR: acq task did not park — bus not safe, aborting\r\n");
-        return;
-    }
+    /* Centering runs with the acq task LIVE (it keeps the RAM buffer fresh at
+     * the new DC operating point — see scope_center_buf_median). The servo
+     * touches only the DAC and reads RAM, never SPI3, so there is no bus
+     * contention with the acq task's reads and no need to pause it. */
 
     /* BUGFIX 2026-08-14: the search's scope_trigger_dac_raw() writes were inert
      * without this init (bench: reported means clustered 120-170 regardless of
@@ -2932,13 +2957,12 @@ static void cmd_fpga_scope_center(const char *args)
         /* Name the reference in the output: a bare "center=" line would read
          * identically whichever channel ran, and a mislabelled log is how this
          * project has repeatedly convinced itself of the wrong pin. */
-        usb_debug_printf("CH%u range %lu: center %s=%u (mean=%lu)\r\n",
+        usb_debug_printf("CH%u range %lu: center %s=%u (median=%lu)\r\n",
                          (unsigned)ch, (unsigned long)r,
                          (ch == 2) ? "TMR13_C1DT" : "DAC1",
                          dac, (unsigned long)mean);
     }
-
-    fpga_acq_resume();
+    /* acq was never paused (see the note above) — nothing to resume. */
 }
 
 static void cmd_fpga_diag_clear(void)
