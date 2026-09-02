@@ -594,11 +594,30 @@ typedef struct {
                                *     answer is the prelude, not the bit-bang — and we
                                *     get a config path ~100x faster than bit-banging
                                *     115,638 bytes. Applies to all prelude_frame_modes. */
+    uint8_t  single_br;       /* 1 = NEVER call spi3_set_br() during the config
+                               *     transaction (prelude → upload → close), so SPE
+                               *     is toggled ZERO times between fpga_init and the
+                               *     0x3A close — exactly like stock, which sets BR
+                               *     once at init and never touches it again. The
+                               *     sequence runs at whatever divider the caller
+                               *     already programmed (fpga_init leaves /2). Our
+                               *     normal path toggles SPE via spi3_set_br() BEFORE
+                               *     the prelude (fpga.c:4280) — a pre-0x15 glitch
+                               *     stock never produces (EXP-34). Post-0x15
+                               *     measurement reads (probe_edit, 0x41 STATUS) still
+                               *     switch to /256; they are downstream of the wall
+                               *     and cannot retro-cause it. */
 } fpga_cfg_seq_opts_t;
 
 /* Run the full SPI3 config handshake. Returns the 0x3A close status byte
  * (stock: 0xF8). Fills fpga.init_hs[], fpga.h2_close_status, fpga.scope_status[]. */
 uint8_t fpga_spi3_config_sequence(const fpga_cfg_seq_opts_t *opt);
+
+/* GPIO bit-bang SSPI config (2C23T-V0.4 transplant, FPGA_CONFIG_B). Owns
+ * PB3/4/5/6 as GPIO for the handshake, then restores PB3/4/5 to SPI3 AF.
+ * Returns cfg_status_reg[3]; populates fpga.cfg_status_reg[] (post-upload STATUS)
+ * and fpga.probe_id_bit_close. Only defined under FPGA_CONFIG_B. */
+uint8_t fpga_bitbang_config_sequence(void);
 
 /* ═══════════════════════════════════════════════════════════════════
  * API
@@ -738,6 +757,22 @@ void fpga_set_active(bool active);
  * esp32-bringup branch (tools/esp32_sspi_bringup/). Re-flash to undo.
  */
 void fpga_bus_release(void);
+
+/*
+ * Re-acquire the SPI3 bus after fpga_bus_release() (H7, 2026-08-26).
+ * Restores PB3(SCK)/PB5(MOSI) to SPI3 AF, PB4(MISO) to input pull-up (stock's
+ * defined idle level), PB6(CS) to GPIO output HIGH, re-programs CTRL1/CTRL2/SPE,
+ * stages PC6 HIGH, and clears fpga.bus_released. Lets a guest-bringup boot (which
+ * leaves the FPGA config port pristine + CDC alive) hand the bus back to the MCU
+ * so `fpga reinit` can drive the failing hardware-SPI prelude on demand.
+ */
+void fpga_spi3_bus_reacquire(void);
+
+/* EXP-37: LA edge-capture. Emits `reps` (0 => 16) identical 0x15 CONFIG_ENABLE
+ * frames over AF hardware-SPI3 (/256), a 60ms gap, then `reps` over GPIO bit-bang
+ * — same pins/rate/frame, drive type the only variable. Isolated frames; does NOT
+ * configure. Arm sigrok (D0=SCK/D1=MISO/D2=MOSI/D3=CS) before calling. */
+void fpga_edgecap_15(uint8_t reps);
 
 /*
  * Cooperative acquisition pause (Step 0b, bench plan 2026-08-14).

@@ -2960,6 +2960,49 @@ static void cmd_fpga_bus_release(void)
     usb_send_str("  ESP32 may now drive SSPI. Re-flash/power-cycle to reclaim.\r\n");
 }
 
+static void cmd_fpga_bus_reacquire(void)
+{
+    fpga_spi3_bus_reacquire();
+    usb_send_str("SPI3 bus REACQUIRED by MCU.\r\n");
+    usb_send_str("  PB3(SCK)/PB5(MOSI) -> SPI3 AF, PB6(CS) -> GPIO out HIGH.\r\n");
+    usb_send_str("  PB4(MISO) input pull-up (stock idle), PC6=HIGH, SPE=1.\r\n");
+    usb_send_str("  Config port left untouched. `fpga reinit` now drives it.\r\n");
+}
+
+/* fpga configbb — run the GPIO bit-bang SSPI config on demand (H7 step 1).
+ * Fires the SAME bit-bang loader coldtrace uses at boot, but from the shell on
+ * guest-bringup-bb, so bit-bang (succeeds) and hardware-SPI (`fpga reinit`, fails)
+ * run from ONE build with identical off-SPI pin state. If bit-bang hits DONE_FINAL
+ * here, the wall is in the SPI3 clocking character (LA-diffable), not off-bus.
+ * Needs a cold/open port (power-cycle first); a successful config CLOSES the port,
+ * so re-run only after another power cycle. */
+static void cmd_fpga_configbb(void)
+{
+#if FPGA_CONFIG_B
+    usb_send_str("bit-bang SSPI config (05-less V0.4 framing) — firing...\r\n");
+    (void)fpga_bitbang_config_sequence();
+    uint32_t sr = ((uint32_t)fpga.cfg_status_reg[0] << 24) |
+                  ((uint32_t)fpga.cfg_status_reg[1] << 16) |
+                  ((uint32_t)fpga.cfg_status_reg[2] << 8) |
+                  (uint32_t)fpga.cfg_status_reg[3];
+    usb_debug_printf("post-upload STATUS(0x41): %02X %02X %02X %02X (raw=%08lX)\r\n",
+                     fpga.cfg_status_reg[0], fpga.cfg_status_reg[1],
+                     fpga.cfg_status_reg[2], fpga.cfg_status_reg[3], sr);
+    usb_debug_printf("  DONE_FINAL(bit13)=%s  flags:%s%s%s%s\r\n",
+                     (sr & (1u << 13)) ? "YES -- CONFIG TOOK" : "no -- the wall",
+                     (sr & (1u << 0))  ? " CRC_ERR" : "",
+                     (sr & (1u << 2))  ? " ID_FAIL" : "",
+                     (sr & (1u << 12)) ? " GWVLD"   : "",
+                     (sr & (1u << 15)) ? " READY"   : "");
+    usb_debug_printf("  close IDCODE(0x11)=%s (silent=port CLOSED=configured)\r\n",
+                     fpga.probe_id_bit_close == 0 ? "0x0120681B ANSWERS (still open)"
+                                                  : "silent/unanchored");
+#else
+    usb_send_str("configbb: not compiled — rebuild with FPGA_CONFIG_B "
+                 "(make guest-bringup-bb)\r\n");
+#endif
+}
+
 static void cmd_fpga_stock_diag(void)
 {
     fpga_stock_diag_print();
@@ -5831,6 +5874,23 @@ static void cmd_spi3_gowin(void)
                  "  The /2 pass is expected to be garbage; it is the negative control.\r\n");
 }
 
+/* spi3 edgecap [reps] — EXP-37 LA edge-capture. Emits [reps] identical 0x15
+ * CONFIG_ENABLE frames over AF hardware-SPI3 (/256), a 60ms gap, then [reps] over
+ * GPIO bit-bang — same pins/rate/frame, drive type the only variable. Isolated
+ * frames; does NOT configure. Arm sigrok (D0=SCK/D1=MISO/D2=MOSI/D3=CS) BEFORE
+ * running, then diff the two bursts. */
+static void cmd_spi3_edgecap(const char *args)
+{
+    uint32_t reps = 16;
+    if (args && *args) reps = (uint32_t)strtoul(args, NULL, 0);
+    if (reps == 0 || reps > 255) reps = 16;
+    usb_debug_printf("edgecap: %lu AF 0x15 frames (/256), 60ms gap, %lu bit-bang 0x15 frames\r\n",
+                     reps, reps);
+    usb_send_str("  emitting now — capture window should be armed on D0=SCK D1=MISO D2=MOSI D3=CS\r\n");
+    fpga_edgecap_15((uint8_t)reps);
+    usb_send_str("edgecap: done. AF burst | gap | GPIO burst are in the capture.\r\n");
+}
+
 /* ─── fpga selftest ────────────────────────────────────────────────────────
  *
  * ONE precondition table, printed before an experiment, so the instrument is
@@ -6264,6 +6324,14 @@ static void cmd_fpga_dbgarm(const char *args)
  * Defaults match the stock-captured timing: br=0 (/2), gap=100ms, close=600ms. */
 static void cmd_fpga_reinit(const char *args)
 {
+    /* guest-bringup leaves the bus released (PB3/5/6 Hi-Z, SPE off). reinit means
+     * "take the bus and configure", so reacquire it first — otherwise the whole
+     * handshake clocks into a dead wire (H7, 2026-08-26). No-op on other builds. */
+    if (fpga.bus_released) {
+        fpga_spi3_bus_reacquire();
+        usb_send_str("reinit: bus was released -> reacquired SPI3 (PB3/4/5/6, SPE)\r\n");
+    }
+
     fpga_cfg_seq_opts_t opt = {
         .upload_br = 0, .prelude_gap_ms = 100, .post_close_ms = 600, .arm_pb11 = 1,
         .reset_port = 0, .reset_pin = 0, .reset_low_ms = 10,
@@ -6299,10 +6367,13 @@ static void cmd_fpga_reinit(const char *args)
                                          * with reset-port c (a..e) above */
                 opt.cmd_br = (uint32_t)strtoul(tk + 1, NULL, 0);
             } else if (tk[0] == 's') {  /* strap-hold: s2[h|l]=PD2, sd[h|l]=PD12+13
-                                         * (default HIGH = stock). GPIO-audit lead. */
+                                         * (default HIGH = stock). GPIO-audit lead.
+                                         * sb = single-BR (EXP-34): no SPE toggle
+                                         * through the config transaction. */
                 uint8_t lvl = (tk[2] == 'l') ? 2 : 1;
                 if (tk[1] == '2')      opt.strap_pd2    = lvl;
                 else if (tk[1] == 'd') opt.strap_pd1213 = lvl;
+                else if (tk[1] == 'b') opt.single_br    = 1;
             } else if (tk[0] == 't' && tk[1] == 'c') {  /* tc<N> = trailing clocks
                                          * after bitstream, before 0x3A (sibling ~200) */
                 opt.trailing_clocks = (uint16_t)strtoul(tk + 2, NULL, 0);
@@ -6334,6 +6405,8 @@ static void cmd_fpga_reinit(const char *args)
     if (opt.trailing_clocks)
         usb_debug_printf("reinit: trailing_clocks=%u (after bitstream, before 0x3A)\r\n",
                          opt.trailing_clocks);
+    if (opt.single_br)
+        usb_send_str("reinit: SINGLE-BR — no spi3_set_br/SPE toggle through the transaction (EXP-34)\r\n");
 
     uint8_t close = fpga_spi3_config_sequence(&opt);
 
@@ -6820,6 +6893,10 @@ static const shell_cmd_t shell_cmds[] = {
 #endif
     CMD_V("fpga busrelease", cmd_fpga_bus_release, SC_EXACT,
           "fpga busrelease                 Hand SPI3 to an external master (one-way, EXPERIMENTAL)\r\n"),
+    CMD_V("fpga busreacquire", cmd_fpga_bus_reacquire, SC_EXACT,
+          "fpga busreacquire               Take SPI3 back after busrelease (H7 capture prep)\r\n"),
+    CMD_V("fpga configbb", cmd_fpga_configbb, SC_EXACT,
+          "fpga configbb                   Run GPIO bit-bang SSPI config on demand (H7 step 1)\r\n"),
     CMD_V("fpga stock diag", cmd_fpga_stock_diag, SC_EXACT,
           "fpga stock diag                Show stock-state bench shadow\r\n"),
     CMD_V("fpga stock clear", cmd_fpga_stock_clear, SC_EXACT,
@@ -6952,6 +7029,8 @@ static const shell_cmd_t shell_cmds[] = {
           "spi3 armtest [pb11|pc6]         Pulse FPGA run/re-arm pin, re-cfg, acqread\r\n"),
     CMD_V("spi3 gowin", cmd_spi3_gowin, SC_EXACT | SC_SPI3,
           "spi3 gowin                      Read+decode Gowin ID/USERCODE/STATUS regs\r\n"),
+    CMD_A("spi3 edgecap", cmd_spi3_edgecap, SC_SPI3,
+          "spi3 edgecap [reps]             EXP-37: AF vs bit-bang 0x15 frames for LA edge-diff\r\n"),
     CMD_A("spi3 scopetest", cmd_spi3_scopetest, SC_SPI3,
           "spi3 scopetest [bank]           Full scope seq: USART cfg->PC0->0x04/05 read\r\n"),
     CMD_V("spi3 acqtest", cmd_spi3_acqtest, SC_EXACT | SC_SPI3,

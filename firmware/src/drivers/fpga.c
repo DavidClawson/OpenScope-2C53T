@@ -864,6 +864,15 @@ static void spi3_pump_h2_record(const uint8_t *tx, uint32_t n)
 #define FPGA_BUS_RELEASED_BOOT  0
 #endif
 
+/* H7 confirmation (2026-08-26): configure over HARDWARE-SPI at /2 (stock's write
+ * rate) inside the warm-handoff/coldtrace branch, then arm + run the live readout.
+ * The shell A/B showed HW-SPI config at /2 CLOSES the port (configured signature)
+ * where /256 walls; this build tests whether that is a REAL config by looking for
+ * a live trace. `make guest-coldtrace-hwspi`. */
+#ifndef FPGA_CONFIG_A_HWSPI
+#define FPGA_CONFIG_A_HWSPI  0
+#endif
+
 static void spi3_set_br(uint32_t br)
 {
     FPGA_SPI->ctrl1 &= ~(1u << 6);              /* SPE = 0 */
@@ -4267,8 +4276,14 @@ uint8_t fpga_spi3_config_sequence(const fpga_cfg_seq_opts_t *opt)
      * garbage at /2, clean at /256), so the prelude/close/status all run at
      * opt->cmd_br here; only the bulk 0x3B payload switches to opt->upload_br
      * and then returns to cmd_br for the close/status reads. Restored to /2 at
-     * function exit. */
-    spi3_set_br(opt->cmd_br);
+     * function exit.
+     *
+     * single_br (EXP-34): skip this entirely. spi3_set_br() toggles SPE off/on,
+     * and this call fires BEFORE the 05/12/15 prelude — the one pre-0x15 SPE
+     * glitch stock never produces (stock sets BR once at SPI3 init and leaves
+     * it). Leaving it out runs the whole transaction at the caller's divider
+     * (fpga_init leaves /2 = stock's rate) with SPE untouched through 0x15. */
+    if (!opt->single_br) spi3_set_br(opt->cmd_br);
 
     /* Re-capture SPI3 CTRL1 HERE, at the config-frame clock (S1 overlay field).
      * fpga_init captured it at Step-4 init time (always the /2 default), so a
@@ -4482,14 +4497,14 @@ uint8_t fpga_spi3_config_sequence(const fpga_cfg_seq_opts_t *opt)
      * opened by 15 00; modes 0/1 open a fresh CS frame here. */
     if (opt->prelude_frame_mode != 2) SPI3_CS_ASSERT();
     fpga.init_hs[10] = spi3_xfer(0x3B);  /* open upload */
-    spi3_set_br(opt->upload_br);
+    if (!opt->single_br) spi3_set_br(opt->upload_br);  /* EXP-34: keep SPE untouched */
     fpga.h2_rx_00_count = 0;
     fpga.h2_rx_ff_count = 0;
     fpga.h2_rx_other_count = 0;
     fpga.h2_close_rx_len = 0;
     memset((void *)fpga.h2_close_rx, 0, sizeof(fpga.h2_close_rx));
     spi3_pump_h2_record(fpga_h2_cal_table, FPGA_H2_CAL_TABLE_SIZE);
-    spi3_set_br(opt->cmd_br);            /* back to command clock for close/status */
+    if (!opt->single_br) spi3_set_br(opt->cmd_br);  /* EXP-34: keep SPE untouched */
     /* Trailing clocks: Gowin runs the CRC-check / DONE / wakeup on CCLK cycles
      * AFTER the last config byte. Our sequence sent none; rosenrot00's working
      * 2C23T SPI loader clocks ~200 dummy 0x00 here. Stay inside the upload CS
@@ -5074,6 +5089,28 @@ void fpga_init(void)
      * Step 4, so the engine-arm co-enables are asserted when the FPGA_CONFIG_B_ARM
      * writes fire inside the sequence. `make guest-coldtrace`. */
     fpga_bitbang_config_sequence();
+#elif FPGA_CONFIG_A_HWSPI
+    /* H7 confirmation: HARDWARE-SPI config at /2 (stock's write rate), then the
+     * same five-write arm coldtrace uses. If the demo trace latches off, HW-SPI
+     * config-entry works and the wall was write-rate (/256) all along. */
+    fpga_spi3_config_sequence(&(fpga_cfg_seq_opts_t){
+        .upload_br = 0,          /* /2 (60MHz) — stock's upload rate */
+        .cmd_br    = 0,          /* /2 (60MHz) — stock's prelude WRITE rate */
+        .prelude_gap_ms = 100,
+        .post_close_ms  = 600,
+        .arm_pb11  = 1,
+        .probe_edit = 1,
+    });
+    /* Five-write engine arm (coldtrace's FPGA_CONFIG_B_ARM burst), at /256 —
+     * runtime opcodes on the now-configured user design. PB11/PC6 already HIGH. */
+    fpga_scope_delay_ms(600);
+    spi3_set_br(7);
+    fpga_scope_write_reg(0x01, 0x08);
+    fpga_scope_write_reg(0x02, 0x03);
+    fpga_scope_write_reg(0x06, 0x00);
+    fpga_scope_write_reg(0x07, 0x00);
+    fpga_scope_write_reg(0x08, 0xAD);
+    spi3_set_br(0);              /* back to /2 for acquisition */
 #endif
 
     /* PC0 = FPGA data-ready, active LOW. Nothing else in the image ever
@@ -5125,7 +5162,15 @@ void fpga_init(void)
      * and cannot disturb the FPGA. ⚠ Drives PA6 as AF PWM — confirm on the bench
      * that PA6 is really the CH2 reference and not a conflicting frontend line. */
     scope_trigger_ch2_init();
-    scope_trigger_ch2_raw(2048);
+    /* Arm at the code that CENTERS CH2, not raw mid-scale. DAC1 (CH1) centers at
+     * 2048 because it is a true 12-bit DAC — 2048 is mid voltage. TMR13 is a
+     * PWM-DAC through an RC filter, so its centering code is NOT 2048: bench
+     * unit #1, range 5 (2026-08-27, JDS6600 on CH2) measured 2048->mean 65,
+     * 3072->mean 195, which interpolates to ADC 128 at code 2544. Arming 2048
+     * left CH2 at mean ~65 (low, looked like "railed noise" with no signal);
+     * 2544 boots CH2 centered, mirroring CH1's fixed-arm pattern. The runtime
+     * `fpga scope center ch2` servo refines this per-range / per-unit. */
+    scope_trigger_ch2_raw(2544);
 #endif
 
     /* Frontend relays — bench run 3 (2026-08-12, first live capture): the
@@ -5673,6 +5718,121 @@ void fpga_bus_release(void)
     gpio_cfg.gpio_pins = GPIO_PINS_6;            /* PC6 = SPI enable */
     gpio_init(GPIOC, &gpio_cfg);
     GPIOC->scr = PC6_MASK;                       /* PC6 HIGH */
+}
+
+/* Re-acquire the SPI3 bus the MCU released in fpga_bus_release() — a faithful
+ * mirror of the fpga_init() SPI3 pin+peripheral block (fpga.c ~4740-4966), so a
+ * guest-bringup boot (config port left pristine, no acq flooding, CDC alive) can
+ * hand the bus back and let `fpga reinit` drive the failing hardware-SPI prelude
+ * on demand for an LA capture (H7). No-op if the bus was never released. */
+void fpga_spi3_bus_reacquire(void)
+{
+    gpio_init_type gpio_cfg;
+    gpio_default_para_init(&gpio_cfg);
+
+    crm_periph_clock_enable(CRM_SPI3_PERIPH_CLOCK, TRUE);
+
+    /* PB3 = SPI3_SCK: AF push-pull, 10MHz slew (matches stock, H6). */
+    gpio_cfg.gpio_pins = GPIO_PINS_3;
+    gpio_cfg.gpio_mode = GPIO_MODE_MUX;
+    gpio_cfg.gpio_out_type = GPIO_OUTPUT_PUSH_PULL;
+    gpio_cfg.gpio_drive_strength = GPIO_DRIVE_STRENGTH_STRONGER;
+    gpio_init(GPIOB, &gpio_cfg);
+
+    /* PB4 = SPI3_MISO: input PULL-UP — stock's defined idle level (Exp E), so an
+     * undriven line reads a clean 0xFF instead of floating noise on the capture. */
+    gpio_cfg.gpio_pins = GPIO_PINS_4;
+    gpio_cfg.gpio_mode = GPIO_MODE_INPUT;
+    gpio_cfg.gpio_pull = GPIO_PULL_UP;
+    gpio_init(GPIOB, &gpio_cfg);
+    gpio_cfg.gpio_pull = GPIO_PULL_NONE;   /* restore shared struct default */
+
+    /* PB5 = SPI3_MOSI: AF push-pull. */
+    gpio_cfg.gpio_pins = GPIO_PINS_5;
+    gpio_cfg.gpio_mode = GPIO_MODE_MUX;
+    gpio_cfg.gpio_out_type = GPIO_OUTPUT_PUSH_PULL;
+    gpio_cfg.gpio_drive_strength = GPIO_DRIVE_STRENGTH_STRONGER;
+    gpio_init(GPIOB, &gpio_cfg);
+
+    /* PB6 = SPI3_CS: GPIO output push-pull, idle HIGH. */
+    gpio_cfg.gpio_pins = GPIO_PINS_6;
+    gpio_cfg.gpio_mode = GPIO_MODE_OUTPUT;
+    gpio_cfg.gpio_out_type = GPIO_OUTPUT_PUSH_PULL;
+    gpio_cfg.gpio_drive_strength = GPIO_DRIVE_STRENGTH_STRONGER;
+    gpio_init(GPIOB, &gpio_cfg);
+    SPI3_CS_DEASSERT();
+
+    /* PC6 = FPGA SPI enable HIGH (bus_release already staged it, re-assert). */
+    gpio_cfg.gpio_pins = GPIO_PINS_6;
+    gpio_cfg.gpio_mode = GPIO_MODE_OUTPUT;
+    gpio_cfg.gpio_out_type = GPIO_OUTPUT_PUSH_PULL;
+    gpio_cfg.gpio_drive_strength = GPIO_DRIVE_STRENGTH_STRONGER;
+    gpio_init(GPIOC, &gpio_cfg);
+    GPIOC->scr = PC6_MASK;
+
+    /* SPI3 CTRL1/CTRL2/SPE — identical to fpga_init (mode 3, master, /2, SW CS). */
+    FPGA_SPI->ctrl1 = (1 << 0) | (1 << 1) | (1 << 2) | (1 << 8) | (1 << 9);
+    FPGA_SPI->ctrl2 = 0x03;
+    FPGA_SPI->ctrl1 |= (1 << 6);   /* SPE = 1 */
+
+    fpga.bus_released = false;
+    fpga.spi3_active  = true;
+}
+
+/* EXP-37 (2026-08-26) — LA edge-capture rig. Emits the SAME logical CONFIG_ENABLE
+ * frame (CS-high dummy 0x00, CS-low 0x15 0x00) N times over AF hardware-SPI3 at
+ * /256, then a gap, then N times over GPIO bit-bang at ~470kHz. Same pins, same
+ * rate, same frame — drive type (AF vs GPIO push-pull) is the ONLY variable.
+ * Arm sigrok (D0=SCK/D1=MISO/D2=MOSI/D3=CS) and diff the two bursts.
+ *
+ * NOTE: this fires ISOLATED 0x15 frames — no 05/12 prelude — so it does NOT
+ * configure anything; it exists purely to photograph the SCK/MOSI/CS waveform of
+ * a 0x15 frame under each drive. `reps` frames per group, ~2ms apart; 60ms gap
+ * between the AF and GPIO bursts as a marker. */
+void fpga_edgecap_15(uint8_t reps)
+{
+    gpio_init_type gpio_cfg;
+    gpio_default_para_init(&gpio_cfg);
+    if (reps == 0) reps = 16;
+
+    if (fpga.bus_released) fpga_spi3_bus_reacquire();
+
+    /* --- Group 1: AF-driven 0x15 frames at /256 (~470kHz, decodable) --- */
+    spi3_set_br(7);
+    for (uint8_t i = 0; i < reps; i++) {
+        (void)spi3_xfer(0x00);          /* CS-HIGH dummy (mirrors bb_cmd16) */
+        SPI3_CS_ASSERT();
+        (void)spi3_xfer(0x15);
+        (void)spi3_xfer(0x00);
+        SPI3_CS_DEASSERT();
+        fpga_scope_delay_ms(2);
+    }
+
+    fpga_scope_delay_ms(60);            /* gap marker between the two bursts */
+
+    /* --- Switch PB3(SCK)/PB5(MOSI)/PB6(CS) to GPIO push-pull, PB4 floating in,
+     *     mode-3 idle (SCK/CS high, MOSI low) — exactly the bit-bang posture. */
+    FPGA_SPI->ctrl1 &= ~(1u << 6);      /* SPE off: peripheral releases the pins */
+    GPIOB->scr = BB_SCK | BB_CS;
+    GPIOB->clr = BB_MOSI;
+    gpio_cfg.gpio_pins = BB_SCK | BB_MOSI | BB_CS;
+    gpio_cfg.gpio_mode = GPIO_MODE_OUTPUT;
+    gpio_cfg.gpio_out_type = GPIO_OUTPUT_PUSH_PULL;
+    gpio_cfg.gpio_drive_strength = GPIO_DRIVE_STRENGTH_STRONGER;
+    gpio_init(GPIOB, &gpio_cfg);
+    gpio_cfg.gpio_pins = BB_MISO;
+    gpio_cfg.gpio_mode = GPIO_MODE_INPUT;
+    gpio_cfg.gpio_pull = GPIO_PULL_NONE;
+    gpio_init(GPIOB, &gpio_cfg);
+
+    /* --- Group 2: GPIO bit-bang 0x15 frames (rate = FPGA_BB_HALF_DELAY) --- */
+    for (uint8_t i = 0; i < reps; i++) {
+        bb_cmd16(0x15, 0x00);           /* CS-HIGH dummy + CS↓ 15 00 CS↑ */
+        fpga_scope_delay_ms(2);
+    }
+
+    /* Restore AF bus so later shell commands work. */
+    fpga_spi3_bus_reacquire();
 }
 
 void fpga_scope_reinit(void)
