@@ -390,6 +390,22 @@ static uint8_t spi3_xfer(uint8_t tx_byte)
     return (uint8_t)FPGA_SPI->dt;
 }
 
+/* [H-gapless / post-H6 suspect (a)] Clock each mode-0 prelude frame's two bytes
+ * GAPLESSLY via spi3_xfer2_gapless() instead of the stalling spi3_xfer(), so SCK
+ * does not idle between the command byte and its 0x00 param inside the CS-LOW
+ * frame — matching the continuous clocking of both working transports (bit-bang
+ * + stock). This is the LAST untested firmware axis after H1-H6: register/byte/
+ * framing are all excluded, so the only firmware-reachable difference left is the
+ * intra-frame cadence our polled peripheral introduces. 0 = shipping path
+ * (spi3_xfer, stalling). Test: `make guest-configA-gapless`. Mode-0 only.
+ *
+ * The default lives here, above spi3_xfer2_gapless(), so the helper can be
+ * compiled only for the builds that call it. */
+#ifndef FPGA_HW_PRELUDE_GAPLESS
+#define FPGA_HW_PRELUDE_GAPLESS 0
+#endif
+
+#if FPGA_HW_PRELUDE_GAPLESS
 /* [H-gapless] Send two bytes back-to-back with NO inter-byte stall — the
  * double-buffered idiom of spi3_pump_h2_record(), for a 2-byte prelude frame.
  *
@@ -427,6 +443,7 @@ static void spi3_xfer2_gapless(uint8_t b0, uint8_t b1, uint8_t *r0, uint8_t *r1)
     if (r0) *r0 = rx0;
     if (r1) *r1 = rx1;
 }
+#endif /* FPGA_HW_PRELUDE_GAPLESS */
 
 static void fpga_h2_record_body_rx(uint8_t rx_byte)
 {
@@ -477,18 +494,6 @@ static void fpga_h2_record_close_rx(uint8_t rx_byte)
  * See docs/config_entry_hw_spi_hypotheses.md (H2 — the converged lead). */
 #ifndef FPGA_HW_CS_DUMMY
 #define FPGA_HW_CS_DUMMY 0
-#endif
-
-/* [H-gapless / post-H6 suspect (a)] Clock each mode-0 prelude frame's two bytes
- * GAPLESSLY via spi3_xfer2_gapless() instead of the stalling spi3_xfer(), so SCK
- * does not idle between the command byte and its 0x00 param inside the CS-LOW
- * frame — matching the continuous clocking of both working transports (bit-bang
- * + stock). This is the LAST untested firmware axis after H1-H6: register/byte/
- * framing are all excluded, so the only firmware-reachable difference left is the
- * intra-frame cadence our polled peripheral introduces. 0 = shipping path
- * (spi3_xfer, stalling). Test: `make guest-configA-gapless`. Mode-0 only. */
-#ifndef FPGA_HW_PRELUDE_GAPLESS
-#define FPGA_HW_PRELUDE_GAPLESS 0
 #endif
 
 /* Double-buffered SPI3 pump for the H2 upload (per GitHub issue #11, Lanchon).
@@ -5788,7 +5793,11 @@ void fpga_spi3_bus_reacquire(void)
  * NOTE: this fires ISOLATED 0x15 frames — no 05/12 prelude — so it does NOT
  * configure anything; it exists purely to photograph the SCK/MOSI/CS waveform of
  * a 0x15 frame under each drive. `reps` frames per group, ~2ms apart; 60ms gap
- * between the AF and GPIO bursts as a marker. */
+ * between the AF and GPIO bursts as a marker.
+ *
+ * Bit-bang half only exists under FPGA_CONFIG_B (BB_* pin masks, bb_cmd16), so
+ * the rig is built only for those images — `make guest-bringup-bb`. */
+#if FPGA_CONFIG_B
 void fpga_edgecap_15(uint8_t reps)
 {
     gpio_init_type gpio_cfg;
@@ -5834,6 +5843,7 @@ void fpga_edgecap_15(uint8_t reps)
     /* Restore AF bus so later shell commands work. */
     fpga_spi3_bus_reacquire();
 }
+#endif /* FPGA_CONFIG_B */
 
 void fpga_scope_reinit(void)
 {

@@ -5877,9 +5877,18 @@ static void cmd_spi3_gowin(void)
  * CONFIG_ENABLE frames over AF hardware-SPI3 (/256), a 60ms gap, then [reps] over
  * GPIO bit-bang — same pins/rate/frame, drive type the only variable. Isolated
  * frames; does NOT configure. Arm sigrok (D0=SCK/D1=MISO/D2=MOSI/D3=CS) BEFORE
- * running, then diff the two bursts. */
+ * running, then diff the two bursts.
+ *
+ * The rig needs the bit-bang transport, which only exists under FPGA_CONFIG_B.
+ * The command stays in the table on every build and says so, rather than
+ * disappearing from `help` and leaving the operator guessing. */
 static void cmd_spi3_edgecap(const char *args)
 {
+#if !FPGA_CONFIG_B
+    (void)args;
+    usb_send_str("edgecap: FPGA_CONFIG_B builds only — the GPIO bit-bang half is not"
+                 " compiled here. Flash `make guest-bringup-bb`.\r\n");
+#else
     uint32_t reps = 16;
     if (args && *args) reps = (uint32_t)strtoul(args, NULL, 0);
     if (reps == 0 || reps > 255) reps = 16;
@@ -5888,6 +5897,7 @@ static void cmd_spi3_edgecap(const char *args)
     usb_send_str("  emitting now — capture window should be armed on D0=SCK D1=MISO D2=MOSI D3=CS\r\n");
     fpga_edgecap_15((uint8_t)reps);
     usb_send_str("edgecap: done. AF burst | gap | GPIO burst are in the capture.\r\n");
+#endif
 }
 
 /* ─── fpga selftest ────────────────────────────────────────────────────────
