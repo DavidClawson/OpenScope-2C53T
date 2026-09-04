@@ -771,8 +771,11 @@ void fpga_spi3_bus_reacquire(void);
 /* EXP-37: LA edge-capture. Emits `reps` (0 => 16) identical 0x15 CONFIG_ENABLE
  * frames over AF hardware-SPI3 (/256), a 60ms gap, then `reps` over GPIO bit-bang
  * — same pins/rate/frame, drive type the only variable. Isolated frames; does NOT
- * configure. Arm sigrok (D0=SCK/D1=MISO/D2=MOSI/D3=CS) before calling. */
+ * configure. Arm sigrok (D0=SCK/D1=MISO/D2=MOSI/D3=CS) before calling.
+ * FPGA_CONFIG_B builds only — the bit-bang half is compiled out elsewhere. */
+#if FPGA_CONFIG_B
 void fpga_edgecap_15(uint8_t reps);
+#endif
 
 /*
  * Cooperative acquisition pause (Step 0b, bench plan 2026-08-14).
