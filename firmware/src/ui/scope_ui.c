@@ -836,6 +836,23 @@ static uint16_t scope_soft_trigger_offset(const scope_state_t *ss,
         return 0;                                 /* no slack to slide */
     uint16_t max_start = (uint16_t)(FPGA_ADC_BUF_SIZE - draw_n);
 
+    /* SEAM GUARD (EXP-22, 2026-09-03): the acquisition record is NOT always
+     * time-contiguous at its edges. Saved-frame analysis found ~9-14-sample
+     * phase discontinuities clustered at indices 32..96 (a stale head —
+     * residue roughly one read cadence old, the same defect family as the
+     * "reads are off by one byte" finding) and 864..928. A trigger crossing
+     * fabricated at such a seam locks the trace to an arbitrary phase — at
+     * 500 Hz it showed as frames flipping 180 degrees, ~11-sample p95 jitter,
+     * indistinguishable from free-run. Every frame whose seam fell OUTSIDE
+     * the drawn window locked to <0.1 sample, so the algorithm is sound and
+     * the guard just keeps it off the bad data: start the search at
+     * SEAM_GUARD, which also keeps the window [off, off+draw_n] clear of the
+     * late seams for any signal above ~35 Hz at the slow timebases. The
+     * underlying acquisition defect is filed, not fixed, by this. */
+    const uint16_t SEAM_GUARD = 128u;
+    if (max_start <= SEAM_GUARD)
+        return 0;
+
     /* Auto-level: base the threshold at the SIGNAL'S OWN midline, not a fixed
      * ADC 128. The capture is frequently not centred (e.g. mean 84, range
      * 34..136 on the bench), so a fixed 128 sits up near the peak where the
@@ -843,9 +860,10 @@ static uint16_t scope_soft_trigger_offset(const scope_state_t *ss,
      * screen as the trace dancing. The 50% level (min+max)/2 is the steep
      * mid-slope crossing and locks cleanly regardless of DC offset;
      * trigger.level then shifts it up/down from there (true-scale slope:
-     * SCOPE_H px == 256 counts). */
+     * SCOPE_H px == 256 counts). Min/max over the guarded region only, so a
+     * seam's glitch cannot skew the threshold either. */
     uint8_t mn = 255, mx = 0;
-    for (uint16_t i = 0; i < FPGA_ADC_BUF_SIZE; i++) {
+    for (uint16_t i = SEAM_GUARD; i < FPGA_ADC_BUF_SIZE; i++) {
         uint8_t s = src_buf[i];
         if (s < mn) mn = s;
         if (s > mx) mx = s;
@@ -857,10 +875,21 @@ static uint16_t scope_soft_trigger_offset(const scope_state_t *ss,
     if (thr < (int)mn + 1) thr = (int)mn + 1;     /* keep it inside the signal */
     if (thr > (int)mx - 1) thr = (int)mx - 1;
 
-    int idx = scope_measure_find_trigger((const uint8_t *)src_buf, max_start,
+    int idx = scope_measure_find_trigger((const uint8_t *)src_buf + SEAM_GUARD,
+                                         (uint16_t)(max_start - SEAM_GUARD),
                                          (uint8_t)thr,
                                          ss->trigger.edge == TRIG_RISING, 3u);
-    return (idx > 0) ? (uint16_t)idx : 0u;
+    return (idx > 0) ? (uint16_t)(idx + SEAM_GUARD) : 0u;
+}
+
+/* Exported for bench validation (`spi3 frame`): the offset the renderer would
+ * start the drawn window at for the CURRENT scope state. Exporting the real
+ * function rather than letting the host re-implement it is deliberate — a
+ * host replica passing while the on-screen algorithm fails is exactly the
+ * class of stable-wrong-number this project keeps paying for. */
+uint16_t scope_ui_soft_trigger_offset(const volatile uint8_t *src_buf)
+{
+    return scope_soft_trigger_offset(scope_state_get(), src_buf);
 }
 
 void draw_demo_waveform(uint32_t frame)

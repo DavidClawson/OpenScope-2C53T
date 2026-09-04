@@ -3484,6 +3484,64 @@ static void cmd_spi3_read(const char *args)
     }
 }
 
+static void spi3_frame_dump(const char *name, const uint8_t *buf)
+{
+    usb_debug_printf("%s (%u bytes):\r\n", name, (unsigned)FPGA_ADC_BUF_SIZE);
+    for (uint32_t i = 0; i < FPGA_ADC_BUF_SIZE; i++) {
+        if (i % 16 == 0) usb_debug_printf("%04lX:", i);
+        usb_debug_printf(" %02X", buf[i]);
+        if (i % 16 == 15) usb_send_str("\r\n");
+    }
+}
+
+/* spi3 frame — one COHERENT two-channel snapshot of the acquisition buffers,
+ * plus the render-path facts a host needs to reproduce what the screen shows:
+ * the frame generation (proves successive grabs are distinct captures) and
+ * the soft-trigger offset computed by the RENDERER'S OWN code
+ * (scope_ui_soft_trigger_offset), not a host-side replica.
+ *
+ * Coherence: the acq task commits CH1+CH2 atomically under acq_frame_gen
+ * (odd = commit in progress), so a copy bracketed by an unchanged EVEN
+ * generation is one capture on both channels — which is what makes the
+ * CH1-vs-CH2 relative-phase measurement in scripts/exp22_stability.py valid.
+ * Touches RAM only (no SPI3), so acq stays live, same as `spi3 read`. */
+static void cmd_spi3_frame(void)
+{
+    const volatile uint8_t *c1 = fpga_get_ch1_buf();
+    const volatile uint8_t *c2 = fpga_get_ch2_buf();
+    if (!c1 || !c2) {
+        usb_send_str("FPGA not initialized\r\n");
+        return;
+    }
+
+    static uint8_t s1[FPGA_ADC_BUF_SIZE], s2[FPGA_ADC_BUF_SIZE];
+    uint32_t g0 = 0, g1 = 1;
+    for (uint8_t tries = 0; tries < 8; tries++) {
+        g0 = fpga_acq_frame_generation();
+        if (g0 & 1u) {                      /* mid-commit: wait it out */
+            vTaskDelay(pdMS_TO_TICKS(1));
+            continue;
+        }
+        for (uint32_t i = 0; i < FPGA_ADC_BUF_SIZE; i++) s1[i] = c1[i];
+        for (uint32_t i = 0; i < FPGA_ADC_BUF_SIZE; i++) s2[i] = c2[i];
+        g1 = fpga_acq_frame_generation();
+        if (g1 == g0) break;
+        vTaskDelay(pdMS_TO_TICKS(1));
+    }
+
+    const scope_state_t *ss = scope_state_get();
+    uint8_t src_ch = (ss && ss->trigger.source == TRIG_SRC_CH2) ? 2u : 1u;
+    uint16_t off = scope_ui_soft_trigger_offset((src_ch == 2u) ? s2 : s1);
+
+    usb_debug_printf("FRAME gen=%lu coherent=%u src=CH%u off=%u soft=%u\r\n",
+                     (unsigned long)g1,
+                     (unsigned)(g1 == g0 && !(g0 & 1u)),
+                     (unsigned)src_ch, (unsigned)off,
+                     (unsigned)(ss ? (ss->soft_trigger ? 1 : 0) : 0));
+    spi3_frame_dump("CH1", s1);
+    spi3_frame_dump("CH2", s2);
+}
+
 static int32_t scaled_i100(float value)
 {
     float scaled = value * 100.0f;
@@ -6913,6 +6971,8 @@ static const shell_cmd_t shell_cmds[] = {
           "spi3 seq <b..> | <b..>          xfer w/ mid-sequence CS pulse at '|'\r\n"),
     CMD_A("spi3 read", cmd_spi3_read, 0,
           "spi3 read [len]                 Raw SPI3 read + hex dump\r\n"),
+    CMD_V("spi3 frame", cmd_spi3_frame, SC_EXACT,
+          "spi3 frame                      Coherent CH1+CH2 snapshot + gen + render trig offset\r\n"),
     CMD_V("reboot bootloader", cmd_reboot_bootloader, SC_EXACT,
           "reboot bootloader               Reboot into USB HID updater\r\n"),
     CMD_V("spi3 acqread", cmd_spi3_acqread, SC_EXACT | SC_SPI3,
