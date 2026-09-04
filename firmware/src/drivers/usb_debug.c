@@ -3441,6 +3441,14 @@ static void cmd_reboot_bootloader(void)
     dfu_request_reboot();
 }
 
+/* One scratch buffer shared by the shell's bus-snapshot commands (`spi3 read`
+ * uses the first half; `spi3 frame` uses both halves for a coherent CH1+CH2
+ * grab). They all run on the single shell task and never nest, so sharing is
+ * safe — and it keeps guest RAM in budget: two per-command 1 KB buffers
+ * overflowed the region by 368 bytes (2ff992c, caught once #31 unblocked the
+ * guest link). One 2 KB buffer costs +1 KB over the old lone snapshot. */
+static uint8_t shell_bus_scratch[2 * FPGA_ADC_BUF_SIZE];
+
 static void cmd_spi3_read(const char *args)
 {
     uint32_t len = 64;
@@ -3469,10 +3477,11 @@ static void cmd_spi3_read(const char *args)
      * "a fifth to a half of capture records are torn" as a property of
      * acquisition. It was a property of this loop. Corrected 2026-08-19.
      *
-     * Copy under one pass, then print at leisure. Static rather than stack:
-     * this runs on the shell task and 1 KB is more than it should borrow.
+     * Copy under one pass, then print at leisure. The shared shell scratch
+     * (file scope) rather than the stack: this runs on the shell task and 1 KB
+     * is more than it should borrow.
      */
-    static uint8_t snap[FPGA_ADC_BUF_SIZE];
+    uint8_t *snap = shell_bus_scratch;
     for (uint32_t i = 0; i < len; i++)
         snap[i] = ch1[i];
 
@@ -3514,7 +3523,8 @@ static void cmd_spi3_frame(void)
         return;
     }
 
-    static uint8_t s1[FPGA_ADC_BUF_SIZE], s2[FPGA_ADC_BUF_SIZE];
+    uint8_t *s1 = shell_bus_scratch;
+    uint8_t *s2 = shell_bus_scratch + FPGA_ADC_BUF_SIZE;
     uint32_t g0 = 0, g1 = 1;
     for (uint8_t tries = 0; tries < 8; tries++) {
         g0 = fpga_acq_frame_generation();
