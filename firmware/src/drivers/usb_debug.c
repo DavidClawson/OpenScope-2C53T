@@ -2395,14 +2395,12 @@ static uint8_t spi3_raw_xfer(uint8_t tx);
  * above. The operator must keep the input quiet/DC while this runs (no AC
  * signal) — it averages a static level.
  *
- * Diagnostic / bench only — it does NOT touch the normal acquisition path.
- * The continuous acquisition task is parked with fpga_acq_pause() for the
- * whole command so our CS-framed reads never interleave with its capture
- * frames (same hazard class as `spi3 opread` / `spi3 opsweep`).
+ * Diagnostic / bench only. It runs with the acq task LIVE (it reads the acq
+ * task's RAM buffer, not SPI3, so there is no bus contention) — the task must
+ * keep running to refresh that buffer at each new DC operating point.
  */
 #define SCOPE_CENTER_TARGET   128u   /* ADC mid-scale code we center on    */
-#define SCOPE_CENTER_NBYTES   256u   /* payload bytes averaged per read     */
-#define SCOPE_CENTER_AVG      2u     /* reads averaged to knock down noise  */
+#define SCOPE_CENTER_AVG      2u     /* buffer medians averaged per step    */
 #define SCOPE_CENTER_ITERS    11u    /* binary-search steps over 0..4095    */
 #define SCOPE_CENTER_SETTLE_MS 480u  /* >= one ~430ms buffer fill after a DAC
                                         move, so the read is not stale         */
@@ -2411,28 +2409,43 @@ static uint8_t spi3_raw_xfer(uint8_t tx);
  * mean of the first `nbytes` payload bytes. Same framing as spi3_opread_window
  * (one CS-LOW window, opcode + 2 filler bytes, then payload). The two filler
  * bytes are the header stock discards. Caller must already hold the acq pause. */
-static uint32_t scope_center_read_mean(uint8_t opcode, uint32_t nbytes)
+/*
+ * Median of the acq task's LIVE RAM buffer via an 8-bit histogram.
+ *
+ * Two design choices, both learned on the bench (2026-08-28/29):
+ *
+ * 1. MEDIAN, not mean. The old servo optimised the arithmetic mean, which a
+ *    clipped AC signal biases toward the OPEN rail: at large amplitude the sine
+ *    clips the top, the mean reads < 128, the search raises DAC1, that clips
+ *    MORE, and it runs away to a rail (0.5 Vpp centred perfectly at 2415/128,
+ *    but 4 Vpp diverged to 3071). The median equals the DC baseline regardless
+ *    of one-rail clipping until more than half the samples clip, and stays
+ *    monotonic in DAC1, so the binary search converges at any amplitude.
+ *
+ * 2. Read the RAM buffer the RUNNING acq task keeps fresh, NOT a direct SPI3
+ *    opread with the acq task paused. The capture buffer is a rolling window;
+ *    with acq paused nothing re-arms it, so after a DAC step it FREEZES holding
+ *    a bimodal old+new mix and no statistic recovers the new operating point
+ *    (bench: dac=3071 read 120, frozen, while its true settled level is 207).
+ *    The acq task re-arms and commits continuously, so its buffer tracks the
+ *    DAC — that is exactly the path `spi3 acqread` reads, which settles in
+ *    ~350 ms. Centering therefore runs with acq LIVE and reads RAM (no SPI3
+ *    from this side, so no bus contention).
+ */
+static uint32_t scope_center_buf_median(uint8_t ch)
 {
-    uint32_t ssum = 0;
-    GPIOB->clr = (1 << 6);                 /* CS assert (PB6 LOW)    */
-    (void)spi3_raw_xfer(opcode);
-    (void)spi3_raw_xfer(0xFF);
-    (void)spi3_raw_xfer(0xFF);
-    for (uint32_t i = 0; i < nbytes; i++)
-        ssum += spi3_raw_xfer(0xFF);
-    GPIOB->scr = (1 << 6);                 /* CS deassert (PB6 HIGH) */
-    return nbytes ? ssum / nbytes : 0;
-}
-
-/* Average SCOPE_CENTER_AVG windows for a noise-robust mean. */
-static uint32_t scope_center_robust_mean(uint8_t opcode)
-{
-    uint32_t acc = 0;
-    for (uint32_t k = 0; k < SCOPE_CENTER_AVG; k++) {
-        acc += scope_center_read_mean(opcode, SCOPE_CENTER_NBYTES);
-        vTaskDelay(pdMS_TO_TICKS(5));
+    const volatile uint8_t *b = (ch == 2) ? fpga_get_ch2_buf()
+                                          : fpga_get_ch1_buf();
+    if (b == NULL) return 128;
+    uint16_t hist[256] = {0};
+    for (uint32_t i = 0; i < FPGA_ADC_BUF_SIZE; i++)
+        hist[b[i]]++;
+    uint32_t half = FPGA_ADC_BUF_SIZE / 2u, cum = 0;
+    for (uint32_t v = 0; v < 256; v++) {
+        cum += hist[v];
+        if (cum >= half) return v;
     }
-    return acc / SCOPE_CENTER_AVG;
+    return 128;
 }
 
 /* Binary-search the channel's offset reference for a mean of ~128. Assumes the
@@ -2445,10 +2458,25 @@ static uint32_t scope_center_robust_mean(uint8_t opcode)
  * CCTRL C1P), so the duty->voltage sense could invert. If a CH2 search
  * converges on a rail, suspect the direction before suspecting the pin: sweep
  * `trig2 raw` by hand and watch which way the mean moves. */
+/*
+ * Settle the acq buffer after a DAC step: the running acq task re-commits its
+ * RAM buffer every ~33 ms poll, and the operating point settles in ~350 ms
+ * (bench), so wait a generous fixed budget then average a couple of RAM-buffer
+ * medians to knock down per-frame noise.
+ */
+static uint32_t scope_center_settle_level(uint8_t ch)
+{
+    vTaskDelay(pdMS_TO_TICKS(SCOPE_CENTER_SETTLE_MS));
+    uint32_t acc = 0;
+    for (uint32_t k = 0; k < SCOPE_CENTER_AVG; k++) {
+        acc += scope_center_buf_median(ch);
+        vTaskDelay(pdMS_TO_TICKS(60));
+    }
+    return acc / SCOPE_CENTER_AVG;
+}
+
 static void scope_center_one(uint8_t ch, uint16_t *out_dac, uint32_t *out_mean)
 {
-    const uint8_t opcode = (ch == 2) ? 0x05u : 0x04u;
-
     uint16_t lo = 0, hi = 4095;
     uint16_t best_dac = 2048;
     uint32_t best_mean = 0;
@@ -2458,24 +2486,21 @@ static void scope_center_one(uint8_t ch, uint16_t *out_dac, uint32_t *out_mean)
         uint16_t mid = (uint16_t)((lo + hi) / 2);
         if (ch == 2) scope_trigger_ch2_raw(mid);
         else         scope_trigger_dac_raw(mid);
-        /* BUGFIX 2026-08-14 (round 2): the DAC moves fine, but the capture
-         * buffer FREE-RUNS and takes ~430 ms to refill (1024 samples at
-         * ~2.4 kS/s). A 10 ms settle read the STALE buffer (old, roughly-
-         * centered DC ~130) every iteration, so the search never converged —
-         * the first "DAC init" fix was aimed at the wrong cause. Wait a full
-         * buffer fill so the read reflects the NEW DC operating point. */
-        vTaskDelay(pdMS_TO_TICKS(SCOPE_CENTER_SETTLE_MS));
-        uint32_t mean = scope_center_robust_mean(opcode);
-        uint32_t err = (mean > SCOPE_CENTER_TARGET)
-                       ? mean - SCOPE_CENTER_TARGET
-                       : SCOPE_CENTER_TARGET - mean;
+        /* Wait for the running acq task to re-commit its RAM buffer at the new
+         * DC operating point, then read the settled median from that buffer.
+         * (The old paused-SPI path froze the rolling buffer mid-transition —
+         * see scope_center_buf_median.) */
+        uint32_t level = scope_center_settle_level(ch);
+        uint32_t err = (level > SCOPE_CENTER_TARGET)
+                       ? level - SCOPE_CENTER_TARGET
+                       : SCOPE_CENTER_TARGET - level;
         if (err < best_err) {
             best_err = err;
             best_dac = mid;
-            best_mean = mean;
+            best_mean = level;
         }
-        if (mean < SCOPE_CENTER_TARGET) lo = mid;   /* need higher DAC1 */
-        else                            hi = mid;   /* need lower  DAC1 */
+        if (level < SCOPE_CENTER_TARGET) lo = mid;   /* need higher DAC1 */
+        else                             hi = mid;   /* need lower  DAC1 */
         if (hi - lo <= 1) break;
     }
     *out_dac = best_dac;
@@ -2905,10 +2930,10 @@ static void cmd_fpga_scope_center(const char *args)
         return;
     }
 
-    if (!fpga_acq_pause()) {
-        usb_send_str("ERR: acq task did not park — bus not safe, aborting\r\n");
-        return;
-    }
+    /* Centering runs with the acq task LIVE (it keeps the RAM buffer fresh at
+     * the new DC operating point — see scope_center_buf_median). The servo
+     * touches only the DAC and reads RAM, never SPI3, so there is no bus
+     * contention with the acq task's reads and no need to pause it. */
 
     /* BUGFIX 2026-08-14: the search's scope_trigger_dac_raw() writes were inert
      * without this init (bench: reported means clustered 120-170 regardless of
@@ -2933,13 +2958,12 @@ static void cmd_fpga_scope_center(const char *args)
         /* Name the reference in the output: a bare "center=" line would read
          * identically whichever channel ran, and a mislabelled log is how this
          * project has repeatedly convinced itself of the wrong pin. */
-        usb_debug_printf("CH%u range %lu: center %s=%u (mean=%lu)\r\n",
+        usb_debug_printf("CH%u range %lu: center %s=%u (median=%lu)\r\n",
                          (unsigned)ch, (unsigned long)r,
                          (ch == 2) ? "TMR13_C1DT" : "DAC1",
                          dac, (unsigned long)mean);
     }
-
-    fpga_acq_resume();
+    /* acq was never paused (see the note above) — nothing to resume. */
 }
 
 static void cmd_fpga_diag_clear(void)
@@ -3418,6 +3442,14 @@ static void cmd_reboot_bootloader(void)
     dfu_request_reboot();
 }
 
+/* One scratch buffer shared by the shell's bus-snapshot commands (`spi3 read`
+ * uses the first half; `spi3 frame` uses both halves for a coherent CH1+CH2
+ * grab). They all run on the single shell task and never nest, so sharing is
+ * safe — and it keeps guest RAM in budget: two per-command 1 KB buffers
+ * overflowed the region by 368 bytes (2ff992c, caught once #31 unblocked the
+ * guest link). One 2 KB buffer costs +1 KB over the old lone snapshot. */
+static uint8_t shell_bus_scratch[2 * FPGA_ADC_BUF_SIZE];
+
 static void cmd_spi3_read(const char *args)
 {
     uint32_t len = 64;
@@ -3446,10 +3478,11 @@ static void cmd_spi3_read(const char *args)
      * "a fifth to a half of capture records are torn" as a property of
      * acquisition. It was a property of this loop. Corrected 2026-08-19.
      *
-     * Copy under one pass, then print at leisure. Static rather than stack:
-     * this runs on the shell task and 1 KB is more than it should borrow.
+     * Copy under one pass, then print at leisure. The shared shell scratch
+     * (file scope) rather than the stack: this runs on the shell task and 1 KB
+     * is more than it should borrow.
      */
-    static uint8_t snap[FPGA_ADC_BUF_SIZE];
+    uint8_t *snap = shell_bus_scratch;
     for (uint32_t i = 0; i < len; i++)
         snap[i] = ch1[i];
 
@@ -3459,6 +3492,65 @@ static void cmd_spi3_read(const char *args)
         usb_debug_printf(" %02X", snap[i]);
         if (i % 16 == 15 || i == len - 1) usb_send_str("\r\n");
     }
+}
+
+static void spi3_frame_dump(const char *name, const uint8_t *buf)
+{
+    usb_debug_printf("%s (%u bytes):\r\n", name, (unsigned)FPGA_ADC_BUF_SIZE);
+    for (uint32_t i = 0; i < FPGA_ADC_BUF_SIZE; i++) {
+        if (i % 16 == 0) usb_debug_printf("%04lX:", i);
+        usb_debug_printf(" %02X", buf[i]);
+        if (i % 16 == 15) usb_send_str("\r\n");
+    }
+}
+
+/* spi3 frame — one COHERENT two-channel snapshot of the acquisition buffers,
+ * plus the render-path facts a host needs to reproduce what the screen shows:
+ * the frame generation (proves successive grabs are distinct captures) and
+ * the soft-trigger offset computed by the RENDERER'S OWN code
+ * (scope_ui_soft_trigger_offset), not a host-side replica.
+ *
+ * Coherence: the acq task commits CH1+CH2 atomically under acq_frame_gen
+ * (odd = commit in progress), so a copy bracketed by an unchanged EVEN
+ * generation is one capture on both channels — which is what makes the
+ * CH1-vs-CH2 relative-phase measurement in scripts/exp22_stability.py valid.
+ * Touches RAM only (no SPI3), so acq stays live, same as `spi3 read`. */
+static void cmd_spi3_frame(void)
+{
+    const volatile uint8_t *c1 = fpga_get_ch1_buf();
+    const volatile uint8_t *c2 = fpga_get_ch2_buf();
+    if (!c1 || !c2) {
+        usb_send_str("FPGA not initialized\r\n");
+        return;
+    }
+
+    uint8_t *s1 = shell_bus_scratch;
+    uint8_t *s2 = shell_bus_scratch + FPGA_ADC_BUF_SIZE;
+    uint32_t g0 = 0, g1 = 1;
+    for (uint8_t tries = 0; tries < 8; tries++) {
+        g0 = fpga_acq_frame_generation();
+        if (g0 & 1u) {                      /* mid-commit: wait it out */
+            vTaskDelay(pdMS_TO_TICKS(1));
+            continue;
+        }
+        for (uint32_t i = 0; i < FPGA_ADC_BUF_SIZE; i++) s1[i] = c1[i];
+        for (uint32_t i = 0; i < FPGA_ADC_BUF_SIZE; i++) s2[i] = c2[i];
+        g1 = fpga_acq_frame_generation();
+        if (g1 == g0) break;
+        vTaskDelay(pdMS_TO_TICKS(1));
+    }
+
+    const scope_state_t *ss = scope_state_get();
+    uint8_t src_ch = (ss && ss->trigger.source == TRIG_SRC_CH2) ? 2u : 1u;
+    uint16_t off = scope_ui_soft_trigger_offset((src_ch == 2u) ? s2 : s1);
+
+    usb_debug_printf("FRAME gen=%lu coherent=%u src=CH%u off=%u soft=%u\r\n",
+                     (unsigned long)g1,
+                     (unsigned)(g1 == g0 && !(g0 & 1u)),
+                     (unsigned)src_ch, (unsigned)off,
+                     (unsigned)(ss ? (ss->soft_trigger ? 1 : 0) : 0));
+    spi3_frame_dump("CH1", s1);
+    spi3_frame_dump("CH2", s2);
 }
 
 static int32_t scaled_i100(float value)
@@ -5878,9 +5970,18 @@ static void cmd_spi3_gowin(void)
  * CONFIG_ENABLE frames over AF hardware-SPI3 (/256), a 60ms gap, then [reps] over
  * GPIO bit-bang — same pins/rate/frame, drive type the only variable. Isolated
  * frames; does NOT configure. Arm sigrok (D0=SCK/D1=MISO/D2=MOSI/D3=CS) BEFORE
- * running, then diff the two bursts. */
+ * running, then diff the two bursts.
+ *
+ * The rig needs the bit-bang transport, which only exists under FPGA_CONFIG_B.
+ * The command stays in the table on every build and says so, rather than
+ * disappearing from `help` and leaving the operator guessing. */
 static void cmd_spi3_edgecap(const char *args)
 {
+#if !FPGA_CONFIG_B
+    (void)args;
+    usb_send_str("edgecap: FPGA_CONFIG_B builds only — the GPIO bit-bang half is not"
+                 " compiled here. Flash `make guest-bringup-bb`.\r\n");
+#else
     uint32_t reps = 16;
     if (args && *args) reps = (uint32_t)strtoul(args, NULL, 0);
     if (reps == 0 || reps > 255) reps = 16;
@@ -5889,6 +5990,7 @@ static void cmd_spi3_edgecap(const char *args)
     usb_send_str("  emitting now — capture window should be armed on D0=SCK D1=MISO D2=MOSI D3=CS\r\n");
     fpga_edgecap_15((uint8_t)reps);
     usb_send_str("edgecap: done. AF burst | gap | GPIO burst are in the capture.\r\n");
+#endif
 }
 
 /* ─── fpga selftest ────────────────────────────────────────────────────────
@@ -7017,6 +7119,8 @@ static const shell_cmd_t shell_cmds[] = {
           "spi3 seq <b..> | <b..>          xfer w/ mid-sequence CS pulse at '|'\r\n"),
     CMD_A("spi3 read", cmd_spi3_read, 0,
           "spi3 read [len]                 Raw SPI3 read + hex dump\r\n"),
+    CMD_V("spi3 frame", cmd_spi3_frame, SC_EXACT,
+          "spi3 frame                      Coherent CH1+CH2 snapshot + gen + render trig offset\r\n"),
     CMD_V("reboot bootloader", cmd_reboot_bootloader, SC_EXACT,
           "reboot bootloader               Reboot into USB HID updater\r\n"),
     CMD_V("spi3 acqread", cmd_spi3_acqread, SC_EXACT | SC_SPI3,

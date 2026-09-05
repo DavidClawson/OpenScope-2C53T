@@ -167,6 +167,11 @@ void draw_scope_live_frame(void);  /* flicker-free trace-band update; falls
 void scope_show_popup(const char *text);
 bool scope_popup_active(void);
 
+/* The renderer's software display trigger, exported for bench validation
+ * (`spi3 frame`): index the drawn window starts at for the CURRENT scope
+ * state; 0 = free-run (disabled / flat signal / no crossing). */
+uint16_t scope_ui_soft_trigger_offset(const volatile uint8_t *src_buf);
+
 /* Advance the quick-change popup on the flicker-free render path, painting the
  * box once on the frame it first appears. draw_scope_live_frame() steps the
  * trace band around the popup rectangle, so the box is never repainted while

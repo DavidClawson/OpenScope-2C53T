@@ -175,18 +175,18 @@ static void test_labels(void)
     CHECK(buf[0] != '~', "r6 is MEASURED and must not be marked, got \"%s\"", buf);
     CHECK(strchr(buf, 'V') != NULL, "r6 label should carry units, got \"%s\"", buf);
 
-    /* 42.95 mV/count * 32 counts/div = 1.3744 V/div. */
-    CHECK(strcmp(buf, "1.37V") == 0,
-          "r6 label should be derived as 1.37V, got \"%s\"", buf);
+    /* 42.95 mV/count * 0.92 source-scale * 32 counts/div = 1.2645 V/div. */
+    CHECK(strcmp(buf, "1.26V") == 0,
+          "r6 label should be derived as 1.26V, got \"%s\"", buf);
 
     /* Provisional -> same number, marked. */
     scope_cal_range_label(1, 9, buf, sizeof(buf));
     CHECK(buf[0] == '~', "r9 is PROVISIONAL and must be marked, got \"%s\"", buf);
 
-    /* Sub-volt divisions read in mV. 21.83 * 32 = 698.6 mV. */
+    /* Sub-volt divisions read in mV. 21.83 * 0.92 * 32 = 642.7 mV. */
     scope_cal_range_label(1, 5, buf, sizeof(buf));
-    CHECK(strcmp(buf, "699mV") == 0,
-          "r5 label should be derived as 699mV, got \"%s\"", buf);
+    CHECK(strcmp(buf, "643mV") == 0,
+          "r5 label should be derived as 643mV, got \"%s\"", buf);
 
     /*
      * And the point of the whole exercise: the derived label must NOT equal

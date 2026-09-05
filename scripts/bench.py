@@ -930,6 +930,15 @@ class JDS6600:
         s = str(int(round(pct * 10)))
         self._write_checked(self._ch_reg(29, ch), s, s)
 
+    def phase(self, deg: float) -> None:
+        """CH2 phase relative to CH1, in degrees.
+
+        The JDS6600 has ONE phase register (31, 0.1-degree units) -- it offsets
+        CH2 against CH1; there is no per-channel phase.  Normalised to
+        [0, 360).  Readback-verified like every setter here."""
+        tenths = int(round(deg * 10)) % 3600
+        self._write_checked(31, str(tenths), str(tenths))
+
     # -- state save / restore ---------------------------------------------
 
     _STATE_REGS = (20, 21, 22, 23, 24, 25, 26, 27, 28, 29, 30)
