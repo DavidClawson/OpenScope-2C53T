@@ -33,7 +33,13 @@
 /* Memory allocation */
 #define configSUPPORT_STATIC_ALLOCATION         0
 #define configSUPPORT_DYNAMIC_ALLOCATION        1
-#define configTOTAL_HEAP_SIZE                   ((size_t)(32768))
+/* 31 KB, was 32 KB (2026-09-05). The statics had grown to within 648 B of the
+ * 224 KB ceiling while the heap's low-water mark sat at 12 128 B free
+ * (xMinimumEverFreeBytesRemaining, guest-coldtrace, unit #2, 2026-08-26 —
+ * one build, one session). 1 KB moves from the idle part of the heap to the
+ * link-time budget; ~11 KB of heap headroom remains. Re-measure the low-water
+ * mark before taking any more. */
+#define configTOTAL_HEAP_SIZE                   ((size_t)(31744))
 #define configAPPLICATION_ALLOCATED_HEAP        0
 
 /* Queue and semaphore features (used heavily by original firmware) */
