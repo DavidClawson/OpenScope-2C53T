@@ -95,6 +95,10 @@ typedef struct {
 typedef enum {
     FLASH_REGION_SYSVOL = 0,   /* RO: FatFS "3:" — UI assets + factory cal path */
     FLASH_REGION_USERVOL,      /* RO: FatFS "2:" — stock screenshot volume      */
+    FLASH_REGION_FWCACHE,      /* rw: A/B firmware-image cache (fw_loader.c) —
+                                * MUST sit here: the table self-check requires
+                                * ascending start addresses, and the ids index
+                                * the table */
     FLASH_REGION_USER_CAL,     /* append: our user-calibration overlay          */
     FLASH_REGION_SETTINGS,     /* append: our saved settings                    */
     FLASH_REGION_MODULES,      /* rw: module data assets                        */

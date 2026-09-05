@@ -70,7 +70,14 @@
 
 const flash_region_t flash_region_table[FLASH_REGION_COUNT] = {
     [FLASH_REGION_SYSVOL]   = { "sysvol",   0x000000u, 0x200000u, FLASH_REGION_KIND_READONLY },
-    [FLASH_REGION_USERVOL]  = { "uservol",  0x200000u, 0xD00000u, FLASH_REGION_KIND_READONLY },
+    [FLASH_REGION_USERVOL]  = { "uservol",  0x200000u, 0xB00000u, FLASH_REGION_KIND_READONLY },
+    /* Carved out of uservol's tail 2026-08-22: two 1 MB firmware-image
+     * cache slots (manifest sector + image each), shared with the 2C23T
+     * port's fw_cache.c so either firmware can install what the other
+     * cached. The stock FAT in uservol nominally spans this range; the
+     * volume is read-only here and its screenshot payloads live far
+     * below, so the carve-out costs nothing in practice. */
+    [FLASH_REGION_FWCACHE]  = { "fwcache",  0xD00000u, 0x200000u, FLASH_REGION_KIND_RW       },
     [FLASH_REGION_USER_CAL] = { "usercal",  0xF00000u, 0x010000u, FLASH_REGION_KIND_APPEND   },
     [FLASH_REGION_SETTINGS] = { "settings", 0xF10000u, 0x010000u, FLASH_REGION_KIND_APPEND   },
     [FLASH_REGION_MODULES]  = { "modules",  0xF20000u, 0x080000u, FLASH_REGION_KIND_RW       },

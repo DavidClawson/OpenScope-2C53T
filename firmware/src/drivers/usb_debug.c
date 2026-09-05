@@ -17,6 +17,7 @@
 #include "cdc_desc.h"
 #include "dfu_boot.h"
 #include "flash_fs.h"
+#include "fw_loader.h"
 #include "cal_backup.h"
 #include "rtt.h"
 #include "continuity_buzzer.h"
@@ -6779,6 +6780,125 @@ static void cmd_spi3_probe(void)
  * string, CMD_V if it takes void). Help is part of the row; keep the
  * left-aligned name+argspec column at 32 chars like the rows around it.
  * ═══════════════════════════════════════════════════════════════════ */
+/* ── fwload / fwstat / fwapply — image loading over this shell ──────────
+ * The state machine and every flash touch live in fw_loader.c; these
+ * handlers are parsing and printing only. The RX rerouting that feeds the
+ * transfer is in vUsbDebugTask below. */
+
+static const char *fwl_err_name(fw_loader_error_t e)
+{
+    switch (e) {
+    case FW_LOADER_ERR_NONE:    return "none";
+    case FW_LOADER_ERR_SIZE:    return "size (need even 8192..757760)";
+    case FW_LOADER_ERR_FLASH:   return "w25q erase/write/read";
+    case FW_LOADER_ERR_CRC:     return "crc mismatch";
+    case FW_LOADER_ERR_VECTOR:  return "vector table not app-shaped";
+    case FW_LOADER_ERR_TIMEOUT: return "rx went silent; run fwload again";
+    case FW_LOADER_ERR_NO_IMAGE: return "slot holds no valid image";
+    case FW_LOADER_ERR_NO_BUFFER: return "no scratch attached (shell task bug)";
+    }
+    return "?";
+}
+
+static void fwl_print_status(void)
+{
+    static const char *names[] = { "IDLE", "RECEIVING", "STAGED", "ERROR" };
+    char buf[160];
+    snprintf(buf, sizeof(buf),
+             "fwload: %s slot=%c %lu/%lu crc=%08lX err=%s\r\n"
+             "cache:  A=%lu/%08lX B=%lu/%08lX\r\n",
+             names[fw_loader_state()],
+             fw_loader_slot() ? 'b' : 'a',
+             (unsigned long)fw_loader_bytes(),
+             (unsigned long)fw_loader_expected(),
+             (unsigned long)fw_loader_crc_announced(),
+             fwl_err_name(fw_loader_error()),
+             (unsigned long)fw_loader_slot_size(0), (unsigned long)fw_loader_slot_crc(0),
+             (unsigned long)fw_loader_slot_size(1), (unsigned long)fw_loader_slot_crc(1));
+    usb_send_str(buf);
+}
+
+static void cmd_fwload(const char *args)
+{
+    char *end = NULL;
+    unsigned long size = strtoul(args, &end, 10);
+    char *end2 = NULL;
+    unsigned long crc = (end && *end) ? strtoul(end, &end2, 16) : 0;
+    uint8_t slot = 1; /* default: slot b — "the other firmware" by custom */
+    bool slot_bad = false;
+    if (end2 != NULL) {
+        while (*end2 == ' ') end2++;
+        if (*end2 == 'a' || *end2 == 'A') slot = 0;
+        else if (*end2 == 'b' || *end2 == 'B') slot = 1;
+        else if (*end2 != '\0') slot_bad = true;
+    }
+    /* An argument that is present but is neither a nor b used to fall back to
+     * the default and arm the intake anyway: `fwload <size> <crc> c` put the
+     * shell into raw mode while the operator was still reading the reply, and
+     * the next line they typed went into the image instead of the parser.
+     * (Wedged the 2C23T port that way on 2026-08-24 — same parser, same trap.)
+     * Refusing costs nothing: cdc_flash.py never sends anything but a or b. */
+    if (slot_bad) {
+        usb_send_str("fwload: ERROR slot must be a or b\r\n");
+        return;
+    }
+    if (end == args || crc == 0) {
+        usb_send_str("usage: fwload <size bytes, decimal> <crc32 hex> [a|b]\r\n"
+                     "       then stream exactly that many raw bytes\r\n");
+        return;
+    }
+    if (!fw_loader_begin((uint32_t)size, (uint32_t)crc, slot)) {
+        fwl_print_status();
+        return;
+    }
+    char buf[72];
+    snprintf(buf, sizeof(buf), "GO %lu bytes to slot %c, crc %08lX expected\r\n",
+             size, slot ? 'b' : 'a', crc);
+    usb_send_str(buf);
+}
+
+static void cmd_fwstat(void)
+{
+    fwl_print_status();
+}
+
+static void cmd_fwswap(const char *args)
+{
+    uint8_t slot;
+    while (*args == ' ') args++;
+    if (*args == 'a' || *args == 'A') slot = 0;
+    else if (*args == 'b' || *args == 'B') slot = 1;
+    else {
+        usb_send_str("usage: fwswap a|b   (install a cached image, no transfer)\r\n");
+        fwl_print_status();
+        return;
+    }
+    usb_send_str("verifying slot, then: erase+program+verify from RAM and\r\n"
+                 "SYSTEM RESET into the image. keep USB attached (it carries\r\n"
+                 "the rail through the reset). recovery = MENU+Power IAP.\r\n");
+    vTaskDelay(pdMS_TO_TICKS(300));
+    if (!fw_loader_install_slot(slot)) {
+        fwl_print_status();
+    }
+}
+
+static void cmd_fwapply(void)
+{
+    if (fw_loader_state() != FW_LOADER_STAGED) {
+        usb_send_str("nothing staged — fwload first (or fwswap a|b)\r\n");
+        fwl_print_status();
+        return;
+    }
+    usb_send_str("applying: erase+program+verify from RAM, then SYSTEM RESET\r\n"
+                 "into the new image (a clean boot, not a jump). this port\r\n"
+                 "drops now. keep USB attached — it carries the rail through\r\n"
+                 "the reset. recovery = MENU+Power IAP.\r\n");
+    vTaskDelay(pdMS_TO_TICKS(300));   /* let the goodbye reach the host */
+    if (!fw_loader_apply()) {
+        fwl_print_status();           /* only reached on a refused apply */
+    }
+}
+
 typedef struct {
     const char *name;                    /* full command word(s) */
     void (*fn_args)(const char *args);   /* exactly one of these two is set */
@@ -6803,6 +6923,15 @@ static const shell_cmd_t shell_cmds[] = {
           "version                         Firmware info\r\n"),
     CMD_V("status", cmd_status, SC_EXACT,
           "status                          FPGA & system status\r\n"),
+    CMD_A("fwload", cmd_fwload, SC_NEEDARGS,
+          "fwload <size> <crc32hex> [a|b]  Stage an image into W25Q cache slot a/b\r\n"
+          "  then stream exactly <size> raw bytes (scripts/cdc_flash.py does both)\r\n"),
+    CMD_V("fwstat", cmd_fwstat, SC_EXACT,
+          "fwstat                          Staging state / byte count / verdict\r\n"),
+    CMD_V("fwapply", cmd_fwapply, SC_EXACT,
+          "fwapply                         Install the staged image over the app slot\r\n"),
+    CMD_A("fwswap", cmd_fwswap, SC_NEEDARGS,
+          "fwswap a|b                      Install a cached image (no transfer needed)\r\n"),
     CMD_A("usart raw", cmd_usart_raw, SC_NEEDARGS,
           "usart raw <10 hex bytes>       Send raw 10-byte USART frame\r\n" "  e.g.: usart raw 00 00 00 0B 01 00 00 00 00 0B\r\n"),
     CMD_A("usart tx", cmd_usart_tx, SC_NEEDARGS,
@@ -7154,6 +7283,23 @@ static void vUsbDebugTask(void *pvParameters)
     bool usb_banner_sent = false;
     bool rtt_banner_sent = false;
     uint32_t usb_settle = 0;
+    /* When a transfer dies mid-stream the host still has bytes in flight, and
+     * without this they land in shell_feed() and are parsed as command lines —
+     * a binary typed at the prompt. cdc_flash.py stops at the first chunk
+     * carrying ERROR, so the tail is short, but any other host makes it long.
+     * Swallow exactly what the aborted image still owed, and give up on the
+     * wait after the same silence the loader itself uses, so a host that never
+     * sends the rest cannot leave the shell deaf to the operator. */
+    uint32_t fwl_discard = 0;
+    uint32_t fwl_discard_idle = 0;
+
+    /* The firmware loader borrows this task's bus scratch (the arena `spi3
+     * read` / `spi3 frame` already share, 545a9d8) instead of owning a 512 B
+     * buffer of its own — the RAM ceiling is that close. Safe for the same
+     * reason theirs is: every fw_loader entry point runs on this task, and no
+     * other command can interleave with a transfer (RX is routed to the
+     * loader) or an install (interrupts are off). */
+    fw_loader_attach_scratch(shell_bus_scratch, sizeof(shell_bus_scratch));
 
     for (;;) {
         bool did_work = false;
@@ -7213,7 +7359,52 @@ static void vUsbDebugTask(void *pvParameters)
             } else {
                 uint16_t rx_len = usb_vcp_get_rxdata(&usb_core_dev, rx_buf);
                 if (rx_len > 0) {
-                    shell_feed(rx_buf, rx_len, true);
+                    if (fw_loader_active()) {
+                        /* Raw image bytes for fw_loader — no echo, no line
+                         * editor. Progress every 64 KB so a long transfer
+                         * is visibly alive without flooding the port. */
+                        uint32_t before = fw_loader_bytes();
+                        fw_loader_feed(rx_buf, rx_len);
+                        if ((fw_loader_bytes() >> 16) != (before >> 16)) {
+                            char pbuf[24];
+                            snprintf(pbuf, sizeof(pbuf), "..%luK\r\n",
+                                     (unsigned long)(fw_loader_bytes() >> 10));
+                            usb_send_str(pbuf);
+                        }
+                        if (!fw_loader_active()) {
+                            fwl_print_status();  /* staged or failed — say so */
+                            if (fw_loader_state() == FW_LOADER_ERROR) {
+                                /* The host has sent `before + rx_len` bytes
+                                 * so far — the tail of THIS packet is already
+                                 * off the wire even when the loader refused
+                                 * it, so `expected - bytes()` would over-
+                                 * count and the drain would eat up to a
+                                 * packet of the operator's next keystrokes.
+                                 * Count what is still in flight instead. */
+                                uint32_t sent = before + rx_len;
+                                fwl_discard =
+                                    sent < fw_loader_expected()
+                                        ? fw_loader_expected() - sent
+                                        : 0;
+                                fwl_discard_idle = 0;
+                            }
+                        }
+                    } else if (fwl_discard > 0) {
+                        uint32_t drop = rx_len < fwl_discard ? rx_len
+                                                             : fwl_discard;
+                        fwl_discard -= drop;
+                        fwl_discard_idle = 0;
+                        if (fwl_discard == 0) {
+                            usb_send_str("fwload: aborted image drained; "
+                                         "shell is listening again\r\n");
+                        }
+                        if (rx_len > drop) {
+                            shell_feed(rx_buf + drop,
+                                       (uint16_t)(rx_len - drop), true);
+                        }
+                    } else {
+                        shell_feed(rx_buf, rx_len, true);
+                    }
                     did_work = true;
                 }
             }
@@ -7224,6 +7415,38 @@ static void vUsbDebugTask(void *pvParameters)
 #else
         (void)rx_buf; (void)usb_banner_sent; (void)usb_settle;
 #endif
+
+        /* Age the fw_loader RX-silence timeout, and report if it fires —
+         * the poll is what turns a wedged transfer back into a live shell. */
+        {
+            bool was_loading = fw_loader_active();
+            fw_loader_poll();
+            if (was_loading && !fw_loader_active()) {
+                fwl_print_status();
+                /* A timeout kills the transfer too, and a host that merely
+                 * stalled (>3 s of silence mid-image) may well resume: arm
+                 * the same drain the feed-path error arms, or the rest of
+                 * the image lands in shell_feed() as command lines. No
+                 * packet is in flight here, so expected - received is the
+                 * exact figure. A host that is truly gone costs one more
+                 * 3 s drain expiry, which reports itself. */
+                if (fw_loader_state() == FW_LOADER_ERROR) {
+                    fwl_discard = fw_loader_expected() - fw_loader_bytes();
+                    fwl_discard_idle = 0;
+                }
+            }
+        }
+
+        /* The drain waits on the same 3 s of silence the loader does: a host
+         * that aborted and walked away must not cost the operator a shell. */
+        if (fwl_discard > 0 && !did_work) {
+            if (++fwl_discard_idle >= FW_LOADER_TIMEOUT_POLLS) {
+                fwl_discard = 0;
+                fwl_discard_idle = 0;
+                usb_send_str("fwload: stopped waiting for the aborted image; "
+                             "shell is listening again\r\n");
+            }
+        }
 
         if (!did_work) {
             vTaskDelay(pdMS_TO_TICKS(10));

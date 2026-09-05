@@ -65,6 +65,7 @@ C_SOURCES += src/drivers/meter_data.c
 C_SOURCES += src/drivers/meter_auto.c
 C_SOURCES += src/drivers/meter_autoselect.c
 C_SOURCES += src/drivers/usb_debug.c
+C_SOURCES += src/drivers/fw_loader.c
 C_SOURCES += src/drivers/rtt.c
 C_SOURCES += src/drivers/fault.c
 C_SOURCES += src/dsp/signal_gen.c
@@ -524,6 +525,22 @@ $(BUILD_DIR)/test_scope_cal: tests/test_scope_cal.c src/ui/scope_cal.c src/ui/sc
 # calibrated measurement can rescale the instrument), and the MEASURED tier's
 # agreement/doubling claims must actually hold.
 test-scope-cal: $(BUILD_DIR)/test_scope_cal
+	$<
+
+$(BUILD_DIR)/test_fw_loader: tests/test_fw_loader.c src/drivers/fw_loader.c src/drivers/fw_loader.h | $(BUILD_DIR)
+	$(HOST_CC) -std=gnu11 -Wall -Wextra -DFW_LOADER_HOST_TEST -Isrc/drivers $< src/drivers/fw_loader.c -o $@
+
+# CDC firmware loader: tests the gates between a byte stream and an erased
+# app slot (size/CRC/vector/timeout), the staging byte-exactness, and that
+# apply() refuses anything not STAGED. The RAM installer itself is compiled
+# out on the host and is validated on hardware.
+#
+# Declared .PHONY here rather than appended to the shared list below: that
+# single long line is edited by every branch that adds a target, and it was
+# the only merge conflict this work produced, twice. A second .PHONY line is
+# equivalent to make and conflicts with nobody.
+.PHONY: test-fw-loader
+test-fw-loader: $(BUILD_DIR)/test_fw_loader
 	$<
 
 $(BUILD_DIR)/test_scope_timebase: tests/test_scope_timebase.c src/ui/scope_timebase.c src/ui/scope_timebase.h | $(BUILD_DIR)
