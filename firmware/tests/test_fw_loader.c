@@ -16,6 +16,8 @@
  *   5. Timeout: a transfer that goes silent returns the shell to life as
  *      ERROR, and a fresh fwload recovers.
  *   6. apply() refuses anything not STAGED.
+ *   7. No-buffer gate: until the shell task lends a scratch area, begin()
+ *      and install_slot() refuse with ERR_NO_BUFFER and consume nothing.
  */
 
 #include "../src/drivers/fw_loader.h"
@@ -178,8 +180,32 @@ static void test_timeout_recovers(void)
     CHECK(fw_loader_state() == FW_LOADER_STAGED, "retry must stage");
 }
 
+/* The loader owns no buffer; on target the shell task lends its bus scratch.
+ * Before that has happened nothing may start — and a lend that is too small
+ * must count as no lend at all. */
+static void test_no_buffer_gate(void)
+{
+    static uint8_t tiny[FW_LOADER_SCRATCH_MIN - 1];
+
+    CHECK(!fw_loader_begin(20000, 0x1234, 1), "begin without scratch must refuse");
+    CHECK(fw_loader_error() == FW_LOADER_ERR_NO_BUFFER, "err must be NO_BUFFER");
+    CHECK(!fw_loader_active(), "a refused begin must not activate RX routing");
+    CHECK(!fw_loader_install_slot(0), "install without scratch must refuse");
+    CHECK(fw_loader_error() == FW_LOADER_ERR_NO_BUFFER, "err must be NO_BUFFER");
+
+    fw_loader_attach_scratch(tiny, sizeof(tiny));
+    CHECK(!fw_loader_begin(20000, 0x1234, 1), "undersized scratch must count as none");
+    CHECK(fw_loader_error() == FW_LOADER_ERR_NO_BUFFER, "err must be NO_BUFFER");
+}
+
 int main(void)
 {
+    /* Same shape as the target: one 2 KB arena lent by the shell task. */
+    static uint8_t scratch[2048];
+
+    test_no_buffer_gate();
+    fw_loader_attach_scratch(scratch, sizeof(scratch));
+
     test_size_gate();
     test_happy_path();
     test_crc_gate();

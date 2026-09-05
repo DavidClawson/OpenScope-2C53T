@@ -73,7 +73,20 @@ typedef enum {
     FW_LOADER_ERR_VECTOR,   /* image's SP/PC not app-slot shaped          */
     FW_LOADER_ERR_TIMEOUT,  /* RX went silent mid-transfer                */
     FW_LOADER_ERR_NO_IMAGE, /* slot holds no valid manifest               */
+    FW_LOADER_ERR_NO_BUFFER,/* no scratch attached — a programming error   */
 } fw_loader_error_t;
+
+/* The loader owns no buffer. The shell task lends it one — at least
+ * FW_LOADER_SCRATCH_MIN bytes — before the first fwload/fwswap; every entry
+ * point below refuses with ERR_NO_BUFFER until that has happened. On target
+ * the lender is usb_debug.c's shell_bus_scratch, the arena `spi3 read` /
+ * `spi3 frame` already share: all of them run on the single shell task and
+ * none can overlap a transfer (RX is routed here, so no other command runs)
+ * or an install (interrupts are off). Lending rather than importing keeps
+ * this module ignorant of USB, and the host test lends its own array.
+ * len < FW_LOADER_SCRATCH_MIN detaches. */
+#define FW_LOADER_SCRATCH_MIN 512u
+void fw_loader_attach_scratch(uint8_t *buf, uint32_t len);
 
 /* Shell entry points (usb_debug.c). */
 bool fw_loader_begin(uint32_t size, uint32_t crc32, uint8_t slot);

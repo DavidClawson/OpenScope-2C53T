@@ -6795,6 +6795,7 @@ static const char *fwl_err_name(fw_loader_error_t e)
     case FW_LOADER_ERR_VECTOR:  return "vector table not app-shaped";
     case FW_LOADER_ERR_TIMEOUT: return "rx went silent; run fwload again";
     case FW_LOADER_ERR_NO_IMAGE: return "slot holds no valid image";
+    case FW_LOADER_ERR_NO_BUFFER: return "no scratch attached (shell task bug)";
     }
     return "?";
 }
@@ -7291,6 +7292,14 @@ static void vUsbDebugTask(void *pvParameters)
      * sends the rest cannot leave the shell deaf to the operator. */
     uint32_t fwl_discard = 0;
     uint32_t fwl_discard_idle = 0;
+
+    /* The firmware loader borrows this task's bus scratch (the arena `spi3
+     * read` / `spi3 frame` already share, 545a9d8) instead of owning a 512 B
+     * buffer of its own — the RAM ceiling is that close. Safe for the same
+     * reason theirs is: every fw_loader entry point runs on this task, and no
+     * other command can interleave with a transfer (RX is routed to the
+     * loader) or an install (interrupts are off). */
+    fw_loader_attach_scratch(shell_bus_scratch, sizeof(shell_bus_scratch));
 
     for (;;) {
         bool did_work = false;

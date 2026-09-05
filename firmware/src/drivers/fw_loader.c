@@ -55,6 +55,9 @@ enum {
     FWL_DATA_OFF    = FWL_SECTOR,
     FWL_DATA_MAX    = FWL_APP_CEILING - FWL_APP_BASE,   /* 740 KB */
 
+    /* Working chunk of the lent scratch buffer — see fwl_buf below. */
+    FWL_CHUNK       = FW_LOADER_SCRATCH_MIN,
+
     /* See FW_LOADER_TIMEOUT_POLLS in the header — the shell task ages the
      * drain of an aborted image against the same number. */
     FWL_TIMEOUT_POLLS = FW_LOADER_TIMEOUT_POLLS,
@@ -80,12 +83,20 @@ static uint32_t fwl_erase_mark;
 static uint32_t fwl_silence_polls;
 
 /* RX chunk accumulator; also the CRC/verify read buffer and the
- * installer's transfer buffer (never active at the same time). 512 B on
- * purpose — this firmware runs within a few hundred bytes of the RAM
- * ceiling, so the installer works the 2 KB flash pages in four 512-byte
- * passes instead of holding a whole page. */
-static uint8_t  fwl_buf[512];
+ * installer's transfer buffer (never active at the same time). Not owned
+ * here: the shell task lends it via fw_loader_attach_scratch() — see the
+ * header. This firmware runs within a few hundred bytes of the RAM
+ * ceiling, and a 512 B array of our own was the difference between the
+ * app/guest images linking and not. FWL_CHUNK stays 512 so the installer
+ * works the 2 KB flash pages in four passes exactly as bench-proven; the
+ * lender's arena may be larger, the extra is simply unused. */
+static uint8_t *fwl_buf;
 static uint32_t fwl_buf_fill;
+
+void fw_loader_attach_scratch(uint8_t *buf, uint32_t len)
+{
+    fwl_buf = (buf != NULL && len >= FWL_CHUNK) ? buf : NULL;
+}
 
 static uint32_t fwl_slot_base(uint8_t slot)
 {
@@ -197,6 +208,10 @@ bool fw_loader_begin(uint32_t size, uint32_t crc32, uint8_t slot)
     fwl_buf_fill = 0;
     fwl_silence_polls = 0;
 
+    if (fwl_buf == NULL) {
+        fwl_fail(FW_LOADER_ERR_NO_BUFFER);
+        return false;
+    }
     if (slot > 1u || size < FWL_MIN_IMAGE || size > FWL_DATA_MAX ||
         (size & 1u)) {
         fwl_fail(FW_LOADER_ERR_SIZE);
@@ -247,10 +262,10 @@ static void fwl_finish(void)
     uint32_t data = fwl_slot_base(fwl_slot) + FWL_DATA_OFF;
     uint32_t crc = 0xFFFFFFFFu;
 
-    for (uint32_t off = 0; off < fwl_expected; off += sizeof(fwl_buf)) {
+    for (uint32_t off = 0; off < fwl_expected; off += FWL_CHUNK) {
         uint32_t n = fwl_expected - off;
-        if (n > sizeof(fwl_buf)) {
-            n = sizeof(fwl_buf);
+        if (n > FWL_CHUNK) {
+            n = FWL_CHUNK;
         }
         if (fwl_w25q_read(data + off, fwl_buf, n) != 0) {
             fwl_fail(FW_LOADER_ERR_FLASH);
@@ -281,7 +296,7 @@ static void fwl_finish(void)
 
     {
         fwl_manifest_t *m = (fwl_manifest_t *)fwl_buf;
-        memset(fwl_buf, 0xFF, FWL_SECTOR > sizeof(fwl_buf) ? sizeof(fwl_buf)
+        memset(fwl_buf, 0xFF, FWL_SECTOR > FWL_CHUNK ? FWL_CHUNK
                                                            : FWL_SECTOR);
         m->magic = FWL_MANIFEST_MAGIC;
         m->size = fwl_expected;
@@ -304,7 +319,7 @@ void fw_loader_feed(const uint8_t *data, uint16_t len)
     }
     fwl_silence_polls = 0;
     while (len > 0) {
-        uint32_t room = sizeof(fwl_buf) - fwl_buf_fill;
+        uint32_t room = FWL_CHUNK - fwl_buf_fill;
         uint32_t take = len < room ? len : room;
         uint32_t remaining = fwl_expected - fwl_received;
         if (take > remaining) {
@@ -317,7 +332,7 @@ void fw_loader_feed(const uint8_t *data, uint16_t len)
         data += take;
         len = (uint16_t)(len - take);
 
-        if (fwl_buf_fill == sizeof(fwl_buf) ||
+        if (fwl_buf_fill == FWL_CHUNK ||
             fwl_received == fwl_expected) {
             if (!fwl_commit_chunk()) {
                 fwl_fail(FW_LOADER_ERR_FLASH);
@@ -497,21 +512,21 @@ RF static void fwl_ram_install(uint32_t src, uint32_t size)
         }
 
         /* ...then program and verify it in 512-byte passes (RAM budget). */
-        for (uint32_t sub = 0; sub < FWL_PAGE_SIZE; sub += sizeof(fwl_buf)) {
+        for (uint32_t sub = 0; sub < FWL_PAGE_SIZE; sub += FWL_CHUNK) {
             uint32_t poff = off + sub;
             uint32_t n = poff < size ? size - poff : 0;
-            if (n > sizeof(fwl_buf)) {
-                n = sizeof(fwl_buf);
+            if (n > FWL_CHUNK) {
+                n = FWL_CHUNK;
             }
             if (n == 0) {
                 break; /* rest of the page stays erased (0xFF) */
             }
-            rf_w25q_read_raw(src + poff, page, sizeof(fwl_buf));
-            for (uint32_t i = n; i < sizeof(fwl_buf); ++i) {
+            rf_w25q_read_raw(src + poff, page, FWL_CHUNK);
+            for (uint32_t i = n; i < FWL_CHUNK; ++i) {
                 page[i] = 0xFFu;
             }
 
-            for (uint32_t i = 0; i < sizeof(fwl_buf); i += 2u) {
+            for (uint32_t i = 0; i < FWL_CHUNK; i += 2u) {
                 uint16_t v = (uint16_t)page[i] | ((uint16_t)page[i + 1u] << 8);
                 t = 0x00FFFFFFu;
                 while ((*sts & 1u) && --t) {
@@ -531,7 +546,7 @@ RF static void fwl_ram_install(uint32_t src, uint32_t size)
                 }
             }
 
-            for (uint32_t i = 0; i < sizeof(fwl_buf); ++i) {
+            for (uint32_t i = 0; i < FWL_CHUNK; ++i) {
                 if (*(volatile uint8_t *)(addr + sub + i) != page[i]) {
                     goto dead;
                 }
@@ -560,16 +575,20 @@ bool fw_loader_install_slot(uint8_t slot)
     uint32_t crc = 0xFFFFFFFFu;
     uint32_t data;
 
+    if (fwl_buf == NULL) {
+        fwl_fail(FW_LOADER_ERR_NO_BUFFER);
+        return false;
+    }
     if (slot > 1u || !fwl_read_manifest(slot, &m)) {
         fwl_fail(FW_LOADER_ERR_NO_IMAGE);
         return false;
     }
     data = fwl_slot_base(slot) + FWL_DATA_OFF;
 
-    for (uint32_t off = 0; off < m.size; off += sizeof(fwl_buf)) {
+    for (uint32_t off = 0; off < m.size; off += FWL_CHUNK) {
         uint32_t n = m.size - off;
-        if (n > sizeof(fwl_buf)) {
-            n = sizeof(fwl_buf);
+        if (n > FWL_CHUNK) {
+            n = FWL_CHUNK;
         }
         if (fwl_w25q_read(data + off, fwl_buf, n) != 0) {
             fwl_fail(FW_LOADER_ERR_FLASH);
