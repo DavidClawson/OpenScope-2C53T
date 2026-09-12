@@ -18,6 +18,7 @@
 #include "scope_measure.h"
 #include "scope_cal.h"
 #include "scope_timebase.h"
+#include "scope_cursor.h"
 #include "scope_freq.h"
 #include "math_channel.h"
 #include "persistence.h"
@@ -326,8 +327,8 @@ static bool measure_live_channel(const volatile uint8_t *buf,
 }
 
 /* No float formatting: the firmware links newlib-nano without
- * -u _printf_float, so "%f" prints nothing. Tenths are assembled by hand,
- * exactly as format_si()/format_freq() do below. */
+ * -u _printf_float, so "%f" prints nothing. Tenths are assembled by hand
+ * here, and in scope_cursor.c for the cursor readout. */
 static void fmt_counts(char *b, size_t n, unsigned v)
 {
     snprintf(b, n, "%ucnt", v);
@@ -429,6 +430,14 @@ _Static_assert(SCOPE_TIMEBASE_SAMPLES_PER_DIV == 32.0f,
                "grid pitch no longer matches SCOPE_TIMEBASE_SAMPLES_PER_DIV");
 _Static_assert(SCOPE_TIMEBASE_CODE_COUNT == TIMEBASE_COUNT,
                "timebase rate table length must match TIMEBASE_COUNT");
+
+/* The cursor readout converts a pixel delta into a sample delta with this,
+ * and it is true only because draw_channel_autofit()/draw_channel_fixed()
+ * plot buf[x] at column x. Decimating or interpolating the plot without
+ * changing this would silently rescale every cursor dt. */
+_Static_assert(SCOPE_CURSOR_SAMPLES_PER_PIXEL == 1.0f,
+               "the plot no longer draws one sample per column — "
+               "cursor dt and 1/dt would be wrong");
 
 /*
  * Measurement badges.
@@ -747,8 +756,61 @@ static inline int16_t autofit_y(const autofit_t *a, uint8_t v)
     return (int16_t)yy;
 }
 
-static void draw_channel_autofit(const volatile uint8_t *buf, uint16_t color,
-                                 int16_t y_top, int16_t y_bot)
+/*
+ * What the renderer ACTUALLY did to the vertical axis, recorded per band for
+ * the cursor readout.
+ *
+ * The cursor cannot assume the fixed 256/SCOPE_H transform, because the
+ * DEFAULT path is autofit and autofit's pixels-per-count is a property of the
+ * frame that was drawn — it rescales from the record's own min/max, every
+ * frame. Reading the scale off the drawing rather than off an assumption is
+ * the same "one copy, two callers" rule that autofit_prep() itself exists to
+ * enforce; the two-copies version of that bug (full path vs compositor)
+ * already cost this project a week.
+ *
+ * on == false means "nothing was plotted in this band", which the cursor
+ * reports as pixels rather than converting.
+ */
+typedef struct {
+    bool    on;
+    int16_t y_top, y_bot;
+    float   counts_per_pixel;
+    uint8_t channel;            /* 1 or 2 */
+    uint8_t range_idx;
+} vband_t;
+
+static vband_t g_vband[2];
+
+static void vband_clear(void)
+{
+    g_vband[0].on = false;
+    g_vband[1].on = false;
+}
+
+static void vband_note(uint8_t slot, uint8_t channel, uint8_t range_idx,
+                       int16_t y_top, int16_t y_bot, float counts_per_pixel)
+{
+    if (slot > 1u) return;
+    g_vband[slot].on               = (counts_per_pixel > 0.0f);
+    g_vband[slot].y_top            = y_top;
+    g_vband[slot].y_bot            = y_bot;
+    g_vband[slot].counts_per_pixel = counts_per_pixel;
+    g_vband[slot].channel          = channel;
+    g_vband[slot].range_idx        = range_idx;
+}
+
+/* autofit_y() maps counts to pixels with h/span, so its inverse — the number
+ * of ADC counts one screen row is worth in THIS frame — is span/h. */
+static float autofit_counts_per_pixel(const autofit_t *a)
+{
+    if (!a->on || a->h <= 0) return 0.0f;
+    return (float)a->span / (float)a->h;
+}
+
+/* Returns the ADC counts one screen row was worth in the frame it just drew,
+ * for the cursor readout. */
+static float draw_channel_autofit(const volatile uint8_t *buf, uint16_t color,
+                                  int16_t y_top, int16_t y_bot)
 {
     uint16_t n = (LCD_WIDTH < 512u) ? (uint16_t)LCD_WIDTH : 512u;
     autofit_t a;
@@ -767,6 +829,8 @@ static void draw_channel_autofit(const volatile uint8_t *buf, uint16_t color,
         }
         prev_y = y;
     }
+
+    return autofit_counts_per_pixel(&a);
 }
 
 /* Fixed-scale ("true volts/div") render — the graticule-honesty path (M3).
@@ -787,8 +851,8 @@ static void draw_channel_autofit(const volatile uint8_t *buf, uint16_t color,
  * In split (both-channel) mode the slope still uses the full SCOPE_H, so the
  * volts/div is identical to single-channel mode and a large signal clips at the
  * half-band edge exactly as it should. */
-static void draw_channel_fixed(const volatile uint8_t *buf, uint16_t color,
-                               int16_t y_top, int16_t y_bot, uint8_t center)
+static float draw_channel_fixed(const volatile uint8_t *buf, uint16_t color,
+                                int16_t y_top, int16_t y_bot, uint8_t center)
 {
     uint16_t n = (LCD_WIDTH < 512u) ? (uint16_t)LCD_WIDTH : 512u;
     int16_t  y_mid = (int16_t)((y_top + y_bot) / 2);
@@ -809,6 +873,11 @@ static void draw_channel_fixed(const volatile uint8_t *buf, uint16_t color,
         }
         prev_y = y;
     }
+
+    /* The inverse of the slope above, and the one the status bar's volts/div
+     * already assumes. Returned rather than recomputed at the call site so
+     * the cursor can never disagree with the plot. */
+    return 256.0f / (float)SCOPE_H;
 }
 
 /* Software display trigger — the fix for the free-running "dancing" trace.
@@ -897,6 +966,13 @@ void draw_demo_waveform(uint32_t frame)
     const theme_t *th = theme_get();
     const scope_state_t *ss = scope_state_get();
 
+    /* Forget last frame's vertical scales before anything is drawn. A band
+     * that is not plotted this frame — no capture, channel off, or the demo
+     * waveform below, whose amplitude is decorative — must leave the cursor
+     * with NO transform, so it reports pixels instead of converting through a
+     * scale that belongs to a trace no longer on the screen. */
+    vband_clear();
+
     /* Freeze waveform when stopped — hold the last running frame */
     static uint32_t frozen_frame = 0;
     if (ss->running) {
@@ -944,17 +1020,23 @@ void draw_demo_waveform(uint32_t frame)
         bool fx1 = ss->true_scale && scope_cal_true_scale_ok(1u, ss->ch1.vdiv_idx);
         bool fx2 = ss->true_scale && scope_cal_true_scale_ok(2u, ss->ch2.vdiv_idx);
 
+        /* Whatever transform each band ends up drawn with is recorded for the
+         * cursor readout — see vband_note(). */
         if (c1 && c2) {
-            if (fx1) draw_channel_fixed(b1, th->ch1, SCOPE_TOP, SCOPE_MID_Y - 1, 128u);
-            else     draw_channel_autofit(b1, th->ch1, SCOPE_TOP, SCOPE_MID_Y - 1);
-            if (fx2) draw_channel_fixed(b2, th->ch2, SCOPE_MID_Y + 1, SCOPE_BOT, 128u);
-            else     draw_channel_autofit(b2, th->ch2, SCOPE_MID_Y + 1, SCOPE_BOT);
+            vband_note(0u, 1u, ss->ch1.vdiv_idx, SCOPE_TOP, SCOPE_MID_Y - 1,
+                       fx1 ? draw_channel_fixed(b1, th->ch1, SCOPE_TOP, SCOPE_MID_Y - 1, 128u)
+                           : draw_channel_autofit(b1, th->ch1, SCOPE_TOP, SCOPE_MID_Y - 1));
+            vband_note(1u, 2u, ss->ch2.vdiv_idx, SCOPE_MID_Y + 1, SCOPE_BOT,
+                       fx2 ? draw_channel_fixed(b2, th->ch2, SCOPE_MID_Y + 1, SCOPE_BOT, 128u)
+                           : draw_channel_autofit(b2, th->ch2, SCOPE_MID_Y + 1, SCOPE_BOT));
         } else if (c1) {
-            if (fx1) draw_channel_fixed(b1, th->ch1, SCOPE_TOP, SCOPE_BOT, 128u);
-            else     draw_channel_autofit(b1, th->ch1, SCOPE_TOP, SCOPE_BOT);
+            vband_note(0u, 1u, ss->ch1.vdiv_idx, SCOPE_TOP, SCOPE_BOT,
+                       fx1 ? draw_channel_fixed(b1, th->ch1, SCOPE_TOP, SCOPE_BOT, 128u)
+                           : draw_channel_autofit(b1, th->ch1, SCOPE_TOP, SCOPE_BOT));
         } else if (c2) {
-            if (fx2) draw_channel_fixed(b2, th->ch2, SCOPE_TOP, SCOPE_BOT, 128u);
-            else     draw_channel_autofit(b2, th->ch2, SCOPE_TOP, SCOPE_BOT);
+            vband_note(0u, 2u, ss->ch2.vdiv_idx, SCOPE_TOP, SCOPE_BOT,
+                       fx2 ? draw_channel_fixed(b2, th->ch2, SCOPE_TOP, SCOPE_BOT, 128u)
+                           : draw_channel_autofit(b2, th->ch2, SCOPE_TOP, SCOPE_BOT));
         }
         return;
     }
@@ -1033,49 +1115,6 @@ void draw_demo_waveform(uint32_t frame)
  * Cursor measurement drawing
  * ═══════════════════════════════════════════════════════════════════ */
 
-static void format_si(float val, const char *unit, char *buf, int bufsize)
-{
-    const char *prefix;
-    float abs_val = val < 0.0f ? -val : val;
-    int pos = 0;
-
-    if (abs_val == 0.0f) {
-        prefix = "";
-    } else if (abs_val >= 1.0f) {
-        prefix = "";
-    } else if (abs_val >= 1.0e-3f) {
-        val *= 1.0e3f;
-        prefix = "m";
-    } else if (abs_val >= 1.0e-6f) {
-        val *= 1.0e6f;
-        prefix = "u";
-    } else {
-        val *= 1.0e9f;
-        prefix = "n";
-    }
-
-    if (val < 0.0f && pos < bufsize - 1) {
-        buf[pos++] = '-';
-        val = -val;
-    }
-
-    int integer = (int)val;
-    int frac = (int)((val - (float)integer) * 100.0f + 0.5f);
-    if (frac >= 100) { integer++; frac -= 100; }
-
-    if (integer >= 1000 && pos < bufsize - 1) buf[pos++] = (char)('0' + (integer / 1000) % 10);
-    if (integer >= 100 && pos < bufsize - 1) buf[pos++] = (char)('0' + (integer / 100) % 10);
-    if (integer >= 10 && pos < bufsize - 1) buf[pos++] = (char)('0' + (integer / 10) % 10);
-    if (pos < bufsize - 1) buf[pos++] = (char)('0' + integer % 10);
-    if (pos < bufsize - 1) buf[pos++] = '.';
-    if (pos < bufsize - 1) buf[pos++] = (char)('0' + frac / 10);
-    if (pos < bufsize - 1) buf[pos++] = (char)('0' + frac % 10);
-
-    while (*prefix && pos < bufsize - 1) buf[pos++] = *prefix++;
-    while (*unit && pos < bufsize - 1) buf[pos++] = *unit++;
-    buf[pos] = '\0';
-}
-
 static void draw_vline_dashed(uint16_t x, uint16_t y_top, uint16_t y_bot,
                               uint16_t color, bool is_active)
 {
@@ -1144,22 +1183,31 @@ static void draw_cursors(void)
     /*
      * Delta readout.
      *
-     * Both cursor axes have an EXACT relationship to the capture, because
-     * the waveform plot defines one:
+     * Nothing here converts anything itself. The pixel deltas are turned into
+     * real units by scope_cursor.c, which reads the SAME measured tables the
+     * status bar and the measurement badges read — scope_timebase.c for the
+     * sample rate and scope_cal.c for the per-(channel,range) gain — and
+     * refuses to name a unit when the table has no entry.
      *
-     *   horizontal — draw_demo_waveform()/draw_scope_live_frame() plot
-     *                buf[x] at column x, so one screen column IS one sample.
-     *                dx pixels = dx samples, exactly, no calibration.
-     *   vertical   — the same plots use
-     *                  y = SCOPE_MID_Y - (sample - 128) * SCOPE_H / 256,
-     *                so dy pixels = dy * 256 / SCOPE_H ADC counts, exactly.
+     * What the axes are worth, and why each is exact:
      *
-     * Seconds and volts are a different matter: they need a sample rate and
-     * a per-range gain, neither of which exists yet (dev plan §F2/§F4).
-     * So the readouts are in samples and counts, and the s/V forms appear
-     * only once cursor.time_per_pixel / volts_per_pixel are non-zero — which
-     * scope_state.c documents as "unknown" and sets to 0 until a timebase
-     * and a calibration are wired. That is the whole switch-over.
+     *   horizontal — the plot draws buf[x] at column x, so dx pixels IS dx
+     *                samples (asserted at the top of this file). Seconds need
+     *                the reg-0x01 rate; without one the readout stays in
+     *                samples.
+     *   vertical   — pixels-per-count is whatever the renderer used for the
+     *                band the cursors are in, recorded by vband_note() as it
+     *                draws. It is NOT a constant: autofit, the default path,
+     *                rescales from each record's own min/max. Volts then need
+     *                the range's gain; without one the readout stays in
+     *                counts, and without even a transform it stays in pixels.
+     *
+     * Until 2026-09-12 this read two floats in cursor_state_t that nothing
+     * ever updated: 10 ms across the screen and 8 V down it, seeded once at
+     * init. Every dt and dV the instrument had ever printed came from those
+     * two numbers. They were zeroed in August, which made the readout honest
+     * but left it disconnected from the tables that had just been measured.
+     * The floats are gone; there is no second copy of either constant now.
      */
     uint16_t badge_y = SCOPE_BOT - 28;
     uint16_t badge_x = 4;
@@ -1167,51 +1215,63 @@ static void draw_cursors(void)
     char label[40];
 
     if (c->mode == CURSOR_VERTICAL || c->mode == CURSOR_BOTH) {
-        int16_t dx = (int16_t)c->v2_x - (int16_t)c->v1_x;
-        int16_t adx = (dx < 0) ? (int16_t)-dx : dx;
+        const int32_t dx = (int32_t)c->v2_x - (int32_t)c->v1_x;
 
+        /* ss->timebase_idx IS the reg-0x01 code — the same field the status
+         * bar labels and the Freq badge derive from, so the three cannot
+         * disagree about what rate is in force. */
+        scope_cursor_reading_t dt = scope_cursor_delta_t(ss->timebase_idx, dx);
+        scope_cursor_format(&dt, buf, sizeof(buf));
+        snprintf(label, sizeof(label), "dt=%s", buf);
         lcd_fill_rect(badge_x, badge_y, 100, 13, th->background);
-        if (c->time_per_pixel > 0.0f) {
-            float dt = (float)adx * c->time_per_pixel;
-            format_si(dt, "s", buf, sizeof(buf));
-            snprintf(label, sizeof(label), "dt=%s%s", dx < 0 ? "-" : "", buf);
-        } else {
-            snprintf(label, sizeof(label), "dt=%s%dsmp", dx < 0 ? "-" : "", adx);
-        }
         font_draw_string(badge_x, badge_y, label,
                          th->highlight, th->highlight, &font_small);
 
+        scope_cursor_reading_t f = scope_cursor_one_over_dt(ss->timebase_idx, dx);
+        scope_cursor_format(&f, buf, sizeof(buf));
+        snprintf(label, sizeof(label), "1/dt=%s", buf);
         lcd_fill_rect(badge_x, badge_y + 14, 100, 13, th->background);
-        if (c->time_per_pixel > 0.0f && adx != 0) {
-            float freq = 1.0f / ((float)adx * c->time_per_pixel);
-            format_si(freq, "Hz", buf, sizeof(buf));
-            snprintf(label, sizeof(label), "1/dt=%s", buf);
-        } else {
-            /* No sample rate => no Hz. Saying "1/dt=--" beats printing a
-             * number derived from a placeholder time base. */
-            snprintf(label, sizeof(label), "1/dt=%s", MEAS_NA);
-        }
         font_draw_string(badge_x, badge_y + 14, label,
                          th->highlight, th->highlight, &font_small);
     }
 
     if (c->mode == CURSOR_HORIZONTAL || c->mode == CURSOR_BOTH) {
-        int16_t dy = (int16_t)c->h1_y - (int16_t)c->h2_y;
-        int16_t ady = (dy < 0) ? (int16_t)-dy : dy;
+        /* Second cursor minus first, the same convention dt uses (v2 - v1).
+         * Screen y grows downward while volts grow upward, so H2 minus H1 in
+         * volts is h1_y minus h2_y in pixels. */
+        const int32_t dy = (int32_t)c->h1_y - (int32_t)c->h2_y;
+
+        /*
+         * Only a band that contains BOTH cursors can convert this. In split
+         * (two-channel) mode each band has its own autofit scale, so a delta
+         * spanning the two is not a voltage in either channel — it falls back
+         * to pixels rather than picking one scale and hoping.
+         */
+        scope_cursor_vmap_t vm = { 0.0f, 0u, 0u };
+        for (uint8_t i = 0u; i < 2u; i++) {
+            const vband_t *b = &g_vband[i];
+            if (!b->on) continue;
+            if ((int16_t)c->h1_y < b->y_top || (int16_t)c->h1_y > b->y_bot) continue;
+            if ((int16_t)c->h2_y < b->y_top || (int16_t)c->h2_y > b->y_bot) continue;
+            vm.counts_per_pixel = b->counts_per_pixel;
+            vm.channel          = b->channel;
+            vm.range_idx        = b->range_idx;
+            break;
+        }
+
+        scope_cursor_reading_t dv = scope_cursor_delta_v(&vm, dy);
+        scope_cursor_format(&dv, buf, sizeof(buf));
+
+        /* Name the channel when the number is a voltage: with two channels on
+         * two ranges, "dV=1.20V" alone does not say which frontend measured
+         * it. */
+        if (dv.unit == SCOPE_CURSOR_UNIT_VOLTS)
+            snprintf(label, sizeof(label), "dV%u=%s", vm.channel, buf);
+        else
+            snprintf(label, sizeof(label), "dV=%s", buf);
 
         uint16_t vbadge_x = (c->mode == CURSOR_BOTH) ? 120 : badge_x;
         lcd_fill_rect(vbadge_x, badge_y, 100, 13, th->background);
-        if (c->volts_per_pixel > 0.0f) {
-            float dv = (float)ady * c->volts_per_pixel;
-            format_si(dv, "V", buf, sizeof(buf));
-            snprintf(label, sizeof(label), "dV=%s%s", dy < 0 ? "-" : "", buf);
-        } else {
-            /* Pixels -> counts is the plot's own transform, inverted. */
-            unsigned counts = (unsigned)(((uint32_t)ady * 256u + SCOPE_H / 2u)
-                                         / (uint32_t)SCOPE_H);
-            snprintf(label, sizeof(label), "dV=%s%ucnt",
-                     dy < 0 ? "-" : "", counts);
-        }
         font_draw_string(vbadge_x, badge_y, label,
                          th->highlight, th->highlight, &font_small);
     }

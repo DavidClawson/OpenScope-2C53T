@@ -115,15 +115,20 @@ typedef struct {
     uint16_t h1_y;
     uint16_t h2_y;
 
-    /* Display scales for the cursor delta readout.
+    /*
+     * NO SCALE FIELDS HERE, DELIBERATELY (2026-09-12).
      *
-     * 0.0 means UNKNOWN — not "zero seconds per pixel". Both are 0 today
-     * (see scope_state_init) because seconds need a timebase and volts need
-     * per-range calibration, and this firmware has neither. Consumers MUST
-     * check for > 0 before using them; scope_ui.c falls back to samples and
-     * ADC counts, which are exact, when they are 0. */
-    float time_per_pixel;
-    float volts_per_pixel;
+     * This struct used to carry `time_per_pixel` and `volts_per_pixel`,
+     * seeded once with 10 ms across the screen and 8 V down it and updated by
+     * nothing — so every dt and dV the instrument printed was a function of
+     * the cursor positions alone. They were zeroed in August, which made the
+     * readout honest but left it disconnected from the measured tables.
+     *
+     * The readout now derives from scope_timebase.c (seconds per sample) and
+     * scope_cal.c (volts per ADC count) at draw time, via scope_cursor.c.
+     * Caching either here would be a second copy of a measured number, which
+     * is how the first one came to be wrong. Do not add them back.
+     */
 } cursor_state_t;
 
 /* Full oscilloscope state */

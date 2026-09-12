@@ -42,7 +42,7 @@ concrete.
 | Auto-measurements (real units) | S1 | [auto-measurements](scope/auto-measurements.md) | S2: badge volts/seconds validated against a bench-driven signal |
 | FFT + waterfall on live data | S0 | [fft-live](scope/fft-live.md) | S1: consume the live acq buffer in `guest-coldtrace` |
 | Trigger level | S1 | — | S2: measure level-vs-ADC-code transfer on the bench |
-| Cursors | S1 | *needed* | Units are fixed constants, not derived from the measured tables — same defect class the badges just escaped |
+| Cursors | S1 | *needed* | Units now derive from `scope_cal` / `scope_timebase` and refuse when the table has no entry (`scope_cursor.c`, host-tested with negative controls, 2026-09-12). **Not S2: unverified on the bench** — next is a cursor delta read against a known signal, and against the badges on the same capture |
 | Autofit vs. measured graticule | S1 | *needed* | Decision pending: the vertical graticule does not mean the volts/div the status bar prints |
 | Math channels | S0 | — | After auto-measurements S2 (same input plumbing) |
 | XY / roll / trend / mask | S0 | — | Unclaimed; each needs a spec before work starts |

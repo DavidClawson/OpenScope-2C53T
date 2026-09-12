@@ -45,6 +45,7 @@ C_SOURCES += src/ui/scope_state.c
 C_SOURCES += src/ui/scope_measure.c
 C_SOURCES += src/ui/scope_cal.c
 C_SOURCES += src/ui/scope_timebase.c
+C_SOURCES += src/ui/scope_cursor.c
 C_SOURCES += src/ui/scope_freq.c
 C_SOURCES += src/tasks/input_handler.c
 C_SOURCES += src/drivers/flash_fs.c
@@ -551,6 +552,21 @@ $(BUILD_DIR)/test_scope_timebase: tests/test_scope_timebase.c src/ui/scope_timeb
 # rates and all three were fitted to an incoherent record, so the test fails
 # the build if any of them is re-entered.
 test-scope-timebase: $(BUILD_DIR)/test_scope_timebase
+	$<
+
+$(BUILD_DIR)/test_scope_cursor: tests/test_scope_cursor.c src/ui/scope_cursor.c src/ui/scope_cursor.h \
+                                src/ui/scope_cal.c src/ui/scope_timebase.c | $(BUILD_DIR)
+	$(HOST_CC) -std=gnu11 -Wall -Wextra -Isrc/ui $< \
+		src/ui/scope_cursor.c src/ui/scope_cal.c src/ui/scope_timebase.c -lm -o $@
+
+# Cursor delta readouts. The cursor is the one feature whose whole purpose is
+# measurement, and its units used to come from two floats nothing ever updated.
+# The tests assert the two properties that stop that returning: the answer must
+# MOVE with the measured tables (a constant cannot depend on a code or a range),
+# and where there is no calibration there must be no unit. Includes four
+# negative controls, among them the historical constants transcribed verbatim.
+.PHONY: test-scope-cursor
+test-scope-cursor: $(BUILD_DIR)/test_scope_cursor
 	$<
 
 $(BUILD_DIR)/test_scope_freq: tests/test_scope_freq.c src/ui/scope_freq.c src/ui/scope_freq.h | $(BUILD_DIR)
