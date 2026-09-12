@@ -507,6 +507,25 @@ $(BUILD_DIR)/test_fpga_meter_plan: tests/test_fpga_meter_plan.c src/drivers/fpga
 test-fpga-meter-plan: $(BUILD_DIR)/test_fpga_meter_plan
 	$<
 
+$(BUILD_DIR)/test_meter_word_map: tests/test_meter_word_map.c src/drivers/fpga_meter_plan.c src/drivers/fpga_meter_plan.h | $(BUILD_DIR)
+	$(HOST_CC) -std=gnu11 -Wall -Wextra -Isrc/drivers $< src/drivers/fpga_meter_plan.c -o $@
+
+# The meter function-word map, from issue #15.
+#
+# ⚠ THIS TARGET IS EXPECTED TO FAIL. It is not broken, and it is deliberately
+# NOT part of `test-meter` or any other aggregate — a red aggregate teaches
+# people to ignore aggregates. Run it by name.
+#
+# stock_meter_cmd_low[] ties the right bytes to the wrong functions for 10 of
+# our 11 submodes (submode 0 "DCV" sends 0x0514, which is the SoC's Auto). The
+# correction is inbound as a contributor PR; when it lands, this target going
+# green IS the verification. Do not silence it by patching the table as a side
+# errand, and do not flip the AA 55 TX header default while it is still red.
+.PHONY: test-meter-word-map
+test-meter-word-map: $(BUILD_DIR)/test_meter_word_map
+	@echo "note: this target is EXPECTED to fail until the issue #15 word-table correction lands"
+	$<
+
 $(BUILD_DIR)/test_scope_measure: tests/test_scope_measure.c src/ui/scope_measure.c src/ui/scope_measure.h | $(BUILD_DIR)
 	$(HOST_CC) -std=gnu11 -Wall -Wextra -Isrc/ui $< src/ui/scope_measure.c -lm -o $@
 
