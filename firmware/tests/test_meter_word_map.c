@@ -266,51 +266,37 @@ static void test_every_submode_sends_its_own_function_word(void)
 }
 
 /*
- * The low-byte accessor the plan builder reads through. Same claim, one layer
- * down, so a correction that fixes only the submode switch and leaves the
- * table unable to express a word still gets caught.
+ * Every word this firmware can emit must be a word stock is known to send.
+ *
+ * This PASSES today and passed before the correction, which is the point: it
+ * is what says the reverse engineering was sound and only the ASSIGNMENT was
+ * wrong. It is also what would catch an invented selector byte -- a plausible
+ * 0x05xx that no stock unit has ever been observed to send.
+ *
+ * Rewritten 2026-09-13 for PR #33, which deletes
+ * fpga_meter_stock_cmd_low_for_mode(). That accessor indexed an eight-entry
+ * list in stock's MENU ORDER by a mode number, which is the mechanism that
+ * produced the ten wrong submodes in the first place, so its removal is the
+ * fix and not a regression. The old "is this low byte reachable through the
+ * eight slots" check went with it: with a direct per-submode table there are
+ * no slots to be unreachable through, and group [1] already asserts the exact
+ * word for every submode.
  */
-static void test_every_required_low_byte_is_reachable(void)
+static void test_every_emitted_word_is_a_real_stock_word(void)
 {
     size_t i;
     size_t j;
-    uint8_t mode;
     char line[192];
 
-    printf("[3] required low bytes reachable through "
-           "fpga_meter_stock_cmd_low_for_mode()\n");
+    printf("[3] every word we can emit is a word stock sends\n");
 
     for (i = 0; i < SUBMODE_EXPECTATION_COUNT; i++) {
         const submode_expectation_t *e = &submode_expectations[i];
-        uint8_t want_low = (uint8_t)(e->want_word & 0xFFu);
-        bool reachable = false;
-
-        for (mode = 0; mode < FPGA_METER_STOCK_MODE_COUNT; mode++) {
-            if (fpga_meter_stock_cmd_low_for_mode(mode) == want_low) {
-                reachable = true;
-                break;
-            }
-        }
-        if (!reachable) {
-            snprintf(line, sizeof(line),
-                     "0x%02X (%s, for submode %u %s) is in no stock slot at "
-                     "all -- the table cannot express it",
-                     want_low, e->want_stock_function, (unsigned)e->submode,
-                     e->ui_name);
-            fail(line);
-        }
-    }
-
-    /*
-     * And the converse, which PASSES today and is worth keeping: every byte the
-     * table can emit is a word stock is known to send. This is what says the
-     * reverse engineering was sound and only the assignment was wrong -- and it
-     * is what would catch an invented selector byte.
-     */
-    for (mode = 0; mode < FPGA_METER_STOCK_MODE_COUNT; mode++) {
-        uint16_t word = (uint16_t)(0x0500u |
-                                   fpga_meter_stock_cmd_low_for_mode(mode));
+        uint16_t word = fpga_meter_stock_cmd_word_for_submode(e->submode);
         bool known = false;
+
+        if (word == FPGA_METER_INVALID_SELECTOR_WORD)
+            continue;   /* group [1] owns "this submode has no word" */
 
         for (j = 0; j < STOCK_WORD_MAP_COUNT; j++) {
             if (stock_word_map[j].word == word) {
@@ -320,8 +306,8 @@ static void test_every_required_low_byte_is_reachable(void)
         }
         if (!known) {
             snprintf(line, sizeof(line),
-                     "stock slot %u emits 0x%04X, which stock never sends (%s)",
-                     (unsigned)mode, word, stock_function_for_word(word));
+                     "submode %u (%s) emits 0x%04X, which stock never sends",
+                     (unsigned)e->submode, e->ui_name, word);
             fail(line);
         }
     }
@@ -453,7 +439,7 @@ int main(void)
 
     test_reference_map_is_self_consistent();
     test_every_submode_sends_its_own_function_word();
-    test_every_required_low_byte_is_reachable();
+    test_every_emitted_word_is_a_real_stock_word();
     test_no_two_submodes_share_a_word();
     test_invalid_submode_still_refuses();
 
