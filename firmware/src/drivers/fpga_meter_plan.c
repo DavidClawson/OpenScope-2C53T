@@ -3,19 +3,43 @@
 #define FPGA_METER_STOCK_WORD_BASE 0x0500u
 
 /*
- * Stock source of truth:
- * reverse_engineering/analysis_v120/meter_mode_command_table_2026_06_05.md
- * records the eight recovered selector low bytes below. The open firmware has
- * eleven UI submodes, so this module maps local UI policy onto those eight
- * hardware selector slots; it does not claim that stock has eleven independent
- * analog frontend modes. In particular, DC mA/DC A share stock slot 2,
- * AC mA/local AC A share stock slot 3, and capacitance/temperature share stock
- * slot 5 until a stock writer or bench trace proves a narrower selector. If a
- * future live case is surprising, keep that boundary here: do not invent a new
- * 0x05xx selector for the local split without binary stock evidence.
+ * The word the meter SoC obeys for each local submode. MEASURED, not decompiled
+ * (issue #15): a logger patched into stock V1.2.0 recorded every TX frame while
+ * the stock meter menu was walked, one word per function, no pairs, no GPIO
+ * writes (unit #2, 2026-09-07); 0x0B and 0x0C replicated on unit #1 (EXP-25,
+ * EXP-27). The AC/DC toggle inside a stock function is its own word: DC Voltage
+ * 0x0C -> AC Voltage 0x0D, Continuity 0x17 -> Diode 0x0E, small DC current
+ * 0x11 -> small AC current 0x16, large DC current 0x10 -> large AC current
+ * 0x15. So every local submode owns a distinct selector, and nothing here has
+ * to share a slot any more.
+ *
+ * The eight-byte table `14 0c 17 0b 0a 12 11 10` at stock 0x080BB3FC (pinned
+ * by scripts/test_stock_meter_literals.py) is real, but it is stock's MENU
+ * ORDER -- Auto, DC Voltage, Continuity, Resistance, Capacitance, Temperature,
+ * small DC current, large DC current -- not a mode index. Indexing it by a
+ * mode number is how this module selected Auto for "DCV", Continuity for the
+ * DC currents, Resistance for the AC currents, Capacitance for "Resistance",
+ * the currents for Continuity/Diode and Temperature for "Capacitance": ten of
+ * eleven submodes wrong, invisible for five months because the frames also
+ * carried the wrong header and the SoC discarded every one of them.
+ *
+ * Words the SoC accepts that have no local submode: 0x14 Auto (the SoC's own
+ * autorange-everything function), 0x13 LIVE (the NCV screen; its frame is the
+ * seven-segment text "L1uE", not a value), 0x0F (accepted, never sent by stock).
  */
-static const uint8_t stock_meter_cmd_low[FPGA_METER_STOCK_MODE_COUNT] = {
-    0x14, 0x0C, 0x17, 0x0B, 0x0A, 0x12, 0x11, 0x10
+static const uint8_t
+stock_meter_word_low_for_submode[FPGA_METER_LOCAL_SUBMODE_COUNT] = {
+    0x0C, /*  0 DC voltage       */
+    0x0D, /*  1 AC voltage       */
+    0x11, /*  2 DC current, mA   */
+    0x10, /*  3 DC current, A    */
+    0x16, /*  4 AC current, mA   */
+    0x15, /*  5 AC current, A    */
+    0x0B, /*  6 resistance       */
+    0x17, /*  7 continuity       */
+    0x0E, /*  8 diode            */
+    0x0A, /*  9 capacitance      */
+    0x12, /* 10 temperature      */
 };
 
 /*
@@ -131,84 +155,45 @@ bool fpga_meter_logical_function_is_unresolved(uint8_t function)
            !fpga_meter_logical_function_is_supported(function);
 }
 
+/*
+ * `stock_mode` is the FORMATTER FAMILY of a submode: the case index the stock
+ * display formatter (meter_data.c, meter_stock_fsm_apply) and the local mux
+ * projection below run on. It used to double as the index into the wire-word
+ * table, which is where the wrong selectors came from. It no longer touches
+ * the wire: the word the SoC hears is stock_meter_word_low_for_submode[],
+ * one per submode, and the pairs that share a formatter family here (DC mA /
+ * DC A, AC mA / AC A, capacitance / temperature) do so only because stock
+ * formats them alike, not because the SoC cannot tell them apart.
+ */
 uint8_t fpga_meter_stock_mode_for_submode(uint8_t submode)
 {
     switch (submode) {
     case 0: return 0; /* DCV */
     case 1: return 1; /* ACV */
     case 2: /* DC mA */
-    case 3: /* DC A */
+    case 3: /* DC A  -- same formatter family, different wire word */
         return 2;
     case 4: /* AC mA */
-    case 5: /* Local AC A policy over the recovered ACA slot. */
+    case 5: /* AC A  -- same formatter family, different wire word */
         return 3;
     case 6: return 4; /* Resistance */
     case 7: return 6; /* Continuity */
     case 8: return 7; /* Diode */
     case 9:  /* Capacitance */
-    case 10: /* Local temp split on the recovered extended stock slot. */
+    case 10: /* Temperature -- same formatter family, different wire word */
         return 5;
     default:
         return FPGA_METER_INVALID_STOCK_MODE;
     }
 }
 
-uint8_t fpga_meter_stock_cmd_low_for_mode(uint8_t stock_mode)
-{
-    if (stock_mode >= FPGA_METER_STOCK_MODE_COUNT) {
-        return 0;
-    }
-    return stock_meter_cmd_low[stock_mode];
-}
-
 uint16_t fpga_meter_stock_cmd_word_for_submode(uint8_t submode)
 {
-    uint8_t stock_mode = fpga_meter_stock_mode_for_submode(submode);
-    if (stock_mode >= FPGA_METER_STOCK_MODE_COUNT) {
+    if (!fpga_meter_submode_is_valid(submode)) {
         return FPGA_METER_INVALID_SELECTOR_WORD;
     }
     return (uint16_t)(FPGA_METER_STOCK_WORD_BASE |
-                      fpga_meter_stock_cmd_low_for_mode(stock_mode));
-}
-
-bool fpga_meter_stock_apply_cmd_word_for_submode(uint8_t submode, uint16_t *word)
-{
-    uint8_t stock_mode = fpga_meter_stock_mode_for_submode(submode);
-    uint8_t low;
-
-    /*
-     * Stock V1.2.0 dynamic raw-word helper boundary:
-     *   0x08006120 gates and masks the selector-side state,
-     *   0x08006194 / 0x0800626A choose low-byte pairs, and
-     *   0x08006288 emits 0x0500 | low through the dvom_TX raw-word path.
-     *
-     * Recovered apply pairs are ACV 0x0C/0x0D, DCA 0x17/0x0E,
-     * continuity 0x11/0x16, and diode 0x10/0x15.  There is no recovered
-     * apply pair yet for DCV, ACA, resistance, capacitance, temperature, or
-     * microamp modes; those must not be filled from the parsed numeric value,
-     * one-point live observations, or local range guesses.
-     */
-    switch (stock_mode) {
-    case 1:
-        low = 0x0D;
-        break;
-    case 2:
-        low = 0x0E;
-        break;
-    case 6:
-        low = 0x16;
-        break;
-    case 7:
-        low = 0x15;
-        break;
-    default:
-        return false;
-    }
-
-    if (word != 0) {
-        *word = (uint16_t)(FPGA_METER_STOCK_WORD_BASE | low);
-    }
-    return true;
+                      stock_meter_word_low_for_submode[submode]);
 }
 
 fpga_meter_frame_family_t fpga_meter_frame_family_for_submode(uint8_t submode)
@@ -304,7 +289,9 @@ fpga_meter_transition_plan_t fpga_meter_transition_plan_for_submode(uint8_t subm
      * 0x0800BCA6 as queuing byte commands 0x00 then 0x2C before the common
      * send tail. That is not a raw 0x052C selector and not a numeric range
      * correction; it is the recovered byte-dispatch state that arms the
-     * continuity/diode family before the raw selector/apply pair below.
+     * continuity/diode family before the raw selector below. On the wire it
+     * goes out UNOBEYED (00 00 header, see fpga.c): with the AA 55 header
+     * live, only the selector word is a command to the SoC.
      */
     plan.has_command_bank_prefix = (submode == 7 || submode == 8);
     plan.command_bank_first = plan.has_command_bank_prefix ? 0x00u : 0x00u;
@@ -317,14 +304,23 @@ fpga_meter_transition_plan_t fpga_meter_transition_plan_for_submode(uint8_t subm
      * emits 0x0508 before 0x0514, while the earlier open firmware only sent
      * 0x0514 on normal DCV transitions. Low-DCV live failures are
      * producer-frame faults, so re-materialize this stock basic configure word
-     * for DCV without treating it as a numeric correction or as one of the
-     * dynamic selector/apply pairs.
+     * for DCV without treating it as a numeric correction. Like the bank
+     * prefix it is sent UNOBEYED: measured on unit #2, an obeyed 0x0508 is
+     * echoed and changes nothing visible, so it stays traffic, not a command.
      */
     plan.has_config_word = submode == 0;
     plan.config_word = plan.has_config_word ? FPGA_METER_CONFIGURE_WORD : 0;
     plan.selector_word = fpga_meter_stock_cmd_word_for_submode(submode);
-    plan.has_apply_word =
-        fpga_meter_stock_apply_cmd_word_for_submode(submode, &plan.apply_word);
+    /*
+     * No apply word. The four "selector/apply pairs" this used to carry
+     * (0x0C/0x0D, 0x17/0x0E, 0x11/0x16, 0x10/0x15) are stock's AC/DC toggle:
+     * the second word of each pair is the primary selector of another local
+     * submode (ACV, diode, AC mA, AC A) and now goes out as such. The fields
+     * stay in the struct because the transition history and the shell print
+     * them; they read 0.
+     */
+    plan.has_apply_word = false;
+    plan.apply_word = 0;
     plan.has_probe_detect = true;
     plan.start_word = FPGA_METER_START_WORD;
     if (plan.stock_mode >= FPGA_METER_STOCK_MODE_COUNT) {

@@ -60,8 +60,12 @@
 /* Runtime commands */
 #define FPGA_CMD_RESET        0x00
 #define FPGA_CMD_SCOPE_CH     0x01   /* Scope channel config */
-#define FPGA_CMD_METER_START  0x09   /* Start meter measurement */
-#define FPGA_CMD_METER_NOPROBE 0x0A  /* Meter PC7-low command tail */
+#define FPGA_CMD_METER_START  0x09   /* Legacy name. Obeyed, 0x0509 puts the SoC's
+                                      * display into a non-measurement state ("EF");
+                                      * sent unobeyed it is keepalive traffic. */
+#define FPGA_CMD_METER_NOPROBE 0x0A  /* Legacy name for the "PC7-low tail". 0x050A is
+                                      * the SoC's CAPACITANCE selector (issue #15);
+                                      * never send it obeyed outside a transition. */
 
 /* Scope configuration commands (case 0 of mode init dispatcher FUN_0800b908).
  * Sent as a sequence when entering oscilloscope mode: 0x0B-0x11.
@@ -75,10 +79,12 @@
 #define FPGA_CMD_SCOPE_CFG_10 0x10   /* Scope config: timebase period */
 #define FPGA_CMD_SCOPE_CFG_11 0x11   /* Scope config: timebase mode */
 
-/* Meter variant setup (system_mode 9: resistance) */
-#define FPGA_CMD_METER_VAR_12 0x12   /* Meter variant config */
-#define FPGA_CMD_METER_VAR_13 0x13   /* Meter variant config */
-#define FPGA_CMD_METER_VAR_14 0x14   /* Meter variant config */
+/* Legacy "meter variant" names. Measured (issue #15): these are function
+ * selectors of the meter SoC, not variant setup. The canonical per-submode
+ * table is stock_meter_word_low_for_submode[] in fpga_meter_plan.c. */
+#define FPGA_CMD_METER_VAR_12 0x12   /* Temperature */
+#define FPGA_CMD_METER_VAR_13 0x13   /* LIVE (NCV screen; frame is the text "L1uE") */
+#define FPGA_CMD_METER_VAR_14 0x14   /* Auto -- the SoC's own autorange-everything */
 
 /* Scope channel command family 0x1A..0x1E. Stock scope xrefs use these as
  * channel gain/offset/coupling commands. The DMM boot dispatcher also queues
@@ -231,6 +237,14 @@ typedef struct {
      * its echo, which made good echoes fail validation (EXP-27). */
     volatile uint8_t  last_obeyed_tx_lo;
     volatile bool     last_obeyed_tx_valid;
+    /* Last meter transition (EXP-205): ms from PC11 back up to the SoC's first
+     * data frame (0xFFFF = timed out), selector sends until its echo, whether
+     * it was confirmed, and how many transitions ended unconfirmed. */
+    volatile uint16_t meter_soc_wake_ms;
+    volatile uint8_t  meter_selector_attempts;
+    volatile uint8_t  meter_selector_confirmed;
+    volatile uint16_t meter_selector_unconfirmed_total;
+    volatile uint16_t meter_soc_wake_timeouts;
     volatile uint8_t  tx_frame_history[FPGA_TX_FRAME_HISTORY][FPGA_TX_FRAME_SIZE];
     volatile uint16_t tx_frame_history_tx_count[FPGA_TX_FRAME_HISTORY];
     volatile uint8_t  tx_frame_history_head;
@@ -676,10 +690,12 @@ BaseType_t fpga_send_cmd(uint8_t cmd_high, uint8_t cmd_low);
  */
 bool fpga_usart_tx_task_exists(void);
 
-/* Meter TX frame header A/B (EXP-25, issue #15). Default false = 00 00, the
- * header every measurement before 2026-09-12 was taken with. True = AA 55,
- * which Stlkv measured as the header the meter SoC actually requires. */
+/* Meter TX frame header (EXP-25, issue #15). Default true = AA 55, the header
+ * the meter SoC requires (measured on two units). False = 00 00, the header
+ * every measurement before 2026-09-12 was taken with; kept as the bench's
+ * negative control (`meter hdr off`). */
 /* usart_tx_queue item: bits 0-7 cmd_lo, 8-15 cmd_hi, bit 16 = OBEY.
+ * OBEY set   means "a command to the meter SoC": AA 55 while the header is on.
  * OBEY clear means "send this frame with the 00 00 header the meter ignores".
  * That is not a hack — EXP-25 measured that the meter emits data frames in
  * response to USART TRAFFIC, not to commands it accepts (header off, zero
@@ -690,6 +706,12 @@ bool fpga_usart_tx_task_exists(void);
 
 void fpga_meter_tx_header_set(bool aa55);
 bool fpga_meter_tx_header_get(void);
+
+/* Queue a frame UNOBEYED: 00 00 header regardless of the header setting. For
+ * traffic that has always gone out 00 00 and must stay bit-identical now that
+ * obeyed frames are real (legacy scope/siggen/config words, diagnostics that
+ * replay stock's byte stream without meaning to switch the meter). */
+BaseType_t fpga_send_cmd_unobeyed(uint8_t cmd_high, uint8_t cmd_low);
 
 /* Keepalive send: solicits a data frame without being obeyed. */
 BaseType_t fpga_send_cmd_keepalive(uint8_t cmd_high, uint8_t cmd_low);
@@ -1012,6 +1034,12 @@ void fpga_stock_diag_bridge_dynamic(uint8_t bank_mode);
  *   1 = CH2 candidate bank
  *   2 = CH1 + CH2 candidate banks
  */
+/* fpga_wire_send_word() is OBEYED: with the AA 55 header on, a 0x05xx word
+ * sent here switches the meter SoC's function (`fpga wire words`). The batch
+ * replays -- fpga_wire_entry(), fpga_wire_scope_sequence() and the stock-diag
+ * bridges -- send their words UNOBEYED: they probe the FPGA config-entry path
+ * with stock's byte stream, and their bank words are eight live meter
+ * selectors plus 0x0501 (Auto) and 0x0503 (unmeasured). Shell only. */
 void fpga_wire_send_word(uint16_t word, uint32_t delay_ms);
 void fpga_wire_entry(uint8_t bank_mode);
 void fpga_wire_scope_sequence(uint8_t bank_mode);

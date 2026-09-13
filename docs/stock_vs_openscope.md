@@ -62,8 +62,8 @@ Legend: ✅ works · ⚠️ partial / caveated · 🔬 code exists but is not re
 | Persistence / math channels | ✅ / — | 🔬 | Implemented, but they render a synthetic sine rather than the live trace |
 | XY, roll, trend, mask test | partial | 🔬 | Compiled libraries with no UI path |
 | **Multimeter** | | | |
-| DCV / ACV / current / resistance / continuity / diode / capacitance | ✅ | ✅ | 10 sub-modes, real data over USART2 |
-| Temperature | ✅ | ❌ | No sub-mode for it |
+| DCV / ACV / current / resistance / continuity / diode / capacitance | ✅ | ⚠️ | 10 sub-modes **selected** with the meter SoC's measured word map (issue #15). Read back so far: DCV and resistance. The other frame families still wait for the decoder |
+| Temperature | ✅ | ⚠️ | Sub-mode 10 selects it (`0x0512`); the reading is not decoded yet |
 | Chart (strip-chart) view | ❌ | ✅ | 300-sample scrolling trace, auto-scaled |
 | Stats view (histogram, min/max/avg) | ❌ | ✅ | 20-bin histogram |
 | Fuse-drop / parasitic-drain tester | ❌ | ✅ | 5 fuse types, 47 ratings, 3 sub-views |

@@ -476,7 +476,9 @@ def verify_meter_aux_afe_pin_policy() -> dict[str, Any]:
         raise GateError("could not locate fpga_init body")
     init_body = text[init_start:init_end]
     boot_frontend = init_body.find("fpga_set_meter_frontend_for_submode(0);")
-    boot_activate = init_body.find("usart2_send_cmd(0x05, 0x08);")
+    # The activation block is sent unobeyed since the AA 55 header shipped
+    # (0x0A is Capacitance, 0x14 is Auto); the order it guards is unchanged.
+    boot_activate = init_body.find("usart2_send_cmd_ex(0x05, 0x08, false);")
     bad_boot_order = (
         boot_frontend < 0 or boot_activate < 0 or boot_frontend > boot_activate
     )
@@ -832,7 +834,7 @@ def verify_transition_plan_property_contract() -> dict[str, Any]:
     text = (REPO / rel).read_text(encoding="utf-8", errors="replace")
     required_tests = [
         "transition_plan_covers_mux_family_and_settle_policy",
-        "stock_apply_words_for_runtime_family_switch",
+        "stock_toggle_words_are_selectors_not_apply_words",
         "mux_gpio_state_matches_stock_projection_for_every_submode",
         "mux_writer_stock_arm_truth_table_covers_all_10_switch_arms",
         "transition_settle_discard_policy_is_explicit_for_every_submode",
@@ -840,7 +842,7 @@ def verify_transition_plan_property_contract() -> dict[str, Any]:
         "frame_family_mismatch_policy_matrix_is_exhaustive",
         "frame_family_marker_visibility_documents_observed_gaps",
         "logical_function_capability_matrix_covers_all_dmm_modes",
-        "local_splits_do_not_invent_extra_stock_selectors",
+        "local_splits_share_formatter_family_not_wire_word",
         "local_splits_share_mux_gpio_state",
         "fallbacks",
         "rx_frame_gate_preserves_discard_budget_while_busy",
@@ -850,17 +852,19 @@ def verify_transition_plan_property_contract() -> dict[str, Any]:
         "local stock-mode mapping preserves recovered shared slots":
             r"static const uint8_t expected_stock_mode\[FPGA_METER_LOCAL_SUBMODE_COUNT\]\s*=\s*"
             r"\{\s*0,\s*1,\s*2,\s*2,\s*3,\s*3,\s*4,\s*6,\s*7,\s*5,\s*5\s*\};",
-        "local selector words preserve recovered stock command table":
+        # The measured word map (issue #15): one distinct word per submode,
+        # recorded from stock V1.2.0's own TX stream, not from the decompile.
+        "local selector words follow the measured stock word map":
             r"static const uint16_t expected_words\[FPGA_METER_LOCAL_SUBMODE_COUNT\]\s*=\s*"
-            r"\{\s*0x0514,\s*0x050C,\s*0x0517,\s*0x0517,\s*0x050B,\s*"
-            r"0x050B,\s*0x050A,\s*0x0511,\s*0x0510,\s*0x0512,\s*0x0512\s*\};",
-        "runtime apply words stay limited to recovered helper slots":
+            r"\{\s*0x050C,\s*0x050D,\s*0x0511,\s*0x0510,\s*0x0516,\s*"
+            r"0x0515,\s*0x050B,\s*0x0517,\s*0x050E,\s*0x050A,\s*0x0512\s*\};",
+        "no submode carries an apply word":
             r"static const uint16_t expected_apply\[FPGA_METER_LOCAL_SUBMODE_COUNT\]\s*=\s*"
-            r"\{\s*0x0000,\s*0x050D,\s*0x050E,\s*0x050E,\s*0x0000,\s*"
-            r"0x0000,\s*0x0000,\s*0x0516,\s*0x0515,\s*0x0000,\s*0x0000\s*\};",
-        "runtime apply words are subset of stock dynamic helper pairs":
-            r"static const uint16_t stock_dynamic_apply_words\[\]\s*=\s*"
-            r"\{\s*0x050D,\s*0x050E,\s*0x0516,\s*0x0515\s*\};",
+            r"\{\s*0x0000,\s*0x0000,\s*0x0000,\s*0x0000,\s*0x0000,\s*"
+            r"0x0000,\s*0x0000,\s*0x0000,\s*0x0000,\s*0x0000,\s*0x0000\s*\};",
+        "the former apply words are primary selectors of their own submodes":
+            r"\{\s*0x050D,\s*1\s*\},[\s\S]*\{\s*0x050E,\s*8\s*\},[\s\S]*"
+            r"\{\s*0x0516,\s*4\s*\},[\s\S]*\{\s*0x0515,\s*5\s*\},",
         "shared local split pairs remain explicit":
             r"\{\s*2,\s*3,\s*\"DC current small/A\"\s*\}[\s\S]*"
             r"\{\s*4,\s*5,\s*\"AC current small/A\"\s*\}[\s\S]*"

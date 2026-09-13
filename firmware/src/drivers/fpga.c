@@ -265,6 +265,20 @@ static void fpga_meter_reset_transport(void)
 
     USART2->ctrl1 = (ctrl1 | USART_CTRL1_UEN | USART_CTRL1_RDBFIEN) &
                     ~USART_CTRL1_TDBEIEN;
+    /*
+     * Do not inherit a dead transceiver (EXP-205, unit #2). On a silent-scope
+     * build, scope entry parks USART2 with ctrl1 = 0 and the IRQ masked. When
+     * a meter transition runs before fpga_set_meter_mux(true) has re-armed it
+     * -- a race the shell's `mode meter` loses about one time in three -- the
+     * restore above re-enables UEN and RDBFIEN on a ctrl1 that had TE and RE
+     * clear, with the NVIC line still masked: TX count climbs, the wire is
+     * dark, the SoC never speaks, and every selector retry times out
+     * (measured: CTRL1 0x20A0 in the failed state, 0x202C in the good one).
+     * The transition is about to talk to the SoC, so it owns the transceiver.
+     */
+    USART2->ctrl1 |= (1U << 2) | (1U << 3);   /* RE, TE */
+    NVIC_SetPriority(USART2_IRQn, 5);
+    NVIC_EnableIRQ(USART2_IRQn);
 
     if (rx_task_handle != NULL) vTaskResume(rx_task_handle);
     if (tx_task_handle != NULL) vTaskResume(tx_task_handle);
@@ -1167,19 +1181,26 @@ static void fpga_capture_meter_first_rx_latch(void)
  * Format: [hdr0][hdr1] [cmd_hi][cmd_lo] [0..0] [checksum]
  * Checksum = (cmd_hi + cmd_lo) & 0xFF
  *
- * THE HEADER IS THE OPEN QUESTION (EXP-25, issue #15). We have always sent
- * 00 00 here. Stlkv measured on unit #2 (2026-09-07) that the meter SoC
- * requires AA 55: with AA 55 it echoes every accepted word and switches
- * function; with 00 00 it stays silent and holds its power-on auto mode.
- * That would explain `echo_frames` sitting at 0 since EXP-05, and it would
- * mean every meter reading this project has taken was auto mode.
+ * THE HEADER IS AA 55 (issue #15; EXP-25 replicated it on unit #1 A/B/A/B/A,
+ * echoes 0/3/0/3/0). With AA 55 the meter SoC echoes every accepted word and
+ * switches function; with 00 00 -- what this project sent from 2026-04 to
+ * 2026-09 -- it stays silent and holds its power-on auto mode. That is why
+ * `echo_frames` sat at 0 since EXP-05 and why every meter reading before
+ * 2026-09-12 was the SoC's auto mode, whatever the UI said.
  *
- * Runtime-toggleable (`meter hdr on|off`) so the comparison runs A/B/A inside
- * one boot: same probe, same cell, same build, ONE variable. It defaults OFF
- * so the device boots bit-identical to the one that took every earlier
- * measurement, and so the baseline is a measurement rather than a memory.
+ * The header defaults ON, and it landed in the same commit as the corrected
+ * word table: with a wrong table an obeyed frame is worse than a discarded
+ * one. `meter hdr off` remains as the NEGATIVE CONTROL for the bench (a
+ * transition under 00 00 must produce zero echoes and leave the SoC's
+ * function where it was).
+ *
+ * The header only goes on frames sent OBEYED (FPGA_TX_OBEY_BIT). Everything
+ * this firmware transmitted before 2026-09-12 as scope/siggen/config traffic
+ * still goes out 00 00, bit-identical to the traffic the SoC answered for five
+ * months, so the flip changes exactly one thing on the wire: the selector
+ * word of a meter transition, plus whatever the operator sends by hand.
  */
-static volatile bool meter_tx_header_aa55 = false;
+static volatile bool meter_tx_header_aa55 = true;
 
 void fpga_meter_tx_header_set(bool aa55) { meter_tx_header_aa55 = aa55; }
 bool fpga_meter_tx_header_get(void)      { return meter_tx_header_aa55; }
@@ -1214,14 +1235,20 @@ static void meter_build_tx_frame(uint8_t *frame, uint8_t cmd_hi, uint8_t cmd_lo,
     frame[9] = (cmd_lo + cmd_hi) & 0xFF;
 }
 
-static void usart2_send_cmd(uint8_t cmd_hi, uint8_t cmd_lo)
+static void usart2_send_cmd_ex(uint8_t cmd_hi, uint8_t cmd_lo, bool obey)
 {
     uint8_t frame[FPGA_TX_FRAME_SIZE];
     fpga_record_tx_cmd(cmd_hi, cmd_lo);
     fpga.tx_count++;
-    meter_build_tx_frame(frame, cmd_hi, cmd_lo, true);
+    meter_build_tx_frame(frame, cmd_hi, cmd_lo, obey);
     fpga_record_tx_frame(frame);
     usart2_send_frame(frame);
+}
+
+/* Polled, OBEYED: a deliberate command to the meter SoC. */
+static void usart2_send_cmd(uint8_t cmd_hi, uint8_t cmd_lo)
+{
+    usart2_send_cmd_ex(cmd_hi, cmd_lo, true);
 }
 
 /* ═══════════════════════════════════════════════════════════════════
@@ -1258,19 +1285,40 @@ static void fpga_scope_delay_ms(uint32_t ms)
     }
 }
 
-static void fpga_timed_send_cmd(uint8_t cmd_hi, uint8_t cmd_lo, uint32_t delay_ms)
+static void fpga_timed_send_cmd_ex(uint8_t cmd_hi, uint8_t cmd_lo,
+                                   uint32_t delay_ms, bool obey)
 {
     if (xTaskGetSchedulerState() == taskSCHEDULER_RUNNING && usart_tx_queue != NULL) {
-        uint32_t item = ((uint32_t)cmd_hi << 8) | cmd_lo | FPGA_TX_OBEY_BIT;
+        uint32_t item = ((uint32_t)cmd_hi << 8) | cmd_lo |
+                        (obey ? FPGA_TX_OBEY_BIT : 0U);
 
         /* Scope reinit is a deliberate control path, so it's worth waiting
          * briefly for queue space instead of silently dropping commands. */
         (void)xQueueSend(usart_tx_queue, &item, pdMS_TO_TICKS(100));
     } else {
-        usart2_send_cmd(cmd_hi, cmd_lo);
+        usart2_send_cmd_ex(cmd_hi, cmd_lo, obey);
     }
 
     fpga_scope_delay_ms(delay_ms);
+}
+
+/*
+ * Timed send, UNOBEYED (00 00 header).
+ *
+ * This is the path every scope, siggen and mode-entry sequence in this file has
+ * always used, and until 2026-09-12 all of it went out 00 00 and was discarded
+ * by the meter SoC while still soliciting its data frames (EXP-26: the SoC
+ * answers traffic, not commands). Keeping it unobeyed keeps that wire
+ * bit-identical now that the header is real. What would otherwise have become
+ * live the moment the header flipped: 0x050A (Capacitance) as the "PC7-low
+ * probe tail", 0x0514 (Auto) as "variant setup", 0x0509 (a display state),
+ * 0x0508, the 0x00 0x2C bank prefix, and every non-0x05 scope word whose
+ * effect on the SoC nobody has measured. A command to the SoC is sent with
+ * fpga_wire_send_word() or fpga_send_cmd() instead.
+ */
+static void fpga_timed_send_cmd(uint8_t cmd_hi, uint8_t cmd_lo, uint32_t delay_ms)
+{
+    fpga_timed_send_cmd_ex(cmd_hi, cmd_lo, delay_ms, false);
 }
 
 static void fpga_scope_select_timing(const scope_state_t *ss,
@@ -1285,7 +1333,27 @@ static uint8_t fpga_scope_trigger_lsb(const scope_state_t *ss);
 static uint8_t fpga_scope_trigger_mode_byte(const scope_state_t *ss);
 static uint8_t fpga_scope_prefix_cmd(const scope_state_t *ss);
 
+/* A stock word to the meter SoC, OBEYED (AA 55 when the header is on). This is
+ * what a meter transition's selector, the debug boot-order replay's selector
+ * and the shell's `fpga wire words` use. The batch replays use the unobeyed
+ * variant below. */
 void fpga_wire_send_word(uint16_t word, uint32_t delay_ms)
+{
+    fpga_timed_send_cmd_ex((uint8_t)(word >> 8), (uint8_t)(word & 0xFF),
+                           delay_ms, true);
+}
+
+/*
+ * The shell's stock-shape replays (`fpga wire entry/scope`, `spi3 scopetest`,
+ * `stock diag bridge`) go through this UNOBEYED variant. They exist to probe
+ * the FPGA config-entry path by reproducing stock's USART2 byte stream, not to
+ * command the meter -- and their bank words are eight live meter function
+ * selectors (DCV, Diode, DC A, DC mA / ACV, Continuity, AC mA, AC A) plus
+ * 0x0501 (Auto) and 0x0503 (unmeasured). Obeyed, one `fpga wire entry` would
+ * walk the SoC through five functions. A word meant for the SoC is sent with
+ * `fpga wire words`, which stays obeyed.
+ */
+static void fpga_wire_send_word_unobeyed(uint16_t word, uint32_t delay_ms)
 {
     fpga_timed_send_cmd((uint8_t)(word >> 8), (uint8_t)(word & 0xFF), delay_ms);
 }
@@ -1297,13 +1365,13 @@ static void fpga_wire_send_bank_words(uint8_t bank_mode)
 
     if (bank_mode == 0 || bank_mode == 2) {
         for (size_t i = 0; i < sizeof(ch1_words) / sizeof(ch1_words[0]); i++) {
-            fpga_wire_send_word(ch1_words[i], 15);
+            fpga_wire_send_word_unobeyed(ch1_words[i], 15);
         }
     }
 
     if (bank_mode == 1 || bank_mode == 2) {
         for (size_t i = 0; i < sizeof(ch2_words) / sizeof(ch2_words[0]); i++) {
-            fpga_wire_send_word(ch2_words[i], 15);
+            fpga_wire_send_word_unobeyed(ch2_words[i], 15);
         }
     }
 }
@@ -1342,10 +1410,10 @@ void fpga_wire_entry(uint8_t bank_mode)
 {
     if (!fpga.initialized) return;
 
-    fpga_wire_send_word(0x02A0, 20);
-    fpga_wire_send_word(0x0501, 15);
+    fpga_wire_send_word_unobeyed(0x02A0, 20);
+    fpga_wire_send_word_unobeyed(0x0501, 15);
     fpga_wire_send_bank_words(bank_mode);
-    fpga_wire_send_word(0x0503, 20);
+    fpga_wire_send_word_unobeyed(0x0503, 20);
 }
 
 void fpga_wire_scope_sequence(uint8_t bank_mode)
@@ -1529,7 +1597,7 @@ void fpga_stock_diag_bridge_fixed(void)
      * 0x0501 materializer family around 0x08006060. */
     fpga_timed_send_cmd(0x00, 0x13, 15);
     fpga_timed_send_cmd(0x00, 0x14, 20);
-    fpga_wire_send_word(0x0501, 15);
+    fpga_wire_send_word_unobeyed(0x0501, 15);
     fpga_timed_send_cmd(0x00, 0x1D, 15);
     fpga_timed_send_cmd(0x00, 0x1B, 20);
 }
@@ -1876,6 +1944,10 @@ static void fpga_send_meter_wake_preamble(void)
      *
      * That is stock command sequencing evidence only. It is not a recovered
      * analog range writer, low-DCV correction, or factory calibration source.
+     *
+     * All four go out UNOBEYED (fpga_timed_send_cmd): obeyed, 0x0A would
+     * select Capacitance and 0x14 would select Auto right before the
+     * transition sends the real selector.
      */
     fpga_timed_send_cmd(0x05, 0x08, 10);
     fpga_timed_send_cmd(0x05, FPGA_CMD_METER_START, 10);
@@ -2595,12 +2667,15 @@ static void fpga_meter_poll_task(void *pv)
                 /* Stock's meter activation, sent once on entry rather than at
                  * boot — a scope build never runs fpga_init's meter block. */
                 fpga_meter_needs_activation = false;
-                usart2_send_cmd(0x05, 0x08);  vTaskDelay(pdMS_TO_TICKS(10));
-                usart2_send_cmd(0x05, 0x09);  vTaskDelay(pdMS_TO_TICKS(10));
-                if (GPIOC->idt & (1U << 7)) usart2_send_cmd(0x05, 0x07);
-                else                        usart2_send_cmd(0x05, 0x0A);
+                /* Unobeyed, same reason as fpga_init's copy: 0x0A selects
+                 * Capacitance and 0x14 selects Auto when obeyed, and this
+                 * runs right after the transition's real selector. */
+                usart2_send_cmd_ex(0x05, 0x08, false);  vTaskDelay(pdMS_TO_TICKS(10));
+                usart2_send_cmd_ex(0x05, 0x09, false);  vTaskDelay(pdMS_TO_TICKS(10));
+                if (GPIOC->idt & (1U << 7)) usart2_send_cmd_ex(0x05, 0x07, false);
+                else                        usart2_send_cmd_ex(0x05, 0x0A, false);
                 vTaskDelay(pdMS_TO_TICKS(10));
-                usart2_send_cmd(0x05, 0x14);  vTaskDelay(pdMS_TO_TICKS(50));
+                usart2_send_cmd_ex(0x05, 0x14, false);  vTaskDelay(pdMS_TO_TICKS(50));
             }
             fpga_send_meter_poll_sequence(meter_submode);
         }
@@ -5539,20 +5614,23 @@ void fpga_init(void)
      * Stock firmware TX queue items: 0x0508, 0x0509, 0x0507, 0x0514.
      * This was discovered by tracing direct TX queue writes in the binary. */
 #if !FPGA_USART_SILENT_SCOPE
-    usart2_send_cmd(0x05, 0x08);  /* Meter: configure */
+    /* All UNOBEYED (00 00 header): 0x0A is the SoC's Capacitance selector and
+     * 0x14 is Auto -- obeyed at boot they would pick a function before the
+     * UI does. The block stays as traffic because that is what it always was. */
+    usart2_send_cmd_ex(0x05, 0x08, false);  /* "configure" -- a display word */
     systick_delay_ms(10);
-    usart2_send_cmd(0x05, 0x09);  /* Meter: start measurement */
+    usart2_send_cmd_ex(0x05, 0x09, false);  /* "start" -- a display word */
     systick_delay_ms(10);
 
     /* Stock PC7 command tail: high -> 0x07, low -> 0x0A. */
     if (GPIOC->idt & (1U << 7)) {
-        usart2_send_cmd(0x05, 0x07);
+        usart2_send_cmd_ex(0x05, 0x07, false);
     } else {
-        usart2_send_cmd(0x05, 0x0A);
+        usart2_send_cmd_ex(0x05, 0x0A, false);
     }
     systick_delay_ms(10);
 
-    usart2_send_cmd(0x05, 0x14);  /* Meter variant setup */
+    usart2_send_cmd_ex(0x05, 0x14, false);  /* Auto */
     systick_delay_ms(50);
 
     /*
@@ -5693,14 +5771,19 @@ BaseType_t fpga_send_cmd(uint8_t cmd_high, uint8_t cmd_low)
     return pdTRUE;
 }
 
-BaseType_t fpga_send_cmd_keepalive(uint8_t cmd_high, uint8_t cmd_low)
+BaseType_t fpga_send_cmd_unobeyed(uint8_t cmd_high, uint8_t cmd_low)
 {
     if (usart_tx_queue != NULL &&
         xTaskGetSchedulerState() == taskSCHEDULER_RUNNING) {
         uint32_t item = ((uint32_t)cmd_high << 8) | cmd_low;  /* OBEY clear */
         return xQueueSend(usart_tx_queue, &item, 0);
     }
-    return pdFALSE;  /* keepalive is best-effort; never block the poll task */
+    return pdFALSE;  /* best-effort; never block the caller */
+}
+
+BaseType_t fpga_send_cmd_keepalive(uint8_t cmd_high, uint8_t cmd_low)
+{
+    return fpga_send_cmd_unobeyed(cmd_high, cmd_low);
 }
 
 bool fpga_usart_tx_task_exists(void)
@@ -6038,22 +6121,24 @@ void fpga_enter_siggen_mode(void)
      * 0x14 = meter variant setup
      * 0x09 = meter start measurement
      * 0x07/0x0A = stock PC7 command tail, not a DMM range state */
-    fpga_send_cmd(0x00, 0x02);  /* Siggen: frequency */
-    fpga_send_cmd(0x00, 0x03);  /* Siggen: waveform */
-    fpga_send_cmd(0x00, 0x04);  /* Siggen: amplitude */
-    fpga_send_cmd(0x00, 0x05);  /* Siggen: offset */
-    fpga_send_cmd(0x00, 0x06);  /* Siggen: duty cycle */
-    fpga_send_cmd(0x00, 0x08);  /* Shared meter configure/setup byte */
+    /* Unobeyed: this block has always gone out 00 00 and the SoC's reaction
+     * to AA 55 frames with a 0x00 high byte has never been measured. */
+    fpga_send_cmd_unobeyed(0x00, 0x02);  /* Siggen: frequency */
+    fpga_send_cmd_unobeyed(0x00, 0x03);  /* Siggen: waveform */
+    fpga_send_cmd_unobeyed(0x00, 0x04);  /* Siggen: amplitude */
+    fpga_send_cmd_unobeyed(0x00, 0x05);  /* Siggen: offset */
+    fpga_send_cmd_unobeyed(0x00, 0x06);  /* Siggen: duty cycle */
+    fpga_send_cmd_unobeyed(0x00, 0x08);  /* Shared meter configure/setup byte */
 
     /* Case 9 tail: meter variant + stock PC7 command tail */
-    fpga_send_cmd(0x00, 0x14);
-    fpga_send_cmd(0x00, FPGA_CMD_METER_START);
+    fpga_send_cmd_unobeyed(0x00, 0x14);
+    fpga_send_cmd_unobeyed(0x00, FPGA_CMD_METER_START);
 
     /* Stock PC7 command tail: high -> 0x07, low -> 0x0A. */
     if (GPIOC->idt & (1U << 7)) {
-        fpga_send_cmd(0x00, 0x07);
+        fpga_send_cmd_unobeyed(0x00, 0x07);
     } else {
-        fpga_send_cmd(0x00, FPGA_CMD_METER_NOPROBE);
+        fpga_send_cmd_unobeyed(0x00, FPGA_CMD_METER_NOPROBE);
     }
 
     /* Switch analog MUX for signal gen output.
@@ -6065,6 +6150,85 @@ void fpga_enter_siggen_mode(void)
     GPIOE->clr = (1U << 4);   /* PE4 LOW — clear range select */
     GPIOE->clr = (1U << 5);   /* PE5 LOW */
     GPIOE->clr = (1U << 6);   /* PE6 LOW */
+}
+
+/*
+ * THE SoC RESTARTS ON EVERY TRANSITION, AND IT IS DEAF WHILE IT BOOTS.
+ *
+ * Measured on unit #2 with the AA 55 header live (2026-09-13, EXP-205):
+ * fpga_meter_reset_transport() drops PC11, and the meter SoC comes back in its
+ * power-on Auto state -- the frame after a transition is the boot-time "Auto"
+ * text again, whatever function had been selected before. Then the selector
+ * sent 20 ms later is swallowed: `AA 55 05 0B` left the wire (tx_control
+ * history) and no echo ever came back, while not one data frame arrived
+ * during the whole sequence (transition history data=558..558). The same word
+ * typed by hand a second later was echoed at once and switched the function.
+ *
+ * So the transition waits for the SoC to speak before it commands it, and it
+ * does not take the selector on trust: it re-sends until the echo confirms it.
+ * The wait feeds unobeyed keepalive traffic, since a silent wire is the other
+ * documented way to get no frames (EXP-26). Numbers are exported for
+ * `meter hdr`, so the wake time and the retry count are measurements, not
+ * assumptions.
+ */
+#define FPGA_METER_SOC_WAKE_TIMEOUT_MS   3000u  /* measured wake 1380 ms; one
+                                                   * boot->meter entry missed 1500 */
+#define FPGA_METER_SOC_WAKE_SETTLE_MS     200u
+#define FPGA_METER_SOC_WAKE_POLL_MS        10u
+#define FPGA_METER_SELECTOR_ECHO_WAIT_MS  300u
+#define FPGA_METER_SELECTOR_TRIES           5u
+
+static void fpga_meter_wait_for_soc(uint16_t frame_before)
+{
+    uint32_t waited = 0;
+    uint32_t since_keepalive = 0;
+
+    fpga.meter_soc_wake_ms = 0xFFFFu;  /* timeout until proven otherwise */
+    while (waited < FPGA_METER_SOC_WAKE_TIMEOUT_MS) {
+        if (fpga.frame_count != frame_before) {
+            fpga.meter_soc_wake_ms = (uint16_t)waited;
+            break;
+        }
+        if (waited + FPGA_METER_SOC_WAKE_POLL_MS >= FPGA_METER_SOC_WAKE_TIMEOUT_MS) {
+            fpga.meter_soc_wake_timeouts++;
+        }
+        if (since_keepalive >= 250u) {
+            (void)fpga_send_cmd_unobeyed(0x05, FPGA_CMD_METER_START);
+            since_keepalive = 0;
+        }
+        fpga_scope_delay_ms(FPGA_METER_SOC_WAKE_POLL_MS);
+        waited += FPGA_METER_SOC_WAKE_POLL_MS;
+        since_keepalive += FPGA_METER_SOC_WAKE_POLL_MS;
+    }
+    fpga_scope_delay_ms(FPGA_METER_SOC_WAKE_SETTLE_MS);
+}
+
+/* Send the selector OBEYED and wait for its echo; retry a bounded number of
+ * times. Leaves the outcome in fpga.meter_selector_attempts / _confirmed. */
+static void fpga_send_selector_confirmed(uint16_t word, uint32_t settle_ms)
+{
+    fpga.meter_selector_attempts = 0;
+    fpga.meter_selector_confirmed = 0;
+    for (uint8_t attempt = 0; attempt < FPGA_METER_SELECTOR_TRIES; attempt++) {
+        uint16_t echo_before = fpga.rx_echo_valid_count;
+        uint32_t waited = 0;
+
+        fpga.meter_selector_attempts++;
+        fpga_wire_send_word(word, 0);
+        while (waited < FPGA_METER_SELECTOR_ECHO_WAIT_MS) {
+            if (fpga.rx_echo_valid_count != echo_before) {
+                fpga.meter_selector_confirmed = 1;
+                break;
+            }
+            fpga_scope_delay_ms(FPGA_METER_SOC_WAKE_POLL_MS);
+            waited += FPGA_METER_SOC_WAKE_POLL_MS;
+        }
+        if (fpga.meter_selector_confirmed) break;
+    }
+    if (!fpga.meter_selector_confirmed) {
+        fpga.meter_selector_unconfirmed_total++;
+    }
+    fpga_scope_delay_ms(settle_ms);
 }
 
 /* Helper: send the stock PC7-gated command tail (shared by meter modes). */
@@ -6094,7 +6258,7 @@ static void fpga_send_meter_mode_sequence(uint8_t submode)
     fpga.meter_mode_sequence_submode = submode;
     fpga.meter_mode_config_word = 0;
     fpga.meter_mode_selector_word = plan.selector_word;
-    fpga.meter_mode_apply_word = 0;
+    fpga.meter_mode_apply_word = plan.apply_word;  /* always 0 now, see plan */
     fpga.meter_mode_probe_word = plan.has_probe_detect ? probe_word : 0;
     fpga.meter_mode_start_word = plan.start_word;
     /*
@@ -6115,13 +6279,18 @@ static void fpga_send_meter_mode_sequence(uint8_t submode)
     }
     if (plan.has_config_word) {
         fpga.meter_mode_config_word = plan.config_word;
-        fpga_wire_send_word(plan.config_word, plan.settle_ms);
+        fpga_timed_send_cmd((uint8_t)(plan.config_word >> 8),
+                            (uint8_t)(plan.config_word & 0x00FFU),
+                            plan.settle_ms);
     }
-    fpga_wire_send_word(plan.selector_word, plan.settle_ms);
-    if (plan.has_apply_word) {
-        fpga.meter_mode_apply_word = plan.apply_word;
-        fpga_wire_send_word(plan.apply_word, plan.settle_ms);
-    }
+    /*
+     * THE ONE OBEYED WORD of a transition. Everything around it (bank prefix,
+     * 0x0508, the probe tail, 0x0509) keeps the 00 00 header it always had:
+     * the probe tail's low branch is 0x0A, which is the SoC's Capacitance
+     * selector, and 0x0509 puts the SoC's display into a state that is not a
+     * measurement. Obeyed, either would undo the selector a few ms later.
+     */
+    fpga_send_selector_confirmed(plan.selector_word, plan.settle_ms);
     if (plan.has_probe_detect) {
         fpga_timed_send_probe_detect(10);
     }
@@ -6169,6 +6338,7 @@ static void fpga_apply_meter_transition(uint8_t submode, bool wake_preamble)
     fpga_set_meter_frontend_for_submode(submode);
     actual_gpio = fpga_meter_mux_gpio_mask_live();
     fpga_scope_delay_ms(plan.settle_ms);
+    fpga_meter_wait_for_soc(frame_before);
     fpga_send_meter_mode_sequence(submode);
     fpga_record_meter_transition_snapshot(submode, &plan, planned_gpio,
                                           actual_gpio, tx_before, frame_before);

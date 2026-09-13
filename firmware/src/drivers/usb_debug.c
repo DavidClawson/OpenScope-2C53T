@@ -550,9 +550,13 @@ static void fpga_stock_diag_print(void)
     usb_send_str("\r\n");
 }
 
+/* Shell replays of stock's scope word stream (`fpga scope entry/freq/trigger`).
+ * Unobeyed, like fpga.c's own scope sequences: these words have always gone
+ * out 00 00, and what the meter SoC does with an AA 55 frame whose high byte
+ * is a scope parameter has never been measured. */
 static bool fpga_send_cmd_timed(uint8_t cmd_hi, uint8_t cmd_lo, uint32_t delay_ms)
 {
-    BaseType_t ok = fpga_send_cmd(cmd_hi, cmd_lo);
+    BaseType_t ok = fpga_send_cmd_unobeyed(cmd_hi, cmd_lo);
     if (ok != pdTRUE) {
         usb_debug_printf("Queue full at %02X %02X\r\n", cmd_hi, cmd_lo);
         return false;
@@ -2285,9 +2289,11 @@ static void cmd_fpga_usart(const char *args)
 }
 
 /* `meter hdr [on|off]` — EXP-25 (issue #15). A/B the meter TX frame header
- * between 00 00 (what this project has always sent) and AA 55 (what Stlkv
- * measured the meter SoC requires). Prints the echo ladder every time, so the
- * A/B is one command and the numbers are on the same screen as the setting.
+ * between AA 55 (the default since the word table was corrected; what the
+ * meter SoC requires, measured on two units) and 00 00 (what this project sent
+ * before 2026-09-12, kept as the negative control: a transition under 00 00
+ * must produce zero echoes). Prints the echo ladder every time, so the A/B is
+ * one command and the numbers are on the same screen as the setting.
  *
  * Read the ladder from the bottom up when it stays at zero:
  *   rx_bytes    moving => the RX ISR runs at all
@@ -2310,8 +2316,9 @@ static void cmd_meter_hdr(const char *args)
     usb_debug_printf(
         "meter TX header: %s  (frame[0]=%02X frame[1]=%02X)\r\n"
         "  tx_count=%u rx_bytes=%u data_frames=%u\r\n"
-        "  echo_start=%u echo_hdr=%u echo_valid=%u echo_bad=%u echo_frames=%u\r\n",
-        aa55 ? "AA 55" : "00 00 (baseline)",
+        "  echo_start=%u echo_hdr=%u echo_valid=%u echo_bad=%u echo_frames=%u\r\n"
+        "  transition: wake_ms=%u tries=%u ok=%u | unconfirmed=%u wake_timeouts=%u\r\n",
+        aa55 ? "AA 55 (default)" : "00 00 (legacy, negative control)",
         aa55 ? 0xAA : 0x00, aa55 ? 0x55 : 0x00,
         (unsigned)fpga.tx_count, (unsigned)fpga.rx_byte_count,
         (unsigned)fpga.frame_count,
@@ -2319,7 +2326,12 @@ static void cmd_meter_hdr(const char *args)
         (unsigned)fpga.rx_sync_echo_header_count,
         (unsigned)fpga.rx_echo_valid_count,
         (unsigned)fpga.rx_echo_bad_count,
-        (unsigned)fpga.echo_count);
+        (unsigned)fpga.echo_count,
+        (unsigned)fpga.meter_soc_wake_ms,
+        (unsigned)fpga.meter_selector_attempts,
+        (unsigned)fpga.meter_selector_confirmed,
+        (unsigned)fpga.meter_selector_unconfirmed_total,
+        (unsigned)fpga.meter_soc_wake_timeouts);
 }
 
 /* `fpga rearm [on|off]` — stock's post-read re-arm write (reg 0x01 <- rate idx).
@@ -4938,10 +4950,12 @@ static void cmd_meter_mux_arms(const char *args)
     }
 
     vTaskDelay(pdMS_TO_TICKS(settle_ms));
-    /* Reported, not discarded. This only ENQUEUES; if the USART TX queue is
-     * full the START frame never goes out, and the trace printed below then
-     * reads as "the hardware did not answer" rather than "we never asked". */
-    if (fpga_send_cmd(0x05, FPGA_CMD_METER_START) != pdTRUE)
+    /* UNOBEYED: an obeyed 0x0509 moves the SoC's display state, and this
+     * trace is about the relays, not about commanding the meter.
+     * Reported, not discarded: this only ENQUEUES, and if the TX queue is
+     * full the START frame never goes out, so the trace below would read
+     * as "the hardware did not answer" rather than "we never asked". */
+    if (fpga_send_cmd_unobeyed(0x05, FPGA_CMD_METER_START) != pdTRUE)
         usb_send_str("WARN: METER_START not queued (TX queue full) — the trace"
                      " below is NOT a response to it\r\n");
     vTaskDelay(pdMS_TO_TICKS(350));
@@ -4983,10 +4997,12 @@ static void cmd_meter_boot_sequence(const char *args)
     }
 
     vTaskDelay(pdMS_TO_TICKS(settle_ms));
-    /* Reported, not discarded. This only ENQUEUES; if the USART TX queue is
-     * full the START frame never goes out, and the trace printed below then
-     * reads as "the hardware did not answer" rather than "we never asked". */
-    if (fpga_send_cmd(0x05, FPGA_CMD_METER_START) != pdTRUE)
+    /* UNOBEYED: an obeyed 0x0509 moves the SoC's display state, and this
+     * trace is about the relays, not about commanding the meter.
+     * Reported, not discarded: this only ENQUEUES, and if the TX queue is
+     * full the START frame never goes out, so the trace below would read
+     * as "the hardware did not answer" rather than "we never asked". */
+    if (fpga_send_cmd_unobeyed(0x05, FPGA_CMD_METER_START) != pdTRUE)
         usb_send_str("WARN: METER_START not queued (TX queue full) — the trace"
                      " below is NOT a response to it\r\n");
     vTaskDelay(pdMS_TO_TICKS(350));
@@ -5056,10 +5072,12 @@ static void cmd_meter_pc11_timing(const char *args)
     }
 
     vTaskDelay(pdMS_TO_TICKS(high_ms));
-    /* Reported, not discarded. This only ENQUEUES; if the USART TX queue is
-     * full the START frame never goes out, and the trace printed below then
-     * reads as "the hardware did not answer" rather than "we never asked". */
-    if (fpga_send_cmd(0x05, FPGA_CMD_METER_START) != pdTRUE)
+    /* UNOBEYED: an obeyed 0x0509 moves the SoC's display state, and this
+     * trace is about the relays, not about commanding the meter.
+     * Reported, not discarded: this only ENQUEUES, and if the TX queue is
+     * full the START frame never goes out, so the trace below would read
+     * as "the hardware did not answer" rather than "we never asked". */
+    if (fpga_send_cmd_unobeyed(0x05, FPGA_CMD_METER_START) != pdTRUE)
         usb_send_str("WARN: METER_START not queued (TX queue full) — the trace"
                      " below is NOT a response to it\r\n");
     vTaskDelay(pdMS_TO_TICKS(350));
@@ -5470,7 +5488,11 @@ static bool spi3_shell_claim(void)
 static uint32_t acqtest_enq_fails;
 static void acqtest_send(uint8_t hi, uint8_t lo)
 {
-    if (fpga_send_cmd(hi, lo) != pdTRUE) acqtest_enq_fails++;
+    /* UNOBEYED (00 00). These are FPGA-side scope words; with the AA 55 header
+     * on, an obeyed 0x00xx frame's effect on the meter SoC is unmeasured, and
+     * this test is about SPI3. The enqueue result is still counted, so a full
+     * TX queue cannot masquerade as "the hardware did not answer". */
+    if (fpga_send_cmd_unobeyed(hi, lo) != pdTRUE) acqtest_enq_fails++;
 }
 
 static void cmd_spi3_acqtest(void)
@@ -7381,7 +7403,7 @@ static const shell_cmd_t shell_cmds[] = {
     CMD_A("fpga rearm", cmd_fpga_rearm, 0,
           "fpga rearm [on|off]             Stock post-read re-arm (reg01) A/B toggle\r\n"),
     CMD_A("meter hdr", cmd_meter_hdr, 0,
-          "meter hdr [on|off]              Meter TX header 00 00 vs AA 55 (EXP-25) + echo ladder\r\n"),
+          "meter hdr [on|off]              Meter TX header AA 55 (default) vs 00 00 (EXP-25) + echo ladder\r\n"),
     CMD_A("fpga rate", cmd_fpga_rate, 0,
           "fpga rate [hexidx]              reg-0x01 rate index the re-arm rewrites\r\n"),
     CMD_V("fpga scope reinit", cmd_fpga_scope_reinit, SC_EXACT,

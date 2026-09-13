@@ -5,7 +5,7 @@
 #include <stdint.h>
 
 #define FPGA_METER_LOCAL_SUBMODE_COUNT 11u
-#define FPGA_METER_STOCK_MODE_COUNT    8u
+#define FPGA_METER_STOCK_MODE_COUNT    8u   /* formatter families, not wire words */
 #define FPGA_METER_LOGICAL_FUNCTION_COUNT 13u
 #define FPGA_METER_TRANSITION_DISCARD_FRAMES 2u
 #define FPGA_METER_TRANSITION_SETTLE_MS      20u
@@ -88,9 +88,7 @@ bool fpga_meter_logical_function_is_supported(uint8_t function);
 bool fpga_meter_logical_function_is_unresolved(uint8_t function);
 uint8_t fpga_meter_submode_for_logical_function(uint8_t function);
 uint8_t fpga_meter_stock_mode_for_submode(uint8_t submode);
-uint8_t fpga_meter_stock_cmd_low_for_mode(uint8_t stock_mode);
 uint16_t fpga_meter_stock_cmd_word_for_submode(uint8_t submode);
-bool fpga_meter_stock_apply_cmd_word_for_submode(uint8_t submode, uint16_t *word);
 fpga_meter_frame_family_t fpga_meter_frame_family_for_submode(uint8_t submode);
 bool fpga_meter_frame_family_is_recovered(uint8_t family);
 bool fpga_meter_frame_family_has_stock_marker(uint8_t family);

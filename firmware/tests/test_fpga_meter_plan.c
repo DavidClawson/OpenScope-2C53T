@@ -55,16 +55,28 @@ static void expect_mux_state(const char *label,
     EXPECT_EQ_U8(name, got->pa6, want->pa6);
 }
 
-static void test_stock_table_bytes(void)
+static void test_measured_word_map_is_one_distinct_word_per_submode(void)
 {
-    static const uint8_t expected[FPGA_METER_STOCK_MODE_COUNT] = {
-        0x14, 0x0C, 0x17, 0x0B, 0x0A, 0x12, 0x11, 0x10
-    };
+    /*
+     * The meter SoC's word map, measured with a logger inside stock V1.2.0
+     * (issue #15). Every submode owns a distinct word; none of them is Auto
+     * (0x14), LIVE (0x13) or the never-sent 0x0F; all sit in the accepted
+     * 0x0A..0x17 range.
+     */
+    uint32_t seen = 0;
 
-    for (uint8_t i = 0; i < FPGA_METER_STOCK_MODE_COUNT; i++) {
-        char name[32];
-        snprintf(name, sizeof(name), "stock low %u", (unsigned)i);
-        EXPECT_EQ_U8(name, fpga_meter_stock_cmd_low_for_mode(i), expected[i]);
+    for (uint8_t i = 0; i < FPGA_METER_LOCAL_SUBMODE_COUNT; i++) {
+        char name[48];
+        uint16_t word = fpga_meter_stock_cmd_word_for_submode(i);
+        uint8_t low = (uint8_t)(word & 0xFFU);
+
+        snprintf(name, sizeof(name), "submode %u word in range", (unsigned)i);
+        EXPECT_EQ_U8(name, (low >= 0x0A && low <= 0x17) ? 1U : 0U, 1U);
+        snprintf(name, sizeof(name), "submode %u word is not Auto/LIVE/0F", (unsigned)i);
+        EXPECT_EQ_U8(name, (low == 0x14 || low == 0x13 || low == 0x0F) ? 1U : 0U, 0U);
+        snprintf(name, sizeof(name), "submode %u word is distinct", (unsigned)i);
+        EXPECT_EQ_U8(name, (seen & (1UL << low)) ? 1U : 0U, 0U);
+        seen |= (1UL << low);
     }
 }
 
@@ -148,8 +160,8 @@ static void test_logical_function_capability_matrix_covers_all_dmm_modes(void)
 static void test_wire_words_are_raw_05_family(void)
 {
     static const uint16_t expected_words[FPGA_METER_LOCAL_SUBMODE_COUNT] = {
-        0x0514, 0x050C, 0x0517, 0x0517, 0x050B,
-        0x050B, 0x050A, 0x0511, 0x0510, 0x0512,
+        0x050C, 0x050D, 0x0511, 0x0510, 0x0516,
+        0x0515, 0x050B, 0x0517, 0x050E, 0x050A,
         0x0512
     };
 
@@ -162,53 +174,45 @@ static void test_wire_words_are_raw_05_family(void)
     }
 }
 
-static void test_stock_apply_words_for_runtime_family_switch(void)
+static void test_stock_toggle_words_are_selectors_not_apply_words(void)
 {
     /*
-     * Stock dynamic raw-word helper at 0x08006120 chooses only these
-     * selector/apply low-byte pairs for runtime family-side switching:
-     * ACV 0x0C/0x0D, DCA 0x17/0x0E, continuity 0x11/0x16, diode 0x10/0x15.
-     * Keep the local apply table as a subset of that recovered pair set; do
-     * not add an apply word for a surprising range without new stock xrefs.
+     * Stock's decompile showed four low-byte pairs (0x0C/0x0D, 0x17/0x0E,
+     * 0x11/0x16, 0x10/0x15) and this module used to send the second of each
+     * as an "apply" word after the first. Measured with stock's own TX stream
+     * (issue #15), the second word is what stock sends when the AC/DC toggle
+     * inside a function is pressed: ACV, Diode, AC mA, AC A. So each is the
+     * primary selector of its own local submode, and no submode has an apply
+     * word any more.
      */
-    static const uint16_t expected_apply[FPGA_METER_LOCAL_SUBMODE_COUNT] = {
-        0x0000, 0x050D, 0x050E, 0x050E, 0x0000,
-        0x0000, 0x0000, 0x0516, 0x0515, 0x0000,
-        0x0000
-    };
-    static const uint16_t stock_dynamic_apply_words[] = {
-        0x050D, 0x050E, 0x0516, 0x0515
+    static const struct {
+        uint16_t word;
+        uint8_t  submode;
+    } toggle_words[] = {
+        { 0x050D, 1 }, /* DC Voltage -> AC Voltage */
+        { 0x050E, 8 }, /* Continuity -> Diode */
+        { 0x0516, 4 }, /* small DC current -> small AC current */
+        { 0x0515, 5 }, /* large DC current -> large AC current */
     };
 
     for (uint8_t i = 0; i < FPGA_METER_LOCAL_SUBMODE_COUNT; i++) {
-        char name[32];
-        uint16_t word = 0xAAAA;
-        bool have_word = fpga_meter_stock_apply_cmd_word_for_submode(i, &word);
+        char name[48];
+        fpga_meter_transition_plan_t plan =
+            fpga_meter_transition_plan_for_submode(i);
 
-        snprintf(name, sizeof(name), "apply exists %u", (unsigned)i);
-        EXPECT_EQ_U8(name, have_word ? 1U : 0U,
-                     expected_apply[i] != 0 ? 1U : 0U);
-        if (expected_apply[i] != 0) {
-            snprintf(name, sizeof(name), "apply word %u", (unsigned)i);
-            EXPECT_EQ_U16(name, word, expected_apply[i]);
-            EXPECT_EQ_U8("apply raw family", (uint8_t)(word >> 8), 0x05);
-            {
-                uint8_t found = 0;
-                for (uint8_t j = 0;
-                     j < sizeof(stock_dynamic_apply_words) /
-                         sizeof(stock_dynamic_apply_words[0]);
-                     j++) {
-                    if (word == stock_dynamic_apply_words[j]) {
-                        found = 1;
-                    }
-                }
-                snprintf(name, sizeof(name), "apply stock pair %u", (unsigned)i);
-                EXPECT_EQ_U8(name, found, 1U);
-            }
-        } else {
-            snprintf(name, sizeof(name), "apply untouched %u", (unsigned)i);
-            EXPECT_EQ_U16(name, word, 0xAAAA);
-        }
+        snprintf(name, sizeof(name), "no apply word %u", (unsigned)i);
+        EXPECT_EQ_U8(name, plan.has_apply_word ? 1U : 0U, 0U);
+        snprintf(name, sizeof(name), "apply word zero %u", (unsigned)i);
+        EXPECT_EQ_U16(name, plan.apply_word, 0x0000U);
+    }
+
+    for (unsigned i = 0; i < sizeof(toggle_words) / sizeof(toggle_words[0]); i++) {
+        char name[48];
+        snprintf(name, sizeof(name), "toggle word 0x%04X is a selector",
+                 (unsigned)toggle_words[i].word);
+        EXPECT_EQ_U16(name,
+                      fpga_meter_stock_cmd_word_for_submode(toggle_words[i].submode),
+                      toggle_words[i].word);
     }
 }
 
@@ -231,13 +235,13 @@ static void test_transition_plan_covers_mux_family_and_settle_policy(void)
         FPGA_METER_FRAME_FAMILY_EXTENDED,
     };
     static const uint16_t expected_selector[FPGA_METER_LOCAL_SUBMODE_COUNT] = {
-        0x0514, 0x050C, 0x0517, 0x0517, 0x050B,
-        0x050B, 0x050A, 0x0511, 0x0510, 0x0512,
+        0x050C, 0x050D, 0x0511, 0x0510, 0x0516,
+        0x0515, 0x050B, 0x0517, 0x050E, 0x050A,
         0x0512
     };
     static const uint16_t expected_apply[FPGA_METER_LOCAL_SUBMODE_COUNT] = {
-        0x0000, 0x050D, 0x050E, 0x050E, 0x0000,
-        0x0000, 0x0000, 0x0516, 0x0515, 0x0000,
+        0x0000, 0x0000, 0x0000, 0x0000, 0x0000,
+        0x0000, 0x0000, 0x0000, 0x0000, 0x0000,
         0x0000
     };
     static const uint16_t expected_config[FPGA_METER_LOCAL_SUBMODE_COUNT] = {
@@ -567,8 +571,15 @@ static void test_frame_family_marker_visibility_documents_observed_gaps(void)
                  0U);
 }
 
-static void test_local_splits_do_not_invent_extra_stock_selectors(void)
+static void test_local_splits_share_formatter_family_not_wire_word(void)
 {
+    /*
+     * These pairs share a stock formatter family (and therefore the local mux
+     * projection), but each half owns its own selector word: stock's meter
+     * menu has separate entries for the two currents, and capacitance and
+     * temperature are 0x0A and 0x12. Sharing the word here is what made the
+     * old table select Temperature for "Capacitance".
+     */
     static const struct {
         uint8_t a;
         uint8_t b;
@@ -588,8 +599,8 @@ static void test_local_splits_do_not_invent_extra_stock_selectors(void)
 
         snprintf(name, sizeof(name), "%s stock slot", shared_slots[i].label);
         EXPECT_EQ_U8(name, a.stock_mode, b.stock_mode);
-        snprintf(name, sizeof(name), "%s selector", shared_slots[i].label);
-        EXPECT_EQ_U16(name, a.selector_word, b.selector_word);
+        snprintf(name, sizeof(name), "%s selectors differ", shared_slots[i].label);
+        EXPECT_EQ_U8(name, a.selector_word != b.selector_word ? 1U : 0U, 1U);
         snprintf(name, sizeof(name), "%s Port C/E mux", shared_slots[i].label);
         EXPECT_EQ_U8(name, a.portc_porte_mux, b.portc_porte_mux);
         snprintf(name, sizeof(name), "%s Port A/B mux", shared_slots[i].label);
@@ -645,8 +656,6 @@ static void test_fallbacks(void)
         fpga_meter_transition_plan_for_submode(99);
     fpga_meter_mux_gpio_state_t state = { 0 };
 
-    EXPECT_EQ_U8("bad stock mode is invalid",
-                 fpga_meter_stock_cmd_low_for_mode(99), 0);
     EXPECT_EQ_U8("bad submode valid",
                  fpga_meter_submode_is_valid(99) ? 1U : 0U, 0U);
     EXPECT_EQ_U8("good submode valid",
@@ -657,8 +666,6 @@ static void test_fallbacks(void)
     EXPECT_EQ_U16("bad submode word",
                   fpga_meter_stock_cmd_word_for_submode(99),
                   FPGA_METER_INVALID_SELECTOR_WORD);
-    EXPECT_EQ_U8("bad submode no apply word",
-                 fpga_meter_stock_apply_cmd_word_for_submode(99, NULL) ? 1U : 0U, 0U);
     EXPECT_EQ_U8("bad plan stock", plan.stock_mode,
                  FPGA_METER_INVALID_STOCK_MODE);
     EXPECT_EQ_U8("bad plan mux", plan.mux_index,
@@ -758,11 +765,11 @@ static void test_every_submode_transition_drains_before_accepting_frames(void)
 
 int main(void)
 {
-    test_stock_table_bytes();
+    test_measured_word_map_is_one_distinct_word_per_submode();
     test_local_submode_mapping();
     test_logical_function_capability_matrix_covers_all_dmm_modes();
     test_wire_words_are_raw_05_family();
-    test_stock_apply_words_for_runtime_family_switch();
+    test_stock_toggle_words_are_selectors_not_apply_words();
     test_transition_plan_covers_mux_family_and_settle_policy();
     test_mux_gpio_state_matches_stock_projection_for_every_submode();
     test_mux_writer_stock_arm_truth_table_covers_all_10_switch_arms();
@@ -770,7 +777,7 @@ int main(void)
     test_state_machine_contract_is_exhaustive();
     test_frame_family_mismatch_policy_matrix_is_exhaustive();
     test_frame_family_marker_visibility_documents_observed_gaps();
-    test_local_splits_do_not_invent_extra_stock_selectors();
+    test_local_splits_share_formatter_family_not_wire_word();
     test_local_splits_share_mux_gpio_state();
     test_fallbacks();
     test_rx_frame_gate_preserves_discard_budget_while_busy();
