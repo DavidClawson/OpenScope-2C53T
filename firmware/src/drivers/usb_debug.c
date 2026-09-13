@@ -930,6 +930,18 @@ static void cmd_usart_tx(const char *args)
                       "  e.g.: usart tx 00 09\r\n");
         return;
     }
+    /* Only bytes[0] and bytes[1] are ever transmitted. The loop above happily
+     * parsed up to eight, so `usart tx 00 09 AA BB CC` sent two bytes and
+     * reported "queued" with no hint that three were dropped — an operator
+     * building a frame here got a two-byte command and a plausible receipt.
+     * `fpga frame` is the command that takes a whole frame; say so instead of
+     * quietly truncating. */
+    while (*p == ' ') p++;
+    if (count > 2 || *p != '\0') {
+        usb_send_str("ERR: usart tx sends exactly two bytes (cmd_hi cmd_lo).\r\n"
+                     "     For a full 10-byte frame use: fpga frame <hi> <lo> [p1..p5 [ck]]\r\n");
+        return;
+    }
 
     /* Two ways this command used to lie, both of which have already voided a
      * bench experiment (exp(02), 2026-08-16 — recorded VOID, not negative):
@@ -1508,7 +1520,14 @@ static void cmd_mem_read(const char *args)
     }
 
     uint32_t count = 1;
-    if (space) parse_int(space + 1, &count);
+    /* Checked, not discarded: parse_int() writes *out from strtoul() even when
+     * it fails, so `mem read 0x40021000 four` used to set count=0 and print
+     * absolutely nothing — indistinguishable from a region that reads back
+     * empty. */
+    if (space && parse_int(space + 1, &count) != 0) {
+        usb_send_str("Usage: mem read <hex_addr> [count]\r\n");
+        return;
+    }
     if (count > 64) count = 64;
 
     /* Align to 4 bytes */
@@ -2211,7 +2230,15 @@ static void cmd_fpga_acq(const char *args)
 
     if (args && *args) {
         uint32_t mode = FPGA_ACQ_NORMAL + 1;  /* Explicit low-level trigger byte */
-        parse_int(args, &mode);
+        /* The return MUST be checked. parse_int() writes *out unconditionally,
+         * so a non-numeric argument did not fall back to the default above —
+         * it overwrote it with 0, fired a real acquisition on trigger byte 0
+         * and printed "mode 0: queued", which reads as a confirmation of
+         * something the operator never asked for. */
+        if (parse_int(args, &mode) != 0 || mode > 0xFF) {
+            usb_debug_printf("fpga acq: bad mode '%s'. Usage: fpga acq [0-255]\r\n", args);
+            return;
+        }
         ok = fpga_trigger_acquisition((uint8_t)mode);
         usb_debug_printf("Acquisition trigger mode %lu: %s\r\n",
                          mode, ok == pdTRUE ? "queued" : "FULL");
@@ -2331,8 +2358,14 @@ static void cmd_fpga_rate(const char *args)
     char buf[80];
     while (*args == ' ') args++;
     if (*args) {
-        unsigned v = (unsigned)strtoul(args, NULL, 16);
-        if (v > 0xFF) { usb_send_str("usage: fpga rate <hex idx>\r\n"); return; }
+        /* parse_hex32(), not a bare strtoul(): `fpga rate scope` used to
+         * silently become 0x00 and be echoed back as a successful setting,
+         * changing what the re-arm writes into FPGA reg 0x01. */
+        uint32_t v;
+        if (parse_hex32(args, &v) != 0 || v > 0xFF) {
+            usb_send_str("usage: fpga rate <hex idx>\r\n");
+            return;
+        }
         fpga_acq_rate_idx_set((uint8_t)v);
     }
     snprintf(buf, sizeof(buf), "acq rate idx = 0x%02X\r\n", fpga_acq_rate_idx_get());
@@ -2639,7 +2672,17 @@ static void cmd_fpga_scope_timebase(const char *args)
     scope_state_t *ss = scope_state_get();
 
     if (*args) {
-        unsigned v = (unsigned)strtoul(args, NULL, 16);
+        /* parse_hex32(), not a bare strtoul(). `fpga scope timebase fast`
+         * used to parse as 0, pass the range check below, write BOTH the
+         * display state and reg 0x01, and then print the full success block —
+         * which is the exact display-vs-hardware divergence this command was
+         * added (EXP-17) to prevent. */
+        uint32_t v;
+        if (parse_hex32(args, &v) != 0) {
+            usb_debug_printf("usage: fpga scope timebase <hex code 00-%02X>\r\n",
+                             SCOPE_TIMEBASE_CODE_COUNT - 1);
+            return;
+        }
         if (v >= SCOPE_TIMEBASE_CODE_COUNT) {
             usb_debug_printf("usage: fpga scope timebase <hex code 00-%02X>\r\n",
                              SCOPE_TIMEBASE_CODE_COUNT - 1);
@@ -2735,7 +2778,13 @@ static void cmd_fpga_scope_softtrig(const char *args)
 static void cmd_fpga_scope_freq(const char *args)
 {
     uint32_t reps = 10;
-    if (args && *args) parse_int(args, &reps);
+    /* Checked: a failed parse_int() still writes 0 into reps, so a bad
+     * argument silently ran ONE rep and reported `answered 1/1` as though a
+     * single rep had been requested. */
+    if (args && *args && parse_int(args, &reps) != 0) {
+        usb_send_str("Usage: fpga scope freq [reps 1-100]\r\n");
+        return;
+    }
     if (reps == 0u) reps = 1u;
     if (reps > 100u) reps = 100u;
 
@@ -2805,7 +2854,12 @@ static void cmd_fpga_scope_freq(const char *args)
 static void cmd_fpga_scope_measure(const char *args)
 {
     uint32_t reps = 5;
-    if (args && *args) parse_int(args, &reps);
+    /* Checked — see cmd_fpga_scope_freq: an unparseable argument used to
+     * degrade this to a single record without saying so. */
+    if (args && *args && parse_int(args, &reps) != 0) {
+        usb_send_str("Usage: fpga scope measure [reps 1-50]\r\n");
+        return;
+    }
     if (reps == 0u) reps = 1u;
     if (reps > 50u) reps = 50u;
 
@@ -3294,6 +3348,7 @@ static void cmd_fpga_wire_words(const char *args)
     char *saveptr = NULL;
     char *tok;
     uint32_t value;
+    uint16_t words[48];
     size_t count = 0;
     fpga_diag_snapshot_t before;
 
@@ -3303,18 +3358,30 @@ static void cmd_fpga_wire_words(const char *args)
     }
 
     strcpy(buf, args);
-    fpga_diag_snapshot_take(&before);
 
+    /* Parse the WHOLE list before transmitting any of it. This used to send
+     * each word as it was parsed, so `fpga wire words 0501 0502 oops` drove
+     * two words onto the wire and then printed nothing but a usage line — the
+     * operator reads "syntax error, nothing happened" while the FPGA has been
+     * half-driven. Validate first, then commit. */
     tok = strtok_r(buf, " \t", &saveptr);
     while (tok != NULL) {
+        if (count >= (sizeof(words) / sizeof(words[0]))) {
+            usb_debug_printf("ERR: at most %u words\r\n",
+                             (unsigned)(sizeof(words) / sizeof(words[0])));
+            return;
+        }
         if (parse_int(tok, &value) != 0 || value > 0xFFFF) {
             usb_send_str("Usage: fpga wire words <word1> [word2 ...]\r\n");
             return;
         }
-        fpga_wire_send_word((uint16_t)value, 15);
-        count++;
+        words[count++] = (uint16_t)value;
         tok = strtok_r(NULL, " \t", &saveptr);
     }
+
+    fpga_diag_snapshot_take(&before);
+    for (size_t i = 0; i < count; i++)
+        fpga_wire_send_word(words[i], 15);
 
     usb_debug_printf("Wire words sent: %u\r\n", (unsigned)count);
     fpga_diag_print_delta(&before);
@@ -3509,7 +3576,14 @@ static uint8_t shell_bus_scratch[2 * FPGA_ADC_BUF_SIZE];
 static void cmd_spi3_read(const char *args)
 {
     uint32_t len = 64;
-    if (args && *args) parse_int(args, &len);
+    /* Checked: `spi3 read all` used to set len = 0 and print
+     * "CH1 buffer (0 bytes):" with nothing under it — an empty dump that is
+     * indistinguishable from a genuinely empty capture, from the one command
+     * whose header comment is about exactly that confusion. */
+    if (args && *args && parse_int(args, &len) != 0) {
+        usb_send_str("Usage: spi3 read [len]\r\n");
+        return;
+    }
     if (len > FPGA_ADC_BUF_SIZE) len = FPGA_ADC_BUF_SIZE;
 
     const volatile uint8_t *ch1 = fpga_get_ch1_buf();
@@ -3648,8 +3722,30 @@ static const char *meter_layout_name(uint8_t layout)
 
 static meter_voltage_wave_snapshot_t usb_meter_wave_snap;
 
+/* One usage line, so every rejection path names the same accepted set. */
+#define MODE_USAGE_LINE \
+    "Usage: mode [scope|0 | meter|1 [submode] [layout] | startup [scope|meter]]\r\n"
+
 static void cmd_mode(const char *args)
 {
+    /* Numeric aliases for the mode keywords.
+     *
+     * `ui.h` declares MODE_OSCILLOSCOPE = 0 and MODE_MULTIMETER = 1, and the
+     * no-argument form of this command prints `current=<number>`, so a bench
+     * script reaching for `mode 0` is reading our own output correctly.  Until
+     * 2026-09-12 that spelling matched none of the keyword branches and fell
+     * out the bottom: no mode change, only a usage line that is easy to miss in
+     * a scripted session.  It voided a bench test.
+     *
+     * Rewrite the leading token onto the keyword path rather than duplicating
+     * the branch bodies, so there stays exactly one implementation per mode.
+     * Only 0 and 1 are accepted: MODE_SIGNAL_GEN and MODE_SETTINGS have no
+     * frontend transition here, and inventing one silently would be the same
+     * defect wearing a different hat.  Anything else still reaches the usage
+     * line below, which now names the numeric forms. */
+    char alias_buf[56];
+    const char *as_typed = args;
+
     if (args == NULL || *args == '\0') {
         usb_debug_printf("current=%lu startup=%s meter_submode=%u (%s) layout=%u (%s)\r\n",
                          (uint32_t)current_mode,
@@ -3659,6 +3755,27 @@ static void cmd_mode(const char *args)
                          (unsigned)meter_layout,
                          meter_layout_name(meter_layout));
         return;
+    }
+
+    {
+        size_t tok_len = 0;
+        const char *keyword = NULL;
+
+        while (args[tok_len] != '\0' && args[tok_len] != ' ' && args[tok_len] != '\t')
+            tok_len++;
+
+        if (tok_len == 1 && args[0] == '0') keyword = "scope";
+        else if (tok_len == 1 && args[0] == '1') keyword = "meter";
+
+        if (keyword != NULL) {
+            if (strlen(keyword) + strlen(args + tok_len) >= sizeof(alias_buf)) {
+                usb_send_str(MODE_USAGE_LINE);
+                return;
+            }
+            strcpy(alias_buf, keyword);
+            strcat(alias_buf, args + tok_len);
+            args = alias_buf;
+        }
     }
 
     if (strcmp(args, "scope") == 0) {
@@ -3739,7 +3856,8 @@ static void cmd_mode(const char *args)
         return;
     }
 
-    usb_send_str("Usage: mode [scope|meter [submode] [layout]|startup [scope|meter]]\r\n");
+    usb_debug_printf("mode: unrecognised argument '%s'\r\n", as_typed);
+    usb_send_str(MODE_USAGE_LINE);
 }
 
 static void cmd_meter_dump(const char *args)
@@ -4832,9 +4950,14 @@ static void cmd_meter_mux_arms(const char *args)
     }
 
     vTaskDelay(pdMS_TO_TICKS(settle_ms));
-    /* Unobeyed: obeyed 0x0509 moves the SoC's display state, and this trace
-     * is about the relays, not about commanding the meter. */
-    (void)fpga_send_cmd_unobeyed(0x05, FPGA_CMD_METER_START);
+    /* UNOBEYED: an obeyed 0x0509 moves the SoC's display state, and this
+     * trace is about the relays, not about commanding the meter.
+     * Reported, not discarded: this only ENQUEUES, and if the TX queue is
+     * full the START frame never goes out, so the trace below would read
+     * as "the hardware did not answer" rather than "we never asked". */
+    if (fpga_send_cmd_unobeyed(0x05, FPGA_CMD_METER_START) != pdTRUE)
+        usb_send_str("WARN: METER_START not queued (TX queue full) — the trace"
+                     " below is NOT a response to it\r\n");
     vTaskDelay(pdMS_TO_TICKS(350));
 
     usb_send_str("=== DMM Mux Arms Trace ===\r\n");
@@ -4874,9 +4997,14 @@ static void cmd_meter_boot_sequence(const char *args)
     }
 
     vTaskDelay(pdMS_TO_TICKS(settle_ms));
-    /* Unobeyed: obeyed 0x0509 moves the SoC's display state, and this trace
-     * is about the relays, not about commanding the meter. */
-    (void)fpga_send_cmd_unobeyed(0x05, FPGA_CMD_METER_START);
+    /* UNOBEYED: an obeyed 0x0509 moves the SoC's display state, and this
+     * trace is about the relays, not about commanding the meter.
+     * Reported, not discarded: this only ENQUEUES, and if the TX queue is
+     * full the START frame never goes out, so the trace below would read
+     * as "the hardware did not answer" rather than "we never asked". */
+    if (fpga_send_cmd_unobeyed(0x05, FPGA_CMD_METER_START) != pdTRUE)
+        usb_send_str("WARN: METER_START not queued (TX queue full) — the trace"
+                     " below is NOT a response to it\r\n");
     vTaskDelay(pdMS_TO_TICKS(350));
 
     usb_send_str("=== DMM Boot-Order Trace ===\r\n");
@@ -4903,8 +5031,16 @@ static void cmd_meter_pc11_timing(const char *args)
         char *saveptr = NULL;
         char *tok;
 
-        strncpy(buf, args, sizeof(buf) - 1);
-        buf[sizeof(buf) - 1] = '\0';
+        /* Guard the copy. strncpy() truncates silently, so an over-long
+         * argument lost its tail BEFORE the trailing-token rejection below
+         * could see it — the guard existed but could be walked around. Both
+         * sibling parsers (parse_stream_args, parse_mux_arm_args) already
+         * check this. */
+        if (strlen(args) >= sizeof(buf)) {
+            usb_send_str(usage);
+            return;
+        }
+        strcpy(buf, args);
         tok = strtok_r(buf, " \t", &saveptr);
         if (tok != NULL &&
             (parse_int(tok, &low_ms) != 0 || low_ms > 5000U)) {
@@ -4936,9 +5072,14 @@ static void cmd_meter_pc11_timing(const char *args)
     }
 
     vTaskDelay(pdMS_TO_TICKS(high_ms));
-    /* Unobeyed: obeyed 0x0509 moves the SoC's display state, and this trace
-     * is about the relays, not about commanding the meter. */
-    (void)fpga_send_cmd_unobeyed(0x05, FPGA_CMD_METER_START);
+    /* UNOBEYED: an obeyed 0x0509 moves the SoC's display state, and this
+     * trace is about the relays, not about commanding the meter.
+     * Reported, not discarded: this only ENQUEUES, and if the TX queue is
+     * full the START frame never goes out, so the trace below would read
+     * as "the hardware did not answer" rather than "we never asked". */
+    if (fpga_send_cmd_unobeyed(0x05, FPGA_CMD_METER_START) != pdTRUE)
+        usb_send_str("WARN: METER_START not queued (TX queue full) — the trace"
+                     " below is NOT a response to it\r\n");
     vTaskDelay(pdMS_TO_TICKS(350));
 
     usb_send_str("=== DMM PC11 Timing Trace ===\r\n");
@@ -5341,8 +5482,22 @@ static bool spi3_shell_claim(void)
     return true;
 }
 
+/* The 14 arm commands below only ENQUEUE. Their return was discarded, so a
+ * full TX queue produced a complete, plausible, entirely meaningless test
+ * report. Count the failures and say so. */
+static uint32_t acqtest_enq_fails;
+static void acqtest_send(uint8_t hi, uint8_t lo)
+{
+    /* UNOBEYED (00 00). These are FPGA-side scope words; with the AA 55 header
+     * on, an obeyed 0x00xx frame's effect on the meter SoC is unmeasured, and
+     * this test is about SPI3. The enqueue result is still counted, so a full
+     * TX queue cannot masquerade as "the hardware did not answer". */
+    if (fpga_send_cmd_unobeyed(hi, lo) != pdTRUE) acqtest_enq_fails++;
+}
+
 static void cmd_spi3_acqtest(void)
 {
+    acqtest_enq_fails = 0;
     usb_send_str("=== SPI3 Acquisition Path Test (Decomposer Phase 20) ===\r\n\r\n");
 
     /* --- State report --- */
@@ -5399,11 +5554,19 @@ static void cmd_spi3_acqtest(void)
 
     /* --- Test 3: USART2 scope-arm then SPI3 read --- */
     usb_send_str("\r\n-- T3: USART2 arm (0x20,0x21) → SPI3 read --\r\n");
-    /* Unobeyed (00 00): the SoC's reaction to AA 55 frames with a 0x00 high
-     * byte is unmeasured, and this test is about SPI3, not the meter. */
-    fpga_send_cmd_unobeyed(0x00, 0x20);  /* Scope timebase cmd */
+    /* T3 and T4 are only measurements if the arm words can actually leave
+     * PA2. On a USART-silent build they cannot, and their "no non-FF" result
+     * is then a statement about this firmware, not about the FPGA. */
+    {
+        uint32_t c1 = fpga_usart_ctrl1();
+        if (!(((c1 >> 13) & 1u) && ((c1 >> 3) & 1u)))
+            usb_debug_printf("WARN: USART2 is dark (CTRL1=%08lX) — T3/T4 arm words cannot\r\n"
+                             "      leave PA2. Their results are NOT measurements. `fpga usart on` first.\r\n",
+                             (unsigned long)c1);
+    }
+    acqtest_send(0x00, 0x20);  /* Scope timebase cmd */
     vTaskDelay(pdMS_TO_TICKS(30));
-    fpga_send_cmd_unobeyed(0x00, 0x21);  /* Scope trigger mode cmd */
+    acqtest_send(0x00, 0x21);  /* Scope trigger mode cmd */
     vTaskDelay(pdMS_TO_TICKS(30));
 
     usb_debug_printf("PC0 after arm: %d\r\n", (GPIOC->idt & (1 << 0)) ? 1 : 0);
@@ -5421,18 +5584,18 @@ static void cmd_spi3_acqtest(void)
     /* --- Test 4: Full stock scope entry (0x01..0x08, 0x0B..0x11, 0x20, 0x21) --- */
     usb_send_str("\r\n-- T4: Full scope entry → SPI3 read --\r\n");
     /* Reset sequence */
-    fpga_send_cmd_unobeyed(0x00, 0x01);  vTaskDelay(pdMS_TO_TICKS(10));
-    fpga_send_cmd_unobeyed(0x00, 0x02);  vTaskDelay(pdMS_TO_TICKS(10));
-    fpga_send_cmd_unobeyed(0x00, 0x03);  vTaskDelay(pdMS_TO_TICKS(10));
-    fpga_send_cmd_unobeyed(0x00, 0x0B);  vTaskDelay(pdMS_TO_TICKS(10));  /* CH1 gain */
-    fpga_send_cmd_unobeyed(0x00, 0x0C);  vTaskDelay(pdMS_TO_TICKS(10));  /* CH1 offset */
-    fpga_send_cmd_unobeyed(0x00, 0x0D);  vTaskDelay(pdMS_TO_TICKS(10));  /* CH2 gain */
-    fpga_send_cmd_unobeyed(0x00, 0x0E);  vTaskDelay(pdMS_TO_TICKS(10));  /* CH2 offset */
-    fpga_send_cmd_unobeyed(0x00, 0x0F);  vTaskDelay(pdMS_TO_TICKS(10));  /* Coupling */
-    fpga_send_cmd_unobeyed(0x00, 0x10);  vTaskDelay(pdMS_TO_TICKS(10));  /* Trigger */
-    fpga_send_cmd_unobeyed(0x00, 0x11);  vTaskDelay(pdMS_TO_TICKS(10));  /* Timebase */
-    fpga_send_cmd_unobeyed(0x00, 0x20);  vTaskDelay(pdMS_TO_TICKS(10));  /* Acq mode */
-    fpga_send_cmd_unobeyed(0x00, 0x21);  vTaskDelay(pdMS_TO_TICKS(50));  /* Trigger arm */
+    acqtest_send(0x00, 0x01);  vTaskDelay(pdMS_TO_TICKS(10));
+    acqtest_send(0x00, 0x02);  vTaskDelay(pdMS_TO_TICKS(10));
+    acqtest_send(0x00, 0x03);  vTaskDelay(pdMS_TO_TICKS(10));
+    acqtest_send(0x00, 0x0B);  vTaskDelay(pdMS_TO_TICKS(10));  /* CH1 gain */
+    acqtest_send(0x00, 0x0C);  vTaskDelay(pdMS_TO_TICKS(10));  /* CH1 offset */
+    acqtest_send(0x00, 0x0D);  vTaskDelay(pdMS_TO_TICKS(10));  /* CH2 gain */
+    acqtest_send(0x00, 0x0E);  vTaskDelay(pdMS_TO_TICKS(10));  /* CH2 offset */
+    acqtest_send(0x00, 0x0F);  vTaskDelay(pdMS_TO_TICKS(10));  /* Coupling */
+    acqtest_send(0x00, 0x10);  vTaskDelay(pdMS_TO_TICKS(10));  /* Trigger */
+    acqtest_send(0x00, 0x11);  vTaskDelay(pdMS_TO_TICKS(10));  /* Timebase */
+    acqtest_send(0x00, 0x20);  vTaskDelay(pdMS_TO_TICKS(10));  /* Acq mode */
+    acqtest_send(0x00, 0x21);  vTaskDelay(pdMS_TO_TICKS(50));  /* Trigger arm */
 
     usb_debug_printf("PC0 after full entry: %d\r\n", (GPIOC->idt & (1 << 0)) ? 1 : 0);
 
@@ -5473,6 +5636,10 @@ static void cmd_spi3_acqtest(void)
     usb_debug_printf("DMA2_SRCSEL0: 0x%08lX\r\n", *dma2_srcsel0);
     usb_debug_printf("DMA2_SRCSEL1: 0x%08lX\r\n", *dma2_srcsel1);
 
+    if (acqtest_enq_fails)
+        usb_debug_printf("WARN: %lu of 14 arm commands were NOT queued (TX queue full) — the\r\n"
+                         "      T3/T4 results above are not a test of what you think.\r\n",
+                         (unsigned long)acqtest_enq_fails);
     usb_send_str("\r\n=== Done. Non-FF in any test = FPGA responding on SPI3 ===\r\n");
 }
 
@@ -5628,12 +5795,24 @@ static void cmd_spi3_xfer(const char *args)
     for (uint32_t i = 0; i < n; i++) usb_debug_printf(" %02X", tx[i]);
     usb_send_str("\r\nMISO:");
     uint32_t nonff = 0;
+    uint32_t timeouts = 0;
     for (uint32_t i = 0; i < n; i++) {
         usb_debug_printf(" %02X", rx[i]);
         if (rx[i] != 0xFF) nonff++;
+        /* spi3_raw_xfer() returns 0xEE on a TXE/RXNE timeout. It is NOT a
+         * reply, and it was being counted as one: on a hung bus this printed
+         * "non-FF: 1/1", i.e. the exact positive signal this command exists to
+         * detect. Every other counter in this file already excludes 0xEE. The
+         * nonff figure is left alone (bench notes quote it); the timeouts are
+         * reported alongside it so the number can be read honestly. */
+        if (rx[i] == 0xEE) timeouts++;
     }
-    usb_debug_printf("\r\nnon-FF: %lu/%lu  PC0 %lu->%lu\r\n",
-                     (unsigned long)nonff, (unsigned long)n, pc0_before, pc0_after);
+    usb_debug_printf("\r\nnon-FF: %lu/%lu  timeouts(0xEE): %lu  PC0 %lu->%lu\r\n",
+                     (unsigned long)nonff, (unsigned long)n,
+                     (unsigned long)timeouts, pc0_before, pc0_after);
+    if (timeouts)
+        usb_send_str("WARN: 0xEE is the SPI3 timeout sentinel, not FPGA data — "
+                     "treat the non-FF count as unproven\r\n");
 }
 
 /* spi3 acqread — read one acquisition frame per channel using the REAL
@@ -5794,7 +5973,20 @@ static void cmd_spi3_opread(const char *args)
             return;
         }
         tok = strtok_r(NULL, " \t", &saveptr);
-        if (tok && strcmp(tok, "dump") == 0) dump = true;
+        /* An unrecognised third token used to be swallowed: the window ran
+         * with dump=false and the operator read "stats only" as an empty
+         * dump rather than a rejected argument. */
+        if (tok) {
+            if (strcmp(tok, "dump") != 0) {
+                usb_debug_printf("ERR: expected 'dump', got '%s'\r\n", tok);
+                return;
+            }
+            dump = true;
+            if (strtok_r(NULL, " \t", &saveptr) != NULL) {
+                usb_send_str("ERR: too many arguments. Usage: spi3 opread <op> [len [dump]]\r\n");
+                return;
+            }
+        }
     }
 
     if (!fpga_acq_pause()) {
@@ -6047,7 +6239,14 @@ static void cmd_spi3_edgecap(const char *args)
                  " compiled here. Flash `make guest-bringup-bb`.\r\n");
 #else
     uint32_t reps = 16;
-    if (args && *args) reps = (uint32_t)strtoul(args, NULL, 0);
+    /* parse_int(), not a bare strtoul(): a non-numeric argument used to become
+     * 0 and then be clamped back to the default, so the command silently ran
+     * something other than what was typed. Numeric out-of-range still clamps,
+     * as it always has. */
+    if (args && *args && parse_int(args, &reps) != 0) {
+        usb_send_str("Usage: spi3 edgecap [reps]\r\n");
+        return;
+    }
     if (reps == 0 || reps > 255) reps = 16;
     usb_debug_printf("edgecap: %lu AF 0x15 frames (/256), 60ms gap, %lu bit-bang 0x15 frames\r\n",
                      reps, reps);
@@ -6174,7 +6373,17 @@ static void cmd_fpga_selftest(void)
 static void cmd_spi3_scopetest(const char *args)
 {
     uint8_t bank = 0;
-    if (args && *args) bank = (uint8_t)strtoul(args, NULL, 0);
+    /* parse_int(), not a bare strtoul(): `spi3 scopetest ch2` used to run
+     * bank 0 and print "(bank=0)" — an experiment on the wrong bank, labelled
+     * plausibly. */
+    if (args && *args) {
+        uint32_t v;
+        if (parse_int(args, &v) != 0 || v > 0xFF) {
+            usb_send_str("Usage: spi3 scopetest [bank]\r\n");
+            return;
+        }
+        bank = (uint8_t)v;
+    }
 
     usb_send_str("=== scope test: USART scope-cfg -> PC0 wait -> 0x04/0x05 ===\r\n");
     usb_debug_printf("PB11(active)=%d PC6(spi_en)=%d PC0(rdy)=%d before cfg\r\n",
@@ -6513,42 +6722,73 @@ static void cmd_fpga_reinit(const char *args)
         char *t0 = strtok_r(buf, " \t", &save);
         char *t1 = t0 ? strtok_r(NULL, " \t", &save) : NULL;
         char *t2 = t1 ? strtok_r(NULL, " \t", &save) : NULL;
-        if (t0) opt.upload_br      = (uint32_t)strtoul(t0, NULL, 0);
-        if (t1) opt.prelude_gap_ms = (uint32_t)strtoul(t1, NULL, 0);
-        if (t2) opt.post_close_ms  = (uint32_t)strtoul(t2, NULL, 0);
+        /* Every number below is parse_int()-checked. Bare strtoul() used to
+         * turn an unparseable token into 0 SILENTLY, which on this command is
+         * the worst possible failure: `fpga reinit slow` discarded all three
+         * stock-captured defaults (br=0/gap=100/close=600), ran a different
+         * handshake, and echoed "br=0 gap=0ms close=0ms" as though that were
+         * what was asked for. 0 is a legal value, so the echo could not
+         * disambiguate it. This is a sweep tool; a typo must not quietly
+         * become a data point. */
+        if ((t0 && parse_int(t0, &opt.upload_br) != 0) ||
+            (t1 && parse_int(t1, &opt.prelude_gap_ms) != 0) ||
+            (t2 && parse_int(t2, &opt.post_close_ms) != 0)) {
+            usb_send_str("ERR: br/gap/close must be numbers. See `help`.\r\n");
+            return;
+        }
         /* Remaining tokens are optional, order-independent, prefix-classified:
          *   a..e<pin> = FPGA reset pulse pin (e.g. b9)
          *   f<0|1|2>  = prelude frame mode (split/combined/merge)
          *   u<ms>     = pre-upload digest gap after CONFIG_ENABLE */
         for (char *tk = strtok_r(NULL, " \t", &save); tk;
              tk = strtok_r(NULL, " \t", &save)) {
+            uint32_t n;
             if (tk[0] >= 'a' && tk[0] <= 'e' && tk[1]) {   /* <port><pin> */
+                if (parse_int(tk + 1, &n) != 0 || n > 15u) goto reinit_bad_token;
                 opt.reset_port = (uint8_t)(tk[0] - 'a' + 1);
-                opt.reset_pin  = (uint8_t)strtoul(tk + 1, NULL, 10);
+                opt.reset_pin  = (uint8_t)n;
             } else if (tk[0] == 'f') {
-                opt.prelude_frame_mode = (uint8_t)strtoul(tk + 1, NULL, 10);
+                if (parse_int(tk + 1, &n) != 0 || n > 2u) goto reinit_bad_token;
+                opt.prelude_frame_mode = (uint8_t)n;
             } else if (tk[0] == 'u') {
-                opt.pre_upload_gap_ms = (uint32_t)strtoul(tk + 1, NULL, 0);
+                if (parse_int(tk + 1, &n) != 0) goto reinit_bad_token;
+                opt.pre_upload_gap_ms = n;
             } else if (tk[0] == 'k') {  /* 'k' (clock) — NOT 'c', which collides
                                          * with reset-port c (a..e) above */
-                opt.cmd_br = (uint32_t)strtoul(tk + 1, NULL, 0);
-            } else if (tk[0] == 's') {  /* strap-hold: s2[h|l]=PD2, sd[h|l]=PD12+13
+                if (parse_int(tk + 1, &n) != 0 || n > 7u) goto reinit_bad_token;
+                opt.cmd_br = n;
+            } else if (tk[0] == 's' && tk[1] != '\0') {
+                                        /* strap-hold: s2[h|l]=PD2, sd[h|l]=PD12+13
                                          * (default HIGH = stock). GPIO-audit lead.
                                          * sb = single-BR (EXP-34): no SPE toggle
-                                         * through the config transaction. */
+                                         * through the config transaction.
+                                         * tk[1] is tested first now: reading tk[2]
+                                         * on a bare "s" ran off the end of the
+                                         * token. */
                 uint8_t lvl = (tk[2] == 'l') ? 2 : 1;
                 if (tk[1] == '2')      opt.strap_pd2    = lvl;
                 else if (tk[1] == 'd') opt.strap_pd1213 = lvl;
                 else if (tk[1] == 'b') opt.single_br    = 1;
+                else goto reinit_bad_token;
             } else if (tk[0] == 't' && tk[1] == 'c') {  /* tc<N> = trailing clocks
                                          * after bitstream, before 0x3A (sibling ~200) */
-                opt.trailing_clocks = (uint16_t)strtoul(tk + 2, NULL, 0);
-            } else if (tk[0] == 'p' && tk[1] == 'e') {  /* pe = probe SYSTEM_EDIT_MODE:
+                if (parse_int(tk + 2, &n) != 0 || n > 0xFFFFu) goto reinit_bad_token;
+                opt.trailing_clocks = (uint16_t)n;
+            } else if (strcmp(tk, "pe") == 0) {  /* pe = probe SYSTEM_EDIT_MODE:
                                          * read STATUS at /256 right after 0x15 */
                 opt.probe_edit = 1;
-            } else if (tk[0] == 'r' && tk[1] == 'l') {  /* rl = send 0x3C RELOAD before
+            } else if (strcmp(tk, "rl") == 0) {  /* rl = send 0x3C RELOAD before
                                          * the prelude (software reconfig trigger) */
                 opt.reload_3c = 1;
+            } else {
+                /* No silent drop. The chain used to end here with nothing, so a
+                 * mistyped sweep option ran the BASELINE handshake and reported
+                 * success — and got written down as a data point for a
+                 * parameter that was never applied. */
+reinit_bad_token:
+                usb_debug_printf("ERR: unknown or malformed reinit option '%s' — "
+                                 "nothing was sent. See `help`.\r\n", tk);
+                return;
             }
         }
     }
@@ -6787,7 +7027,8 @@ static void cmd_spi3_probe(void)
     timeout = 100000;
     while (!(*spi_sts & 0x01) && --timeout);  /* Wait RXNE */
     uint8_t rx = (uint8_t)*spi_dt;
-    usb_debug_printf("SPI3 xfer(0x00) = 0x%02X (timeout=%lu)\r\n", rx, timeout);
+    usb_debug_printf("SPI3 xfer(0x00) = 0x%02X (timeout=%lu)%s\r\n", rx, timeout,
+                     timeout ? "" : "  <-- RXNE TIMED OUT: byte is stale, not a reply");
 
     /* Send 0x05 (FPGA query cmd) */
     timeout = 100000;
@@ -6796,7 +7037,8 @@ static void cmd_spi3_probe(void)
     timeout = 100000;
     while (!(*spi_sts & 0x01) && --timeout);
     rx = (uint8_t)*spi_dt;
-    usb_debug_printf("SPI3 xfer(0x05) = 0x%02X (timeout=%lu)\r\n", rx, timeout);
+    usb_debug_printf("SPI3 xfer(0x05) = 0x%02X (timeout=%lu)%s\r\n", rx, timeout,
+                     timeout ? "" : "  <-- RXNE TIMED OUT: byte is stale, not a reply");
 
     /* Send another 0x00 */
     timeout = 100000;
@@ -6805,7 +7047,8 @@ static void cmd_spi3_probe(void)
     timeout = 100000;
     while (!(*spi_sts & 0x01) && --timeout);
     rx = (uint8_t)*spi_dt;
-    usb_debug_printf("SPI3 xfer(0x00) = 0x%02X (timeout=%lu)\r\n", rx, timeout);
+    usb_debug_printf("SPI3 xfer(0x00) = 0x%02X (timeout=%lu)%s\r\n", rx, timeout,
+                     timeout ? "" : "  <-- RXNE TIMED OUT: byte is stale, not a reply");
 
     /* Deassert CS */
     GPIOB->scr = (1 << 6);
@@ -6887,7 +7130,17 @@ static void cmd_fwload(const char *args)
     char *end = NULL;
     unsigned long size = strtoul(args, &end, 10);
     char *end2 = NULL;
-    unsigned long crc = (end && *end) ? strtoul(end, &end2, 16) : 0;
+    bool crc_bad = false;
+    unsigned long crc = 0;
+    if (end && *end) {
+        crc = strtoul(end, &end2, 16);
+        /* strtoul() leaves endptr == nptr when it converted nothing, so this
+         * separates "crc32 token is not hex" from "crc32 is literally 0" and
+         * from "no crc32 given" — all three used to print the same usage
+         * line, which sends the operator hunting a syntax error they do not
+         * have. */
+        if (end2 == end) crc_bad = true;
+    }
     uint8_t slot = 1; /* default: slot b — "the other firmware" by custom */
     bool slot_bad = false;
     if (end2 != NULL) {
@@ -6895,6 +7148,15 @@ static void cmd_fwload(const char *args)
         if (*end2 == 'a' || *end2 == 'A') slot = 0;
         else if (*end2 == 'b' || *end2 == 'B') slot = 1;
         else if (*end2 != '\0') slot_bad = true;
+        /* The letter must END the argument. `fwload 8192 DEADBEEF apple`
+         * matched 'a', dropped "pple" and armed the raw-byte intake — the
+         * same wedge the comment below describes, reached through the
+         * recognised-letter door instead of the unrecognised one. */
+        if (!slot_bad && *end2 != '\0') {
+            const char *tail = end2 + 1;
+            while (*tail == ' ') tail++;
+            if (*tail != '\0') slot_bad = true;
+        }
     }
     /* An argument that is present but is neither a nor b used to fall back to
      * the default and arm the intake anyway: `fwload <size> <crc> c` put the
@@ -6902,8 +7164,14 @@ static void cmd_fwload(const char *args)
      * the next line they typed went into the image instead of the parser.
      * (Wedged the 2C23T port that way on 2026-08-24 — same parser, same trap.)
      * Refusing costs nothing: cdc_flash.py never sends anything but a or b. */
+    if (crc_bad) {
+        /* Checked before slot_bad: an unparseable crc32 leaves end2 pointing at
+         * that same token, which can then be mis-blamed on the slot letter. */
+        usb_send_str("fwload: ERROR crc32 must be hex\r\n");
+        return;
+    }
     if (slot_bad) {
-        usb_send_str("fwload: ERROR slot must be a or b\r\n");
+        usb_send_str("fwload: ERROR slot must be exactly a or b\r\n");
         return;
     }
     if (end == args || crc == 0) {
@@ -6930,9 +7198,17 @@ static void cmd_fwswap(const char *args)
 {
     uint8_t slot;
     while (*args == ' ') args++;
-    if (*args == 'a' || *args == 'A') slot = 0;
+    /* The token must be exactly one letter. A first-character match meant
+     * `fwswap apple` and `fwswap b0rked` both reached erase+program+system
+     * reset — the most destructive command in this shell, accepting the
+     * loosest argument in it. */
+    const char *sw_tail = (*args != '\0') ? args + 1 : args;
+    while (*sw_tail == ' ') sw_tail++;
+    if (*sw_tail != '\0') slot = 0xFF;
+    else if (*args == 'a' || *args == 'A') slot = 0;
     else if (*args == 'b' || *args == 'B') slot = 1;
-    else {
+    else slot = 0xFF;
+    if (slot == 0xFF) {
         usb_send_str("usage: fwswap a|b   (install a cached image, no transfer)\r\n");
         fwl_print_status();
         return;
@@ -7147,7 +7423,7 @@ static const shell_cmd_t shell_cmds[] = {
     CMD_A("fpga scope trig", cmd_fpga_scope_trig, SC_NEEDARGS,
           "fpga scope trig <4 bytes>       Send 0x07/0x0A,0x16..0x19\r\n"),
     CMD_A("mode", cmd_mode, 0,
-          "mode meter [submode] [layout]   Switch UI + FPGA to DMM frontend\r\n" "mode scope                      Switch UI + FPGA to scope frontend\r\n" "mode startup [scope|meter]      Get/set Settings > Startup on Boot\r\n"),
+          "mode meter [submode] [layout]   Switch UI + FPGA to DMM frontend ('mode 1' = same)\r\n" "mode scope                      Switch UI + FPGA to scope frontend ('mode 0' = same)\r\n" "mode startup [scope|meter]      Get/set Settings > Startup on Boot\r\n"),
     CMD_A("meter dump", cmd_meter_dump, 0,
           "meter dump [delay_ms]           Show parsed DMM/UI/raw frame state\r\n"),
     CMD_A("meter autoscan", cmd_meter_autoscan, 0,

@@ -41,8 +41,9 @@ concrete.
 | Freq badge | S3 | — | S4: refusal states could say *why* (`torn` vs `no peak`) |
 | Auto-measurements (real units) | S1 | [auto-measurements](scope/auto-measurements.md) | S2: badge volts/seconds validated against a bench-driven signal |
 | FFT + waterfall on live data | S0 | [fft-live](scope/fft-live.md) | S1: consume the live acq buffer in `guest-coldtrace` |
-| Trigger level | S1 | — | S2: measure level-vs-ADC-code transfer on the bench |
-| Cursors | S1 | *needed* | Units are fixed constants, not derived from the measured tables — same defect class the badges just escaped |
+| Trigger level | S1 | [trigger-modes](scope/trigger-modes.md) | S2: measure level-vs-ADC-code transfer on the bench. ⚠ The register is real and bench-proven, but **no control reaches it** — `scope_adjust_trigger_level()` has zero callers, so the level is immutable at runtime and the on-screen marker never moves (spec D1) |
+| Trigger modes (auto / normal / single) | S0 | [trigger-modes](scope/trigger-modes.md) | S1: one entry point per trigger quantity that writes the hardware and records what is in force, plus the A/B/A PC0-edge-rate proof that the *control* moved the register — not a raw `spi3 seq`. Wishlist Tier 1 #1; milestone M2. Eight known defects catalogued with file:line, five of them decorative controls |
+| Cursors | S1 | *needed* | Units now derive from `scope_cal` / `scope_timebase` and refuse when the table has no entry (`scope_cursor.c`, host-tested with negative controls, 2026-09-12). **Not S2: unverified on the bench** — next is a cursor delta read against a known signal, and against the badges on the same capture |
 | Autofit vs. measured graticule | S1 | *needed* | Decision pending: the vertical graticule does not mean the volts/div the status bar prints |
 | Math channels | S0 | — | After auto-measurements S2 (same input plumbing) |
 | XY / roll / trend / mask | S0 | — | Unclaimed; each needs a spec before work starts |
@@ -88,11 +89,12 @@ concrete.
 Listed so their absence is a published fact, and each is claimable. Every one
 needs a spec before code.
 
-- **Trigger modes: auto / normal / single.** Wishlist Tier 1 **#1** — the
-  single most-cited complaint about stock across the whole model family
-  ("Normal trigger… mostly miss the trigger events"). We have a trigger
-  *level*; we have no trigger *modes*. The flagship differentiator if done
-  right, and the hardest: needs the engine's re-arm semantics understood.
+- ~~**Trigger modes: auto / normal / single.**~~ **CLAIMED** — spec written,
+  [trigger-modes](scope/trigger-modes.md). Wishlist Tier 1 **#1**. The spec's
+  finding: what exists is a hardware level register with no control surface, a
+  software *display* trigger in the renderer, and a one-field acquisition wait
+  policy — the mode, edge, source and level controls a user can press reach the
+  fabric nowhere.
 - **Pre-trigger capture / horizontal position.** Unknown whether the FPGA's
   ring buffer supports it — a research question before a spec.
 - **Acquisition averaging / high-res mode.**
@@ -113,7 +115,7 @@ with a reason. Sources: [`docs/community_wishlist.md`](../community_wishlist.md)
 
 | Ask | Source | Where it lands |
 |---|---|---|
-| Reliable triggering (Normal/Single at all timebases) | Wishlist **T1 #1** — most-cited complaint family-wide | Gap list → trigger-modes spec. The flagship. |
+| Reliable triggering (Normal/Single at all timebases) | Wishlist **T1 #1** — most-cited complaint family-wide | [trigger-modes](scope/trigger-modes.md), S0. The flagship. Its S2 criterion answers the complaint with a number: capture success rate in Normal, per measured timebase code. |
 | Manual DMM range lock, no auto-revert | Wishlist T1 #2 | Meter table; spec after coexistence S2 |
 | Correct Min/Max/Avg semantics | Wishlist T1 #3 | [auto-measurements](scope/auto-measurements.md) |
 | Honest resolution (no padded zeros) | Wishlist T1 #4 | House style already (measure-or-refuse); enforced per-badge in auto-measurements S2 |

@@ -45,6 +45,7 @@ C_SOURCES += src/ui/scope_state.c
 C_SOURCES += src/ui/scope_measure.c
 C_SOURCES += src/ui/scope_cal.c
 C_SOURCES += src/ui/scope_timebase.c
+C_SOURCES += src/ui/scope_cursor.c
 C_SOURCES += src/ui/scope_freq.c
 C_SOURCES += src/tasks/input_handler.c
 C_SOURCES += src/drivers/flash_fs.c
@@ -507,6 +508,25 @@ $(BUILD_DIR)/test_fpga_meter_plan: tests/test_fpga_meter_plan.c src/drivers/fpga
 test-fpga-meter-plan: $(BUILD_DIR)/test_fpga_meter_plan
 	$<
 
+$(BUILD_DIR)/test_meter_word_map: tests/test_meter_word_map.c src/drivers/fpga_meter_plan.c src/drivers/fpga_meter_plan.h | $(BUILD_DIR)
+	$(HOST_CC) -std=gnu11 -Wall -Wextra -Isrc/drivers $< src/drivers/fpga_meter_plan.c -o $@
+
+# The meter function-word map, from issue #15.
+#
+# ⚠ THIS TARGET IS EXPECTED TO FAIL. It is not broken, and it is deliberately
+# NOT part of `test-meter` or any other aggregate — a red aggregate teaches
+# people to ignore aggregates. Run it by name.
+#
+# stock_meter_cmd_low[] ties the right bytes to the wrong functions for 10 of
+# our 11 submodes (submode 0 "DCV" sends 0x0514, which is the SoC's Auto). The
+# correction is inbound as a contributor PR; when it lands, this target going
+# green IS the verification. Do not silence it by patching the table as a side
+# errand, and do not flip the AA 55 TX header default while it is still red.
+.PHONY: test-meter-word-map
+test-meter-word-map: $(BUILD_DIR)/test_meter_word_map
+	@echo "note: this target is EXPECTED to fail until the issue #15 word-table correction lands"
+	$<
+
 $(BUILD_DIR)/test_scope_measure: tests/test_scope_measure.c src/ui/scope_measure.c src/ui/scope_measure.h | $(BUILD_DIR)
 	$(HOST_CC) -std=gnu11 -Wall -Wextra -Isrc/ui $< src/ui/scope_measure.c -lm -o $@
 
@@ -551,6 +571,21 @@ $(BUILD_DIR)/test_scope_timebase: tests/test_scope_timebase.c src/ui/scope_timeb
 # rates and all three were fitted to an incoherent record, so the test fails
 # the build if any of them is re-entered.
 test-scope-timebase: $(BUILD_DIR)/test_scope_timebase
+	$<
+
+$(BUILD_DIR)/test_scope_cursor: tests/test_scope_cursor.c src/ui/scope_cursor.c src/ui/scope_cursor.h \
+                                src/ui/scope_cal.c src/ui/scope_timebase.c | $(BUILD_DIR)
+	$(HOST_CC) -std=gnu11 -Wall -Wextra -Isrc/ui $< \
+		src/ui/scope_cursor.c src/ui/scope_cal.c src/ui/scope_timebase.c -lm -o $@
+
+# Cursor delta readouts. The cursor is the one feature whose whole purpose is
+# measurement, and its units used to come from two floats nothing ever updated.
+# The tests assert the two properties that stop that returning: the answer must
+# MOVE with the measured tables (a constant cannot depend on a code or a range),
+# and where there is no calibration there must be no unit. Includes four
+# negative controls, among them the historical constants transcribed verbatim.
+.PHONY: test-scope-cursor
+test-scope-cursor: $(BUILD_DIR)/test_scope_cursor
 	$<
 
 $(BUILD_DIR)/test_scope_freq: tests/test_scope_freq.c src/ui/scope_freq.c src/ui/scope_freq.h | $(BUILD_DIR)
