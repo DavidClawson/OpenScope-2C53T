@@ -2351,6 +2351,27 @@ static void cmd_fpga_rearm(const char *args)
     usb_send_str(buf);
 }
 
+/* `fpga acqgate [on|off]` — stock's PRE-read gate (EXP-29/30). Pairs with
+ * `fpga rearm`; the two are load-bearing for each other. */
+static void cmd_fpga_acqgate(const char *args)
+{
+    char buf[160];
+    while (*args == ' ') args++;
+    if (*args) {
+        if      (strncmp(args, "on",  2) == 0) fpga_acq_gate_set(true);
+        else if (strncmp(args, "off", 3) == 0) fpga_acq_gate_set(false);
+        else { usb_send_str("usage: fpga acqgate [on|off]\r\n"); return; }
+    }
+    snprintf(buf, sizeof(buf),
+             "acq gate %s (AUTO reads only on a data-ready edge)  skips=%lu\r\n",
+             fpga_acq_gate_get() ? "ON" : "OFF",
+             (unsigned long)fpga_acq_gate_skips());
+    usb_send_str(buf);
+    if (fpga_acq_gate_get() && !fpga_acq_rearm_get())
+        usb_send_str("  WARN: gate ON with re-arm OFF — PC0 may never arrive "
+                     "and the trace will freeze. `fpga rearm on`.\r\n");
+}
+
 /* `fpga rate [idx]` — the reg-0x01 value the re-arm rewrites. Setting it here
  * keeps the re-arm from silently reverting a timebase chosen elsewhere. */
 static void cmd_fpga_rate(const char *args)
@@ -7404,6 +7425,8 @@ static const shell_cmd_t shell_cmds[] = {
           "fpga rearm [on|off]             Stock post-read re-arm (reg01) A/B toggle\r\n"),
     CMD_A("meter hdr", cmd_meter_hdr, 0,
           "meter hdr [on|off]              Meter TX header AA 55 (default) vs 00 00 (EXP-25) + echo ladder\r\n"),
+    CMD_A("fpga acqgate", cmd_fpga_acqgate, 0,
+          "fpga acqgate [on|off]           Stock PRE-read data-ready gate (EXP-29) A/B toggle\r\n"),
     CMD_A("fpga rate", cmd_fpga_rate, 0,
           "fpga rate [hexidx]              reg-0x01 rate index the re-arm rewrites\r\n"),
     CMD_V("fpga scope reinit", cmd_fpga_scope_reinit, SC_EXACT,

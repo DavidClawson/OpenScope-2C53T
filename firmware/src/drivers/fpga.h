@@ -1073,6 +1073,14 @@ extern volatile bool fpga_meter_needs_activation;
 
 void    fpga_acq_rearm_set(bool on);
 bool    fpga_acq_rearm_get(void);
+
+/* Stock's acquisition GATE: in AUTO, refuse to read without a data-ready
+ * edge instead of free-running across the engine's write pointer (EXP-29
+ * located the seam there). Default OFF, and meant to be used WITH the
+ * re-arm above — see the block comment in fpga.c. */
+void     fpga_acq_gate_set(bool on);
+bool     fpga_acq_gate_get(void);
+uint32_t fpga_acq_gate_skips(void);
 /* Apply a timebase code (SPI reg 0x01) to the hardware and record it as the
  * value in force. This is the ONLY correct way to change the sample rate:
  * writing scope_state.timebase_idx alone relabels the axis without touching

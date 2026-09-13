@@ -3383,6 +3383,40 @@ void fpga_set_meter_mux(bool enable)
 #define FPGA_ACQ_REARM_DEFAULT 0
 #endif
 static volatile bool    acq_rearm_enable = (FPGA_ACQ_REARM_DEFAULT != 0);
+
+/* ── Stock's acquisition GATE (2026-09-13, EXP-30) ───────────────────────
+ *
+ * The re-arm above is stock's THIRD step. This is its FIRST, and EXP-29
+ * showed the re-arm alone does not close the record seam: A/B/A across
+ * `fpga rearm` moved the median phase discontinuity from 21.6 samples to
+ * 24.1, i.e. not at all. The same experiment showed WHY the seam exists —
+ * one discontinuity per record whose location marches through the buffer at
+ * a near-constant rate, which is the signature of reading across a live
+ * write pointer.
+ *
+ * The mechanism is a few lines below: in AUTO mode, when no PC0 edge arrives
+ * within the wait window, the task "falls through and reads the live buffer".
+ * That free-run read has no interlock with the capture engine at all, and in
+ * AUTO — the default — it is the common case, not the rare one.
+ *
+ * With the gate on, a missing trigger is a timeout and we do NOT read. Only
+ * a genuine data-ready edge produces a record.
+ *
+ * USE IT WITH THE RE-ARM. Stock does both, and they are load-bearing for
+ * each other: the gate waits for PC0, and the re-arm is what starts the next
+ * capture so another PC0 can arrive. Gate ON with re-arm OFF risks the
+ * documented stopped-engine deadlock (PC0 is not spontaneous when the engine
+ * is not running), which is exactly why the old fallback read exists.
+ *
+ * DEFAULT OFF. Free-run is the bench-proven configuration that produced the
+ * cold-boot-to-live-trace result, and this stays opt-in until it is shown to
+ * be at least as good on hardware. Runtime-toggleable so one boot, one probe
+ * and one signal can produce every arm of the comparison. */
+#ifndef FPGA_ACQ_GATE_DEFAULT
+#define FPGA_ACQ_GATE_DEFAULT 0
+#endif
+static volatile bool    acq_gate_enable = (FPGA_ACQ_GATE_DEFAULT != 0);
+static volatile uint32_t acq_gate_skips = 0;   /* reads the gate prevented */
 /* Reg 0x01 value currently in force -- the ONE variable that mirrors the
  * hardware register. 0x08 is what the arm block writes at config time; the
  * re-arm must rewrite THIS, not a constant, or it would silently undo any
@@ -3443,6 +3477,9 @@ uint32_t fpga_usart_baudr(void) { return USART2->baudr; }
 
 void fpga_acq_rearm_set(bool on)      { acq_rearm_enable = on; }
 bool fpga_acq_rearm_get(void)         { return acq_rearm_enable; }
+void fpga_acq_gate_set(bool on)       { acq_gate_enable = on; }
+bool fpga_acq_gate_get(void)          { return acq_gate_enable; }
+uint32_t fpga_acq_gate_skips(void)    { return acq_gate_skips; }
 void fpga_acq_rate_idx_set(uint8_t v) { acq_rate_idx = v; }
 uint8_t fpga_acq_rate_idx_get(void)   { return acq_rate_idx; }
 
@@ -3645,6 +3682,17 @@ static void fpga_warmtest_acq_task(void *pv)
         }
 
         if (!triggered) {
+            if (auto_mode && acq_gate_enable) {
+                /* GATE ON (stock's first step): no data-ready edge means the
+                 * capture is not complete, so there is nothing coherent to
+                 * read. Hold the last trace rather than reading across the
+                 * engine's write pointer. See the block comment on
+                 * acq_gate_enable — this needs the re-arm to keep PC0
+                 * arriving. */
+                acq_gate_skips++;
+                fpga.spi3_total_timeouts++;
+                continue;
+            }
             if (auto_mode) {
                 /* Free-run poll: fall through and read the live buffer. Pace
                  * to ~30 Hz so the display (its own ~50 ms frame loop is the
