@@ -8,6 +8,16 @@
 >
 > - **FNIRSI 2C23T** → [rosenrot00/OpenScope-2C23T](https://github.com/rosenrot00/OpenScope-2C23T) is the open firmware for that hardware. Its images flash through the stock MENU + Power drive and leave the factory bootloader alone.
 > - **Already flashed the wrong model?** Open an issue. ROM DFU lives in unerasable mask ROM, so the flash is always writable and recovery is almost always possible.
+>
+> ### Already flashed this to a 2C23T? The way back (issue #32, 2026-09-12)
+>
+> One owner did exactly this on a **2C23T HW4.0** and recovered. ROM DFU lives in unerasable mask ROM, so nothing here can take it away: BOOT0 + pinhole reset, `dfu-util -l` shows `2e3c:df11`, and the flash is writable again. Some units only stay powered in ROM DFU while the POWER button is **held**; that is a power-hold quirk, not damage.
+>
+> 1. **Get a booting instrument:** build [rosenrot00/OpenScope-2C23T](https://github.com/rosenrot00/OpenScope-2C23T) for your board revision and flash it at its link address with `dfu-util -a 0 -d 2e3c:df11 -s <APP_BASE> -D <its .bin>` (his `release-hw4` target links at `0x08007000`). It boots through our bootloader, but our bootloader's update mode is unreachable from his app — it enters only from *our* Settings menu, from an empty flash, or from POWER+PRM (PB7) during reset, and PB7 is a 2C53T button assignment.
+> 2. **Better — remove our bootloader altogether:** his Makefile takes the link address as a variable (`make APP_BASE=0x08000000 …` rewrites the linker `ORIGIN`). Flash that image at `0x08000000` and the device is a stock-shaped instrument with nothing from this repo left on it; future updates go through ROM DFU the same way. Verified in his Makefile, **not yet run on hardware** — report back on #32 if you try it.
+> 3. **Do not** flash `archive/factory_iap_bootloader_2C53T.bin` to a 2C23T. It is the wrong device's bootloader.
+>
+> The SRAM option-byte step was almost certainly a no-op on a 2C23T (its own firmware already links ~216 KB of RAM), so there is nothing to reverse there.
 
 The first time you flash custom firmware, you need to enter the AT32's **ROM DFU mode** by pulling the BOOT0 pin high while resetting the MCU. After the initial flash installs the USB HID bootloader, **you'll never need to do this again** — all future updates go over USB-C with the case closed.
 
