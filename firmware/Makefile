@@ -1001,18 +1001,23 @@ guest-coldtrace-hwspi: clean all
 #
 # This target only sets FPGA_CH2_TRIGGER, which arms TMR13 at boot alongside
 # the DAC1 write. The runtime knobs (`trig2 raw`, `fpga scope center ch2`)
-# self-init and work on ANY build, so the experiment does NOT require this
-# target — flash it once the pin is confirmed and you want the arm at boot.
+# self-init and work on ANY build.
 #
-# ⚠ PA6 is DECODED, NOT CONFIRMED (HARDWARE_PINOUT.md: "candidate,
-# unconfirmed"). It is derived from stock's master_init TMR13 setup at
-# 0x0802B0FE and the C1DT write at 0x08008C3A (ripcord contract 38). Run the
-# CH1 DAC1 sweep as a positive control in the same session before believing a
-# negative here: if DAC1 moves CH1's mean and this moves nothing on CH2, the
-# pin is wrong — which is a clean result, not an ambiguous one.
+# PA6 CONFIRMED as the CH2 offset reference: EXP-07 (2026-08-17, TMR13 moves
+# CH2's mean, DAC1 does not) and EXP-21 (2026-08-21, independent CH2 signal +
+# Lissajous once armed). FPGA_CH2_TRIGGER defaults to 1 in fpga.c since
+# 2026-09-14, so this target is now IDENTICAL to guest-coldtrace and is kept
+# as a name people have in their notes. The A/B control is
+# guest-coldtrace-noch2 below: same image with the CH2 arm compiled out.
 guest-coldtrace-ch2: CFLAGS += -DGUEST_BUILD -DFPGA_WARM_HANDOFF_TEST=1 -DFPGA_USART_SILENT_SCOPE=1 -DFPGA_CONFIG_B=1 -DFPGA_CONFIG_B_ARM=1 -DFPGA_CH2_TRIGGER=1
 guest-coldtrace-ch2: LDSCRIPT = ld/at32f403a_guest.ld
 guest-coldtrace-ch2: clean all
+
+# Control build for the CH2 arm: coldtrace with FPGA_CH2_TRIGGER=0, i.e. the
+# image every "CH2 reads all zeros" note before 2026-09-14 was taken on.
+guest-coldtrace-noch2: CFLAGS += -DGUEST_BUILD -DFPGA_WARM_HANDOFF_TEST=1 -DFPGA_USART_SILENT_SCOPE=1 -DFPGA_CONFIG_B=1 -DFPGA_CONFIG_B_ARM=1 -DFPGA_CH2_TRIGGER=0
+guest-coldtrace-noch2: LDSCRIPT = ld/at32f403a_guest.ld
+guest-coldtrace-noch2: clean all
 
 # [LA 2026-08-15] guest-coldtrace-la — coldtrace with the bit-bang config clock
 # slowed (FPGA_BB_HALF_DELAY=60 nops per half period, ~1-2 MHz SCK) so a

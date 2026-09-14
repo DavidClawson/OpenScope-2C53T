@@ -35,7 +35,7 @@ concrete.
 | Cold-boot FPGA config | S2 | — | Regression guard on the config path; hardware-SPI gap stays a research thread, not a spec |
 | Live capture CH1 | S2 | — | Guard: scripted capture acceptance in `bench.py` |
 | Acquisition record integrity | S1 (known defect) | *needed* | The record is not time-contiguous at its edges (EXP-22). **Root cause found 2026-09-13 (EXP-29/30): PC0 data-ready has never fired on unit #1, so every record ever taken was the free-run fallback read of a buffer being written; the seam marches 32–64 samples per read.** The `SEAM_GUARD` display step-over stays a symptom fix. Next: gate the read on the in-band `0x80` data-ready marker, with the EXP-29 seam metric *and* the generation-counter control that voided EXP-30's false fix. Blocks FFT-live |
-| Live capture CH2 | S1 | — | TMR13/PA6 offset bring-up (`guest-coldtrace-ch2`), then re-run the attenuator ladder |
+| Live capture CH2 | **S2** (EXP-38, 2026-09-14) | — | Armed at boot by default: fresh `guest-coldtrace` boot reads op05 = its own 2 kHz tone (bin 163 ×5) with op04 = 1 kHz (bin 81 ×5), no shell command; A/B against the `noch2` control image reproduces the old all-zeros. S3: re-run the CH2 attenuator ladder armed (the one-usable-tap result was unarmed) + one true-power-cycle repeat |
 | Vertical scale | S3 | — | S4 blocked on a calibrated source (`SCOPE_CAL_SOURCE_SCALE`) — Help Wanted #3b |
 | Horizontal scale | S3 | — | Codes 0x09–0x0C need a faster source; 0x06–0x08 need the narrow-field/roll-mode hypothesis tested |
 | Freq badge | S3 | — | S4: refusal states could say *why* (`torn` vs `no peak`) |

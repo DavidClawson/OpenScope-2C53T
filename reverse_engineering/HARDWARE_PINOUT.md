@@ -33,7 +33,7 @@
 | PA3 | USART2 RX | Input | Floating | -- | `FPGA_BOOT_SEQUENCE.md` step 9; `usart2_isr` at 0x080277B4 | FPGA to MCU responses; same signal on debug UART RX pad |
 | PA4 | Unknown | -- | -- | -- | | Possible DAC1 output |
 | PA5 | Unknown | -- | -- | -- | | Possible DAC2 output |
-| PA6 | CH2 trigger ref (TMR13_CH1 PWM-DAC) — **candidate, unconfirmed** | AF-PP | -- | -- | master_init TMR13 init flash 0x0802B0FE; C1DT write 0x08008C3A; ripcord contract 38 | TMR13_CH1 default pin (tmr13_mux=0, stock never remaps). PWM-DAC → RC → CH2 comparator ref, CH1-DAC1 analog. Confirm on bench (`guest-warmtest-ch2`) |
+| PA6 | CH2 vertical-offset ref (TMR13_CH1 PWM-DAC) — **CONFIRMED** (EXP-07 2026-08-17, EXP-21 2026-08-21) | AF-PP | -- | -- | master_init TMR13 init flash 0x0802B0FE; C1DT write 0x08008C3A; ripcord contract 38 | TMR13_CH1 default pin (tmr13_mux=0, stock never remaps). PWM-DAC → RC → CH2 offset injector, the CH2 analog of DAC1/PA4 (an offset, not a trigger threshold — the trigger is SPI3 reg 0x08). Centering code ≈2544 at range 5, not 2048. Armed at boot by default since 2026-09-14 (`FPGA_CH2_TRIGGER`) |
 | PA7 | Button matrix row | Input | Pull-up | -- | `peripheral_map.md`; `input_and_housekeeping` at 0x08039188 | CH2 button row pin |
 | PA8 | Button matrix row | Input | Pull-up | -- | `peripheral_map.md`; `input_and_housekeeping` | Right button row pin |
 | PA9 | USART1 TX | AF | -- | -- | Probed: dead (0 bytes) | Not used by stock USART firmware |

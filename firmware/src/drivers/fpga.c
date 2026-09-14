@@ -868,12 +868,18 @@ static void spi3_pump_h2_record(const uint8_t *tx, uint32_t n)
 #define FPGA_CONFIG_B_FAITHFUL  0
 #endif
 
-/* Bench plan item 5 (2026-08-13, `make guest-warmtest-ch2`) — bring up the CH2
- * trigger reference (TMR13 CH1 PWM-DAC on PA6) alongside the warm-handoff DAC1
- * arm, so a live CH2 trace can be validated. Layers onto guest-warmtest. See
- * scope_trigger_ch2_init(). */
+/* CH2 vertical-offset reference (TMR13 CH1 PWM-DAC on PA6), armed at boot
+ * alongside the DAC1 arm for CH1. Was bench plan item 5 (2026-08-13,
+ * `make guest-warmtest-ch2`) and defaulted OFF while PA6 was "decoded, not
+ * confirmed". CONFIRMED since: EXP-07 (2026-08-17) moved CH2's mean with
+ * TMR13 alone and not with DAC1 (specificity control held); EXP-21
+ * (2026-08-21) read 1 kHz on CH1 and 2 kHz on CH2 independently once armed
+ * and rendered a Lissajous. Unarmed, op05 reads all zeros — which is what
+ * every "CH2 dead" note on a plain coldtrace build since then actually was.
+ * Default ON as of 2026-09-14; `make guest-coldtrace-noch2` is the A/B
+ * control. See scope_trigger_ch2_init(). */
 #ifndef FPGA_CH2_TRIGGER
-#define FPGA_CH2_TRIGGER  0
+#define FPGA_CH2_TRIGGER  1
 #endif
 
 /* Build B + engine-arm (`make guest-configB-arm`): after the bit-bang config
@@ -1747,12 +1753,16 @@ static void fpga_set_ch2_frontend_range(uint8_t range_idx)
     if (b & 0x08) GPIOA->scr = (1U << 10); else GPIOA->clr = (1U << 10); /* PA10 */
 }
 
-/* Shared analog enables asserted in scope mode. PA6: stock configures it as
- * an output, function still unproven. PB9 is deliberately NOT driven — it is
- * the onboard piezo buzzer (TMR4_CH4 PWM, issue #25), not an analog enable. */
+/* Shared analog enables asserted in scope mode. PA6 is the CH2 offset
+ * reference (TMR13_CH1 PWM, EXP-07); with FPGA_CH2_TRIGGER the pin is AF and
+ * TMR13 owns it, so the old "drive PA6 HIGH" write is kept only for the
+ * control build, where PA6 is still a plain output. PB9 is deliberately NOT
+ * driven — it is the onboard piezo buzzer (TMR4_CH4 PWM, issue #25). */
 static void fpga_scope_frontend_enables(void)
 {
+#if !FPGA_CH2_TRIGGER
     GPIOA->scr = (1U << 6);
+#endif
 }
 
 /* Apply BOTH channels from their own volts/div indices. */
