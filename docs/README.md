@@ -55,6 +55,7 @@ RE methodology and analysis docs. The primary RE artifacts live in [`reverse_eng
 - [FreeRTOS Tasks](re/freertos_tasks.md) — Task structure, flash base address offset analysis
 - [RTOS Analysis](re/rtos_analysis.md) — FreeRTOS kernel identification via string signatures
 - [Reference Projects](re/reference_projects.md) — pecostm32 FNIRSI hack, EEVblog, open-source tools
+- [stock-caplog](stock_caplog.md) — a logger patched into the user's own stock V1.2.0: every meter-SoC frame and every GPIO change, read back over the shell after a MENU+Power round trip; how the meter word map was measured (issue #15)
 
 ## Community Tools & Sibling Projects
 
