@@ -3702,6 +3702,17 @@ static void fpga_warmtest_acq_task(void *pv)
 {
     (void)pv;
     uint32_t edges_consumed = 0;   /* pc0_edges value at our last pair read */
+    /* EXP-43 (2026-09-14): a READ is what starts a capture (EXP-41), so a
+     * triggered mode that waits for an edge before its first read waits
+     * forever — NORMAL froze at level 0 on the bench with zero edges and
+     * zero reads. capture_in_flight says whether a read has started a
+     * capture that has not yet been consumed; when it is false in
+     * NORMAL/SINGLE we do a PRIMING read (staging only, never published) to
+     * start one. single_done implements SINGLE: one triggered record, then
+     * hold until the mode is re-selected. */
+    bool capture_in_flight = false;
+    bool single_done = false;
+    trigger_mode_t last_mode = TRIG_AUTO;
     for (;;) {
         if (!fpga.initialized || fpga.bus_released) {
             vTaskDelay(pdMS_TO_TICKS(100));
@@ -3755,6 +3766,15 @@ static void fpga_warmtest_acq_task(void *pv)
          * timeout. */
         const scope_state_t *ss_acq = scope_state_get();
         bool auto_mode = (ss_acq == NULL) || (ss_acq->trigger.mode == TRIG_AUTO);
+        trigger_mode_t mode_now = (ss_acq == NULL) ? TRIG_AUTO : ss_acq->trigger.mode;
+        if (mode_now != last_mode) {           /* re-selecting SINGLE re-arms it */
+            single_done = false;
+            last_mode = mode_now;
+        }
+        if (mode_now == TRIG_SINGLE && single_done) {
+            vTaskDelay(pdMS_TO_TICKS(10));     /* hold the one record */
+            continue;
+        }
         unsigned wait_ms = auto_mode ? fpga_acq_auto_wait_get()
                                      : FPGA_NORMAL_TRIG_WAIT_MS;
 
@@ -3785,10 +3805,22 @@ static void fpga_warmtest_acq_task(void *pv)
                  * (dev plan F4); a faster refresh gives more updates, not more
                  * correct time bases. */
                 vTaskDelay(pdMS_TO_TICKS(FPGA_AUTO_CADENCE_MS));
+            } else if (!capture_in_flight) {
+                /* NORMAL/SINGLE with nothing in flight: PRIME. A read starts
+                 * the capture the edge will announce; its contents are the
+                 * stale buffer, so it lands in staging and is never
+                 * committed. Consume edges first so the edge this read
+                 * produces is the one we wait for. */
+                edges_consumed = fpga.pc0_edges;
+                (void)fpga_warmtest_read_channel(0x04, acq_write_ch1());
+                (void)fpga_warmtest_read_channel(0x05, acq_write_ch2());
+                capture_in_flight = true;
+                continue;
             } else {
-                /* NORMAL/SINGLE, no trigger this window: hold the last trace.
-                 * Count it as a timeout for the "TO:" overlay and loop back
-                 * WITHOUT reading — ch1_buf/ch2_buf keep the last capture. */
+                /* NORMAL/SINGLE, capture in flight, no trigger this window:
+                 * hold the last trace. Count it as a timeout for the "TO:"
+                 * overlay and loop back WITHOUT reading — ch1_buf/ch2_buf
+                 * keep the last capture. */
                 fpga.spi3_total_timeouts++;
                 continue;
             }
@@ -3805,6 +3837,7 @@ static void fpga_warmtest_acq_task(void *pv)
         volatile uint8_t *w2 = acq_write_ch2();
         uint8_t s1 = fpga_warmtest_read_channel(0x04, w1);
         uint8_t s2 = fpga_warmtest_read_channel(0x05, w2);
+        capture_in_flight = true;              /* this read started the next one */
 
         /* Anchor the success flags on frame validity — a fully dead bus
          * reads 0xFF everywhere (pull-up idle / spi3_xfer timeout), which
@@ -3835,6 +3868,8 @@ static void fpga_warmtest_acq_task(void *pv)
             fpga.spi3_ok_count++;
             fpga.spi3_timeout_count = 0;
             data_ready = true;
+            if (mode_now == TRIG_SINGLE && triggered)
+                single_done = true;            /* one triggered record, then hold */
         } else {
             fpga.spi3_total_timeouts++;    /* rejected frame — shows in TO: */
             /* Dry-spell recovery only: after a run of rejected reads (a dead
