@@ -1019,6 +1019,9 @@ int main(void)
      * relays before the restore, so push the restored vdiv indices out too
      * (EXP-19, 2026-08-20). */
     fpga_reconcile_frontend_after_arm();
+    /* And the trigger level: the arm burst's 0xAD sits above any mid-scale
+     * signal, so PC0 never completes a capture (EXP-41, 2026-09-14). */
+    fpga_reconcile_trigger_after_arm();
 #endif
 
     /* Create queues */

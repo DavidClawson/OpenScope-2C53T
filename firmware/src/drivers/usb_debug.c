@@ -2383,13 +2383,53 @@ static void cmd_fpga_autowait(const char *args)
     if (*args) {
         uint32_t ms = 0;
         if (parse_int(args, &ms) != 0 || ms > 60000u) {
-            usb_send_str("usage: fpga autowait [ms 0..60000, 0 = default]\r\n"); return;
+            usb_send_str("usage: fpga autowait [ms 0..60000, 0 = derive from timebase]\r\n"); return;
         }
         fpga_acq_auto_wait_set((uint16_t)ms);
     }
-    snprintf(buf, sizeof(buf), "acq AUTO edge-wait %u ms before the free-run fallback read\r\n",
-             (unsigned)fpga_acq_auto_wait_get());
+    snprintf(buf, sizeof(buf), "acq AUTO edge-wait %u ms before the free-run fallback read (%s, rate idx 0x%02X)\r\n",
+             (unsigned)fpga_acq_auto_wait_get(),
+             fpga_acq_auto_wait_is_override() ? "override" : "derived from timebase",
+             fpga_acq_rate_idx_get());
     usb_send_str(buf);
+}
+
+/* `fpga scope trigmode [auto|normal|single]` — set/read the acq wait policy
+ * (EXP-30 noted nothing in the shell could set it; the time-view button
+ * cycles cursors). Pure state; the acq task reads it each cycle. */
+static void cmd_fpga_scope_trigmode(const char *args)
+{
+    while (*args == ' ') args++;
+    scope_state_t *ss = scope_state_get();
+    if (*args) {
+        if      (strncmp(args, "auto",   4) == 0) ss->trigger.mode = TRIG_AUTO;
+        else if (strncmp(args, "normal", 6) == 0) ss->trigger.mode = TRIG_NORMAL;
+        else if (strncmp(args, "single", 6) == 0) ss->trigger.mode = TRIG_SINGLE;
+        else { usb_send_str("usage: fpga scope trigmode [auto|normal|single]\r\n"); return; }
+    }
+    usb_debug_printf("trigger mode %s (acq wait policy: AUTO falls back after the edge-wait; NORMAL/SINGLE hold)\r\n",
+                     trigger_mode_labels[ss->trigger.mode]);
+}
+
+/* `fpga scope level [level]` — the digital trigger level (reg 0x08) from the
+ * UI's -100..100, through the one entry point; prints the code in force. */
+static void cmd_fpga_scope_level(const char *args)
+{
+    while (*args == ' ') args++;
+    scope_state_t *ss = scope_state_get();
+    if (*args) {
+        int neg = 0; uint32_t lv = 0; const char *p = args;
+        if (*p == '-') { neg = 1; p++; }
+        if (parse_int(p, &lv) != 0 || lv > 100u) {
+            usb_send_str("usage: fpga scope level [-100..100]\r\n"); return;
+        }
+        ss->trigger.level = neg ? -(int)lv : (int)lv;
+        if (!fpga_apply_trigger_level(ss->trigger.level)) {
+            usb_send_str("acq task would not park — reg 0x08 NOT written\r\n"); return;
+        }
+    }
+    usb_debug_printf("trigger level %d -> reg 0x08 code 0x%02X in force (boot reconcile wrote 0x%02X)\r\n",
+                     ss->trigger.level, fpga_acq_trig_code_get(), fpga_trigger_reconcile_code());
 }
 
 /* `fpga acqgate [on|off]` — stock's PRE-read gate (EXP-29/30). Pairs with
@@ -7456,6 +7496,10 @@ static const shell_cmd_t shell_cmds[] = {
           "fpga scope softtrig [on|off|toggle]      Lock trace to trigger crossing vs free-run\r\n"),
     CMD_V("settings", cmd_settings, SC_EXACT,
           "settings                        Persistence status: bound, load result, writes, failures\r\n"),
+    CMD_A("fpga scope trigmode", cmd_fpga_scope_trigmode, 0,
+          "fpga scope trigmode [auto|normal|single]  Acq wait policy (EXP-43)\r\n"),
+    CMD_A("fpga scope level", cmd_fpga_scope_level, 0,
+          "fpga scope level [-100..100]    Digital trigger level -> reg 0x08 code (EXP-41)\r\n"),
     CMD_A("fpga scope timebase", cmd_fpga_scope_timebase, 0,
           "fpga scope timebase [code]      Set timebase in BOTH display state and reg 0x01 (hex)\r\n"),
     CMD_A("fpga scope center", cmd_fpga_scope_center, 0,

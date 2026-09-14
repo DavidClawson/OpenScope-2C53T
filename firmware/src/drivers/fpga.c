@@ -3443,6 +3443,12 @@ static volatile uint16_t acq_rearm_wait_ms = 0;
  * (82 ms at 0x10), so the AUTO fallback always read mid-capture — the seam.
  * `fpga autowait <ms>`; 0 = the compiled default. */
 static volatile uint16_t acq_auto_wait_ms = 0;
+/* The digital trigger level in force: SPI3 reg 0x08, an unsigned ADC code.
+ * The boot arm burst writes stock's captured 0xAD (173); every bench signal
+ * since 2026-08 peaked near 160, so PC0 "never fired" for a month (EXP-41).
+ * fpga_reconcile_trigger_after_arm() hands the register to the UI level
+ * right after the arm; fpga_apply_trigger_level() is the ONLY runtime path. */
+static volatile uint8_t acq_trig_code = 0xAD;
 static volatile uint32_t acq_gate_skips = 0;   /* reads the gate prevented */
 /* Reg 0x01 value currently in force -- the ONE variable that mirrors the
  * hardware register. 0x08 is what the arm block writes at config time; the
@@ -3507,7 +3513,37 @@ bool fpga_acq_rearm_get(void)         { return acq_rearm_enable; }
 void fpga_acq_gate_set(bool on)       { acq_gate_enable = on; }
 void fpga_acq_rearm_wait_set(uint16_t ms) { acq_rearm_wait_ms = ms; }
 void fpga_acq_auto_wait_set(uint16_t ms)  { acq_auto_wait_ms = ms; }
-uint16_t fpga_acq_auto_wait_get(void)   { return acq_auto_wait_ms ? acq_auto_wait_ms : FPGA_AUTO_TRIG_WAIT_MS; }
+/* AUTO edge-wait budget in force. Override if set; else derived from the
+ * timebase in force: 4x the 1024-sample fill at that rate (EXP-42: edges per
+ * pair saturate by ~3.6x at 0x10), clamped to [compiled 25 ms, 1000 ms] —
+ * codes slower than ~0x12 fall back to free-run reads past the cap rather
+ * than freezing AUTO for seconds. Unmeasured codes (rate 0) get the compiled
+ * value. */
+uint16_t fpga_acq_auto_wait_get(void)
+{
+    if (acq_auto_wait_ms) return acq_auto_wait_ms;
+    float fs = scope_timebase_sample_rate(acq_rate_idx);
+    if (fs <= 0.0f) return FPGA_AUTO_TRIG_WAIT_MS;
+    float ms = 4.0f * 1024.0f / fs * 1000.0f;
+    if (ms < (float)FPGA_AUTO_TRIG_WAIT_MS) ms = (float)FPGA_AUTO_TRIG_WAIT_MS;
+    if (ms > 1000.0f) ms = 1000.0f;
+    return (uint16_t)ms;
+}
+bool fpga_acq_auto_wait_is_override(void) { return acq_auto_wait_ms != 0; }
+uint8_t fpga_acq_trig_code_get(void)      { return acq_trig_code; }
+
+/* UI trigger level (-100..100, screen pixels about mid-scale, the renderer's
+ * own convention: SCOPE_H px == 256 counts, SCOPE_H = LCD_HEIGHT-16-18 = 206
+ * in scope_ui.c) -> reg 0x08 code. Keep the 206 in step with scope_ui.c. */
+uint8_t fpga_trigger_code_from_level(int level)
+{
+    if (level < -100) level = -100;
+    if (level >  100) level =  100;
+    int code = 128 + (level * 256) / 206;
+    if (code < 1)   code = 1;
+    if (code > 254) code = 254;
+    return (uint8_t)code;
+}
 uint16_t fpga_acq_rearm_wait_get(void)  { return acq_rearm_wait_ms; }
 bool fpga_acq_gate_get(void)          { return acq_gate_enable; }
 uint32_t fpga_acq_gate_skips(void)    { return acq_gate_skips; }
@@ -3550,6 +3586,22 @@ bool fpga_apply_timebase(uint8_t code)
         return false;
     fpga_scope_write_reg(0x01, code);
     acq_rate_idx = code;
+    fpga_acq_resume();
+    return true;
+}
+
+/* Trigger sibling of fpga_apply_timebase (EXP-41, 2026-09-14): write the
+ * digital trigger level (reg 0x08, unsigned ADC code) and record what is in
+ * force. The level is the UI's -100..100; the code is what the FPGA compares
+ * the ADC against to complete a capture and pulse PC0. Returns false if the
+ * acquisition task would not park, in which case nothing was written. */
+bool fpga_apply_trigger_level(int level)
+{
+    uint8_t code = fpga_trigger_code_from_level(level);
+    if (!fpga_acq_pause())
+        return false;
+    fpga_scope_write_reg(0x08, code);
+    acq_trig_code = code;
     fpga_acq_resume();
     return true;
 }
@@ -4433,6 +4485,25 @@ void fpga_reconcile_timebase_after_arm(void)
         acq_rate_idx     = 0x08;
         fpga_tb_reconcile_action = 2u;
     }
+}
+
+/* Trigger sibling of the reconcile above (EXP-41): the arm burst leaves reg
+ * 0x08 at stock's captured 0xAD, above every bench signal this project has
+ * applied; hand it to the (possibly restored) UI level. Runs before the acq
+ * task exists, so a bare write is correct here, as for the timebase. */
+static volatile uint8_t fpga_trig_reconcile_code;
+uint8_t fpga_trigger_reconcile_code(void) { return fpga_trig_reconcile_code; }
+
+void fpga_reconcile_trigger_after_arm(void)
+{
+    scope_state_t *ss = scope_state_get();
+    uint8_t code = fpga_trigger_code_from_level(ss->trigger.level);
+    SPI3_CS_ASSERT();
+    spi3_xfer(0x08);
+    spi3_xfer(code);
+    SPI3_CS_DEASSERT();
+    acq_trig_code = code;
+    fpga_trig_reconcile_code = code;
 }
 
 /* Vertical sibling of the reconcile above: fpga_init() applies the frontend

@@ -1096,6 +1096,13 @@ uint32_t fpga_acq_gate_skips(void);
  * was written and the previous rate is still in force. */
 bool    fpga_apply_timebase(uint8_t code);
 
+/* Trigger sibling (EXP-41): write the digital trigger level, reg 0x08, from
+ * the UI's -100..100 and record the code in force. Same park contract. */
+bool    fpga_apply_trigger_level(int level);
+uint8_t fpga_trigger_code_from_level(int level);
+uint8_t fpga_acq_trig_code_get(void);
+bool    fpga_acq_auto_wait_is_override(void);
+
 /* Vertical sibling of fpga_apply_timebase (EXP-19): drive channel ch's
  * (1 or 2) frontend relay bank to range idx. The caller owns updating
  * scope_state's vdiv_idx, same split as the timebase pair. Returns false on
@@ -1114,6 +1121,8 @@ uint8_t fpga_timebase_reconcile_action(void);
  * call. Pre-scheduler only: takes no lock. */
 void    fpga_reconcile_timebase_after_arm(void);
 void    fpga_reconcile_frontend_after_arm(void);
+void    fpga_reconcile_trigger_after_arm(void);
+uint8_t fpga_trigger_reconcile_code(void);
 
 void    fpga_acq_rate_idx_set(uint8_t v);
 uint8_t fpga_acq_rate_idx_get(void);
