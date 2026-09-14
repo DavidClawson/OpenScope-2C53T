@@ -1102,6 +1102,8 @@ bool    fpga_apply_trigger_level(int level);
 uint8_t fpga_trigger_code_from_level(int level);
 uint8_t fpga_acq_trig_code_get(void);
 bool    fpga_acq_auto_wait_is_override(void);
+void     fpga_acq_pair_gap_set(uint16_t ms);
+uint16_t fpga_acq_pair_gap_get(void);
 
 /* Vertical sibling of fpga_apply_timebase (EXP-19): drive channel ch's
  * (1 or 2) frontend relay bank to range idx. The caller owns updating

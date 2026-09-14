@@ -2394,6 +2394,18 @@ static void cmd_fpga_autowait(const char *args)
     usb_send_str(buf);
 }
 
+/* `fpga pairgap [ms]` — delay between the 0x04 and 0x05 reads of a pair (EXP-45). */
+static void cmd_fpga_pairgap(const char *args)
+{
+    while (*args == ' ') args++;
+    if (*args) {
+        uint32_t ms = 0;
+        if (parse_int(args, &ms) != 0 || ms > 1000u) { usb_send_str("usage: fpga pairgap [ms 0..1000]\r\n"); return; }
+        fpga_acq_pair_gap_set((uint16_t)ms);
+    }
+    usb_debug_printf("acq pair gap %u ms between the 04 and 05 reads\r\n", (unsigned)fpga_acq_pair_gap_get());
+}
+
 /* `fpga scope trigmode [auto|normal|single]` — set/read the acq wait policy
  * (EXP-30 noted nothing in the shell could set it; the time-view button
  * cycles cursors). Pure state; the acq task reads it each cycle. */
@@ -7496,6 +7508,8 @@ static const shell_cmd_t shell_cmds[] = {
           "fpga scope softtrig [on|off|toggle]      Lock trace to trigger crossing vs free-run\r\n"),
     CMD_V("settings", cmd_settings, SC_EXACT,
           "settings                        Persistence status: bound, load result, writes, failures\r\n"),
+    CMD_A("fpga pairgap", cmd_fpga_pairgap, 0,
+          "fpga pairgap [ms]               Gap between the 04 and 05 reads (EXP-45)\r\n"),
     CMD_A("fpga scope trigmode", cmd_fpga_scope_trigmode, 0,
           "fpga scope trigmode [auto|normal|single]  Acq wait policy (EXP-43)\r\n"),
     CMD_A("fpga scope level", cmd_fpga_scope_level, 0,

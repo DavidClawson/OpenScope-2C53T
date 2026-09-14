@@ -3449,6 +3449,11 @@ static volatile uint16_t acq_auto_wait_ms = 0;
  * fpga_reconcile_trigger_after_arm() hands the register to the UI level
  * right after the arm; fpga_apply_trigger_level() is the ONLY runtime path. */
 static volatile uint8_t acq_trig_code = 0xAD;
+/* EXP-45 (2026-09-14): gap between the 0x04 and 0x05 reads of a pair. Shell
+ * reads 50 ms apart each produce a PC0 edge; the task's back-to-back pair
+ * (~140 us apart at /2) produces none, which is why NORMAL could not sustain
+ * itself. Runtime `fpga pairgap <ms>`, default 0 = the historical shape. */
+static volatile uint16_t acq_pair_gap_ms = 0;
 static volatile uint32_t acq_gate_skips = 0;   /* reads the gate prevented */
 /* Reg 0x01 value currently in force -- the ONE variable that mirrors the
  * hardware register. 0x08 is what the arm block writes at config time; the
@@ -3530,6 +3535,8 @@ uint16_t fpga_acq_auto_wait_get(void)
     return (uint16_t)ms;
 }
 bool fpga_acq_auto_wait_is_override(void) { return acq_auto_wait_ms != 0; }
+void fpga_acq_pair_gap_set(uint16_t ms)   { acq_pair_gap_ms = ms; }
+uint16_t fpga_acq_pair_gap_get(void)    { return acq_pair_gap_ms; }
 uint8_t fpga_acq_trig_code_get(void)      { return acq_trig_code; }
 
 /* UI trigger level (-100..100, screen pixels about mid-scale, the renderer's
@@ -3813,6 +3820,7 @@ static void fpga_warmtest_acq_task(void *pv)
                  * produces is the one we wait for. */
                 edges_consumed = fpga.pc0_edges;
                 (void)fpga_warmtest_read_channel(0x04, acq_write_ch1());
+                if (acq_pair_gap_ms) vTaskDelay(pdMS_TO_TICKS(acq_pair_gap_ms));
                 (void)fpga_warmtest_read_channel(0x05, acq_write_ch2());
                 capture_in_flight = true;
                 continue;
@@ -3836,6 +3844,7 @@ static void fpga_warmtest_acq_task(void *pv)
         volatile uint8_t *w1 = acq_write_ch1();
         volatile uint8_t *w2 = acq_write_ch2();
         uint8_t s1 = fpga_warmtest_read_channel(0x04, w1);
+        if (acq_pair_gap_ms) vTaskDelay(pdMS_TO_TICKS(acq_pair_gap_ms));
         uint8_t s2 = fpga_warmtest_read_channel(0x05, w2);
         capture_in_flight = true;              /* this read started the next one */
 
