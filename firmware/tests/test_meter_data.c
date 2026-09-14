@@ -824,17 +824,18 @@ static int test_passive_formatter_debug_fields_cover_diode_and_extended_splits(v
     return 1;
 }
 
-static int test_resistance_low_ohm_fails_closed_without_factory_cal(void)
+static int test_resistance_low_band_reads_the_soc_text_as_ohms(void)
 {
     uint8_t frame[12];
 
+    /* frame[6] upper nibble 0, no point: the digits are ohms as the SoC shows
+     * them. This used to fail closed for want of a per-unit low-ohm factor;
+     * the factor was the auto-mode artefact (issue #15), the text is the value. */
     meter_data_init();
     build_segment_frame(frame, 4, 8, 2, 4, 0x00, 0x00, 0x00, 0x00, 0);
     process_frame(frame, 6);
-    ASSERT(!meter_reading.valid);
-    ASSERT(meter_reading.reject_reason == METER_REJECT_UNRESOLVED_CALIBRATION);
-    ASSERT_STR_EQ(meter_reading.display_str, "---");
-    ASSERT(meter_reading.result_class == METER_RESULT_NONE);
+    ASSERT(expect_normal_reading("4824", "Ohm", 4824.0f, 0.5f));
+    ASSERT(meter_reading.reject_reason == METER_REJECT_NONE);
 
     build_segment_frame(frame, 3, 3, 0, 0, 0x40, 0x00, 0x00, 0x00, 0);
     process_frame(frame, 6);
@@ -2688,6 +2689,161 @@ static int test_snapshot_rejects_concurrent_two_writer_window(void)
     return 1;
 }
 
+/* ═══════════════════════════════════════════════════════════════════
+ * Live frames from two units (issue #15). The frame is seven-segment text:
+ * bit 4 of a digit's nibble is its decimal point, a leading blank glyph is a
+ * space. Unit #2 frames: EXP-205 (2026-09-13) and the 2026-09-07 bench; unit
+ * #1 frames: EXP-27, bytes[2..5] and frame[6] as published, frame[7] = 0x20
+ * assumed (the same regime as unit #2's), so those two are labelled.
+ * ═══════════════════════════════════════════════════════════════════ */
+
+static void raw_frame(uint8_t frame[12], const char *hex24)
+{
+    for (int i = 0; i < 12; i++) {
+        unsigned v = 0;
+        sscanf(hex24 + 2 * i, "%2x", &v);
+        frame[i] = (uint8_t)v;
+    }
+}
+
+static int test_live_frames_carry_their_own_decimal_point(void)
+{
+    uint8_t frame[12];
+
+    meter_data_init();
+    /* 10 kOhm, unit #2: "9.924", point on digit 1, frame[6] 0x4E, frame[7] 0x20 */
+    raw_frame(frame, "5AA5C4DFAF4D4E200000012F");
+    process_frame(frame, 6);
+    ASSERT(expect_normal_reading("9.924", "kOhm", 9.924f, 0.0005f));
+    ASSERT(meter_reading.decimal_pos == 1);
+
+    /* 2.2 kOhm, unit #2: "2168", no point, frame[6] 0x4F -> 2.168 kOhm */
+    raw_frame(frame, "5AA5A40DEAE74F208000012E");
+    process_frame(frame, 6);
+    ASSERT(expect_normal_reading("2.168", "kOhm", 2.168f, 0.0005f));
+
+    /* ACV mains, upstream's own fixture: the point sits on digit 3 -> 226.6 V */
+    raw_frame(frame, "5AA5A5ADEDF7070002000032");
+    process_frame(frame, 1);
+    ASSERT(expect_normal_reading("226.6", "V", 226.6f, 0.05f));
+    ASSERT(meter_reading.decimal_pos == 3);
+
+    /* DCV is untouched by the point: the stock classes still rule there */
+    raw_frame(frame, "5AA54ECE8F8A0A0082000173");
+    process_frame(frame, 0);
+    ASSERT(meter_reading.valid);
+    ASSERT_STR_EQ(meter_reading.display_str, "1.4977");
+    return 1;
+}
+
+static int test_live_resistance_bands_unit2_and_unit1(void)
+{
+    uint8_t frame[12];
+
+    meter_data_init();
+    /* shorted probes, unit #2, resistance: " 0.17", frame[7] 0x20 */
+    raw_frame(frame, "5AA504E01B8A0A2000000131");
+    process_frame(frame, 6);
+    ASSERT(expect_normal_reading("0.17", "Ohm", 0.17f, 0.0005f));
+
+    /* the same leads in continuity, frame[7] 0x28: same text, same value */
+    raw_frame(frame, "5AA500E01B8A0A2800000132");
+    process_frame(frame, 7);
+    ASSERT(meter_reading.valid);
+    ASSERT_STR_EQ(meter_reading.display_str, "0.17");
+    ASSERT_STR_EQ(meter_reading.unit_suffix, "Ohm");
+    ASSERT(close_to(meter_reading.value, 0.17f, 0.0005f));
+
+    /* 300 kOhm, unit #2: "2978", frame[7] 0x24 -> hundreds of ohms -> 297.8 kOhm */
+    raw_frame(frame, "5AA5A4CD8FEA0F2480000132");
+    process_frame(frame, 6);
+    ASSERT(expect_normal_reading("297.8", "kOhm", 297.8f, 0.05f));
+
+    /* open probes in resistance, unit #2: " 0L " in the upper band -> OL */
+    raw_frame(frame, "5AA504F06B0100240000010B");
+    process_frame(frame, 6);
+    ASSERT(meter_reading.valid);
+    ASSERT(meter_reading.result_class == METER_RESULT_OVERLOAD);
+    ASSERT_STR_EQ(meter_reading.display_str, "OL");
+
+    /* unit #1, EXP-27, 10 kOhm: bytes[2..5] C4 9F 8A CA, frame[6] 0x47 -> "9775" */
+    raw_frame(frame, "5AA5C49F8ACA472080000000");
+    process_frame(frame, 6);
+    ASSERT(expect_normal_reading("9.775", "kOhm", 9.775f, 0.0005f));
+
+    /* unit #1, EXP-27, shorted probes: 04 E0 1B 4A, frame[6] 0x0F. The point
+     * is in the pre-lookup nibble of digit 2 (0x1A), so this is " 0.14" =
+     * 0.14 Ohm, not the 0.014 the digit codes alone suggested. frame[6] is
+     * the 0x0E of his rotation that completes digit 3 as a "4". */
+    raw_frame(frame, "5AA504E01B4A0E2000000000");
+    process_frame(frame, 6);
+    ASSERT(expect_normal_reading("0.14", "Ohm", 0.14f, 0.0005f));
+    return 1;
+}
+
+static int test_live_capacitance_frames_self_describe(void)
+{
+    uint8_t frame[12];
+
+    meter_data_init();
+    raw_frame(frame, "5AA5C4FFA78D2F100000013A");        /* 10 nF, EXP-205 */
+    process_frame(frame, 9);
+    ASSERT(expect_normal_reading("9.623", "nF", 9.623f, 0.0005f));
+
+    raw_frame(frame, "5AA5C4FFC78F1A100000013A");        /* 10 uF, EXP-205 */
+    process_frame(frame, 9);
+    ASSERT(expect_normal_reading("9.697", "uF", 9.697f, 0.0005f));
+
+    raw_frame(frame, "5AA504EAEBFB2710000000DB");        /* 100 nF, 2026-09-07 */
+    process_frame(frame, 9);
+    ASSERT(expect_normal_reading("100.6", "nF", 100.6f, 0.05f));
+
+    raw_frame(frame, "5AA5C4EF9BEF1710000000DB");        /* 100 uF, 2026-09-07 */
+    process_frame(frame, 9);
+    ASSERT(expect_normal_reading("90.36", "uF", 90.36f, 0.005f));
+
+    raw_frame(frame, "5AA5E4FBEBEB2F10000000DB");        /* open probes: 0.008 nF */
+    process_frame(frame, 9);
+    ASSERT(expect_normal_reading("0.008", "nF", 0.008f, 0.0005f));
+
+    raw_frame(frame, "5AA504100000201000000011");        /* ranging: blank digits */
+    process_frame(frame, 9);
+    ASSERT(meter_reading.valid);
+    ASSERT(meter_reading.result_class == METER_RESULT_BLANK);
+
+    /* an unmeasured unit nibble (mF was never on the bench) is refused, not guessed */
+    raw_frame(frame, "5AA5C4FFA78D3F100000013A");
+    process_frame(frame, 9);
+    ASSERT(!meter_reading.valid);
+    ASSERT(meter_reading.reject_reason == METER_REJECT_UNSUPPORTED_EXTENSION);
+    return 1;
+}
+
+static int test_live_ol_second_spelling_and_leading_blanks(void)
+{
+    uint8_t frame[12];
+
+    meter_data_init();
+    /* 2.2 kOhm in continuity, unit #2: " 0L " -> OL, not ERR */
+    raw_frame(frame, "5AA500E07B0100280000012F");
+    process_frame(frame, 7);
+    ASSERT(meter_reading.valid);
+    ASSERT(meter_reading.result_class == METER_RESULT_OVERLOAD);
+    ASSERT_STR_EQ(meter_reading.display_str, "OL");
+
+    /* temperature, internal sensor, unit #2: "  28" -> 28 C */
+    raw_frame(frame, "5AA50000A0ED0F002000011F");
+    process_frame(frame, 10);
+    ASSERT(expect_normal_reading("28", "C", 28.0f, 0.5f));
+    ASSERT(meter_reading.decimal_pos == 0);
+
+    /* a fully blank frame is still the blank special, not a zero reading */
+    build_segment_frame(frame, 0x10, 0x10, 0x10, 0x10, 0x00, 0x00, 0x00, 0x00, 0);
+    process_frame(frame, 6);
+    ASSERT(meter_reading.result_class == METER_RESULT_BLANK);
+    return 1;
+}
+
 int main(void)
 {
     printf("Meter data frame tests\n");
@@ -2716,7 +2872,11 @@ int main(void)
     TEST(ac_modes_require_frequency_hint_boundaries);
     TEST(stock_formatter_families_have_regression_fixtures);
     TEST(passive_formatter_debug_fields_cover_diode_and_extended_splits);
-    TEST(resistance_low_ohm_fails_closed_without_factory_cal);
+    TEST(resistance_low_band_reads_the_soc_text_as_ohms);
+    TEST(live_frames_carry_their_own_decimal_point);
+    TEST(live_resistance_bands_unit2_and_unit1);
+    TEST(live_capacitance_frames_self_describe);
+    TEST(live_ol_second_spelling_and_leading_blanks);
     TEST(invalidate_clears_stale_reading_before_mode_transition);
     TEST(invalidate_clears_stale_reading_for_every_submode);
     TEST(parser_stock_mode_tracks_transition_plan_for_every_submode);
