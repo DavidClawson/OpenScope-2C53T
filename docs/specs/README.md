@@ -34,7 +34,7 @@ concrete.
 |---|---|---|---|
 | Cold-boot FPGA config | S2 | — | Regression guard on the config path; hardware-SPI gap stays a research thread, not a spec |
 | Live capture CH1 | S2 | — | Guard: scripted capture acceptance in `bench.py` |
-| Acquisition record integrity | S1 (known defect) | *needed* | The record is not time-contiguous at its edges — stale ~one-read-cadence data at indices ~32–96 / ~864–928 (EXP-22). The display trigger steps over it (`SEAM_GUARD`); every whole-buffer consumer still eats it. Root cause open; blocks FFT-live from being trustworthy |
+| Acquisition record integrity | S1 (known defect) | *needed* | The record is not time-contiguous at its edges (EXP-22). **Root cause found 2026-09-13 (EXP-29/30): PC0 data-ready has never fired on unit #1, so every record ever taken was the free-run fallback read of a buffer being written; the seam marches 32–64 samples per read.** The `SEAM_GUARD` display step-over stays a symptom fix. Next: gate the read on the in-band `0x80` data-ready marker, with the EXP-29 seam metric *and* the generation-counter control that voided EXP-30's false fix. Blocks FFT-live |
 | Live capture CH2 | S1 | — | TMR13/PA6 offset bring-up (`guest-coldtrace-ch2`), then re-run the attenuator ladder |
 | Vertical scale | S3 | — | S4 blocked on a calibrated source (`SCOPE_CAL_SOURCE_SCALE`) — Help Wanted #3b |
 | Horizontal scale | S3 | — | Codes 0x09–0x0C need a faster source; 0x06–0x08 need the narrow-field/roll-mode hypothesis tested |
@@ -42,7 +42,7 @@ concrete.
 | Auto-measurements (real units) | S1 | [auto-measurements](scope/auto-measurements.md) | S2: badge volts/seconds validated against a bench-driven signal |
 | FFT + waterfall on live data | S0 | [fft-live](scope/fft-live.md) | S1: consume the live acq buffer in `guest-coldtrace` |
 | Trigger level | S1 | [trigger-modes](scope/trigger-modes.md) | S2: measure level-vs-ADC-code transfer on the bench. ⚠ The register is real and bench-proven, but **no control reaches it** — `scope_adjust_trigger_level()` has zero callers, so the level is immutable at runtime and the on-screen marker never moves (spec D1) |
-| Trigger modes (auto / normal / single) | S0 | [trigger-modes](scope/trigger-modes.md) | S1: one entry point per trigger quantity that writes the hardware and records what is in force, plus the A/B/A PC0-edge-rate proof that the *control* moved the register — not a raw `spi3 seq`. Wishlist Tier 1 #1; milestone M2. Eight known defects catalogued with file:line, five of them decorative controls |
+| Trigger modes (auto / normal / single) | S0 | [trigger-modes](scope/trigger-modes.md) | S1: one entry point per trigger quantity that writes the hardware and records what is in force, plus the A/B/A PC0-edge-rate proof that the *control* moved the register — not a raw `spi3 seq`. Wishlist Tier 1 #1; milestone M2. Eight known defects catalogued with file:line, five of them decorative controls. **EXP-30 prediction (2026-09-13): NORMAL and SINGLE wait on a PC0 edge that has never fired on unit #1, so they cannot capture at all — the same fix as the record seam** |
 | Cursors | S1 | *needed* | Units now derive from `scope_cal` / `scope_timebase` and refuse when the table has no entry (`scope_cursor.c`, host-tested with negative controls, 2026-09-12). **Not S2: unverified on the bench** — next is a cursor delta read against a known signal, and against the badges on the same capture |
 | Autofit vs. measured graticule | S1 | *needed* | Decision pending: the vertical graticule does not mean the volts/div the status bar prints |
 | Math channels | S0 | — | After auto-measurements S2 (same input plumbing) |
@@ -54,7 +54,7 @@ concrete.
 
 | Feature | Stage | Spec | Next |
 |---|---|---|---|
-| Multimeter in the scope build | **S1** (coldtrace, all submodes *accepted*) | [meter-in-the-scope-build](meter/meter-in-the-scope-build.md) | EXP-25/26/27/28 (2026-09-12): the `AA 55` TX header replicates on unit #1, commanded modes are acknowledged (`echo_frames` non-zero for the first time), 10 kΩ reads 9.775 kΩ, and the scope is undisturbed. **Not S2**: the 10 kΩ is a ±5% part, so it bounds the reading without being a reference. S2 needs a bench DMM across the same load. Next: land Stlkv's decoder (#15 PR 2) and correct the word table |
+| Multimeter in the scope build | **S1** (coldtrace, all submodes *accepted*) | [meter-in-the-scope-build](meter/meter-in-the-scope-build.md) | EXP-25/26/27/28 (2026-09-12): the `AA 55` TX header replicates on unit #1, commanded modes are acknowledged (`echo_frames` non-zero for the first time), 10 kΩ reads 9.775 kΩ, and the scope is undisturbed. **Not S2**: the 10 kΩ is a ±5% part, so it bounds the reading without being a reference. S2 needs a bench DMM across the same load. Word table + `AA 55` header landed (#33, `12c038c`); seven-segment decoder landed (#35, `e9891ae`), both host-tested and bench-exercised on unit #2 only. Next: run both on unit #1 with the eight untested words (capacitor, diode, thermocouple), then fold `guest-coldtrace-meter` into the default build |
 | Manual range lock | S-none | — | Wishlist Tier 1 #2; spec after coexistence reaches S2 |
 | DCV >10 V | S1 (known-wrong) | — | Decimal-latch bug documented since 2026-04-04; folds into the coexistence spec's S4 |
 | Fuse current tester | S1 | — | Unvalidated against known loads |
