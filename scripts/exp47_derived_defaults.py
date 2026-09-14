@@ -51,13 +51,13 @@ def main():
     sc = Scope("/dev/ttyACM0")
     print("=== readback first ===")
     for c in ("fpga postedge", "fpga autowait", "fpga scope level", "fpga scope trigmode", "fpga pairgap", "fpga acqbr"):
-        print("  " + sc.cmd(c).strip().splitlines()[-2][:100])
+        print("  " + next((l for l in sc.cmd(c).strip().splitlines() if l.strip() and not l.strip().startswith(">") and c not in l), "?")[:100])
     sc.cmd("fpga scope vdiv 1 5")
 
     print("\n=== NORMAL, defaults, level 0, no shell prime ===")
     for tb in (0x0E, 0x10, 0x11, 0x12):
         sc.cmd("fpga scope trigmode auto"); sc.cmd("fpga scope timebase %02x" % tb, timeout=6.0); time.sleep(0.5)
-        pe = sc.cmd("fpga postedge").strip().splitlines()[-2]
+        pe = next((l for l in sc.cmd("fpga postedge").strip().splitlines() if "delay" in l), "?")
         sc.cmd("fpga scope trigmode normal"); time.sleep(1.5)
         st, de, do, g = watch(sc)
         print("  tb 0x%02X: %-9s edges +%d commits +%d  gens %s   [%s]" % (tb, st, de, do, g, pe[:44]))

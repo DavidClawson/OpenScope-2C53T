@@ -3449,6 +3449,10 @@ static volatile uint16_t acq_auto_wait_ms = 0;
  * fpga_reconcile_trigger_after_arm() hands the register to the UI level
  * right after the arm; fpga_apply_trigger_level() is the ONLY runtime path. */
 static volatile uint8_t acq_trig_code = 0xAD;
+/* EXP-47: a reg-0x08 or reg-0x01 write drops the capture in flight (NORMAL
+ * stayed frozen after level +100 -> 0). The apply entry points raise this;
+ * the acq task clears capture_in_flight on it and re-primes. */
+static volatile bool acq_reprime_req = false;
 /* EXP-45 (2026-09-14): gap between the 0x04 and 0x05 reads of a pair. Shell
  * reads 50 ms apart each produce a PC0 edge; the task's back-to-back pair
  * (~140 us apart at /2) produces none, which is why NORMAL could not sustain
@@ -3623,6 +3627,7 @@ bool fpga_apply_timebase(uint8_t code)
         return false;
     fpga_scope_write_reg(0x01, code);
     acq_rate_idx = code;
+    acq_reprime_req = true;
     fpga_acq_resume();
     return true;
 }
@@ -3639,6 +3644,7 @@ bool fpga_apply_trigger_level(int level)
         return false;
     fpga_scope_write_reg(0x08, code);
     acq_trig_code = code;
+    acq_reprime_req = true;
     fpga_acq_resume();
     return true;
 }
@@ -3807,6 +3813,10 @@ static void fpga_warmtest_acq_task(void *pv)
         if (mode_now != last_mode) {           /* re-selecting SINGLE re-arms it */
             single_done = false;
             last_mode = mode_now;
+        }
+        if (acq_reprime_req) {                 /* a register write dropped the capture */
+            acq_reprime_req = false;
+            capture_in_flight = false;
         }
         if (mode_now == TRIG_SINGLE && single_done) {
             vTaskDelay(pdMS_TO_TICKS(10));     /* hold the one record */
