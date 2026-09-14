@@ -2412,10 +2412,13 @@ static void cmd_fpga_postedge(const char *args)
     while (*args == ' ') args++;
     if (*args) {
         uint32_t ms = 0;
-        if (parse_int(args, &ms) != 0 || ms > 5000u) { usb_send_str("usage: fpga postedge [ms 0..5000]\r\n"); return; }
+        if (parse_int(args, &ms) != 0 || ms > 5000u) { usb_send_str("usage: fpga postedge [ms 0..5000, 0 = derive from timebase]\r\n"); return; }
         fpga_acq_post_edge_set((uint16_t)ms);
     }
-    usb_debug_printf("acq post-edge delay %u ms before the pair read\r\n", (unsigned)fpga_acq_post_edge_get());
+    usb_debug_printf("acq post-edge delay %u ms before the pair read (%s, rate idx 0x%02X)\r\n",
+                     (unsigned)fpga_acq_post_edge_get(),
+                     fpga_acq_post_edge_is_override() ? "override" : "derived: fill + 230 ms",
+                     fpga_acq_rate_idx_get());
 }
 
 /* `fpga acqbr [0-7|off]` — SPI3 clock divider the acq task sets before each pair (EXP-46). */

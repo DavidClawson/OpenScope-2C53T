@@ -3537,7 +3537,9 @@ uint16_t fpga_acq_auto_wait_get(void)
     if (acq_auto_wait_ms) return acq_auto_wait_ms;
     float fs = scope_timebase_sample_rate(acq_rate_idx);
     if (fs <= 0.0f) return FPGA_AUTO_TRIG_WAIT_MS;
-    float ms = 4.0f * 1024.0f / fs * 1000.0f;
+    /* Must exceed the post-edge re-arm bracket (EXP-46) by a couple of fills,
+     * or the fallback read lands while the FPGA still refuses to arm. */
+    float ms = 3.0f * 1024.0f / fs * 1000.0f + 230.0f;
     if (ms < (float)FPGA_AUTO_TRIG_WAIT_MS) ms = (float)FPGA_AUTO_TRIG_WAIT_MS;
     if (ms > 1000.0f) ms = 1000.0f;
     return (uint16_t)ms;
@@ -3545,7 +3547,23 @@ uint16_t fpga_acq_auto_wait_get(void)
 bool fpga_acq_auto_wait_is_override(void) { return acq_auto_wait_ms != 0; }
 void fpga_acq_pair_gap_set(uint16_t ms)   { acq_pair_gap_ms = ms; }
 void fpga_acq_post_edge_set(uint16_t ms)  { acq_post_edge_ms = ms; }
-uint16_t fpga_acq_post_edge_get(void)   { return acq_post_edge_ms; }
+/* Post-edge delay in force. Override if set; else DERIVED (EXP-46, 2026-09-14,
+ * six predicted brackets at 0x0E/0x0F/0x10/0x11/0x12 all hit): after PC0
+ * announces the trigger the FPGA will not arm again until one 1024-sample
+ * fill plus ~180-210 ms has elapsed — a read before that is ignored and the
+ * next capture never starts (why NORMAL froze and gated AUTO sat at exactly
+ * 0.50 edges per pair). fill + 230 ms leaves ~30 ms over the measured
+ * bracket. Unmeasured rates get 600 ms. */
+uint16_t fpga_acq_post_edge_get(void)
+{
+    if (acq_post_edge_ms) return acq_post_edge_ms;
+    float fs = scope_timebase_sample_rate(acq_rate_idx);
+    if (fs <= 0.0f) return 600u;
+    float ms = 1024.0f / fs * 1000.0f + 230.0f;
+    if (ms > 5000.0f) ms = 5000.0f;
+    return (uint16_t)ms;
+}
+bool fpga_acq_post_edge_is_override(void) { return acq_post_edge_ms != 0; }
 void fpga_acq_read_br_set(uint8_t br)     { acq_read_br = br; }
 uint8_t fpga_acq_read_br_get(void)      { return acq_read_br; }
 uint16_t fpga_acq_pair_gap_get(void)    { return acq_pair_gap_ms; }
@@ -3847,8 +3865,10 @@ static void fpga_warmtest_acq_task(void *pv)
             }
         }
 
-        if (triggered && acq_post_edge_ms)
-            vTaskDelay(pdMS_TO_TICKS(acq_post_edge_ms));   /* EXP-46 (a) */
+        if (triggered) {
+            uint16_t pe = fpga_acq_post_edge_get();          /* EXP-46: FPGA re-arm bracket */
+            if (pe) vTaskDelay(pdMS_TO_TICKS(pe));
+        }
         if (acq_read_br != 0xFF)
             spi3_set_br(acq_read_br);                       /* EXP-46 (b) */
         edges_consumed = fpga.pc0_edges;   /* consume BEFORE reading: an edge
