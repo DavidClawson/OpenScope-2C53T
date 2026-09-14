@@ -3454,6 +3454,14 @@ static volatile uint8_t acq_trig_code = 0xAD;
  * (~140 us apart at /2) produces none, which is why NORMAL could not sustain
  * itself. Runtime `fpga pairgap <ms>`, default 0 = the historical shape. */
 static volatile uint16_t acq_pair_gap_ms = 0;
+/* EXP-46 (2026-09-14): (a) delay between a PC0 edge and the pair read that
+ * consumes it — gated AUTO shows exactly 0.50 edges per pair at any pair
+ * gap: the read issued immediately on the edge never yields the next edge,
+ * the fallback read 327 ms later always does. (b) an explicit SPI3 clock for
+ * the task's reads (0..7 = /2../256; 0xFF = leave whatever is set) — shell
+ * reads at /256 yield an edge every time. */
+static volatile uint16_t acq_post_edge_ms = 0;
+static volatile uint8_t  acq_read_br = 0xFF;
 static volatile uint32_t acq_gate_skips = 0;   /* reads the gate prevented */
 /* Reg 0x01 value currently in force -- the ONE variable that mirrors the
  * hardware register. 0x08 is what the arm block writes at config time; the
@@ -3536,6 +3544,10 @@ uint16_t fpga_acq_auto_wait_get(void)
 }
 bool fpga_acq_auto_wait_is_override(void) { return acq_auto_wait_ms != 0; }
 void fpga_acq_pair_gap_set(uint16_t ms)   { acq_pair_gap_ms = ms; }
+void fpga_acq_post_edge_set(uint16_t ms)  { acq_post_edge_ms = ms; }
+uint16_t fpga_acq_post_edge_get(void)   { return acq_post_edge_ms; }
+void fpga_acq_read_br_set(uint8_t br)     { acq_read_br = br; }
+uint8_t fpga_acq_read_br_get(void)      { return acq_read_br; }
 uint16_t fpga_acq_pair_gap_get(void)    { return acq_pair_gap_ms; }
 uint8_t fpga_acq_trig_code_get(void)      { return acq_trig_code; }
 
@@ -3819,6 +3831,7 @@ static void fpga_warmtest_acq_task(void *pv)
                  * committed. Consume edges first so the edge this read
                  * produces is the one we wait for. */
                 edges_consumed = fpga.pc0_edges;
+                if (acq_read_br != 0xFF) spi3_set_br(acq_read_br);
                 (void)fpga_warmtest_read_channel(0x04, acq_write_ch1());
                 if (acq_pair_gap_ms) vTaskDelay(pdMS_TO_TICKS(acq_pair_gap_ms));
                 (void)fpga_warmtest_read_channel(0x05, acq_write_ch2());
@@ -3834,6 +3847,10 @@ static void fpga_warmtest_acq_task(void *pv)
             }
         }
 
+        if (triggered && acq_post_edge_ms)
+            vTaskDelay(pdMS_TO_TICKS(acq_post_edge_ms));   /* EXP-46 (a) */
+        if (acq_read_br != 0xFF)
+            spi3_set_br(acq_read_br);                       /* EXP-46 (b) */
         edges_consumed = fpga.pc0_edges;   /* consume BEFORE reading: an edge
                                               during our read is a new capture
                                               and belongs to the next cycle */

@@ -1103,6 +1103,10 @@ uint8_t fpga_trigger_code_from_level(int level);
 uint8_t fpga_acq_trig_code_get(void);
 bool    fpga_acq_auto_wait_is_override(void);
 void     fpga_acq_pair_gap_set(uint16_t ms);
+void     fpga_acq_post_edge_set(uint16_t ms);
+uint16_t fpga_acq_post_edge_get(void);
+void     fpga_acq_read_br_set(uint8_t br);
+uint8_t  fpga_acq_read_br_get(void);
 uint16_t fpga_acq_pair_gap_get(void);
 
 /* Vertical sibling of fpga_apply_timebase (EXP-19): drive channel ch's

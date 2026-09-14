@@ -2406,6 +2406,34 @@ static void cmd_fpga_pairgap(const char *args)
     usb_debug_printf("acq pair gap %u ms between the 04 and 05 reads\r\n", (unsigned)fpga_acq_pair_gap_get());
 }
 
+/* `fpga postedge [ms]` — delay between a PC0 edge and the pair read (EXP-46). */
+static void cmd_fpga_postedge(const char *args)
+{
+    while (*args == ' ') args++;
+    if (*args) {
+        uint32_t ms = 0;
+        if (parse_int(args, &ms) != 0 || ms > 5000u) { usb_send_str("usage: fpga postedge [ms 0..5000]\r\n"); return; }
+        fpga_acq_post_edge_set((uint16_t)ms);
+    }
+    usb_debug_printf("acq post-edge delay %u ms before the pair read\r\n", (unsigned)fpga_acq_post_edge_get());
+}
+
+/* `fpga acqbr [0-7|off]` — SPI3 clock divider the acq task sets before each pair (EXP-46). */
+static void cmd_fpga_acqbr(const char *args)
+{
+    while (*args == ' ') args++;
+    if (*args) {
+        if (strncmp(args, "off", 3) == 0) fpga_acq_read_br_set(0xFF);
+        else {
+            uint32_t br = 0;
+            if (parse_int(args, &br) != 0 || br > 7u) { usb_send_str("usage: fpga acqbr [0-7|off]\r\n"); return; }
+            fpga_acq_read_br_set((uint8_t)br);
+        }
+    }
+    if (fpga_acq_read_br_get() == 0xFF) usb_send_str("acq read clock: not set by the task (whatever is in force)\r\n");
+    else usb_debug_printf("acq read clock: br=%u (/%u) set before each pair\r\n", fpga_acq_read_br_get(), 2u << fpga_acq_read_br_get());
+}
+
 /* `fpga scope trigmode [auto|normal|single]` — set/read the acq wait policy
  * (EXP-30 noted nothing in the shell could set it; the time-view button
  * cycles cursors). Pure state; the acq task reads it each cycle. */
@@ -7508,6 +7536,10 @@ static const shell_cmd_t shell_cmds[] = {
           "fpga scope softtrig [on|off|toggle]      Lock trace to trigger crossing vs free-run\r\n"),
     CMD_V("settings", cmd_settings, SC_EXACT,
           "settings                        Persistence status: bound, load result, writes, failures\r\n"),
+    CMD_A("fpga postedge", cmd_fpga_postedge, 0,
+          "fpga postedge [ms]              Delay between PC0 edge and the pair read (EXP-46)\r\n"),
+    CMD_A("fpga acqbr", cmd_fpga_acqbr, 0,
+          "fpga acqbr [0-7|off]            SPI3 clock the acq task sets before each pair (EXP-46)\r\n"),
     CMD_A("fpga pairgap", cmd_fpga_pairgap, 0,
           "fpga pairgap [ms]               Gap between the 04 and 05 reads (EXP-45)\r\n"),
     CMD_A("fpga scope trigmode", cmd_fpga_scope_trigmode, 0,
