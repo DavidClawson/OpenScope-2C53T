@@ -2351,6 +2351,47 @@ static void cmd_fpga_rearm(const char *args)
     usb_send_str(buf);
 }
 
+/* `fpga rearmwait [ms]` — settle after the re-arm write before the next read
+ * (EXP-40). Stock's op-01 gate is a per-timebase TIME table, so the re-arm
+ * alone (EXP-29) read mid-capture at slow codes. Readback prints what is in
+ * force; the bench script derives ms from scope_timebase.c's rate table. */
+static void cmd_fpga_rearmwait(const char *args)
+{
+    char buf[112];
+    while (*args == ' ') args++;
+    if (*args) {
+        uint32_t ms = 0;
+        if (parse_int(args, &ms) != 0 || ms > 60000u) {
+            usb_send_str("usage: fpga rearmwait [ms 0..60000]\r\n"); return;
+        }
+        fpga_acq_rearm_wait_set((uint16_t)ms);
+    }
+    snprintf(buf, sizeof(buf), "acq re-arm wait %u ms after reg01 write (re-arm %s)\r\n",
+             (unsigned)fpga_acq_rearm_wait_get(), fpga_acq_rearm_get() ? "ON" : "OFF");
+    usb_send_str(buf);
+    if (fpga_acq_rearm_wait_get() && !fpga_acq_rearm_get())
+        usb_send_str("  NOTE: wait only applies with `fpga rearm on`.\r\n");
+}
+
+/* `fpga autowait [ms]` — AUTO-mode budget to wait for a PC0 edge before the
+ * free-run fallback read (EXP-42). A read starts a capture; completion pulses
+ * PC0; the compiled 25 ms is shorter than the capture at slow timebases. */
+static void cmd_fpga_autowait(const char *args)
+{
+    char buf[112];
+    while (*args == ' ') args++;
+    if (*args) {
+        uint32_t ms = 0;
+        if (parse_int(args, &ms) != 0 || ms > 60000u) {
+            usb_send_str("usage: fpga autowait [ms 0..60000, 0 = default]\r\n"); return;
+        }
+        fpga_acq_auto_wait_set((uint16_t)ms);
+    }
+    snprintf(buf, sizeof(buf), "acq AUTO edge-wait %u ms before the free-run fallback read\r\n",
+             (unsigned)fpga_acq_auto_wait_get());
+    usb_send_str(buf);
+}
+
 /* `fpga acqgate [on|off]` — stock's PRE-read gate (EXP-29/30). Pairs with
  * `fpga rearm`; the two are load-bearing for each other. */
 static void cmd_fpga_acqgate(const char *args)
@@ -7425,6 +7466,10 @@ static const shell_cmd_t shell_cmds[] = {
           "fpga rearm [on|off]             Stock post-read re-arm (reg01) A/B toggle\r\n"),
     CMD_A("meter hdr", cmd_meter_hdr, 0,
           "meter hdr [on|off]              Meter TX header AA 55 (default) vs 00 00 (EXP-25) + echo ladder\r\n"),
+    CMD_A("fpga autowait", cmd_fpga_autowait, 0,
+          "fpga autowait [ms]              AUTO edge-wait budget before fallback read (EXP-42)\r\n"),
+    CMD_A("fpga rearmwait", cmd_fpga_rearmwait, 0,
+          "fpga rearmwait [ms]             Settle after re-arm before next read (EXP-40)\r\n"),
     CMD_A("fpga acqgate", cmd_fpga_acqgate, 0,
           "fpga acqgate [on|off]           Stock PRE-read data-ready gate (EXP-29) A/B toggle\r\n"),
     CMD_A("fpga rate", cmd_fpga_rate, 0,

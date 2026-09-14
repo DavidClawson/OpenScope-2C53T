@@ -1073,6 +1073,12 @@ extern volatile bool fpga_meter_needs_activation;
 
 void    fpga_acq_rearm_set(bool on);
 bool    fpga_acq_rearm_get(void);
+/* Settle time after the re-arm write before the next read (EXP-40); 0 = none. */
+void     fpga_acq_rearm_wait_set(uint16_t ms);
+uint16_t fpga_acq_rearm_wait_get(void);
+/* AUTO-mode edge-wait budget before the free-run fallback read (EXP-42); 0 = compiled default. */
+void     fpga_acq_auto_wait_set(uint16_t ms);
+uint16_t fpga_acq_auto_wait_get(void);
 
 /* Stock's acquisition GATE: in AUTO, refuse to read without a data-ready
  * edge instead of free-running across the engine's write pointer (EXP-29

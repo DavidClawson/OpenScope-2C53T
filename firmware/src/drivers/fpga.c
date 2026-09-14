@@ -3426,6 +3426,23 @@ static volatile bool    acq_rearm_enable = (FPGA_ACQ_REARM_DEFAULT != 0);
 #define FPGA_ACQ_GATE_DEFAULT 0
 #endif
 static volatile bool    acq_gate_enable = (FPGA_ACQ_GATE_DEFAULT != 0);
+/* EXP-40 (2026-09-14): a settle time AFTER the re-arm write, before the next
+ * read. Stock's op-01 handler is gated on `tbl[0x0804D833 + tb] + 0x32`
+ * elapsed since the last arm — a TIME table (u8, ~1024/fs in 10 ms units:
+ * 9/21/41/82 at codes 0x10..0x13), not a status bit. EXP-29 re-armed and then
+ * read ~30 ms later regardless of timebase, i.e. mid-capture at every code
+ * slower than 0x0E; this is the missing half. 0 = no wait (EXP-29's shape).
+ * Runtime `fpga rearmwait <ms>`; the bench script derives ms from the rate
+ * table so there is one source. */
+static volatile uint16_t acq_rearm_wait_ms = 0;
+/* EXP-41/42 (2026-09-14): the AUTO edge-wait budget, runtime-settable. PC0
+ * is a real data-ready line: a READ starts a capture, the capture completes
+ * when the ADC crosses the reg-0x08 trigger level, and completion pulses PC0
+ * once (idle produces nothing; a reg-01 write produces nothing). The compiled
+ * 25 ms budget is shorter than the capture at every code slower than 0x0E
+ * (82 ms at 0x10), so the AUTO fallback always read mid-capture — the seam.
+ * `fpga autowait <ms>`; 0 = the compiled default. */
+static volatile uint16_t acq_auto_wait_ms = 0;
 static volatile uint32_t acq_gate_skips = 0;   /* reads the gate prevented */
 /* Reg 0x01 value currently in force -- the ONE variable that mirrors the
  * hardware register. 0x08 is what the arm block writes at config time; the
@@ -3488,6 +3505,10 @@ uint32_t fpga_usart_baudr(void) { return USART2->baudr; }
 void fpga_acq_rearm_set(bool on)      { acq_rearm_enable = on; }
 bool fpga_acq_rearm_get(void)         { return acq_rearm_enable; }
 void fpga_acq_gate_set(bool on)       { acq_gate_enable = on; }
+void fpga_acq_rearm_wait_set(uint16_t ms) { acq_rearm_wait_ms = ms; }
+void fpga_acq_auto_wait_set(uint16_t ms)  { acq_auto_wait_ms = ms; }
+uint16_t fpga_acq_auto_wait_get(void)   { return acq_auto_wait_ms ? acq_auto_wait_ms : FPGA_AUTO_TRIG_WAIT_MS; }
+uint16_t fpga_acq_rearm_wait_get(void)  { return acq_rearm_wait_ms; }
 bool fpga_acq_gate_get(void)          { return acq_gate_enable; }
 uint32_t fpga_acq_gate_skips(void)    { return acq_gate_skips; }
 void fpga_acq_rate_idx_set(uint8_t v) { acq_rate_idx = v; }
@@ -3682,7 +3703,7 @@ static void fpga_warmtest_acq_task(void *pv)
          * timeout. */
         const scope_state_t *ss_acq = scope_state_get();
         bool auto_mode = (ss_acq == NULL) || (ss_acq->trigger.mode == TRIG_AUTO);
-        unsigned wait_ms = auto_mode ? FPGA_AUTO_TRIG_WAIT_MS
+        unsigned wait_ms = auto_mode ? fpga_acq_auto_wait_get()
                                      : FPGA_NORMAL_TRIG_WAIT_MS;
 
         bool triggered = false;
@@ -3781,8 +3802,13 @@ static void fpga_warmtest_acq_task(void *pv)
          * Placed AFTER the accept/reject logic so a rejected frame still
          * re-arms — otherwise one bad read would wedge acquisition, which is
          * the deadlock this task's fallback path exists to avoid. */
-        if (acq_rearm_enable)
+        if (acq_rearm_enable) {
             fpga_scope_write_reg(0x01, acq_rate_idx);
+            /* Let the re-armed capture COMPLETE before the next read (EXP-40).
+             * With 0 this is exactly EXP-29's re-arm-then-read-immediately. */
+            if (acq_rearm_wait_ms)
+                vTaskDelay(pdMS_TO_TICKS(acq_rearm_wait_ms));
+        }
 
         /* Bound the read rate lightly; the display's own 50 ms frame loop
          * caps rendering, so reading faster than it draws only costs SPI
