@@ -45,3 +45,29 @@ rotation: a new bounded defect, hiding under the same guard that hid the seam.
 
 Sixth inert control of the year: a register written correctly from a capture,
 then never read against the signal it gates.
+
+## Postscript, the same night: NORMAL and SINGLE
+
+With the level inside the signal the two modes EXP-30 had written off as
+impossible were supposed to work as coded. They did not, three times, and
+each freeze was the same lesson from a different side.
+
+NORMAL froze at level 0 with zero edges and zero reads (EXP-43): it waited
+for an edge before its first read, and a read is what starts a capture.
+Priming with one read got exactly one record, then froze again (EXP-44): a
+shell read seconds later always produced the next edge, the task's own pair
+issued the instant PC0 fell never did. Not the SPI clock, not the gap between
+the 04 and 05 reads (EXP-45). It was time since the edge, and it scales with
+the timebase: the FPGA refuses to arm a new capture until **one 1024-sample
+fill plus ~200 ms** after the trigger, bracketed to 180–209 ms across five
+rates with the predictions written before the runs (EXP-46). Then, on the
+image that derives that delay from the timebase, everything passed except
+one line: NORMAL did not come back after a level change, because the reg-08
+write drops the capture in flight and the task still thought it had one
+(EXP-47).
+
+The state now, fresh boot, nothing typed: NORMAL captures at four timebases
+with one edge per record, holds above the signal, resumes below; SINGLE is
+one record per press; AUTO's body is static. Wishlist Tier 1 item 1, at S1.
+The bill is ~3.5 records per second at 0x10, and stock's capture shows it
+reading every 29 ms. How it does that is the next question.
