@@ -324,15 +324,17 @@ static void label_harmonics(fft_peak_t *peaks, uint8_t num_peaks)
         }
     }
 
-    /* Find fundamental: lowest-frequency peak within 20dB of strongest */
+    /* Find fundamental: lowest-BIN peak within 20dB of strongest. Bins, not
+     * freq_hz: harmonic tags are ratios between bins and stay true when the
+     * sample rate is unknown (freq_hz all 0 — see fft_set_sample_rate). */
     uint8_t fund_idx = strongest_idx;
-    float fund_freq = peaks[strongest_idx].freq_hz;
+    uint16_t fund_bin_i = peaks[strongest_idx].bin;
     float mag_threshold = strongest_mag - 20.0f;
 
     for (i = 0; i < num_peaks; i++) {
         if (peaks[i].level_db >= mag_threshold &&
-            peaks[i].freq_hz < fund_freq) {
-            fund_freq = peaks[i].freq_hz;
+            peaks[i].bin < fund_bin_i) {
+            fund_bin_i = peaks[i].bin;
             fund_idx = i;
         }
     }
@@ -344,8 +346,8 @@ static void label_harmonics(fft_peak_t *peaks, uint8_t num_peaks)
     peaks[fund_idx].label[3] = 'd';
     peaks[fund_idx].label[4] = '\0';
 
-    if (fund_freq <= 0.0f) return;
-    float fund_bin = (float)peaks[fund_idx].bin;
+    if (fund_bin_i == 0) return;
+    float fund_bin = (float)fund_bin_i;
 
     /* Check each other peak for harmonic relationship */
     for (i = 0; i < num_peaks; i++) {
@@ -438,14 +440,28 @@ void fft_process(const int16_t *samples, uint16_t num_samples,
     uint16_t count = (num_samples < FFT_SIZE) ? num_samples : FFT_SIZE;
 
     result->num_bins = FFT_BINS;
-    result->bin_width_hz = current_cfg.sample_rate_hz / (float)FFT_SIZE;
+    result->bin_width_hz = (current_cfg.sample_rate_hz > 0.0f)
+                           ? current_cfg.sample_rate_hz / (float)FFT_SIZE
+                           : 0.0f;
+
+    /* A record shorter than FFT_SIZE is zero-padded (which interpolates the
+     * spectrum and is fine) — but the window must span the RECORD, not the
+     * transform. Indexing the precomputed FFT_SIZE-point window with stride
+     * FFT_SIZE/count stretches it over the `count` real samples, so a
+     * 896-sample live record gets a full symmetric Hann rather than the
+     * first 22 % of one (a ramp from 0 to 0.4 and then a cliff at the
+     * zero-padding, which costs the sidelobe rejection the window exists
+     * for). For count == FFT_SIZE this is the identity. */
+#define FFT_WINDOW_AT(idx) \
+    window_coeffs[(count == FFT_SIZE) ? (idx) \
+                  : (uint16_t)((uint32_t)(idx) * FFT_SIZE / count)]
 
 #ifdef USE_CMSIS_DSP
     /* ── CMSIS-DSP path ── */
 
     /* Step 1: Window the real-valued input */
     for (i = 0; i < count; i++)
-        fft_input[i] = (float)samples[i] * window_coeffs[i];
+        fft_input[i] = (float)samples[i] * FFT_WINDOW_AT(i);
     for (i = count; i < FFT_SIZE; i++)
         fft_input[i] = 0.0f;
 
@@ -479,7 +495,7 @@ void fft_process(const int16_t *samples, uint16_t num_samples,
 
     /* Step 1: Convert int16 to float, apply window, load into complex buffer */
     for (i = 0; i < count; i++) {
-        fft_buf[i * 2]     = (float)samples[i] * window_coeffs[i];
+        fft_buf[i * 2]     = (float)samples[i] * FFT_WINDOW_AT(i);
         fft_buf[i * 2 + 1] = 0.0f;
     }
 
@@ -571,6 +587,11 @@ void fft_process(const int16_t *samples, uint16_t num_samples,
 const fft_config_t *fft_get_config(void)
 {
     return &current_cfg;
+}
+
+void fft_set_sample_rate(float sample_rate_hz)
+{
+    current_cfg.sample_rate_hz = (sample_rate_hz > 0.0f) ? sample_rate_hz : 0.0f;
 }
 
 void fft_set_window(fft_window_t window)

@@ -104,6 +104,7 @@ C_SOURCES += src/fonts/font_xlarge.c
 # FFT / DSP module
 ifneq ($(findstring FFT,$(FEATURES)),)
   C_SOURCES += src/dsp/fft.c
+  C_SOURCES += src/dsp/fft_live.c
   C_SOURCES += src/dsp/fft_test_signals.c
   FFT_DEFS = -DFEATURE_FFT
   # CMSIS-DSP (optional optimization — auto-detected)
@@ -629,7 +630,20 @@ $(BUILD_DIR)/test_redraw_gate: tests/test_redraw_gate.c src/ui/redraw_gate.h | $
 test-redraw-gate: $(BUILD_DIR)/test_redraw_gate
 	$<
 
-.PHONY: all clean disasm size renode soak-test soak-quick flash flash-dfu bootloader flash-bootloader flash-all guest guest-warmtest guest-usart-silent emu test-meter-data test-meter-auto test-meter-voltage-wave test-fpga-meter-plan test-stock-meter-literals test-meter test-scope-measure test-scope-cal test-scope-timebase test-scope-freq test-redraw-gate test-config-persist guest-persist guest-caldump guest-coldtrace-slow guest-coldtrace-la guest-debugclk guest-configA-gap guest-configA-csdummy guest-configA-gapless guest-bringup guest-bringup-bb guest-bringup-bb-slow guest-coldtrace-hwspi guest-bringup-bb-faithful fpga-alt-header guest-coldtrace-meter
+# FFT on the live acquisition record (spec fft-live, S1/S3 host half):
+# head skip, bin -> Hz only from a known rate, refusal at rate 0, a tone in
+# the predicted bin, the window spanning the record — each with a negative
+# control. See tests/test_fft_live.c.
+$(BUILD_DIR)/test_fft_live: tests/test_fft_live.c src/dsp/fft_live.c src/dsp/fft_live.h \
+                            src/dsp/fft.c src/dsp/fft.h src/dsp/shared_mem.c \
+                            src/ui/scope_record.h | $(BUILD_DIR)
+	$(HOST_CC) -std=gnu11 -O2 -Wall -Wextra -Werror -Isrc/dsp -Isrc/ui \
+		$< src/dsp/fft_live.c src/dsp/fft.c src/dsp/shared_mem.c -lm -o $@
+
+test-fft-live: $(BUILD_DIR)/test_fft_live
+	$<
+
+.PHONY: all clean disasm size renode soak-test soak-quick flash flash-dfu bootloader flash-bootloader flash-all guest guest-warmtest guest-usart-silent emu test-meter-data test-meter-auto test-meter-voltage-wave test-fpga-meter-plan test-stock-meter-literals test-meter test-scope-measure test-scope-cal test-scope-timebase test-scope-freq test-redraw-gate test-fft-live test-config-persist guest-persist guest-caldump guest-coldtrace-slow guest-coldtrace-la guest-debugclk guest-configA-gap guest-configA-csdummy guest-configA-gapless guest-bringup guest-bringup-bb guest-bringup-bb-slow guest-coldtrace-hwspi guest-bringup-bb-faithful fpga-alt-header guest-coldtrace-meter
 
 # ═══════════════════════════════════════════════════════════════════════════
 # BENCH / EXPERIMENT IMAGE INDEX                          (index added 2026-08-13)
