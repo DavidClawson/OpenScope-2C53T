@@ -25,6 +25,9 @@
 #include "component_test.h"
 #include "persistence.h"
 #include "shared_mem.h"
+#ifdef FEATURE_FFT
+#include "fft_live.h"
+#endif
 #include "fpga.h"
 #include "meter_autoselect.h"
 #include "at32f403a_407.h"
@@ -389,13 +392,28 @@ uint8_t input_handle_button(button_id_t button, QueueHandle_t dq)
         } else if (current_mode == MODE_OSCILLOSCOPE) {
 #ifdef FEATURE_FFT
             if (scope_view != SCOPE_VIEW_TIME) {
+                /* Auto-configure the spectrum view on what it actually
+                 * analyses: the live CH1 record (head skipped, as the views
+                 * do) when there is one, the demo signal only otherwise —
+                 * and never in the live-capture builds, where the demo is
+                 * compiled out (scope_ui.c fft_prepare_input). */
                 int16_t *sbuf = fft_get_sample_buf();
-                if (sbuf) {
+                const volatile uint8_t *b = fpga_get_ch1_buf();
+                if (sbuf && fpga_data_ready() && b != NULL) {
+                    uint16_t n = fft_live_prepare((const uint8_t *)b,
+                                                  FPGA_ADC_BUF_SIZE,
+                                                  sbuf, FFT_SIZE);
+                    if (n > 0)
+                        fft_auto_configure(sbuf, n);
+                }
+#if !(defined(FPGA_WARM_HANDOFF_TEST) && FPGA_WARM_HANDOFF_TEST)
+                else if (sbuf) {
                     test_signal_generate(TEST_SIG_SQUARE, sbuf,
                                          FFT_SIZE, fft_get_config()->sample_rate_hz,
                                          1000.0f, 0.0f, 0.8f);
                     fft_auto_configure(sbuf, FFT_SIZE);
                 }
+#endif
             }
 #endif
             send_cmd(dq, cmd);

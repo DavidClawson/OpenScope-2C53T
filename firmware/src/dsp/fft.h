@@ -90,6 +90,13 @@ void fft_process(const int16_t *samples, uint16_t num_samples,
 /* Get current configuration (for UI display). */
 const fft_config_t *fft_get_config(void);
 
+/* Set the sample rate the NEXT fft_process() reports bin_width_hz and
+ * peak frequencies against. 0 (or negative) means "unknown": bin_width_hz
+ * and every freq_hz come back 0, and the UI must label bins, not hertz.
+ * The live spectrum sets this per frame from the timebase in force; the
+ * demo signal sets it to the rate it was synthesised at. */
+void fft_set_sample_rate(float sample_rate_hz);
+
 /* Change window type (recomputes coefficients). */
 void fft_set_window(fft_window_t window);
 

@@ -20,11 +20,16 @@
 #include "scope_timebase.h"
 #include "scope_cursor.h"
 #include "scope_freq.h"
+#include "scope_record.h"
 #include "math_channel.h"
 #include "persistence.h"
 #include "fpga.h"
 #include "FreeRTOS.h"   /* pvPortMalloc — the X-Y snapshot buffers */
 #include "scope_trigger.h"
+#ifdef FEATURE_FFT
+#include "fft_live.h"
+#include "fft_test_signals.h"
+#endif
 #include "at32f403a_407.h"  /* GPIO port reads in the debug overlay */
 #include <stdio.h>
 #include <math.h>
@@ -917,8 +922,10 @@ static uint16_t scope_soft_trigger_offset(const scope_state_t *ss,
      * the guard just keeps it off the bad data: start the search at
      * SEAM_GUARD, which also keeps the window [off, off+draw_n] clear of the
      * late seams for any signal above ~35 Hz at the slow timebases. The
-     * underlying acquisition defect is filed, not fixed, by this. */
-    const uint16_t SEAM_GUARD = 128u;
+     * underlying acquisition defect is filed, not fixed, by this.
+     * The number itself lives in scope_record.h so the spectrum views skip
+     * the same head (2026-09-15). */
+    const uint16_t SEAM_GUARD = SCOPE_RECORD_HEAD_SKIP;
     if (max_start <= SEAM_GUARD)
         return 0;
 
@@ -2150,38 +2157,6 @@ void draw_scope_live_frame(void)
 
 #ifdef FEATURE_FFT
 
-static void format_freq(float freq_hz, char *buf, int bufsize)
-{
-    const char *unit;
-    float val;
-
-    if (freq_hz >= 1000000.0f) {
-        val = freq_hz / 1000000.0f;
-        unit = "MHz";
-    } else if (freq_hz >= 1000.0f) {
-        val = freq_hz / 1000.0f;
-        unit = "kHz";
-    } else {
-        val = freq_hz;
-        unit = "Hz";
-    }
-
-    int integer = (int)val;
-    int frac = (int)((val - (float)integer) * 10.0f);
-    if (frac < 0) frac = -frac;
-
-    int pos = 0;
-    if (integer >= 100 && pos < bufsize - 1) buf[pos++] = (char)('0' + integer / 100);
-    if (integer >= 10  && pos < bufsize - 1) buf[pos++] = (char)('0' + (integer / 10) % 10);
-    if (pos < bufsize - 1) buf[pos++] = (char)('0' + integer % 10);
-    if (pos < bufsize - 1) buf[pos++] = '.';
-    if (pos < bufsize - 1) buf[pos++] = (char)('0' + frac);
-
-    while (*unit && pos < bufsize - 1)
-        buf[pos++] = *unit++;
-    buf[pos] = '\0';
-}
-
 /* ── Display reference auto-ranging ─────────────────────────────────
  *
  * fft_process() reports magnitude in dB relative to ONE ADC COUNT
@@ -2224,45 +2199,95 @@ static bool  fft_ref_primed  = false;
  * views did not say so: a user could not tell the spectrum of their probe
  * from the spectrum of a constant compiled into the firmware.
  *
- * Now: the live CH1 record if there is one, the test signal otherwise, and
- * the view is LABELLED with which it got. Same latch discipline as the
- * trace (scope_ui.c fpga_data_ready() gate).
+ * Since then: the live CH1 record if there is one, and the view is LABELLED
+ * with what it got. Same gate as the trace (fpga_data_ready()), same
+ * tear-check as the measurement badges (frame generation counter).
  *
- * Two honest limits, both visible in the labelling rather than hidden:
- *
- *  1. THE FREQUENCY AXIS IS NOT CALIBRATED FOR LIVE DATA. fft_config's
- *     sample_rate_hz is a placeholder (there is no timebase — dev plan §F4),
- *     so bin -> Hz is unknown. The live view therefore reports the peak by
- *     BIN INDEX, which is exact, and never in Hz. The demo view does quote
- *     Hz, and may: the test signal is synthesised at exactly that assumed
- *     rate, so the two agree by construction.
- *  2. The record is 1024 samples into a 4096-point transform. fft_process()
- *     zero-pads, which interpolates the spectrum (fine), but applies the
- *     first quarter of a 4096-point window to it, which is an asymmetric
- *     taper (not fine — it costs sidelobe rejection). Relative magnitudes
- *     stay meaningful; this is a real limitation of analysing a short record
- *     with a long window, and the fix belongs in fft.c, not here.
+ * 2026-09-15 (FFT-live S1):
+ *  - The record's invalid head is skipped (SCOPE_RECORD_HEAD_SKIP, the
+ *    trace's SEAM_GUARD): 896 samples of static body go into the transform,
+ *    windowed over the record rather than over the transform length
+ *    (fft.c FFT_WINDOW_AT).
+ *  - The frequency axis is REAL on measured timebase codes: the rate comes
+ *    from scope_timebase_sample_rate() for the code in force, and is
+ *    refused (0 -> bins, "--") when the code is unmeasured OR when the
+ *    display's code and the FPGA's reg-0x01 code disagree — the same rule
+ *    `fpga scope freq` applies. A confident wrong number is the failure
+ *    mode this project keeps finding; "--" is not.
+ *  - In the live-capture builds (FPGA_WARM_HANDOFF_TEST) the synthetic
+ *    source is compiled OUT: with no capture yet the views say so and draw
+ *    nothing, so the demo signal is unreachable there by construction
+ *    (spec S1). Plain `guest` and `emu` keep the demo, labelled DEMO.
  */
-static bool fft_prepare_input(const fft_config_t *cfg, int16_t *sbuf,
-                              uint16_t *n_out)
+typedef enum {
+    FFT_SRC_NONE = 0,   /* live build, no capture yet: nothing to analyse */
+    FFT_SRC_DEMO,       /* synthetic 1 kHz square at FFT_DEMO_SAMPLE_RATE_HZ */
+    FFT_SRC_LIVE        /* CH1 acquisition record, head skipped */
+} fft_src_t;
+
+#define FFT_DEMO_SAMPLE_RATE_HZ  44100.0f
+
+#if defined(FPGA_WARM_HANDOFF_TEST) && FPGA_WARM_HANDOFF_TEST
+#define FFT_DEMO_REACHABLE 0
+#else
+#define FFT_DEMO_REACHABLE 1
+#endif
+
+/* Sample rate the live spectrum may claim, 0 when it may not. */
+static float fft_live_rate_in_force(void)
+{
+    const scope_state_t *ss = scope_state_get();
+    if (fpga_acq_rate_idx_get() != ss->timebase_idx)
+        return 0.0f;                         /* display and hardware disagree */
+    return scope_timebase_sample_rate(ss->timebase_idx);
+}
+
+static fft_src_t fft_prepare_input(int16_t *sbuf, uint16_t *n_out,
+                                   float *fs_out)
 {
     const volatile uint8_t *b = fpga_get_ch1_buf();
+    *n_out = 0;
+    *fs_out = 0.0f;
 
     if (fpga_data_ready() && b != NULL) {
-        /* Unsigned 8-bit about 128 -> signed, then a fixed <<7 for numeric
-         * headroom in the transform. A constant gain shifts every bin by the
-         * same dB and cannot change the shape of the spectrum. */
-        for (uint16_t i = 0; i < FPGA_ADC_BUF_SIZE; i++)
-            sbuf[i] = (int16_t)(((int16_t)b[i] - 128) * 128);
-        *n_out = FPGA_ADC_BUF_SIZE;
-        return true;
+        uint16_t n = 0;
+        for (int attempt = 0; attempt < 3; attempt++) {
+            uint32_t g0 = fpga_acq_frame_generation();
+            n = fft_live_prepare((const uint8_t *)b, FPGA_ADC_BUF_SIZE,
+                                 sbuf, FFT_SIZE);
+            if ((g0 & 1u) == 0u && fpga_acq_frame_generation() == g0)
+                break;
+        }
+        *fs_out = fft_live_rate_in_force();
+        fft_set_sample_rate(*fs_out);
+        *n_out = n;
+        return FFT_SRC_LIVE;
     }
 
+#if FFT_DEMO_REACHABLE
+    fft_set_sample_rate(FFT_DEMO_SAMPLE_RATE_HZ);
     test_signal_generate(TEST_SIG_SQUARE, sbuf,
-                         FFT_SIZE, cfg->sample_rate_hz,
+                         FFT_SIZE, FFT_DEMO_SAMPLE_RATE_HZ,
                          1000.0f, 0.0f, 0.8f);
+    *fs_out = FFT_DEMO_SAMPLE_RATE_HZ;
     *n_out = FFT_SIZE;
-    return false;
+    return FFT_SRC_DEMO;
+#else
+    return FFT_SRC_NONE;
+#endif
+}
+
+/* Frequency-axis end labels for the visible bin span: hertz on a measured
+ * code, "--" otherwise. Drawn along the bottom edge of the region. */
+static void draw_fft_axis_labels(uint16_t y_bot, float fs,
+                                 uint16_t zoom_start, uint16_t zoom_end)
+{
+    char lbl[12];
+    fft_live_axis_label(fs, FFT_SIZE, zoom_start, lbl, sizeof(lbl));
+    font_draw_string(2, y_bot - 10, lbl, COLOR_GRAY, COLOR_GRAY, &font_small);
+    fft_live_axis_label(fs, FFT_SIZE, zoom_end, lbl, sizeof(lbl));
+    font_draw_string_right(LCD_WIDTH - 2, y_bot - 10, lbl,
+                           COLOR_GRAY, COLOR_GRAY, &font_small);
 }
 
 static float fft_display_ref(const fft_config_t *cfg, const float *data,
@@ -2298,7 +2323,14 @@ static void draw_fft_region(uint16_t y_top, uint16_t height)
     int16_t *sbuf = fft_get_sample_buf();
     if (!sbuf) return;  /* FFT not initialized */
     uint16_t nsamp = 0;
-    bool live = fft_prepare_input(cfg, sbuf, &nsamp);
+    float fs = 0.0f;
+    fft_src_t src = fft_prepare_input(sbuf, &nsamp, &fs);
+    if (src == FFT_SRC_NONE || nsamp == 0) {
+        font_draw_string(4, y_top + 2, "FFT: waiting for capture",
+                         COLOR_GRAY, COLOR_GRAY, &font_small);
+        return;
+    }
+    bool live = (src == FFT_SRC_LIVE);
     fft_process(sbuf, nsamp, &fft_result);
 
     const float *draw_data = (fft_result.avg_db != NULL)
@@ -2400,32 +2432,30 @@ static void draw_fft_region(uint16_t y_top, uint16_t height)
         }
     }
 
-    /* Source + peak header. The peak is quoted in Hz ONLY for the synthetic
-     * signal, where the sample rate is the one it was generated at; for live
-     * capture it is quoted as a bin index, which needs no rate to be true. */
+    /* Source + peak header. The peak is quoted in Hz only when the sample
+     * rate is known — the demo signal's by construction, the live record's
+     * when the timebase code in force is a measured one (fft_live_axis_known).
+     * Otherwise it is quoted as a bin index, which needs no rate to be true. */
     {
-        char hdr[28];
-        uint16_t color;
-        if (live) {
-            color = COLOR_WHITE;
-            if (fft_result.num_peaks > 0)
-                snprintf(hdr, sizeof(hdr), "LIVE CH1  pk bin %u",
-                         (unsigned)fft_result.peaks[0].bin);
-            else
-                snprintf(hdr, sizeof(hdr), "LIVE CH1");
+        char hdr[40];
+        char freq_str[16];
+        uint16_t color = live ? COLOR_WHITE : COLOR_ORANGE;
+        const char *tag = live ? "LIVE CH1" : "DEMO sq";
+        if (fft_result.num_peaks == 0) {
+            snprintf(hdr, sizeof(hdr), "%s", live ? "LIVE CH1" : "DEMO SIGNAL");
+        } else if (fft_live_axis_known(fs)) {
+            fft_live_format_hz(fft_result.peaks[0].freq_hz, freq_str,
+                               sizeof(freq_str));
+            snprintf(hdr, sizeof(hdr), "%s  pk %s", tag, freq_str);
         } else {
-            char freq_str[16];
-            color = COLOR_ORANGE;
-            if (fft_result.num_peaks > 0) {
-                format_freq(fft_result.peaks[0].freq_hz, freq_str,
-                            sizeof(freq_str));
-                snprintf(hdr, sizeof(hdr), "DEMO sq  pk %s", freq_str);
-            } else {
-                snprintf(hdr, sizeof(hdr), "DEMO SIGNAL");
-            }
+            snprintf(hdr, sizeof(hdr), "%s  pk bin %u  --", tag,
+                     (unsigned)fft_result.peaks[0].bin);
         }
         font_draw_string(4, y_top + 2, hdr, color, color, &font_small);
     }
+
+    if (height > 80)
+        draw_fft_axis_labels(y_bot, fs, zoom_start, zoom_end);
 
     const char *win_names[] = { "Rect", "Hann", "Hamm", "BHar", "Flat" };
     const char *win_name = (cfg->window < FFT_WINDOW_COUNT)
@@ -2463,9 +2493,10 @@ void draw_split_screen(uint32_t frame)
 
     if (trace_live) {
         uint16_t band_h = (uint16_t)(scope_bot - scope_top);
-        for (x = 0; x < LCD_WIDTH && x < FPGA_ADC_BUF_SIZE; x++) {
+        /* Start past the invalid head (scope_record.h), like the trace. */
+        for (x = 0; x < LCD_WIDTH && x + SCOPE_RECORD_HEAD_SKIP < FPGA_ADC_BUF_SIZE; x++) {
             int16_t wy = (int16_t)scope_mid -
-                         (int16_t)(((int16_t)b1[x] - 128) * band_h / 256);
+                         (int16_t)(((int16_t)b1[x + SCOPE_RECORD_HEAD_SKIP] - 128) * band_h / 256);
             if (wy >= (int16_t)scope_top && wy < (int16_t)scope_bot)
                 lcd_set_pixel(x, (uint16_t)wy, COLOR_CH1);
         }
@@ -2555,7 +2586,15 @@ void draw_waterfall_screen(void)
     int16_t *sbuf = fft_get_sample_buf();
     if (!sbuf) return;  /* FFT not initialized */
     uint16_t nsamp = 0;
-    bool live = fft_prepare_input(cfg, sbuf, &nsamp);
+    float fs = 0.0f;
+    fft_src_t src = fft_prepare_input(sbuf, &nsamp, &fs);
+    if (src == FFT_SRC_NONE || nsamp == 0) {
+        lcd_fill_rect(0, SCOPE_TOP, LCD_WIDTH, SCOPE_H, COLOR_BLACK);
+        font_draw_string(4, SCOPE_TOP + 2, "WFALL: waiting for capture",
+                         COLOR_GRAY, COLOR_GRAY, &font_small);
+        return;
+    }
+    bool live = (src == FFT_SRC_LIVE);
     fft_process(sbuf, nsamp, &fft_result);
 
     /* Resolve the history buffer out of the FFT's pool tenancy. Returns NULL
@@ -2683,6 +2722,7 @@ void draw_waterfall_screen(void)
     else
         font_draw_string(4, SCOPE_TOP + 2, "WFALL DEMO SIGNAL",
                          COLOR_ORANGE, COLOR_ORANGE, &font_small);
+    draw_fft_axis_labels(SCOPE_TOP + SCOPE_H, fs, zoom_start, zoom_end);
 }
 
 #endif /* FEATURE_FFT */
