@@ -373,6 +373,8 @@ typedef struct {
                                             * b2==0x01 is a buffer-valid flag — set on
                                             * 143/174 CH1 windows, NEVER on CH2. */
     volatile uint8_t  acq_hdr_ch2[3];      /* Same for the last 0x05 read */
+    volatile uint32_t pc0_last_tick;       /* tick of the last PC0 edge (EXP-50 latency) */
+    volatile uint32_t acq_last_latency_ms; /* edge -> commit of the held record, last cycle */
     volatile uint32_t pc0_edges;           /* PC0 (data-ready) falling edges via EXINT0.
                                             * One per fresh ready event — the instrument
                                             * for engine cycle rate per trigger regime,
@@ -1106,6 +1108,11 @@ void     fpga_acq_pair_gap_set(uint16_t ms);
 void     fpga_acq_post_edge_set(uint16_t ms);
 uint16_t fpga_acq_post_edge_get(void);
 bool     fpga_acq_post_edge_is_override(void);
+/* EXP-50: delay from the PC0 edge to the read of the HELD record (committed),
+ * derived fill + 30 ms; the arming read follows at fpga_acq_post_edge_get(). */
+void     fpga_acq_hold_read_set(uint16_t ms);
+uint16_t fpga_acq_hold_read_get(void);
+bool     fpga_acq_hold_read_is_override(void);
 void     fpga_acq_read_br_set(uint8_t br);
 uint8_t  fpga_acq_read_br_get(void);
 uint16_t fpga_acq_pair_gap_get(void);

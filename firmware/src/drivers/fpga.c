@@ -3465,6 +3465,7 @@ static volatile uint16_t acq_pair_gap_ms = 0;
  * the task's reads (0..7 = /2../256; 0xFF = leave whatever is set) — shell
  * reads at /256 yield an edge every time. */
 static volatile uint16_t acq_post_edge_ms = 0;
+static volatile uint16_t acq_hold_read_ms = 0;   /* EXP-50: 0 = derive fill + 30 ms */
 static volatile uint8_t  acq_read_br = 0xFF;
 static volatile uint32_t acq_gate_skips = 0;   /* reads the gate prevented */
 /* Reg 0x01 value currently in force -- the ONE variable that mirrors the
@@ -3568,6 +3569,22 @@ uint16_t fpga_acq_post_edge_get(void)
     return (uint16_t)ms;
 }
 bool fpga_acq_post_edge_is_override(void) { return acq_post_edge_ms != 0; }
+/* EXP-48/49 (2026-09-14): from the edge until the bracket ends the FPGA holds
+ * the completed record and ignores reads as arms, so the record can be read
+ * (and committed) at edge + fill + margin instead of at the bracket's end;
+ * the ARMING read is then issued at fpga_acq_post_edge_get(). Same records
+ * per second, each one ~200 ms sooner. Unmeasured rates: 300 ms. */
+void fpga_acq_hold_read_set(uint16_t ms)  { acq_hold_read_ms = ms; }
+uint16_t fpga_acq_hold_read_get(void)
+{
+    if (acq_hold_read_ms) return acq_hold_read_ms;
+    float fs = scope_timebase_sample_rate(acq_rate_idx);
+    if (fs <= 0.0f) return 300u;
+    float ms = 1024.0f / fs * 1000.0f + 30.0f;
+    if (ms > 5000.0f) ms = 5000.0f;
+    return (uint16_t)ms;
+}
+bool fpga_acq_hold_read_is_override(void) { return acq_hold_read_ms != 0; }
 void fpga_acq_read_br_set(uint8_t br)     { acq_read_br = br; }
 uint8_t fpga_acq_read_br_get(void)      { return acq_read_br; }
 uint16_t fpga_acq_pair_gap_get(void)    { return acq_pair_gap_ms; }
@@ -3682,6 +3699,7 @@ void EXINT0_IRQHandler(void)
 {
     exint_flag_clear(EXINT_LINE_0);
     fpga.pc0_edges++;
+    fpga.pc0_last_tick = xTaskGetTickCountFromISR();
 }
 #endif
 
@@ -3875,9 +3893,20 @@ static void fpga_warmtest_acq_task(void *pv)
             }
         }
 
+        bool two_phase = false;
         if (triggered) {
-            uint16_t pe = fpga_acq_post_edge_get();          /* EXP-46: FPGA re-arm bracket */
-            if (pe) vTaskDelay(pdMS_TO_TICKS(pe));
+            if (fpga_acq_post_edge_is_override()) {
+                /* Single read at the override delay (EXP-46 sweeps): this
+                 * read both returns the held record and arms the next. */
+                uint16_t pe = fpga_acq_post_edge_get();
+                if (pe) vTaskDelay(pdMS_TO_TICKS(pe));
+            } else {
+                /* EXP-50 default: read the HELD record at fill + margin and
+                 * commit it now; the arming read comes at the bracket's end
+                 * (below). Reads inside the bracket do not arm (EXP-48 B). */
+                two_phase = true;
+                vTaskDelay(pdMS_TO_TICKS(fpga_acq_hold_read_get()));
+            }
         }
         if (acq_read_br != 0xFF)
             spi3_set_br(acq_read_br);                       /* EXP-46 (b) */
@@ -3893,7 +3922,8 @@ static void fpga_warmtest_acq_task(void *pv)
         uint8_t s1 = fpga_warmtest_read_channel(0x04, w1);
         if (acq_pair_gap_ms) vTaskDelay(pdMS_TO_TICKS(acq_pair_gap_ms));
         uint8_t s2 = fpga_warmtest_read_channel(0x05, w2);
-        capture_in_flight = true;              /* this read started the next one */
+        if (!two_phase)
+            capture_in_flight = true;          /* this read started the next one */
 
         /* Anchor the success flags on frame validity — a fully dead bus
          * reads 0xFF everywhere (pull-up idle / spi3_xfer timeout), which
@@ -3924,6 +3954,8 @@ static void fpga_warmtest_acq_task(void *pv)
             fpga.spi3_ok_count++;
             fpga.spi3_timeout_count = 0;
             data_ready = true;
+            if (triggered)
+                fpga.acq_last_latency_ms = xTaskGetTickCount() - fpga.pc0_last_tick;
             if (mode_now == TRIG_SINGLE && triggered)
                 single_done = true;            /* one triggered record, then hold */
         } else {
@@ -3951,6 +3983,20 @@ static void fpga_warmtest_acq_task(void *pv)
              * With 0 this is exactly EXP-29's re-arm-then-read-immediately. */
             if (acq_rearm_wait_ms)
                 vTaskDelay(pdMS_TO_TICKS(acq_rearm_wait_ms));
+        }
+
+        /* EXP-50: the arming read at the bracket's end. Its contents are the
+         * same held record, so it lands in staging and is not committed. In
+         * SINGLE after its one record we hold instead. */
+        if (two_phase && !(mode_now == TRIG_SINGLE && single_done)) {
+            uint16_t pe = fpga_acq_post_edge_get(), hr = fpga_acq_hold_read_get();
+            if (pe > hr) vTaskDelay(pdMS_TO_TICKS(pe - hr));
+            edges_consumed = fpga.pc0_edges;
+            if (acq_read_br != 0xFF) spi3_set_br(acq_read_br);
+            (void)fpga_warmtest_read_channel(0x04, acq_write_ch1());
+            if (acq_pair_gap_ms) vTaskDelay(pdMS_TO_TICKS(acq_pair_gap_ms));
+            (void)fpga_warmtest_read_channel(0x05, acq_write_ch2());
+            capture_in_flight = true;
         }
 
         /* Bound the read rate lightly; the display's own 50 ms frame loop

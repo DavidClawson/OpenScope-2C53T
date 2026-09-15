@@ -674,8 +674,10 @@ static void cmd_status(void)
      * MISO bytes of the last 04/05 read — stock's CH1 b2==01 = buffer valid. */
     usb_debug_printf(
         "PC0 edges: %lu\r\n"
+        "acq latency: %lu ms (edge -> held record committed, last cycle)\r\n"
         "acq hdr CH1: %02X %02X %02X  CH2: %02X %02X %02X\r\n",
         (unsigned long)fpga.pc0_edges,
+        (unsigned long)fpga.acq_last_latency_ms,
         fpga.acq_hdr_ch1[0], fpga.acq_hdr_ch1[1], fpga.acq_hdr_ch1[2],
         fpga.acq_hdr_ch2[0], fpga.acq_hdr_ch2[1], fpga.acq_hdr_ch2[2]
     );
@@ -2419,6 +2421,22 @@ static void cmd_fpga_postedge(const char *args)
                      (unsigned)fpga_acq_post_edge_get(),
                      fpga_acq_post_edge_is_override() ? "override" : "derived: fill + 230 ms",
                      fpga_acq_rate_idx_get());
+}
+
+/* `fpga holdread [ms]` — delay from the PC0 edge to the read of the held record (EXP-50). */
+static void cmd_fpga_holdread(const char *args)
+{
+    while (*args == ' ') args++;
+    if (*args) {
+        uint32_t ms = 0;
+        if (parse_int(args, &ms) != 0 || ms > 5000u) { usb_send_str("usage: fpga holdread [ms 0..5000, 0 = derive from timebase]\r\n"); return; }
+        fpga_acq_hold_read_set((uint16_t)ms);
+    }
+    usb_debug_printf("acq hold-read delay %u ms after the edge (%s); arming read at %u ms (%s)\r\n",
+                     (unsigned)fpga_acq_hold_read_get(),
+                     fpga_acq_hold_read_is_override() ? "override" : "derived: fill + 30 ms",
+                     (unsigned)fpga_acq_post_edge_get(),
+                     fpga_acq_post_edge_is_override() ? "override: single read, arms" : "derived: fill + 230 ms");
 }
 
 /* `fpga acqbr [0-7|off]` — SPI3 clock divider the acq task sets before each pair (EXP-46). */
@@ -7541,6 +7559,8 @@ static const shell_cmd_t shell_cmds[] = {
           "settings                        Persistence status: bound, load result, writes, failures\r\n"),
     CMD_A("fpga postedge", cmd_fpga_postedge, 0,
           "fpga postedge [ms]              Delay between PC0 edge and the pair read (EXP-46)\r\n"),
+    CMD_A("fpga holdread", cmd_fpga_holdread, 0,
+          "fpga holdread [ms]              Edge -> held-record read; arming read at postedge (EXP-50)\r\n"),
     CMD_A("fpga acqbr", cmd_fpga_acqbr, 0,
           "fpga acqbr [0-7|off]            SPI3 clock the acq task sets before each pair (EXP-46)\r\n"),
     CMD_A("fpga pairgap", cmd_fpga_pairgap, 0,
