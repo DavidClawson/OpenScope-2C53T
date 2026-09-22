@@ -15,13 +15,11 @@ static inline int at(const volatile uint8_t *rec, uint32_t k, int i)
     return (int)rec[(k + (uint32_t)i) & MASK];
 }
 
-trig_edge_class_t trig_edge_classify(const volatile uint8_t *rec, int crossing)
+int trig_edge_find_seam(const volatile uint8_t *rec, uint32_t *k_out)
 {
     if (rec == 0)
-        return TRIG_EDGE_CLASS_UNKNOWN;
-
-    /* 1. The seam: the largest circular step. k = its newer side = oldest
-     *    sample of the segment. */
+        return 0;
+    /* The largest circular step. k = its newer side = oldest sample. */
     uint32_t k = 0;
     int j1 = -1;
     for (uint32_t i = 0; i < N; i++) {
@@ -38,6 +36,16 @@ trig_edge_class_t trig_edge_classify(const volatile uint8_t *rec, int crossing)
         if (d > j2) j2 = d;
     }
     if (j1 < SEAM_MIN || j1 < SEAM_RATIO * j2)
+        return 0;
+    *k_out = k;
+    return 1;
+}
+
+trig_edge_class_t trig_edge_classify(const volatile uint8_t *rec, int crossing)
+{
+    /* 1. The seam (see trig_edge_find_seam). */
+    uint32_t k = 0;
+    if (!trig_edge_find_seam(rec, &k))
         return TRIG_EDGE_CLASS_UNKNOWN;
 
     /* 2. The crossing nearest the trigger index, on a 4-sample running sum

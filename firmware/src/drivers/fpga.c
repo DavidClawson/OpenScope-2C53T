@@ -3467,7 +3467,7 @@ static volatile uint16_t acq_pair_gap_ms = 0;
  * reads at /256 yield an edge every time. */
 static volatile uint16_t acq_post_edge_ms = 0;
 static volatile uint16_t acq_poll_gap_ms = 30;   /* EXP-54: poll cadence after the poll start (stock: 29 ms) */
-static volatile bool     acq_unrotate = false;   /* EXP-52: OFF until the pointer origin is measured */
+static volatile bool     acq_unrotate = true;    /* 2026-09-22: seam-based (dev plan 2.3); `fpga unrotate off` for the raw record */
 static volatile int16_t  acq_unrotate_offset = 0;
 static volatile uint8_t  acq_read_br = 0xFF;
 static volatile uint32_t acq_gate_skips = 0;   /* reads the gate prevented */
@@ -3595,32 +3595,42 @@ void fpga_acq_unrotate_offset_set(int16_t n)  { acq_unrotate_offset = n; }
 int16_t fpga_acq_unrotate_offset_get(void)    { return acq_unrotate_offset; }
 
 #if FPGA_WARM_HANDOFF_TEST
-/* EXP-51/52 (2026-09-15): the readout is the circular capture memory from
- * address 0, rotated by L = (PC0 edge - arming read) x fs (+ calibration).
- * Rotate both staged channels left by L so index 0 is the trigger crossing.
- * Returns the rotation applied, or -1 when it could not be computed. */
+/* Un-rotate a strobed record into time order (dev plan 2.3, 2026-09-22).
+ *
+ * The committed record is one continuous 1024-sample segment rotated so its
+ * seam sits at the FPGA's write pointer, with the trigger 512 samples after
+ * the seam (EXP-53/54). The pointer is not recoverable from MCU timestamps
+ * (EXP-53 postscript: PC0 strobes 6-9 us after the read, so the EXP-52
+ * latency model this replaces measured nothing), but the seam itself is
+ * visible in the data: trig_edge_find_seam() returns the oldest sample when
+ * the step there stands out (>= 2x every other step). Both channels share the
+ * pointer, so both are rotated by the CH1 seam (CH2's if CH1 has none).
+ * After this, index 0 is the oldest sample and the trigger is at index 512.
+ *
+ * Not applied when no seam stands out: for an integer number of periods the
+ * wrap is already continuous; for a fast signal the pointer is not
+ * recoverable and the record is left as read (and the soft trigger still
+ * aligns the display). Free-run reads (not strobed) are left alone: the
+ * rolling buffer has no trigger at 512 to put anywhere.
+ *
+ * Returns the rotation applied (0..1023), or -1 when none was. */
 static int32_t fpga_acq_unrotate_staging(bool triggered)
 {
     static uint8_t tmp[FPGA_ADC_BUF_SIZE];
     if (!triggered) return -1;
-    float fs = scope_timebase_sample_rate(acq_rate_idx);
-    if (fs <= 0.0f) return -1;
-    uint32_t dcyc = fpga.pc0_last_cyc - fpga.arm_read_cyc;      /* wraps correctly */
-    if (dcyc > 240000000u) return -1;                            /* > 1 s: not this cycle */
-    fpga.acq_last_lat_us = dcyc / 240u;
-    int32_t L = (int32_t)((float)dcyc / 240000000.0f * fs + 0.5f) + acq_unrotate_offset;
-    L %= (int32_t)FPGA_ADC_BUF_SIZE;
-    if (L < 0) L += FPGA_ADC_BUF_SIZE;
-    if (!acq_unrotate) return L;          /* reported (status), not applied */
-    if (L == 0) return 0;
     volatile uint8_t *bufs[2] = { acq_write_ch1(), acq_write_ch2() };
+    uint32_t k = 0;
+    if (!trig_edge_find_seam(bufs[0], &k) && !trig_edge_find_seam(bufs[1], &k))
+        return -1;
+    if (!acq_unrotate) return (int32_t)k;        /* reported (status), not applied */
+    if (k == 0) return 0;
     for (int c = 0; c < 2; c++) {
         uint8_t *b = (uint8_t *)bufs[c];
-        memcpy(tmp, b + L, FPGA_ADC_BUF_SIZE - L);
-        memcpy(tmp + (FPGA_ADC_BUF_SIZE - L), b, L);
+        memcpy(tmp, b + k, FPGA_ADC_BUF_SIZE - k);
+        memcpy(tmp + (FPGA_ADC_BUF_SIZE - k), b, k);
         memcpy(b, tmp, FPGA_ADC_BUF_SIZE);
     }
-    return L;
+    return (int32_t)k;
 }
 #endif
 void fpga_acq_read_br_set(uint8_t br)     { acq_read_br = br; }
@@ -3998,7 +4008,7 @@ static void fpga_warmtest_acq_task(void *pv)
          * which "varies" and would pass. If spi3_hw_timeouts moved during the
          * two reads, at least one byte is fabricated: reject. */
         if ((marker || varies) && fpga.spi3_hw_timeouts == hw_to_before) {
-            fpga.acq_last_rot = fpga_acq_unrotate_staging(triggered);   /* EXP-52 */
+            fpga.acq_last_rot = fpga_acq_unrotate_staging(triggered);   /* dev plan 2.3: seam-based */
             fpga_acq_frames_commit();
             last_commit_tick = last_read_tick;
             fpga.spi3_ok_count++;

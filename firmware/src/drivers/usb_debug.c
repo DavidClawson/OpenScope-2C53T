@@ -676,13 +676,13 @@ static void cmd_status(void)
         "PC0 edges: %lu\r\n"
         "acq latency: %lu ms (strobe -> commit, last cycle); poll reads before it: %lu (total %lu)\r\n"
         "acq edge filter: %s  kept %lu  dropped %lu  unclassified %lu\r\n"
-        "acq rotation: %ld samples (arm -> edge %lu us)\r\n"
+        "acq rotation: %ld samples (seam of the last strobed record; -1 = none)\r\n"
         "acq hdr CH1: %02X %02X %02X  CH2: %02X %02X %02X\r\n",
         (unsigned long)fpga.pc0_edges,
         (unsigned long)fpga.acq_last_latency_ms, (unsigned long)fpga.acq_polls_last, (unsigned long)fpga.acq_poll_reads,
         fpga_acq_edge_filter_get() ? "ON" : "OFF", (unsigned long)fpga.acq_edge_kept,
         (unsigned long)fpga.acq_edge_dropped, (unsigned long)fpga.acq_edge_unknown,
-        (long)fpga.acq_last_rot, (unsigned long)fpga.acq_last_lat_us,
+        (long)fpga.acq_last_rot,
         fpga.acq_hdr_ch1[0], fpga.acq_hdr_ch1[1], fpga.acq_hdr_ch1[2],
         fpga.acq_hdr_ch2[0], fpga.acq_hdr_ch2[1], fpga.acq_hdr_ch2[2]
     );
@@ -2482,25 +2482,19 @@ static void cmd_fpga_holdread(const char *args)
     usb_send_str("retired (EXP-54): PC0 strobes the read that hands over the record, so that read is committed; use fpga pollgap / fpga postedge\r\n");
 }
 
-/* `fpga unrotate [on|off] [offset]` — un-rotate the record so index 0 is the trigger (EXP-52). */
+/* `fpga unrotate [on|off]` — time-order strobed records at their seam (dev plan 2.3). */
 static void cmd_fpga_unrotate(const char *args)
 {
+    /* Seam-based since 2026-09-22 (dev plan 2.3); the EXP-52 offset argument
+     * belonged to the retired latency model and is no longer accepted. */
     while (*args == ' ') args++;
     if (*args) {
-        if      (strncmp(args, "on",  2) == 0) { fpga_acq_unrotate_set(true);  args += 2; }
-        else if (strncmp(args, "off", 3) == 0) { fpga_acq_unrotate_set(false); args += 3; }
-        while (*args == ' ') args++;
-        if (*args) {
-            int32_t n = 0; bool neg = (*args == '-'); if (neg || *args == '+') args++;
-            uint32_t u = 0;
-            if (parse_int(args, &u) != 0 || u > 1023u) { usb_send_str("usage: fpga unrotate [on|off] [offset -1023..1023]\r\n"); return; }
-            n = neg ? -(int32_t)u : (int32_t)u;
-            fpga_acq_unrotate_offset_set((int16_t)n);
-        }
+        if      (strncmp(args, "on",  2) == 0) fpga_acq_unrotate_set(true);
+        else if (strncmp(args, "off", 3) == 0) fpga_acq_unrotate_set(false);
+        else { usb_send_str("usage: fpga unrotate [on|off]\r\n"); return; }
     }
-    usb_debug_printf("acq unrotate %s, offset %d samples; last rotation %ld (arm -> edge %lu us)\r\n",
-                     fpga_acq_unrotate_get() ? "ON" : "OFF", (int)fpga_acq_unrotate_offset_get(),
-                     (long)fpga.acq_last_rot, (unsigned long)fpga.acq_last_lat_us);
+    usb_debug_printf("acq unrotate %s (seam-based); last strobed record's seam at %ld (-1 = none found)\r\n",
+                     fpga_acq_unrotate_get() ? "ON" : "OFF", (long)fpga.acq_last_rot);
 }
 
 /* `fpga acqbr [0-7|off]` — SPI3 clock divider the acq task sets before each pair (EXP-46). */
@@ -7675,7 +7669,7 @@ static const shell_cmd_t shell_cmds[] = {
     CMD_A("fpga holdread", cmd_fpga_holdread, 0,
           "fpga holdread                   Retired (EXP-54)\r\n"),
     CMD_A("fpga unrotate", cmd_fpga_unrotate, 0,
-          "fpga unrotate [on|off] [ofs]    Rotate the record so index 0 = trigger crossing (EXP-52)\r\n"),
+          "fpga unrotate [on|off]          Time-order strobed records at the seam; trigger at 512 (default on)\r\n"),
     CMD_A("fpga acqbr", cmd_fpga_acqbr, 0,
           "fpga acqbr [0-7|off]            SPI3 clock the acq task sets before each pair (EXP-46)\r\n"),
     CMD_A("fpga pairgap", cmd_fpga_pairgap, 0,

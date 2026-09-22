@@ -27,12 +27,14 @@ static int label_of(trig_edge_class_t c)
 static uint32_t lcg = 12345u;
 static double urand(void) { lcg = lcg * 1664525u + 1013904223u; return (lcg >> 8) / 16777216.0; }
 
+static uint32_t last_rot;
 static void synth(uint8_t *rec, double periods, int want, int square, double amp)
 {
     const double pi = 3.14159265358979;
     double per = 1024.0 / periods;
     double ph = -2.0 * pi * 512.0 / per + (want > 0 ? 0.0 : pi) + (urand() - 0.5) * 0.1;
     uint32_t rot = (uint32_t)(urand() * 1024.0) & 1023u;
+    last_rot = rot;
     for (int n = 0; n < 1024; n++) {
         double b = sin(2.0 * pi * n / per + ph);
         if (square) b = tanh(8.0 * b);
@@ -83,6 +85,22 @@ int main(void)
         if (trig_edge_classify(rec, 128) != TRIG_EDGE_CLASS_UNKNOWN) int_classified++;
     }
     CHECK(int_classified == 0, "integer periods (seam invisible) refused, not guessed (%d classified)", int_classified);
+
+    printf("[4] seam finder recovers the rotation (un-rotation, dev plan 2.3)\n");
+    int found = 0, exact = 0, off = 0;
+    for (int sq = 0; sq < 2; sq++)
+        for (unsigned f = 0; f < sizeof frac / sizeof frac[0]; f++)
+            for (int i = 0; i < 50; i++) {
+                synth(rec, frac[f], (i & 1) ? -1 : 1, sq, 25.0 + urand() * 35.0);
+                uint32_t k = 9999u;
+                if (!trig_edge_find_seam(rec, &k)) continue;
+                found++;
+                /* synth() writes sample n at (n + rot): the oldest sample
+                 * (n = 0) sits at index rot. */
+                if (k == last_rot) exact++; else { off++; if (off <= 3) printf("    k %u vs rot %u (periods %.1f)\n", (unsigned)k, (unsigned)last_rot, frac[f]); }
+            }
+    CHECK(off == 0, "every confident seam is the true rotation (%d found, %d exact, %d off)", found, exact, off);
+    CHECK(found >= 900, "finds the seam on >= 75%% of 1200 fractional-period records (%d)", found);
 
     printf("\n%s\n", fails ? "FAILED" : "all passed");
     return fails ? 1 : 0;

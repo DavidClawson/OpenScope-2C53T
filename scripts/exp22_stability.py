@@ -331,7 +331,8 @@ def trigger_scenarios():
     base = dict(wave="sine", f=201.2, amp=2.0, off=0.0, tb=0x10, mode="normal",
                 level=0, expect="advance", n=5, gap=0.4, settle=1.5,
                 body=False, negctl=False, auto_window=0.0,
-                edge="rising", edgefilter=True, check_edge=None)
+                edge="rising", edgefilter=True, check_edge=None,
+                unrotate=True, check_order=None)
     def s(name, **kw):
         d = dict(base, name=name); d.update(kw); return d
     return [
@@ -355,11 +356,16 @@ def trigger_scenarios():
         # committed record's edge is readable by the host from the slope
         # around the un-rotated trigger index.
         s("EDGE rising",  wave="triangle", f=2.0, amp=2.0, off=0.0, tb=0x12,
-          n=8, gap=1.0, settle=3.0, check_edge="rising"),
+          n=8, gap=1.0, settle=3.0, check_edge="rising", check_order="ordered"),
         s("EDGE falling", wave="triangle", f=2.0, amp=2.0, off=0.0, tb=0x12,
           n=8, gap=1.0, settle=3.0, edge="falling", check_edge="falling"),
         s("NEGCTL edge filter off", wave="triangle", f=2.0, amp=2.0, off=0.0, tb=0x12,
           n=12, gap=1.0, settle=3.0, edgefilter=False, check_edge="mixed"),
+        # Un-rotation (dev plan 2.3): strobed records in time order, seam at
+        # index 0, trigger at 512. Negative control: raw records keep the seam
+        # wherever the FPGA's pointer stopped.
+        s("NEGCTL unrotate off", wave="triangle", f=2.0, amp=2.0, off=0.0, tb=0x12,
+          n=8, gap=1.0, settle=3.0, unrotate=False, check_order="raw"),
     ]
 
 
@@ -380,6 +386,9 @@ def apply_trigger_scenario(sc, sg, scen, state):
         state["tb"] = scen["tb"]
         state["mode"] = "auto"
         time.sleep(0.5)
+    if scen["unrotate"] != state.get("unrotate"):
+        sc.cmd("fpga unrotate %s" % ("on" if scen["unrotate"] else "off"))
+        state["unrotate"] = scen["unrotate"]
     if scen["edge"] != state.get("edge"):
         sc.cmd("fpga scope edge %s" % scen["edge"])
         state["edge"] = scen["edge"]
@@ -473,6 +482,22 @@ def eval_trigger_scenario(scen, run, fs):
         chk(edges == 0, "negctl-strobe",
             "and strobes nothing (PC0 edges +%d): the advance is the fallback, not a trigger" % edges)
 
+    if scen["check_order"]:
+        ks = []
+        for fr in frames:
+            v = np.asarray(fr["ch1"], float)
+            dv = np.abs(v - np.roll(v, 1))
+            k = int(np.argmax(dv))
+            others = np.delete(dv, [(k + o) % len(v) for o in range(-2, 3)])
+            ks.append(k if (dv[k] >= 6 and dv[k] >= 2 * others.max()) else None)
+        found = [k for k in ks if k is not None]
+        if scen["check_order"] == "ordered":
+            chk(len(found) >= 3 and all(k == 0 for k in found), "time-order",
+                "seam at index 0 on %d/%d records with a visible seam (seams %s)" % (
+                    sum(1 for k in found if k == 0), len(found), ks))
+        else:
+            chk(len(found) >= 3 and sum(1 for k in found if k != 0) >= len(found) - 1, "order-negctl",
+                "unrotate OFF: seam away from index 0 (%s) -- the order check can fail" % ks)
     if scen["check_edge"]:
         seen = []
         for fr in frames:

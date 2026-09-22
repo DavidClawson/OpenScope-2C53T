@@ -36,4 +36,13 @@ typedef enum {
  * crossing: the level in record units (reg 0x08 code - 28). */
 trig_edge_class_t trig_edge_classify(const volatile uint8_t *rec, int crossing);
 
+/* The seam of a committed record: the largest circular step, accepted only
+ * when it is >= 2x every other step and >= 6 counts. On success *k is the
+ * index of the OLDEST sample (the newer side of the step), so rotating the
+ * record left by k puts it in time order with the trigger at index 512.
+ * Returns 0 (and leaves *k alone) when the seam does not stand out -- for an
+ * integer number of periods the wrap is continuous and there is nothing to
+ * undo; for a fast signal the pointer is not recoverable. */
+int trig_edge_find_seam(const volatile uint8_t *rec, uint32_t *k);
+
 #endif
