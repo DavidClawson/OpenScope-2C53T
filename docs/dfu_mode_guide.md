@@ -166,7 +166,9 @@ The `dfu-util` + `make flash-all` path above is what I use and test on macOS. Us
 
 ### Stock USB update channel — no case opening (macOS / Linux / Windows)
 
-Separate from the ROM DFU path above: the device's **stock bootloader** also accepts firmware over USB-C with the case closed. Hold **MENU + tap Power** to enter upgrade mode (LCD shows "firmware upgrade") — the device mounts a FAT12 drive named `IAP`. This is the channel for restoring the original FNIRSI firmware, or flashing an image without the HID bootloader.
+Separate from the ROM DFU path above: the device's **stock bootloader** also accepts firmware over USB-C with the case closed. Hold **MENU + tap Power** to enter upgrade mode (LCD shows "firmware upgrade") — the device mounts a FAT12 drive named `IAP`.
+
+> **If MENU + Power does nothing** (for example the app slot is half-written and the screen stays dark): keep USB attached, **hold MENU and press the pinhole reset**, and keep holding MENU for a few seconds. The bootloader checks MENU at reset, and on bench unit #1 this reached the `IAP` drive when MENU + Power from off did not (EXP-57, 2026-09-22). This is the channel for restoring the original FNIRSI firmware, or flashing an image without the HID bootloader.
 
 - **Windows:** drag-drop the `.bin` onto the `IAP` drive — this is the official FNIRSI update method and Windows' FAT driver handles the volume cleanly.
 - **macOS:** do **not** drag-drop in Finder — macOS corrupts the write (the volume uses 2048-byte sectors and Finder adds AppleDouble `._` junk the bootloader misreads as firmware). Use the bundled flasher: `brew install mtools && python3 scripts/iap_flash.py` (auto-detects the device and images, SHA-verifies stock, shows progress). `python3 scripts/iap_flash.py guide` prints the full walkthrough.

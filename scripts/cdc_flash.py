@@ -1,5 +1,10 @@
 #!/usr/bin/env python3
-"""Flash a firmware image over the OpenScope CDC debug shell.
+"""
+!! 2026-09-22 (EXP-57): `fwapply` HUNG on bench unit #1 with a 619 KB image and
+!! left the app slot unbootable (recovered with MENU held + pinhole reset). Root
+!! cause not established. Do not run without --stage-only on unit #1 until the
+!! installer reports which exit it took.
+Flash a firmware image over the OpenScope CDC debug shell.
 
 Host half of firmware/src/drivers/fw_loader.c: sends `fwload <size> <crc32>`,
 streams the raw image, waits for the STAGED verdict, then (unless --stage-only)
