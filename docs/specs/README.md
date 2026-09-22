@@ -153,5 +153,5 @@ disagree, readiness wins the session but demand wins the quarter.
 | `README.md` § Feature maturity | **Status of record** | Specs must agree with it; promotions move both in one commit |
 | `docs/community_wishlist.md` | Demand evidence | Cited from specs' Prior art; never restated |
 | `docs/ideas/feature_catalog.md` | Brainstorm pool | A feature graduates from there to here by getting a spec |
-| `docs/dev_plan_2026-08-13.md` | Session sequencing (partly stale) | Its lettered items become specs as they're picked up (D1 → module-loader) |
+| `docs/dev_plan_2026-09-22.md` | Session sequencing (current) | Its numbered items name the catalog rows they promote; the 08-13 and 09-12 plans are superseded and kept for the record |
 | `docs/roadmap.md` | Design sections only | Its status sections are superseded — see its header |
