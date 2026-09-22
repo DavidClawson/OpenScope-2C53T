@@ -13,8 +13,17 @@ uint16_t fft_live_prepare(const uint8_t *rec, uint16_t n,
     if (count > out_cap)
         count = out_cap;
 
+    /* Remove the record's OWN mean, not a nominal 128: at range 5 the input
+     * sits around code 67 (bottom-clipped, EXP-53), and a 60-count residual
+     * DC put a spike in bins 0..2 taller than the fundamental on the bench
+     * (FFT-live S2, 2026-09-22). The peak search starts at bin 2 so the
+     * header was right; the screen was not. */
+    uint32_t sum = 0;
     for (uint16_t i = 0; i < count; i++)
-        out[i] = (int16_t)(((int16_t)rec[FFT_LIVE_HEAD_SKIP + i] - 128)
+        sum += rec[FFT_LIVE_HEAD_SKIP + i];
+    int16_t mean = (int16_t)((sum + count / 2) / count);
+    for (uint16_t i = 0; i < count; i++)
+        out[i] = (int16_t)(((int16_t)rec[FFT_LIVE_HEAD_SKIP + i] - mean)
                            * FFT_LIVE_GAIN);
     return count;
 }

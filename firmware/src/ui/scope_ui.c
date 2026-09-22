@@ -2284,10 +2284,13 @@ static void draw_fft_axis_labels(uint16_t y_bot, float fs,
 {
     char lbl[12];
     fft_live_axis_label(fs, FFT_SIZE, zoom_start, lbl, sizeof(lbl));
-    font_draw_string(2, y_bot - 10, lbl, COLOR_GRAY, COLOR_GRAY, &font_small);
+    /* Opaque on black: the bars fill the bottom of the region, and grey
+     * transparent text on amber bars was invisible on the bench (FFT-live
+     * S2, 2026-09-22). fg == bg means transparent in font_draw_char(). */
+    font_draw_string(2, y_bot - 10, lbl, COLOR_WHITE, COLOR_BLACK, &font_small);
     fft_live_axis_label(fs, FFT_SIZE, zoom_end, lbl, sizeof(lbl));
     font_draw_string_right(LCD_WIDTH - 2, y_bot - 10, lbl,
-                           COLOR_GRAY, COLOR_GRAY, &font_small);
+                           COLOR_WHITE, COLOR_BLACK, &font_small);
 }
 
 static float fft_display_ref(const fft_config_t *cfg, const float *data,
@@ -2399,7 +2402,7 @@ static void draw_fft_region(uint16_t y_top, uint16_t height)
                 if (db_int >= 10)  label[pos++] = (char)('0' + (db_int / 10) % 10);
                 label[pos++] = (char)('0' + db_int % 10);
                 label[pos] = '\0';
-                font_draw_string(2, y - 5, label, COLOR_GRAY, COLOR_GRAY, &font_small);
+                font_draw_string(2, y - 5, label, COLOR_GRAY, COLOR_BLACK, &font_small);  /* opaque: see draw_fft_axis_labels */
             }
         }
     }

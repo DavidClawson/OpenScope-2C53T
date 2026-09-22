@@ -208,6 +208,37 @@ static void test_unknown_rate(void)
     fft_deinit();
 }
 
+
+/* 6. The input stage removes the record's OWN mean, not a nominal 128. On the
+ *    bench (range 5, EXP-53) the input sits around code 67; with "-128" a
+ *    ~60-count DC went into the transform and bins 0..2 out-drew the
+ *    fundamental on screen (FFT-live S2, 2026-09-22). NEGATIVE CONTROL: the
+ *    old formula applied to the same record leaves a mean of about -61 x
+ *    gain and a DC bin above the tone. */
+static void test_dc_removed(void)
+{
+    printf("\n[6] record mean removed, not 128\n");
+    for (int i = 0; i < REC_N; i++) {
+        float v = 67.0f + 50.0f * sinf(2.0f * (float)M_PI * 1000.0f * (float)i / FS_0X10);
+        rec[i] = (i < (int)SCOPE_RECORD_HEAD_SKIP) ? 0xFF : (uint8_t)(v + 0.5f);
+    }
+    uint16_t n = fft_live_prepare(rec, REC_N, sbuf, FFT_SIZE);
+    long sum = 0;
+    for (uint16_t i = 0; i < n; i++) sum += sbuf[i];
+    float mean = (float)sum / (float)n;
+    CHECK(fabsf(mean) <= (float)FFT_LIVE_GAIN, "prepared input mean is %.1f (within one gain step of 0)", mean);
+    long sum_old = 0;
+    for (uint16_t i = 0; i < n; i++) sum_old += ((int16_t)rec[SCOPE_RECORD_HEAD_SKIP + i] - 128) * FFT_LIVE_GAIN;
+    float mean_old = (float)sum_old / (float)n;
+    CHECK(mean_old < -50.0f * (float)FFT_LIVE_GAIN, "negative control: the old -128 formula leaves a mean of %.1f", mean_old);
+    init_fft(FFT_WINDOW_HANNING, FS_0X10);
+    fft_process(sbuf, n, &res);
+    float dc = res.level_db[0] > res.level_db[1] ? res.level_db[0] : res.level_db[1];
+    if (res.level_db[2] > dc) dc = res.level_db[2];
+    float tone = res.level_db[328];
+    CHECK(tone - dc > 20.0f, "tone at bin 328 is %.1f dB above the DC bins (%.1f vs %.1f)", tone - dc, tone, dc);
+}
+
 int main(void)
 {
     printf("test_fft_live: the live acquisition record as spectrum input\n");
@@ -216,6 +247,7 @@ int main(void)
     test_tone_bin();
     test_window_spans_record();
     test_unknown_rate();
+    test_dc_removed();
     printf("\n%d passed, %d failed\n", tests_passed, tests_failed);
     return tests_failed ? 1 : 0;
 }
