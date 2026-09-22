@@ -29,6 +29,35 @@ free-running trace proves nothing (held-out-sets lesson, EXP-17).
 
 Cabling: JDS6600 CH1 -> scope CH1, JDS6600 CH2 -> scope CH2 (two cables).
 
+TRIGGER / ACQUISITION BLOCK (folded in 2026-09-22 from exp54_poll_acceptance.py,
+trigger-modes spec S3, acquisition-record-integrity S3): after the display
+matrix the same run drives the acquisition loop through its own entry points
+(`fpga scope trigmode`, `fpga scope level`, `fpga scope timebase`) and checks
+
+  5. NORMAL ADVANCES  at 0x0E/0x10/0x11/0x12 on a sine, and on a 4 Hz square
+                      at 0x10 and a 1 Hz square at 0x12 (EXP-53's open defect,
+                      fixed by the poll loop) -- every commit carries a PC0
+                      handover strobe (edges == 2 x commits).
+  6. NORMAL HOLDS     with the level above the signal: generations frozen,
+                      zero strobes; resumes at level 0.
+  7. SINGLE           exactly one record, then held.
+  8. RECORD BODY      committed records are not torn: the fundamental's
+                      phase steps evenly around the circular record with at
+                      most one anomaly run (the rotation seam at the FPGA's
+                      pointer, EXP-53/54); a torn record has two. And the
+                      fundamental matches the drive.
+  9. AUTO             with a signal present, strobed commits dominate
+                      (edges/commit >= AUTO_STROBED_MIN).
+
+Negative control for the hold metric, same build: AUTO with the level above
+the signal must ADVANCE (the fallback) while strobing nothing -- the `hold`
+classifier must say "not held" there or it proves nothing.
+
+Edge polarity is NOT exercised: the FPGA fires on either edge and reg 0x02
+does not select one (EXP-55); the edge control is a pending MCU-side filter
+(dev plan 2026-09-22 § 2.2). The run prints that as a SKIP so its absence is
+visible.
+
 Usage:
   exp22_stability.py                run the full matrix on hardware
   exp22_stability.py --selftest     validate the metric math on synthetic
@@ -64,6 +93,16 @@ VPP_TOL      = 0.12    # absolute Vpp vs commanded (percentile span carries
                        # the device's own slope-validated path achieves)
 FREQ_TOL     = 0.025
 PHASE_TOL_DEG = 10.0
+
+# Trigger / acquisition block
+TEAR_MAX_RUNS    = 1     # phase-step anomaly runs around the circular record:
+                         # 1 = the rotation seam of a committed record, 2 = torn
+TEAR_STEP_DEG    = 30.0  # a step this far off the median is an anomaly
+AUTO_STROBED_MIN = 1.5   # PC0 edges per committed pair in AUTO with a signal
+                         # (2.0 = every commit strobed; fallback commits pull
+                         # it down)
+STATUS_RE = dict(edges=r"PC0 edges: (\d+)", ok=r"SPI3 OK: (\d+)",
+                 latency=r"acq latency: (\d+) ms", polls=r"poll reads before it: (\d+)")
 
 # r6 gains, raw table * SOURCE_SCALE (scope_cal.c / scope_cal.h). Volts/count.
 K_R6 = {1: 42.95e-3 * 0.92, 2: 41.71e-3 * 0.92}
@@ -168,6 +207,254 @@ def freq_peak(x, fs):
 
 def span(x):
     return float(np.percentile(x, 99.5) - np.percentile(x, 0.5))
+
+
+def tear_clusters(x, f, fs, win=64, hop=32, tol_deg=30.0):
+    """Is a record one continuous segment? Returns (clusters, max_step_deg).
+
+    The phase of the fundamental is measured in a 64-sample window every 32
+    samples, circularly (the last window wraps to the start). Along one
+    continuous segment the phase advances by the same step every hop, so the
+    steps minus their median are ~0. A discontinuity shows as a run of
+    anomalous steps (|residual| > tol_deg), and runs are counted:
+
+      * a COMMITTED record is one continuous 1024-sample segment rotated so
+        its seam sits at the FPGA's write pointer (EXP-53/54) -- at most ONE
+        run, and none when the segment is an integer number of periods;
+      * a TORN record (two segments with different phase, a read that caught
+        the roll) has TWO runs -- the tear and the wrap.
+
+    No un-rotation is needed, so the seam is never mistaken for a tear when
+    its amplitude jump is small (EXP-56's outliers), and a frequency error
+    in f moves every step equally, so the median removes it. Blind spots: a
+    tear whose phase jump is below tol_deg (also invisible on screen), and a
+    tear in amplitude only.
+    """
+    v = np.asarray(x, dtype=float)
+    v = v - v.mean()
+    N = len(v)
+    fx = freq_peak(v, fs)
+    if not (0.8 * f <= fx <= 1.25 * f):
+        fx = f
+    n_ = np.arange(win)
+    kern = np.hanning(win) * np.exp(-2j * np.pi * fx * n_ / fs)
+    starts = range(0, N, hop)
+    phases = [np.angle(np.sum(np.take(v, np.arange(i, i + win), mode="wrap") * kern))
+              for i in starts]
+    steps = np.array([math.atan2(math.sin(b - a), math.cos(b - a))
+                      for a, b in zip(phases, phases[1:] + phases[:1])])
+    med = float(np.median(steps))
+    resid = np.array([math.degrees(math.atan2(math.sin(st - med), math.cos(st - med)))
+                      for st in steps])
+    bad = np.abs(resid) > tol_deg
+    if bad.all():
+        return len(bad), float(np.max(np.abs(resid)))
+    # count runs of True on the circle: start from a False so a run that
+    # wraps around is counted once
+    i0 = int(np.argmin(bad))
+    order = np.r_[bad[i0:], bad[:i0]]
+    runs = int(np.sum(order[1:] & ~order[:-1]) + (1 if order[0] else 0))
+    return runs, float(np.max(np.abs(resid)))
+
+
+def gens_state(gens, n_expected=None):
+    """'advancing' / 'held' / 'ambiguous' from the generation counters of
+    consecutive frame grabs. Held = every grab returned the same generation.
+    Advancing = at least half the grabs saw a new one (slow codes deliver a
+    record every ~0.6-0.8 s, so consecutive grabs can legitimately repeat)."""
+    distinct = len(set(gens))
+    if distinct == 1:
+        return "held"
+    if distinct >= max(3, (len(gens) + 1) // 2):
+        return "advancing"
+    return "ambiguous"
+
+
+# ---------------------------------------------------------------------------
+# Trigger / acquisition block (EXP-54 arms as a regression)
+# ---------------------------------------------------------------------------
+
+def read_status(sc):
+    t = sc.cmd("status", timeout=6.0)
+    out = {}
+    for k, rx in STATUS_RE.items():
+        m = re.search(rx, t)
+        if not m:
+            raise BenchError("status: no '%s' line" % k)
+        out[k] = int(m.group(1))
+    return out
+
+
+def fresh_frame(sc, commits=2, timeout=6.0):
+    """A frame whose record was committed at least `commits` commits after
+    this call (generation is a seqlock, +2 per commit). Under the poll loop the
+    buffer changes only on a commit, so a fixed sleep can return a record from
+    before the last change -- the defect the firmware centre servo had."""
+    g0 = grab_frame(sc)["gen"] & ~1
+    t0 = time.time()
+    while True:
+        fr = grab_frame(sc)
+        if (fr["gen"] & ~1) >= g0 + 2 * commits:
+            return fr
+        if time.time() - t0 > timeout:
+            raise BenchError("no fresh commit within %.0f s (gen stuck at %d)"
+                             % (timeout, fr["gen"]))
+        time.sleep(0.15)
+
+
+def centre_ch1_host(sc, target=114.0, tol=4.0, dac=2400, slope=0.125, iters=8):
+    """Put CH1's record midline at `target` by steering DAC1 (`trig raw`) on
+    the acquisition record itself. The record scale is ADC - 28, so its top
+    is 227 and mid-scale is ~114. Slope from the 2026-09-22 hand sweep:
+    +0.125 record counts per DAC1 step on range 5 (2600->125, 3400->225).
+
+    Host-side on purpose: the precondition must not depend on the firmware
+    centre servo, which read stale buffers under the poll loop (fixed in the
+    v9 image, `fpga scope center` now waits for fresh commits)."""
+    mid = None
+    for _ in range(iters):
+        sc.cmd("trig raw %d" % dac, timeout=6.0)
+        v = np.asarray(fresh_frame(sc)["ch1"], float)
+        mid = (np.percentile(v, 0.5) + np.percentile(v, 99.5)) / 2.0
+        if abs(mid - target) <= tol:
+            return dac, mid
+        dac = int(max(0, min(4095, dac + (target - mid) / slope)))
+    return dac, mid
+
+
+def trigger_scenarios():
+    """Each entry: what to drive, which mode/level/timebase, and what a
+    correct acquisition loop does. `expect`: advance | hold | single |
+    advance-negctl (AUTO fallback: advances with zero strobes)."""
+    base = dict(wave="sine", f=201.2, amp=2.0, off=0.0, tb=0x10, mode="normal",
+                level=0, expect="advance", n=5, gap=0.4, settle=1.5,
+                body=False, negctl=False, auto_window=0.0)
+    def s(name, **kw):
+        d = dict(base, name=name); d.update(kw); return d
+    return [
+        s("NORMAL 0x0E sine",      tb=0x0E),
+        s("NORMAL 0x10 sine",      tb=0x10, body=True),
+        s("NORMAL 0x11 sine",      tb=0x11, body=True, gap=0.6),
+        s("NORMAL 0x12 sine",      tb=0x12, body=True, gap=1.0, settle=2.5),
+        s("NORMAL square 4Hz 0x10", wave="square", f=4.0, amp=2.0, off=0.5,
+          tb=0x10, settle=2.5),
+        s("NORMAL square 1Hz 0x12", wave="square", f=1.0, amp=2.0, off=0.5,
+          tb=0x12, gap=1.0, settle=2.5),
+        s("NORMAL hold above level", level=100, expect="hold"),
+        s("NEGCTL AUTO above level", mode="auto", level=100,
+          expect="advance-negctl", negctl=True),
+        s("NORMAL resume level 0",  level=0),
+        s("SINGLE one-shot",        mode="single", expect="single"),
+        s("AUTO strobed commits",   mode="auto", expect="advance",
+          auto_window=10.0),
+    ]
+
+
+def apply_trigger_scenario(sc, sg, scen, state):
+    """Send only what changed, through the same entry points the UI uses.
+    A timebase change is made in AUTO (the acq loop re-primes on the write;
+    EXP-54 switched to AUTO around it) and the mode is re-applied after."""
+    if (scen["wave"], scen["f"], scen["amp"], scen["off"]) != state.get("drive"):
+        sg.waveform(scen["wave"], 1)
+        sg.freq(scen["f"], 1)
+        sg.amp(scen["amp"], 1)
+        sg.offset(scen["off"], 1)
+        state["drive"] = (scen["wave"], scen["f"], scen["amp"], scen["off"])
+        time.sleep(0.8)
+    if scen["tb"] != state.get("tb"):
+        sc.trigger_mode("auto")
+        sc.timebase(scen["tb"])
+        state["tb"] = scen["tb"]
+        state["mode"] = "auto"
+        time.sleep(0.5)
+    if scen["level"] != state.get("level"):
+        r = sc.trigger_level(scen["level"])
+        m = re.search(r"code 0x([0-9A-Fa-f]+)", r)
+        state["level"] = scen["level"]
+        state["level_code"] = int(m.group(1), 16) if m else None
+    if scen["mode"] != state.get("mode") or scen["mode"] == "single":
+        sc.trigger_mode(scen["mode"])
+        state["mode"] = scen["mode"]
+    time.sleep(scen["settle"])
+
+
+def run_trigger_scenario(sc, scen):
+    """Returns dict(frames, st0, st1, g0) -- g0 only for SINGLE."""
+    if scen["expect"] == "single":
+        # Arm from AUTO so the one-shot has a fresh generation to beat.
+        sc.trigger_mode("auto"); time.sleep(0.4)
+        g0 = grab_frame(sc)["gen"]
+        sc.trigger_mode("single"); time.sleep(scen["settle"])
+        frames = [grab_frame(sc) for _ in range(3)]
+        return dict(frames=frames, st0=None, st1=None, g0=g0)
+    st0 = read_status(sc)
+    frames = []
+    for _ in range(scen["n"]):
+        frames.append(grab_frame(sc))
+        time.sleep(scen["gap"])
+    if scen["auto_window"]:
+        time.sleep(scen["auto_window"])
+    st1 = read_status(sc)
+    return dict(frames=frames, st0=st0, st1=st1, g0=None)
+
+
+def eval_trigger_scenario(scen, run, fs):
+    out, ok = [], True
+    def chk(cond, label, detail):
+        nonlocal ok
+        out.append("  %-5s %-14s %s" % ("PASS" if cond else "FAIL", label, detail))
+        ok = ok and cond
+    frames = run["frames"]
+    gens = [fr["gen"] for fr in frames]
+    state = gens_state(gens)
+    out.append("        gens           %s -> %s" % (gens, state))
+
+    if scen["expect"] == "single":
+        g0, g = run["g0"], gens
+        chk(g[0] > g0 and len(set(g)) == 1, "single",
+            "gen %d -> %s: %s" % (g0, g, "one record then held"
+                                  if (g[0] > g0 and len(set(g)) == 1) else "UNEXPECTED"))
+        return out, ok
+
+    st0, st1 = run["st0"], run["st1"]
+    edges = st1["edges"] - st0["edges"]
+    commits = (st1["ok"] - st0["ok"]) // 2
+    out.append("        status         edges +%d commits +%d latency %d ms polls-before-last %d"
+               % (edges, commits, st1["latency"], st1["polls"]))
+
+    if scen["expect"] == "advance":
+        chk(state == "advancing", "advancing",
+            "%d distinct generations of %d grabs" % (len(set(gens)), len(gens)))
+        chk(edges > 0 and commits > 0, "strobed",
+            "PC0 edges +%d, commits +%d" % (edges, commits))
+        if scen["mode"] == "normal":
+            chk(abs(edges - 2 * commits) <= 2, "edges=2xcommit",
+                "every NORMAL commit carries a handover strobe (%d vs 2x%d)"
+                % (edges, commits))
+        if scen["auto_window"]:
+            ratio = edges / commits if commits else 0.0
+            chk(ratio >= AUTO_STROBED_MIN, "auto-strobed",
+                "edges/commit %.2f >= %.1f over %.0f s" % (ratio, AUTO_STROBED_MIN,
+                                                          scen["auto_window"]))
+    elif scen["expect"] == "hold":
+        chk(state == "held", "hold", "generations frozen at %d" % gens[0])
+        chk(edges == 0, "no-strobe", "PC0 edges +%d with the level above the signal" % edges)
+    elif scen["expect"] == "advance-negctl":
+        chk(state != "held", "negctl-hold",
+            "AUTO above the level ADVANCES (fallback) -- the hold metric can fail")
+        chk(edges == 0, "negctl-strobe",
+            "and strobes nothing (PC0 edges +%d): the advance is the fallback, not a trigger" % edges)
+
+    if scen["body"] and scen["wave"] == "sine":
+        tears = [tear_clusters(fr["ch1"], scen["f"], fs, tol_deg=TEAR_STEP_DEG) for fr in frames]
+        runs = [t[0] for t in tears]
+        chk(max(runs) <= TEAR_MAX_RUNS, "body",
+            "phase-step anomaly runs %s (<= %d: one seam, no tear; max step %.0f deg)"
+            % (runs, TEAR_MAX_RUNS, max(t[1] for t in tears)))
+        fm = float(np.mean([freq_peak(fr["ch1"], fs) for fr in frames]))
+        chk(abs(fm / scen["f"] - 1.0) <= FREQ_TOL, "freq",
+            "%.1f Hz vs %.1f commanded (%+.2f%%)" % (fm, scen["f"], (fm / scen["f"] - 1) * 100))
+    return out, ok
 
 
 # ---------------------------------------------------------------------------
@@ -368,6 +655,25 @@ def selftest():
     j, _ = lock_jitter_samples(pair, f, fs)
     chk(abs(j - 0.4) < 0.1, "0.4-sample injected shift measured as %.2f" % j)
 
+    # Trigger block metrics: the tear detector on the three record shapes it
+    # must tell apart. Clean = one continuous segment (0 runs); committed =
+    # the same rotated, seam mid-record, at a frequency that leaves a 126 deg
+    # seam step (1 run); torn = two segments spliced with a 174 deg phase
+    # jump and a 170 deg wrap (2 runs).
+    c1, _ = _synth(f, fs, t0=0.0, seed=7)
+    runs, mx = tear_clusters(c1, f, fs)
+    chk(runs == 0, "clean synthetic record: %d anomaly runs (max step %.0f deg)" % (runs, mx))
+    c480, _ = _synth(480.0, fs, t0=0.0, seed=8)         # 39.35 periods: seam step 126 deg
+    runs, mx = tear_clusters(np.roll(c480, 300), 480.0, fs)
+    chk(runs == 1, "rotated committed record (seam at 300, 126 deg): %d run, not a tear (max step %.0f deg)" % (runs, mx))
+    torn = np.r_[c1[:600], np.roll(c1, 137)[600:]]      # 174 deg jump at 600, 170 deg at the wrap
+    runs, mx = tear_clusters(torn, f, fs)
+    chk(runs >= 2, "torn record (tear at 600 + wrap): %d runs > %d (metric detects a tear; max step %.0f deg)"
+        % (runs, TEAR_MAX_RUNS, mx))
+    chk(gens_state([10, 10, 10, 10, 10]) == "held", "gens 10x5 -> held")
+    chk(gens_state([10, 12, 12, 14, 16]) == "advancing", "gens 10,12,12,14,16 -> advancing")
+    chk(gens_state([10, 10, 10, 10, 12]) == "ambiguous", "gens one new of five -> ambiguous (not 'advancing')")
+
     print("selftest: %s" % ("ALL PASS" if fails == 0 else "%d FAILED" % fails))
     return fails == 0
 
@@ -387,6 +693,10 @@ def main():
                          "analysis (keys: <scenario>__ch1/ch2/off/gen)")
     ap.add_argument("--only", default=None,
                     help="run only scenarios whose name contains this")
+    ap.add_argument("--trigger-only", action="store_true",
+                    help="skip the display matrix; run the trigger/acquisition block")
+    ap.add_argument("--no-trigger", action="store_true",
+                    help="run the display matrix only")
     a = ap.parse_args()
 
     if a.selftest:
@@ -426,7 +736,7 @@ def main():
     base_rel = None
     results = []
     saved = {}
-    for scen in scenarios():
+    for scen in ([] if a.trigger_only else scenarios()):
         if a.only and a.only not in scen["name"]:
             continue
         fs = rates[scen["tb"]]
@@ -451,6 +761,52 @@ def main():
         np.savez_compressed(a.save, **saved)
         print("\nraw frames saved to %s" % a.save)
 
+    # -- trigger / acquisition block --------------------------------------
+    if not a.no_trigger:
+        print("\n===== TRIGGER / ACQUISITION BLOCK (EXP-54 arms) =====")
+        print("setup: range 5 CH1, level 0, AUTO; JDS CH1 only")
+        for c in ("fpga pollgap", "fpga postedge", "fpga autowait"):
+            print("  " + next((l.strip() for l in sc.cmd(c).splitlines()
+                                if l.strip() and not l.strip().startswith(">") and c not in l), "?")[:110])
+        sc.trigger_mode("auto")
+        sc.trigger_level(0)
+        sc.timebase(0x10)
+        sc.vdiv(1, 5)
+        sg.waveform("sine", 1); sg.freq(201.2, 1); sg.amp(2.0, 1); sg.offset(0.0, 1)
+        sg.output(True, True)
+        time.sleep(0.8)
+        # Precondition, checked by readback: centre range 5 with the drive on,
+        # then require a record that is in range. The first run of this block
+        # (2026-09-22) skipped centring and read CH1 pinned at code 227 --
+        # every check then failed for a reason that had nothing to do with the
+        # acquisition loop. A railed record makes the block VOID, not FAIL.
+        dac, mid = centre_ch1_host(sc)
+        print("  host centre: DAC1=%d -> record midline %.0f (target 114)" % (dac, mid))
+        v = np.asarray(fresh_frame(sc)["ch1"], float)
+        pre_ok = v.min() > 5 and v.max() < 222 and (v.max() - v.min()) > 40
+        print("  precondition: CH1 record %d..%d span %d -> %s"
+              % (v.min(), v.max(), v.max() - v.min(),
+                 "OK" if pre_ok else "VOID (railed or no signal)"))
+        if not pre_ok:
+            results.append(("trigger block precondition", False))
+        tstate = {"tb": 0x10, "mode": "auto", "level": 0,
+                  "drive": ("sine", 201.2, 2.0, 0.0)}
+        for scen in (trigger_scenarios() if pre_ok else []):
+            if a.only and a.only not in scen["name"]:
+                continue
+            fs = rates[scen["tb"]]
+            print("\n== %s  (fs %.0f S/s, %s, level %+d) ==" % (scen["name"], fs, scen["mode"], scen["level"]))
+            apply_trigger_scenario(sc, sg, scen, tstate)
+            run = run_trigger_scenario(sc, scen)
+            lines, ok = eval_trigger_scenario(scen, run, fs)
+            print("\n".join(lines))
+            results.append((scen["name"], ok))
+        print("\n== edge falling ==\n  SKIP  edge-flip       no edge control exists: the FPGA fires on either edge and reg 0x02 does not select one (EXP-55); MCU-side filter pending")
+        sc.trigger_mode("auto")
+        sc.trigger_level(0)
+        sc.timebase(0x10)
+        sc.vdiv(1, 6)
+
     sg.output(False, False)
 
     print("\n===== EXP-22 SUMMARY =====")
@@ -458,7 +814,9 @@ def main():
         print("  %-22s %s" % (name, "PASS" if ok else "FAIL"))
     total_ok = all(ok for _, ok in results)
     print("OVERALL: %s" % ("PASS -- trace holds still under phase/amp/freq "
-                           "changes on both channels" if total_ok else "FAIL"))
+                           "changes on both channels; acquisition loop "
+                           "triggers, holds and single-shots as specified"
+                           if total_ok else "FAIL"))
     sys.exit(0 if total_ok else 1)
 
 

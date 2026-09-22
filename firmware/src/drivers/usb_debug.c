@@ -2685,6 +2685,9 @@ static uint8_t spi3_raw_xfer(uint8_t tx);
 #define SCOPE_CENTER_ITERS    11u    /* binary-search steps over 0..4095    */
 #define SCOPE_CENTER_SETTLE_MS 480u  /* >= one ~430ms buffer fill after a DAC
                                         move, so the read is not stale         */
+#define SCOPE_CENTER_COMMIT_TIMEOUT_MS 4000u /* bound on waiting for fresh
+                                        commits; 0x12 AUTO fallback ~1.5 s   */
+static uint32_t scope_center_stale_steps;  /* steps that timed out waiting */
 
 /* One capture read window (opcode 0x04 = CH1 buffer, 0x05 = CH2); returns the
  * mean of the first `nbytes` payload bytes. Same framing as spi3_opread_window
@@ -2745,13 +2748,44 @@ static uint32_t scope_center_buf_median(uint8_t ch)
  * (bench), so wait a generous fixed budget then average a couple of RAM-buffer
  * medians to knock down per-frame noise.
  */
+/* Wait until the acq task has committed `n` records whose reads began after
+ * this call. The frame generation is a seqlock: +2 per commit, odd while a
+ * commit is in progress. Returns false on timeout.
+ *
+ * Why not a fixed delay (the pre-2026-09-22 version slept 480 ms): under the
+ * poll loop (EXP-54) the RAM buffer changes only on a commit, and with no
+ * trigger crossing AUTO commits one free-run record per fallback budget,
+ * 3 x fill + 230 ms = 475 ms at 0x10 and ~1.46 s at 0x12. A fixed 480 ms
+ * therefore read the buffer from BEFORE the DAC step at slow codes and
+ * sometimes at 0x10; the binary search steered on stale medians and the
+ * servo reported "DAC1=2047 (median=101)" while the record then read 185. The
+ * first commit after the write may have been read before the DAC settled, so
+ * the caller asks for two. */
+static bool scope_center_wait_commits(uint32_t n)
+{
+    uint32_t g = fpga_acq_frame_generation() & ~1u;
+    uint32_t target = g + 2u * n;
+    TickType_t t0 = xTaskGetTickCount();
+    while ((int32_t)((fpga_acq_frame_generation() & ~1u) - target) < 0) {
+        if ((xTaskGetTickCount() - t0) > pdMS_TO_TICKS(SCOPE_CENTER_COMMIT_TIMEOUT_MS))
+            return false;
+        vTaskDelay(pdMS_TO_TICKS(10));
+    }
+    return true;
+}
+
 static uint32_t scope_center_settle_level(uint8_t ch)
 {
+    /* Keep the historical floor for the analog settle (~350 ms bench), then
+     * require fresh commits so the median is of a record read after the DAC
+     * moved. On timeout the median is still taken but the search is steering
+     * blind; the caller reports the count. */
     vTaskDelay(pdMS_TO_TICKS(SCOPE_CENTER_SETTLE_MS));
+    if (!scope_center_wait_commits(2u)) scope_center_stale_steps++;
     uint32_t acc = 0;
     for (uint32_t k = 0; k < SCOPE_CENTER_AVG; k++) {
+        if (k > 0 && !scope_center_wait_commits(1u)) scope_center_stale_steps++;
         acc += scope_center_buf_median(ch);
-        vTaskDelay(pdMS_TO_TICKS(60));
     }
     return acc / SCOPE_CENTER_AVG;
 }
@@ -2784,6 +2818,11 @@ static void scope_center_one(uint8_t ch, uint16_t *out_dac, uint32_t *out_mean)
         else                             hi = mid;   /* need lower  DAC1 */
         if (hi - lo <= 1) break;
     }
+    /* Leave the reference at the value we REPORT. Until 2026-09-22 the DAC
+     * stayed at the last probe (`mid`), not at best_dac, so the printed
+     * "center DAC1=..." could differ from what the hardware held. */
+    if (ch == 2) scope_trigger_ch2_raw(best_dac);
+    else         scope_trigger_dac_raw(best_dac);
     *out_dac = best_dac;
     *out_mean = best_mean;
 }
@@ -3256,14 +3295,18 @@ static void cmd_fpga_scope_center(const char *args)
          * change to a working measurement for no measurable gain. */
         fpga_scope_set_range_diag((uint8_t)r);
         vTaskDelay(pdMS_TO_TICKS(20));     /* relay/frontend settle */
+        scope_center_stale_steps = 0;
         scope_center_one(ch, &dac, &mean);
         /* Name the reference in the output: a bare "center=" line would read
          * identically whichever channel ran, and a mislabelled log is how this
          * project has repeatedly convinced itself of the wrong pin. */
-        usb_debug_printf("CH%u range %lu: center %s=%u (median=%lu)\r\n",
+        usb_debug_printf("CH%u range %lu: center %s=%u (median=%lu)%s\r\n",
                          (unsigned)ch, (unsigned long)r,
                          (ch == 2) ? "TMR13_C1DT" : "DAC1",
-                         dac, (unsigned long)mean);
+                         dac, (unsigned long)mean,
+                         scope_center_stale_steps
+                             ? "  STALE: no fresh commit on some steps -- result unreliable"
+                             : "");
     }
     /* acq was never paused (see the note above) — nothing to resume. */
 }

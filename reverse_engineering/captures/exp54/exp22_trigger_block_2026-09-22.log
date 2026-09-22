@@ -1,0 +1,105 @@
+device Build: Sep 22 2026 13:17:33
+setup: range 6 both channels, timebase 0x10, soft trigger on
+
+===== TRIGGER / ACQUISITION BLOCK (EXP-54 arms) =====
+setup: range 5 CH1, level 0, AUTO; JDS CH1 only
+  acq poll gap 30 ms; poll starts 181 ms after a handover (derived: fill + 100 ms); last handover after 4031 pol
+  acq poll start 181 ms after a handover (derived: fill + 100 ms, rate idx 0x10)
+  acq AUTO edge-wait 475 ms before the free-run fallback read (derived from timebase, rate idx 0x10)
+  host centre: DAC1=2496 -> record midline 114 (target 114)
+  precondition: CH1 record 64..165 span 101 -> OK
+
+== NORMAL 0x0E sine  (fs 49930 S/s, normal, level +0) ==
+        gens           [15306, 15322, 15338, 15354, 15370] -> advancing
+        status         edges +39 commits +19 latency 1 ms polls-before-last 4
+  PASS  advancing      5 distinct generations of 5 grabs
+  PASS  strobed        PC0 edges +39, commits +19
+  PASS  edges=2xcommit every NORMAL commit carries a handover strobe (39 vs 2x19)
+
+== NORMAL 0x10 sine  (fs 12490 S/s, normal, level +0) ==
+        gens           [15402, 15414, 15428, 15440, 15452] -> advancing
+        status         edges +31 commits +15 latency 1 ms polls-before-last 4
+  PASS  advancing      5 distinct generations of 5 grabs
+  PASS  strobed        PC0 edges +31, commits +15
+  PASS  edges=2xcommit every NORMAL commit carries a handover strobe (31 vs 2x15)
+  PASS  body           phase-step anomaly runs [1, 1, 1, 1, 1] (<= 1: one seam, no tear; max step 167 deg)
+  PASS  freq           200.6 Hz vs 201.2 commanded (-0.28%)
+
+== NORMAL 0x11 sine  (fs 4991 S/s, normal, level +0) ==
+        gens           [15478, 15488, 15498, 15508, 15518] -> advancing
+        status         edges +25 commits +12 latency 1 ms polls-before-last 4
+  PASS  advancing      5 distinct generations of 5 grabs
+  PASS  strobed        PC0 edges +25, commits +12
+  PASS  edges=2xcommit every NORMAL commit carries a handover strobe (25 vs 2x12)
+  PASS  body           phase-step anomaly runs [1, 1, 1, 1, 1] (<= 1: one seam, no tear; max step 64 deg)
+  PASS  freq           200.0 Hz vs 201.2 commanded (-0.61%)
+
+== NORMAL 0x12 sine  (fs 2495 S/s, normal, level +0) ==
+        gens           [15540, 15548, 15556, 15564, 15570] -> advancing
+        status         edges +19 commits +9 latency 1 ms polls-before-last 4
+  PASS  advancing      5 distinct generations of 5 grabs
+  PASS  strobed        PC0 edges +19, commits +9
+  PASS  edges=2xcommit every NORMAL commit carries a handover strobe (19 vs 2x9)
+  PASS  body           phase-step anomaly runs [1, 1, 1, 1, 1] (<= 1: one seam, no tear; max step 133 deg)
+  PASS  freq           200.3 Hz vs 201.2 commanded (-0.46%)
+
+== NORMAL square 4Hz 0x10  (fs 12490 S/s, normal, level +0) ==
+        gens           [15620, 15628, 15636, 15642, 15650] -> advancing
+        status         edges +19 commits +9 latency 1 ms polls-before-last 11
+  PASS  advancing      5 distinct generations of 5 grabs
+  PASS  strobed        PC0 edges +19, commits +9
+  PASS  edges=2xcommit every NORMAL commit carries a handover strobe (19 vs 2x9)
+
+== NORMAL square 1Hz 0x12  (fs 2495 S/s, normal, level +0) ==
+        gens           [15692, 15698, 15702, 15708, 15712] -> advancing
+        status         edges +13 commits +6 latency 1 ms polls-before-last 16
+  PASS  advancing      5 distinct generations of 5 grabs
+  PASS  strobed        PC0 edges +13, commits +6
+  PASS  edges=2xcommit every NORMAL commit carries a handover strobe (13 vs 2x6)
+
+== NORMAL hold above level  (fs 12490 S/s, normal, level +100) ==
+        gens           [15754, 15754, 15754, 15754, 15754] -> held
+        status         edges +0 commits +0 latency 1 ms polls-before-last 1
+  PASS  hold           generations frozen at 15754
+  PASS  no-strobe      PC0 edges +0 with the level above the signal
+
+== NEGCTL AUTO above level  (fs 12490 S/s, auto, level +100) ==
+        gens           [15762, 15770, 15778, 15784, 15792] -> advancing
+        status         edges +0 commits +9 latency 1 ms polls-before-last 1
+  PASS  negctl-hold    AUTO above the level ADVANCES (fallback) -- the hold metric can fail
+  PASS  negctl-strobe  and strobes nothing (PC0 edges +0): the advance is the fallback, not a trigger
+
+== NORMAL resume level 0  (fs 12490 S/s, normal, level +0) ==
+        gens           [15814, 15832, 15844, 15856, 15868] -> advancing
+        status         edges +33 commits +16 latency 1 ms polls-before-last 4
+  PASS  advancing      5 distinct generations of 5 grabs
+  PASS  strobed        PC0 edges +33, commits +16
+  PASS  edges=2xcommit every NORMAL commit carries a handover strobe (33 vs 2x16)
+
+== SINGLE one-shot  (fs 12490 S/s, single, level +0) ==
+        gens           [15900, 15900, 15900] -> held
+  PASS  single         gen 15888 -> [15900, 15900, 15900]: one record then held
+
+== AUTO strobed commits  (fs 12490 S/s, auto, level +0) ==
+        gens           [15912, 15924, 15936, 15950, 15962] -> advancing
+        status         edges +64 commits +32 latency 1 ms polls-before-last 4
+  PASS  advancing      5 distinct generations of 5 grabs
+  PASS  strobed        PC0 edges +64, commits +32
+  PASS  auto-strobed   edges/commit 2.00 >= 1.5 over 10 s
+
+== edge falling ==
+  SKIP  edge-flip       no edge control exists: the FPGA fires on either edge and reg 0x02 does not select one (EXP-55); MCU-side filter pending
+
+===== EXP-22 SUMMARY =====
+  NORMAL 0x0E sine       PASS
+  NORMAL 0x10 sine       PASS
+  NORMAL 0x11 sine       PASS
+  NORMAL 0x12 sine       PASS
+  NORMAL square 4Hz 0x10 PASS
+  NORMAL square 1Hz 0x12 PASS
+  NORMAL hold above level PASS
+  NEGCTL AUTO above level PASS
+  NORMAL resume level 0  PASS
+  SINGLE one-shot        PASS
+  AUTO strobed commits   PASS
+OVERALL: PASS -- trace holds still under phase/amp/freq changes on both channels; acquisition loop triggers, holds and single-shots as specified

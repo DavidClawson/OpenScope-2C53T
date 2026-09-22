@@ -568,8 +568,32 @@ class Scope:
         """
         return self.seq(0x01, index & 0xFF)
 
-    def trigger_level(self, code: int) -> str:
-        """Set the digital trigger level (SPI3 register 0x08, an ADC code)."""
+    def trigger_mode(self, mode: str) -> str:
+        """Set the acquisition trigger mode through the single entry point.
+
+        `fpga scope trigmode auto|normal|single` is the same path the UI
+        button takes (trigger-modes spec S3 (i)). The mode is an acquisition
+        policy in fpga.c, not a fabric register: EXP-55 found no polarity
+        select and nothing here writes SPI3 directly.
+        """
+        return self.cmd(f"fpga scope trigmode {mode}")
+
+    def trigger_level(self, level: int) -> str:
+        """Set the trigger level through the single entry point.
+
+        `fpga scope level <n>` is the one writer of SPI3 reg 0x08 (EXP-43,
+        `3ec8fd9`); it records what is in force for the UI and re-primes the
+        capture. `n` is the UI unit (code = 128 + 1.2 n by readback, EXP-56).
+        The reply carries `code 0x..`, which is the number to trust.
+        """
+        return self.cmd(f"fpga scope level {int(level)}")
+
+    def trigger_level_raw(self, code: int) -> str:
+        """Write reg 0x08 directly, leaving the UI's idea of the level stale.
+
+        Only for deliberately testing that divergence, like timebase_raw().
+        The comparator fires at (code - 28) in record units (EXP-53/55/56).
+        """
         return self.seq(0x08, code & 0xFF)
 
 
@@ -819,7 +843,12 @@ class JDS6600:
 
     #: Known-good waveform codes.  Codes >= 2 are firmware-dependent on the
     #: JDS6600 family; pass a raw int when in doubt.
-    WAVE = {"sine": 0, "square": 1, "triangle": 2, "tri": 2}
+    # JDS6600 waveform codes: 0 sine, 1 square, 2 PULSE, 3 triangle. Until
+    # 2026-09-22 this map sent 2 for "triangle", which is the pulse train;
+    # EXP-53's triangle runs verified code 3 on the scope and wrote it by hand
+    # (`write_raw(21, "3")`). A wrong shape on a slope-sign test is the kind
+    # of stable, plausible instrument error this project keeps finding.
+    WAVE = {"sine": 0, "square": 1, "pulse": 2, "triangle": 3, "tri": 3}
 
     def __init__(self, port: Optional[str] = "/dev/ttyUSB0", baud: int = 115200,
                  settle: float = 0.35, ser=None):

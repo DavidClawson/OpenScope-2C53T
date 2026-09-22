@@ -1,6 +1,9 @@
 #!/usr/bin/env python3
 """EXP-54 -- the acquisition loop is a poll on the PC0 handover strobe.
 
+FOLDED 2026-09-22 into `exp22_stability.py --trigger-only` (the regression);
+kept as the record of the one-off acceptance run.
+
 PREDICTIONS (written before the run, image = poll loop, `fpga pollgap` 30 ms, poll start fill + 100)
   (a) NORMAL triggers on a 1 Hz square at 0x12 and a 4 Hz square at 0x10 (EXP-53's open defect):
       edges advance and commits == edges (the frozen 0/0 of exp50h is the falsifier).
