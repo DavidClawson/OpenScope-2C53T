@@ -1,0 +1,132 @@
+device Build: Sep 22 2026 17:37:34
+setup: range 6 both channels, timebase 0x10, soft trigger on
+
+===== TRIGGER / ACQUISITION BLOCK (EXP-54 arms) =====
+setup: range 5 CH1, level 0, AUTO; JDS CH1 only
+  acq poll gap 30 ms; poll starts 181 ms after a handover (derived: fill + 100 ms); last handover after 196 poll
+  acq poll start 181 ms after a handover (derived: fill + 100 ms, rate idx 0x10)
+  acq AUTO edge-wait 475 ms before the free-run fallback read (derived from timebase, rate idx 0x10)
+  host centre: DAC1=2499 -> record midline 114 (target 114)
+  precondition: CH1 record 64..165 span 101 -> OK
+
+== NORMAL 0x0E sine  (fs 49930 S/s, normal, level +0) ==
+        gens           [144, 160, 176, 190, 206] -> advancing
+        status         edges +40 commits +19 dropped +1 unclassified +32 latency 1 ms polls-before-last 4
+  PASS  advancing      5 distinct generations of 5 grabs
+  PASS  strobed        PC0 edges +40, commits +19
+  PASS  strobes-accounted each strobed pair committed or edge-dropped (40 vs 2x(19+1))
+
+== NORMAL 0x10 sine  (fs 12490 S/s, normal, level +0) ==
+        gens           [240, 254, 266, 278, 290] -> advancing
+        status         edges +31 commits +15 dropped +0 unclassified +14 latency 1 ms polls-before-last 4
+  PASS  advancing      5 distinct generations of 5 grabs
+  PASS  strobed        PC0 edges +31, commits +15
+  PASS  strobes-accounted each strobed pair committed or edge-dropped (31 vs 2x(15+0))
+  PASS  body           phase-step anomaly runs [1, 1, 1, 1, 1] (<= 1: one seam, no tear; max step 172 deg)
+  PASS  freq           200.7 Hz vs 201.2 commanded (-0.25%)
+
+== NORMAL 0x11 sine  (fs 4991 S/s, normal, level +0) ==
+        gens           [316, 326, 336, 342, 352] -> advancing
+        status         edges +25 commits +11 dropped +3 unclassified +16 latency 1 ms polls-before-last 4
+  PASS  advancing      5 distinct generations of 5 grabs
+  PASS  strobed        PC0 edges +25, commits +11
+  FAIL  strobes-accounted each strobed pair committed or edge-dropped (25 vs 2x(11+3))
+  PASS  body           phase-step anomaly runs [1, 1, 1, 1, 1] (<= 1: one seam, no tear; max step 68 deg)
+  PASS  freq           200.0 Hz vs 201.2 commanded (-0.61%)
+
+== NORMAL 0x12 sine  (fs 2495 S/s, normal, level +0) ==
+        gens           [372, 376, 384, 390, 400] -> advancing
+        status         edges +20 commits +8 dropped +3 unclassified +15 latency 1 ms polls-before-last 4
+  PASS  advancing      5 distinct generations of 5 grabs
+  PASS  strobed        PC0 edges +20, commits +8
+  PASS  strobes-accounted each strobed pair committed or edge-dropped (20 vs 2x(8+3))
+  PASS  body           phase-step anomaly runs [1, 1, 1, 1, 1] (<= 1: one seam, no tear; max step 138 deg)
+  PASS  freq           200.3 Hz vs 201.2 commanded (-0.46%)
+
+== NORMAL square 4Hz 0x10  (fs 12490 S/s, normal, level +0) ==
+        gens           [448, 454, 462, 470, 476] -> advancing
+        status         edges +18 commits +9 dropped +0 unclassified +18 latency 1 ms polls-before-last 11
+  PASS  advancing      5 distinct generations of 5 grabs
+  PASS  strobed        PC0 edges +18, commits +9
+  PASS  strobes-accounted each strobed pair committed or edge-dropped (18 vs 2x(9+0))
+
+== NORMAL square 1Hz 0x12  (fs 2495 S/s, normal, level +0) ==
+        gens           [516, 522, 526, 532, 536] -> advancing
+        status         edges +13 commits +6 dropped +0 unclassified +13 latency 1 ms polls-before-last 17
+  PASS  advancing      5 distinct generations of 5 grabs
+  PASS  strobed        PC0 edges +13, commits +6
+  PASS  strobes-accounted each strobed pair committed or edge-dropped (13 vs 2x(6+0))
+
+== NORMAL hold above level  (fs 12490 S/s, normal, level +100) ==
+        gens           [572, 572, 572, 572, 572] -> held
+        status         edges +0 commits +0 dropped +0 unclassified +0 latency 1 ms polls-before-last 1
+  PASS  hold           generations frozen at 572
+  PASS  no-strobe      PC0 edges +0 with the level above the signal
+
+== NEGCTL AUTO above level  (fs 12490 S/s, auto, level +100) ==
+        gens           [580, 588, 596, 602, 610] -> advancing
+        status         edges +0 commits +9 dropped +0 unclassified +0 latency 1 ms polls-before-last 1
+  PASS  negctl-hold    AUTO above the level ADVANCES (fallback) -- the hold metric can fail
+  PASS  negctl-strobe  and strobes nothing (PC0 edges +0): the advance is the fallback, not a trigger
+
+== NORMAL resume level 0  (fs 12490 S/s, normal, level +0) ==
+        gens           [634, 646, 658, 670, 682] -> advancing
+        status         edges +31 commits +15 dropped +0 unclassified +15 latency 1 ms polls-before-last 4
+  PASS  advancing      5 distinct generations of 5 grabs
+  PASS  strobed        PC0 edges +31, commits +15
+  PASS  strobes-accounted each strobed pair committed or edge-dropped (31 vs 2x(15+0))
+
+== SINGLE one-shot  (fs 12490 S/s, single, level +0) ==
+        gens           [714, 714, 714] -> held
+  PASS  single         gen 702 -> [714, 714, 714]: one record then held
+
+== AUTO strobed commits  (fs 12490 S/s, auto, level +0) ==
+        gens           [726, 738, 752, 764, 778] -> advancing
+        status         edges +65 commits +32 dropped +0 unclassified +37 latency 1 ms polls-before-last 4
+  PASS  advancing      5 distinct generations of 5 grabs
+  PASS  strobed        PC0 edges +65, commits +32
+  PASS  auto-strobed   edges/commit 2.03 >= 1.5 over 10 s
+
+== EDGE rising  (fs 2495 S/s, normal, level +0) ==
+        gens           [930, 932, 936, 940, 944, 946, 950, 954] -> advancing
+        status         edges +27 commits +7 dropped +12 unclassified +0 latency 1 ms polls-before-last 6
+  PASS  advancing      8 distinct generations of 8 grabs
+  PASS  strobed        PC0 edges +27, commits +7
+  FAIL  strobes-accounted each strobed pair committed or edge-dropped (27 vs 2x(7+12))
+  PASS  edge           8 distinct records, all rising (rrrrrrrr)
+
+== EDGE falling  (fs 2495 S/s, normal, level +0) ==
+        gens           [962, 966, 968, 972, 976, 978, 982, 984] -> advancing
+        status         edges +26 commits +6 dropped +13 unclassified +0 latency 1 ms polls-before-last 10
+  PASS  advancing      8 distinct generations of 8 grabs
+  PASS  strobed        PC0 edges +26, commits +6
+  FAIL  strobes-accounted each strobed pair committed or edge-dropped (26 vs 2x(6+13))
+  PASS  edge           8 distinct records, all falling (ffffffff)
+
+== NEGCTL edge filter off  (fs 2495 S/s, normal, level +0) ==
+        gens           [994, 1000, 1006, 1014, 1020, 1024, 1032, 1038, 1044, 1052, 1058, 1066] -> advancing
+        status         edges +39 commits +19 dropped +0 unclassified +0 latency 1 ms polls-before-last 5
+  PASS  advancing      12 distinct generations of 12 grabs
+  PASS  strobed        PC0 edges +39, commits +19
+  PASS  strobes-accounted each strobed pair committed or edge-dropped (39 vs 2x(19+0))
+  PASS  edge-negctl    filter OFF: both edges committed (ffrrfrrfrrff) -- the edge check can fail
+
+== edge falling ==
+  SKIP  edge-flip       no edge control exists: the FPGA fires on either edge and reg 0x02 does not select one (EXP-55); MCU-side filter pending
+
+===== EXP-22 SUMMARY =====
+  NORMAL 0x0E sine       PASS
+  NORMAL 0x10 sine       PASS
+  NORMAL 0x11 sine       FAIL
+  NORMAL 0x12 sine       PASS
+  NORMAL square 4Hz 0x10 PASS
+  NORMAL square 1Hz 0x12 PASS
+  NORMAL hold above level PASS
+  NEGCTL AUTO above level PASS
+  NORMAL resume level 0  PASS
+  SINGLE one-shot        PASS
+  AUTO strobed commits   PASS
+  EDGE rising            FAIL
+  EDGE falling           FAIL
+  NEGCTL edge filter off PASS
+OVERALL: FAIL
