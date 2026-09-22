@@ -185,3 +185,25 @@ bench run showing the hardware moved.
 5. **Pre-trigger / horizontal position** is deliberately out of scope — the
    catalog lists it as a research question (does the fabric's ring buffer support
    it?) and it needs an answer before it can have a ladder.
+
+## Bench facts for S2, measured 2026-09-22 (EXP-53, unit #1, range 5)
+
+These belong to S2 (a) and (c) and were found while characterising the record, not by
+running the S2 procedure; they are recorded here so the procedure is written against them.
+
+- **(a) Level transfer.** The comparator sees the signal **28 codes above the record**: on
+  a triangle the record shows spanning 33..133, level 152 triggers and level 54 does not,
+  and in every triggered record a crossing of (level − 28) sits 504–523 samples before the
+  write pointer. Measured on range 5 only. The UI marker must be drawn at (code − 28) in
+  record units, or the marker will sit 28 counts above where the hardware fires.
+- **(c) Edge.** **The FPGA fires on either polarity.** The crossing before the pointer is
+  rising in some records and falling in others at the same level, at every level tried.
+  Whether reg 0x02 (stock writes `02 03` at boot) selects a polarity is untested; until
+  it is, the edge button is software-only and must be labelled so (S1 (e)).
+- **Trigger position.** 512 post-trigger samples: the trigger is at mid-record, at
+  (pointer − 512) mod 1024. PC0 is a handover strobe on the read, not a completion flag
+  (EXP-53 postscript, EXP-54); the acquisition loop polls for it.
+- **Superseding the seam paragraph above:** the record is a rotation of a continuous
+  1024-sample segment with one seam at the FPGA's write pointer; there is no stale head or
+  tail. `SEAM_GUARD` still works as a display measure because the soft trigger searches
+  past it; it is not a model of the record.

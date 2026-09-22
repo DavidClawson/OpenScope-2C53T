@@ -54,3 +54,21 @@ shape: a metric that cannot see the seam will accept a phase-locked free-run as 
 triggered record forever. What broke it was not a better hypothesis. It was a tear
 locator, a waveform that encodes time, and a timestamp that could not possibly be a
 latency.
+
+## Postscript, same day: FFT-live on the screen
+
+With the poll loop on the device, the spectrum view got its first look at real data. The
+header read `LIVE CH1 pk 1.0kHz` at 0x10 and 0x0F, `pk bin N` on an unmeasured code, and the
+record side of the S2 acceptance ran clean: bins 328, 164 and 82 exactly at the three codes,
+and the 8 kHz fold at bin 1475 against 1472 predicted — which is the sample rate talking,
+not the transform (a fold at 8 kHz moves 0.2 bins per sample per second; 1475 says
+12,497 S/s, within 0.06 % of the table).
+
+Two things only a screen could show. The axis labels were there and invisible: grey text
+drawn transparent onto the amber bars that fill the bottom of the region. And a tall peak
+sat at the far left of the spectrum, above the fundamental — the input stage subtracted a
+nominal 128 where this signal sits around 67, so sixty counts of DC went into the transform.
+The peak search starts at bin 2, so the header had been right all along while the picture
+was wrong. Both fixed, the DC one with a fixture whose negative control reproduces the
+spike. That is the third time this month a number was correct and the thing it described
+was not.
