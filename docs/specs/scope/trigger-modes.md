@@ -204,8 +204,12 @@ running the S2 procedure; they are recorded here so the procedure is written aga
   the committed record (discard the other edge in NORMAL/SINGLE, halving the rate on a
   symmetric signal) and must be labelled so (S1 (e)). Not excluded: a select that needs a
   re-arm or a second register.
-- **(a) replicated:** with the level at code 128 the trigger sample r[512] read 97–101
-  on all 100 EXP-55 records against a predicted 100 (level − 28). Still range 5 only.
+- **(a) replicated and closed (EXP-55, EXP-56):** with the level at code 128 the trigger
+  sample r[512] read 97–101 on all 100 EXP-55 records against a predicted 100; EXP-56 then
+  measured **range 5 and range 7 at three levels each, median offset 28 (once 29), 43/48
+  records within ±3**. Range 7 is 4.05× the gain of range 5 and shows the same 28, so the
+  offset is **digital** (an ADC-code bias), not analog. One constant serves the marker:
+  draw it at (code − 28). S2 (a) is met; *Trigger level* promotes to S2.
 - **Trigger position.** 512 post-trigger samples: the trigger is at mid-record, at
   (pointer − 512) mod 1024. PC0 is a handover strobe on the read, not a completion flag
   (EXP-53 postscript, EXP-54); the acquisition loop polls for it.

@@ -1,0 +1,14 @@
+EXP-56 device: Build: Sep 22 2026 13:17:33
+>
+  center: ['CH1 range 5: center DAC1=2815 (median=131)']
+  range 5 amp 2.0 Vpp: record span 105..204 mean 161.4
+  range 5 level code 183  predicted L-28 = 155 | r[512] 156 153 156 154 153 154 153 155 | median offset L - r[512] = 29 | edges frrrrffr
+  range 5 level code 164  predicted L-28 = 136 | r[512] 136 135 136 136 136 135 135 135 | median offset L - r[512] = 28 | edges frrfrrrr
+  range 5 level code 205  predicted L-28 = 177 | r[512] 178 177 177 177 178 176 185 182 | median offset L - r[512] = 28 | edges frffrrff
+>
+  center: ['CH1 range 7: center DAC1=2559 (median=139)']
+  range 7 amp 8.0 Vpp: record span 65..170 mean 111.8
+  range 7 level code 146  predicted L-28 = 118 | r[512] 119 118 117 117 118 119 117 118 | median offset L - r[512] = 28 | edges rrrrrfrr
+  range 7 level code 125  predicted L-28 =  97 | r[512]  97  97  99  88  99  89  92  97 | median offset L - r[512] = 28 | edges rffrfrrr
+  range 7 level code 167  predicted L-28 = 139 | r[512] 139 139 139 140 138 138 139 138 | median offset L - r[512] = 28 | edges rffffrff
+done
