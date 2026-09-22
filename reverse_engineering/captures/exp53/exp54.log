@@ -1,0 +1,31 @@
+EXP-54  device: Build: Sep 22 2026 09:20:17
+  acq poll gap 30 ms; poll starts 181 ms after a handover (derived: fill + 100 ms); last handover after 4 poll reads, 516 
+  acq poll start 181 ms after a handover (derived: fill + 100 ms, rate idx 0x10)
+  acq AUTO edge-wait 475 ms before the free-run fallback read (derived from timebase, rate idx 0x10)
+  trigger level 0 -> reg 0x08 code 0x80 in force (boot reconcile wrote 0x80)
+  trigger mode Auto (acq wait policy: AUTO falls back after the edge-wait; NORMAL/SINGLE hold)
+
+=== (a) NORMAL on a square (EXP-53 open defect) ===
+  square 1 Hz tb 0x12 NORMAL: advancing edges +13 commits +6  latency 1 ms  polls-before-last 50
+  square 4 Hz tb 0x10 NORMAL: advancing edges +20 commits +10  latency 1 ms  polls-before-last 11
+
+=== (b) EXP-47 lines, sine 201.2 Hz ===
+  tb 0x0E NORMAL: advancing edges +37 commits +18  latency 1 ms  polls 4  (fill 21 ms)
+  tb 0x10 NORMAL: advancing edges +30 commits +15  latency 1 ms  polls 4  (fill 82 ms)
+  tb 0x11 NORMAL: advancing edges +21 commits +10  latency 1 ms  polls 4  (fill 205 ms)
+  tb 0x12 NORMAL: advancing edges +14 commits +7  latency 1 ms  polls 4  (fill 410 ms)
+  level   +0 NORMAL: advancing edges +30 commits +15
+  level +100 NORMAL: FROZEN    edges +0 commits +0
+  level   +0 NORMAL: advancing edges +30 commits +15
+  SINGLE 1: gen 938 -> [950, 950, 950] -> ONE record then held
+  SINGLE 2: gen 954 -> [968, 968, 968] -> ONE record then held
+  SINGLE 3: gen 972 -> [984, 984, 984] -> ONE record then held
+  AUTO 10 s: edges +33 commits +16  edges/commit 2.06
+
+=== (c) body floors, AUTO ===
+  drive 201.2 Hz tb 0x10 body   6   6   6   6   6   6  median 6  latency 1 ms polls 4
+  drive 201.2 Hz tb 0x11 body  12  12  11  10  11  11  median 11  latency 1 ms polls 4
+  drive 201.2 Hz tb 0x12 body  23  22  22  22  23  23  median 22  latency 1 ms polls 4
+  drive  50.0 Hz tb 0x10 body   8   9  32   8  32   8  median 8  latency 1 ms polls 4
+  drive  50.0 Hz tb 0x11 body   8   7   7   7   7   8  median 7  latency 1 ms polls 4
+  drive  50.0 Hz tb 0x12 body   8   8   8   8   8   8  median 8  latency 1 ms polls 4

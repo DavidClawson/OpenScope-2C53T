@@ -1,0 +1,9 @@
+tb 0x12 pulse 1 Hz fs 2495 fill 410 ms: span 33..134 high-fraction 0.45 (expect ~0.24 if duty=10%)  level readback: trigger level -20 -> reg 0x08 code 0x80 in force (boot recon
+  LATE  edge+fill+330  edges +0 commits +0   rising-edge raw index per record: [355, 355, 355, 355, 355, 355, 355, 355]   falling: [707, 707, 707, 707, 707, 707, 707, 707]
+  LATE  edge+fill+230  edges +0 commits +0   rising-edge raw index per record: [355, 355, 355, 355, 355, 355, 355, 355]   falling: [707, 707, 707, 707, 707, 707, 707, 707]
+  EARLY edge+100       edges +0 commits +0   rising-edge raw index per record: [355, 355, 355, 355, 355, 355, 355, 355]   falling: [707, 707, 707, 707, 707, 707, 707, 707]
+tb 0x10 pulse 4 Hz fs 12490 fill 82 ms: span 32..134 high-fraction 0.55 (expect ~0.30 if duty=10%)  level readback: trigger level -20 -> reg 0x08 code 0x68 in force (boot recon
+  LATE  edge+fill+330  edges +0 commits +0   rising-edge raw index per record: [489, 489, 489, 489, 489, 489, 489, 489]   falling: [176, 176, 176, 176, 176, 176, 176, 176]
+  LATE  edge+fill+230  edges +0 commits +0   rising-edge raw index per record: [489, 489, 489, 489, 489, 489, 489, 489]   falling: [176, 176, 176, 176, 176, 176, 176, 176]
+  EARLY edge+100       edges +0 commits +0   rising-edge raw index per record: [489, 489, 489, 489, 489, 489, 489, 489]   falling: [176, 176, 176, 176, 176, 176, 176, 176]
+done

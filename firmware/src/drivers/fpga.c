@@ -3465,7 +3465,9 @@ static volatile uint16_t acq_pair_gap_ms = 0;
  * the task's reads (0..7 = /2../256; 0xFF = leave whatever is set) — shell
  * reads at /256 yield an edge every time. */
 static volatile uint16_t acq_post_edge_ms = 0;
-static volatile uint16_t acq_hold_read_ms = 0;   /* EXP-50: 0 = derive fill + 30 ms */
+static volatile uint16_t acq_poll_gap_ms = 30;   /* EXP-54: poll cadence after the poll start (stock: 29 ms) */
+static volatile bool     acq_unrotate = false;   /* EXP-52: OFF until the pointer origin is measured */
+static volatile int16_t  acq_unrotate_offset = 0;
 static volatile uint8_t  acq_read_br = 0xFF;
 static volatile uint32_t acq_gate_skips = 0;   /* reads the gate prevented */
 /* Reg 0x01 value currently in force -- the ONE variable that mirrors the
@@ -3564,7 +3566,10 @@ uint16_t fpga_acq_post_edge_get(void)
     if (acq_post_edge_ms) return acq_post_edge_ms;
     float fs = scope_timebase_sample_rate(acq_rate_idx);
     if (fs <= 0.0f) return 600u;
-    float ms = 1024.0f / fs * 1000.0f + 230.0f;
+    /* EXP-54: poll START after a handover. The FPGA holds ~189 ms then needs
+     * one fill before the next record can be complete (EXP-46's bracket);
+     * start polling a little early -- a read before completion is harmless. */
+    float ms = 1024.0f / fs * 1000.0f + 100.0f;
     if (ms > 5000.0f) ms = 5000.0f;
     return (uint16_t)ms;
 }
@@ -3574,17 +3579,42 @@ bool fpga_acq_post_edge_is_override(void) { return acq_post_edge_ms != 0; }
  * (and committed) at edge + fill + margin instead of at the bracket's end;
  * the ARMING read is then issued at fpga_acq_post_edge_get(). Same records
  * per second, each one ~200 ms sooner. Unmeasured rates: 300 ms. */
-void fpga_acq_hold_read_set(uint16_t ms)  { acq_hold_read_ms = ms; }
-uint16_t fpga_acq_hold_read_get(void)
+void     fpga_acq_poll_gap_set(uint16_t ms)  { acq_poll_gap_ms = ms ? ms : 30u; }
+uint16_t fpga_acq_poll_gap_get(void)         { return acq_poll_gap_ms; }
+void fpga_acq_unrotate_set(bool on)           { acq_unrotate = on; }
+bool fpga_acq_unrotate_get(void)              { return acq_unrotate; }
+void fpga_acq_unrotate_offset_set(int16_t n)  { acq_unrotate_offset = n; }
+int16_t fpga_acq_unrotate_offset_get(void)    { return acq_unrotate_offset; }
+
+#if FPGA_WARM_HANDOFF_TEST
+/* EXP-51/52 (2026-09-15): the readout is the circular capture memory from
+ * address 0, rotated by L = (PC0 edge - arming read) x fs (+ calibration).
+ * Rotate both staged channels left by L so index 0 is the trigger crossing.
+ * Returns the rotation applied, or -1 when it could not be computed. */
+static int32_t fpga_acq_unrotate_staging(bool triggered)
 {
-    if (acq_hold_read_ms) return acq_hold_read_ms;
+    static uint8_t tmp[FPGA_ADC_BUF_SIZE];
+    if (!triggered) return -1;
     float fs = scope_timebase_sample_rate(acq_rate_idx);
-    if (fs <= 0.0f) return 300u;
-    float ms = 1024.0f / fs * 1000.0f + 30.0f;
-    if (ms > 5000.0f) ms = 5000.0f;
-    return (uint16_t)ms;
+    if (fs <= 0.0f) return -1;
+    uint32_t dcyc = fpga.pc0_last_cyc - fpga.arm_read_cyc;      /* wraps correctly */
+    if (dcyc > 240000000u) return -1;                            /* > 1 s: not this cycle */
+    fpga.acq_last_lat_us = dcyc / 240u;
+    int32_t L = (int32_t)((float)dcyc / 240000000.0f * fs + 0.5f) + acq_unrotate_offset;
+    L %= (int32_t)FPGA_ADC_BUF_SIZE;
+    if (L < 0) L += FPGA_ADC_BUF_SIZE;
+    if (!acq_unrotate) return L;          /* reported (status), not applied */
+    if (L == 0) return 0;
+    volatile uint8_t *bufs[2] = { acq_write_ch1(), acq_write_ch2() };
+    for (int c = 0; c < 2; c++) {
+        uint8_t *b = (uint8_t *)bufs[c];
+        memcpy(tmp, b + L, FPGA_ADC_BUF_SIZE - L);
+        memcpy(tmp + (FPGA_ADC_BUF_SIZE - L), b, L);
+        memcpy(b, tmp, FPGA_ADC_BUF_SIZE);
+    }
+    return L;
 }
-bool fpga_acq_hold_read_is_override(void) { return acq_hold_read_ms != 0; }
+#endif
 void fpga_acq_read_br_set(uint8_t br)     { acq_read_br = br; }
 uint8_t fpga_acq_read_br_get(void)      { return acq_read_br; }
 uint16_t fpga_acq_pair_gap_get(void)    { return acq_pair_gap_ms; }
@@ -3700,6 +3730,7 @@ void EXINT0_IRQHandler(void)
     exint_flag_clear(EXINT_LINE_0);
     fpga.pc0_edges++;
     fpga.pc0_last_tick = xTaskGetTickCountFromISR();
+    fpga.pc0_last_cyc  = DWT->CYCCNT;
 }
 #endif
 
@@ -3773,6 +3804,10 @@ static void fpga_warmtest_acq_task(void *pv)
      * hold until the mode is re-selected. */
     bool capture_in_flight = false;
     bool single_done = false;
+    uint32_t last_handover_tick = 0;   /* EXP-54: tick of the last PC0-strobed read */
+    uint32_t last_read_tick = 0;
+    uint32_t last_commit_tick = 0;
+    uint32_t polls_since_handover = 0;
     trigger_mode_t last_mode = TRIG_AUTO;
     for (;;) {
         if (!fpga.initialized || fpga.bus_released) {
@@ -3840,91 +3875,77 @@ static void fpga_warmtest_acq_task(void *pv)
             vTaskDelay(pdMS_TO_TICKS(10));     /* hold the one record */
             continue;
         }
-        unsigned wait_ms = auto_mode ? fpga_acq_auto_wait_get()
-                                     : FPGA_NORMAL_TRIG_WAIT_MS;
-
-        bool triggered = false;
-        for (unsigned w = 0; w < wait_ms; w++) {
-            if (fpga.pc0_edges != edges_consumed) { triggered = true; break; }
-            vTaskDelay(pdMS_TO_TICKS(1));
-        }
-
-        if (!triggered) {
-            if (auto_mode && acq_gate_enable) {
-                /* GATE ON (stock's first step): no data-ready edge means the
-                 * capture is not complete, so there is nothing coherent to
-                 * read. Hold the last trace rather than reading across the
-                 * engine's write pointer. See the block comment on
-                 * acq_gate_enable — this needs the re-arm to keep PC0
-                 * arriving. */
-                acq_gate_skips++;
-                fpga.spi3_total_timeouts++;
-                continue;
+        /* EXP-53/54 (2026-09-20..22) — PC0 is a HANDOVER strobe, not a
+         * completion flag: it pulses 6–9 µs after an opcode-0x04 read that
+         * finds a completed record (50 cycles at 0x10/0x12, never more). The
+         * FPGA runs its own cycle: handover → ~189 ms hold → roll → crossing
+         * of (reg-0x08 − 28), either edge → 512 post samples → HELD until the
+         * next read. So this loop is a POLL, stock's 29 ms cadence: read; if
+         * the read strobed PC0 its data IS the fresh record → commit; else it
+         * is the rolling buffer → discard (AUTO: commit it as free-run once
+         * the budget expires; NORMAL/SINGLE: hold). Sleep until the earliest
+         * possible next handover (last + fill + poll-start margin), then poll
+         * every acq_poll_gap_ms. Reads during the FPGA's cycle are harmless
+         * (EXP-53: the cycle ran at the same rate with reads inside it).
+         * This also fixes NORMAL freezing on slow signals: the single arming
+         * read of EXP-47/50 landed before the crossing and nothing read again. */
+        uint32_t now = xTaskGetTickCount();
+        if (capture_in_flight) {
+            uint32_t earliest = last_handover_tick + fpga_acq_post_edge_get();
+            if ((int32_t)(earliest - now) > 0) {
+                uint32_t d = earliest - now;
+                if (d > 5000u) d = 5000u;
+                vTaskDelay(pdMS_TO_TICKS(d));
+                now = xTaskGetTickCount();
             }
-            if (auto_mode) {
-                /* Free-run poll: fall through and read the live buffer. Pace
-                 * to ~30 Hz so the display (its own ~50 ms frame loop is the
-                 * real cap) stays smooth without spinning SPI. NOTE this is
-                 * REFRESH rate, not SAMPLE rate — horizontal measurements
-                 * depend on the in-buffer sample clock, still uncontrolled
-                 * (dev plan F4); a faster refresh gives more updates, not more
-                 * correct time bases. */
-                vTaskDelay(pdMS_TO_TICKS(FPGA_AUTO_CADENCE_MS));
-            } else if (!capture_in_flight) {
-                /* NORMAL/SINGLE with nothing in flight: PRIME. A read starts
-                 * the capture the edge will announce; its contents are the
-                 * stale buffer, so it lands in staging and is never
-                 * committed. Consume edges first so the edge this read
-                 * produces is the one we wait for. */
-                edges_consumed = fpga.pc0_edges;
-                if (acq_read_br != 0xFF) spi3_set_br(acq_read_br);
-                (void)fpga_warmtest_read_channel(0x04, acq_write_ch1());
-                if (acq_pair_gap_ms) vTaskDelay(pdMS_TO_TICKS(acq_pair_gap_ms));
-                (void)fpga_warmtest_read_channel(0x05, acq_write_ch2());
-                capture_in_flight = true;
-                continue;
-            } else {
-                /* NORMAL/SINGLE, capture in flight, no trigger this window:
-                 * hold the last trace. Count it as a timeout for the "TO:"
-                 * overlay and loop back WITHOUT reading — ch1_buf/ch2_buf
-                 * keep the last capture. */
-                fpga.spi3_total_timeouts++;
-                continue;
-            }
-        }
-
-        bool two_phase = false;
-        if (triggered) {
-            if (fpga_acq_post_edge_is_override()) {
-                /* Single read at the override delay (EXP-46 sweeps): this
-                 * read both returns the held record and arms the next. */
-                uint16_t pe = fpga_acq_post_edge_get();
-                if (pe) vTaskDelay(pdMS_TO_TICKS(pe));
-            } else {
-                /* EXP-50 default: read the HELD record at fill + margin and
-                 * commit it now; the arming read comes at the bracket's end
-                 * (below). Reads inside the bracket do not arm (EXP-48 B). */
-                two_phase = true;
-                vTaskDelay(pdMS_TO_TICKS(fpga_acq_hold_read_get()));
-            }
+            uint32_t next_poll = last_read_tick + acq_poll_gap_ms;
+            if ((int32_t)(next_poll - now) > 0)
+                vTaskDelay(pdMS_TO_TICKS(next_poll - now));
         }
         if (acq_read_br != 0xFF)
             spi3_set_br(acq_read_br);                       /* EXP-46 (b) */
-        edges_consumed = fpga.pc0_edges;   /* consume BEFORE reading: an edge
-                                              during our read is a new capture
-                                              and belongs to the next cycle */
+        uint32_t edges_before = fpga.pc0_edges;
         uint16_t hw_to_before = fpga.spi3_hw_timeouts;
         /* Reads land in staging, not the published buffers (P0.2): a frame
          * the gate below rejects never reaches the display, and an accepted
          * one is committed atomically in fpga_acq_frames_commit(). */
         volatile uint8_t *w1 = acq_write_ch1();
         volatile uint8_t *w2 = acq_write_ch2();
+        fpga.arm_read_cyc = DWT->CYCCNT;
         uint8_t s1 = fpga_warmtest_read_channel(0x04, w1);
         if (acq_pair_gap_ms) vTaskDelay(pdMS_TO_TICKS(acq_pair_gap_ms));
         uint8_t s2 = fpga_warmtest_read_channel(0x05, w2);
-        if (!two_phase)
-            capture_in_flight = true;          /* this read started the next one */
-
+        last_read_tick = xTaskGetTickCount();
+        bool triggered = (fpga.pc0_edges != edges_before);
+        if (!triggered) {                       /* the strobe is µs after the read; give the ISR a tick */
+            vTaskDelay(pdMS_TO_TICKS(1));
+            triggered = (fpga.pc0_edges != edges_before);
+        }
+        edges_consumed = fpga.pc0_edges;
+        bool first_read = !capture_in_flight;
+        capture_in_flight = true;
+        if (triggered || first_read) {
+            last_handover_tick = last_read_tick;
+            fpga.acq_polls_last = polls_since_handover;
+            polls_since_handover = 0;
+        } else {
+            polls_since_handover++;
+            fpga.acq_poll_reads++;
+        }
+        if (!triggered) {
+            if (auto_mode && acq_gate_enable) {
+                acq_gate_skips++;                /* GATE ON: never show the roll */
+                continue;
+            }
+            bool budget_up = (int32_t)(last_read_tick - last_commit_tick) >= (int32_t)fpga_acq_auto_wait_get();
+            if (!(auto_mode && (budget_up || first_read))) {
+                /* NORMAL/SINGLE (or AUTO inside its budget): the rolling
+                 * buffer is not a record. Hold the last trace, poll again. */
+                continue;
+            }
+            /* AUTO fallback: no handover for a whole budget — show the
+             * free-running buffer so a quiet or off-level input still moves. */
+        }
         /* Anchor the success flags on frame validity — a fully dead bus
          * reads 0xFF everywhere (pull-up idle / spi3_xfer timeout), which
          * after the -28 offset is a plausible flat 227, and one spurious
@@ -3950,7 +3971,9 @@ static void fpga_warmtest_acq_task(void *pv)
          * which "varies" and would pass. If spi3_hw_timeouts moved during the
          * two reads, at least one byte is fabricated: reject. */
         if ((marker || varies) && fpga.spi3_hw_timeouts == hw_to_before) {
+            fpga.acq_last_rot = fpga_acq_unrotate_staging(triggered);   /* EXP-52 */
             fpga_acq_frames_commit();
+            last_commit_tick = last_read_tick;
             fpga.spi3_ok_count++;
             fpga.spi3_timeout_count = 0;
             data_ready = true;
@@ -3985,24 +4008,10 @@ static void fpga_warmtest_acq_task(void *pv)
                 vTaskDelay(pdMS_TO_TICKS(acq_rearm_wait_ms));
         }
 
-        /* EXP-50: the arming read at the bracket's end. Its contents are the
-         * same held record, so it lands in staging and is not committed. In
-         * SINGLE after its one record we hold instead. */
-        if (two_phase && !(mode_now == TRIG_SINGLE && single_done)) {
-            uint16_t pe = fpga_acq_post_edge_get(), hr = fpga_acq_hold_read_get();
-            if (pe > hr) vTaskDelay(pdMS_TO_TICKS(pe - hr));
-            edges_consumed = fpga.pc0_edges;
-            if (acq_read_br != 0xFF) spi3_set_br(acq_read_br);
-            (void)fpga_warmtest_read_channel(0x04, acq_write_ch1());
-            if (acq_pair_gap_ms) vTaskDelay(pdMS_TO_TICKS(acq_pair_gap_ms));
-            (void)fpga_warmtest_read_channel(0x05, acq_write_ch2());
-            capture_in_flight = true;
-        }
-
         /* Bound the read rate lightly; the display's own 50 ms frame loop
          * caps rendering, so reading faster than it draws only costs SPI
          * time (~275 µs per CH1+CH2 pair at /2). */
-        vTaskDelay(pdMS_TO_TICKS(10));
+        vTaskDelay(pdMS_TO_TICKS(1));
     }
 }
 #endif /* FPGA_WARM_HANDOFF_TEST */

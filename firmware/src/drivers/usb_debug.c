@@ -674,10 +674,12 @@ static void cmd_status(void)
      * MISO bytes of the last 04/05 read — stock's CH1 b2==01 = buffer valid. */
     usb_debug_printf(
         "PC0 edges: %lu\r\n"
-        "acq latency: %lu ms (edge -> held record committed, last cycle)\r\n"
+        "acq latency: %lu ms (strobe -> commit, last cycle); poll reads before it: %lu (total %lu)\r\n"
+        "acq rotation: %ld samples (arm -> edge %lu us)\r\n"
         "acq hdr CH1: %02X %02X %02X  CH2: %02X %02X %02X\r\n",
         (unsigned long)fpga.pc0_edges,
-        (unsigned long)fpga.acq_last_latency_ms,
+        (unsigned long)fpga.acq_last_latency_ms, (unsigned long)fpga.acq_polls_last, (unsigned long)fpga.acq_poll_reads,
+        (long)fpga.acq_last_rot, (unsigned long)fpga.acq_last_lat_us,
         fpga.acq_hdr_ch1[0], fpga.acq_hdr_ch1[1], fpga.acq_hdr_ch1[2],
         fpga.acq_hdr_ch2[0], fpga.acq_hdr_ch2[1], fpga.acq_hdr_ch2[2]
     );
@@ -2417,26 +2419,53 @@ static void cmd_fpga_postedge(const char *args)
         if (parse_int(args, &ms) != 0 || ms > 5000u) { usb_send_str("usage: fpga postedge [ms 0..5000, 0 = derive from timebase]\r\n"); return; }
         fpga_acq_post_edge_set((uint16_t)ms);
     }
-    usb_debug_printf("acq post-edge delay %u ms before the pair read (%s, rate idx 0x%02X)\r\n",
+    usb_debug_printf("acq poll start %u ms after a handover (%s, rate idx 0x%02X)\r\n",
                      (unsigned)fpga_acq_post_edge_get(),
-                     fpga_acq_post_edge_is_override() ? "override" : "derived: fill + 230 ms",
+                     fpga_acq_post_edge_is_override() ? "override" : "derived: fill + 100 ms",
                      fpga_acq_rate_idx_get());
 }
 
-/* `fpga holdread [ms]` — delay from the PC0 edge to the read of the held record (EXP-50). */
-static void cmd_fpga_holdread(const char *args)
+/* `fpga pollgap [ms]` — poll cadence after the poll start (EXP-54). */
+static void cmd_fpga_pollgap(const char *args)
 {
     while (*args == ' ') args++;
     if (*args) {
         uint32_t ms = 0;
-        if (parse_int(args, &ms) != 0 || ms > 5000u) { usb_send_str("usage: fpga holdread [ms 0..5000, 0 = derive from timebase]\r\n"); return; }
-        fpga_acq_hold_read_set((uint16_t)ms);
+        if (parse_int(args, &ms) != 0 || ms < 1u || ms > 1000u) { usb_send_str("usage: fpga pollgap [ms 1..1000]\r\n"); return; }
+        fpga_acq_poll_gap_set((uint16_t)ms);
     }
-    usb_debug_printf("acq hold-read delay %u ms after the edge (%s); arming read at %u ms (%s)\r\n",
-                     (unsigned)fpga_acq_hold_read_get(),
-                     fpga_acq_hold_read_is_override() ? "override" : "derived: fill + 30 ms",
-                     (unsigned)fpga_acq_post_edge_get(),
-                     fpga_acq_post_edge_is_override() ? "override: single read, arms" : "derived: fill + 230 ms");
+    usb_debug_printf("acq poll gap %u ms; poll starts %u ms after a handover (%s); last handover after %lu poll reads, %lu total\r\n",
+                     (unsigned)fpga_acq_poll_gap_get(), (unsigned)fpga_acq_post_edge_get(),
+                     fpga_acq_post_edge_is_override() ? "override" : "derived: fill + 100 ms",
+                     (unsigned long)fpga.acq_polls_last, (unsigned long)fpga.acq_poll_reads);
+}
+
+/* `fpga holdread` — retired by EXP-54: the read that strobes PC0 is the record. */
+static void cmd_fpga_holdread(const char *args)
+{
+    (void)args;
+    usb_send_str("retired (EXP-54): PC0 strobes the read that hands over the record, so that read is committed; use fpga pollgap / fpga postedge\r\n");
+}
+
+/* `fpga unrotate [on|off] [offset]` — un-rotate the record so index 0 is the trigger (EXP-52). */
+static void cmd_fpga_unrotate(const char *args)
+{
+    while (*args == ' ') args++;
+    if (*args) {
+        if      (strncmp(args, "on",  2) == 0) { fpga_acq_unrotate_set(true);  args += 2; }
+        else if (strncmp(args, "off", 3) == 0) { fpga_acq_unrotate_set(false); args += 3; }
+        while (*args == ' ') args++;
+        if (*args) {
+            int32_t n = 0; bool neg = (*args == '-'); if (neg || *args == '+') args++;
+            uint32_t u = 0;
+            if (parse_int(args, &u) != 0 || u > 1023u) { usb_send_str("usage: fpga unrotate [on|off] [offset -1023..1023]\r\n"); return; }
+            n = neg ? -(int32_t)u : (int32_t)u;
+            fpga_acq_unrotate_offset_set((int16_t)n);
+        }
+    }
+    usb_debug_printf("acq unrotate %s, offset %d samples; last rotation %ld (arm -> edge %lu us)\r\n",
+                     fpga_acq_unrotate_get() ? "ON" : "OFF", (int)fpga_acq_unrotate_offset_get(),
+                     (long)fpga.acq_last_rot, (unsigned long)fpga.acq_last_lat_us);
 }
 
 /* `fpga acqbr [0-7|off]` — SPI3 clock divider the acq task sets before each pair (EXP-46). */
@@ -7558,9 +7587,13 @@ static const shell_cmd_t shell_cmds[] = {
     CMD_V("settings", cmd_settings, SC_EXACT,
           "settings                        Persistence status: bound, load result, writes, failures\r\n"),
     CMD_A("fpga postedge", cmd_fpga_postedge, 0,
-          "fpga postedge [ms]              Delay between PC0 edge and the pair read (EXP-46)\r\n"),
+          "fpga postedge [ms]              Poll start after a handover, ms (EXP-54; derived fill + 100)\r\n"),
+    CMD_A("fpga pollgap", cmd_fpga_pollgap, 0,
+          "fpga pollgap [ms]               Poll cadence after the poll start (EXP-54; default 30)\r\n"),
     CMD_A("fpga holdread", cmd_fpga_holdread, 0,
-          "fpga holdread [ms]              Edge -> held-record read; arming read at postedge (EXP-50)\r\n"),
+          "fpga holdread                   Retired (EXP-54)\r\n"),
+    CMD_A("fpga unrotate", cmd_fpga_unrotate, 0,
+          "fpga unrotate [on|off] [ofs]    Rotate the record so index 0 = trigger crossing (EXP-52)\r\n"),
     CMD_A("fpga acqbr", cmd_fpga_acqbr, 0,
           "fpga acqbr [0-7|off]            SPI3 clock the acq task sets before each pair (EXP-46)\r\n"),
     CMD_A("fpga pairgap", cmd_fpga_pairgap, 0,

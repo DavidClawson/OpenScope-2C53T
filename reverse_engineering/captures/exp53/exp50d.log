@@ -1,0 +1,19 @@
+tb 0x12 table fs 2495  spectral fs from +330 records: 2500 2500 2500 2500 2500 2500  median 2500
+tb 0x12 drive   50 Hz hold fill+30    tear k [628, 628, 628, 632, 632]  phase-jump deg [-172, -136, -136, -136, -143]  1-seg rms 48 45 45 45 46  2-seg rms 6 6 6 5 7
+tb 0x12 drive   50 Hz hold fill+60    tear k [704, 704, 704, 704, 704]  phase-jump deg [-172, -136, -143, -136, -136]  1-seg rms 46 43 44 43 43  2-seg rms 5 5 5 6 5
+tb 0x12 drive   50 Hz hold fill+100   tear k [804, 804, 804, 804, 804]  phase-jump deg [-158, -136, -136, -136, -136]  1-seg rms 41 38 38 38 38  2-seg rms 5 5 5 5 6
+tb 0x12 drive   50 Hz hold fill+150   tear k [928, 928, 932, 928, 928]  phase-jump deg [-157, -135, -135, -135, -136]  1-seg rms 29 28 27 28 27  2-seg rms 6 6 7 6 7
+tb 0x12 drive   50 Hz hold fill+190   tear k [500, 424, 564, 464, 84]  phase-jump deg [7, 8, 6, 8, 2]  1-seg rms 7 8 7 7 10  2-seg rms 6 7 7 6 9
+tb 0x12 drive   50 Hz hold fill+210   tear k [64, 64, 64, 64, 496]  phase-jump deg [31, 169, 16, 117, 7]  1-seg rms 16 22 14 18 6  2-seg rms 12 13 12 11 5
+tb 0x12 drive   50 Hz hold fill+230   tear k [64, 64, 448, 64, 64]  phase-jump deg [171, 127, 8, 38, 171]  1-seg rms 22 19 7 16 22  2-seg rms 13 12 6 11 13
+tb 0x12 drive   50 Hz hold fill+330   tear k [64, 496, 64, 64, 64]  phase-jump deg [127, 7, 33, 171, 15]  1-seg rms 19 7 16 22 13  2-seg rms 12 6 12 13 11
+tb 0x11 table fs 4991  spectral fs from +330 records: 4998 4998 4998 4998 4998 4998  median 4998
+tb 0x11 drive   50 Hz hold fill+30    tear k [224, 232, 232, 232, 232]  phase-jump deg [111, 129, 128, 129, 129]  1-seg rms 34 38 37 38 38  2-seg rms 5 5 6 5 5
+tb 0x11 drive   50 Hz hold fill+60    tear k [376, 380, 384, 384, 380]  phase-jump deg [93, 129, 129, 125, 129]  1-seg rms 35 43 44 43 43  2-seg rms 5 5 5 7 6
+tb 0x11 drive   50 Hz hold fill+100   tear k [576, 584, 580, 584, 580]  phase-jump deg [111, 125, 129, 129, 128]  1-seg rms 41 44 45 45 44  2-seg rms 6 5 5 5 7
+tb 0x11 drive   50 Hz hold fill+150   tear k [828, 832, 832, 832, 832]  phase-jump deg [111, 129, 128, 129, 129]  1-seg rms 32 36 35 35 36  2-seg rms 4 5 6 5 5
+tb 0x11 drive   50 Hz hold fill+190   tear k [64, 64, 64, 64, 76]  phase-jump deg [15, -8, -10, -9, 88]  1-seg rms 7 9 9 7 21  2-seg rms 6 7 7 6 5
+tb 0x11 drive   50 Hz hold fill+210   tear k [92, 64, 64, 64, 92]  phase-jump deg [90, 37, 77, 97, 90]  1-seg rms 21 15 15 16 21  2-seg rms 5 7 7 7 5
+tb 0x11 drive   50 Hz hold fill+230   tear k [84, 92, 64, 64, 64]  phase-jump deg [89, 90, 28, 73, 96]  1-seg rms 21 21 15 15 15  2-seg rms 5 6 7 7 7
+tb 0x11 drive   50 Hz hold fill+330   tear k [72, 84, 92, 64, 76]  phase-jump deg [86, 90, 90, 45, 89]  1-seg rms 20 21 21 15 20  2-seg rms 5 5 5 7 6
+done

@@ -1,0 +1,18 @@
+(a) NORMAL at 0x10, sine 201.2 Hz, hold read edge+40
+   control: arming read derived (fill+230)  edges +37  commits +19 in 12 s
+   arming read at edge+5000                 edges +2  commits +0 in 12 s
+   control again                            edges +38  commits +19 in 12 s
+(b) hold read edge+40 vs edge+250, AUTO, body max (floor: ~6 at 0x10, ~11 at 0x11, ~22 at 0x12 for 201.2 Hz; ~8 for 50 Hz)
+   drive 201.2 Hz tb 0x10 hold edge+40   body   6   6   6   6   6   6  median 6   edges +32 commits +16
+   drive 201.2 Hz tb 0x10 hold edge+250  body  70   6   7   7   6   7  median 7   edges +31 commits +16
+   drive 201.2 Hz tb 0x11 hold edge+40   body  11  11  11  12  11  12  median 11   edges +24 commits +11
+   drive 201.2 Hz tb 0x11 hold edge+250  body  19  11  11  11  11  21  median 11   edges +23 commits +11
+   drive 201.2 Hz tb 0x12 hold edge+40   body  22  22  22  22  22  23  median 22   edges +16 commits +8
+   drive 201.2 Hz tb 0x12 hold edge+250  body  38  61  61  46  62  62  median 61   edges +16 commits +7
+   drive  50.0 Hz tb 0x10 hold edge+40   body  15  32   8   8  30  32  median 23   edges +32 commits +16
+   drive  50.0 Hz tb 0x10 hold edge+250  body  18  52  49  48  48  50  median 48   edges +33 commits +16
+   drive  50.0 Hz tb 0x11 hold edge+40   body   7   8   7   7   7   8  median 7   edges +23 commits +11
+   drive  50.0 Hz tb 0x11 hold edge+250  body  79  90  87  86  82  86  median 86   edges +24 commits +12
+   drive  50.0 Hz tb 0x12 hold edge+40   body   8   8   8   8   8   8  median 8   edges +17 commits +8
+   drive  50.0 Hz tb 0x12 hold edge+250  body  81  84  77  80  77  82  median 80   edges +16 commits +7
+done

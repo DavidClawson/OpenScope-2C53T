@@ -1,0 +1,67 @@
+level  -60 code  54  edges + 0 commits +12 | per record (k, v[k-1], v[k-64], back-to-rise-L, back-to-fall-L):
+      k    1  v[k-1]  97  v[k-64]  86  rise 813   fall 876  
+      k 1024  v[k-1]  58  v[k-64]  68  rise 731   fall 732  
+      k    1  v[k-1]  39  v[k-64] 122  rise 401   fall 1    
+      k    1  v[k-1]  45  v[k-64] 128  rise 523   fall 1    
+      k  634  v[k-1]  80  v[k-64]  90  rise 820   fall 821  
+      k    1  v[k-1]  90  v[k-64]  94  rise 306   fall 349  
+      k    1  v[k-1] 123  v[k-64]  61  rise 1     fall 12   
+      k    1  v[k-1]  33  v[k-64] 116  rise 445   fall 1    
+      k    1  v[k-1]  53  v[k-64] 132  rise 563   fall 1    
+      k  670  v[k-1]  68  v[k-64]  77  rise 897   fall 898  
+level  -37 code  83  edges +17 commits +16 | per record (k, v[k-1], v[k-64], back-to-rise-L, back-to-fall-L):
+      k  160  v[k-1] 130  v[k-64] 126  rise 324   fall 325  
+      k  657  v[k-1]  92  v[k-64]  82  rise 60    fall 677  
+      k  952  v[k-1]  93  v[k-64]  84  rise 61    fall 63   
+      k  472  v[k-1]  92  v[k-64]  83  rise 62    fall 63   
+      k  762  v[k-1]  93  v[k-64]  82  rise 57    fall 58   
+      k   74  v[k-1] 129  v[k-64] 126  rise 332   fall 333  
+      k  191  v[k-1]  93  v[k-64]  82  rise 56    fall 57   
+      k  959  v[k-1]  92  v[k-64]  82  rise 53    fall 54   
+      k  875  v[k-1]  93  v[k-64]  82  rise 58    fall 60   
+      k  394  v[k-1]  93  v[k-64]  83  rise 59    fall 60   
+level  -20 code 104  edges +16 commits +15 | per record (k, v[k-1], v[k-64], back-to-rise-L, back-to-fall-L):
+      k  109  v[k-1] 108  v[k-64] 118  rise 342   fall 346  
+      k  336  v[k-1]  70  v[k-64]  60  rise 676   fall 675  
+      k  640  v[k-1]  72  v[k-64]  63  rise 689   fall 688  
+      k  149  v[k-1]  70  v[k-64]  61  rise 677   fall 676  
+      k  442  v[k-1]  71  v[k-64]  61  rise 676   fall 675  
+      k   27  v[k-1] 109  v[k-64] 117  rise 334   fall 338  
+      k  419  v[k-1] 109  v[k-64] 120  rise 336   fall 341  
+      k  650  v[k-1]  71  v[k-64]  61  rise 677   fall 676  
+      k  234  v[k-1] 108  v[k-64] 119  rise 337   fall 339  
+      k  458  v[k-1]  70  v[k-64]  60  rise 674   fall 672  
+level   +0 code 128  edges +23 commits +16 | per record (k, v[k-1], v[k-64], back-to-rise-L, back-to-fall-L):
+      k   76  v[k-1]  86  v[k-64]  95  rise 333   fall 262  
+      k  484  v[k-1]  84  v[k-64]  94  rise 342   fall 272  
+      k   27  v[k-1]  46  v[k-64]  37  rise 676   fall 671  
+      k   44  v[k-1]  48  v[k-64]  38  rise 679   fall 678  
+      k   55  v[k-1]  49  v[k-64]  38  rise 755   fall 682  
+      k   29  v[k-1]  85  v[k-64]  94  rise 261   fall 259  
+      k   50  v[k-1]  85  v[k-64]  94  rise 261   fall 260  
+      k  543  v[k-1]  85  v[k-64]  95  rise 261   fall 260  
+      k  556  v[k-1]  84  v[k-64]  94  rise 262   fall 261  
+      k  111  v[k-1]  47  v[k-64]  38  rise 677   fall 676  
+level  +20 code 152  edges +18 commits +16 | per record (k, v[k-1], v[k-64], back-to-rise-L, back-to-fall-L):
+      k  905  v[k-1]  61  v[k-64]  71  rise None  fall None 
+      k   39  v[k-1]  41  v[k-64]  52  rise None  fall None 
+      k  314  v[k-1]  60  v[k-64]  70  rise None  fall None 
+      k  603  v[k-1]  60  v[k-64]  70  rise None  fall None 
+      k  120  v[k-1]  61  v[k-64]  71  rise None  fall None 
+      k  415  v[k-1]  60  v[k-64]  70  rise None  fall None 
+      k  805  v[k-1]  60  v[k-64]  69  rise None  fall None 
+      k   77  v[k-1]  60  v[k-64]  70  rise None  fall None 
+      k  616  v[k-1]  61  v[k-64]  71  rise None  fall None 
+      k  910  v[k-1]  61  v[k-64]  71  rise None  fall None 
+level  -37 code  83  edges +18 commits +16 | per record (k, v[k-1], v[k-64], back-to-rise-L, back-to-fall-L):
+      k  897  v[k-1]  93  v[k-64]  81  rise 63    fall 65   
+      k  183  v[k-1] 130  v[k-64] 128  rise 332   fall 333  
+      k  200  v[k-1]  93  v[k-64]  83  rise 61    fall 63   
+      k  583  v[k-1]  90  v[k-64]  80  rise 49    fall 50   
+      k    3  v[k-1] 130  v[k-64] 125  rise 330   fall 332  
+      k  124  v[k-1]  93  v[k-64]  83  rise 67    fall 69   
+      k  410  v[k-1]  92  v[k-64]  82  rise 52    fall 53   
+      k  200  v[k-1] 130  v[k-64] 125  rise 328   fall 329  
+      k  223  v[k-1]  93  v[k-64]  82  rise 53    fall 54   
+      k  620  v[k-1]  93  v[k-64]  81  rise 62    fall 64   
+done

@@ -374,7 +374,13 @@ typedef struct {
                                             * 143/174 CH1 windows, NEVER on CH2. */
     volatile uint8_t  acq_hdr_ch2[3];      /* Same for the last 0x05 read */
     volatile uint32_t pc0_last_tick;       /* tick of the last PC0 edge (EXP-50 latency) */
+    volatile uint32_t pc0_last_cyc;        /* DWT cycle count at the last PC0 edge (EXP-52) */
+    volatile uint32_t arm_read_cyc;        /* DWT cycle count at the start of the last 0x04 read */
+    volatile int32_t  acq_last_rot;        /* rotation L applied to the last committed record, -1 = none */
+    volatile uint32_t acq_last_lat_us;     /* arming read -> PC0 edge, microseconds, last cycle */
     volatile uint32_t acq_last_latency_ms; /* edge -> commit of the held record, last cycle */
+    volatile uint32_t acq_poll_reads;      /* EXP-54: reads that found the rolling buffer (no strobe), total */
+    volatile uint32_t acq_polls_last;      /* EXP-54: such reads before the last handover */
     volatile uint32_t pc0_edges;           /* PC0 (data-ready) falling edges via EXINT0.
                                             * One per fresh ready event — the instrument
                                             * for engine cycle rate per trigger regime,
@@ -1110,9 +1116,16 @@ uint16_t fpga_acq_post_edge_get(void);
 bool     fpga_acq_post_edge_is_override(void);
 /* EXP-50: delay from the PC0 edge to the read of the HELD record (committed),
  * derived fill + 30 ms; the arming read follows at fpga_acq_post_edge_get(). */
-void     fpga_acq_hold_read_set(uint16_t ms);
-uint16_t fpga_acq_hold_read_get(void);
-bool     fpga_acq_hold_read_is_override(void);
+void     fpga_acq_poll_gap_set(uint16_t ms);   /* EXP-54: poll cadence, ms (0 -> 30) */
+uint16_t fpga_acq_poll_gap_get(void);
+/* EXP-52: un-rotate the record so index 0 is the trigger crossing. The FPGA's
+ * capture memory is read from address 0; the write pointer starts at the
+ * arming read and reaches L at the crossing, so the readout is rotated by L
+ * = latency x fs. `offset` is a calibration term in samples added to L. */
+void     fpga_acq_unrotate_set(bool on);
+bool     fpga_acq_unrotate_get(void);
+void     fpga_acq_unrotate_offset_set(int16_t samples);
+int16_t  fpga_acq_unrotate_offset_get(void);
 void     fpga_acq_read_br_set(uint8_t br);
 uint8_t  fpga_acq_read_br_get(void);
 uint16_t fpga_acq_pair_gap_get(void);

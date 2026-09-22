@@ -1,0 +1,39 @@
+tb 0x12 tri 1 Hz fs 2495  level -34 (code 86)  period 2495 samples; predictions: post=0  roll-end=1024  189ms-late=2023
+  LATE  edge+fill+330  seam k    1 (jump  63)  fit rms  8.5 amp  38.9 off  -3.2   trig index: rising    277  falling    277
+  LATE  edge+fill+330  seam k  169 (jump 121)  fit rms  0.7 amp -75.5 off  74.3   trig index: rising    282  falling   1723
+  LATE  edge+fill+330  seam k  355 (jump  68)  fit rms  0.8 amp  75.7 off  57.6   trig index: rising   2331  falling    617
+  LATE  edge+fill+330  seam k  179 (jump 121)  fit rms  3.4 amp -75.3 off  74.4   trig index: rising    289  falling   1729
+  LATE  edge+fill+330  seam k  487 (jump 120)  fit rms  0.7 amp  75.2 off  73.9   trig index: rising    745  falling   1791
+  LATE  edge+fill+330  seam k 1004 (jump 120)  fit rms  0.7 amp  75.3 off  73.8   trig index: rising    749  falling   1795
+  LATE  edge+fill+230  seam k  105 (jump  28)  fit rms  3.5 amp -61.5 off  51.9   trig index: rising   2150  falling   1595
+  LATE  edge+fill+230  seam k  105 (jump  92)  fit rms  0.9 amp  75.7 off  57.7   trig index: rising   2242  falling    528
+  LATE  edge+fill+230  seam k  105 (jump  95)  fit rms  3.0 amp  75.4 off  57.5   trig index: rising    518  falling   1294
+  LATE  edge+fill+230  seam k  646 (jump 120)  fit rms  0.7 amp -75.2 off  73.9   trig index: rising   1793  falling    746
+  LATE  edge+fill+230  seam k  158 (jump 121)  fit rms  0.7 amp  75.4 off  74.2   trig index: rising   1725  falling    283
+  LATE  edge+fill+230  seam k  104 (jump  66)  fit rms  4.1 amp  67.3 off  56.4   trig index: rising   1137  falling   1835
+  EARLY edge+100       seam k  739 (jump 121)  fit rms  0.7 amp -75.4 off  74.3   trig index: rising    283  falling   1725
+  EARLY edge+100       seam k  262 (jump 121)  fit rms  0.7 amp -75.2 off  73.7   trig index: rising   1793  falling    750
+  EARLY edge+100       seam k   13 (jump 118)  fit rms  0.7 amp -75.3 off  73.8   trig index: rising   1793  falling    748
+  EARLY edge+100       seam k   80 (jump 120)  fit rms  0.7 amp -75.2 off  73.9   trig index: rising   1793  falling    746
+  EARLY edge+100       seam k  944 (jump 119)  fit rms  0.7 amp -75.3 off  73.7   trig index: rising   1795  falling    751
+  EARLY edge+100       seam k 1024 (jump  69)  fit rms  1.7 amp  75.3 off  75.7   trig index: rising    736  falling   1813
+tb 0x10 tri 4 Hz fs 12490  level -29 (code 92)  period 3122 samples; predictions: post=0  roll-end=1024  189ms-late=762
+  LATE  edge+fill+330  seam k  858 (jump  98)  fit rms  1.4 amp  75.5 off  91.0   trig index: rising   1806  falling    224
+  LATE  edge+fill+330  seam k  965 (jump 100)  fit rms  3.0 amp -74.9 off  55.0   trig index: rising   1611  falling    820
+  LATE  edge+fill+330  seam k  639 (jump  99)  fit rms  0.9 amp  75.8 off  90.4   trig index: rising   1817  falling    223
+  LATE  edge+fill+330  seam k  745 (jump 100)  fit rms  0.9 amp  75.5 off  82.6   trig index: rising    815  falling   2182
+  LATE  edge+fill+330  seam k  812 (jump  97)  fit rms  1.1 amp  75.7 off  91.0   trig index: rising   1808  falling    226
+  LATE  edge+fill+330  seam k  925 (jump  99)  fit rms  1.1 amp  75.2 off  68.2   trig index: rising    813  falling   1880
+  LATE  edge+fill+230  seam k  270 (jump  97)  fit rms  0.7 amp -75.6 off  90.2   trig index: rising    221  falling   1819
+  LATE  edge+fill+230  seam k    1 (jump  98)  fit rms  3.4 amp -74.5 off 158.2   trig index: rising    394  falling    567
+  LATE  edge+fill+230  seam k  505 (jump  96)  fit rms  0.9 amp -75.2 off  74.0   trig index: rising   2177  falling    989
+  LATE  edge+fill+230  seam k  579 (jump  99)  fit rms  1.7 amp -75.4 off  68.5   trig index: rising   1889  falling    816
+  LATE  edge+fill+230  seam k    1 (jump  97)  fit rms  5.8 amp  54.7 off -25.6   trig index: rising    569  falling    569
+  LATE  edge+fill+230  seam k  672 (jump 100)  fit rms  0.7 amp  75.7 off  38.7   trig index: rising   2886  falling    224
+  EARLY edge+100       seam k  472 (jump  99)  fit rms  0.7 amp  75.3 off  84.0   trig index: rising    814  falling   2211
+  EARLY edge+100       seam k  580 (jump 100)  fit rms  0.7 amp -75.4 off  89.6   trig index: rising   2319  falling    806
+  EARLY edge+100       seam k  603 (jump  99)  fit rms  1.6 amp -75.5 off  36.9   trig index: rising   1232  falling    811
+  EARLY edge+100       seam k  868 (jump  97)  fit rms  0.7 amp  75.7 off  90.3   trig index: rising   1820  falling    223
+  EARLY edge+100       seam k  345 (jump 101)  fit rms  0.7 amp  75.4 off  72.5   trig index: rising    820  falling   1976
+  EARLY edge+100       seam k  363 (jump 100)  fit rms  0.7 amp -75.4 off  39.4   trig index: rising   1286  falling    815
+done
