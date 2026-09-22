@@ -1,0 +1,58 @@
+EXP-55 device: Build: Sep 22 2026 13:17:33
+level code 128 -> expected crossing in record scale 100
+reg02=03 control  edges + 33 reads + 16 | distinct records 10/10 | rise 0 fall 1 flat 9 | r[512] 100 100  99  99  98  98  99  99 101  98
+      k  103  r[512] 100  slope   -2.6  flat
+      k   97  r[512] 100  slope   -2.1  flat
+      k  526  r[512]  99  slope   +2.1  flat
+      k   82  r[512]  99  slope   -3.8  fall
+      k  513  r[512]  98  slope   +2.4  flat
+      k  497  r[512]  98  slope   +1.2  flat
+      k  141  r[512]  99  slope   -3.0  flat
+      k  128  r[512]  99  slope   -2.1  flat
+      k  117  r[512] 101  slope   -1.6  flat
+      k  551  r[512]  98  slope   +2.4  flat
+reg02=01 bit0     edges + 33 reads + 16 | distinct records 10/10 | rise 0 fall 1 flat 9 | r[512] 100  98 100 100 100  99  99 100 100 100
+      k  103  r[512] 100  slope   -3.4  fall
+      k  102  r[512]  98  slope   -2.1  flat
+      k  532  r[512] 100  slope   +2.5  flat
+      k   88  r[512] 100  slope   -3.0  flat
+      k   78  r[512] 100  slope   -2.9  flat
+      k  504  r[512]  99  slope   +1.0  flat
+      k   71  r[512]  99  slope   -2.0  flat
+      k  495  r[512] 100  slope   +2.2  flat
+      k  484  r[512] 100  slope   +3.0  flat
+      k  554  r[512] 100  slope   +2.9  flat
+reg02=02 bit1     edges + 31 reads + 15 | distinct records 10/10 | rise 0 fall 0 flat 10 | r[512] 100  97  97 101  98  99 100  98 100  98
+      k  108  r[512] 100  slope   -2.4  flat
+      k  103  r[512]  97  slope   -2.2  flat
+      k  530  r[512]  97  slope   +2.5  flat
+      k   88  r[512] 101  slope   -2.0  flat
+      k   84  r[512]  98  slope   -1.6  flat
+      k   78  r[512]  99  slope   -2.6  flat
+      k  139  r[512] 100  slope   -2.8  flat
+      k  494  r[512]  98  slope   +2.0  flat
+      k  558  r[512] 100  slope   +2.5  flat
+      k  127  r[512]  98  slope   -2.6  flat
+reg02=00 none     edges + 31 reads + 15 | distinct records 10/10 | rise 0 fall 0 flat 10 | r[512] 100 100  98  98  99  98  98  97  97  99
+      k  116  r[512] 100  slope   -2.6  flat
+      k  550  r[512] 100  slope   +2.6  flat
+      k  537  r[512]  98  slope   +2.1  flat
+      k   99  r[512]  98  slope   -2.2  flat
+      k  520  r[512]  99  slope   +2.0  flat
+      k  510  r[512]  98  slope   +1.6  flat
+      k   75  r[512]  98  slope   -2.2  flat
+      k  508  r[512]  97  slope   +2.0  flat
+      k  142  r[512]  97  slope   -2.5  flat
+      k  143  r[512]  99  slope   -2.1  flat
+reg02=03 recovery edges + 31 reads + 15 | distinct records 10/10 | rise 0 fall 0 flat 10 | r[512] 100 100 100  98 100 100  97 100 100 100
+      k  490  r[512] 100  slope   +2.5  flat
+      k  560  r[512] 100  slope   +2.8  flat
+      k  113  r[512] 100  slope   -1.6  flat
+      k  113  r[512]  98  slope   -1.5  flat
+      k   97  r[512] 100  slope   -2.2  flat
+      k  523  r[512] 100  slope   +2.8  flat
+      k   86  r[512]  97  slope   -2.0  flat
+      k  145  r[512] 100  slope   -2.0  flat
+      k  500  r[512] 100  slope   +1.9  flat
+      k  138  r[512] 100  slope   -1.9  flat
+done

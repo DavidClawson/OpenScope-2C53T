@@ -198,8 +198,14 @@ running the S2 procedure; they are recorded here so the procedure is written aga
   record units, or the marker will sit 28 counts above where the hardware fires.
 - **(c) Edge.** **The FPGA fires on either polarity.** The crossing before the pointer is
   rising in some records and falling in others at the same level, at every level tried.
-  Whether reg 0x02 (stock writes `02 03` at boot) selects a polarity is untested; until
-  it is, the edge button is software-only and must be labelled so (S1 (e)).
+  **Reg 0x02 is not the select (EXP-55, 2026-09-22):** `02 00/01/02/03` all trigger on
+  both edges at the same rate and level, 100 records, two runs, `02 00` does not stop
+  triggering. So the edge button is an **MCU-side filter** on the slope at index 512 of
+  the committed record (discard the other edge in NORMAL/SINGLE, halving the rate on a
+  symmetric signal) and must be labelled so (S1 (e)). Not excluded: a select that needs a
+  re-arm or a second register.
+- **(a) replicated:** with the level at code 128 the trigger sample r[512] read 97–101
+  on all 100 EXP-55 records against a predicted 100 (level − 28). Still range 5 only.
 - **Trigger position.** 512 post-trigger samples: the trigger is at mid-record, at
   (pointer − 512) mod 1024. PC0 is a handover strobe on the read, not a completion flag
   (EXP-53 postscript, EXP-54); the acquisition loop polls for it.
