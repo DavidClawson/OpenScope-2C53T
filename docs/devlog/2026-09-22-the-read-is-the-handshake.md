@@ -72,3 +72,13 @@ The peak search starts at bin 2, so the header had been right all along while th
 was wrong. Both fixed, the DC one with a fixture whose negative control reproduces the
 spike. That is the third time this month a number was correct and the thing it described
 was not.
+
+The second look, on the fixed image, found three more, and they are the same shape. The
+header said `pk 4.4kHz` for a peak the estimator put at 4,497 Hz: the formatter truncated
+the tenth, so every frequency on the screen was biased down and nothing about the reading
+said so. The right-hand axis label read `24.9kH`: the string renderer's overflow check priced
+every glyph at the font height, so any label aligned to the screen edge lost its last
+character. And the `Fund` tag sat on top of the header. Each got a fixture whose negative
+control reproduces the exact screen reading. Five display defects in one day on a feature
+whose numbers had all been right, which is the argument for a screen check being a step in
+the acceptance rather than a courtesy.

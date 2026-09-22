@@ -116,6 +116,19 @@ static void test_bin_hz(void)
     CHECK(strcmp(lbl, "999.9Hz") == 0, "format 999.9 -> \"%s\"", lbl);
     fft_live_format_hz(2500000.0f, lbl, sizeof(lbl));
     CHECK(strcmp(lbl, "2.5MHz") == 0, "format 2.5e6 -> \"%s\"", lbl);
+    /* Rounding, not truncation (bench 2026-09-22: the 8 kHz fold at 0x10 is
+     * bin 1475 = 4497 Hz and the header said "4.4kHz"; Nyquist at 0x0E is
+     * 24,965 Hz and the axis said "24.9kHz"). The old formatter fails both. */
+    fft_live_format_hz(4497.4f, lbl, sizeof(lbl));
+    CHECK(strcmp(lbl, "4.5kHz") == 0, "format 4497.4 rounds to \"4.5kHz\" (got \"%s\")", lbl);
+    fft_live_format_hz(24965.0f, lbl, sizeof(lbl));
+    CHECK(strcmp(lbl, "25.0kHz") == 0, "format 24965 rounds to \"25.0kHz\" (got \"%s\")", lbl);
+    fft_live_format_hz(999.96f, lbl, sizeof(lbl));
+    CHECK(strcmp(lbl, "1.0kHz") == 0, "format 999.96 carries into \"1.0kHz\" (got \"%s\")", lbl);
+    fft_live_format_hz(12.19f, lbl, sizeof(lbl));
+    CHECK(strcmp(lbl, "12.2Hz") == 0, "format 12.19 rounds to \"12.2Hz\" (got \"%s\")", lbl);
+    fft_live_format_hz(4440.0f, lbl, sizeof(lbl));
+    CHECK(strcmp(lbl, "4.4kHz") == 0, "format 4440 stays \"4.4kHz\" (got \"%s\")", lbl);
 }
 
 /* ── 3. tone lands in the predicted bin; wrong fs fails ──────────── */

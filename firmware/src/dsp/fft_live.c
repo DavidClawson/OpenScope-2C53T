@@ -50,20 +50,27 @@ void fft_live_format_hz(float hz, char *buf, int bufsize)
     if (hz < 0.0f)
         hz = 0.0f;
 
-    if (hz >= 1000000.0f) {
+    /* Round to the tenth that is printed, then pick the unit on the rounded
+     * value so 999.96 Hz reads "1.0kHz" and not "1000.0Hz". Until 2026-09-22
+     * the tenth was truncated: the 8 kHz fold at 0x10 (bin 1475 = 4497 Hz)
+     * printed "4.4kHz" on the bench, and Nyquist at 0x0E (24,965 Hz) read
+     * "24.9kHz". Truncation is a bias, always down, so it cannot be told
+     * from a rate error by reading the screen. */
+    long tenths;
+    if (hz >= 999950.0f) {
         val = hz / 1000000.0f;
         unit = "MHz";
-    } else if (hz >= 1000.0f) {
+    } else if (hz >= 999.95f) {
         val = hz / 1000.0f;
         unit = "kHz";
     } else {
         val = hz;
         unit = "Hz";
     }
+    tenths = (long)(val * 10.0f + 0.5f);
 
-    int integer = (int)val;
-    int frac = (int)((val - (float)integer) * 10.0f);
-    if (frac < 0) frac = -frac;
+    int integer = (int)(tenths / 10);
+    int frac = (int)(tenths % 10);
 
     int pos = 0;
     if (integer >= 100 && pos < bufsize - 1) buf[pos++] = (char)('0' + integer / 100);
@@ -71,7 +78,6 @@ void fft_live_format_hz(float hz, char *buf, int bufsize)
     if (pos < bufsize - 1) buf[pos++] = (char)('0' + integer % 10);
     if (pos < bufsize - 1) buf[pos++] = '.';
     if (pos < bufsize - 1) buf[pos++] = (char)('0' + frac);
-
     while (*unit && pos < bufsize - 1)
         buf[pos++] = *unit++;
     buf[pos] = '\0';

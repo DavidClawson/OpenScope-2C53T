@@ -67,7 +67,14 @@ uint16_t font_draw_string(uint16_t x, uint16_t y, const char *str,
 {
     uint16_t start_x = x;
     while (*str) {
-        if (x + font->height > LCD_WIDTH)  /* rough overflow check */
+        /* Per-glyph clipping lives in font_draw_char() (it skips a glyph
+         * that would pass the right edge and still returns its advance).
+         * This used to break out early on `x + font->height > LCD_WIDTH`,
+         * a "rough overflow check" that priced every glyph at the font
+         * height (12 px in font_small): a label right-aligned to x = 318
+         * lost its last glyph, seen on the bench as `24.9kH` on the FFT
+         * axis (2026-09-22). */
+        if (x >= LCD_WIDTH)
             break;
         x += font_draw_char(x, y, *str, fg, bg, font);
         str++;

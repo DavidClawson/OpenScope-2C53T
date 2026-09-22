@@ -2430,7 +2430,14 @@ static void draw_fft_region(uint16_t y_top, uint16_t height)
          * unlike an absolute Hz figure, which is why one is drawn here and
          * the other is not. */
         if (fft_result.peaks[p].label[0] != '\0' && peak_x > 8 && peak_x < LCD_WIDTH - 30) {
-            font_draw_string(peak_x - 8, peak_y - 12,
+            /* Keep the tag below the source/peak header, which occupies
+             * y_top + 2 .. y_top + 2 + font height. The tallest peak reaches
+             * the headroom line just under the header, so its tag sat on top
+             * of "LIVE CH1 pk ..." on the bench (2026-09-22). */
+            int16_t tag_y = (int16_t)peak_y - 12;
+            int16_t tag_min = (int16_t)y_top + 2 + (int16_t)font_small.height + 1;
+            if (tag_y < tag_min) tag_y = tag_min;
+            font_draw_string(peak_x - 8, (uint16_t)tag_y,
                              fft_result.peaks[p].label, COLOR_ORANGE, COLOR_ORANGE, &font_small);
         }
     }

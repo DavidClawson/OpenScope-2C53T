@@ -8,9 +8,16 @@
 /* Stub out LCD functions since we're testing font logic only */
 #define LCD_WIDTH  320
 #define LCD_HEIGHT 240
-void lcd_set_pixel(unsigned short x, unsigned short y, unsigned short c) { (void)x; (void)y; (void)c; }
-void lcd_set_window(unsigned short x, unsigned short y, unsigned short w, unsigned short h) { (void)x; (void)y; (void)w; (void)h; }
-void lcd_write_data(unsigned short d) { (void)d; }
+/* The stubs count what reaches the panel so a test can tell "drew the whole
+ * string" from "returned a plausible width". Opaque draws go through
+ * lcd_set_window + lcd_write_data; transparent ones through lcd_set_pixel. */
+static unsigned long px_writes = 0;
+static unsigned short px_max_x = 0;
+static unsigned short win_x = 0, win_w = 0;
+void lcd_set_pixel(unsigned short x, unsigned short y, unsigned short c) { (void)y; (void)c; px_writes++; if (x > px_max_x) px_max_x = x; }
+void lcd_set_window(unsigned short x, unsigned short y, unsigned short w, unsigned short h) { (void)y; (void)h; win_x = x; win_w = w; if (w && x + w - 1 > px_max_x) px_max_x = x + w - 1; }
+void lcd_write_data(unsigned short d) { (void)d; px_writes++; }
+static void px_reset(void) { px_writes = 0; px_max_x = 0; win_x = win_w = 0; }
 
 #include "font.h"
 
@@ -83,6 +90,45 @@ static void test_draw_returns_width(void)
     ASSERT(adv > 0, "returned zero advance");
 }
 
+/* Right-aligned labels at the screen edge must keep their last glyph.
+ *
+ * Bench, 2026-09-22: the FFT axis label right-aligned to x = 318 read
+ * `24.9kH` — font_draw_string() stopped when x + font height passed the
+ * edge, pricing a 5 px 'z' at 12 px. The reference is the same string drawn
+ * well inside the screen: the pixel count must match, and the rightmost
+ * pixel must land inside the panel. The negative control reproduces the old
+ * rule on the same glyph advances and shows it would have dropped the 'z'. */
+static void test_right_aligned_edge_label(void)
+{
+    const char *lbl = "24.9kHz";
+
+    px_reset();
+    font_draw_string(100, 0, lbl, 0xFFFF, 0x0000, &font_small);
+    unsigned long inside = px_writes;
+
+    px_reset();
+    font_draw_string_right(LCD_WIDTH - 2, 0, lbl, 0xFFFF, 0x0000, &font_small);
+    unsigned long at_edge = px_writes;
+    unsigned short max_x = px_max_x;
+
+    TEST("right-aligned label at x=318 draws every glyph");
+    ASSERT(at_edge == inside && inside > 0, "pixel count differs from the same string drawn mid-screen");
+
+    TEST("right-aligned label stays inside the panel");
+    ASSERT(max_x <= LCD_WIDTH - 2, "rightmost pixel past x_right");
+
+    /* Negative control: the old rule on the same metrics. */
+    uint16_t w = font_string_width(lbl, &font_small);
+    uint16_t x = (uint16_t)(LCD_WIDTH - 2 - w);
+    int dropped = 0;
+    for (const char *c = lbl; *c; c++) {
+        if (x + font_small.height > LCD_WIDTH) { dropped++; }
+        x += font_small.advances[font_small.charmap[*c - font_small.first_char]];
+    }
+    TEST("negative control: old height-based rule drops the 'z'");
+    ASSERT(dropped >= 1, "old rule would not have reproduced the bench defect");
+}
+
 int main(void)
 {
     printf("=== Font System Tests ===\n\n");
@@ -98,6 +144,9 @@ int main(void)
 
     printf("\n[Drawing return values]\n");
     test_draw_returns_width();
+
+    printf("\n[Edge clipping]\n");
+    test_right_aligned_edge_label();
 
     printf("\n=== Results: %d/%d passed ===\n", tests_passed, tests_run);
     return (tests_passed == tests_run) ? 0 : 1;
