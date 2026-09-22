@@ -144,6 +144,11 @@ extern volatile bool          persist_enabled;
 #include "fft_test_signals.h"
 #include "shared_mem.h"   /* waterfall history is a sub-tenant of the FFT pool region */
 extern volatile scope_view_t scope_view;
+
+/* Scope time view: what UP/DOWN adjust. false = volts/div of the active
+ * channel (the default), true = the hardware trigger level. Toggled by MOVE
+ * (2026-09-22). Read by the renderer to highlight the level marker. */
+extern volatile bool scope_trig_level_focus;
 extern fft_result_t     fft_result;
 #endif
 

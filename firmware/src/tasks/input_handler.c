@@ -208,6 +208,8 @@ static void send_cmd(QueueHandle_t q, uint8_t cmd)
     xQueueSend(q, &cmd, 0);
 }
 
+volatile bool scope_trig_level_focus = false;
+
 /* Helper: show popup and send redraw */
 static void popup_and_redraw(QueueHandle_t q, const char *text)
 {
@@ -313,10 +315,17 @@ uint8_t input_handle_button(button_id_t button, QueueHandle_t dq)
 
     case BTN_MOVE:
         if (current_mode == MODE_OSCILLOSCOPE) {
-            scope_cycle_trigger_edge(ss);
-            snprintf(pb, sizeof(pb), "Edge: %s",
-                     trigger_edge_labels[ss->trigger.edge]);
-            popup_and_redraw(dq, pb);
+            /* MOVE switches what UP/DOWN adjust: volts/div <-> trigger level.
+             *
+             * Until 2026-09-22 the trigger level had NO control at all:
+             * scope_adjust_trigger_level() had zero callers, so reg 0x08 was
+             * whatever the boot reconcile or the shell last wrote and NORMAL
+             * mode could not be aimed. MOVE used to cycle the edge; the edge
+             * stays reachable in Settings -> Trigger Edge (it steers the
+             * display's soft trigger; the FPGA fires on either edge, EXP-55). */
+            scope_trig_level_focus = !scope_trig_level_focus;
+            popup_and_redraw(dq, scope_trig_level_focus ? "UP/DN: Trig level"
+                                                        : "UP/DN: V/div");
         } else {
             send_cmd(dq, cmd);
         }
@@ -538,6 +547,18 @@ uint8_t input_handle_button(button_id_t button, QueueHandle_t dq)
             send_cmd(dq, cmd);
         }
 #endif
+        else if (current_mode == MODE_OSCILLOSCOPE && scope_trig_level_focus) {
+            scope_adjust_trigger_level(ss, 1);
+            /* Through the ONE writer of reg 0x08, so the register, the
+             * persisted level and the marker cannot diverge. The popup shows
+             * the code the firmware records as in force, not a recomputation:
+             * the inert-controls lesson is to report the wire, not the
+             * setter's intent. */
+            const bool lv_ok = fpga_apply_trigger_level(ss->trigger.level);
+            snprintf(pb, sizeof(pb), lv_ok ? "Trig %+d  code %u" : "Trig %+d  NOT SET",
+                     ss->trigger.level, (unsigned)fpga_acq_trig_code_get());
+            popup_and_redraw(dq, pb);
+        }
         else if (current_mode == MODE_OSCILLOSCOPE) {
             channel_state_t *ch = (active_channel == 0) ? &ss->ch1 : &ss->ch2;
             scope_adjust_vdiv(ch, 1);
@@ -601,6 +622,18 @@ uint8_t input_handle_button(button_id_t button, QueueHandle_t dq)
             send_cmd(dq, cmd);
         }
 #endif
+        else if (current_mode == MODE_OSCILLOSCOPE && scope_trig_level_focus) {
+            scope_adjust_trigger_level(ss, -1);
+            /* Through the ONE writer of reg 0x08, so the register, the
+             * persisted level and the marker cannot diverge. The popup shows
+             * the code the firmware records as in force, not a recomputation:
+             * the inert-controls lesson is to report the wire, not the
+             * setter's intent. */
+            const bool lv_ok = fpga_apply_trigger_level(ss->trigger.level);
+            snprintf(pb, sizeof(pb), lv_ok ? "Trig %+d  code %u" : "Trig %+d  NOT SET",
+                     ss->trigger.level, (unsigned)fpga_acq_trig_code_get());
+            popup_and_redraw(dq, pb);
+        }
         else if (current_mode == MODE_OSCILLOSCOPE) {
             channel_state_t *ch = (active_channel == 0) ? &ss->ch1 : &ss->ch2;
             scope_adjust_vdiv(ch, -1);

@@ -147,10 +147,12 @@ void draw_scope_grid(void)
  * Trigger level indicator
  * ═══════════════════════════════════════════════════════════════════ */
 
-static void draw_trigger_indicator(const scope_state_t *ss, const theme_t *th)
+/* trig_y comes from trigger_marker_y_*() below: the row where the HARDWARE
+ * fires, not `level` pixels above centre (which is what this drew until
+ * 2026-09-22, unrelated to an autofit trace). */
+static void draw_trigger_indicator(const scope_state_t *ss, const theme_t *th,
+                                   int16_t trig_y)
 {
-    /* Trigger level as pixel Y position */
-    int16_t trig_y = SCOPE_MID_Y - ss->trigger.level;
     if (trig_y < SCOPE_TOP + 2) trig_y = SCOPE_TOP + 2;
     if (trig_y > SCOPE_BOT - 3) trig_y = SCOPE_BOT - 3;
 
@@ -166,8 +168,9 @@ static void draw_trigger_indicator(const scope_state_t *ss, const theme_t *th)
     lcd_set_pixel(ax - 1, (uint16_t)(trig_y + 1), th->trigger);
     lcd_set_pixel(ax - 2, (uint16_t)(trig_y + 2), th->trigger);
 
-    /* Dotted horizontal line at trigger level */
-    for (uint16_t x = 0; x < LCD_WIDTH - 6; x += 4)
+    /* Dotted horizontal line at trigger level; denser while UP/DOWN are
+     * adjusting it, so the user can see which control the arrows own. */
+    for (uint16_t x = 0; x < LCD_WIDTH - 6; x += (scope_trig_level_focus ? 2u : 4u))
         lcd_set_pixel(x, (uint16_t)trig_y, th->trigger);
 
     /* Trigger edge indicator (small arrow next to the trigger arrow) */
@@ -810,6 +813,58 @@ static float autofit_counts_per_pixel(const autofit_t *a)
 {
     if (!a->on || a->h <= 0) return 0.0f;
     return (float)a->span / (float)a->h;
+}
+
+/*
+ * Where the HARDWARE trigger fires, on the glass.
+ *
+ * The FPGA compares the ADC against reg 0x08 but the record carries ADC - 28,
+ * so the crossing that fires sits at (code - 28) in record units: measured on
+ * ranges 5 and 7 at six levels (EXP-55/56, median 28) and the same constant
+ * as stock's FPGA_ADC_OFFSET. That record code is mapped through the SAME
+ * autofit the trigger-source trace is drawn with, so the line sits on the
+ * trace where NORMAL would fire. Outside the trace's span it clamps to the
+ * band edge (autofit_y's clamp), which on screen reads as "level is above /
+ * below the signal" -- exactly the case where NORMAL holds.
+ *
+ * The code is the one fpga.c records as written (fpga_acq_trig_code_get),
+ * not recomputed from the UI level: report the wire, not the intent.
+ *
+ * Not covered: the opt-in true-scale view (the live compositor ignores it
+ * too); a band with no data falls back to the old pixel convention.
+ */
+static uint16_t scope_soft_trigger_offset(const scope_state_t *ss,
+                                          const volatile uint8_t *src_buf);
+
+static int16_t trigger_marker_y(const scope_state_t *ss, const autofit_t *a)
+{
+    if (a == NULL || !a->on)
+        return (int16_t)(SCOPE_MID_Y - ss->trigger.level);
+    int rec = (int)fpga_acq_trig_code_get() + (int)FPGA_ADC_OFFSET;
+    if (rec < 0)   rec = 0;
+    if (rec > 255) rec = 255;
+    return autofit_y(a, (uint8_t)rec);
+}
+
+/* Full-path variant: rebuild the trigger source's autofit exactly as
+ * draw_demo_waveform() will (same soft-trigger offset, same band split). */
+static int16_t trigger_marker_y_full(const scope_state_t *ss)
+{
+    const volatile uint8_t *b1 = fpga_get_ch1_buf();
+    const volatile uint8_t *b2 = fpga_get_ch2_buf();
+    if (!fpga_data_ready() || b1 == NULL || b2 == NULL)
+        return trigger_marker_y(ss, NULL);
+    const bool src2 = (ss->trigger.source == TRIG_SRC_CH2);
+    const bool c1 = ss->ch1.enabled, c2 = ss->ch2.enabled;
+    const volatile uint8_t *src = src2 ? b2 : b1;
+    uint16_t toff = scope_soft_trigger_offset(ss, src);
+    autofit_t a = { false, 0, 0, 0, 8, 0 };
+    if (c1 && c2)
+        autofit_prep(&a, src + toff, src2 ? (int16_t)(SCOPE_MID_Y + 1) : (int16_t)SCOPE_TOP,
+                                     src2 ? (int16_t)SCOPE_BOT : (int16_t)(SCOPE_MID_Y - 1));
+    else if (src2 ? c2 : c1)
+        autofit_prep(&a, src + toff, SCOPE_TOP, SCOPE_BOT);
+    return trigger_marker_y(ss, &a);
 }
 
 /* Returns the ADC counts one screen row was worth in the frame it just drew,
@@ -1907,7 +1962,7 @@ void draw_scope_screen(uint32_t frame)
     draw_ground_markers(ss, th);
 
     /* Layer 4: Trigger level indicator */
-    draw_trigger_indicator(ss, th);
+    draw_trigger_indicator(ss, th, trigger_marker_y_full(ss));
 
     /* Layer 5: Waveform */
     draw_demo_waveform(frame);
@@ -2023,10 +2078,6 @@ void draw_scope_live_frame(void)
     const uint16_t band_h = band_bot - SCOPE_TOP;
     (void)band_h;
 
-    /* Trigger dotted line, exactly as draw_trigger_indicator places it. */
-    int16_t trig_y = SCOPE_MID_Y - ss->trigger.level;
-    if (trig_y < SCOPE_TOP + 2) trig_y = SCOPE_TOP + 2;
-    if (trig_y > SCOPE_BOT - 3) trig_y = SCOPE_BOT - 3;
 
     /* Autofit exactly as the full path does, including its band split, so a
      * change of renderer never moves the trace. The transform runs against
@@ -2051,6 +2102,13 @@ void draw_scope_live_frame(void)
     } else if (en2) {
         autofit_prep(&a2, b2, SCOPE_TOP, SCOPE_BOT);
     }
+
+    /* Trigger dotted line, placed exactly as the full path places it: on the
+     * trigger source's autofit, at the record code where the hardware fires. */
+    int16_t trig_y = trigger_marker_y(ss, (ss->trigger.source == TRIG_SRC_CH2) ? &a2 : &a1);
+    if (trig_y < SCOPE_TOP + 2) trig_y = SCOPE_TOP + 2;
+    if (trig_y > SCOPE_BOT - 3) trig_y = SCOPE_BOT - 3;
+    const uint16_t trig_step = scope_trig_level_focus ? 1u : 3u;   /* dot mask */
 
     int16_t p1 = 0, p2 = 0;  /* previous column's y — vertical continuity */
 
@@ -2108,7 +2166,7 @@ void draw_scope_live_frame(void)
                 c = th->ch2;
             else if (a1.on && (int16_t)y >= lo1 && (int16_t)y <= hi1)
                 c = th->ch1;
-            else if ((int16_t)y == trig_y && (x & 3u) == 0 && x < LCD_WIDTH - 6)
+            else if ((int16_t)y == trig_y && (x & trig_step) == 0 && x < LCD_WIDTH - 6)
                 c = th->trigger;
             else if (y == SCOPE_MID_Y || x == LCD_WIDTH / 2)
                 c = th->grid_center;
