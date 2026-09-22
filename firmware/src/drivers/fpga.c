@@ -26,6 +26,7 @@
 #include "fpga_meter_plan.h"
 #include "meter_data.h"
 #include "scope_trigger.h"
+#include "../dsp/trig_edge.h"
 #include "../ui/ui.h"
 #include "../ui/scope_state.h"
 #include "../ui/scope_timebase.h"
@@ -3580,6 +3581,13 @@ bool fpga_acq_post_edge_is_override(void) { return acq_post_edge_ms != 0; }
  * the ARMING read is then issued at fpga_acq_post_edge_get(). Same records
  * per second, each one ~200 ms sooner. Unmeasured rates: 300 ms. */
 void     fpga_acq_poll_gap_set(uint16_t ms)  { acq_poll_gap_ms = ms ? ms : 30u; }
+/* Rising/Falling is an MCU-side filter: the FPGA fires on either edge and no
+ * register selects one (EXP-53 50j, EXP-55). Default ON, so the Trigger Edge
+ * setting means what it says in NORMAL/SINGLE; `fpga edgefilter off` restores
+ * the either-edge behaviour for comparison. */
+static bool acq_edge_filter = true;
+void     fpga_acq_edge_filter_set(bool on)   { acq_edge_filter = on; }
+bool     fpga_acq_edge_filter_get(void)      { return acq_edge_filter; }
 uint16_t fpga_acq_poll_gap_get(void)         { return acq_poll_gap_ms; }
 void fpga_acq_unrotate_set(bool on)           { acq_unrotate = on; }
 bool fpga_acq_unrotate_get(void)              { return acq_unrotate; }
@@ -3945,6 +3953,25 @@ static void fpga_warmtest_acq_task(void *pv)
             }
             /* AUTO fallback: no handover for a whole budget — show the
              * free-running buffer so a quiet or off-level input still moves. */
+        }
+        /* Edge filter (2026-09-22). A strobed record whose trigger crossing
+         * runs the wrong way is handled exactly like a read that found the
+         * roll: NORMAL/SINGLE keep holding (SINGLE is not consumed), AUTO
+         * keeps its fallback budget. Classified on CH1, where reg 0x08's
+         * level was measured. UNKNOWN (seam not recoverable -- typically a
+         * fast periodic signal, whose display the soft trigger already
+         * aligns to the chosen edge) is committed unfiltered and counted. */
+        if (triggered && acq_edge_filter) {
+            trig_edge_class_t ec = trig_edge_classify(w1, (int)acq_trig_code + (int)FPGA_ADC_OFFSET);
+            bool want_rising = (fpga_stock_trigger_edge_byte() == (uint8_t)TRIG_RISING);
+            if (ec == TRIG_EDGE_CLASS_UNKNOWN) {
+                fpga.acq_edge_unknown++;
+            } else if ((ec == TRIG_EDGE_CLASS_RISING) != want_rising) {
+                fpga.acq_edge_dropped++;
+                continue;
+            } else {
+                fpga.acq_edge_kept++;
+            }
         }
         /* Anchor the success flags on frame validity — a fully dead bus
          * reads 0xFF everywhere (pull-up idle / spi3_xfer timeout), which

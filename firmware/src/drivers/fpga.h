@@ -381,6 +381,9 @@ typedef struct {
     volatile uint32_t acq_last_latency_ms; /* edge -> commit of the held record, last cycle */
     volatile uint32_t acq_poll_reads;      /* EXP-54: reads that found the rolling buffer (no strobe), total */
     volatile uint32_t acq_polls_last;      /* EXP-54: such reads before the last handover */
+    volatile uint32_t acq_edge_kept;       /* edge filter: strobed records of the chosen edge */
+    volatile uint32_t acq_edge_dropped;    /* edge filter: strobed records of the other edge */
+    volatile uint32_t acq_edge_unknown;    /* edge filter: not classifiable -> committed unfiltered */
     volatile uint32_t pc0_edges;           /* PC0 (data-ready) falling edges via EXINT0.
                                             * One per fresh ready event — the instrument
                                             * for engine cycle rate per trigger regime,
@@ -1118,6 +1121,8 @@ bool     fpga_acq_post_edge_is_override(void);
  * derived fill + 30 ms; the arming read follows at fpga_acq_post_edge_get(). */
 void     fpga_acq_poll_gap_set(uint16_t ms);   /* EXP-54: poll cadence, ms (0 -> 30) */
 uint16_t fpga_acq_poll_gap_get(void);
+void     fpga_acq_edge_filter_set(bool on);    /* MCU-side trigger edge filter (EXP-55 follow-up) */
+bool     fpga_acq_edge_filter_get(void);
 /* EXP-52: un-rotate the record so index 0 is the trigger crossing. The FPGA's
  * capture memory is read from address 0; the write pointer starts at the
  * arming read and reaches L at the crossing, so the readout is rotated by L

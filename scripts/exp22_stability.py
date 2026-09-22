@@ -102,7 +102,9 @@ AUTO_STROBED_MIN = 1.5   # PC0 edges per committed pair in AUTO with a signal
                          # (2.0 = every commit strobed; fallback commits pull
                          # it down)
 STATUS_RE = dict(edges=r"PC0 edges: (\d+)", ok=r"SPI3 OK: (\d+)",
-                 latency=r"acq latency: (\d+) ms", polls=r"poll reads before it: (\d+)")
+                 latency=r"acq latency: (\d+) ms", polls=r"poll reads before it: (\d+)",
+                 kept=r"acq edge filter: \w+  kept (\d+)", dropped=r"dropped (\d+)  unclassified",
+                 unclassified=r"unclassified (\d+)")
 
 # r6 gains, raw table * SOURCE_SCALE (scope_cal.c / scope_cal.h). Volts/count.
 K_R6 = {1: 42.95e-3 * 0.92, 2: 41.71e-3 * 0.92}
@@ -328,7 +330,8 @@ def trigger_scenarios():
     advance-negctl (AUTO fallback: advances with zero strobes)."""
     base = dict(wave="sine", f=201.2, amp=2.0, off=0.0, tb=0x10, mode="normal",
                 level=0, expect="advance", n=5, gap=0.4, settle=1.5,
-                body=False, negctl=False, auto_window=0.0)
+                body=False, negctl=False, auto_window=0.0,
+                edge="rising", edgefilter=True, check_edge=None)
     def s(name, **kw):
         d = dict(base, name=name); d.update(kw); return d
     return [
@@ -347,6 +350,16 @@ def trigger_scenarios():
         s("SINGLE one-shot",        mode="single", expect="single"),
         s("AUTO strobed commits",   mode="auto", expect="advance",
           auto_window=10.0),
+        # Edge filter (MCU-side; the FPGA fires on either edge, EXP-55). A
+        # 2 Hz triangle at 0x12 puts one slow crossing per record, so every
+        # committed record's edge is readable by the host from the slope
+        # around the un-rotated trigger index.
+        s("EDGE rising",  wave="triangle", f=2.0, amp=2.0, off=0.0, tb=0x12,
+          n=8, gap=1.0, settle=3.0, check_edge="rising"),
+        s("EDGE falling", wave="triangle", f=2.0, amp=2.0, off=0.0, tb=0x12,
+          n=8, gap=1.0, settle=3.0, edge="falling", check_edge="falling"),
+        s("NEGCTL edge filter off", wave="triangle", f=2.0, amp=2.0, off=0.0, tb=0x12,
+          n=12, gap=1.0, settle=3.0, edgefilter=False, check_edge="mixed"),
     ]
 
 
@@ -367,6 +380,12 @@ def apply_trigger_scenario(sc, sg, scen, state):
         state["tb"] = scen["tb"]
         state["mode"] = "auto"
         time.sleep(0.5)
+    if scen["edge"] != state.get("edge"):
+        sc.cmd("fpga scope edge %s" % scen["edge"])
+        state["edge"] = scen["edge"]
+    if scen["edgefilter"] != state.get("edgefilter"):
+        sc.cmd("fpga edgefilter %s" % ("on" if scen["edgefilter"] else "off"))
+        state["edgefilter"] = scen["edgefilter"]
     if scen["level"] != state.get("level"):
         r = sc.trigger_level(scen["level"])
         m = re.search(r"code 0x([0-9A-Fa-f]+)", r)
@@ -419,8 +438,10 @@ def eval_trigger_scenario(scen, run, fs):
     st0, st1 = run["st0"], run["st1"]
     edges = st1["edges"] - st0["edges"]
     commits = (st1["ok"] - st0["ok"]) // 2
-    out.append("        status         edges +%d commits +%d latency %d ms polls-before-last %d"
-               % (edges, commits, st1["latency"], st1["polls"]))
+    dropped = st1["dropped"] - st0["dropped"]
+    out.append("        status         edges +%d commits +%d dropped +%d unclassified +%d latency %d ms polls-before-last %d"
+               % (edges, commits, dropped, st1["unclassified"] - st0["unclassified"],
+                  st1["latency"], st1["polls"]))
 
     if scen["expect"] == "advance":
         chk(state == "advancing", "advancing",
@@ -428,9 +449,11 @@ def eval_trigger_scenario(scen, run, fs):
         chk(edges > 0 and commits > 0, "strobed",
             "PC0 edges +%d, commits +%d" % (edges, commits))
         if scen["mode"] == "normal":
-            chk(abs(edges - 2 * commits) <= 2, "edges=2xcommit",
-                "every NORMAL commit carries a handover strobe (%d vs 2x%d)"
-                % (edges, commits))
+            # Every strobed pair is either committed or dropped by the edge
+            # filter; nothing else consumes a strobe in NORMAL.
+            chk(abs(edges - 2 * (commits + dropped)) <= 2, "strobes-accounted",
+                "each strobed pair committed or edge-dropped (%d vs 2x(%d+%d))"
+                % (edges, commits, dropped))
         if scen["auto_window"]:
             ratio = edges / commits if commits else 0.0
             chk(ratio >= AUTO_STROBED_MIN, "auto-strobed",
@@ -445,6 +468,23 @@ def eval_trigger_scenario(scen, run, fs):
         chk(edges == 0, "negctl-strobe",
             "and strobes nothing (PC0 edges +%d): the advance is the fallback, not a trigger" % edges)
 
+    if scen["check_edge"]:
+        seen = []
+        for fr in frames:
+            v = np.asarray(fr["ch1"], float)
+            k = int(np.argmax(np.abs(v - np.roll(v, 1))))
+            r = np.roll(v, -k)
+            d = r[552:592].mean() - r[432:472].mean()     # +/-40..80 around the trigger
+            seen.append("r" if d > 0 else "f")
+        uniq = [s for i, s in enumerate(seen) if i == 0 or frames[i]["gen"] != frames[i - 1]["gen"]]
+        tag = "".join(uniq)
+        if scen["check_edge"] == "mixed":
+            chk("r" in tag and "f" in tag, "edge-negctl",
+                "filter OFF: both edges committed (%s) -- the edge check can fail" % tag)
+        else:
+            want = scen["check_edge"][0]
+            chk(len(uniq) >= 3 and all(s == want for s in uniq), "edge",
+                "%d distinct records, all %s (%s)" % (len(uniq), scen["check_edge"], tag))
     if scen["body"] and scen["wave"] == "sine":
         tears = [tear_clusters(fr["ch1"], scen["f"], fs, tol_deg=TEAR_STEP_DEG) for fr in frames]
         runs = [t[0] for t in tears]

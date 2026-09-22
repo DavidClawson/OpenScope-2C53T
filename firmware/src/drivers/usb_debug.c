@@ -675,10 +675,13 @@ static void cmd_status(void)
     usb_debug_printf(
         "PC0 edges: %lu\r\n"
         "acq latency: %lu ms (strobe -> commit, last cycle); poll reads before it: %lu (total %lu)\r\n"
+        "acq edge filter: %s  kept %lu  dropped %lu  unclassified %lu\r\n"
         "acq rotation: %ld samples (arm -> edge %lu us)\r\n"
         "acq hdr CH1: %02X %02X %02X  CH2: %02X %02X %02X\r\n",
         (unsigned long)fpga.pc0_edges,
         (unsigned long)fpga.acq_last_latency_ms, (unsigned long)fpga.acq_polls_last, (unsigned long)fpga.acq_poll_reads,
+        fpga_acq_edge_filter_get() ? "ON" : "OFF", (unsigned long)fpga.acq_edge_kept,
+        (unsigned long)fpga.acq_edge_dropped, (unsigned long)fpga.acq_edge_unknown,
         (long)fpga.acq_last_rot, (unsigned long)fpga.acq_last_lat_us,
         fpga.acq_hdr_ch1[0], fpga.acq_hdr_ch1[1], fpga.acq_hdr_ch1[2],
         fpga.acq_hdr_ch2[0], fpga.acq_hdr_ch2[1], fpga.acq_hdr_ch2[2]
@@ -2438,6 +2441,38 @@ static void cmd_fpga_pollgap(const char *args)
                      (unsigned)fpga_acq_poll_gap_get(), (unsigned)fpga_acq_post_edge_get(),
                      fpga_acq_post_edge_is_override() ? "override" : "derived: fill + 100 ms",
                      (unsigned long)fpga.acq_polls_last, (unsigned long)fpga.acq_poll_reads);
+}
+
+/* `fpga scope edge [rising|falling]` — the same field Settings -> Trigger Edge
+ * sets; it steers the display's soft trigger and the MCU edge filter. */
+static void cmd_fpga_scope_edge(const char *args)
+{
+    while (*args == ' ') args++;
+    scope_state_t *ss = scope_state_get();
+    if (*args) {
+        if      (strncmp(args, "rising",  6) == 0) ss->trigger.edge = TRIG_RISING;
+        else if (strncmp(args, "falling", 7) == 0) ss->trigger.edge = TRIG_FALLING;
+        else { usb_send_str("usage: fpga scope edge [rising|falling]\r\n"); return; }
+    }
+    usb_debug_printf("trigger edge %s (edge filter %s)\r\n", trigger_edge_labels[ss->trigger.edge],
+                     fpga_acq_edge_filter_get() ? "ON" : "OFF");
+}
+
+/* `fpga edgefilter [on|off]` — the MCU-side trigger edge filter. */
+static void cmd_fpga_edgefilter(const char *args)
+{
+    while (*args == ' ') args++;
+    if (*args) {
+        if      (strncmp(args, "on",  2) == 0) fpga_acq_edge_filter_set(true);
+        else if (strncmp(args, "off", 3) == 0) fpga_acq_edge_filter_set(false);
+        else { usb_send_str("usage: fpga edgefilter [on|off]\r\n"); return; }
+    }
+    const scope_state_t *ss = scope_state_get();
+    usb_debug_printf("edge filter %s, edge %s: kept %lu dropped %lu unclassified %lu\r\n",
+                     fpga_acq_edge_filter_get() ? "ON" : "OFF",
+                     trigger_edge_labels[ss->trigger.edge],
+                     (unsigned long)fpga.acq_edge_kept, (unsigned long)fpga.acq_edge_dropped,
+                     (unsigned long)fpga.acq_edge_unknown);
 }
 
 /* `fpga holdread` — retired by EXP-54: the read that strobes PC0 is the record. */
@@ -7631,6 +7666,10 @@ static const shell_cmd_t shell_cmds[] = {
           "settings                        Persistence status: bound, load result, writes, failures\r\n"),
     CMD_A("fpga postedge", cmd_fpga_postedge, 0,
           "fpga postedge [ms]              Poll start after a handover, ms (EXP-54; derived fill + 100)\r\n"),
+    CMD_A("fpga scope edge", cmd_fpga_scope_edge, 0,
+          "fpga scope edge [rising|falling] Trigger edge (display soft trigger + MCU edge filter)\r\n"),
+    CMD_A("fpga edgefilter", cmd_fpga_edgefilter, 0,
+          "fpga edgefilter [on|off]        MCU trigger edge filter: keep Rising/Falling records (default on)\r\n"),
     CMD_A("fpga pollgap", cmd_fpga_pollgap, 0,
           "fpga pollgap [ms]               Poll cadence after the poll start (EXP-54; default 30)\r\n"),
     CMD_A("fpga holdread", cmd_fpga_holdread, 0,
