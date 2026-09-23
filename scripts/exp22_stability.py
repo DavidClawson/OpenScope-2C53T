@@ -989,6 +989,14 @@ def main():
             lines, ok = eval_trigger_scenario(scen, run, fs)
             print("\n".join(lines))
             results.append((scen["name"], ok))
+        # Restore every knob a scenario may have changed: the negative
+        # controls turn un-rotation and the edge filter OFF, and on
+        # 2026-09-23 a screen check ran on a device the harness had left
+        # with un-rotation off.
+        sc.cmd("fpga unrotate on")
+        sc.cmd("fpga edgefilter on")
+        sc.cmd("fpga scope edge rising")
+        sc.cmd("fpga scope hpos 160")
         sc.trigger_mode("auto")
         sc.trigger_level(0)
         sc.timebase(0x10)
