@@ -3,7 +3,7 @@
 - **Date:** 2026-09-22
 - **Unit:** bench unit #1
 - **Build:** measured on v15 (`d0ce0bb`, Build Sep 22 2026 19:13:27) through `spi3 opread`; fix in v16
-- **Status:** **CONFIRMED** on the wire; v16 acceptance below (predictions written before the run)
+- **Status:** **CONFIRMED** on the wire and on v16 (Build Sep 22 2026 20:15:11)
 
 ## 1. Problem
 Sample 0 of a committed record is often a stray value (13/20 raw records at 201 Hz / 0x10;
@@ -74,3 +74,15 @@ bytes in, as before). Log: `reverse_engineering/captures/exp58/exp58_held.log`; 
   records at 201 Hz / 0x10 (unrotate off) ≤ 1/20, against 13/20 on v15 with the same
   metric; (2) raw seam index = v15's minus one in distribution (seams at 4–59, not 5–60);
   (3) `exp22_stability.py --trigger-only` 17/17.
+
+## 8. v16 acceptance (run after the predictions above)
+| prediction | result | verdict |
+|---|---|---|
+| stray sample 0 ≤ 1/20 (v15: 13/20, same metric) | **0/20** | met |
+| raw seams shift by one sample | v16 seams 0–55, v15 1–60, unpaired records | **inconclusive** — per-record seam spread exceeds one sample, so unpaired sets cannot show a one-sample shift |
+| `exp22_stability.py --trigger-only` 17/17 | **17/17** | met |
+
+A first acceptance attempt stalled in NORMAL with zero strobes. Cause: the fresh boot left
+CH1 uncentred (29..81), so the trigger crossing (record 100) sat above the signal and NORMAL
+correctly held; the script had skipped centring. Rerun after a host centre (DAC1 2500).
+Logs: `v16_acceptance.log`, `v16_regression.log`, frames `v16_regression_frames.npz`.
