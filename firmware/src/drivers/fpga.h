@@ -1123,6 +1123,9 @@ void     fpga_acq_poll_gap_set(uint16_t ms);   /* EXP-54: poll cadence, ms (0 ->
 uint16_t fpga_acq_poll_gap_get(void);
 void     fpga_acq_edge_filter_set(bool on);    /* MCU-side trigger edge filter (EXP-55 follow-up) */
 bool     fpga_acq_edge_filter_get(void);
+/* true when the latest committed record was un-rotated at its seam, so the
+ * hardware trigger sits at index 512 (dev plan 2.3). */
+bool     fpga_acq_record_time_ordered(void);
 /* EXP-52: un-rotate the record so index 0 is the trigger crossing. The FPGA's
  * capture memory is read from address 0; the write pointer starts at the
  * arming read and reaches L at the crossing, so the readout is rotated by L

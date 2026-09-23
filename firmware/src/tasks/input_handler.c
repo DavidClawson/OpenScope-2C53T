@@ -209,6 +209,7 @@ static void send_cmd(QueueHandle_t q, uint8_t cmd)
 }
 
 volatile bool scope_trig_level_focus = false;
+volatile bool scope_hpos_focus = false;
 
 /* Helper: show popup and send redraw */
 static void popup_and_redraw(QueueHandle_t q, const char *text)
@@ -323,9 +324,18 @@ uint8_t input_handle_button(button_id_t button, QueueHandle_t dq)
              * mode could not be aimed. MOVE used to cycle the edge; the edge
              * stays reachable in Settings -> Trigger Edge (it steers the
              * display's soft trigger; the FPGA fires on either edge, EXP-55). */
-            scope_trig_level_focus = !scope_trig_level_focus;
-            popup_and_redraw(dq, scope_trig_level_focus ? "UP/DN: Trig level"
-                                                        : "UP/DN: V/div");
+            /* Cycle: V/div -> Trig level (UP/DN) -> Position (LT/RT). */
+            if (!scope_trig_level_focus && !scope_hpos_focus) {
+                scope_trig_level_focus = true;
+                popup_and_redraw(dq, "UP/DN: Trig level");
+            } else if (scope_trig_level_focus) {
+                scope_trig_level_focus = false;
+                scope_hpos_focus = true;
+                popup_and_redraw(dq, "LT/RT: Position");
+            } else {
+                scope_hpos_focus = false;
+                popup_and_redraw(dq, "UP/DN: V/div  LT/RT: Time");
+            }
         } else {
             send_cmd(dq, cmd);
         }
@@ -721,6 +731,17 @@ uint8_t input_handle_button(button_id_t button, QueueHandle_t dq)
             cmd = DCMD_DRAW_SIGGEN;
             send_cmd(dq, cmd);
         }
+        else if (current_mode == MODE_OSCILLOSCOPE && scope_hpos_focus) {
+            /* Move the trigger point across the screen, 16 px per press.
+             * The popup reports the column it was ASKED for; the marker at
+             * the top shows where it actually landed. */
+            int tx = ss->trig_x + (-16);
+            if (tx < 8) tx = 8;
+            if (tx > 312) tx = 312;
+            ss->trig_x = (int16_t)tx;
+            snprintf(pb, sizeof(pb), "Trig at x=%d", tx);
+            popup_and_redraw(dq, pb);
+        }
         else if (current_mode == MODE_OSCILLOSCOPE) {
             scope_adjust_timebase(ss, -1);
             /* Push it to the FPGA. Before 2026-08-19 this line did not exist
@@ -788,6 +809,17 @@ uint8_t input_handle_button(button_id_t button, QueueHandle_t dq)
             siggen_duty_cycle_up();
             cmd = DCMD_DRAW_SIGGEN;
             send_cmd(dq, cmd);
+        }
+        else if (current_mode == MODE_OSCILLOSCOPE && scope_hpos_focus) {
+            /* Move the trigger point across the screen, 16 px per press.
+             * The popup reports the column it was ASKED for; the marker at
+             * the top shows where it actually landed. */
+            int tx = ss->trig_x + (16);
+            if (tx < 8) tx = 8;
+            if (tx > 312) tx = 312;
+            ss->trig_x = (int16_t)tx;
+            snprintf(pb, sizeof(pb), "Trig at x=%d", tx);
+            popup_and_redraw(dq, pb);
         }
         else if (current_mode == MODE_OSCILLOSCOPE) {
             scope_adjust_timebase(ss, 1);

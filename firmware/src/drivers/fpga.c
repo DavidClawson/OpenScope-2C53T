@@ -3591,6 +3591,7 @@ bool     fpga_acq_edge_filter_get(void)      { return acq_edge_filter; }
 uint16_t fpga_acq_poll_gap_get(void)         { return acq_poll_gap_ms; }
 void fpga_acq_unrotate_set(bool on)           { acq_unrotate = on; }
 bool fpga_acq_unrotate_get(void)              { return acq_unrotate; }
+bool fpga_acq_record_time_ordered(void)       { return acq_unrotate && fpga.acq_last_rot >= 0; }
 void fpga_acq_unrotate_offset_set(int16_t n)  { acq_unrotate_offset = n; }
 int16_t fpga_acq_unrotate_offset_get(void)    { return acq_unrotate_offset; }
 

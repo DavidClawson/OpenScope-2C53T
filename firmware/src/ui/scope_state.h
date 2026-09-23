@@ -162,6 +162,13 @@ typedef struct {
      * no crossing is found the render free-runs regardless, which is AUTO-mode
      * behaviour. Toggle on the bench with `fpga scope softtrig`. */
     bool            soft_trigger;
+
+    /* Horizontal position (2026-09-22): the screen column (0..319) where the
+     * trigger point is drawn. Default 160 = mid-screen, so half the window is
+     * pre-trigger. The record holds 512 samples each side of the hardware
+     * trigger once it is time-ordered (EXP-53, dev plan 2.3), so any column
+     * is reachable at 1 sample per pixel. Not persisted. */
+    int16_t         trig_x;
 } scope_state_t;
 
 /* ═══════════════════════════════════════════════════════════════════

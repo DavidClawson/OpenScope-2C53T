@@ -76,7 +76,7 @@ sys.path.insert(0, os.path.dirname(__file__))
 from bench import Scope, JDS6600, BenchError, parse_dump  # noqa: E402
 
 FRAME_RE = re.compile(
-    r"FRAME gen=(\d+) coherent=(\d+) src=CH(\d) off=(\d+) soft=(\d+)")
+    r"FRAME gen=(\d+) coherent=(\d+) src=CH(\d) off=(\d+) soft=(\d+)(?: tx=(-?\d+) anchor=(\d+))?")
 
 N_FRAMES     = 8       # frames per scenario
 FRAME_GAP_S  = 0.12
@@ -132,7 +132,9 @@ def grab_frame(sc):
     if not m:
         raise BenchError("no FRAME header in reply:\n%s" % txt[:300])
     hdr = dict(gen=int(m.group(1)), coherent=int(m.group(2)),
-               src=int(m.group(3)), off=int(m.group(4)), soft=int(m.group(5)))
+               src=int(m.group(3)), off=int(m.group(4)), soft=int(m.group(5)),
+               tx=int(m.group(6)) if m.group(6) is not None else None,
+               anchor=int(m.group(7)) if m.group(7) is not None else None)
     # CH1 and CH2 dumps both start at offset 0000: split at the CH2 header so
     # parse_dump's strict drop-detection still applies to each half.
     i = txt.find("CH2 (")
@@ -276,6 +278,14 @@ def internal_breaks(x, fs, f, win=64, hop=32, tol=30.0):
     return int(np.sum(bad[1:] & ~bad[:-1]) + (1 if bad[0] else 0))
 
 
+_LEVEL_CODE = {}
+
+def state_level_record(scen):
+    """The level in record units (reg 0x08 code - 28), as the firmware reported
+    it when the scenario set the level."""
+    return _LEVEL_CODE.get(scen["level"], 128) - 28
+
+
 def host_seam(v):
     """Seam of a record for the HOST-side checks: largest circular step of the
     3-sample median, so a single stray sample (sample 0 of a read is often
@@ -362,7 +372,8 @@ def trigger_scenarios():
                 level=0, expect="advance", n=5, gap=0.4, settle=1.5,
                 body=False, negctl=False, auto_window=0.0,
                 edge="rising", edgefilter=True, check_edge=None,
-                unrotate=True, check_order=None, check_breaks=None)
+                unrotate=True, check_order=None, check_breaks=None,
+                hpos=160, check_hpos=None)
     def s(name, **kw):
         d = dict(base, name=name); d.update(kw); return d
     return [
@@ -403,6 +414,16 @@ def trigger_scenarios():
         s("UNROTATE fast sine", edgefilter=False, n=10, gap=0.5, check_breaks="on"),
         s("NEGCTL unrotate off fast sine", edgefilter=False, unrotate=False, n=10, gap=0.5,
           check_breaks="off"),
+        # Horizontal position (2026-09-22): the trigger point lands on the
+        # asked column, anchored on the hardware level crossing of the
+        # time-ordered record. Control: un-rotation off + level off the
+        # midline -> soft (midline) anchor, so the sample at the column is NOT
+        # the level and the check must fail there.
+        s("HPOS x=40",  hpos=40,  n=6, gap=0.4, check_hpos="hw"),
+        s("HPOS x=160", hpos=160, n=6, gap=0.4, check_hpos="hw"),
+        s("HPOS x=280", hpos=280, n=6, gap=0.4, check_hpos="hw"),
+        s("NEGCTL hpos soft anchor", hpos=160, level=30, unrotate=False, n=6, gap=0.4,
+          check_hpos="soft"),
     ]
 
 
@@ -423,6 +444,9 @@ def apply_trigger_scenario(sc, sg, scen, state):
         state["tb"] = scen["tb"]
         state["mode"] = "auto"
         time.sleep(0.5)
+    if scen["hpos"] != state.get("hpos"):
+        sc.cmd("fpga scope hpos %d" % scen["hpos"])
+        state["hpos"] = scen["hpos"]
     if scen["unrotate"] != state.get("unrotate"):
         sc.cmd("fpga unrotate %s" % ("on" if scen["unrotate"] else "off"))
         state["unrotate"] = scen["unrotate"]
@@ -437,6 +461,8 @@ def apply_trigger_scenario(sc, sg, scen, state):
         m = re.search(r"code 0x([0-9A-Fa-f]+)", r)
         state["level"] = scen["level"]
         state["level_code"] = int(m.group(1), 16) if m else None
+        if m:
+            _LEVEL_CODE[scen["level"]] = int(m.group(1), 16)
     if scen["mode"] != state.get("mode") or scen["mode"] == "single":
         sc.trigger_mode(scen["mode"])
         state["mode"] = scen["mode"]
@@ -519,6 +545,27 @@ def eval_trigger_scenario(scen, run, fs):
         chk(edges == 0, "negctl-strobe",
             "and strobes nothing (PC0 edges +%d): the advance is the fallback, not a trigger" % edges)
 
+    if scen["check_hpos"]:
+        R = state_level_record(scen)
+        rows = []
+        for fr in frames:
+            v = np.asarray(fr["ch1"], float)
+            tx, an, off = fr["tx"], fr["anchor"], fr["off"]
+            at = v[off + tx] if (tx is not None and tx >= 0) else float("nan")
+            prev = v[off + tx - 3] if (tx is not None and tx >= 3) else float("nan")
+            rows.append((tx, an, at, at - prev))
+        if scen["check_hpos"] == "hw":
+            ok_rows = [r for r in rows if r[0] == scen["hpos"] and r[1] == 2
+                       and abs(r[2] - R) <= 6 and r[3] > 0]
+            chk(len(ok_rows) == len(rows), "hpos",
+                "%d/%d frames: hardware anchor at column %d, sample there within 6 of level %d, rising (%s)"
+                % (len(ok_rows), len(rows), scen["hpos"], R,
+                   " ".join("%s/%s/%.0f" % (r[0], r[1], r[2]) for r in rows)))
+        else:
+            far = [r for r in rows if r[1] != 2 and abs(r[2] - R) > 10]
+            chk(len(far) >= len(rows) - 1, "hpos-negctl",
+                "un-rotation OFF: soft anchor, sample at the column off the level %d on %d/%d frames (%s) -- the check can fail"
+                % (R, len(far), len(rows), " ".join("%s/%s/%.0f" % (r[0], r[1], r[2]) for r in rows)))
     if scen["check_breaks"]:
         br = [internal_breaks(np.asarray(fr["ch1"], float), fs, scen["f"]) for fr in frames]
         nb = sum(1 for b in br if b > 0)

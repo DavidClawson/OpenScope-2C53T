@@ -2443,6 +2443,22 @@ static void cmd_fpga_pollgap(const char *args)
                      (unsigned long)fpga.acq_polls_last, (unsigned long)fpga.acq_poll_reads);
 }
 
+/* `fpga scope hpos [8..312]` — the screen column for the trigger point (the
+ * same field MOVE -> Position -> LEFT/RIGHT sets). */
+static void cmd_fpga_scope_hpos(const char *args)
+{
+    while (*args == ' ') args++;
+    scope_state_t *ss = scope_state_get();
+    if (*args) {
+        uint32_t v = 0;
+        if (parse_int(args, &v) != 0 || v < 8u || v > 312u) { usb_send_str("usage: fpga scope hpos [8..312]\r\n"); return; }
+        ss->trig_x = (int16_t)v;
+    }
+    usb_debug_printf("trigger position: asked column %d; last window landed at %d (anchor %s)\r\n",
+                     (int)ss->trig_x, (int)scope_ui_trig_x_actual(),
+                     scope_ui_trig_anchor() == 2 ? "hardware" : scope_ui_trig_anchor() == 1 ? "soft" : "none");
+}
+
 /* `fpga scope edge [rising|falling]` — the same field Settings -> Trigger Edge
  * sets; it steers the display's soft trigger and the MCU edge filter. */
 static void cmd_fpga_scope_edge(const char *args)
@@ -3938,11 +3954,12 @@ static void cmd_spi3_frame(void)
     uint8_t src_ch = (ss && ss->trigger.source == TRIG_SRC_CH2) ? 2u : 1u;
     uint16_t off = scope_ui_soft_trigger_offset((src_ch == 2u) ? s2 : s1);
 
-    usb_debug_printf("FRAME gen=%lu coherent=%u src=CH%u off=%u soft=%u\r\n",
+    usb_debug_printf("FRAME gen=%lu coherent=%u src=CH%u off=%u soft=%u tx=%d anchor=%u\r\n",
                      (unsigned long)g1,
                      (unsigned)(g1 == g0 && !(g0 & 1u)),
                      (unsigned)src_ch, (unsigned)off,
-                     (unsigned)(ss ? (ss->soft_trigger ? 1 : 0) : 0));
+                     (unsigned)(ss ? (ss->soft_trigger ? 1 : 0) : 0),
+                     (int)scope_ui_trig_x_actual(), (unsigned)scope_ui_trig_anchor());
     spi3_frame_dump("CH1", s1);
     spi3_frame_dump("CH2", s2);
 }
@@ -7660,6 +7677,8 @@ static const shell_cmd_t shell_cmds[] = {
           "settings                        Persistence status: bound, load result, writes, failures\r\n"),
     CMD_A("fpga postedge", cmd_fpga_postedge, 0,
           "fpga postedge [ms]              Poll start after a handover, ms (EXP-54; derived fill + 100)\r\n"),
+    CMD_A("fpga scope hpos", cmd_fpga_scope_hpos, 0,
+          "fpga scope hpos [8..312]        Screen column of the trigger point (default 160)\r\n"),
     CMD_A("fpga scope edge", cmd_fpga_scope_edge, 0,
           "fpga scope edge [rising|falling] Trigger edge (display soft trigger + MCU edge filter)\r\n"),
     CMD_A("fpga edgefilter", cmd_fpga_edgefilter, 0,

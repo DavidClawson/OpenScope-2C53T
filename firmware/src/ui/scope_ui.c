@@ -954,9 +954,46 @@ static float draw_channel_fixed(const volatile uint8_t *buf, uint16_t color,
  * the normal outcome when the level sits outside the signal, and free-running
  * then is exactly AUTO-mode behaviour.
  */
+/* Where the trigger point landed on the glass in the last computed window:
+ * column 0..319, or -1 when free-running. g_trig_anchor: 0 none, 1 soft
+ * (midline crossing), 2 hardware (the level crossing nearest index 512 of a
+ * time-ordered record). Read by the position marker and by `spi3 frame`. */
+static int16_t g_trig_x_actual = -1;
+static uint8_t g_trig_anchor = 0;
+
+/* The hardware trigger point of a time-ordered record: the crossing of the
+ * level (code - 28, EXP-55/56) in the chosen direction nearest index 512,
+ * within +/-48 (EXP-53: 501..520). Schmitt-armed like the soft trigger.
+ * Returns the index or -1. */
+static int hw_trigger_anchor(const scope_state_t *ss, const volatile uint8_t *buf)
+{
+    int c = (int)fpga_acq_trig_code_get() + (int)FPGA_ADC_OFFSET;
+    if (c < 4 || c > 251) return -1;
+    const bool rising = (ss->trigger.edge == TRIG_RISING);
+    const int hyst = 3;
+    int best = -1;
+    bool armed = false;
+    for (int i = 512 - 64; i <= 512 + 48; i++) {
+        int s = (int)buf[i];
+        if (!armed) {
+            if (rising ? (s <= c - hyst) : (s >= c + hyst)) armed = true;
+        } else if (rising ? (s >= c) : (s <= c)) {
+            if (i >= 512 - 48) {
+                int d = i - 512; if (d < 0) d = -d;
+                int db = best - 512; if (db < 0) db = -db;
+                if (best < 0 || d < db) best = i;
+            }
+            armed = false;                        /* re-arm for the next one */
+        }
+    }
+    return best;
+}
+
 static uint16_t scope_soft_trigger_offset(const scope_state_t *ss,
                                           const volatile uint8_t *src_buf)
 {
+    g_trig_x_actual = -1;
+    g_trig_anchor = 0;
     if (!ss->soft_trigger || src_buf == NULL)
         return 0;
 
@@ -964,6 +1001,26 @@ static uint16_t scope_soft_trigger_offset(const scope_state_t *ss,
     if (FPGA_ADC_BUF_SIZE <= draw_n)
         return 0;                                 /* no slack to slide */
     uint16_t max_start = (uint16_t)(FPGA_ADC_BUF_SIZE - draw_n);
+
+    /* Horizontal position: the column the trigger point should land on. */
+    int tx = ss->trig_x;
+    if (tx < 8) tx = 8;
+    if (tx > (int)draw_n - 8) tx = (int)draw_n - 8;
+
+    /* 1. Hardware anchor (2026-09-22): a time-ordered record carries the
+     *    hardware trigger at index 512, and the crossing nearest it IS the
+     *    event that fired. CH1 only -- the level register was measured there. */
+    if (src_buf == fpga_get_ch1_buf() && fpga_acq_record_time_ordered()) {
+        int a = hw_trigger_anchor(ss, src_buf);
+        if (a >= 0) {
+            int start = a - tx;
+            if (start < 0) start = 0;
+            if (start > (int)max_start) start = (int)max_start;
+            g_trig_x_actual = (int16_t)(a - start);
+            g_trig_anchor = 2;
+            return (uint16_t)start;
+        }
+    }
 
     /* SEAM GUARD (EXP-22, 2026-09-03): the acquisition record is NOT always
      * time-contiguous at its edges. Saved-frame analysis found ~9-14-sample
@@ -1006,12 +1063,23 @@ static uint16_t scope_soft_trigger_offset(const scope_state_t *ss,
     if (thr < (int)mn + 1) thr = (int)mn + 1;     /* keep it inside the signal */
     if (thr > (int)mx - 1) thr = (int)mx - 1;
 
-    int idx = scope_measure_find_trigger((const uint8_t *)src_buf + SEAM_GUARD,
+    /* 2. Soft anchor: the midline crossing, searched so that the window
+     *    [crossing - tx, crossing - tx + draw_n) stays inside the record and
+     *    clear of the guarded head. */
+    int idx = scope_measure_find_trigger((const uint8_t *)src_buf + SEAM_GUARD + tx,
                                          (uint16_t)(max_start - SEAM_GUARD),
                                          (uint8_t)thr,
                                          ss->trigger.edge == TRIG_RISING, 3u);
-    return (idx > 0) ? (uint16_t)(idx + SEAM_GUARD) : 0u;
+    if (idx <= 0)
+        return 0u;
+    int a = idx + SEAM_GUARD + tx;
+    g_trig_x_actual = (int16_t)tx;
+    g_trig_anchor = 1;
+    return (uint16_t)(a - tx);
 }
+
+int16_t scope_ui_trig_x_actual(void) { return g_trig_x_actual; }
+uint8_t scope_ui_trig_anchor(void)   { return g_trig_anchor; }
 
 /* Exported for bench validation (`spi3 frame`): the offset the renderer would
  * start the drawn window at for the CURRENT scope state. Exporting the real
@@ -1967,6 +2035,18 @@ void draw_scope_screen(uint32_t frame)
     /* Layer 5: Waveform */
     draw_demo_waveform(frame);
 
+    /* Trigger-position marker: a small down-pointing triangle at the top of
+     * the scope area over the column where the trigger point actually landed
+     * (not where it was asked to land -- the fallback may not honour it). */
+    if (g_trig_x_actual >= 0) {
+        for (int r = 0; r < 4; r++)
+            for (int dx = -(3 - r); dx <= 3 - r; dx++) {
+                int x = g_trig_x_actual + dx;
+                if (x >= 0 && x < LCD_WIDTH)
+                    lcd_set_pixel((uint16_t)x, (uint16_t)(SCOPE_TOP + r), th->trigger);
+            }
+    }
+
     /* Layer 6: Math channel overlay */
     draw_math_waveform(frame);
 
@@ -2162,7 +2242,11 @@ void draw_scope_live_frame(void)
             uint16_t c;
             /* Z-order matches the full path: CH2 painted after CH1 there,
              * so CH2 wins here; trace over trigger line over grid. */
-            if (a2.on && (int16_t)y >= lo2 && (int16_t)y <= hi2)
+            int mr = (int)y - (int)SCOPE_TOP;          /* trigger-position marker */
+            int mdx = (int)x - (int)g_trig_x_actual; if (mdx < 0) mdx = -mdx;
+            if (g_trig_x_actual >= 0 && mr >= 0 && mr < 4 && mdx <= 3 - mr)
+                c = th->trigger;
+            else if (a2.on && (int16_t)y >= lo2 && (int16_t)y <= hi2)
                 c = th->ch2;
             else if (a1.on && (int16_t)y >= lo1 && (int16_t)y <= hi1)
                 c = th->ch1;

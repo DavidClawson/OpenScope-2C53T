@@ -87,6 +87,7 @@ void scope_state_init(scope_state_t *s)
      * from the shell because it needs a centred baseline first. */
     s->true_scale = false;
     s->soft_trigger = true;
+    s->trig_x = 160;
 
     /* Cursor defaults */
     s->cursor.mode   = CURSOR_OFF;
