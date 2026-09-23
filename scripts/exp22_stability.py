@@ -76,7 +76,7 @@ sys.path.insert(0, os.path.dirname(__file__))
 from bench import Scope, JDS6600, BenchError, parse_dump  # noqa: E402
 
 FRAME_RE = re.compile(
-    r"FRAME gen=(\d+) coherent=(\d+) src=CH(\d) off=(\d+) soft=(\d+)(?: tx=(-?\d+) anchor=(\d+))?")
+    r"FRAME gen=(\d+) coherent=(\d+) src=CH(\d) off=(\d+) soft=(\d+)(?: tx=(-?\d+) anchor=(\d+))?(?: ord=(\d))?")
 
 N_FRAMES     = 8       # frames per scenario
 FRAME_GAP_S  = 0.12
@@ -134,7 +134,8 @@ def grab_frame(sc):
     hdr = dict(gen=int(m.group(1)), coherent=int(m.group(2)),
                src=int(m.group(3)), off=int(m.group(4)), soft=int(m.group(5)),
                tx=int(m.group(6)) if m.group(6) is not None else None,
-               anchor=int(m.group(7)) if m.group(7) is not None else None)
+               anchor=int(m.group(7)) if m.group(7) is not None else None,
+               ord=int(m.group(8)) if m.group(8) is not None else None)
     # CH1 and CH2 dumps both start at offset 0000: split at the CH2 header so
     # parse_dump's strict drop-detection still applies to each half.
     i = txt.find("CH2 (")
@@ -553,14 +554,24 @@ def eval_trigger_scenario(scen, run, fs):
             tx, an, off = fr["tx"], fr["anchor"], fr["off"]
             at = v[off + tx] if (tx is not None and tx >= 0) else float("nan")
             prev = v[off + tx - 3] if (tx is not None and tx >= 3) else float("nan")
-            rows.append((tx, an, at, at - prev))
+            rows.append((tx, an, at, at - prev, fr.get("ord")))
         if scen["check_hpos"] == "hw":
-            ok_rows = [r for r in rows if r[0] == scen["hpos"] and r[1] == 2
-                       and abs(r[2] - R) <= 6 and r[3] > 0]
-            chk(len(ok_rows) == len(rows), "hpos",
-                "%d/%d frames: hardware anchor at column %d, sample there within 6 of level %d, rising (%s)"
-                % (len(ok_rows), len(rows), scen["hpos"], R,
-                   " ".join("%s/%s/%.0f" % (r[0], r[1], r[2]) for r in rows)))
+            # Criterion revised 2026-09-23 after v18 (stated in the commit):
+            # the v17/v18 check demanded a hardware anchor on EVERY frame,
+            # which contradicts the design's fallback for records whose seam
+            # was not found. Now: every frame on the asked column; every
+            # time-ordered frame hardware-anchored ON the level and rising;
+            # every other frame soft-anchored; and time-ordered frames in the
+            # majority (else the hardware path was not exercised at all).
+            on_col = all(r[0] == scen["hpos"] for r in rows)
+            ordered = [r for r in rows if r[4] == 1]
+            hw_ok = all(r[1] == 2 and abs(r[2] - R) <= 6 and r[3] > 0 for r in ordered)
+            fb_ok = all(r[1] != 2 for r in rows if r[4] == 0)
+            desc = " ".join("%s/%s/%.0f/o%s" % (r[0], r[1], r[2], r[4]) for r in rows)
+            chk(on_col, "hpos-column", "all %d frames land on column %d (%s)" % (len(rows), scen["hpos"], desc))
+            chk(hw_ok and len(ordered) * 2 > len(rows), "hpos-hw",
+                "%d/%d frames time-ordered; each hardware-anchored within 6 of level %d and rising" % (len(ordered), len(rows), R))
+            chk(fb_ok, "hpos-fallback", "frames not time-ordered use the soft anchor")
         else:
             far = [r for r in rows if r[1] != 2 and abs(r[2] - R) > 10]
             chk(len(far) >= len(rows) - 1, "hpos-negctl",

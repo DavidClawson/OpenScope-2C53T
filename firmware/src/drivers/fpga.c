@@ -3011,6 +3011,13 @@ static volatile uint8_t *acq_write_ch2(void)
     return acq_stage_ch2 ? acq_stage_ch2 : fpga.ch2_buf;
 }
 
+/* Whether the STAGED / PUBLISHED record is time-ordered (un-rotated at its
+ * seam, trigger at 512). Published inside the commit's seqlock window so the
+ * flag always describes the record in fpga.ch1_buf -- v18 read the flag of
+ * the newest commit against a frame one commit older (2026-09-23). */
+static volatile bool acq_stage_ordered = false;
+static volatile bool acq_pub_ordered = false;
+
 static void fpga_acq_frames_commit(void)
 {
     if (acq_stage_ch1 == NULL || acq_stage_ch2 == NULL)
@@ -3018,6 +3025,7 @@ static void fpga_acq_frames_commit(void)
     acq_frame_gen++;                                   /* odd: committing */
     memcpy((void *)fpga.ch1_buf, acq_stage_ch1, FPGA_ADC_BUF_SIZE);
     memcpy((void *)fpga.ch2_buf, acq_stage_ch2, FPGA_ADC_BUF_SIZE);
+    acq_pub_ordered = acq_stage_ordered;
     acq_frame_gen++;                                   /* even: stable */
 }
 
@@ -3591,7 +3599,7 @@ bool     fpga_acq_edge_filter_get(void)      { return acq_edge_filter; }
 uint16_t fpga_acq_poll_gap_get(void)         { return acq_poll_gap_ms; }
 void fpga_acq_unrotate_set(bool on)           { acq_unrotate = on; }
 bool fpga_acq_unrotate_get(void)              { return acq_unrotate; }
-bool fpga_acq_record_time_ordered(void)       { return acq_unrotate && fpga.acq_last_rot >= 0; }
+bool fpga_acq_record_time_ordered(void)       { return acq_pub_ordered; }
 void fpga_acq_unrotate_offset_set(int16_t n)  { acq_unrotate_offset = n; }
 int16_t fpga_acq_unrotate_offset_get(void)    { return acq_unrotate_offset; }
 
@@ -4027,6 +4035,7 @@ static void fpga_warmtest_acq_task(void *pv)
          * two reads, at least one byte is fabricated: reject. */
         if ((marker || varies) && fpga.spi3_hw_timeouts == hw_to_before) {
             fpga.acq_last_rot = fpga_acq_unrotate_staging(triggered);   /* dev plan 2.3: seam-based */
+            acq_stage_ordered = acq_unrotate && fpga.acq_last_rot >= 0;
             fpga_acq_frames_commit();
             last_commit_tick = last_read_tick;
             fpga.spi3_ok_count++;

@@ -3954,12 +3954,13 @@ static void cmd_spi3_frame(void)
     uint8_t src_ch = (ss && ss->trigger.source == TRIG_SRC_CH2) ? 2u : 1u;
     uint16_t off = scope_ui_soft_trigger_offset((src_ch == 2u) ? s2 : s1);
 
-    usb_debug_printf("FRAME gen=%lu coherent=%u src=CH%u off=%u soft=%u tx=%d anchor=%u\r\n",
+    usb_debug_printf("FRAME gen=%lu coherent=%u src=CH%u off=%u soft=%u tx=%d anchor=%u ord=%u\r\n",
                      (unsigned long)g1,
                      (unsigned)(g1 == g0 && !(g0 & 1u)),
                      (unsigned)src_ch, (unsigned)off,
                      (unsigned)(ss ? (ss->soft_trigger ? 1 : 0) : 0),
-                     (int)scope_ui_trig_x_actual(), (unsigned)scope_ui_trig_anchor());
+                     (int)scope_ui_trig_x_actual(), (unsigned)scope_ui_trig_anchor(),
+                     (unsigned)fpga_acq_record_time_ordered());
     spi3_frame_dump("CH1", s1);
     spi3_frame_dump("CH2", s2);
 }
