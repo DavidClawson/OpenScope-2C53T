@@ -1,0 +1,22 @@
+['Build: Sep 22 2026 19:13:27']
+wire[0] (opcode echo) values: [0]  wire[1] (dummy): [0]
+read0  wire2 130 wire1026 128 | wire2 off-neighbours   7.0  wire1026 off-neighbours   8.5 | wire1027..1042 == wire3..18: False | max step 3..1026 47
+read1  wire2 140 wire1026 128 | wire2 off-neighbours   9.0  wire1026 off-neighbours   0.5 | wire1027..1042 == wire3..18: False | max step 3..1026 50
+read2  wire2 129 wire1026 129 | wire2 off-neighbours   0.5  wire1026 off-neighbours   1.5 | wire1027..1042 == wire3..18: False | max step 3..1026 49
+read3  wire2 129 wire1026 130 | wire2 off-neighbours   9.0  wire1026 off-neighbours   5.5 | wire1027..1042 == wire3..18: False | max step 3..1026 5
+read4  wire2 161 wire1026 126 | wire2 off-neighbours  16.5  wire1026 off-neighbours   3.0 | wire1027..1042 == wire3..18: False | max step 3..1026 39
+read5  wire2 140 wire1026 148 | wire2 off-neighbours   1.0  wire1026 off-neighbours   2.0 | wire1027..1042 == wire3..18: False | max step 3..1026 48
+read6  wire2 160 wire1026 128 | wire2 off-neighbours  16.5  wire1026 off-neighbours   0.0 | wire1027..1042 == wire3..18: False | max step 3..1026 49
+read7  wire2 130 wire1026 128 | wire2 off-neighbours   7.0  wire1026 off-neighbours   7.5 | wire1027..1042 == wire3..18: False | max step 3..1026 28
+read8  wire2 135 wire1026 127 | wire2 off-neighbours   6.5  wire1026 off-neighbours   0.0 | wire1027..1042 == wire3..18: False | max step 3..1026 45
+read9  wire2 128 wire1026 125 | wire2 off-neighbours   7.0  wire1026 off-neighbours   9.5 | wire1027..1042 == wire3..18: False | max step 3..1026 5
+read10 wire2 159 wire1026 124 | wire2 off-neighbours  18.0  wire1026 off-neighbours   9.0 | wire1027..1042 == wire3..18: False | max step 3..1026 49
+read11 wire2 140 wire1026 131 | wire2 off-neighbours   2.0  wire1026 off-neighbours   8.5 | wire1027..1042 == wire3..18: False | max step 3..1026 48
+read12 wire2 120 wire1026 129 | wire2 off-neighbours   2.0  wire1026 off-neighbours   0.5 | wire1027..1042 == wire3..18: False | max step 3..1026 5
+read13 wire2 129 wire1026 130 | wire2 off-neighbours   0.5  wire1026 off-neighbours   6.5 | wire1027..1042 == wire3..18: False | max step 3..1026 11
+read14 wire2 147 wire1026 127 | wire2 off-neighbours  12.0  wire1026 off-neighbours   0.0 | wire1027..1042 == wire3..18: False | max step 3..1026 12
+read15 wire2 129 wire1026 128 | wire2 off-neighbours   0.0  wire1026 off-neighbours   8.5 | wire1027..1042 == wire3..18: False | max step 3..1026 49
+read16 wire2 125 wire1026 125 | wire2 off-neighbours   5.0  wire1026 off-neighbours   9.5 | wire1027..1042 == wire3..18: False | max step 3..1026 50
+read17 wire2 125 wire1026 129 | wire2 off-neighbours   2.5  wire1026 off-neighbours   0.0 | wire1027..1042 == wire3..18: False | max step 3..1026 47
+read18 wire2 127 wire1026 128 | wire2 off-neighbours   7.0  wire1026 off-neighbours   7.0 | wire1027..1042 == wire3..18: False | max step 3..1026 48
+read19 wire2 124 wire1026 128 | wire2 off-neighbours   2.5  wire1026 off-neighbours   0.5 | wire1027..1042 == wire3..18: False | max step 3..1026 47

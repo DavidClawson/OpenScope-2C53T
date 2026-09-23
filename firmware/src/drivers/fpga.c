@@ -3780,18 +3780,32 @@ void EXINT0_IRQHandler(void)
  * NOTE the 0x05 hazard: as a 2-byte CS frame, 0x05 would be byte-identical
  * to the config prelude's ERASE_SRAM step. The 1026-byte frame shape is what
  * makes it a CH2 read — do not "shorten" this window. */
+/*
+ * CORRECTED AGAIN 2026-09-22 (EXP-58): the record starts at the THIRD byte
+ * after the opcode, not the second. Reading held records twice over (2,060
+ * bytes) on unit #1, the byte at wire index 2 + 1024n (n = 1, 2) continued
+ * smoothly from the byte BEFORE it (residual 0-3 counts, 12/12, same as an
+ * interior control byte) and broke into the byte AFTER it (8-35 counts): each
+ * 1024-byte block ends at wire 2 + 1024n. So wire byte 2 is the tail of a
+ * previous block -- a stale byte -- and the record is wire 3..1026. With the
+ * 2-byte discard, "sample 0" was that stale byte (a stray value in 13/20
+ * records) and the true last sample was never read. The 2026-08-15 change to
+ * stock's 2-byte discard matched stock's CODE; at our read timing the first
+ * byte out is stale. The window is now 1027 bytes: opcode, dummy, stale, then
+ * 1024 samples. Longer windows (1043, 2063 bytes) caused no fault in EXP-58.
+ */
 static uint8_t fpga_warmtest_read_channel(uint8_t opcode, volatile uint8_t *buf)
 {
     SPI3_CS_ASSERT();
     uint8_t s0 = spi3_xfer(opcode);        /* MISO during opcode: 0x80 marker
                                               expected in the first window
                                               after data-ready (Stlkv) */
-    uint8_t h1 = spi3_xfer(0xFF);          /* the ONE dummy byte stock
-                                              discards before the samples */
+    uint8_t h1 = spi3_xfer(0xFF);          /* the dummy byte stock discards */
+    uint8_t h2 = spi3_xfer(0xFF);          /* EXP-58: stale, end of a previous block */
     {
         volatile uint8_t *hdr = (opcode == 0x04) ? fpga.acq_hdr_ch1
                                                  : fpga.acq_hdr_ch2;
-        hdr[0] = s0; hdr[1] = h1; hdr[2] = 0;
+        hdr[0] = s0; hdr[1] = h1; hdr[2] = h2;
     }
     if (opcode == 0x04)
         fpga.spi3_first_byte = s0;         /* debug overlay "1:" field */
