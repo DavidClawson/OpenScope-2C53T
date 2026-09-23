@@ -276,6 +276,19 @@ def internal_breaks(x, fs, f, win=64, hop=32, tol=30.0):
     return int(np.sum(bad[1:] & ~bad[:-1]) + (1 if bad[0] else 0))
 
 
+def host_seam(v):
+    """Seam of a record for the HOST-side checks: largest circular step of the
+    3-sample median, so a single stray sample (sample 0 of a read is often
+    one on unit #1, and after firmware un-rotation it sits INSIDE the record)
+    cannot outvote the seam. Returns (k, confident)."""
+    v = np.asarray(v, dtype=float)
+    m3 = np.median(np.stack([np.roll(v, 1), v, np.roll(v, -1)]), axis=0)
+    dv = np.abs(m3 - np.roll(m3, 1))
+    k = int(np.argmax(dv))
+    others = np.delete(dv, [(k + o) % len(v) for o in range(-2, 3)])
+    return k, bool(dv[k] >= 6 and dv[k] >= 2 * others.max())
+
+
 def gens_state(gens, n_expected=None):
     """'advancing' / 'held' / 'ambiguous' from the generation counters of
     consecutive frame grabs. Held = every grab returned the same generation.
@@ -517,11 +530,8 @@ def eval_trigger_scenario(scen, run, fs):
     if scen["check_order"]:
         ks = []
         for fr in frames:
-            v = np.asarray(fr["ch1"], float)
-            dv = np.abs(v - np.roll(v, 1))
-            k = int(np.argmax(dv))
-            others = np.delete(dv, [(k + o) % len(v) for o in range(-2, 3)])
-            ks.append(k if (dv[k] >= 6 and dv[k] >= 2 * others.max()) else None)
+            k, ok_ = host_seam(fr["ch1"])
+            ks.append(k if ok_ else None)
         found = [k for k in ks if k is not None]
         if scen["check_order"] == "ordered":
             chk(len(found) >= 3 and all(k == 0 for k in found), "time-order",
@@ -534,7 +544,7 @@ def eval_trigger_scenario(scen, run, fs):
         seen = []
         for fr in frames:
             v = np.asarray(fr["ch1"], float)
-            k = int(np.argmax(np.abs(v - np.roll(v, 1))))
+            k, _ = host_seam(v)
             r = np.roll(v, -k)
             d = r[552:592].mean() - r[432:472].mean()     # +/-40..80 around the trigger
             seen.append("r" if d > 0 else "f")
@@ -757,6 +767,20 @@ def selftest():
     j, _ = lock_jitter_samples(pair, f, fs)
     chk(abs(j - 0.4) < 0.1, "0.4-sample injected shift measured as %.2f" % j)
 
+    # host_seam: a stray single sample inside the record must not outvote the
+    # seam. A committed-record shape: a 3.3-period segment (41.9 Hz at
+    # 12,490 S/s) rotated so its wrap -- the seam -- lands at 887, plus one
+    # stray sample at 300 whose two steps are bigger than the seam's.
+    seg, _ = _synth(40.25, fs, t0=0.0, seed=9)
+    rs = np.roll(seg, 887).astype(float)
+    dv0 = np.abs(rs - np.roll(rs, 1))
+    spiky = rs.copy(); spiky[300] = min(255.0, spiky[300] + dv0[887] + 25)
+    k_raw = int(np.argmax(np.abs(spiky - np.roll(spiky, 1))))
+    k_med, conf = host_seam(spiky)
+    chk(dv0[887] >= 20 and k_raw in (300, 301) and k_med == 887 and conf,
+        "host_seam ignores a stray sample (seam step %.0f at 887; raw max-jump picks %d; median picks %d)"
+        % (dv0[887], k_raw, k_med))
+
     # Trigger block metrics: the tear detector on the three record shapes it
     # must tell apart. Clean = one continuous segment (0 runs); committed =
     # the same rotated, seam mid-record, at a frequency that leaves a 126 deg
@@ -900,6 +924,10 @@ def main():
             print("\n== %s  (fs %.0f S/s, %s, level %+d) ==" % (scen["name"], fs, scen["mode"], scen["level"]))
             apply_trigger_scenario(sc, sg, scen, tstate)
             run = run_trigger_scenario(sc, scen)
+            if a.save:
+                key = "TRIG_" + scen["name"].replace(" ", "_")
+                saved[key + "__ch1"] = np.stack([fr["ch1"] for fr in run["frames"]])
+                saved[key + "__gen"] = np.array([fr["gen"] for fr in run["frames"]])
             lines, ok = eval_trigger_scenario(scen, run, fs)
             print("\n".join(lines))
             results.append((scen["name"], ok))
@@ -907,6 +935,10 @@ def main():
         sc.trigger_level(0)
         sc.timebase(0x10)
         sc.vdiv(1, 6)
+
+    if a.save and any(k.startswith("TRIG_") for k in saved):
+        np.savez_compressed(a.save, **saved)
+        print("\ntrigger-block frames saved to %s" % a.save)
 
     sg.output(False, False)
 
