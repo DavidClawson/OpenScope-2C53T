@@ -22,13 +22,17 @@ int trig_edge_find_seam(const volatile uint8_t *rec, uint32_t *k_out)
     /* The largest circular step. k = its newer side = oldest sample. */
     uint32_t k = 0;
     int j1 = -1;
-    for (uint32_t i = 0; i < N; i++) {
+    /* Steps touching sample 0 are skipped: on unit #1 sample 0 of a read
+     * is often a stray value that fits neither neighbour (2026-09-22: 13/20
+     * records at 201 Hz / 0x10; samples 1023 -> 1 are continuous), and its
+     * two false steps defeated the ratio test. */
+    for (uint32_t i = 2; i < N; i++) {
         int d = (int)rec[i] - (int)rec[(i + MASK) & MASK];
         if (d < 0) d = -d;
         if (d > j1) { j1 = d; k = i; }
     }
     int j2 = 0;
-    for (uint32_t i = 0; i < N; i++) {
+    for (uint32_t i = 2; i < N; i++) {           /* sample 0 skipped, as above */
         uint32_t off = (i - k) & MASK;           /* skip k-2 .. k+2 */
         if (off <= 2u || off >= N - 2u) continue;
         int d = (int)rec[i] - (int)rec[(i + MASK) & MASK];
@@ -96,16 +100,22 @@ int trig_edge_find_seam_lpc(const volatile uint8_t *rec, uint32_t *k_out)
 {
     if (rec == 0)
         return 0;
+    /* Sample 0 is excluded throughout (stray on unit #1, see
+     * trig_edge_find_seam): from the mean, the autocorrelation, and every
+     * prediction that would read it (n = 0..P). */
     float mean = 0.0f;
-    for (uint32_t i = 0; i < N; i++) mean += (float)rec[i];
-    mean /= (float)N;
+    for (uint32_t i = 1; i < N; i++) mean += (float)rec[i];
+    mean /= (float)(N - 1u);
 
     /* Circular autocorrelation r[0..P]. */
     float r[LPC_P + 1];
     for (int l = 0; l <= LPC_P; l++) {
         float acc = 0.0f;
-        for (uint32_t i = 0; i < N; i++)
-            acc += ((float)rec[i] - mean) * ((float)rec[(i + MASK + 1u - (uint32_t)l) & MASK] - mean);
+        for (uint32_t i = 0; i < N; i++) {
+            uint32_t j = (i + MASK + 1u - (uint32_t)l) & MASK;
+            if (i == 0u || j == 0u) continue;
+            acc += ((float)rec[i] - mean) * ((float)rec[j] - mean);
+        }
         r[l] = acc;
     }
     if (r[0] <= 0.0f)
@@ -130,13 +140,13 @@ int trig_edge_find_seam_lpc(const volatile uint8_t *rec, uint32_t *k_out)
     /* Pass 1: the peak prediction error. */
     uint32_t m = 0;
     float peak = -1.0f;
-    for (uint32_t n = 0; n < N; n++) {
+    for (uint32_t n = (uint32_t)LPC_P + 1u; n < N; n++) {
         float v = lpc_err(rec, a, mean, n);
         if (v > peak) { peak = v; m = n; }
     }
     /* Pass 2: the largest error more than P samples from the peak. */
     float second = 0.0f;
-    for (uint32_t n = 0; n < N; n++) {
+    for (uint32_t n = (uint32_t)LPC_P + 1u; n < N; n++) {
         uint32_t d = (n - m) & MASK;
         if (d <= (uint32_t)LPC_P || d >= N - (uint32_t)LPC_P) continue;
         float v = lpc_err(rec, a, mean, n);
@@ -148,9 +158,16 @@ int trig_edge_find_seam_lpc(const volatile uint8_t *rec, uint32_t *k_out)
      * seam; walk back to the earliest index within P whose error is >= 35%
      * of the peak. */
     uint32_t k = m;
-    for (uint32_t o = 1; o <= (uint32_t)LPC_P; o++)
-        if (lpc_err(rec, a, mean, (m - o) & MASK) >= 0.35f * peak)
-            k = (m - o) & MASK;
+    /* A peak within 2P+1 of index 0 cannot be walked back without reading
+     * sample 0: refuse rather than answer short (the value step, which only
+     * skips sample 0 itself, covers seams there). */
+    if (m <= 2u * (uint32_t)LPC_P + 1u)
+        return 0;
+    for (uint32_t o = 1; o <= (uint32_t)LPC_P; o++) {
+        uint32_t n = (m - o) & MASK;
+        if (lpc_err(rec, a, mean, n) >= 0.35f * peak)
+            k = n;
+    }
     *k_out = k;
     return 1;
 }

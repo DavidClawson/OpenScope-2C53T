@@ -154,6 +154,20 @@ int main(void)
     }
     CHECK(both == 0 || agree == both, "real records: prediction agrees with the value step where both answer (%d/%d)", agree, both);
 
+    printf("[6] stray sample 0 (unit #1: 13/20 raw records at 201 Hz / 0x10)\n");
+    int s_exact = 0, s_bad = 0, s_found = 0;
+    for (int i = 0; i < 600; i++) {
+        synth(rec, fast[1 + (i % 8)], (i & 1) ? -1 : 1, (i / 8) & 1, 25.0 + urand() * 35.0);
+        if (last_rot < 4u || last_rot > 1020u) continue;          /* seam must not BE sample 0 */
+        rec[0] = (uint8_t)(rec[1] + ((i & 2) ? 30 : -30));         /* a stray first sample */
+        uint32_t k;
+        if (!trig_edge_find_seam_any(rec, &k)) continue;
+        s_found++;
+        int d = (int)((k - last_rot + 1536u) & 1023u) - 512;
+        if (d == 0) s_exact++; else s_bad++;
+    }
+    CHECK(s_bad == 0 && s_found >= 300, "with a stray sample 0: %d found, %d exact, %d wrong", s_found, s_exact, s_bad);
+
     printf("\n%s\n", fails ? "FAILED" : "all passed");
     return fails ? 1 : 0;
 }
