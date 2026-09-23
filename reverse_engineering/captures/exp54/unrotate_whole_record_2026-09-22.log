@@ -1,0 +1,4 @@
+tb 0x10 unrotate ON   internal phase breaks per record [0, 0, 0, 0, 1, 0, 1, 0, 0, 1]  | seam found on 6/10
+tb 0x10 unrotate OFF  internal phase breaks per record [0, 1, 1, 0, 0, 0, 1, 0, 1, 1]  | seam found on 6/10
+tb 0x11 unrotate ON   internal phase breaks per record [0, 0, 0, 0, 0, 0, 0, 0, 0, 0]  | seam found on 6/10
+tb 0x11 unrotate OFF  internal phase breaks per record [0, 0, 0, 0, 0, 0, 0, 0, 0, 0]  | seam found on 7/10
