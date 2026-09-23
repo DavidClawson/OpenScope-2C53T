@@ -45,4 +45,20 @@ trig_edge_class_t trig_edge_classify(const volatile uint8_t *rec, int crossing);
  * undo; for a fast signal the pointer is not recoverable. */
 int trig_edge_find_seam(const volatile uint8_t *rec, uint32_t *k);
 
+/* The seam by linear prediction, for records where the value step does not
+ * stand out (fast periodic signals: the two segments can meet at similar
+ * values but different phase). An order-8 predictor is fitted to the
+ * circular record (autocorrelation + Levinson); a continuous signal,
+ * harmonics included, is predicted well everywhere except where the
+ * predictor reaches back across the seam. Accepted only when the peak
+ * prediction error is >= 3x the largest error more than 8 samples away; the
+ * seam is the earliest index within 8 before the peak whose error is >= 35%
+ * of it. Bias measured on synthetic records: exact or 1-2 samples LATE,
+ * never early. Integer periods (no seam in the circular record) refused.
+ * No working buffer: the error is recomputed per pass. */
+int trig_edge_find_seam_lpc(const volatile uint8_t *rec, uint32_t *k);
+
+/* Value step first (never off in any test), else linear prediction. */
+int trig_edge_find_seam_any(const volatile uint8_t *rec, uint32_t *k);
+
 #endif

@@ -3620,7 +3620,10 @@ static int32_t fpga_acq_unrotate_staging(bool triggered)
     if (!triggered) return -1;
     volatile uint8_t *bufs[2] = { acq_write_ch1(), acq_write_ch2() };
     uint32_t k = 0;
-    if (!trig_edge_find_seam(bufs[0], &k) && !trig_edge_find_seam(bufs[1], &k))
+    /* Value step first, then linear prediction (fast periodic records whose
+     * segments meet at similar values; bench 2026-09-22: 3/10 records at
+     * 201 Hz / 0x10 kept an internal break with the value step alone). */
+    if (!trig_edge_find_seam_any(bufs[0], &k) && !trig_edge_find_seam_any(bufs[1], &k))
         return -1;
     if (!acq_unrotate) return (int32_t)k;        /* reported (status), not applied */
     if (k == 0) return 0;

@@ -80,3 +80,82 @@ trig_edge_class_t trig_edge_classify(const volatile uint8_t *rec, int crossing)
     }
     return TRIG_EDGE_CLASS_UNKNOWN;
 }
+
+/* ── Linear-prediction seam finder (see trig_edge.h) ─────────────────── */
+#define LPC_P 8
+
+static float lpc_err(const volatile uint8_t *rec, const float *a, float mean, uint32_t n)
+{
+    float e = 0.0f;
+    for (int j = 0; j <= LPC_P; j++)
+        e += a[j] * ((float)rec[(n - (uint32_t)j) & MASK] - mean);
+    return e < 0.0f ? -e : e;
+}
+
+int trig_edge_find_seam_lpc(const volatile uint8_t *rec, uint32_t *k_out)
+{
+    if (rec == 0)
+        return 0;
+    float mean = 0.0f;
+    for (uint32_t i = 0; i < N; i++) mean += (float)rec[i];
+    mean /= (float)N;
+
+    /* Circular autocorrelation r[0..P]. */
+    float r[LPC_P + 1];
+    for (int l = 0; l <= LPC_P; l++) {
+        float acc = 0.0f;
+        for (uint32_t i = 0; i < N; i++)
+            acc += ((float)rec[i] - mean) * ((float)rec[(i + MASK + 1u - (uint32_t)l) & MASK] - mean);
+        r[l] = acc;
+    }
+    if (r[0] <= 0.0f)
+        return 0;
+
+    /* Levinson-Durbin: a[0] = 1, e = prediction error power. */
+    float a[LPC_P + 1] = { 1.0f };
+    float tmp[LPC_P + 1];
+    float e = r[0];
+    for (int i = 1; i <= LPC_P; i++) {
+        float acc = r[i];
+        for (int j = 1; j < i; j++) acc += a[j] * r[i - j];
+        float kk = -acc / e;
+        for (int j = 0; j <= i; j++) tmp[j] = a[j];
+        for (int j = 1; j < i; j++) a[j] = tmp[j] + kk * tmp[i - j];
+        a[i] = kk;
+        e *= (1.0f - kk * kk);
+        if (e <= 0.0f)
+            return 0;
+    }
+
+    /* Pass 1: the peak prediction error. */
+    uint32_t m = 0;
+    float peak = -1.0f;
+    for (uint32_t n = 0; n < N; n++) {
+        float v = lpc_err(rec, a, mean, n);
+        if (v > peak) { peak = v; m = n; }
+    }
+    /* Pass 2: the largest error more than P samples from the peak. */
+    float second = 0.0f;
+    for (uint32_t n = 0; n < N; n++) {
+        uint32_t d = (n - m) & MASK;
+        if (d <= (uint32_t)LPC_P || d >= N - (uint32_t)LPC_P) continue;
+        float v = lpc_err(rec, a, mean, n);
+        if (v > second) second = v;
+    }
+    if (peak < 3.0f * second)
+        return 0;
+    /* Pass 3: the first prediction that reaches across the seam is AT the
+     * seam; walk back to the earliest index within P whose error is >= 35%
+     * of the peak. */
+    uint32_t k = m;
+    for (uint32_t o = 1; o <= (uint32_t)LPC_P; o++)
+        if (lpc_err(rec, a, mean, (m - o) & MASK) >= 0.35f * peak)
+            k = (m - o) & MASK;
+    *k_out = k;
+    return 1;
+}
+
+int trig_edge_find_seam_any(const volatile uint8_t *rec, uint32_t *k)
+{
+    return trig_edge_find_seam(rec, k) || trig_edge_find_seam_lpc(rec, k);
+}

@@ -259,6 +259,23 @@ def tear_clusters(x, f, fs, win=64, hop=32, tol_deg=30.0):
     return runs, float(np.max(np.abs(resid)))
 
 
+def internal_breaks(x, fs, f, win=64, hop=32, tol=30.0):
+    """Phase-step anomaly runs NOT counting the wrap: a time-ordered record
+    (seam at index 0) has none; a raw record has one wherever the FPGA's
+    pointer stopped (unless the phase happens to match)."""
+    v = np.asarray(x, dtype=float); v = v - v.mean()
+    fx = freq_peak(v, fs)
+    if not (0.8 * f <= fx <= 1.25 * f):
+        fx = f
+    kern = np.hanning(win) * np.exp(-2j * np.pi * fx * np.arange(win) / fs)
+    ph = [np.angle(np.sum(v[i:i + win] * kern)) for i in range(0, len(v) - win + 1, hop)]
+    st = np.array([math.atan2(math.sin(b - a), math.cos(b - a)) for a, b in zip(ph, ph[1:])])
+    med = float(np.median(st))
+    res = np.degrees(np.arctan2(np.sin(st - med), np.cos(st - med)))
+    bad = np.abs(res) > tol
+    return int(np.sum(bad[1:] & ~bad[:-1]) + (1 if bad[0] else 0))
+
+
 def gens_state(gens, n_expected=None):
     """'advancing' / 'held' / 'ambiguous' from the generation counters of
     consecutive frame grabs. Held = every grab returned the same generation.
@@ -332,7 +349,7 @@ def trigger_scenarios():
                 level=0, expect="advance", n=5, gap=0.4, settle=1.5,
                 body=False, negctl=False, auto_window=0.0,
                 edge="rising", edgefilter=True, check_edge=None,
-                unrotate=True, check_order=None)
+                unrotate=True, check_order=None, check_breaks=None)
     def s(name, **kw):
         d = dict(base, name=name); d.update(kw); return d
     return [
@@ -366,6 +383,13 @@ def trigger_scenarios():
         # wherever the FPGA's pointer stopped.
         s("NEGCTL unrotate off", wave="triangle", f=2.0, amp=2.0, off=0.0, tb=0x12,
           n=8, gap=1.0, settle=3.0, unrotate=False, check_order="raw"),
+        # Fast periodic record (16.5 periods): the value-step seam finder
+        # missed ~40% here (v13: 3/10 records kept an internal phase break,
+        # 5/10 with un-rotation off). Criterion written before the v14 run:
+        # <= 1/10 with it on; >= 3/10 with it off (the control).
+        s("UNROTATE fast sine", edgefilter=False, n=10, gap=0.5, check_breaks="on"),
+        s("NEGCTL unrotate off fast sine", edgefilter=False, unrotate=False, n=10, gap=0.5,
+          check_breaks="off"),
     ]
 
 
@@ -482,6 +506,14 @@ def eval_trigger_scenario(scen, run, fs):
         chk(edges == 0, "negctl-strobe",
             "and strobes nothing (PC0 edges +%d): the advance is the fallback, not a trigger" % edges)
 
+    if scen["check_breaks"]:
+        br = [internal_breaks(np.asarray(fr["ch1"], float), fs, scen["f"]) for fr in frames]
+        nb = sum(1 for b in br if b > 0)
+        if scen["check_breaks"] == "on":
+            chk(nb <= 1, "no-internal-break", "%d/%d records keep a phase break inside (%s) <= 1" % (nb, len(br), br))
+        else:
+            chk(nb >= 3, "breaks-negctl", "unrotate OFF: %d/%d records with an internal break (%s) >= 3 -- the check can fail"
+                % (nb, len(br), br))
     if scen["check_order"]:
         ks = []
         for fr in frames:

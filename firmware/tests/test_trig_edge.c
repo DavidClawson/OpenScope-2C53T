@@ -102,6 +102,58 @@ int main(void)
     CHECK(off == 0, "every confident seam is the true rotation (%d found, %d exact, %d off)", found, exact, off);
     CHECK(found >= 900, "finds the seam on >= 75%% of 1200 fractional-period records (%d)", found);
 
+    printf("[5] seam by linear prediction (fast periodic records)\n");
+    static const double fast[] = { 0.3, 1.3, 4.4, 9.1, 16.5, 31.3, 41.3, 60.6, 82.6 };
+    int l_exact = 0, l_late = 0, l_early = 0, l_off = 0, l_ref = 0, v_found = 0, any_found = 0;
+    int v_refused = 0, rescued = 0, rescued_wrong = 0;
+    for (int sq = 0; sq < 2; sq++)
+        for (unsigned f = 0; f < sizeof fast / sizeof fast[0]; f++)
+            for (int i = 0; i < 100; i++) {
+                synth(rec, fast[f], (i & 1) ? -1 : 1, sq, 25.0 + urand() * 35.0);
+                uint32_t k = 9999u;
+                uint32_t kv;
+                int vf = trig_edge_find_seam(rec, &kv);
+                if (vf) v_found++;
+                if (trig_edge_find_seam_any(rec, &k)) any_found++;
+                if (!vf) {
+                    uint32_t kl;
+                    v_refused++;
+                    if (trig_edge_find_seam_lpc(rec, &kl)) {
+                        int dd = (int)((kl - last_rot + 1536u) & 1023u) - 512;
+                        if (dd >= 0 && dd <= 2) rescued++; else rescued_wrong++;
+                    }
+                }
+                if (!trig_edge_find_seam_lpc(rec, &k)) { l_ref++; continue; }
+                int d = (int)((k - last_rot + 1536u) & 1023u) - 512;
+                if (d == 0) l_exact++;
+                else if (d > 0 && d <= 2) l_late++;
+                else if (d < 0 && d >= -2) l_early++;
+                else { l_off++; if (l_off <= 3) printf("    off by %d (periods %.1f, %s)\n", d, fast[f], sq ? "square" : "sine"); }
+            }
+    CHECK(l_off == 0 && l_early == 0, "1800 records: %d exact, %d late by 1-2, %d early, %d off, %d refused",
+          l_exact, l_late, l_early, l_off, l_ref);
+    CHECK(l_exact >= 9 * (l_exact + l_late) / 10, "at least 90%% of answers exact (%d of %d)", l_exact, l_exact + l_late);
+    CHECK(rescued_wrong == 0 && rescued > 0,
+          "where the value step refuses (%d records), prediction recovers %d and is never wrong (%d); combined finds %d vs %d",
+          v_refused, rescued, rescued_wrong, any_found, v_found);
+    int lpc_int = 0;
+    for (int i = 0; i < 200; i++) {
+        synth(rec, (double)(3 + (i % 20)), (i & 1) ? -1 : 1, i & 2, 40.0);
+        uint32_t k;
+        if (trig_edge_find_seam_lpc(rec, &k)) lpc_int++;
+    }
+    CHECK(lpc_int == 0, "integer periods (no seam in the circle) refused by prediction too (%d answered)", lpc_int);
+    int agree = 0, both = 0;
+    for (unsigned i = 0; i < EDGE_FIXTURE_N; i++) {
+        uint32_t kv, kl;
+        if (trig_edge_find_seam(EDGE_FIXTURES[i].rec, &kv) && trig_edge_find_seam_lpc(EDGE_FIXTURES[i].rec, &kl)) {
+            both++;
+            int d = (int)((kl - kv + 1536u) & 1023u) - 512;
+            if (d >= 0 && d <= 2) agree++;
+        }
+    }
+    CHECK(both == 0 || agree == both, "real records: prediction agrees with the value step where both answer (%d/%d)", agree, both);
+
     printf("\n%s\n", fails ? "FAILED" : "all passed");
     return fails ? 1 : 0;
 }
