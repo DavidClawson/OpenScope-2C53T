@@ -76,6 +76,16 @@ class TestSession(unittest.TestCase):
         self.assertIn("OK MAY OR MAY NOT have been pressed", msg)
         self.assertNotIn("OK NOT pressed", msg)
 
+    def test_only_the_buttons_own_nak_means_not_pressed(self):
+        from openscope.device import Nak
+        s, d = session()
+        def press(b):
+            raise Nak(0x08, 0x02)                           # a STATUS NAK, not the button's
+        d.press = press
+        with self.assertRaises(RuntimeError) as cm:
+            s.press(["OK"])
+        self.assertIn("MAY OR MAY NOT", str(cm.exception))
+
     def test_power_refused_by_default(self):
         s, d = session()
         with self.assertRaises(RuntimeError):

@@ -370,6 +370,34 @@ class TestRound5(unittest.TestCase):
         self.assertEqual(made["link"].L.shim_presses(), 0)
 
 
+class TestRound6(unittest.TestCase):
+    def test_failed_recheck_is_a_reconnect_error_and_blocks_actions(self):
+        from openscope import mcp_server
+        dev = device()
+        dev._check_version()
+        dev.link.fail_next_read_after_write = True      # STATUS query loses its reply...
+        dev.link.nak_status_after_reopen = True         # ...and the re-check is NAKed
+        s = mcp_server.ScopeSession(opener=lambda port: dev)
+        with self.assertRaises(RuntimeError) as cm:
+            s.info()
+        self.assertIn("reconnect", str(cm.exception))
+        self.assertIsNone(s._dev, "session kept a device whose firmware was never checked")
+        # and the Device itself refuses to act until it re-verifies
+        with mock.patch.object(proto, "PROTO_MAJOR", 2):
+            with self.assertRaises(proto.ProtocolError):
+                dev.press("OK")
+        self.assertEqual(dev.link.L.shim_presses(), 0)
+
+    def test_write_failure_with_nak_recheck_is_not_a_bare_nak(self):
+        dev = device()
+        dev._check_version()
+        dev.link.fail_next_write = True
+        dev.link.nak_status_after_reopen = True
+        with self.assertRaises(DeviceError) as cm:
+            dev.shell("version")
+        self.assertNotIsInstance(cm.exception, Nak)
+
+
 class TestTransportLoss(unittest.TestCase):
     def test_button_is_not_resent_after_its_write_went_through(self):
         dev = device()
