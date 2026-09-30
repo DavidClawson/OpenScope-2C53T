@@ -89,6 +89,16 @@ MUTATIONS: tuple[Mutation, ...] = (
         new="    out[1] = 0;",
     ),
     Mutation(
+        name="meter with no reading answers a zero frame instead of NOT_READY",
+        old="    if (!meter_provider(&m)) {\n        esp_comm_send_nak(ESP_ERR_NOT_READY);   /* no reading yet: say so */\n        return;\n    }",
+        new="    (void)meter_provider(&m);",
+    ),
+    Mutation(
+        name="raw BCD dropped from METER_FRAME",
+        old="    put_u16(&out[8], (uint16_t)m.raw_bcd);",
+        new="    put_u16(&out[8], 0);",
+    ),
+    Mutation(
         name="router passes frame bytes to the shell",
         old="        if (!esp_comm_rx_in_frame() && b != ESP_SYNC_BYTE)\n            continue;",
         new="        if (b != ESP_SYNC_BYTE && !esp_comm_rx_in_frame())\n            continue;\n        if (passthrough) passthrough(&b, 1, ctx);",

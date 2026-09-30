@@ -79,7 +79,7 @@ class TestFastMcpWiring(unittest.TestCase):
         server = mcp_server.build_server(s)
         tools = asyncio.run(server.list_tools())
         self.assertEqual(sorted(t.name for t in tools),
-                         ["scope_info", "scope_press", "scope_screenshot", "scope_shell"])
+                         ["scope_info", "scope_meter", "scope_press", "scope_screenshot", "scope_shell"])
 
 
 if __name__ == "__main__":

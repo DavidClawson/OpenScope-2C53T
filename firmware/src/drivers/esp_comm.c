@@ -65,6 +65,7 @@ static esp_write_fn uart_write = 0;
 static esp_write_block_fn block_write = 0;
 static esp_status_fn status_provider = 0;
 static esp_button_fn button_injector = 0;
+static esp_meter_fn meter_provider = 0;
 
 /* Reported only when no status provider is bound (host tests, bare ESP32
  * bring-up). The firmware binds the real build string. */
@@ -114,6 +115,11 @@ void esp_comm_set_status_provider(esp_status_fn fn)
 void esp_comm_set_button_injector(esp_button_fn fn)
 {
     button_injector = fn;
+}
+
+void esp_comm_set_meter_provider(esp_meter_fn fn)
+{
+    meter_provider = fn;
 }
 
 void esp_comm_get_rx_stats(esp_rx_stats_t *out)
@@ -377,6 +383,50 @@ static void handle_button(const esp_packet_t *pkt)
     esp_comm_send_ack();
 }
 
+static uint8_t put_str(uint8_t *p, const char *str)
+{
+    size_t n = str ? strlen(str) : 0;
+    if (n > 15) n = 15;
+    p[0] = (uint8_t)n;
+    if (n) memcpy(p + 1, str, n);
+    return (uint8_t)(n + 1);
+}
+
+/* METER_FRAME v1 — layout in esp_comm.h (ESP_METER_FIXED_LEN). */
+static void handle_get_meter(const esp_packet_t *pkt)
+{
+    esp_meter_snapshot_t m;
+    uint8_t out[ESP_METER_FIXED_LEN + 32];
+    uint16_t n = ESP_METER_FIXED_LEN - 1;   /* index of unit_len */
+    uint32_t vbits;
+
+    if (pkt->payload_len != 0) {
+        esp_comm_send_nak(ESP_ERR_BAD_LENGTH);
+        return;
+    }
+    if (!meter_provider) {
+        esp_comm_send_nak(ESP_ERR_UNSUPPORTED);
+        return;
+    }
+    memset(&m, 0, sizeof(m));
+    if (!meter_provider(&m)) {
+        esp_comm_send_nak(ESP_ERR_NOT_READY);   /* no reading yet: say so */
+        return;
+    }
+    memcpy(&vbits, &m.value, sizeof(vbits));
+    put_u32(&out[0], m.update_count);
+    put_u32(&out[4], vbits);
+    put_u16(&out[8], (uint16_t)m.raw_bcd);
+    out[10] = m.decimal_pos;
+    out[11] = m.result_class;
+    out[12] = m.flags;
+    out[13] = m.submode;
+    out[14] = m.unit_variant;
+    n = (uint16_t)(n + put_str(&out[n], m.unit));
+    n = (uint16_t)(n + put_str(&out[n], m.display));
+    esp_comm_send_response(ESP_RSP_METER_FRAME, out, n);
+}
+
 #if ESP_COMM_TRANSFER_STUBS
 static void handle_module_start(const esp_packet_t *pkt)
 {
@@ -571,6 +621,7 @@ void esp_comm_process(const esp_packet_t *pkt)
     case ESP_CMD_PING:              handle_ping(pkt); break;
     case ESP_CMD_STATUS:            handle_status(pkt); break;
     case ESP_CMD_BUTTON:            handle_button(pkt); break;
+    case ESP_CMD_GET_METER:         handle_get_meter(pkt); break;
 #if ESP_COMM_TRANSFER_STUBS
     /* ESP32 co-processor staging. The flash writes are still TODO, so these
      * are compiled only where that is understood (the legacy flow tests). */

@@ -85,6 +85,17 @@ class ScopeSession:
             }
         return self._call(run)
 
+    def meter(self) -> dict:
+        def run(dev: Device) -> dict:
+            m = dev.meter()
+            return {
+                "value": m.value, "unit": m.unit, "display": m.display, "result": m.result,
+                "raw_bcd": m.raw_bcd, "decimal_pos": m.decimal_pos, "update_count": m.update_count,
+                "submode": m.submode, "ac": m.ac, "autorange": m.autorange, "hold": m.hold,
+                "note": "absolute accuracy is unverified on this unit; raw_bcd is what the meter chip reported",
+            }
+        return self._call(run)
+
     def press(self, buttons: List[str]) -> str:
         ids = [proto.button_id(b) for b in buttons]      # validate all before pressing any
         if proto.BUTTONS["POWER"] in ids and not self.allow_raw_shell:
@@ -130,6 +141,13 @@ def build_server(session: ScopeSession):
         """Status of the OpenScope 2C53T: firmware build, current mode (scope/meter/
         siggen/settings), battery, whether real capture data exists yet, USB health."""
         return session.info()
+
+    @mcp.tool(annotations=read_only)
+    def scope_meter() -> dict:
+        """Current multimeter reading (the scope must be in meter mode; the release
+        coldtrace build measures DC volts). update_count increases ~4 times a second;
+        call again to see whether the value moved. NOT_READY means no reading yet."""
+        return session.meter()
 
     @mcp.tool(annotations=ToolAnnotations(readOnlyHint=False, destructiveHint=False,
                                           idempotentHint=False, openWorldHint=False))

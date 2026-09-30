@@ -8340,6 +8340,27 @@ static void remote_status(esp_status_snapshot_t *st)
     st->fw_version    = s_fw_version;
 }
 
+static bool remote_meter(esp_meter_snapshot_t *m)
+{
+    meter_reading_t r;                      /* ~150 B on this task's stack */
+    if (!meter_data_snapshot(&r) || !r.valid)
+        return false;
+    m->update_count = r.update_count;
+    m->value        = r.value;
+    m->raw_bcd      = (int16_t)r.bcd_value;
+    m->decimal_pos  = r.decimal_pos;
+    m->result_class = (uint8_t)r.result_class;
+    m->flags = (uint8_t)((r.negative      ? ESP_METER_FLAG_NEGATIVE : 0) |
+                         (r.is_ac         ? ESP_METER_FLAG_AC       : 0) |
+                         (r.is_auto_range ? ESP_METER_FLAG_AUTO     : 0) |
+                         (r.is_hold       ? ESP_METER_FLAG_HOLD     : 0));
+    m->submode      = r.submode;
+    m->unit_variant = r.unit_variant;
+    strncpy(m->unit, r.unit_suffix ? r.unit_suffix : "", sizeof(m->unit) - 1);
+    strncpy(m->display, r.display_str, sizeof(m->display) - 1);
+    return true;
+}
+
 static void remote_to_shell(const uint8_t *data, uint16_t len, void *ctx)
 {
     (void)ctx;
@@ -8396,6 +8417,7 @@ static void vUsbDebugTask(void *pvParameters)
     esp_comm_set_block_writer(cdc_send_bytes);
     esp_comm_set_status_provider(remote_status);
     esp_comm_set_button_injector(button_scan_inject);
+    esp_comm_set_meter_provider(remote_meter);
 
     for (;;) {
         bool did_work = false;
