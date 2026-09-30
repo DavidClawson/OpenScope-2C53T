@@ -311,6 +311,7 @@ class Device:
         never through the frame decoder. A live trace can change the screen
         during the dump and fail the device's CRC: retried `attempts` times.
         """
+        self._ensure_verified()     # same rule as every other request
         return self._with_reopen(lambda: self._screenshot_once(region, attempts, timeout))
 
     def _screenshot_once(self, region, attempts: int, timeout: float) -> Screen:
