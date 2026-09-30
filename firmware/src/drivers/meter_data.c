@@ -1417,7 +1417,10 @@ void meter_data_process_frame(const volatile uint8_t *frame, uint8_t submode)
     /* Parse status flags from byte [7]. The stock parser treats this as the
      * status byte for data frames and as an integrity marker for echo frames. */
     uint8_t status = frame[7];
-    r->is_ac = (status & (1 << 2)) != 0;
+    /* Bit 2 is the x100 range in resistance and continuity, not AC: the
+     * 300 kOhm reading of EXP-206 carries frame[7] = 0x24. Gate the AC
+     * diagnostic by submode, as frame[7] bit 0 is gated below. */
+    r->is_ac = (submode != 6 && submode != 7) && (status & (1 << 2)) != 0;
     r->is_auto_range = (status & (1 << 3)) != 0;
     /* The sign is frame[2] bit 4 in every function: stock negates on it
      * (VNEG at 0x08037166, documented in meter_math_pipeline_annotated.c since
