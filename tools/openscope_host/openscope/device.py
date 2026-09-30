@@ -92,8 +92,19 @@ class Device:
         """§3.7: refuse to talk to an unknown protocol major before sending
         anything that acts (parse_status raises ProtocolError on a mismatch).
         Runs on open and again after every reopen: the reappearing port may be
-        a different firmware (e.g. right after an IAP flash)."""
-        self.proto_version = self.status().proto_version
+        a different firmware (e.g. right after an IAP flash).
+
+        Deliberately NOT through request(): its replug handling reopens, and
+        reopening runs this check, so a port that keeps vanishing would
+        recurse without bound. A failure here is final for this call."""
+        try:
+            frame = self._request_once(proto.CMD_STATUS, b"", (proto.RSP_STATUS,))
+        except (Timeout, Nak):
+            self._resync()
+            raise
+        except (OSError, _WriteFailed) as e:
+            raise DeviceError(f"port lost again right after (re)opening: {e}") from None
+        self.proto_version = proto.parse_status(frame.payload).proto_version
 
     def close(self) -> None:
         self.link.close()

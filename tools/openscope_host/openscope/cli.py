@@ -145,21 +145,19 @@ def main(argv: Optional[List[str]] = None) -> int:
 
     handlers = {"info": _info, "press": _press, "meter": _meter, "shell": _shell,
                 "screenshot": _screenshot}
+    dev = None
     try:
-        dev = Device.open(a.port)
-    except NoDevice as e:
+        dev = Device.open(a.port)           # also checks the protocol major (§3.7)
+        return handlers[a.cmd](dev, a)
+    except NoDevice as e:                   # none found, busy, or did not come back
         print(str(e), file=sys.stderr)
         return EXIT_NO_DEVICE
-    try:
-        return handlers[a.cmd](dev, a)
     except Nak as e:
         print(str(e), file=sys.stderr)
         return EXIT_DEVICE_ERROR
-    except NoDevice as e:                     # e.g. did not come back after a replug
-        print(str(e), file=sys.stderr)
-        return EXIT_NO_DEVICE
     except (DeviceError, proto.ProtocolError, ValueError, OSError) as e:
         print(f"error: {e}", file=sys.stderr)
         return EXIT_DEVICE_ERROR
     finally:
-        dev.close()
+        if dev is not None:
+            dev.close()

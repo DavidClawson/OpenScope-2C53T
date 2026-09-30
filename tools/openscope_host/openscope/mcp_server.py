@@ -107,9 +107,16 @@ class ScopeSession:
                     dev.press(b)
                 except Exception as e:
                     # Say exactly what already acted, so a retry does not press it twice.
-                    already = ("pressed " + " ".join(done) + "; ") if done else "nothing pressed; "
-                    raise DeviceError(f"{already}{b.upper()} not pressed ({e}); "
-                                      f"remaining not sent: {' '.join(x.upper() for x in buttons[len(done) + 1:]) or '-'}") from None
+                    # Only a NAK proves this button did not act; a lost reply or a
+                    # port lost after the write means it may well have.
+                    already = ("pressed " + " ".join(done) + "; ") if done else "nothing pressed before; "
+                    if isinstance(e, Nak):
+                        this = f"{b.upper()} NOT pressed ({e})"
+                    else:
+                        this = (f"{b.upper()} MAY OR MAY NOT have been pressed ({e}) - "
+                                "take a screenshot before retrying")
+                    rest = " ".join(x.upper() for x in buttons[len(done) + 1:]) or "-"
+                    raise DeviceError(f"{already}{this}; remaining not sent: {rest}") from None
                 done.append(b.upper())
             return "pressed " + " ".join(done)
         return self._call(run)
