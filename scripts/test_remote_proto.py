@@ -119,8 +119,13 @@ MUTATIONS: tuple[Mutation, ...] = (
     ),
     Mutation(
         name="meter with no reading answers a zero frame instead of NOT_READY",
-        old="    if (!meter_provider(&m)) {\n        esp_comm_send_nak(ESP_ERR_NOT_READY);   /* no reading yet: say so */\n        return;\n    }",
-        new="    (void)meter_provider(&m);",
+        old="    default:\n        esp_comm_send_nak(ESP_ERR_NOT_READY);             /* no reading yet: say so */\n        return;",
+        new="    default:\n        break;",
+    ),
+    Mutation(
+        name="frozen reading sent outside meter mode",
+        old="    case ESP_METER_WRONG_MODE:\n        esp_comm_send_nak(ESP_ERR_UNSUPPORTED_IN_MODE);   /* frozen, not live */\n        return;",
+        new="    case ESP_METER_WRONG_MODE:\n        break;",
     ),
     Mutation(
         name="raw BCD dropped from METER_FRAME",

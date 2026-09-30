@@ -50,6 +50,7 @@ def lib():
         L.shim_take_shell.argtypes = [ctypes.c_char_p, ctypes.c_uint32]
         L.shim_take_shell.restype = ctypes.c_uint32
         L.shim_set_meter.argtypes = [ctypes.c_uint32, ctypes.c_float] + [ctypes.c_int] * 4 + [ctypes.c_char_p] * 2
+        L.shim_set_meter_wrong_mode.argtypes = [ctypes.c_int]
         L.shim_set_status.argtypes = [ctypes.c_int] * 4 + [ctypes.c_uint32, ctypes.c_uint32, ctypes.c_int]
         _LIB = L
     return _LIB
@@ -214,6 +215,28 @@ class TestMeter(unittest.TestCase):
             self.assertEqual(cli.main(["meter", "--count", "0"]), 0)
         self.assertIn("1.000 V", out.getvalue())
 
+    def test_outside_meter_mode_is_refused_not_frozen(self):
+        dev = device()
+        dev.link.L.shim_set_meter(42, 1.6141, 16141, 3, 1, 0, b"V", b"1.6141")
+        dev.link.L.shim_set_meter_wrong_mode(1)
+        with self.assertRaises(Nak) as cm:
+            dev.meter()
+        self.assertEqual(proto.ERRORS[cm.exception.code], "UNSUPPORTED_IN_MODE")
+
+    def test_finite_count_gives_up_on_a_frozen_meter(self):
+        dev = device()
+        dev.link.L.shim_set_meter(5, 1.0, 1000, 3, 1, 0, b"V", b"1.000")   # never changes
+        clock = {"t": 1000.0}
+
+        def fake_time():
+            clock["t"] += 1.0
+            return clock["t"]
+        err = io.StringIO()
+        with mock.patch.object(cli.Device, "open", return_value=dev), mock.patch("time.sleep"), \
+                mock.patch.object(cli, "_now", fake_time), redirect_stdout(io.StringIO()), redirect_stderr(err):
+            self.assertEqual(cli.main(["meter", "--count", "2"]), 2)
+        self.assertIn("not updating", err.getvalue())
+
     def test_cli_meter_logs_csv(self):
         import csv
         dev = device()
@@ -256,6 +279,36 @@ class TestTransportLoss(unittest.TestCase):
         dev.link.fail_next_read_after_write = True
         self.assertEqual(dev.ping(), "OpenScope 2C53T shim")
         self.assertEqual(dev.link.reopens, 1)
+
+    def test_non_read_only_shell_is_not_resent(self):
+        dev = device()
+        sent = []
+        real_write = dev.link.write
+
+        def write(data):
+            sent.append(data)
+            real_write(data)
+            dev.link.fail_next_read_after_write = True         # `fwswap b` resets the device
+        dev.link.write = write
+        with self.assertRaises(DeviceError):
+            dev.shell("fwswap b")
+        self.assertEqual(sum(1 for d in sent if d.startswith(b"fwswap")), 1, "re-sent a resetting command")
+
+    def test_flush_failure_counts_as_possibly_sent(self):
+        from openscope.link import FlushFailed
+        dev = device()
+        real_write = dev.link.write
+        state = {"first": True}
+
+        def write(data):
+            real_write(data)                                    # the device did get it
+            if state["first"]:
+                state["first"] = False
+                raise FlushFailed("tcdrain: device vanished")
+        dev.link.write = write
+        with self.assertRaises(DeviceError):
+            dev.press("OK")
+        self.assertEqual(dev.link.L.shim_presses(), 1, "a possibly-delivered press was re-sent")
 
     def test_shell_survives_a_replug(self):
         dev = device()

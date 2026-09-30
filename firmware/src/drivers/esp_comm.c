@@ -415,8 +415,14 @@ static void handle_get_meter(const esp_packet_t *pkt)
         return;
     }
     memset(&m, 0, sizeof(m));
-    if (!meter_provider(&m)) {
-        esp_comm_send_nak(ESP_ERR_NOT_READY);   /* no reading yet: say so */
+    switch (meter_provider(&m)) {
+    case ESP_METER_OK:
+        break;
+    case ESP_METER_WRONG_MODE:
+        esp_comm_send_nak(ESP_ERR_UNSUPPORTED_IN_MODE);   /* frozen, not live */
+        return;
+    default:
+        esp_comm_send_nak(ESP_ERR_NOT_READY);             /* no reading yet: say so */
         return;
     }
     memcpy(&vbits, &m.value, sizeof(vbits));
