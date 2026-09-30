@@ -501,8 +501,11 @@ static void draw_voltage_wave_panel(uint16_t x, uint16_t y,
 
     lcd_fill_rect(x, y - 13, w, 13, th->background);
     lcd_fill_rect(x, y + h + 2, 120, 13, th->background);
-    const char *panel_title = snap.stuck_high ? "DMM waveform unavailable"
-                                              : "SPI3 meter ADC probe";
+    /* User-facing title. It read "SPI3 meter ADC probe" until 2026-09-30 --
+     * a developer label that the README screenshot then showed. */
+    const bool wave_src = fpga_meter_wave_available();
+    const char *panel_title = (snap.stuck_high || !wave_src) ? "DMM waveform unavailable"
+                                                             : "DMM waveform";
     font_draw_string(x, y - 13, panel_title,
                      snap.stuck_high ? th->warning : th->text_secondary,
                      th->background, &font_small);
@@ -511,10 +514,14 @@ static void draw_voltage_wave_panel(uint16_t x, uint16_t y,
         if (panel != NULL) {
             lcd_blit_rect(x, y, w, h, panel);
         }
-        const char *msg = snap.stuck_high ? "SPI3 probe flat FF" :
+        /* In builds without the sampler task the panel can never fill, so
+         * "Waiting for DMM samples" promised data that was never coming
+         * (seen in the v0.4.0 screenshots). Say what is true. */
+        const char *msg = !wave_src ? "Not in this firmware build" :
+                          snap.stuck_high ? "SPI3 probe flat FF" :
                           "Waiting for DMM samples";
         font_draw_string(x + 56, y + h / 2 - 6, msg,
-                         snap.stuck_high ? th->warning : th->text_secondary,
+                         (snap.stuck_high && wave_src) ? th->warning : th->text_secondary,
                          th->background, &font_small);
         meter_wave_panel_retained = true;
         meter_wave_last_mode = mode;
@@ -871,7 +878,11 @@ static void draw_meter_full(const meter_mode_info_t *m, uint8_t mode,
                            th->text_secondary, th->background, &font_small);
 
     if (mode == 0 || mode == 1) {
-        draw_voltage_wave_panel(10, 118, 300, 74, mode, current_val,
+        /* y 128 (was 118): the panel title sits at y - 13, and at 118 it
+         * overlapped the bar graph's "0" scale label (rows 102..114), which
+         * showed as "S0I3" in the v0.4.0 screenshot. Height trimmed so the
+         * bottom edge stays near where it was. */
+        draw_voltage_wave_panel(10, 128, 300, 70, mode, current_val,
                                 unit_str, reading->aux_freq_hz, th,
                                 force_redraw);
         font_draw_string(200, SECONDARY_Y, live_range_label(m, reading, mode),

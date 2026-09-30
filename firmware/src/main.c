@@ -273,6 +273,38 @@ static redraw_gate_t siggen_gate = { 0, 0, 0, false, false };
  * hashed — that is what the new_data term is for — so this stays valid
  * as the FFT/waterfall/measurement-badge inputs get rewired to real
  * capture. */
+/* The bottom info bar is drawn on a full-screen redraw only (DCMD_REDRAW_ALL,
+ * which every button path sends). A state change from anywhere else -- the
+ * USB shell's `fpga scope trigmode`, `mode scope` -- left it stale: on
+ * 2026-09-30 it read "Normal" while the scope was in SINGLE. This hashes
+ * exactly what draw_info_bar() prints, and the display loop repaints the
+ * bar whenever it changes, whoever changed it. */
+static uint32_t g_info_bar_epoch;
+
+static uint32_t info_bar_epoch(void)
+{
+    uint32_t h = REDRAW_EPOCH_SEED;
+    h = redraw_epoch_mix(h, (uint32_t)current_mode | ((uint32_t)theme_get_id() << 8));
+    if (current_mode == MODE_OSCILLOSCOPE) {
+        const scope_state_t *s = scope_state_get();
+        h = redraw_epoch_mix(h, (uint32_t)scope_view);
+        h = redraw_epoch_mix(h, (uint32_t)s->trigger.mode | ((uint32_t)s->timebase_idx << 8));
+        h = redraw_epoch_mix(h, (uint32_t)s->ch1.enabled | ((uint32_t)s->ch1.vdiv_idx << 1)
+                                | ((uint32_t)s->ch1.coupling << 8));
+        h = redraw_epoch_mix(h, (uint32_t)s->ch2.enabled | ((uint32_t)s->ch2.vdiv_idx << 1)
+                                | ((uint32_t)s->ch2.coupling << 8));
+#ifdef FEATURE_FFT
+        const fft_config_t *cfg = fft_get_config();
+        if (cfg)
+            h = redraw_epoch_mix(h, (uint32_t)cfg->window | ((uint32_t)cfg->avg_count << 8)
+                                    | ((uint32_t)cfg->max_hold << 24));
+#endif
+    } else if (current_mode == MODE_MULTIMETER) {
+        h = redraw_epoch_mix(h, (uint32_t)meter_submode);
+    }
+    return h;
+}
+
 static uint32_t scope_ui_epoch(const scope_state_t *s)
 {
     uint32_t h = REDRAW_EPOCH_SEED;
@@ -479,6 +511,7 @@ static void vDisplayTask(void *pvParameters)
                 status_bar_invalidate();
                 draw_status_bar();
                 draw_info_bar();
+                g_info_bar_epoch = info_bar_epoch();
                 /* Draw current mode's screen */
                 if (current_mode == MODE_OSCILLOSCOPE) {
                     scope_render(frame, REDRAW_FULL);
@@ -578,6 +611,13 @@ static void vDisplayTask(void *pvParameters)
         if (ui_modal_active) {
             frame++;
             continue;
+        }
+        {
+            uint32_t ib = info_bar_epoch();
+            if (ib != g_info_bar_epoch) {
+                draw_info_bar();
+                g_info_bar_epoch = ib;
+            }
         }
         if (current_mode == MODE_OSCILLOSCOPE) {
             const scope_state_t *ss_anim = scope_state_get();

@@ -3600,6 +3600,16 @@ uint16_t fpga_acq_poll_gap_get(void)         { return acq_poll_gap_ms; }
 void fpga_acq_unrotate_set(bool on)           { acq_unrotate = on; }
 bool fpga_acq_unrotate_get(void)              { return acq_unrotate; }
 bool fpga_acq_record_time_ordered(void)       { return acq_pub_ordered; }
+bool fpga_meter_wave_available(void)
+{
+    /* Mirrors the task-creation chain in fpga_init(): only the stock-path
+     * branch creates fpga_meter_adc_sampler_task. */
+#if FPGA_BUS_RELEASED_BOOT || FPGA_WARM_HANDOFF_TEST || FPGA_USART_SILENT_SCOPE
+    return false;
+#else
+    return true;
+#endif
+}
 void fpga_acq_unrotate_offset_set(int16_t n)  { acq_unrotate_offset = n; }
 int16_t fpga_acq_unrotate_offset_get(void)    { return acq_unrotate_offset; }
 

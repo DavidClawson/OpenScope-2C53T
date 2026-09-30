@@ -1126,6 +1126,10 @@ bool     fpga_acq_edge_filter_get(void);
 /* true when the latest committed record was un-rotated at its seam, so the
  * hardware trigger sits at index 512 (dev plan 2.3). */
 bool     fpga_acq_record_time_ordered(void);
+/* true when this build creates the meter-waveform sampler task ("mtr_wave").
+ * The coldtrace family does not, so its meter screen must not wait for
+ * samples that never come (2026-09-30). */
+bool     fpga_meter_wave_available(void);
 /* EXP-52: un-rotate the record so index 0 is the trigger crossing. The FPGA's
  * capture memory is read from address 0; the write pointer starts at the
  * arming read and reaches L at the crossing, so the readout is rotated by L
