@@ -31,6 +31,14 @@ The FNIRSI 2C53T is a capable $75 handheld 3-in-1 instrument held back by buggy 
 
 **Custom firmware runs on real hardware, and it captures.** On 2026-08-13, bench unit #1 powered on into this firmware, configured the FPGA over SSPI (status `0x00039020` → `0x0003F460`, `DONE_FINAL` set), armed the capture engine, and drew live traces from real ADC data on both channels — reproducibly across power cycles. Both axes now carry measured numbers: per-range volts/div on both channels (2026-08-18) and eight measured sample rates on the timebase ladder (2026-08-19), each cross-checked against an independent rig. Active development has moved to **wiring the layer above acquisition**: as of v0.4.0 (2026-09-30) triggering is fully usable from the buttons, captures are time-ordered with the trigger mid-record, and the FFT analyses live data. The measurement badges and the FFT read from real captures; math channels and protocol decoders are still written, host-tested, and fed synthetic input.
 
+### What it looks like
+
+Captured from bench unit #1 running v0.4.0, over USB with `scripts/screenshot.py`. These are the device's own framebuffer, not mock-ups; colours are rounded to the firmware's 16-colour screenshot palette.
+
+| Scope, SINGLE: CH1 sine, CH2 square, trigger at mid-screen | FFT on the live capture | Multimeter, DC volts |
+|---|---|---|
+| ![Scope time view](docs/screenshots/scope-time-single.png) | ![FFT view](docs/screenshots/fft-live.png) | ![Meter reading 1.6141 V](docs/screenshots/meter-dcv.png) |
+
 ### Seeing live waveforms today
 
 Live capture lives in **one specific build target**. `make` and `make guest` do *not* configure the FPGA and will *not* capture — only `guest-coldtrace` runs the configuration path:
