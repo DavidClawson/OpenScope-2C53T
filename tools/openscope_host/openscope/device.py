@@ -31,6 +31,14 @@ class Timeout(DeviceError):
     pass
 
 
+class _WriteFailed(Exception):
+    """The request never left the host: re-sending it cannot act twice."""
+
+
+# Queries: re-sending after a lost reply cannot change the instrument.
+IDEMPOTENT = frozenset({proto.CMD_PING, proto.CMD_STATUS, proto.CMD_GET_METER})
+
+
 SCREEN_HDR = re.compile(
     rb"SCREENBIN x=(\d+) y=(\d+) w=(\d+) h=(\d+) format=indexed4 len=(\d+) crc32=([0-9A-F]{8})\r\n")
 PROMPT = b"> "
@@ -80,25 +88,49 @@ class Device:
 
     # ── binary protocol ───────────────────────────────────────────
     def request(self, cmd: int, payload: bytes = b"", expect=(proto.RSP_ACK,)) -> proto.Frame:
-        """Send one frame, return the matching reply. NAK raises Nak."""
+        """Send one frame, return the matching reply. NAK raises Nak.
+
+        If the port vanishes (reboot, IAP flash, the firmware's CDC self-heal
+        from #39 — all look like a replug) it is reopened once. The request is
+        re-sent only when that cannot act twice: the write itself failed, or
+        the command is a pure query. A BUTTON whose write went through but
+        whose reply was lost is NOT re-sent (it may already have been
+        pressed); that raises DeviceError instead.
+        """
         try:
             return self._request_once(cmd, payload, expect)
         except (Timeout, Nak):
             self._resync()
             raise
-        except (OSError, IOError) as e:
-            # Port vanished mid-request: reopen once (the device may have
-            # self-healed its CDC endpoint, which looks like a replug).
-            self.link.reopen()
-            self._settle()
-            try:
-                return self._request_once(cmd, payload, expect)
-            except (OSError, IOError):
-                raise DeviceError(f"port lost twice: {e}") from None
+        except _WriteFailed as e:
+            self._reopen()
+            return self._retry(cmd, payload, expect, e.__cause__)
+        except OSError as e:
+            self._reopen()
+            if cmd not in IDEMPOTENT:
+                raise DeviceError(f"port lost after 0x{cmd:02X} was sent; not re-sending "
+                                  f"(it may already have acted): {e}") from None
+            return self._retry(cmd, payload, expect, e)
+
+    def _retry(self, cmd, payload, expect, first) -> proto.Frame:
+        try:
+            return self._request_once(cmd, payload, expect)
+        except OSError:
+            raise DeviceError(f"port lost twice: {first}") from None
+
+    def _reopen(self) -> None:
+        self.link.reopen()
+        self._settle()
+
+    def _write(self, data: bytes) -> None:
+        try:
+            self.link.write(data)
+        except OSError as e:
+            raise _WriteFailed() from e
 
     def _request_once(self, cmd: int, payload: bytes, expect) -> proto.Frame:
         wanted = set(expect) | {proto.RSP_NAK}
-        self.link.write(proto.encode(cmd, payload))
+        self._write(proto.encode(cmd, payload))
         deadline = time.time() + self.timeout
         while time.time() < deadline:
             chunk = self.link.read()
@@ -127,16 +159,36 @@ class Device:
 
     # ── ASCII shell (same port; §3.2 keeps it alive next to the protocol) ──
     def shell(self, line: str, timeout: float = 3.0) -> str:
-        """Run one shell command and return its output (echo and prompt stripped)."""
+        """Run one shell command and return its output (echo and prompt stripped).
+
+        Terminated with CR only: the firmware treats CR and LF each as a line
+        end, so CRLF would print a second, empty prompt."""
         if "\n" in line or "\r" in line:
             raise ValueError("one command per call")
+        return self._with_reopen(lambda: self._shell_once(line, timeout))
+
+    def _shell_once(self, line: str, timeout: float) -> str:
         self.link.drain(quiet=0.05, max_wait=0.3)
-        self.link.write(line.encode("ascii") + b"\r\n")
-        out = self._read_until_prompt(timeout)
-        text = out.decode("utf-8", "replace")
+        self.link.write(line.encode("ascii") + b"\r")
+        text = self._read_until_prompt(timeout).decode("utf-8", "replace")
         if text.startswith(line):
             text = text[len(line):]
-        return text.strip("\r\n")
+        text = text.strip("\r\n")
+        while text.endswith("> ") or text.endswith(">"):          # any extra empty prompts
+            text = text[:text.rfind(">")].rstrip("\r\n ")
+        return text
+
+    def _with_reopen(self, fn):
+        """Shell/screenshot talk to the port directly: give them the same
+        one-reopen-after-replug as request() (both are read-only queries)."""
+        try:
+            return fn()
+        except OSError as e:
+            self._reopen()
+            try:
+                return fn()
+            except OSError:
+                raise DeviceError(f"port lost twice: {e}") from None
 
     def _read_until_prompt(self, timeout: float) -> bytes:
         buf = bytearray()
@@ -163,11 +215,14 @@ class Device:
         never through the frame decoder. A live trace can change the screen
         during the dump and fail the device's CRC: retried `attempts` times.
         """
+        return self._with_reopen(lambda: self._screenshot_once(region, attempts, timeout))
+
+    def _screenshot_once(self, region, attempts: int, timeout: float) -> Screen:
         cmd = "screen dumpbin" + ("" if region is None else " %d %d %d %d" % tuple(region))
         last = ""
         for _ in range(attempts):
             self.link.drain(quiet=0.05, max_wait=0.3)
-            self.link.write(cmd.encode() + b"\r\n")
+            self.link.write(cmd.encode() + b"\r")
             buf = bytearray()
             t0 = time.time()
             m = None

@@ -54,8 +54,8 @@ class ScopeSession:
                 raise RuntimeError(f"{e}. Is the scope plugged in and running OpenScope?") from None
             except Nak as e:
                 raise RuntimeError(str(e)) from None
-            except (DeviceError, proto.ProtocolError) as e:
-                self._drop()
+            except (DeviceError, proto.ProtocolError, OSError) as e:
+                self._drop()        # the next call reopens instead of reusing a dead port
                 raise RuntimeError(f"device error: {e}") from None
 
     def _drop(self) -> None:

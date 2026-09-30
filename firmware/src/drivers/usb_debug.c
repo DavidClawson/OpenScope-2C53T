@@ -141,12 +141,14 @@ void USBFS_L_CAN1_RX0_IRQHandler(void)
 typedef struct {
     uint32_t tx_stalls;          /* waits for g_tx_completed that timed out */
     uint32_t tx_send_errors;     /* usb_vcp_send_data() refused */
-    uint32_t tx_dropped_closed;  /* writes dropped: host closed the port (DTR 0) */
+    uint32_t tx_dropped_closed;  /* writes dropped: host closed the port (DTR 1 -> 0) */
+    uint32_t tx_host_slow;       /* stalls with the packet still VALID: host not reading */
     uint16_t heals;              /* soft reconnects performed */
     uint8_t  consecutive;        /* stalls since the last completed send */
     uint8_t  heal_enabled;
     volatile uint8_t dtr;        /* last DTR from the host */
     volatile uint8_t dtr_seen;   /* a SET_CONTROL_LINE_STATE arrived since enumeration */
+    volatile uint8_t dtr_opened; /* DTR was 1 at some point since enumeration */
     uint8_t  stall_flag;         /* g_tx_completed at the last stall */
     uint32_t stall_ept;          /* USB->ept[1] at the last stall */
     uint32_t stall_tick;
@@ -163,6 +165,7 @@ static usb_sts_type cdc_setup_spy(void *udev, usb_setup_type *setup)
         setup->bRequest == CDC_SET_CONTROL_LINE_STATE) {
         s_usb.dtr = (uint8_t)(setup->wValue & 0x0001u);
         s_usb.dtr_seen = 1;
+        if (s_usb.dtr) s_usb.dtr_opened = 1;
     }
     return cdc_class_handler.setup_handler(udev, setup);
 }
@@ -175,6 +178,16 @@ static void usb_tx_stalled(cdc_struct_type *pcdc)
     s_usb.stall_ept  = USB->ept[USBD_CDC_BULK_IN_EPT & 0x0F];
     s_usb.stall_tick = xTaskGetTickCount();
 
+    /* TX status still VALID = the packet is armed and waiting for IN tokens:
+     * the host has simply stopped reading (paused terminal, full OS buffer).
+     * That is not a wedge and must not cost the host its port. Only a stall
+     * with the endpoint NAK/disabled — packet gone, completion never seen —
+     * is the lost-completion case #39 is about. */
+    if ((s_usb.stall_ept & USB_TXSTS) == USB_TX_VALID) {
+        s_usb.tx_host_slow++;
+        return;
+    }
+
     if (s_usb.heal_enabled && s_usb.dtr_seen && s_usb.dtr &&
         s_usb.consecutive >= USB_HEAL_AFTER_STALLS &&
         xTaskGetSchedulerState() == taskSCHEDULER_RUNNING) {
@@ -182,6 +195,7 @@ static void usb_tx_stalled(cdc_struct_type *pcdc)
         vTaskDelay(pdMS_TO_TICKS(USB_HEAL_OFF_MS));
         s_usb.dtr = 0;
         s_usb.dtr_seen = 0;
+        s_usb.dtr_opened = 0;
         s_usb.consecutive = 0;
         s_usb.heals++;
         usbd_connect(&usb_core_dev);
@@ -244,9 +258,11 @@ static void cdc_send_bytes(const uint8_t *data, uint16_t len)
     return;
 #else
     if (!usb_debug_connected()) return;
-    if (s_usb.dtr_seen && !s_usb.dtr) {
-        /* Host closed the port: nothing will read this, and waiting for it
-         * costs the shell task a 1 s stall per write. */
+    if (s_usb.dtr_opened && !s_usb.dtr) {
+        /* Host raised DTR earlier and has now dropped it: it closed the port,
+         * nothing will read this, and waiting costs the shell task a 1 s stall
+         * per write. A host that never raises DTR (CDC does not require it;
+         * .NET SerialPort defaults it off) is still answered. */
         s_usb.tx_dropped_closed++;
         return;
     }
@@ -729,12 +745,12 @@ static void cmd_usbstat(void)
     esp_comm_get_rx_stats(&rx);
     usb_debug_printf(
         "usb: dtr=%u (seen=%u) heal=%s\r\n"
-        "tx: stalls=%lu consecutive=%u send_err=%lu dropped_closed=%lu heals=%u\r\n"
+        "tx: stalls=%lu (host_slow=%lu) consecutive=%u send_err=%lu dropped_closed=%lu heals=%u\r\n"
         "last stall: tick=%lu tx_completed=%u ept1=0x%08lX\r\n"
         "proto rx: ok=%lu bad_chk=%lu bad_len=%lu gap_timeouts=%lu\r\n",
         (unsigned)s_usb.dtr, (unsigned)s_usb.dtr_seen,
         s_usb.heal_enabled ? "on" : "off",
-        (unsigned long)s_usb.tx_stalls, (unsigned)s_usb.consecutive,
+        (unsigned long)s_usb.tx_stalls, (unsigned long)s_usb.tx_host_slow, (unsigned)s_usb.consecutive,
         (unsigned long)s_usb.tx_send_errors, (unsigned long)s_usb.tx_dropped_closed,
         (unsigned)s_usb.heals,
         (unsigned long)s_usb.stall_tick, (unsigned)s_usb.stall_flag,
@@ -8324,7 +8340,9 @@ static const char shell_banner[] =
  * The binary protocol shares the CDC OUT endpoint with this shell: every
  * received chunk goes through esp_comm_route(), which takes frames starting
  * at 0xAA and hands everything else to shell_feed() unchanged (§3.2). */
-static const char s_fw_version[] = "OpenScope 2C53T " __DATE__ " " __TIME__;
+/* 30 chars ("OpenScope Oct  1 2026 04:59:12"): fits the protocol's version field
+ * whole, so two builds a minute apart stay distinguishable. */
+static const char s_fw_version[] = "OpenScope " __DATE__ " " __TIME__;
 
 static void remote_status(esp_status_snapshot_t *st)
 {
@@ -8371,6 +8389,11 @@ static void remote_route(const uint8_t *data, uint16_t len)
 {
     esp_comm_route(data, len, (uint32_t)xTaskGetTickCount() * portTICK_PERIOD_MS,
                    remote_to_shell, NULL);
+    /* route() stamps a chunk's frame bytes with the time it was entered; a
+     * shell command or a blocked send inside the same chunk can take longer
+     * than the gap. Re-stamp a frame left open at the chunk's end, so the gap
+     * only ever measures silence between chunks. */
+    esp_comm_rx_touch((uint32_t)xTaskGetTickCount() * portTICK_PERIOD_MS);
 }
 
 /* Instrumentation for the 2026-08-11 "shell task never polls RTT" hunt.
@@ -8533,6 +8556,7 @@ static void vUsbDebugTask(void *pvParameters)
             usb_banner_sent = false;
             usb_settle = 0;
             s_usb.dtr_seen = 0;
+            s_usb.dtr_opened = 0;
         }
 #else
         (void)rx_buf; (void)usb_banner_sent; (void)usb_settle;
