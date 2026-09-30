@@ -208,7 +208,10 @@ bool esp_comm_rx_poll(uint32_t now_ms)
     rx_state = RX_WAIT_SYNC;
     rx_discard = 0;
     rx_stats.gap_timeouts++;
-    esp_comm_send_nak(ESP_ERR_TIMEOUT);
+    /* Deliberately silent. The protocol has no request ids, so a reply
+     * nobody is waiting for would be taken by the host as the answer to its
+     * NEXT request. The host that abandoned this frame has already timed
+     * out; the counter (usbstat) is the record. */
     return true;
 }
 
