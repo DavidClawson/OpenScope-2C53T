@@ -215,7 +215,7 @@ static void test_oversize_frame_is_swallowed(void)
 
 static void test_truncated_frame_times_out_and_shell_recovers(void)
 {
-    uint8_t buf[16], p[8]; size_t off = 0;
+    uint8_t buf[16];
     reset();
     size_t n = frame(buf, ESP_CMD_BUTTON, (const uint8_t *)"\x09", 1);
     route(buf, n - 2, 1000);                     /* host dies mid-frame */
@@ -224,7 +224,7 @@ static void test_truncated_frame_times_out_and_shell_recovers(void)
     reset();
     route(buf, n - 2, 1000);
     CHECK(esp_comm_rx_poll(1000 + ESP_RX_GAP_MS) == true, "poll abandons the stale frame after the gap");
-    CHECK(take(&off, p, 0) == ESP_RSP_NAK && p[0] == ESP_ERR_TIMEOUT, "abandoned frame is reported (NAK TIMEOUT)");
+    CHECK(tx_len == 0, "abandoning is silent: no unsolicited reply to be mistaken for the next answer");
     route("version\r", 8, 1000 + ESP_RX_GAP_MS + 5);
     CHECK(strcmp(shell, "version\r") == 0, "after the timeout the shell hears the operator again");
     esp_rx_stats_t st; esp_comm_get_rx_stats(&st);

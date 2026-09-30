@@ -1,0 +1,21 @@
+[build-system]
+requires = ["setuptools>=61"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "openscope"
+version = "0.1.0"
+description = "Host tool for the OpenScope 2C53T remote protocol (USB CDC)"
+requires-python = ">=3.9"
+dependencies = ["pyserial>=3.5"]
+
+[project.optional-dependencies]
+image = ["Pillow"]
+mcp = ["mcp>=1.2"]
+
+[project.scripts]
+openscope = "openscope.cli:main"
+openscope-mcp = "openscope.mcp_server:main"
+
+[tool.setuptools]
+packages = ["openscope"]

@@ -57,7 +57,7 @@
 #define ESP_ERR_NOT_READY       0x07
 #define ESP_ERR_TRANSFER_ACTIVE 0x08
 #define ESP_ERR_UNSUPPORTED     0x09    /* command exists but is not implemented on this build */
-#define ESP_ERR_TIMEOUT         0x0A    /* packet abandoned mid-frame (inter-byte gap) */
+#define ESP_ERR_RESERVED_0A     0x0A    /* reserved: never sent (a gap timeout is silent, see esp_comm_rx_poll) */
 #define ESP_ERR_NO_CAPTURE_DATA 0x0B    /* remote_protocol.md §3.4 — never substitute the demo trace */
 #define ESP_ERR_UNSUPPORTED_IN_MODE 0x0C
 #define ESP_ERR_BAD_ARG         0x0D    /* argument out of range */
@@ -216,7 +216,8 @@ void esp_comm_set_button_injector(esp_button_fn fn);
 bool esp_comm_rx_in_frame(void);
 
 /* Abandon a frame whose bytes stopped arriving ESP_RX_GAP_MS ago.
- * Returns true if a frame was abandoned (a NAK(TIMEOUT) is sent). */
+ * Returns true if a frame was abandoned. Nothing is sent: without request
+ * ids an unsolicited reply would be mistaken for the next request's answer. */
 bool esp_comm_rx_poll(uint32_t now_ms);
 
 /* Route a chunk from a stream shared with the ASCII shell (§3.2):

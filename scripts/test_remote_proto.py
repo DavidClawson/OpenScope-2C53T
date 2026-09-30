@@ -59,9 +59,9 @@ MUTATIONS: tuple[Mutation, ...] = (
         new="if (1)\n        return false;",
     ),
     Mutation(
-        name="abandoned frame not reported",
-        old="    rx_stats.gap_timeouts++;\n    esp_comm_send_nak(ESP_ERR_TIMEOUT);",
-        new="    rx_stats.gap_timeouts++;",
+        name="abandoned frame answered with an unsolicited NAK",
+        old="    rx_stats.gap_timeouts++;\n",
+        new="    rx_stats.gap_timeouts++;\n    esp_comm_send_nak(ESP_ERR_BAD_LENGTH);\n",
     ),
     Mutation(
         name="button ACKed without an injector (false success)",
