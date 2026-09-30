@@ -139,8 +139,10 @@ static void test_frame_split_across_usb_packets(void)
 {
     uint8_t buf[16]; size_t n = frame(buf, ESP_CMD_STATUS, 0, 0), off = 0;
     reset();
-    for (size_t i = 0; i < n; i++) route(buf + i, 1, (uint32_t)i);   /* 1 byte per packet */
-    CHECK(take(&off, 0, 0) == ESP_RSP_STATUS, "a frame split byte-by-byte is reassembled");
+    /* 1 byte per packet, ESP_RX_GAP_MS/2 apart: the frame spans ~2.5 gaps in
+     * total, so this only passes if the timeout is really INTER-byte. */
+    for (size_t i = 0; i < n; i++) route(buf + i, 1, (uint32_t)(i * (ESP_RX_GAP_MS / 2)));
+    CHECK(take(&off, 0, 0) == ESP_RSP_STATUS, "a slow frame (gaps < timeout, total > timeout) is reassembled");
     CHECK(shell_len == 0, "no frame byte leaked to the shell");
 }
 
@@ -298,6 +300,11 @@ static void test_button_injection(void)
           "queue full: NAK(NOT_READY)");
 
     reset(); off = 0; esp_comm_set_button_injector(button_injector);
+    route(buf, frame(buf, ESP_CMD_BUTTON, (const uint8_t *)"\x00", 1), 0);
+    CHECK(take(&off, p, 0) == ESP_RSP_NAK && p[0] == ESP_ERR_BAD_ARG && injected_n == 0,
+          "button id 0 rejected, nothing injected");
+
+    reset(); off = 0; esp_comm_set_button_injector(button_injector);
     route(buf, frame(buf, ESP_CMD_BUTTON, (const uint8_t *)"\x10", 1), 0);
     CHECK(take(&off, p, 0) == ESP_RSP_NAK && p[0] == ESP_ERR_BAD_ARG && injected_n == 0,
           "button id 16 rejected, nothing injected");
@@ -364,6 +371,54 @@ static void test_get_meter(void)
     CHECK(take(&off, p, 0) == ESP_RSP_NAK && p[0] == ESP_ERR_BAD_LENGTH, "GET_METER takes no payload");
 }
 
+static void test_long_version_is_capped(void)
+{
+    uint8_t buf[16], p[128]; uint16_t pl = 0; size_t off = 0;
+    static const char v60[] = "OpenScope 2C53T Oct  1 2026 04:59:12 +remote-protocol-build-x";
+    reset();
+    fake_status.fw_version = v60;                      /* 60 chars > ESP_FW_VERSION_MAX */
+    esp_comm_set_status_provider(status_provider);
+    route(buf, frame(buf, ESP_CMD_STATUS, 0, 0), 0);
+    CHECK(take(&off, p, &pl) == ESP_RSP_STATUS, "STATUS with an over-long version still answers");
+    CHECK(p[16] == ESP_FW_VERSION_MAX && pl == ESP_STATUS_FIXED_LEN + ESP_FW_VERSION_MAX,
+          "version capped at ESP_FW_VERSION_MAX (and the stack buffer is sized to it)");
+    route(buf, frame(buf, ESP_CMD_PING, 0, 0), 0);
+    CHECK(take(&off, p, &pl) == ESP_RSP_DATA && pl == ESP_FW_VERSION_MAX, "PING capped the same way");
+
+    reset(); off = 0;
+    fake_status.fw_version = "OpenScope Oct  1 2026 04:59:12";   /* the firmware's real format */
+    esp_comm_set_status_provider(status_provider);
+    route(buf, frame(buf, ESP_CMD_PING, 0, 0), 0);
+    CHECK(take(&off, p, &pl) == ESP_RSP_DATA && pl == 30 && memcmp(p + 25, "59:12", 5) == 0,
+          "the production version string travels whole, seconds included");
+}
+
+static void test_oversize_then_silence_does_not_deafen_shell(void)
+{
+    uint8_t hdr[6] = { 0xAA, ESP_CMD_PING, 0xFF, 0xFF, 'x', 'y' };  /* announces 65535, sends 2 */
+    reset();
+    route(hdr, sizeof(hdr), 1000);
+    CHECK(esp_comm_rx_in_frame(), "the lying frame is being discarded");
+    CHECK(esp_comm_rx_poll(1000 + ESP_RX_GAP_MS) == true, "silence abandons it");
+    CHECK(!esp_comm_rx_in_frame(), "…including the discard count");
+    route("version\r", 8, 1000 + ESP_RX_GAP_MS + 1);
+    CHECK(strcmp(shell, "version\r") == 0, "the operator is heard right after the gap, not 64 KB later");
+}
+
+static void test_touch_refreshes_open_frame_only(void)
+{
+    uint8_t buf[16], p[8]; size_t off = 0;
+    size_t n = frame(buf, ESP_CMD_PING, 0, 0);
+    reset();
+    route(buf, n - 1, 0);                               /* frame open at chunk end */
+    esp_comm_rx_touch(ESP_RX_GAP_MS + 10);              /* chunk took a while to process */
+    CHECK(esp_comm_rx_poll(ESP_RX_GAP_MS + 20) == false, "a touched frame is not expired by work time");
+    route(buf + n - 1, 1, ESP_RX_GAP_MS + 30);
+    CHECK(take(&off, p, 0) == ESP_RSP_DATA, "…and completes when its last byte arrives");
+    esp_comm_rx_touch(10 * ESP_RX_GAP_MS);
+    CHECK(!esp_comm_rx_in_frame(), "touch never opens a frame");
+}
+
 int main(void)
 {
     printf("test_remote_proto\n");
@@ -382,6 +437,9 @@ int main(void)
     test_button_injection();
     test_block_and_byte_writers_agree();
     test_get_meter();
+    test_long_version_is_capped();
+    test_oversize_then_silence_does_not_deafen_shell();
+    test_touch_refreshes_open_frame_only();
     printf("%d/%d checks passed\n", checks - failures, checks);
     return failures ? 1 : 0;
 }

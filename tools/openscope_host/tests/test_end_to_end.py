@@ -27,7 +27,7 @@ DRIVERS = os.path.join(ROOT, "firmware", "src", "drivers")
 sys.path.insert(0, os.path.join(HERE, ".."))
 
 from openscope import cli, proto  # noqa: E402
-from openscope.device import Device, Nak, Timeout  # noqa: E402
+from openscope.device import Device, DeviceError, Nak, Timeout  # noqa: E402
 
 _LIB = None
 
@@ -67,6 +67,7 @@ class FakeLink:
         self.shell_line = bytearray()
         self.shell_seen = bytearray()
         self.fail_next_write = False
+        self.fail_next_read_after_write = False
         self.reopens = 0
 
     # device side ------------------------------------------------------
@@ -78,10 +79,14 @@ class FakeLink:
         for b in buf.raw[:n]:
             self.shell_seen.append(b)
             if b in (0x0D, 0x0A):
+                # Like firmware shell_feed(): EVERY CR and every LF ends a line,
+                # echoes CRLF and prints a prompt (so CRLF yields two prompts).
                 line = bytes(self.shell_line).decode()
                 self.shell_line.clear()
+                self.rx += line.encode() + b"\r\n"
                 if line:
-                    self.rx += line.encode() + b"\r\n" + self._shell_reply(line) + b"> "
+                    self.rx += self._shell_reply(line)
+                self.rx += b"> "
             else:
                 self.shell_line.append(b)
 
@@ -100,6 +105,9 @@ class FakeLink:
         self._pump()
 
     def read(self, n=4096):
+        if self.fail_next_read_after_write:
+            self.fail_next_read_after_write = False
+            raise OSError(6, "Device not configured")         # replug after the device acted
         self.now += 5
         self.L.shim_poll(self.now)
         self._pump()
@@ -187,6 +195,25 @@ class TestMeter(unittest.TestCase):
         self.assertEqual(m.result, "normal")
         self.assertTrue(m.autorange and not m.hold and not m.negative)
 
+    def test_continuous_log_survives_not_ready(self):
+        dev = device()
+        calls = {"n": 0}
+        real = dev.meter
+
+        def flaky():
+            calls["n"] += 1
+            if calls["n"] == 1:
+                raise Nak(proto.CMD_GET_METER, 0x07)          # NOT_READY during a range change
+            if calls["n"] > 3:
+                raise KeyboardInterrupt                         # stop the "until Ctrl-C" loop
+            dev.link.L.shim_set_meter(calls["n"], 1.0, 1000, 3, 1, 0, b"V", b"1.000")
+            return real()
+        dev.meter = flaky
+        with mock.patch.object(cli.Device, "open", return_value=dev), \
+                mock.patch("time.sleep"), redirect_stdout(io.StringIO()) as out, redirect_stderr(io.StringIO()):
+            self.assertEqual(cli.main(["meter", "--count", "0"]), 0)
+        self.assertIn("1.000 V", out.getvalue())
+
     def test_cli_meter_logs_csv(self):
         import csv
         dev = device()
@@ -217,6 +244,25 @@ class TestSharedStream(unittest.TestCase):
 
 
 class TestTransportLoss(unittest.TestCase):
+    def test_button_is_not_resent_after_its_write_went_through(self):
+        dev = device()
+        dev.link.fail_next_read_after_write = True
+        with self.assertRaises(DeviceError):
+            dev.press("OK")
+        self.assertEqual(dev.link.L.shim_presses(), 1, "the press happened once and was not repeated")
+
+    def test_query_is_resent_after_a_lost_reply(self):
+        dev = device()
+        dev.link.fail_next_read_after_write = True
+        self.assertEqual(dev.ping(), "OpenScope 2C53T shim")
+        self.assertEqual(dev.link.reopens, 1)
+
+    def test_shell_survives_a_replug(self):
+        dev = device()
+        dev.link.fail_next_write = True
+        self.assertEqual(dev.shell("version"), "OpenScope 2C53T\r\nBuild: test")
+        self.assertEqual(dev.link.reopens, 1)
+
     def test_replug_mid_request_is_retried_once(self):
         dev = device()
         dev.link.fail_next_write = True          # CDC self-heal (#39) looks like a replug

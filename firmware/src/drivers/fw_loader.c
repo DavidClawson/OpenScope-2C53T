@@ -461,6 +461,11 @@ RF static void rf_w25q_read_raw(uint32_t addr, uint8_t *dst, uint32_t len)
  * between the two internal-flash banks by address, then SYSRESETREQ.
  * Bank 0 regs at +0x0C/+0x10/+0x14 (KEYR +0x04), bank 1 at +0x4C/+0x50/
  * +0x54 (KEYR2 +0x44). */
+bool fw_loader_records_crumbs(void)
+{
+    return FWL_INSTALL_CRUMBS != 0;
+}
+
 RF static void fwl_ram_install(uint32_t src, uint32_t size)
 {
     uint8_t *page = fwl_buf;
@@ -594,9 +599,12 @@ RF static void fwl_ram_install(uint32_t src, uint32_t size)
             }
 
             for (uint32_t i = 0; i < FWL_CHUNK; ++i) {
-                if (*(volatile uint8_t *)(addr + sub + i) != page[i]) {
-                    /* DT15 = (read << 8) | expected instead of STS here */
-                    FWL_DEAD_AT(7, ((uint32_t)*(volatile uint8_t *)(addr + sub + i) << 8) | page[i],
+                uint8_t got = *(volatile uint8_t *)(addr + sub + i);
+                if (got != page[i]) {
+                    /* DT15 = (read << 8) | expected: the SAME read that
+                     * failed the compare — a marginal cell may read right
+                     * the second time. */
+                    FWL_DEAD_AT(7, ((uint32_t)got << 8) | page[i],
                                 *ctrl, off / FWL_PAGE_SIZE, sub + i);
                 }
             }

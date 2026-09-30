@@ -93,6 +93,7 @@
  *   [17..] char fw_version[fw_len]  (no NUL)
  */
 #define ESP_STATUS_FIXED_LEN    17
+#define ESP_FW_VERSION_MAX      48      /* bytes of fw_version sent; also sizes the STATUS buffer */
 #define ESP_STATUS_FLAG_CHARGING      0x01
 #define ESP_STATUS_FLAG_CAPTURE_READY 0x02
 #define ESP_STATUS_FLAG_BATT_CRITICAL 0x04
@@ -107,7 +108,7 @@ typedef struct {
     uint32_t    uptime_ms;
     uint32_t    usb_tx_stalls;
     uint16_t    usb_heals;
-    const char *fw_version;     /* NUL-terminated; truncated to 32 on the wire */
+    const char *fw_version;     /* NUL-terminated; truncated to ESP_FW_VERSION_MAX on the wire */
 } esp_status_snapshot_t;
 
 typedef void (*esp_status_fn)(esp_status_snapshot_t *out);
@@ -258,6 +259,11 @@ bool esp_comm_rx_in_frame(void);
  * Returns true if a frame was abandoned. Nothing is sent: without request
  * ids an unsolicited reply would be mistaken for the next request's answer. */
 bool esp_comm_rx_poll(uint32_t now_ms);
+
+/* Refresh the gap clock of a frame still open (no-op otherwise). Call after
+ * esp_comm_route() returns, with a fresh time: route() stamps a whole chunk
+ * with its entry time, and work inside the chunk may have taken a while. */
+void esp_comm_rx_touch(uint32_t now_ms);
 
 /* Route a chunk from a stream shared with the ASCII shell (§3.2):
  * bytes belonging to a frame (starting at 0xAA) go to the parser and every

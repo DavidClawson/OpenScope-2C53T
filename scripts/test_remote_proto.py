@@ -27,7 +27,11 @@ SRC = REPO / "firmware" / "src" / "drivers" / "esp_comm.c"
 HDR = REPO / "firmware" / "src" / "drivers" / "esp_comm.h"
 TEST_C = REPO / "firmware" / "tests" / "test_remote_proto.c"
 
-CFLAGS = ["-std=gnu11", "-Wall", "-Wextra", "-O1"]
+CFLAGS = ["-std=gnu11", "-Wall", "-Wextra", "-O1"]   # no -Werror: a mutant may leave an unused variable
+
+
+class BuildFailed(Exception):
+    """A mutant that does not compile proves nothing about the guard."""
 
 
 @dataclass
@@ -74,9 +78,34 @@ MUTATIONS: tuple[Mutation, ...] = (
         new="    (void)button_injector(pkt->payload[0]);",
     ),
     Mutation(
-        name="button id range unchecked",
+        name="button id lower bound unchecked (id 0 queued)",
         old="if (pkt->payload[0] < ESP_BTN_CH1 || pkt->payload[0] > ESP_BTN_POWER) {",
-        new="if (0) {",
+        new="if (pkt->payload[0] > ESP_BTN_POWER) {",
+    ),
+    Mutation(
+        name="button id upper bound unchecked",
+        old="if (pkt->payload[0] < ESP_BTN_CH1 || pkt->payload[0] > ESP_BTN_POWER) {",
+        new="if (pkt->payload[0] < ESP_BTN_CH1) {",
+    ),
+    Mutation(
+        name="fw_version cap removed (stack overflow in handle_status)",
+        old="return (uint8_t)(n > ESP_FW_VERSION_MAX ? ESP_FW_VERSION_MAX : n);",
+        new="return (uint8_t)n;",
+    ),
+    Mutation(
+        name="gap poll leaves an oversize discard running (lying length deafens the shell)",
+        old="    rx_state = RX_WAIT_SYNC;\n    rx_discard = 0;\n    rx_stats.gap_timeouts++;",
+        new="    rx_state = RX_WAIT_SYNC;\n    rx_stats.gap_timeouts++;",
+    ),
+    Mutation(
+        name="gap clock refreshed only at the sync byte (timeout from frame start)",
+        old="        rx_last_ms = now_ms;\n        switch (rx_step(b)) {",
+        new="        if (b == ESP_SYNC_BYTE) rx_last_ms = now_ms;\n        switch (rx_step(b)) {",
+    ),
+    Mutation(
+        name="rx_touch does nothing",
+        old="    if (esp_comm_rx_in_frame())\n        rx_last_ms = now_ms;",
+        new="    (void)now_ms;",
     ),
     Mutation(
         name="stub commands ACK again",
@@ -117,7 +146,7 @@ def compile_and_run(source_text: str, workdir: Path) -> subprocess.CompletedProc
         capture_output=True, text=True,
     )
     if build.returncode != 0:
-        return build
+        raise BuildFailed(build.stderr)
     return subprocess.run([str(binary)], capture_output=True, text=True)
 
 
@@ -128,7 +157,7 @@ class TestRemoteProto(unittest.TestCase):
 
     def test_base_suite_passes(self):
         with tempfile.TemporaryDirectory() as tmp:
-            proc = compile_and_run(SRC.read_text(), Path(tmp))
+            proc = compile_and_run(SRC.read_text(), Path(tmp))   # BuildFailed = error
             self.assertEqual(proc.returncode, 0,
                              f"base suite failed:\n{proc.stdout}\n{proc.stderr}")
 
@@ -140,15 +169,22 @@ class TestRemoteProto(unittest.TestCase):
                 mutated = base.replace(m.old, m.new, 1)
                 self.assertNotEqual(mutated, base, "replacement was a no-op")
                 with tempfile.TemporaryDirectory() as tmp:
-                    proc = compile_and_run(mutated, Path(tmp))
+                    try:
+                        proc = compile_and_run(mutated, Path(tmp))
+                    except BuildFailed as e:
+                        self.fail(f"mutant '{m.name}' did not build, so it proves nothing:\n{e}")
                 self.assertNotEqual(
                     proc.returncode, 0,
                     f"mutation '{m.name}' did NOT make the suite fail — the guard is not tested.\n"
                     f"{proc.stdout}{proc.stderr}")
 
 
-if __name__ == "__main__":
+def setUpModule():
+    # A skip, not a silent exit 0: run_tests.py counts skips, and --strict
+    # must not report "all tests ran" on a machine that ran none.
     if shutil.which("cc") is None:
-        print("cc not found: the remote-protocol host tests cannot run", file=sys.stderr)
-        sys.exit(0)
+        raise unittest.SkipTest("cc not found: the remote-protocol host tests cannot run")
+
+
+if __name__ == "__main__":
     unittest.main(verbosity=2)

@@ -9,7 +9,7 @@ import sys
 from typing import List, Optional
 
 from . import proto
-from .device import Device, DeviceError, Nak
+from .device import Device, DeviceError, Nak, Timeout
 from .link import NoDevice, candidate_ports, looked_where
 
 EXIT_OK, EXIT_NO_DEVICE, EXIT_DEVICE_ERROR, EXIT_USAGE = 0, 1, 2, 64
@@ -41,18 +41,26 @@ def _press(dev: Device, a) -> int:
 def _meter(dev: Device, a) -> int:
     import csv
     import time as _t
-    writer = None
-    if a.log:
-        f = open(a.log, "a", newline="")
-        writer = csv.writer(f)
-        if f.tell() == 0:
-            writer.writerow(["t_unix", "update_count", "value", "unit", "display", "raw_bcd",
-                             "decimal_pos", "result", "submode", "ac", "autorange", "hold"])
+    f = open(a.log, "a", newline="") if a.log else None
+    writer = csv.writer(f) if f else None
+    if f and f.tell() == 0:
+        writer.writerow(["t_unix", "update_count", "value", "unit", "display", "raw_bcd",
+                         "decimal_pos", "result", "submode", "ac", "autorange", "hold"])
+    continuous = a.count == 0
     last = None
     n = 0
     try:
         while True:
-            m = dev.meter()
+            try:
+                m = dev.meter()
+            except (Nak, Timeout) as e:
+                # A long log must survive a range change (NOT_READY) or one
+                # lost reply; a one-shot read reports it.
+                if not continuous:
+                    raise
+                print(f"# {e}", file=sys.stderr, flush=True)
+                _t.sleep(max(a.interval, 0.5))
+                continue
             if m.update_count != last:          # only new readings, not re-reads
                 last = m.update_count
                 print(f"{m.display} {m.unit}   ({m.result}, raw {m.raw_bcd}, #{m.update_count})", flush=True)
@@ -60,12 +68,16 @@ def _meter(dev: Device, a) -> int:
                     writer.writerow([f"{_t.time():.3f}", m.update_count, m.value, m.unit, m.display,
                                      m.raw_bcd, m.decimal_pos, m.result, m.submode,
                                      int(m.ac), int(m.autorange), int(m.hold)])
+                    f.flush()                   # a killed logger keeps every row it printed
                 n += 1
-            if a.count and n >= a.count:
+            if not continuous and n >= a.count:
                 return EXIT_OK
             _t.sleep(a.interval)
     except KeyboardInterrupt:
         return EXIT_OK
+    finally:
+        if f:
+            f.close()
 
 
 def _shell(dev: Device, a) -> int:
@@ -126,7 +138,10 @@ def main(argv: Optional[List[str]] = None) -> int:
     except Nak as e:
         print(str(e), file=sys.stderr)
         return EXIT_DEVICE_ERROR
-    except (DeviceError, proto.ProtocolError, ValueError) as e:
+    except NoDevice as e:                     # e.g. did not come back after a replug
+        print(str(e), file=sys.stderr)
+        return EXIT_NO_DEVICE
+    except (DeviceError, proto.ProtocolError, ValueError, OSError) as e:
         print(f"error: {e}", file=sys.stderr)
         return EXIT_DEVICE_ERROR
     finally:

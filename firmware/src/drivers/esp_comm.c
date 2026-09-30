@@ -205,6 +205,12 @@ bool esp_comm_rx_in_frame(void)
     return rx_state != RX_WAIT_SYNC || rx_discard > 0;
 }
 
+void esp_comm_rx_touch(uint32_t now_ms)
+{
+    if (esp_comm_rx_in_frame())
+        rx_last_ms = now_ms;
+}
+
 bool esp_comm_rx_poll(uint32_t now_ms)
 {
     if (!esp_comm_rx_in_frame())
@@ -318,7 +324,7 @@ static void snapshot(esp_status_snapshot_t *st)
 static uint8_t fw_version_len(const char *v)
 {
     size_t n = strlen(v);
-    return (uint8_t)(n > 32 ? 32 : n);
+    return (uint8_t)(n > ESP_FW_VERSION_MAX ? ESP_FW_VERSION_MAX : n);
 }
 
 static void put_u16(uint8_t *p, uint16_t v) { p[0] = (uint8_t)v; p[1] = (uint8_t)(v >> 8); }
@@ -341,7 +347,7 @@ static void handle_ping(const esp_packet_t *pkt)
 static void handle_status(const esp_packet_t *pkt)
 {
     esp_status_snapshot_t st;
-    uint8_t out[ESP_STATUS_FIXED_LEN + 32];
+    uint8_t out[ESP_STATUS_FIXED_LEN + ESP_FW_VERSION_MAX];
     uint8_t n;
     (void)pkt;
 

@@ -112,4 +112,8 @@ uint32_t fw_loader_crc_announced(void);
 uint32_t fw_loader_slot_size(uint8_t slot);
 uint32_t fw_loader_slot_crc(uint8_t slot);
 
+/* True when this build's RAM installer leaves the BPR breadcrumb trail
+ * (FWL_INSTALL_CRUMBS, `make guest-coldtrace-crumbs`). */
+bool fw_loader_records_crumbs(void);
+
 #endif /* FW_LOADER_H */
