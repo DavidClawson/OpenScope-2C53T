@@ -76,3 +76,30 @@ blocked on unit #1 until every exit leaves a mark.
 The pattern of the day: three times a check passed on synthetic data and failed on the
 bench, and each time the bench was right. The tests got better because the device
 disagreed with them.
+
+## Postscript, the next two days: the byte before the record, and where the trigger sits
+
+The stray first sample got its own experiment (EXP-58). Reading a held record twice over —
+2,063 bytes in one window — showed the FPGA's 1024-byte blocks as fixed boundaries, and the
+byte at wire index 2 + 1024n always continued from the byte *before* it and broke into the
+byte after. So each block ends at wire 2 + 1024n and the record is wire 3..1026: our read,
+moved to stock's two-byte discard in August, kept a stale byte as sample 0 and never read the
+real last sample. The read now discards three and keeps 1024. On the fixed image the stray
+sample went from 13/20 records to 0/20, with the prediction written down before the run.
+The first acceptance attempt stalled with zero triggers and looked like the longer read had
+broken the handover. It had not: the reboot left CH1 uncentred, below the trigger level, and
+NORMAL did exactly what it should.
+
+Horizontal position then took three images. The design anchors the display on the crossing
+of the real level nearest index 512 of a time-ordered record, the event that fired, and lets
+LEFT/RIGHT place it anywhere on screen. v17 landed every column and anchored on the fallback
+every time, because `spi3 frame` passes a snapshot copy and the anchor checked the buffer's
+address. v18 anchored correctly on 16 of 18 and failed a criterion that had demanded 18: the
+two fallbacks were records whose seam was not found, which the design allows, and reading the
+code turned up a real race (the "time-ordered" flag described the newest commit, not the
+record on screen). The flag now travels with the record, the criterion was restated in the
+commit before the next run, and v19 passed 21/21. On the screen, the waveform and the marker
+slide together and the crossing stays under it.
+
+That completes the trigger: mode, level, edge and position all from the buttons, each checked
+on the device with a control that can fail.
