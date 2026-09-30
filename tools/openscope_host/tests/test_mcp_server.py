@@ -54,9 +54,27 @@ class TestSession(unittest.TestCase):
             s.press(["MENU", "OK", "UP"])
         msg = str(cm.exception)
         self.assertIn("pressed MENU", msg)
-        self.assertIn("OK not pressed", msg)
+        self.assertIn("OK NOT pressed", msg)
         self.assertIn("remaining not sent: UP", msg)
         self.assertEqual(d.link.L.shim_presses(), 1)
+
+    def test_lost_reply_is_not_reported_as_not_pressed(self):
+        from openscope.device import Timeout
+        s, d = session()
+        real = d.press
+        calls = {"n": 0}
+
+        def press(b):
+            calls["n"] += 1
+            real(b)                                         # the device got it...
+            if calls["n"] == 2:
+                raise Timeout("no reply to 0x0A")           # ...but the ACK was lost
+        d.press = press
+        with self.assertRaises(RuntimeError) as cm:
+            s.press(["MENU", "OK"])
+        msg = str(cm.exception)
+        self.assertIn("OK MAY OR MAY NOT have been pressed", msg)
+        self.assertNotIn("OK NOT pressed", msg)
 
     def test_power_refused_by_default(self):
         s, d = session()

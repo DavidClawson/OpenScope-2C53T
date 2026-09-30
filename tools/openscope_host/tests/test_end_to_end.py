@@ -303,6 +303,26 @@ class TestRound3(unittest.TestCase):
         self.assertNotIn("0%", out.getvalue())
 
 
+class TestRound4(unittest.TestCase):
+    def test_open_failures_are_one_line_exits(self):
+        for exc in (proto.ProtocolError("device speaks protocol v2"), Timeout("no reply to 0x08"),
+                    OSError(16, "Resource busy")):
+            err = io.StringIO()
+            with mock.patch.object(cli.Device, "open", side_effect=exc), redirect_stderr(err):
+                self.assertEqual(cli.main(["info"]), 2, repr(exc))
+            self.assertEqual(len(err.getvalue().strip().splitlines()), 1, err.getvalue())
+
+    def test_port_that_keeps_vanishing_does_not_recurse(self):
+        dev = device()
+        dev._check_version()                                   # proto_version set, as after open()
+        def always_fail(data):
+            raise OSError(6, "Device not configured")
+        dev.link.write = always_fail
+        with self.assertRaises(DeviceError):
+            dev.ping()
+        self.assertLessEqual(dev.link.reopens, 2, "reopen recursed")
+
+
 class TestTransportLoss(unittest.TestCase):
     def test_button_is_not_resent_after_its_write_went_through(self):
         dev = device()
