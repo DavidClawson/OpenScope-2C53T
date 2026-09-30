@@ -29,7 +29,7 @@ The FNIRSI 2C53T is a capable $75 handheld 3-in-1 instrument held back by buggy 
 
 ## Current Status
 
-**Custom firmware runs on real hardware, and it captures.** On 2026-08-13, bench unit #1 powered on into this firmware, configured the FPGA over SSPI (status `0x00039020` → `0x0003F460`, `DONE_FINAL` set), armed the capture engine, and drew live traces from real ADC data on both channels — reproducibly across power cycles. Both axes now carry measured numbers: per-range volts/div on both channels (2026-08-18) and eight measured sample rates on the timebase ladder (2026-08-19), each cross-checked against an independent rig. Active development has moved to **wiring the layer above acquisition**. The measurement badges now read from real captures; the FFT, math channels and protocol decoders are still written, host-tested, and fed synthetic input.
+**Custom firmware runs on real hardware, and it captures.** On 2026-08-13, bench unit #1 powered on into this firmware, configured the FPGA over SSPI (status `0x00039020` → `0x0003F460`, `DONE_FINAL` set), armed the capture engine, and drew live traces from real ADC data on both channels — reproducibly across power cycles. Both axes now carry measured numbers: per-range volts/div on both channels (2026-08-18) and eight measured sample rates on the timebase ladder (2026-08-19), each cross-checked against an independent rig. Active development has moved to **wiring the layer above acquisition**: as of v0.4.0 (2026-09-30) triggering is fully usable from the buttons, captures are time-ordered with the trigger mid-record, and the FFT analyses live data. The measurement badges and the FFT read from real captures; math channels and protocol decoders are still written, host-tested, and fed synthetic input.
 
 ### Seeing live waveforms today
 
@@ -44,7 +44,7 @@ python3 ../scripts/iap_flash.py     # MENU + tap Power → upgrade mode → dete
 
 Three caveats, stated plainly:
 
-- The **multimeter works in this image, but only on DC Voltage.** Scope and meter run at the same time — bench-measured 2026-09-04 (EXP-23): a 1.61 V cell reads 1.6158 V while SPI3 acquisition keeps running. Selecting any *other* meter function still does nothing useful. The reason changed on 2026-09-07 and is worth stating precisely: the submode code now runs and the frontend really does move (EXP-24), but [@Stlkv](https://github.com/Stlkv) measured that our meter command frames carry the wrong two-byte header, so the meter never accepted any of them and has been sitting in its own power-on auto mode the whole time ([issue #15](https://github.com/DavidClawson/OpenScope-2C53T/issues/15)). DC Voltage appeared to work because auto mode does DC Voltage. Fix in flight.
+- The **multimeter in this image reads DC Voltage only**, alongside the scope (EXP-23). It runs the meter chip's own auto mode. The fix for the other functions — [@Stlkv](https://github.com/Stlkv)'s corrected command header and display decoder ([#33](https://github.com/DavidClawson/OpenScope-2C53T/pull/33), [#35](https://github.com/DavidClawson/OpenScope-2C53T/pull/35)) — builds as `guest-coldtrace-meter`, tested on his unit, and becomes the default once validated on ours.
 - It is validated on **one physical unit**. Nobody has run it on a second 2C53T.
 - **It is not the default `make guest` boot path yet.** Folding it in is on the roadmap.
 
@@ -54,6 +54,8 @@ The short version; see [Feature maturity](#feature-maturity) below for how far e
 
 - **Live oscilloscope capture from a cold boot** (`guest-coldtrace` only) — MCU-driven FPGA configuration, engine arm, and per-channel `0x04`/`0x05` readout
 - **Measured volts/div and time/div**, with uncalibrated ranges labelled `--` rather than guessed
+- **Triggering from the buttons**: AUTO/NORMAL/SINGLE, level, Rising/Falling, and horizontal position with pre-trigger capture (v0.4.0)
+- **FFT and waterfall on the live capture**
 - 4 navigable UI modes: oscilloscope, multimeter, signal generator, settings
 - 4 color themes, variable-width bitmap fonts at 4 sizes
 - FreeRTOS with display + input tasks; 15/15 button matrix at 500 Hz
@@ -85,18 +87,19 @@ reviewable promotion-ladder spec per feature.
 |---|---|---|
 | Cold-boot FPGA configuration | **S2** | Bit-banged SSPI only. The same bytes through the SPI3 peripheral are still silently discarded. |
 | Live capture, CH1 | **S2** | Reproducible across power cycles on one unit. |
-| Live capture, CH2 | **S1** | One usable attenuator tap; every other code parks at a fixed level. Its vertical offset reference (TMR13 CH1 PWM on PA6) has never been programmed, which is the leading explanation. |
+| Live capture, CH2 | **S2** | Armed at boot in `guest-coldtrace` (EXP-38): a fresh boot reads CH2's own tone beside CH1's, no shell command. The CH2 attenuator ladder has not been re-measured since arming. |
 | Vertical scale (volts/div) | **S3** | Ranges 5/6/7 measured and cross-validated four ways; 4/8/9 provisional and marked `~`; 0–3 rail and return `0.0`, with callers falling back to ADC counts. **Absolute scale is unverified** — every gain traces to an amplitude commanded from an unchecked source. One constant fixes it when a trusted source arrives. |
 | Horizontal scale (time/div) | **S3** | 8 of 21 timebase codes measured; the rest show `--` rather than a guess. The UI button reaches the FPGA as of 2026-08-19 — before that it moved a label and nothing else. |
 | Freq badge | **S3** | Spectral, with a held-out fixture and a bin-stratified assertion. Refuses on torn records instead of guessing; answers ~87% of bench captures and has never been wrong on them. |
 | Vpp / Vrms / Period badges | **S2** | Bench-validated against a commanded sine, 3 ranges × 2 codes (EXP-19, 2026-08-20): Vrms within 3.8%, frequency-derived Period within 0.2%, Vpp within 7% with a small residual positive bias (peak detection reads high on a noisy record even after percentile trimming — Vrms is the number to trust). Same-source circularity means this is pipeline+linearity, not absolute volts. Duty passed its host battery but has not faced a commanded duty cycle yet. |
-| Trigger level | **S2** | Digital, SPI3 register `0x08`, an ADC code. Re-armed at boot. Transfer measured 2026-09-22 (EXP-56): the comparator fires at code − 28 on ranges 5 and 7 alike. Set from the device: MOVE hands UP/DOWN to the level, the marker sits where the hardware fires (bench-checked on unit #1). |
+| Trigger level | **S2** | Digital, SPI3 register `0x08`. The comparator fires at code − 28 on ranges 5 and 7 alike (EXP-56). Set from the device: **MOVE** hands **UP/DOWN** to the level, and the marker sits where the hardware fires (bench-checked on unit #1). |
+| Trigger modes, edge, position | **S2** | AUTO / NORMAL / SINGLE, Rising / Falling (a firmware filter — the FPGA fires on both edges, EXP-55), and horizontal position (**MOVE** twice, **LEFT/RIGHT**; trigger at mid-screen by default). Captures are time-ordered with the trigger in the middle. Guarded by `scripts/exp22_stability.py --trigger-only`, 21 scenarios with negative controls. |
 | Settings persistence | **S2** | Commissioned on hardware 2026-08-20: first record ever written to the W25Q, then restored — and pushed into the FPGA — across three consecutive power cycles. Until that day every write was refused by a build-time interlock (`SETTINGS_PERSIST_WRITES=0`) no bench build had ever enabled, so this row previously said "real" while zero records existed — the matrix's first *over*statement. **Documented gap** (still true): a change carries only if a later button press or an orderly power-off follows it. |
-| Multimeter | **S1** | Works, and is accurate within a few percent on DCV and resistance — but **not in `guest-coldtrace`**, which holds USART2 dark. The two do not currently coexist. |
+| Multimeter | **S1** | In `guest-coldtrace` (the release image) the meter runs its own auto mode and reads **DC volts** alongside the scope; other functions do nothing yet. The command-header fix and the display decoder (@Stlkv, #33/#35) drive all functions in `guest-coldtrace-meter`, tested on a second unit, not yet on ours. |
 | Signal generator | **S1** | Reachable; output has never been characterised against an instrument. |
 | Screenshot capture (BMP) | **S1** | Has a call site and writes to flash. |
 | Rendering path | **S3** | Flicker-free column compositor with a redraw gate. Display stability is bench-measured through the real render path (EXP-22, 2026-09-03): both channels driven, amplitude/frequency/phase varied, 11/11 scenarios lock to ≤1 px, with an on-hardware negative control that correctly fails. The scope trace **autoscales** to fill the band, so the vertical graticule does not currently mean the volts/div the status bar prints — that is the remaining S4 item. |
-| FFT spectrum + waterfall | **S0** | Fed a synthetic 1 kHz square wave generated on the spot. |
+| FFT spectrum + waterfall | **S2** | Analyses the live capture (2026-09-22): peak bins exact at three measured timebases, header in Hz on measured codes and refused elsewhere, labels legible on the screen. Whole-record input is time-ordered since v0.4.0. |
 | Math channels | **S0** | Fed a hardcoded sine LUT and square wave. |
 | Bode plot | **S0** | A generated demo response of a first-order low-pass. |
 | Protocol decoders (UART/SPI/I2C/CAN/K-Line) | **S0** | No call sites. |
