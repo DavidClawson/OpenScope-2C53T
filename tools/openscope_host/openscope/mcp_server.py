@@ -110,7 +110,7 @@ class ScopeSession:
                     # Only a NAK proves this button did not act; a lost reply or a
                     # port lost after the write means it may well have.
                     already = ("pressed " + " ".join(done) + "; ") if done else "nothing pressed before; "
-                    if isinstance(e, Nak):
+                    if isinstance(e, Nak) and e.cmd == proto.CMD_BUTTON:   # the press's own refusal
                         this = f"{b.upper()} NOT pressed ({e})"
                     else:
                         this = (f"{b.upper()} MAY OR MAY NOT have been pressed ({e}) - "
