@@ -35,13 +35,14 @@ def rgb(c):
 HDR = re.compile(rb"SCREENBIN x=(\d+) y=(\d+) w=(\d+) h=(\d+) format=indexed4 len=(\d+) crc32=([0-9A-F]{8})\r\n")
 
 
-def capture(port, timeout=20.0):
+def capture(port, timeout=20.0, region=None):
     with serial.Serial(port, 115200, timeout=0.2) as s:
         s.reset_input_buffer()
         s.write(b"\r\n")
         time.sleep(0.2)
         s.reset_input_buffer()
-        s.write(b"screen dumpbin\r\n")
+        cmd = "screen dumpbin" + ("" if region is None else " %d %d %d %d" % tuple(region))
+        s.write(cmd.encode() + b"\r\n")
         buf = b""
         t0 = time.time()
         m = None
@@ -83,8 +84,11 @@ def main():
     ap.add_argument("out")
     ap.add_argument("--port", default="/dev/ttyACM0")
     ap.add_argument("--scale", type=int, default=2)
+    ap.add_argument("--region", type=int, nargs=4, metavar=("X", "Y", "W", "H"),
+                    help="capture only this rectangle (a static region passes the CRC "
+                         "check even while the trace is live)")
     a = ap.parse_args()
-    w, h, data = capture(a.port)
+    w, h, data = capture(a.port, region=a.region)
     img = to_image(w, h, data)
     if a.scale > 1:
         img = img.resize((w * a.scale, h * a.scale), Image.NEAREST)

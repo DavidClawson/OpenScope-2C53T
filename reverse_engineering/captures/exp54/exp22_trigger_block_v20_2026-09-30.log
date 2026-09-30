@@ -1,0 +1,199 @@
+device Build: Sep 30 2026 11:24:58
+setup: range 6 both channels, timebase 0x10, soft trigger on
+
+===== TRIGGER / ACQUISITION BLOCK (EXP-54 arms) =====
+setup: range 5 CH1, level 0, AUTO; JDS CH1 only
+  acq poll gap 30 ms; poll starts 181 ms after a handover (derived: fill + 100 ms); last handover after 1 poll r
+  acq poll start 181 ms after a handover (derived: fill + 100 ms, rate idx 0x10)
+  acq AUTO edge-wait 475 ms before the free-run fallback read (derived from timebase, rate idx 0x10)
+  host centre: DAC1=2508 -> record midline 114 (target 114)
+  precondition: CH1 record 64..165 span 101 -> OK
+
+== NORMAL 0x0E sine  (fs 49930 S/s, normal, level +0) ==
+        gens           [1092, 1108, 1122, 1138, 1154] -> advancing
+        status         edges +39 commits +19 dropped +0 unclassified +0 latency 1 ms polls-before-last 4
+  PASS  advancing      5 distinct generations of 5 grabs
+  PASS  strobed        PC0 edges +39, commits +19
+  PASS  no-commit-unstrobed PC0 edges +39 >= SPI3 OK +39 (dropped +0; edges-OK = 0)
+
+== NORMAL 0x10 sine  (fs 12490 S/s, normal, level +0) ==
+        gens           [1190, 1202, 1214, 1226, 1238] -> advancing
+        status         edges +31 commits +15 dropped +0 unclassified +0 latency 1 ms polls-before-last 4
+  PASS  advancing      5 distinct generations of 5 grabs
+  PASS  strobed        PC0 edges +31, commits +15
+  PASS  no-commit-unstrobed PC0 edges +31 >= SPI3 OK +31 (dropped +0; edges-OK = 0)
+  PASS  body           phase-step anomaly runs [1, 1, 1, 1, 1] (<= 1: one seam, no tear; max step 100 deg)
+  PASS  freq           200.6 Hz vs 201.2 commanded (-0.30%)
+
+== NORMAL 0x11 sine  (fs 4991 S/s, normal, level +0) ==
+        gens           [1264, 1278, 1288, 1298, 1306] -> advancing
+        status         edges +26 commits +13 dropped +0 unclassified +2 latency 1 ms polls-before-last 4
+  PASS  advancing      5 distinct generations of 5 grabs
+  PASS  strobed        PC0 edges +26, commits +13
+  PASS  no-commit-unstrobed PC0 edges +26 >= SPI3 OK +26 (dropped +0; edges-OK = 0)
+  PASS  body           phase-step anomaly runs [1, 1, 1, 1, 1] (<= 1: one seam, no tear; max step 42 deg)
+  PASS  freq           200.0 Hz vs 201.2 commanded (-0.61%)
+
+== NORMAL 0x12 sine  (fs 2495 S/s, normal, level +0) ==
+        gens           [1330, 1338, 1346, 1354, 1362] -> advancing
+        status         edges +20 commits +9 dropped +1 unclassified +19 latency 6 ms polls-before-last 4
+  PASS  advancing      5 distinct generations of 5 grabs
+  PASS  strobed        PC0 edges +20, commits +9
+  PASS  no-commit-unstrobed PC0 edges +20 >= SPI3 OK +19 (dropped +1; edges-OK = 1)
+  PASS  body           phase-step anomaly runs [1, 1, 1, 1, 1] (<= 1: one seam, no tear; max step 121 deg)
+  PASS  freq           200.3 Hz vs 201.2 commanded (-0.46%)
+
+== NORMAL square 4Hz 0x10  (fs 12490 S/s, normal, level +0) ==
+        gens           [1410, 1418, 1426, 1432, 1440] -> advancing
+        status         edges +19 commits +9 dropped +0 unclassified +19 latency 6 ms polls-before-last 10
+  PASS  advancing      5 distinct generations of 5 grabs
+  PASS  strobed        PC0 edges +19, commits +9
+  PASS  no-commit-unstrobed PC0 edges +19 >= SPI3 OK +19 (dropped +0; edges-OK = 0)
+
+== NORMAL square 1Hz 0x12  (fs 2495 S/s, normal, level +0) ==
+        gens           [1480, 1486, 1490, 1496, 1502] -> advancing
+        status         edges +13 commits +6 dropped +0 unclassified +13 latency 6 ms polls-before-last 17
+  PASS  advancing      5 distinct generations of 5 grabs
+  PASS  strobed        PC0 edges +13, commits +6
+  PASS  no-commit-unstrobed PC0 edges +13 >= SPI3 OK +13 (dropped +0; edges-OK = 0)
+
+== NORMAL hold above level  (fs 12490 S/s, normal, level +100) ==
+        gens           [1538, 1538, 1538, 1538, 1538] -> held
+        status         edges +0 commits +0 dropped +0 unclassified +0 latency 1 ms polls-before-last 1
+  PASS  hold           generations frozen at 1538
+  PASS  no-strobe      PC0 edges +0 with the level above the signal
+
+== NEGCTL AUTO above level  (fs 12490 S/s, auto, level +100) ==
+        gens           [1546, 1554, 1562, 1570, 1580] -> advancing
+        status         edges +0 commits +10 dropped +0 unclassified +0 latency 1 ms polls-before-last 1
+  PASS  negctl-hold    AUTO above the level ADVANCES (fallback) -- the hold metric can fail
+  PASS  negctl-strobe  and strobes nothing (PC0 edges +0): the advance is the fallback, not a trigger
+
+== NORMAL resume level 0  (fs 12490 S/s, normal, level +0) ==
+        gens           [1604, 1616, 1628, 1640, 1652] -> advancing
+        status         edges +31 commits +15 dropped +0 unclassified +0 latency 1 ms polls-before-last 4
+  PASS  advancing      5 distinct generations of 5 grabs
+  PASS  strobed        PC0 edges +31, commits +15
+  PASS  no-commit-unstrobed PC0 edges +31 >= SPI3 OK +31 (dropped +0; edges-OK = 0)
+
+== SINGLE one-shot  (fs 12490 S/s, single, level +0) ==
+        gens           [1684, 1684, 1684] -> held
+  PASS  single         gen 1672 -> [1684, 1684, 1684]: one record then held
+
+== AUTO strobed commits  (fs 12490 S/s, auto, level +0) ==
+        gens           [1696, 1708, 1722, 1734, 1748] -> advancing
+        status         edges +67 commits +33 dropped +0 unclassified +2 latency 1 ms polls-before-last 4
+  PASS  advancing      5 distinct generations of 5 grabs
+  PASS  strobed        PC0 edges +67, commits +33
+  PASS  auto-strobed   edges/commit 2.03 >= 1.5 over 10 s
+
+== EDGE rising  (fs 2495 S/s, normal, level +0) ==
+        gens           [1902, 1906, 1910, 1912, 1916, 1920, 1924, 1928] -> advancing
+        status         edges +26 commits +7 dropped +12 unclassified +0 latency 1 ms polls-before-last 10
+  PASS  advancing      8 distinct generations of 8 grabs
+  PASS  strobed        PC0 edges +26, commits +7
+  PASS  no-commit-unstrobed PC0 edges +26 >= SPI3 OK +14 (dropped +12; edges-OK = 12)
+  PASS  time-order     seam at index 0 on 8/8 records with a visible seam (seams [0, 0, 0, 0, 0, 0, 0, 0])
+  PASS  edge           8 distinct records, all rising (rrrrrrrr)
+
+== EDGE falling  (fs 2495 S/s, normal, level +0) ==
+        gens           [1934, 1938, 1940, 1944, 1948, 1950, 1952, 1956] -> advancing
+        status         edges +25 commits +6 dropped +13 unclassified +0 latency 1 ms polls-before-last 6
+  PASS  advancing      8 distinct generations of 8 grabs
+  PASS  strobed        PC0 edges +25, commits +6
+  PASS  no-commit-unstrobed PC0 edges +25 >= SPI3 OK +12 (dropped +13; edges-OK = 13)
+  PASS  edge           8 distinct records, all falling (ffffffff)
+
+== NEGCTL edge filter off  (fs 2495 S/s, normal, level +0) ==
+        gens           [1968, 1974, 1982, 1988, 1994, 2002, 2008, 2014, 2022, 2028, 2034, 2040] -> advancing
+        status         edges +39 commits +19 dropped +0 unclassified +0 latency 1 ms polls-before-last 11
+  PASS  advancing      12 distinct generations of 12 grabs
+  PASS  strobed        PC0 edges +39, commits +19
+  PASS  no-commit-unstrobed PC0 edges +39 >= SPI3 OK +39 (dropped +0; edges-OK = 0)
+  PASS  edge-negctl    filter OFF: both edges committed (frrfrrfrrfrr) -- the edge check can fail
+
+== NEGCTL unrotate off  (fs 2495 S/s, normal, level +0) ==
+        gens           [2052, 2056, 2060, 2062, 2066, 2070, 2072, 2076] -> advancing
+        status         edges +28 commits +7 dropped +14 unclassified +0 latency 1 ms polls-before-last 5
+  PASS  advancing      8 distinct generations of 8 grabs
+  PASS  strobed        PC0 edges +28, commits +7
+  PASS  no-commit-unstrobed PC0 edges +28 >= SPI3 OK +14 (dropped +14; edges-OK = 14)
+  PASS  order-negctl   unrotate OFF: seam away from index 0 ([100, 167, 148, 152, 141, 135, 133, 126]) -- the order check can fail
+
+== UNROTATE fast sine  (fs 12490 S/s, normal, level +0) ==
+        gens           [2118, 2132, 2148, 2162, 2176, 2188, 2202, 2214, 2228, 2240] -> advancing
+        status         edges +68 commits +34 dropped +0 unclassified +0 latency 1 ms polls-before-last 4
+  PASS  advancing      10 distinct generations of 10 grabs
+  PASS  strobed        PC0 edges +68, commits +34
+  PASS  no-commit-unstrobed PC0 edges +68 >= SPI3 OK +68 (dropped +0; edges-OK = 0)
+  PASS  no-internal-break 0/10 records keep a phase break inside ([0, 0, 0, 0, 0, 0, 0, 0, 0, 0]) <= 1
+
+== NEGCTL unrotate off fast sine  (fs 12490 S/s, normal, level +0) ==
+        gens           [2266, 2280, 2294, 2306, 2320, 2332, 2344, 2358, 2370, 2388] -> advancing
+        status         edges +68 commits +34 dropped +0 unclassified +0 latency 1 ms polls-before-last 4
+  PASS  advancing      10 distinct generations of 10 grabs
+  PASS  strobed        PC0 edges +68, commits +34
+  PASS  no-commit-unstrobed PC0 edges +68 >= SPI3 OK +68 (dropped +0; edges-OK = 0)
+  PASS  breaks-negctl  unrotate OFF: 7/10 records with an internal break ([1, 1, 1, 0, 0, 1, 0, 1, 1, 1]) >= 3 -- the check can fail
+
+== HPOS x=40  (fs 12490 S/s, normal, level +0) ==
+        gens           [2414, 2426, 2440, 2452, 2466, 2478] -> advancing
+        status         edges +38 commits +19 dropped +0 unclassified +2 latency 1 ms polls-before-last 4
+  PASS  advancing      6 distinct generations of 6 grabs
+  PASS  strobed        PC0 edges +38, commits +19
+  PASS  no-commit-unstrobed PC0 edges +38 >= SPI3 OK +38 (dropped +0; edges-OK = 0)
+  PASS  hpos-column    all 6 frames land on column 40 (40/2/102/o1 40/2/105/o1 40/2/104/o1 40/2/102/o1 40/2/102/o1 40/2/100/o1)
+  PASS  hpos-hw        6/6 frames time-ordered; each hardware-anchored within 6 of level 100 and rising
+  PASS  hpos-fallback  frames not time-ordered use the soft anchor
+
+== HPOS x=160  (fs 12490 S/s, normal, level +0) ==
+        gens           [2504, 2516, 2528, 2542, 2554, 2566] -> advancing
+        status         edges +38 commits +19 dropped +0 unclassified +1 latency 1 ms polls-before-last 4
+  PASS  advancing      6 distinct generations of 6 grabs
+  PASS  strobed        PC0 edges +38, commits +19
+  PASS  no-commit-unstrobed PC0 edges +38 >= SPI3 OK +38 (dropped +0; edges-OK = 0)
+  PASS  hpos-column    all 6 frames land on column 160 (160/2/102/o1 160/2/101/o1 160/2/100/o1 160/2/104/o1 160/2/102/o1 160/1/117/o0)
+  PASS  hpos-hw        5/6 frames time-ordered; each hardware-anchored within 6 of level 100 and rising
+  PASS  hpos-fallback  frames not time-ordered use the soft anchor
+
+== HPOS x=280  (fs 12490 S/s, normal, level +0) ==
+        gens           [2592, 2604, 2620, 2634, 2646, 2658] -> advancing
+        status         edges +40 commits +20 dropped +0 unclassified +2 latency 1 ms polls-before-last 4
+  PASS  advancing      6 distinct generations of 6 grabs
+  PASS  strobed        PC0 edges +40, commits +20
+  PASS  no-commit-unstrobed PC0 edges +40 >= SPI3 OK +40 (dropped +0; edges-OK = 0)
+  PASS  hpos-column    all 6 frames land on column 280 (280/2/100/o1 280/2/101/o1 280/2/101/o1 280/2/102/o1 280/2/100/o1 280/2/103/o1)
+  PASS  hpos-hw        6/6 frames time-ordered; each hardware-anchored within 6 of level 100 and rising
+  PASS  hpos-fallback  frames not time-ordered use the soft anchor
+
+== NEGCTL hpos soft anchor  (fs 12490 S/s, normal, level +30) ==
+        gens           [2686, 2698, 2712, 2724, 2738, 2750] -> advancing
+        status         edges +39 commits +19 dropped +0 unclassified +3 latency 1 ms polls-before-last 4
+  PASS  advancing      6 distinct generations of 6 grabs
+  PASS  strobed        PC0 edges +39, commits +19
+  PASS  no-commit-unstrobed PC0 edges +39 >= SPI3 OK +39 (dropped +0; edges-OK = 0)
+  PASS  hpos-negctl    un-rotation OFF: soft anchor, sample at the column off the level 137 on 6/6 frames (160/1/151 160/1/152 160/1/153 160/1/151 160/1/152 160/1/153) -- the check can fail
+
+===== EXP-22 SUMMARY =====
+  NORMAL 0x0E sine       PASS
+  NORMAL 0x10 sine       PASS
+  NORMAL 0x11 sine       PASS
+  NORMAL 0x12 sine       PASS
+  NORMAL square 4Hz 0x10 PASS
+  NORMAL square 1Hz 0x12 PASS
+  NORMAL hold above level PASS
+  NEGCTL AUTO above level PASS
+  NORMAL resume level 0  PASS
+  SINGLE one-shot        PASS
+  AUTO strobed commits   PASS
+  EDGE rising            PASS
+  EDGE falling           PASS
+  NEGCTL edge filter off PASS
+  NEGCTL unrotate off    PASS
+  UNROTATE fast sine     PASS
+  NEGCTL unrotate off fast sine PASS
+  HPOS x=40              PASS
+  HPOS x=160             PASS
+  HPOS x=280             PASS
+  NEGCTL hpos soft anchor PASS
+OVERALL: PASS -- trace holds still under phase/amp/freq changes on both channels; acquisition loop triggers, holds and single-shots as specified
