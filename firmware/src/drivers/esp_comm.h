@@ -38,6 +38,7 @@
 #define ESP_CMD_SIGNAL_CONFIG   0x0B    /* Set signal injection config */
 #define ESP_CMD_MODULE_LIST     0x0C    /* List installed modules */
 #define ESP_CMD_MODULE_DELETE   0x0D    /* Delete a module by slot */
+#define ESP_CMD_GET_METER       0x21    /* remote_protocol.md §3.4: one meter reading */
 
 /* Responses: GD32 → ESP32 */
 #define ESP_RSP_ACK             0x81    /* Command accepted */
@@ -46,6 +47,7 @@
 #define ESP_RSP_FRAMEBUFFER     0x84    /* Framebuffer data (multi-packet) */
 #define ESP_RSP_STATUS          0x85    /* Status response */
 #define ESP_RSP_MODULE_LIST     0x86    /* Module list response */
+#define ESP_RSP_METER_FRAME     0x90    /* §3.5 METER_FRAME */
 
 /* NAK error codes */
 #define ESP_ERR_UNKNOWN_CMD     0x01
@@ -109,6 +111,42 @@ typedef struct {
 } esp_status_snapshot_t;
 
 typedef void (*esp_status_fn)(esp_status_snapshot_t *out);
+
+/* METER_FRAME payload v1 (remote_protocol.md §3.5, plus the display text):
+ *   [0..3]   u32  update_count   monotonic: a host sees drops and stale reads
+ *   [4..7]   f32  value          as the firmware scaled it (IEEE-754 LE)
+ *   [8..9]   i16  raw_bcd        the instrument's own digits, uncalibrated —
+ *                                per-device cal (#28) means a log should keep
+ *                                what the meter saw, not only what we concluded
+ *   [10]     u8   decimal_pos
+ *   [11]     u8   result_class   meter_result_class_t (NORMAL, OL, …)
+ *   [12]     u8   flags          bit0 negative, bit1 ac, bit2 autorange, bit3 hold
+ *   [13]     u8   submode
+ *   [14]     u8   unit_variant
+ *   [15]     u8   unit_len, then unit[unit_len] (ASCII, e.g. "V", "kOhm")
+ *   [..]     u8   display_len, then display[display_len] (what the LCD shows)
+ */
+#define ESP_METER_FIXED_LEN     16
+#define ESP_METER_FLAG_NEGATIVE 0x01
+#define ESP_METER_FLAG_AC       0x02
+#define ESP_METER_FLAG_AUTO     0x04
+#define ESP_METER_FLAG_HOLD     0x08
+
+typedef struct {
+    uint32_t    update_count;
+    float       value;
+    int16_t     raw_bcd;
+    uint8_t     decimal_pos;
+    uint8_t     result_class;
+    uint8_t     flags;
+    uint8_t     submode;
+    uint8_t     unit_variant;
+    char        unit[16];       /* copied, NUL-terminated: the provider's own */
+    char        display[16];    /* snapshot is gone by the time we encode */
+} esp_meter_snapshot_t;
+
+/* Fill a coherent reading; return false when there is none yet (NOT_READY). */
+typedef bool (*esp_meter_fn)(esp_meter_snapshot_t *out);
 /* Inject a button press (id 1..15 = button_id_t). Return false if it could
  * not be queued, so the host gets NAK instead of a false ACK. */
 typedef bool (*esp_button_fn)(uint8_t button_id);
@@ -211,6 +249,7 @@ bool esp_comm_transfer_active(void);
 void esp_comm_set_block_writer(esp_write_block_fn fn);
 void esp_comm_set_status_provider(esp_status_fn fn);
 void esp_comm_set_button_injector(esp_button_fn fn);
+void esp_comm_set_meter_provider(esp_meter_fn fn);
 
 /* True while a frame is being received (sync seen, checksum not yet). */
 bool esp_comm_rx_in_frame(void);

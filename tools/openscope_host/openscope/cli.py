@@ -38,6 +38,36 @@ def _press(dev: Device, a) -> int:
     return EXIT_OK
 
 
+def _meter(dev: Device, a) -> int:
+    import csv
+    import time as _t
+    writer = None
+    if a.log:
+        f = open(a.log, "a", newline="")
+        writer = csv.writer(f)
+        if f.tell() == 0:
+            writer.writerow(["t_unix", "update_count", "value", "unit", "display", "raw_bcd",
+                             "decimal_pos", "result", "submode", "ac", "autorange", "hold"])
+    last = None
+    n = 0
+    try:
+        while True:
+            m = dev.meter()
+            if m.update_count != last:          # only new readings, not re-reads
+                last = m.update_count
+                print(f"{m.display} {m.unit}   ({m.result}, raw {m.raw_bcd}, #{m.update_count})", flush=True)
+                if writer:
+                    writer.writerow([f"{_t.time():.3f}", m.update_count, m.value, m.unit, m.display,
+                                     m.raw_bcd, m.decimal_pos, m.result, m.submode,
+                                     int(m.ac), int(m.autorange), int(m.hold)])
+                n += 1
+            if a.count and n >= a.count:
+                return EXIT_OK
+            _t.sleep(a.interval)
+    except KeyboardInterrupt:
+        return EXIT_OK
+
+
 def _shell(dev: Device, a) -> int:
     print(dev.shell(" ".join(a.line), timeout=a.timeout))
     return EXIT_OK
@@ -60,6 +90,10 @@ def build_parser() -> argparse.ArgumentParser:
     p = sub.add_parser("press", help="inject button presses, e.g. `press MENU OK`")
     p.add_argument("buttons", nargs="+", metavar="BUTTON",
                    help=" | ".join(proto.BUTTONS))
+    p = sub.add_parser("meter", help="print (and optionally log to CSV) multimeter readings")
+    p.add_argument("--count", type=int, default=1, help="readings to take (0 = until Ctrl-C)")
+    p.add_argument("--interval", type=float, default=0.25, help="poll period, s (meter updates ~4 Hz)")
+    p.add_argument("--log", metavar="CSV", help="append readings to this CSV (raw BCD kept, see #28)")
     p = sub.add_parser("shell", help="run one ASCII debug-shell command")
     p.add_argument("line", nargs="+")
     p.add_argument("--timeout", type=float, default=3.0)
@@ -80,7 +114,8 @@ def main(argv: Optional[List[str]] = None) -> int:
             print(p + ("   <- would use" if i == 0 else ""))
         return EXIT_OK
 
-    handlers = {"info": _info, "press": _press, "shell": _shell, "screenshot": _screenshot}
+    handlers = {"info": _info, "press": _press, "meter": _meter, "shell": _shell,
+                "screenshot": _screenshot}
     try:
         dev = Device.open(a.port)
     except NoDevice as e:

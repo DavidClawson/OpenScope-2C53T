@@ -60,6 +60,15 @@ static bool button_injector(uint8_t id)
     return true;
 }
 
+static esp_meter_snapshot_t fake_meter;
+static bool meter_ready;
+static bool meter_provider(esp_meter_snapshot_t *out)
+{
+    if (!meter_ready) return false;
+    *out = fake_meter;
+    return true;
+}
+
 static void reset(void)
 {
     esp_comm_init();
@@ -67,6 +76,8 @@ static void reset(void)
     esp_comm_set_block_writer(block_writer);
     esp_comm_set_status_provider(0);
     esp_comm_set_button_injector(0);
+    esp_comm_set_meter_provider(0);
+    meter_ready = false;
     tx_len = 0; block_calls = 0; tx_bytes_len = 0;
     shell_len = 0; shell[0] = 0; shell_calls = 0;
     injected_n = 0; inject_ok = true;
@@ -312,6 +323,47 @@ static void test_block_and_byte_writers_agree(void)
     CHECK(tx_bytes_len == a && memcmp(tx_bytes, copy, a) == 0, "byte writer emits identical bytes");
 }
 
+static void test_get_meter(void)
+{
+    uint8_t buf[16], p[64]; uint16_t pl = 0; size_t off;
+
+    reset(); off = 0;
+    route(buf, frame(buf, ESP_CMD_GET_METER, 0, 0), 0);
+    CHECK(take(&off, p, 0) == ESP_RSP_NAK && p[0] == ESP_ERR_UNSUPPORTED,
+          "GET_METER with no meter bound: UNSUPPORTED");
+
+    reset(); off = 0; esp_comm_set_meter_provider(meter_provider);
+    route(buf, frame(buf, ESP_CMD_GET_METER, 0, 0), 0);
+    CHECK(take(&off, p, 0) == ESP_RSP_NAK && p[0] == ESP_ERR_NOT_READY,
+          "no reading yet: NOT_READY, not a zero reading");
+
+    reset(); off = 0; esp_comm_set_meter_provider(meter_provider); meter_ready = true;
+    fake_meter.update_count = 0x01020304;
+    fake_meter.value = -1.6141f;
+    fake_meter.raw_bcd = 16141;
+    fake_meter.decimal_pos = 3;
+    fake_meter.result_class = 1;
+    fake_meter.flags = ESP_METER_FLAG_NEGATIVE | ESP_METER_FLAG_AUTO;
+    fake_meter.submode = 0;
+    fake_meter.unit_variant = 0;
+    strcpy(fake_meter.unit, "V");
+    strcpy(fake_meter.display, "-1.6141");
+    route(buf, frame(buf, ESP_CMD_GET_METER, 0, 0), 0);
+    CHECK(take(&off, p, &pl) == ESP_RSP_METER_FRAME, "GET_METER -> METER_FRAME");
+    float v; memcpy(&v, p + 4, 4);
+    CHECK(p[0] == 0x04 && p[3] == 0x01, "update_count little-endian");
+    CHECK(v == -1.6141f, "value is IEEE-754 LE float");
+    CHECK((int16_t)(p[8] | (p[9] << 8)) == 16141, "raw BCD travels next to the scaled value");
+    CHECK(p[10] == 3 && p[11] == 1 && p[12] == 0x05 && p[13] == 0 && p[14] == 0, "decimal, class, flags, submode, variant");
+    CHECK(p[15] == 1 && p[16] == 'V', "unit length-prefixed");
+    CHECK(p[17] == 7 && memcmp(p + 18, "-1.6141", 7) == 0, "display text length-prefixed");
+    CHECK(pl == ESP_METER_FIXED_LEN + 1 + 1 + 7, "METER_FRAME length");
+
+    reset(); off = 0; esp_comm_set_meter_provider(meter_provider); meter_ready = true;
+    route(buf, frame(buf, ESP_CMD_GET_METER, (const uint8_t *)"\x01", 1), 0);
+    CHECK(take(&off, p, 0) == ESP_RSP_NAK && p[0] == ESP_ERR_BAD_LENGTH, "GET_METER takes no payload");
+}
+
 int main(void)
 {
     printf("test_remote_proto\n");
@@ -329,6 +381,7 @@ int main(void)
     test_unknown_command();
     test_button_injection();
     test_block_and_byte_writers_agree();
+    test_get_meter();
     printf("%d/%d checks passed\n", checks - failures, checks);
     return failures ? 1 : 0;
 }

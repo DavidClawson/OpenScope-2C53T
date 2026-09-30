@@ -49,6 +49,7 @@ def lib():
         L.shim_take_tx.restype = ctypes.c_uint32
         L.shim_take_shell.argtypes = [ctypes.c_char_p, ctypes.c_uint32]
         L.shim_take_shell.restype = ctypes.c_uint32
+        L.shim_set_meter.argtypes = [ctypes.c_uint32, ctypes.c_float] + [ctypes.c_int] * 4 + [ctypes.c_char_p] * 2
         L.shim_set_status.argtypes = [ctypes.c_int] * 4 + [ctypes.c_uint32, ctypes.c_uint32, ctypes.c_int]
         _LIB = L
     return _LIB
@@ -168,6 +169,34 @@ class TestButtons(unittest.TestCase):
         with mock.patch.object(cli.Device, "open", return_value=dev), redirect_stderr(err):
             self.assertEqual(cli.main(["press", "OK"]), 2)
         self.assertIn("NOT_READY", err.getvalue())
+
+
+class TestMeter(unittest.TestCase):
+    def test_no_reading_yet_is_not_ready(self):
+        dev = device()
+        with self.assertRaises(Nak) as cm:
+            dev.meter()
+        self.assertEqual(proto.ERRORS[cm.exception.code], "NOT_READY")
+
+    def test_reading_roundtrip_through_firmware_encoder(self):
+        dev = device()
+        dev.link.L.shim_set_meter(42, 1.6141, 16141, 3, 1, 0x04, b"V", b"1.6141")
+        m = dev.meter()
+        self.assertEqual((m.update_count, m.raw_bcd, m.decimal_pos, m.unit, m.display), (42, 16141, 3, "V", "1.6141"))
+        self.assertAlmostEqual(m.value, 1.6141, places=5)
+        self.assertEqual(m.result, "normal")
+        self.assertTrue(m.autorange and not m.hold and not m.negative)
+
+    def test_cli_meter_logs_csv(self):
+        import csv
+        dev = device()
+        dev.link.L.shim_set_meter(7, 3.3, 3300, 3, 1, 0, b"V", b"3.300")
+        log = os.path.join(tempfile.mkdtemp(), "m.csv")
+        with mock.patch.object(cli.Device, "open", return_value=dev), redirect_stdout(io.StringIO()):
+            self.assertEqual(cli.main(["meter", "--count", "1", "--log", log]), 0)
+        rows = list(csv.DictReader(open(log)))
+        self.assertEqual(rows[0]["display"], "3.300")
+        self.assertEqual(rows[0]["raw_bcd"], "3300")
 
 
 class TestSharedStream(unittest.TestCase):

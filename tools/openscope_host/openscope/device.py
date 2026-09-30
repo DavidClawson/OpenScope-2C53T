@@ -118,6 +118,10 @@ class Device:
     def status(self) -> proto.Status:
         return proto.parse_status(self.request(proto.CMD_STATUS, expect=(proto.RSP_STATUS,)).payload)
 
+    def meter(self) -> proto.MeterReading:
+        """One coherent multimeter reading (raises Nak NOT_READY before the first)."""
+        return proto.parse_meter(self.request(proto.CMD_GET_METER, expect=(proto.RSP_METER_FRAME,)).payload)
+
     def press(self, button) -> None:
         self.request(proto.CMD_BUTTON, bytes([proto.button_id(button)]))
 

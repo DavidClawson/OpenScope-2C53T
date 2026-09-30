@@ -29,12 +29,14 @@ PROTO_MAJOR = 1             # STATUS byte 0; refuse other majors (§3.7)
 CMD_PING = 0x01
 CMD_STATUS = 0x08
 CMD_BUTTON = 0x0A
+CMD_GET_METER = 0x21
 
 # Device -> host
 RSP_ACK = 0x81
 RSP_NAK = 0x82
 RSP_DATA = 0x83
 RSP_STATUS = 0x85
+RSP_METER_FRAME = 0x90
 
 ERRORS = {
     0x01: "UNKNOWN_CMD",
@@ -200,6 +202,62 @@ def parse_status(payload: bytes) -> Status:
         raise ProtocolError(f"STATUS length {len(payload)} != {STATUS_FIXED.size} + fw_len {fw_len}")
     fw = payload[STATUS_FIXED.size:].decode("ascii", "replace")
     return Status(ver, mode, pct, flags, mv, up, stalls, heals, fw)
+
+
+RESULT_CLASSES = {0: "none", 1: "normal", 2: "underrange", 3: "overrange", 4: "invalid",
+                  5: "overload", 6: "blank", 7: "continuity"}
+METER_FIXED = struct.Struct("<IfhBBBBBB")   # 16 bytes up to and including unit_len
+
+
+@dataclass(frozen=True)
+class MeterReading:
+    update_count: int
+    value: float
+    raw_bcd: int
+    decimal_pos: int
+    result_class: int
+    flags: int
+    submode: int
+    unit_variant: int
+    unit: str
+    display: str
+
+    @property
+    def result(self) -> str:
+        return RESULT_CLASSES.get(self.result_class, f"class{self.result_class}")
+
+    @property
+    def negative(self) -> bool:
+        return bool(self.flags & 0x01)
+
+    @property
+    def ac(self) -> bool:
+        return bool(self.flags & 0x02)
+
+    @property
+    def autorange(self) -> bool:
+        return bool(self.flags & 0x04)
+
+    @property
+    def hold(self) -> bool:
+        return bool(self.flags & 0x08)
+
+
+def parse_meter(payload: bytes) -> MeterReading:
+    if len(payload) < METER_FIXED.size + 1:
+        raise ProtocolError(f"METER_FRAME too short: {len(payload)} B")
+    (count, value, bcd, dp, cls, flags, sub, var, unit_len) = METER_FIXED.unpack_from(payload)
+    i = METER_FIXED.size
+    unit = payload[i:i + unit_len]
+    i += unit_len
+    if i >= len(payload):
+        raise ProtocolError("METER_FRAME truncated before display text")
+    disp_len = payload[i]
+    disp = payload[i + 1:i + 1 + disp_len]
+    if len(unit) != unit_len or len(disp) != disp_len or i + 1 + disp_len != len(payload):
+        raise ProtocolError("METER_FRAME length does not match its string lengths")
+    return MeterReading(count, value, bcd, dp, cls, flags, sub, var,
+                        unit.decode("ascii", "replace"), disp.decode("ascii", "replace"))
 
 
 def nak_name(payload: bytes) -> str:

@@ -120,6 +120,22 @@ class TestStatus(unittest.TestCase):
             proto.parse_status(status_payload()[:10])
 
 
+class TestMeter(unittest.TestCase):
+    def payload(self, unit=b"kOhm", disp=b"OL"):
+        return (struct.pack("<IfhBBBBBB", 9, 0.0, 0, 0, 5, 0x04, 2, 1, len(unit)) + unit
+                + bytes([len(disp)]) + disp)
+
+    def test_parse(self):
+        m = proto.parse_meter(self.payload())
+        self.assertEqual((m.unit, m.display, m.result, m.submode), ("kOhm", "OL", "overload", 2))
+
+    def test_string_lengths_must_add_up(self):
+        p = self.payload()
+        for bad in (p[:-1], p + b"x", p[:15]):
+            with self.assertRaises(proto.ProtocolError):
+                proto.parse_meter(bad)
+
+
 class TestButtons(unittest.TestCase):
     def test_names_and_ids(self):
         self.assertEqual(proto.button_id("menu"), 9)
