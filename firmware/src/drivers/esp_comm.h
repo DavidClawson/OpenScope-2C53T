@@ -56,6 +56,67 @@
 #define ESP_ERR_INVALID_SLOT    0x06
 #define ESP_ERR_NOT_READY       0x07
 #define ESP_ERR_TRANSFER_ACTIVE 0x08
+#define ESP_ERR_UNSUPPORTED     0x09    /* command exists but is not implemented on this build */
+#define ESP_ERR_TIMEOUT         0x0A    /* packet abandoned mid-frame (inter-byte gap) */
+#define ESP_ERR_NO_CAPTURE_DATA 0x0B    /* remote_protocol.md §3.4 — never substitute the demo trace */
+#define ESP_ERR_UNSUPPORTED_IN_MODE 0x0C
+#define ESP_ERR_BAD_ARG         0x0D    /* argument out of range */
+
+/* ─── Remote protocol (issue #10, docs/design/remote_protocol.md) ───
+ *
+ * Wire-format version reported in STATUS byte 0. Bump the major on any
+ * incompatible change; the host refuses unknown majors (§3.7). */
+#define ESP_PROTO_VERSION       1
+
+/* A frame whose bytes stop arriving for this long is abandoned and the
+ * receiver resyncs. Without it a truncated packet leaves the parser in
+ * PAYLOAD and, on the shared CDC endpoint, it would swallow the operator's
+ * shell text (and any later 0xAA) as payload. USB delivers a host write in
+ * back-to-back 64-byte packets, so a real gap of this size means the host
+ * gave up, not that it is slow. */
+#define ESP_RX_GAP_MS           50
+
+/* STATUS payload v1 — explicit little-endian layout, NOT a C struct dump
+ * (a struct's padding and enum width depend on the compiler):
+ *   [0]    u8   proto_version   (ESP_PROTO_VERSION)
+ *   [1]    u8   current_mode    (device_mode_t: 0 scope 1 meter 2 siggen 3 settings)
+ *   [2]    u8   battery_pct     (0..100)
+ *   [3]    u8   flags           bit0 charging, bit1 capture data ready,
+ *                               bit2 battery critical
+ *   [4..5] u16  battery_mv
+ *   [6..9] u32  uptime_ms
+ *   [10..13] u32 usb_tx_stalls  (CDC IN waits that timed out, issue #39)
+ *   [14..15] u16 usb_heals      (transport self-heal reconnects, issue #39)
+ *   [16]   u8   fw_len
+ *   [17..] char fw_version[fw_len]  (no NUL)
+ */
+#define ESP_STATUS_FIXED_LEN    17
+#define ESP_STATUS_FLAG_CHARGING      0x01
+#define ESP_STATUS_FLAG_CAPTURE_READY 0x02
+#define ESP_STATUS_FLAG_BATT_CRITICAL 0x04
+
+/* Snapshot the firmware fills in for STATUS/PING. esp_comm itself knows
+ * nothing about the device, so the host tests can inject any state. */
+typedef struct {
+    uint8_t     current_mode;
+    uint8_t     battery_pct;
+    uint8_t     flags;
+    uint16_t    battery_mv;
+    uint32_t    uptime_ms;
+    uint32_t    usb_tx_stalls;
+    uint16_t    usb_heals;
+    const char *fw_version;     /* NUL-terminated; truncated to 32 on the wire */
+} esp_status_snapshot_t;
+
+typedef void (*esp_status_fn)(esp_status_snapshot_t *out);
+/* Inject a button press (id 1..15 = button_id_t). Return false if it could
+ * not be queued, so the host gets NAK instead of a false ACK. */
+typedef bool (*esp_button_fn)(uint8_t button_id);
+/* Block writer: the whole of `len` bytes, in order. Preferred over the
+ * byte writer — the USB CDC path sends 64-byte packets, not bytes. */
+typedef void (*esp_write_block_fn)(const uint8_t *data, uint16_t len);
+/* Where non-protocol bytes go when routing a shared stream (§3.2). */
+typedef void (*esp_passthrough_fn)(const uint8_t *data, uint16_t len, void *ctx);
 
 /* Module slots */
 #define ESP_MODULE_SLOT_COUNT   4
@@ -144,6 +205,36 @@ void esp_comm_send_nak(uint8_t error_code);
 
 /* Check if a module transfer or firmware update is in progress */
 bool esp_comm_transfer_active(void);
+
+/* ─── Remote protocol bindings ─── */
+
+void esp_comm_set_block_writer(esp_write_block_fn fn);
+void esp_comm_set_status_provider(esp_status_fn fn);
+void esp_comm_set_button_injector(esp_button_fn fn);
+
+/* True while a frame is being received (sync seen, checksum not yet). */
+bool esp_comm_rx_in_frame(void);
+
+/* Abandon a frame whose bytes stopped arriving ESP_RX_GAP_MS ago.
+ * Returns true if a frame was abandoned (a NAK(TIMEOUT) is sent). */
+bool esp_comm_rx_poll(uint32_t now_ms);
+
+/* Route a chunk from a stream shared with the ASCII shell (§3.2):
+ * bytes belonging to a frame (starting at 0xAA) go to the parser and every
+ * completed frame is dispatched; all other bytes are handed, in order and
+ * in contiguous runs, to `passthrough`. Malformed frames are answered with
+ * NAK (bad checksum / bad length) rather than dropped silently. */
+void esp_comm_route(const uint8_t *data, uint16_t len, uint32_t now_ms,
+                    esp_passthrough_fn passthrough, void *ctx);
+
+/* Diagnostics for `usbstat`/tests. */
+typedef struct {
+    uint32_t frames_ok;
+    uint32_t bad_checksum;
+    uint32_t bad_length;
+    uint32_t gap_timeouts;
+} esp_rx_stats_t;
+void esp_comm_get_rx_stats(esp_rx_stats_t *out);
 
 /* Compute XOR checksum */
 uint8_t esp_comm_checksum(const uint8_t *data, uint16_t len);

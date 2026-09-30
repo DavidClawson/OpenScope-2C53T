@@ -566,6 +566,22 @@ $(BUILD_DIR)/test_fw_loader: tests/test_fw_loader.c src/drivers/fw_loader.c src/
 test-fw-loader: $(BUILD_DIR)/test_fw_loader
 	$<
 
+.PHONY: test-esp-comm test-remote-proto
+# Remote protocol over the shared CDC stream (issue #10). test_esp_comm keeps
+# the ESP32 staging flow covered with its (still TODO-on-flash) handlers
+# compiled in; test_remote_proto covers what the USB binding relies on.
+$(BUILD_DIR)/test_esp_comm: tests/test_esp_comm.c src/drivers/esp_comm.c src/drivers/esp_comm.h | $(BUILD_DIR)
+	$(HOST_CC) -std=gnu11 -Wall -Wextra -DESP_COMM_TRANSFER_STUBS=1 -Isrc/drivers $< src/drivers/esp_comm.c -o $@
+
+test-esp-comm: $(BUILD_DIR)/test_esp_comm
+	$<
+
+$(BUILD_DIR)/test_remote_proto: tests/test_remote_proto.c src/drivers/esp_comm.c src/drivers/esp_comm.h | $(BUILD_DIR)
+	$(HOST_CC) -std=gnu11 -Wall -Wextra -Werror -Isrc/drivers $< src/drivers/esp_comm.c -o $@
+
+test-remote-proto: $(BUILD_DIR)/test_remote_proto test-esp-comm
+	$<
+
 $(BUILD_DIR)/test_scope_timebase: tests/test_scope_timebase.c src/ui/scope_timebase.c src/ui/scope_timebase.h | $(BUILD_DIR)
 	$(HOST_CC) -std=gnu11 -Wall -Wextra -Isrc/ui $< src/ui/scope_timebase.c -lm -o $@
 
