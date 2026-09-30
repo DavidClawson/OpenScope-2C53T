@@ -132,6 +132,8 @@ class Device:
         whose reply was lost is NOT re-sent (it may already have been
         pressed); that raises DeviceError instead.
         """
+        if cmd != proto.CMD_STATUS:
+            self._ensure_verified()
         try:
             return self._request_once(cmd, payload, expect)
         except (Timeout, Nak):
@@ -166,10 +168,29 @@ class Device:
             raise DeviceError(f"port lost twice: {first}") from None
 
     def _reopen(self) -> None:
+        """Reopen after the port vanished. The port that reappears is
+        UNVERIFIED until its protocol major checks out; any failure of that
+        check is final for this call and reported as a failed reconnect (a
+        DeviceError, never a Nak that could read as the command's own
+        refusal), and the next request re-checks before it sends anything."""
+        checked = getattr(self, "proto_version", None) is not None
+        self._verified = not checked
         self.link.reopen()
         self._settle()
-        if getattr(self, "proto_version", None) is not None:
-            self._check_version()
+        if checked:
+            try:
+                self._check_version()
+            except (Timeout, Nak) as e:
+                raise DeviceError(f"version check after reconnect failed: {e}") from None
+            self._verified = True
+
+    def _ensure_verified(self) -> None:
+        if not getattr(self, "_verified", True):
+            try:
+                self._check_version()
+            except (Timeout, Nak) as e:
+                raise DeviceError(f"device not verified since reconnect: {e}") from None
+            self._verified = True
 
     def _write(self, data: bytes) -> None:
         try:
@@ -218,6 +239,7 @@ class Device:
         e.g. `fwswap b` drops the port by design and must not run twice."""
         if "\n" in line or "\r" in line:
             raise ValueError("one command per call")
+        self._ensure_verified()
         try:
             return self._shell_once(line, timeout)
         except _WriteFailed as e:
