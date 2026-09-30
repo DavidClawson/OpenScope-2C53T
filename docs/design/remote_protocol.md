@@ -479,8 +479,11 @@ Where the implementation departs from, or sharpens, the design above:
 | Version | `"0.2.0-dev"` | the build string | the constant was stale |
 
 Transport health (issue #39): the Artery CDC class ignores `SET_CONTROL_LINE_STATE`, so a
-wrapped setup handler records DTR. With the port known closed, output is dropped (no 1 s stall
-per write); with it open, two consecutive IN stalls trigger a soft disconnect/reconnect, which
-the host tool handles as a replug. `usbstat` shows the counters and the endpoint register
+wrapped setup handler records DTR. After the host drops DTR (1 → 0: it closed the port) output
+is dropped instead of costing a 1 s stall per write; a host that never raises DTR is still
+answered. With DTR open, a stall whose IN endpoint is still VALID is a host that stopped reading
+(counted, left alone); two consecutive stalls with the endpoint NAK/disabled — packet taken,
+completion lost — trigger a soft disconnect/reconnect, which the host tool handles as a replug
+(re-sending only queries, never a BUTTON that may already have acted). `usbstat` shows the counters and the endpoint register
 captured at the last stall; `usbstat heal on|off` exists for A/B. **Not yet validated on
 hardware** — see the PR for the bench plan.
