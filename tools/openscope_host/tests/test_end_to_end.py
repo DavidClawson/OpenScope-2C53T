@@ -69,6 +69,8 @@ class FakeLink:
         self.shell_seen = bytearray()
         self.fail_next_write = False
         self.fail_next_read_after_write = False
+        self.nak_status_after_reopen = False
+        self._corrupt_next_status = False
         self.reopens = 0
 
     # device side ------------------------------------------------------
@@ -97,6 +99,9 @@ class FakeLink:
 
     # pyserial-ish surface used by Device ------------------------------
     def write(self, data):
+        if self._corrupt_next_status and data[:2] == bytes([0xAA, proto.CMD_STATUS]):
+            self._corrupt_next_status = False
+            data = data[:-1] + bytes([data[-1] ^ 0xFF])         # garbled by the reconnect -> NAK
         if self.fail_next_write:
             self.fail_next_write = False
             raise OSError(6, "Device not configured")        # what macOS says after a replug
@@ -121,9 +126,16 @@ class FakeLink:
 
     def reopen(self):
         self.reopens += 1
+        if self.nak_status_after_reopen:
+            self._corrupt_next_status = True
+
+    def open(self):
+        self.opened = True
+
+    closed = False
 
     def close(self):
-        pass
+        self.closed = True
 
 
 def device(timeout=0.3):
@@ -321,6 +333,41 @@ class TestRound4(unittest.TestCase):
         with self.assertRaises(DeviceError):
             dev.ping()
         self.assertLessEqual(dev.link.reopens, 2, "reopen recursed")
+
+
+class TestRound5(unittest.TestCase):
+    def test_nak_during_reopen_keeps_may_have_acted(self):
+        from openscope import mcp_server
+        dev = device()
+        dev._check_version()
+        dev.link.fail_next_read_after_write = True            # BUTTON sent, then the port drops
+        dev.link.nak_status_after_reopen = True               # and the version re-check is NAKed
+        with self.assertRaises(DeviceError) as cm:
+            dev.press("OK")
+        self.assertIn("may already have acted", str(cm.exception))
+        self.assertEqual(dev.link.L.shim_presses(), 1)
+        dev2 = device()
+        dev2._check_version()
+        dev2.link.fail_next_read_after_write = True
+        dev2.link.nak_status_after_reopen = True
+        s = mcp_server.ScopeSession(opener=lambda port: dev2)
+        with self.assertRaises(RuntimeError) as cm2:
+            s.press(["OK"])
+        self.assertIn("MAY OR MAY NOT", str(cm2.exception))
+        self.assertNotIn("NOT pressed (", str(cm2.exception).replace("MAY OR MAY NOT", ""))
+
+    def test_device_open_itself_refuses_an_unknown_major(self):
+        from openscope import device as devmod
+        made = {}
+
+        def factory(port=None, **kw):
+            made["link"] = FakeLink()
+            return made["link"]
+        with mock.patch.object(devmod, "SerialLink", factory), mock.patch.object(proto, "PROTO_MAJOR", 2):
+            with self.assertRaises(proto.ProtocolError):
+                Device.open()
+        self.assertTrue(made["link"].closed, "port left open after refusing")
+        self.assertEqual(made["link"].L.shim_presses(), 0)
 
 
 class TestTransportLoss(unittest.TestCase):

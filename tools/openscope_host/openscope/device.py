@@ -141,10 +141,19 @@ class Device:
             self._reopen()
             return self._retry(cmd, payload, expect, e.__cause__)
         except OSError as e:
-            self._reopen()
             if cmd not in IDEMPOTENT:
+                # The frame left the host: whatever happens while reopening
+                # (a NAK or timeout of the version check, no device) must not
+                # replace "it may already have acted" with an error that reads
+                # like this command's own refusal.
+                note = ""
+                try:
+                    self._reopen()
+                except Exception as re:
+                    note = f"; reopen then failed: {re}"
                 raise DeviceError(f"port lost after 0x{cmd:02X} was sent; not re-sending "
-                                  f"(it may already have acted): {e}") from None
+                                  f"(it may already have acted): {e}{note}") from None
+            self._reopen()
             return self._retry(cmd, payload, expect, e)
 
     def _retry(self, cmd, payload, expect, first) -> proto.Frame:
@@ -215,10 +224,15 @@ class Device:
             self._reopen()
             return self._shell_retry(line, timeout, e.__cause__)
         except OSError as e:
-            self._reopen()
             if line.strip() not in READ_ONLY_SHELL:
+                note = ""
+                try:
+                    self._reopen()
+                except Exception as re:
+                    note = f"; reopen then failed: {re}"
                 raise DeviceError(f"port lost after '{line}' was sent; not re-sending "
-                                  f"(it may already have acted): {e}") from None
+                                  f"(it may already have acted): {e}{note}") from None
+            self._reopen()
             return self._shell_retry(line, timeout, e)
 
     def _shell_retry(self, line, timeout, first) -> str:
