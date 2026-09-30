@@ -42,6 +42,7 @@ typedef enum {
     RX_BAD_LENGTH,      /* header announced > ESP_MAX_PAYLOAD */
 } rx_result_t;
 
+#if ESP_COMM_TRANSFER_STUBS
 /* ─── Transfer state ─── */
 
 typedef struct {
@@ -57,6 +58,7 @@ static transfer_state_t transfer = {0};
 
 /* Module slot metadata */
 static module_slot_info_t modules[ESP_MODULE_SLOT_COUNT];
+#endif /* ESP_COMM_TRANSFER_STUBS */
 
 /* UART write function (set by caller) */
 static esp_write_fn uart_write = 0;
@@ -88,8 +90,10 @@ void esp_comm_init(void)
     rx_discard = 0;
     memset(&rx_stats, 0, sizeof(rx_stats));
     memset(&rx_packet, 0, sizeof(rx_packet));
+#if ESP_COMM_TRANSFER_STUBS
     memset(&transfer, 0, sizeof(transfer));
     memset(modules, 0, sizeof(modules));
+#endif
 }
 
 void esp_comm_set_writer(esp_write_fn fn)
@@ -283,7 +287,11 @@ void esp_comm_send_nak(uint8_t error_code)
 
 bool esp_comm_transfer_active(void)
 {
+#if ESP_COMM_TRANSFER_STUBS
     return transfer.active;
+#else
+    return false;   /* staging is not compiled in: RAM is ~1.5 KB from full */
+#endif
 }
 
 /* ─── Command handlers ─── */
