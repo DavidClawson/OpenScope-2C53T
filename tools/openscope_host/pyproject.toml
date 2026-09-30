@@ -10,7 +10,6 @@ requires-python = ">=3.9"
 dependencies = ["pyserial>=3.5"]
 
 [project.optional-dependencies]
-image = ["Pillow"]
 mcp = ["mcp>=1.2"]
 
 [project.scripts]

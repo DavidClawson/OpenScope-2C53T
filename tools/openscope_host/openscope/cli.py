@@ -63,7 +63,7 @@ def build_parser() -> argparse.ArgumentParser:
     p = sub.add_parser("shell", help="run one ASCII debug-shell command")
     p.add_argument("line", nargs="+")
     p.add_argument("--timeout", type=float, default=3.0)
-    p = sub.add_parser("screenshot", help="save the device screen as PNG (needs Pillow)")
+    p = sub.add_parser("screenshot", help="save the device screen as PNG")
     p.add_argument("out")
     p.add_argument("--scale", type=int, default=2)
     return ap

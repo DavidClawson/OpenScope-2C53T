@@ -26,9 +26,29 @@ def to_rgb_bytes(w: int, h: int, data: bytes) -> bytes:
     return bytes(out)
 
 
+def png_bytes(w: int, h: int, data: bytes, scale: int = 1) -> bytes:
+    """Encode the capture as an RGB PNG using only zlib (no Pillow)."""
+    import struct
+    import zlib
+    rgb_rows = to_rgb_bytes(w, h, data)
+    raw = bytearray()
+    for y in range(h):
+        row = rgb_rows[y * w * 3:(y + 1) * w * 3]
+        if scale > 1:
+            row = b"".join(row[x * 3:x * 3 + 3] * scale for x in range(w))
+        for _ in range(scale):
+            raw += b"\x00" + row
+    W, H = w * scale, h * scale
+
+    def chunk(tag: bytes, body: bytes) -> bytes:
+        return struct.pack(">I", len(body)) + tag + body + struct.pack(">I", zlib.crc32(tag + body) & 0xFFFFFFFF)
+
+    return (b"\x89PNG\r\n\x1a\n"
+            + chunk(b"IHDR", struct.pack(">IIBBBBB", W, H, 8, 2, 0, 0, 0))
+            + chunk(b"IDAT", zlib.compress(bytes(raw), 9))
+            + chunk(b"IEND", b""))
+
+
 def save_png(path: str, w: int, h: int, data: bytes, scale: int = 2) -> None:
-    from PIL import Image  # optional dependency (pip install openscope[image])
-    img = Image.frombytes("RGB", (w, h), to_rgb_bytes(w, h, data))
-    if scale > 1:
-        img = img.resize((w * scale, h * scale), Image.NEAREST)
-    img.save(path)
+    with open(path, "wb") as f:
+        f.write(png_bytes(w, h, data, scale))
