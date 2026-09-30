@@ -15,6 +15,11 @@ AT32_VCP = (0x2E3C, 0x5740)    # Artery virtual COM port (the app's CDC shell)
 FALLBACK_GLOBS = ("/dev/cu.usbmodem*", "/dev/ttyACM*")
 
 
+class FlushFailed(OSError):
+    """The write returned but draining failed (device vanished). Treat as
+    'possibly delivered': never re-send something that can act twice."""
+
+
 class NoDevice(Exception):
     """No OpenScope port found. The message says where we looked."""
 
@@ -57,9 +62,14 @@ class SerialLink:
                 raise NoDevice(f"no OpenScope found on {looked_where()}")
             port = ports[0]
         try:
-            self._ser = serial.Serial(port, 115200, timeout=0.05, write_timeout=2.0)
+            # exclusive: the protocol has no request ids, so a second process on
+            # the same port would steal (and drain away) this one's replies.
+            self._ser = serial.Serial(port, 115200, timeout=0.05, write_timeout=2.0,
+                                      exclusive=True)
         except (OSError, serial.SerialException) as e:
-            raise NoDevice(f"cannot open {port}: {e}") from None
+            busy = "busy" in str(e).lower() or "lock" in str(e).lower()
+            raise NoDevice(f"cannot open {port}: "
+                           + ("in use by another process (only one client at a time)" if busy else str(e))) from None
         self.port = port
 
     def close(self) -> None:
@@ -85,8 +95,13 @@ class SerialLink:
         raise NoDevice(f"device did not come back within {self.reopen_wait:.0f} s ({last})")
 
     def write(self, data: bytes) -> None:
+        """OSError = nothing may have been sent; FlushFailed = the bytes were
+        handed to the OS and may well have reached the device."""
         self._ser.write(data)
-        self._ser.flush()
+        try:
+            self._ser.flush()
+        except Exception as e:      # pyserial's POSIX flush is a bare tcdrain: termios.error
+            raise FlushFailed(f"port lost after write: {e}") from e
 
     def read(self, n: int = 4096) -> bytes:
         return self._ser.read(max(1, min(n, self._ser.in_waiting or 1)))

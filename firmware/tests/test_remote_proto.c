@@ -62,11 +62,13 @@ static bool button_injector(uint8_t id)
 
 static esp_meter_snapshot_t fake_meter;
 static bool meter_ready;
-static bool meter_provider(esp_meter_snapshot_t *out)
+static bool meter_wrong_mode;
+static esp_meter_result_t meter_provider(esp_meter_snapshot_t *out)
 {
-    if (!meter_ready) return false;
+    if (meter_wrong_mode) return ESP_METER_WRONG_MODE;
+    if (!meter_ready) return ESP_METER_NOT_READY;
     *out = fake_meter;
-    return true;
+    return ESP_METER_OK;
 }
 
 static void reset(void)
@@ -78,6 +80,7 @@ static void reset(void)
     esp_comm_set_button_injector(0);
     esp_comm_set_meter_provider(0);
     meter_ready = false;
+    meter_wrong_mode = false;
     tx_len = 0; block_calls = 0; tx_bytes_len = 0;
     shell_len = 0; shell[0] = 0; shell_calls = 0;
     injected_n = 0; inject_ok = true;
@@ -365,6 +368,12 @@ static void test_get_meter(void)
     CHECK(p[15] == 1 && p[16] == 'V', "unit length-prefixed");
     CHECK(p[17] == 7 && memcmp(p + 18, "-1.6141", 7) == 0, "display text length-prefixed");
     CHECK(pl == ESP_METER_FIXED_LEN + 1 + 1 + 7, "METER_FRAME length");
+
+    reset(); off = 0; esp_comm_set_meter_provider(meter_provider);
+    meter_ready = true; meter_wrong_mode = true;
+    route(buf, frame(buf, ESP_CMD_GET_METER, 0, 0), 0);
+    CHECK(take(&off, p, 0) == ESP_RSP_NAK && p[0] == ESP_ERR_UNSUPPORTED_IN_MODE,
+          "outside meter mode: UNSUPPORTED_IN_MODE, never the frozen last reading");
 
     reset(); off = 0; esp_comm_set_meter_provider(meter_provider); meter_ready = true;
     route(buf, frame(buf, ESP_CMD_GET_METER, (const uint8_t *)"\x01", 1), 0);

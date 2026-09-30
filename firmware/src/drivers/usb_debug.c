@@ -173,7 +173,6 @@ static usb_sts_type cdc_setup_spy(void *udev, usb_setup_type *setup)
 static void usb_tx_stalled(cdc_struct_type *pcdc)
 {
     s_usb.tx_stalls++;
-    if (s_usb.consecutive < 0xFF) s_usb.consecutive++;
     s_usb.stall_flag = pcdc->g_tx_completed;
     s_usb.stall_ept  = USB->ept[USBD_CDC_BULK_IN_EPT & 0x0F];
     s_usb.stall_tick = xTaskGetTickCount();
@@ -185,8 +184,16 @@ static void usb_tx_stalled(cdc_struct_type *pcdc)
      * is the lost-completion case #39 is about. */
     if ((s_usb.stall_ept & USB_TXSTS) == USB_TX_VALID) {
         s_usb.tx_host_slow++;
+        s_usb.consecutive = 0;              /* a slow reader never counts toward a heal */
         return;
     }
+    /* The task can be preempted between the timeout and this capture; if the
+     * completion landed meanwhile the endpoint is free, not wedged. */
+    if (s_usb.stall_flag) {
+        s_usb.consecutive = 0;
+        return;
+    }
+    if (s_usb.consecutive < 0xFF) s_usb.consecutive++;
 
     if (s_usb.heal_enabled && s_usb.dtr_seen && s_usb.dtr &&
         s_usb.consecutive >= USB_HEAL_AFTER_STALLS &&
@@ -8358,11 +8365,15 @@ static void remote_status(esp_status_snapshot_t *st)
     st->fw_version    = s_fw_version;
 }
 
-static bool remote_meter(esp_meter_snapshot_t *m)
+static esp_meter_result_t remote_meter(esp_meter_snapshot_t *m)
 {
     meter_reading_t r;                      /* ~150 B on this task's stack */
+    /* Outside meter mode nothing refreshes meter_reading and leaving the mode
+     * does not invalidate it: the last reading stays "valid" but frozen. */
+    if (current_mode != MODE_MULTIMETER)
+        return ESP_METER_WRONG_MODE;
     if (!meter_data_snapshot(&r) || !r.valid)
-        return false;
+        return ESP_METER_NOT_READY;
     m->update_count = r.update_count;
     m->value        = r.value;
     m->raw_bcd      = (int16_t)r.bcd_value;
@@ -8376,7 +8387,7 @@ static bool remote_meter(esp_meter_snapshot_t *m)
     m->unit_variant = r.unit_variant;
     strncpy(m->unit, r.unit_suffix ? r.unit_suffix : "", sizeof(m->unit) - 1);
     strncpy(m->display, r.display_str, sizeof(m->display) - 1);
-    return true;
+    return ESP_METER_OK;
 }
 
 static void remote_to_shell(const uint8_t *data, uint16_t len, void *ctx)
@@ -8555,8 +8566,13 @@ static void vUsbDebugTask(void *pvParameters)
         } else {
             usb_banner_sent = false;
             usb_settle = 0;
-            s_usb.dtr_seen = 0;
-            s_usb.dtr_opened = 0;
+            /* Forget DTR only on a real re-enumeration. A suspend/resume keeps
+             * the host's port open and it will not resend SET_CONTROL_LINE_STATE;
+             * clearing here would disarm drop-when-closed and the #39 heal. */
+            if (usbd_connect_state_get(&usb_core_dev) != USB_CONN_STATE_SUSPENDED) {
+                s_usb.dtr_seen = 0;
+                s_usb.dtr_opened = 0;
+            }
         }
 #else
         (void)rx_buf; (void)usb_banner_sent; (void)usb_settle;

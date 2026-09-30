@@ -9,12 +9,13 @@ static uint8_t tx[65536]; static uint32_t tx_n;
 static uint8_t sh[65536]; static uint32_t sh_n;
 static esp_status_snapshot_t st;
 static int inject_ok = 1, last_button = -1, presses = 0;
-static esp_meter_snapshot_t mt; static int meter_ok = 0;
+static esp_meter_snapshot_t mt; static int meter_ok = 0, meter_wrong = 0;
 
 static void wr(const uint8_t *d, uint16_t n) { if (tx_n + n <= sizeof tx) { memcpy(tx + tx_n, d, n); tx_n += n; } }
 static void to_shell(const uint8_t *d, uint16_t n, void *c) { (void)c; if (sh_n + n <= sizeof sh) { memcpy(sh + sh_n, d, n); sh_n += n; } }
 static void status(esp_status_snapshot_t *o) { *o = st; }
-static bool meter(esp_meter_snapshot_t *o) { if (!meter_ok) return false; *o = mt; return true; }
+static esp_meter_result_t meter(esp_meter_snapshot_t *o) { if (meter_wrong) return ESP_METER_WRONG_MODE; if (!meter_ok) return ESP_METER_NOT_READY; *o = mt; return ESP_METER_OK; }
+void shim_set_meter_wrong_mode(int w) { meter_wrong = w; }
 static bool inject(uint8_t id) { if (!inject_ok) return false; last_button = id; presses++; return true; }
 
 void shim_init(void)
@@ -24,7 +25,7 @@ void shim_init(void)
     esp_comm_set_status_provider(status);
     esp_comm_set_button_injector(inject);
     esp_comm_set_meter_provider(meter);
-    meter_ok = 0; memset(&mt, 0, sizeof mt);
+    meter_ok = 0; meter_wrong = 0; memset(&mt, 0, sizeof mt);
     tx_n = sh_n = 0; presses = 0; last_button = -1; inject_ok = 1;
     memset(&st, 0, sizeof st);
     st.fw_version = "OpenScope 2C53T shim";

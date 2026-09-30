@@ -23,10 +23,8 @@ from .device import Device, DeviceError, Nak
 from .link import NoDevice
 from .screen import png_bytes
 
-# Exact commands (or prefixes ending in a space) an agent may run by default.
-READ_ONLY_SHELL = (
-    "version", "status", "uptime", "usbstat", "fwstat", "help",
-)
+# Exact commands an agent may run by default (device.py owns the list).
+from .device import READ_ONLY_SHELL  # noqa: E402
 
 
 class ScopeSession:
@@ -146,7 +144,8 @@ def build_server(session: ScopeSession):
     def scope_meter() -> dict:
         """Current multimeter reading (the scope must be in meter mode; the release
         coldtrace build measures DC volts). update_count increases ~4 times a second;
-        call again to see whether the value moved. NOT_READY means no reading yet."""
+        call again to see whether the value moved. NOT_READY means no reading yet;
+        UNSUPPORTED_IN_MODE means the scope is not in meter mode (press MENU to change)."""
         return session.meter()
 
     @mcp.tool(annotations=ToolAnnotations(readOnlyHint=False, destructiveHint=False,
@@ -167,7 +166,7 @@ def build_server(session: ScopeSession):
                                           openWorldHint=False))
     def scope_shell(command: str) -> str:
         """Run one debug-shell command and return its text output. By default only
-        read-only commands are allowed: version, status, uptime, usbstat, fwstat, help."""
+        read-only commands are allowed: version, status, uptime, usbstat, fwstat, fwcrumb, help."""
         return session.shell(command)
 
     return mcp

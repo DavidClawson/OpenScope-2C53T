@@ -14,7 +14,7 @@ from dataclasses import dataclass
 from typing import Callable, Optional, Tuple
 
 from . import proto
-from .link import NoDevice, SerialLink
+from .link import FlushFailed, NoDevice, SerialLink
 
 
 class DeviceError(Exception):
@@ -37,6 +37,12 @@ class _WriteFailed(Exception):
 
 # Queries: re-sending after a lost reply cannot change the instrument.
 IDEMPOTENT = frozenset({proto.CMD_PING, proto.CMD_STATUS, proto.CMD_GET_METER})
+
+# Shell commands that only read. The shell also has commands that reset the
+# device (fwapply, fwswap, reboot bootloader) or write flash, so a shell line
+# is re-sent after a replug only if it is on this list (the MCP server also
+# uses it as its default allowlist).
+READ_ONLY_SHELL = ("version", "status", "uptime", "usbstat", "fwstat", "fwcrumb", "help")
 
 
 SCREEN_HDR = re.compile(
@@ -115,6 +121,9 @@ class Device:
     def _retry(self, cmd, payload, expect, first) -> proto.Frame:
         try:
             return self._request_once(cmd, payload, expect)
+        except (Timeout, Nak):
+            self._resync()          # same rule as the first attempt: nothing stale survives
+            raise
         except OSError:
             raise DeviceError(f"port lost twice: {first}") from None
 
@@ -125,6 +134,8 @@ class Device:
     def _write(self, data: bytes) -> None:
         try:
             self.link.write(data)
+        except FlushFailed:
+            raise                   # possibly delivered: the post-write path decides
         except OSError as e:
             raise _WriteFailed() from e
 
@@ -162,14 +173,32 @@ class Device:
         """Run one shell command and return its output (echo and prompt stripped).
 
         Terminated with CR only: the firmware treats CR and LF each as a line
-        end, so CRLF would print a second, empty prompt."""
+        end, so CRLF would print a second, empty prompt. After a replug the
+        line is re-sent only if its write failed or it is in READ_ONLY_SHELL;
+        e.g. `fwswap b` drops the port by design and must not run twice."""
         if "\n" in line or "\r" in line:
             raise ValueError("one command per call")
-        return self._with_reopen(lambda: self._shell_once(line, timeout))
+        try:
+            return self._shell_once(line, timeout)
+        except _WriteFailed as e:
+            self._reopen()
+            return self._shell_retry(line, timeout, e.__cause__)
+        except OSError as e:
+            self._reopen()
+            if line.strip() not in READ_ONLY_SHELL:
+                raise DeviceError(f"port lost after '{line}' was sent; not re-sending "
+                                  f"(it may already have acted): {e}") from None
+            return self._shell_retry(line, timeout, e)
+
+    def _shell_retry(self, line, timeout, first) -> str:
+        try:
+            return self._shell_once(line, timeout)
+        except OSError:
+            raise DeviceError(f"port lost twice: {first}") from None
 
     def _shell_once(self, line: str, timeout: float) -> str:
         self.link.drain(quiet=0.05, max_wait=0.3)
-        self.link.write(line.encode("ascii") + b"\r")
+        self._write(line.encode("ascii") + b"\r")
         text = self._read_until_prompt(timeout).decode("utf-8", "replace")
         if text.startswith(line):
             text = text[len(line):]
@@ -179,8 +208,8 @@ class Device:
         return text
 
     def _with_reopen(self, fn):
-        """Shell/screenshot talk to the port directly: give them the same
-        one-reopen-after-replug as request() (both are read-only queries)."""
+        """For screenshot() only: `screen dumpbin` is read-only, so it may be
+        re-run after a replug."""
         try:
             return fn()
         except OSError as e:

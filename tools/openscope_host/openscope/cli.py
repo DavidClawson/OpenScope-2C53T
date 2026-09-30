@@ -15,6 +15,11 @@ from .link import NoDevice, candidate_ports, looked_where
 EXIT_OK, EXIT_NO_DEVICE, EXIT_DEVICE_ERROR, EXIT_USAGE = 0, 1, 2, 64
 
 
+def _now() -> float:          # the meter staleness clock (tests replace it)
+    import time
+    return time.monotonic()
+
+
 def _info(dev: Device, _a) -> int:
     version = dev.ping()
     st = dev.status()
@@ -49,6 +54,10 @@ def _meter(dev: Device, a) -> int:
     continuous = a.count == 0
     last = None
     n = 0
+    # A frozen update_count means the meter is not producing readings (wrong
+    # mode, meter chip silent). A finite --count must not poll forever.
+    stale_limit = max(3.0, 20 * a.interval)
+    last_new = _now()
     try:
         while True:
             try:
@@ -61,8 +70,13 @@ def _meter(dev: Device, a) -> int:
                 print(f"# {e}", file=sys.stderr, flush=True)
                 _t.sleep(max(a.interval, 0.5))
                 continue
+            if m.update_count == last and not continuous and _now() - last_new > stale_limit:
+                print(f"error: meter reading not updating for {stale_limit:.0f} s "
+                      f"(update_count stuck at {last})", file=sys.stderr)
+                return EXIT_DEVICE_ERROR
             if m.update_count != last:          # only new readings, not re-reads
                 last = m.update_count
+                last_new = _now()
                 print(f"{m.display} {m.unit}   ({m.result}, raw {m.raw_bcd}, #{m.update_count})", flush=True)
                 if writer:
                     writer.writerow([f"{_t.time():.3f}", m.update_count, m.value, m.unit, m.display,

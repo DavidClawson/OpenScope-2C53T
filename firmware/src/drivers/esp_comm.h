@@ -146,8 +146,15 @@ typedef struct {
     char        display[16];    /* snapshot is gone by the time we encode */
 } esp_meter_snapshot_t;
 
-/* Fill a coherent reading; return false when there is none yet (NOT_READY). */
-typedef bool (*esp_meter_fn)(esp_meter_snapshot_t *out);
+/* Fill a coherent reading. Anything but ESP_METER_OK is answered with a NAK:
+ * a reading the instrument is not currently producing must never be sent as
+ * if it were live (§2.3). */
+typedef enum {
+    ESP_METER_OK = 0,
+    ESP_METER_NOT_READY,        /* in meter mode, no reading parsed yet */
+    ESP_METER_WRONG_MODE,       /* not in meter mode: the last reading is frozen */
+} esp_meter_result_t;
+typedef esp_meter_result_t (*esp_meter_fn)(esp_meter_snapshot_t *out);
 /* Inject a button press (id 1..15 = button_id_t). Return false if it could
  * not be queued, so the host gets NAK instead of a false ACK. */
 typedef bool (*esp_button_fn)(uint8_t button_id);
