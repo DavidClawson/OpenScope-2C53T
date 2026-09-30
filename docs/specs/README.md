@@ -95,8 +95,7 @@ needs a spec before code.
   software *display* trigger in the renderer, and a one-field acquisition wait
   policy — the mode, edge, source and level controls a user can press reach the
   fabric nowhere.
-- **Pre-trigger capture / horizontal position.** Unknown whether the FPGA's
-  ring buffer supports it — a research question before a spec.
+- ~~**Pre-trigger capture / horizontal position.**~~ **DONE 2026-09-23:** the record holds 512 samples each side of the hardware trigger (EXP-53); MOVE → Position → LEFT/RIGHT places the trigger point on any column, anchored on the hardware crossing of a time-ordered record (regression 21/21, screen-checked on unit #1).
 - **Acquisition averaging / high-res mode.**
 - **Per-channel coupling UI.** PC12 is bench-measured (HIGH=DC); there is no
   user control surface for it.
