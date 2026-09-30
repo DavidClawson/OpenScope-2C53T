@@ -274,7 +274,7 @@ u8   unit_len
 u8[] unit                ASCII, e.g. "V", "kOhm"
 ```
 
-Fixed part is 18 bytes. Sending `raw_bcd` alongside `value` is deliberate: the per-device
+Fixed part is 16 bytes up to and including `unit_len` (the implementation, `esp_comm.h`, appends a length-prefixed display string). Sending `raw_bcd` alongside `value` is deliberate: the per-device
 calibration problem means a host log should record what the instrument saw, not only what it
 concluded.
 
@@ -475,7 +475,8 @@ Where the implementation departs from, or sharpens, the design above:
 | Demux | in `vUsbDebugTask` | `esp_comm_route()` in `esp_comm.c` | host-testable |
 | Host decoder | — | lengths above 4 KB are noise | a stray `0xAA` announcing a huge length would stall decoding |
 | Host after an error | — | waits > 50 ms and drains before the next request | so nothing stale lands in, or answers, the next request |
-| `GET_METER` payload | §3.5 | §3.5 plus length-prefixed display text; `NOT_READY` before the first reading | keeps "OL" etc.; never a zero reading |
+| `GET_METER` payload | §3.5 | §3.5 plus length-prefixed display text; `NOT_READY` before the first reading; `UNSUPPORTED_IN_MODE` outside meter mode | keeps "OL" etc.; never a zero reading, never the frozen last reading |
+| STATUS battery | — | flag bit3 = battery unknown (no sample yet, e.g. booted on USB) | 0 % / 0 mV is not a measurement |
 | Version | `"0.2.0-dev"` | the build string | the constant was stale |
 
 Transport health (issue #39): the Artery CDC class ignores `SET_CONTROL_LINE_STATE`, so a

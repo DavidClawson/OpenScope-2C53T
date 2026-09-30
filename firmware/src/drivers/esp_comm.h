@@ -84,7 +84,9 @@
  *   [1]    u8   current_mode    (device_mode_t: 0 scope 1 meter 2 siggen 3 settings)
  *   [2]    u8   battery_pct     (0..100)
  *   [3]    u8   flags           bit0 charging, bit1 capture data ready,
- *                               bit2 battery critical
+ *                               bit2 battery critical, bit3 battery UNKNOWN
+ *                               (no sample yet: battery_pct/mv are 0 and
+ *                               must not be read as a measurement)
  *   [4..5] u16  battery_mv
  *   [6..9] u32  uptime_ms
  *   [10..13] u32 usb_tx_stalls  (CDC IN waits that timed out, issue #39)
@@ -97,6 +99,7 @@
 #define ESP_STATUS_FLAG_CHARGING      0x01
 #define ESP_STATUS_FLAG_CAPTURE_READY 0x02
 #define ESP_STATUS_FLAG_BATT_CRITICAL 0x04
+#define ESP_STATUS_FLAG_BATT_UNKNOWN  0x08
 
 /* Snapshot the firmware fills in for STATUS/PING. esp_comm itself knows
  * nothing about the device, so the host tests can inject any state. */
