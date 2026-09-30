@@ -7405,6 +7405,14 @@ static void fwl_print_status(void)
              (unsigned long)fw_loader_slot_size(0), (unsigned long)fw_loader_slot_crc(0),
              (unsigned long)fw_loader_slot_size(1), (unsigned long)fw_loader_slot_crc(1));
     usb_send_str(buf);
+    const fwl_breadcrumb_t *bc = fw_loader_breadcrumb_last();
+    if (bc->present)
+        usb_debug_printf("last install: %s (code %u)%s, page 0x%08lX, flash sts 0x%04X\r\n",
+                         fw_loader_breadcrumb_name(bc->code), (unsigned)bc->code,
+                         bc->spi2_stall ? ", SPI2 reclaim timed out" : "",
+                         (unsigned long)bc->addr, (unsigned)bc->sts);
+    else
+        usb_send_str("last install: no record since power-up (none, or the board lost power)\r\n");
 }
 
 static void cmd_fwload(const char *args)
@@ -7952,6 +7960,7 @@ static void vUsbDebugTask(void *pvParameters)
      * other command can interleave with a transfer (RX is routed to the
      * loader) or an install (interrupts are off). */
     fw_loader_attach_scratch(shell_bus_scratch, sizeof(shell_bus_scratch));
+    fw_loader_breadcrumb_capture();   /* last install's record, read once and cleared */
 
     for (;;) {
         bool did_work = false;

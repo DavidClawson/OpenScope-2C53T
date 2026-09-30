@@ -102,6 +102,52 @@ void fw_loader_feed(const uint8_t *data, uint16_t len);
 /* Called once per shell-task loop to age the RX-silence timeout. */
 void fw_loader_poll(void);
 
+/* ── Install breadcrumbs (2026-09-30, after EXP-57) ─────────────────────
+ * EXP-57: `fwapply` hung on unit #1 inside the RAM installer, which has
+ * eight exits into a silent spin and reported none of them. The installer
+ * now keeps a record in five AT32 backup registers (BPR DT1..DT5, 16 bits
+ * each), which survive a system or pinhole reset while the board stays
+ * powered (NOT verified to survive the board going fully dark -- that
+ * depends on VBAT wiring, unknown):
+ *   DT1  FWL_BC_MAGIC once an install has started
+ *   DT2  stage / exit code (below); bit 8 set if the SPI2 reclaim timed out
+ *   DT3  high half of the flash page being worked on (updated every page)
+ *   DT4  low half of it
+ *   DT5  low 16 bits of that bank's flash STS register at the exit
+ * and, on a failure exit, blinks the backlight `code` times, pauses, and
+ * repeats -- a readout that needs nothing to survive. The app captures and
+ * clears the record once at boot; `fwstat` prints it. */
+#define FWL_BC_MAGIC 0xF1A5u
+enum {
+    FWL_BC_NONE        = 0x00,
+    FWL_BC_BAD_SIZE    = 0x01,  /* size 0, odd, or past the app ceiling      */
+    FWL_BC_UNLOCK      = 0x02,  /* flash bank stayed locked after the keys   */
+    FWL_BC_ERASE_BUSY  = 0x03,  /* busy never cleared before the erase       */
+    FWL_BC_ERASE_ERR   = 0x04,  /* erase timed out or raised PRGMERR/EPPERR  */
+    FWL_BC_PROG_BUSY   = 0x05,  /* busy never cleared before a halfword      */
+    FWL_BC_PROG_ERR    = 0x06,  /* program timed out or raised an error      */
+    FWL_BC_VERIFY      = 0x07,  /* read-back differs from what was written   */
+    FWL_BC_STARTED     = 0x10,  /* running (still set = died without an exit)*/
+    FWL_BC_DONE        = 0xAA,  /* every page verified; reset issued         */
+};
+#define FWL_BC_SPI2_STALL 0x0100u
+
+typedef struct {
+    bool     present;   /* magic found                                 */
+    uint16_t code;      /* FWL_BC_* (low byte)                         */
+    bool     spi2_stall;
+    uint32_t addr;      /* page address at the exit                    */
+    uint16_t sts;       /* flash STS low half at the exit              */
+} fwl_breadcrumb_t;
+
+/* Pure: decode the five backup words (host-tested). */
+fwl_breadcrumb_t fw_loader_breadcrumb_decode(const uint16_t w[5]);
+const char *fw_loader_breadcrumb_name(uint16_t code);
+
+/* Target: read the backup registers once, keep the result, clear them. */
+void fw_loader_breadcrumb_capture(void);
+const fwl_breadcrumb_t *fw_loader_breadcrumb_last(void);
+
 fw_loader_state_t fw_loader_state(void);
 fw_loader_error_t fw_loader_error(void);
 uint8_t  fw_loader_slot(void);

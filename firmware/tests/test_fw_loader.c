@@ -198,6 +198,52 @@ static void test_no_buffer_gate(void)
     CHECK(fw_loader_error() == FW_LOADER_ERR_NO_BUFFER, "err must be NO_BUFFER");
 }
 
+/* Install breadcrumbs (EXP-57 follow-up): the decoder the boot capture and
+ * `fwstat` rely on. The negative control matters most: backup registers
+ * power up with arbitrary content on some parts, so words WITHOUT the marker
+ * must never read as a record. */
+static void test_breadcrumb_decode(void)
+{
+    uint16_t none[5] = { 0x0000, 0x0004, 0x0808, 0x1000, 0x0014 };
+    fwl_breadcrumb_t b = fw_loader_breadcrumb_decode(none);
+    CHECK(!b.present, "words without the marker must not decode as a record");
+
+    uint16_t junk[5] = { 0xF1A4, 0x0004, 0x0808, 0x1000, 0x0014 };
+    b = fw_loader_breadcrumb_decode(junk);
+    CHECK(!b.present, "a near-miss marker (0xF1A4) must not decode as a record");
+
+    uint16_t erase[5] = { FWL_BC_MAGIC, FWL_BC_ERASE_ERR, 0x0808, 0x1000, 0x0014 };
+    b = fw_loader_breadcrumb_decode(erase);
+    CHECK(b.present && b.code == FWL_BC_ERASE_ERR && !b.spi2_stall,
+          "erase record: present=%d code=%u stall=%d", b.present, b.code, b.spi2_stall);
+    CHECK(b.addr == 0x08081000u, "page address 0x%08X, want 0x08081000", (unsigned)b.addr);
+    CHECK(b.sts == 0x0014u, "sts 0x%04X, want 0x0014", b.sts);
+
+    uint16_t stall[5] = { FWL_BC_MAGIC, FWL_BC_DONE | FWL_BC_SPI2_STALL, 0x0809, 0x6800, 0 };
+    b = fw_loader_breadcrumb_decode(stall);
+    CHECK(b.present && b.code == FWL_BC_DONE && b.spi2_stall,
+          "the stall flag rides beside the code: code=%u stall=%d", b.code, b.spi2_stall);
+
+    CHECK(fw_loader_breadcrumb_decode(NULL).present == false, "NULL words decode as no record");
+
+    /* Every exit the installer can take has its own name; no two share one. */
+    static const uint16_t codes[] = { FWL_BC_BAD_SIZE, FWL_BC_UNLOCK, FWL_BC_ERASE_BUSY,
+                                      FWL_BC_ERASE_ERR, FWL_BC_PROG_BUSY, FWL_BC_PROG_ERR,
+                                      FWL_BC_VERIFY, FWL_BC_STARTED, FWL_BC_DONE };
+    for (unsigned i = 0; i < sizeof codes / sizeof codes[0]; i++) {
+        const char *ni = fw_loader_breadcrumb_name(codes[i]);
+        CHECK(strcmp(ni, "unknown") != 0, "code %u has no name", codes[i]);
+        for (unsigned j = i + 1; j < sizeof codes / sizeof codes[0]; j++)
+            CHECK(strcmp(ni, fw_loader_breadcrumb_name(codes[j])) != 0,
+                  "codes %u and %u share the name '%s'", codes[i], codes[j], ni);
+    }
+    CHECK(strcmp(fw_loader_breadcrumb_name(0x55), "unknown") == 0, "an unlisted code reads 'unknown'");
+    /* The blink count is the code itself, so every failure exit must be a
+     * small positive number a person can count. */
+    for (unsigned i = 0; i < 7; i++)
+        CHECK(codes[i] >= 1 && codes[i] <= 7, "failure exit %u blinks %u times", i, codes[i]);
+}
+
 int main(void)
 {
     /* Same shape as the target: one 2 KB arena lent by the shell task. */
@@ -211,6 +257,7 @@ int main(void)
     test_crc_gate();
     test_vector_gate();
     test_timeout_recovers();
+    test_breadcrumb_decode();
 
     if (failures) {
         printf("%d FAILURE(S)\n", failures);

@@ -392,6 +392,37 @@ uint32_t fw_loader_slot_crc(uint8_t slot)
 }
 
 /* ── The installer ──────────────────────────────────────────────────── */
+/* ── Install breadcrumbs: pure decode (see fw_loader.h) ─────────────── */
+fwl_breadcrumb_t fw_loader_breadcrumb_decode(const uint16_t w[5])
+{
+    fwl_breadcrumb_t b = { false, FWL_BC_NONE, false, 0u, 0u };
+    if (w == 0 || w[0] != FWL_BC_MAGIC)
+        return b;
+    b.present    = true;
+    b.code       = (uint16_t)(w[1] & 0x00FFu);
+    b.spi2_stall = (w[1] & FWL_BC_SPI2_STALL) != 0u;
+    b.addr       = ((uint32_t)w[2] << 16) | (uint32_t)w[3];
+    b.sts        = w[4];
+    return b;
+}
+
+const char *fw_loader_breadcrumb_name(uint16_t code)
+{
+    switch (code) {
+    case FWL_BC_NONE:       return "none";
+    case FWL_BC_BAD_SIZE:   return "bad size";
+    case FWL_BC_UNLOCK:     return "flash bank stayed locked";
+    case FWL_BC_ERASE_BUSY: return "busy before erase";
+    case FWL_BC_ERASE_ERR:  return "erase failed";
+    case FWL_BC_PROG_BUSY:  return "busy before program";
+    case FWL_BC_PROG_ERR:   return "program failed";
+    case FWL_BC_VERIFY:     return "verify mismatch";
+    case FWL_BC_STARTED:    return "started, no exit recorded";
+    case FWL_BC_DONE:       return "completed";
+    default:                return "unknown";
+    }
+}
+
 #ifndef FW_LOADER_HOST_TEST
 
 #define RF __attribute__((section(".data.ramfunc"), noinline, used))
@@ -401,6 +432,32 @@ uint32_t fw_loader_slot_crc(uint8_t slot)
 #define R_SPI2_DT   (*(volatile uint32_t *)0x4000380Cu)
 #define R_GPIOB_SCR (*(volatile uint32_t *)0x40010C10u)
 #define R_GPIOB_CLR (*(volatile uint32_t *)0x40010C14u)
+
+/* Backup-register breadcrumbs (fw_loader.h). CRM APB1EN bit 27 = BPR clock,
+ * bit 28 = PWC clock; PWC CTRL bit 8 = BPWEN (backup write access); BPR DTn
+ * at 0x40006C00 + 4n, 16 data bits each (vendor headers, 2026-09-30). */
+#define R_CRM_APB1EN (*(volatile uint32_t *)0x4002101Cu)
+#define R_PWC_CTRL   (*(volatile uint32_t *)0x40007000u)
+#define R_BPR_DT(n)  (*(volatile uint32_t *)(0x40006C00u + 4u * (uint32_t)(n)))
+
+RF static void rf_bc_enable(void)
+{
+    R_CRM_APB1EN |= (1u << 27) | (1u << 28);
+    R_PWC_CTRL |= 1u << 8;
+}
+
+RF static void rf_bc_write(uint32_t n, uint32_t v)
+{
+    R_BPR_DT(n) = v & 0xFFFFu;
+}
+
+/* ~0.15-0.25 s per call at 240 MHz; approximate on purpose (interrupts are
+ * off and nothing here may read flash-resident timing code). */
+RF static void rf_delay(uint32_t n)
+{
+    for (volatile uint32_t i = 0; i < n; ++i) {
+    }
+}
 
 RF static uint8_t rf_spi2_xfer(uint8_t v)
 {
@@ -436,8 +493,18 @@ RF static void fwl_ram_install(uint32_t src, uint32_t size)
     uint8_t *page = fwl_buf;
     uint32_t end = FWL_APP_BASE +
                    ((size + (FWL_PAGE_SIZE - 1u)) & ~(FWL_PAGE_SIZE - 1u));
+    uint32_t code = FWL_BC_STARTED;
+    uint32_t stall = 0u;
+    volatile uint32_t *sts = (volatile uint32_t *)0x4002200Cu;
 
     __asm__ volatile("cpsid i" ::: "memory");
+
+    rf_bc_enable();
+    rf_bc_write(1, FWL_BC_MAGIC);
+    rf_bc_write(2, FWL_BC_STARTED);
+    rf_bc_write(3, FWL_APP_BASE >> 16);
+    rf_bc_write(4, FWL_APP_BASE & 0xFFFFu);
+    rf_bc_write(5, 0u);
 
     /* Power hold (PC9): keep the rail up through whatever follows. */
     *(volatile uint32_t *)0x40021018u |= (1u << 4);
@@ -449,9 +516,14 @@ RF static void fwl_ram_install(uint32_t src, uint32_t size)
         while ((R_SPI2_STS & 0x80u) && --t) {
         }
         R_GPIOB_SCR = 1u << 12;
+        if (!t) {
+            stall = FWL_BC_SPI2_STALL;   /* noted, not fatal: behaviour unchanged */
+            rf_bc_write(2, FWL_BC_STARTED | stall);
+        }
     }
 
     if (size == 0 || (size & 1u) || end > FWL_APP_CEILING) {
+        code = FWL_BC_BAD_SIZE;
         goto dead;
     }
 
@@ -473,8 +545,9 @@ RF static void fwl_ram_install(uint32_t src, uint32_t size)
         *(volatile uint32_t *)0x40003000u = 0x0000AAAAu;
 
         uint8_t bank1 = addr >= 0x08080000u;
-        volatile uint32_t *sts =
-            (volatile uint32_t *)(bank1 ? 0x4002204Cu : 0x4002200Cu);
+        sts = (volatile uint32_t *)(bank1 ? 0x4002204Cu : 0x4002200Cu);
+        rf_bc_write(3, addr >> 16);                /* progress: page in hand */
+        rf_bc_write(4, addr & 0xFFFFu);
         volatile uint32_t *ctrl =
             (volatile uint32_t *)(bank1 ? 0x40022050u : 0x40022010u);
         volatile uint32_t *fadr =
@@ -489,6 +562,7 @@ RF static void fwl_ram_install(uint32_t src, uint32_t size)
             *keyr = 0xCDEF89ABu;
         }
         if (*ctrl & (1u << 7)) {
+            code = FWL_BC_UNLOCK;
             goto dead;
         }
 
@@ -497,6 +571,7 @@ RF static void fwl_ram_install(uint32_t src, uint32_t size)
         while ((*sts & 1u) && --t) {
         }
         if (!t) {
+            code = FWL_BC_ERASE_BUSY;
             goto dead;
         }
         *sts = (1u << 5) | (1u << 2) | (1u << 4);
@@ -508,6 +583,7 @@ RF static void fwl_ram_install(uint32_t src, uint32_t size)
         }
         *ctrl &= ~(1u << 1);
         if (!t || (*sts & ((1u << 2) | (1u << 4)))) {
+            code = FWL_BC_ERASE_ERR;
             goto dead;
         }
 
@@ -532,6 +608,7 @@ RF static void fwl_ram_install(uint32_t src, uint32_t size)
                 while ((*sts & 1u) && --t) {
                 }
                 if (!t) {
+                    code = FWL_BC_PROG_BUSY;
                     goto dead;
                 }
                 *sts = (1u << 5) | (1u << 2) | (1u << 4);
@@ -542,25 +619,65 @@ RF static void fwl_ram_install(uint32_t src, uint32_t size)
                 }
                 *ctrl &= ~1u;
                 if (!t || (*sts & ((1u << 2) | (1u << 4)))) {
+                    code = FWL_BC_PROG_ERR;
                     goto dead;
                 }
             }
 
             for (uint32_t i = 0; i < FWL_CHUNK; ++i) {
                 if (*(volatile uint8_t *)(addr + sub + i) != page[i]) {
+                    code = FWL_BC_VERIFY;
                     goto dead;
                 }
             }
         }
     }
 
+    rf_bc_write(2, FWL_BC_DONE | stall);
     *(volatile uint32_t *)0xE000ED0Cu = 0x05FA0004u; /* SYSRESETREQ */
+    for (;;) {
+    }
 
 dead:
-    /* Unreachable on success. Rail held; recovery = MENU+Power IAP, which
-     * this code cannot touch — it writes only 0x08007000 upward. */
-    while (1) {
+    /* A failure exit. Record which one, then blink the backlight (PB8)
+     * `code` times, pause, repeat, so the device says which exit it took
+     * even if nothing survives. Rail held; recovery = MENU held through a
+     * pinhole reset (EXP-57), which this code cannot touch -- it writes only
+     * 0x08007000 upward. */
+    rf_bc_write(2, code | stall);
+    rf_bc_write(5, *sts & 0xFFFFu);
+    for (;;) {
+        for (uint32_t b = 0; b < code; ++b) {
+            R_GPIOB_CLR = 1u << 8;          /* backlight off */
+            rf_delay(12000000u);
+            R_GPIOB_SCR = 1u << 8;          /* backlight on  */
+            rf_delay(12000000u);
+        }
+        rf_delay(60000000u);
     }
+}
+
+static fwl_breadcrumb_t fwl_bc_last;
+
+void fw_loader_breadcrumb_capture(void)
+{
+    static bool done;
+    if (done) return;
+    done = true;
+    R_CRM_APB1EN |= (1u << 27) | (1u << 28);
+    R_PWC_CTRL |= 1u << 8;
+    uint16_t w[5];
+    for (uint32_t n = 1; n <= 5; ++n)
+        w[n - 1] = (uint16_t)(R_BPR_DT(n) & 0xFFFFu);
+    fwl_bc_last = fw_loader_breadcrumb_decode(w);
+    if (fwl_bc_last.present)
+        for (uint32_t n = 1; n <= 5; ++n)
+            R_BPR_DT(n) = 0u;
+}
+
+const fwl_breadcrumb_t *fw_loader_breadcrumb_last(void)
+{
+    return &fwl_bc_last;
 }
 
 #endif /* !FW_LOADER_HOST_TEST */
