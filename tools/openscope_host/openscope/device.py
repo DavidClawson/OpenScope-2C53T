@@ -31,8 +31,13 @@ class Timeout(DeviceError):
     pass
 
 
-class _WriteFailed(Exception):
-    """The request never left the host: re-sending it cannot act twice."""
+class _WriteFailed(DeviceError):
+    """The request never left the host: re-sending it cannot act twice.
+    A DeviceError, so a second one (after the reopen) reaches every caller
+    as a normal device error rather than a private exception."""
+
+    def __init__(self, msg: str = "write to the port failed"):
+        super().__init__(msg)
 
 
 # Queries: re-sending after a lost reply cannot change the instrument.
@@ -70,12 +75,25 @@ class Device:
 
     # ── lifecycle ─────────────────────────────────────────────────
     @classmethod
-    def open(cls, port: Optional[str] = None, **kw) -> "Device":
+    def open(cls, port: Optional[str] = None, check_version: bool = True, **kw) -> "Device":
         link = SerialLink(port)
         link.open()
         dev = cls(link, **kw)
         dev._settle()
+        if check_version:
+            try:
+                dev._check_version()
+            except Exception:
+                dev.close()
+                raise
         return dev
+
+    def _check_version(self) -> None:
+        """§3.7: refuse to talk to an unknown protocol major before sending
+        anything that acts (parse_status raises ProtocolError on a mismatch).
+        Runs on open and again after every reopen: the reappearing port may be
+        a different firmware (e.g. right after an IAP flash)."""
+        self.proto_version = self.status().proto_version
 
     def close(self) -> None:
         self.link.close()
@@ -124,12 +142,14 @@ class Device:
         except (Timeout, Nak):
             self._resync()          # same rule as the first attempt: nothing stale survives
             raise
-        except OSError:
+        except (OSError, _WriteFailed):
             raise DeviceError(f"port lost twice: {first}") from None
 
     def _reopen(self) -> None:
         self.link.reopen()
         self._settle()
+        if getattr(self, "proto_version", None) is not None:
+            self._check_version()
 
     def _write(self, data: bytes) -> None:
         try:
@@ -193,7 +213,7 @@ class Device:
     def _shell_retry(self, line, timeout, first) -> str:
         try:
             return self._shell_once(line, timeout)
-        except OSError:
+        except (OSError, _WriteFailed):
             raise DeviceError(f"port lost twice: {first}") from None
 
     def _shell_once(self, line: str, timeout: float) -> str:
@@ -212,11 +232,11 @@ class Device:
         re-run after a replug."""
         try:
             return fn()
-        except OSError as e:
+        except (OSError, _WriteFailed) as e:
             self._reopen()
             try:
                 return fn()
-            except OSError:
+            except (OSError, _WriteFailed):
                 raise DeviceError(f"port lost twice: {e}") from None
 
     def _read_until_prompt(self, timeout: float) -> bytes:

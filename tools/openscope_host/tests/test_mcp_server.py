@@ -38,6 +38,26 @@ class TestSession(unittest.TestCase):
         s.press(["MENU", "OK"])
         self.assertEqual(d.link.L.shim_presses(), 2)
 
+    def test_partial_press_sequence_says_what_acted(self):
+        s, d = session()
+        calls = {"n": 0}
+        real = d.press
+
+        def press(b):
+            calls["n"] += 1
+            if calls["n"] == 2:
+                from openscope.device import Nak
+                raise Nak(0x0A, 0x07)                       # queue full on the 2nd press
+            return real(b)
+        d.press = press
+        with self.assertRaises(RuntimeError) as cm:
+            s.press(["MENU", "OK", "UP"])
+        msg = str(cm.exception)
+        self.assertIn("pressed MENU", msg)
+        self.assertIn("OK not pressed", msg)
+        self.assertIn("remaining not sent: UP", msg)
+        self.assertEqual(d.link.L.shim_presses(), 1)
+
     def test_power_refused_by_default(self):
         s, d = session()
         with self.assertRaises(RuntimeError):

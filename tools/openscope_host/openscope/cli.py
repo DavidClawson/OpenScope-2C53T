@@ -23,8 +23,11 @@ def _now() -> float:          # the meter staleness clock (tests replace it)
 def _info(dev: Device, _a) -> int:
     version = dev.ping()
     st = dev.status()
-    batt = f"{st.battery_pct}% ({st.battery_mv} mV{', charging' if st.charging else ''}"
-    batt += ", CRITICAL)" if st.battery_critical else ")"
+    if st.battery_known:
+        batt = f"{st.battery_pct}% ({st.battery_mv} mV{', charging' if st.charging else ''}"
+        batt += ", CRITICAL)" if st.battery_critical else ")"
+    else:
+        batt = "unknown (no sample yet" + (", charging)" if st.charging else ")")
     print(f"port      {dev.link.port}")
     print(f"firmware  {version}")
     print(f"protocol  v{st.proto_version}")

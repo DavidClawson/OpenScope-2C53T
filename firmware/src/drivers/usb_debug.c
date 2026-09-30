@@ -8146,7 +8146,10 @@ static void remote_status(esp_status_snapshot_t *st)
     st->battery_mv   = battery_read_mv();
     st->flags = (uint8_t)((battery_is_charging() ? ESP_STATUS_FLAG_CHARGING : 0) |
                           (fpga_data_ready()     ? ESP_STATUS_FLAG_CAPTURE_READY : 0) |
-                          (battery_is_critical() ? ESP_STATUS_FLAG_BATT_CRITICAL : 0));
+                          (battery_is_critical() ? ESP_STATUS_FLAG_BATT_CRITICAL : 0) |
+                          /* the average holds no sample yet (e.g. booted on USB
+                           * above the charge threshold): 0 % / 0 mV is not a reading */
+                          (st->battery_mv == 0   ? ESP_STATUS_FLAG_BATT_UNKNOWN : 0));
     st->uptime_ms     = (uint32_t)xTaskGetTickCount() * portTICK_PERIOD_MS;
     st->usb_tx_stalls = s_usb.tx_stalls;
     st->usb_heals     = s_usb.heals;

@@ -66,6 +66,7 @@ MODES = {0: "scope", 1: "meter", 2: "siggen", 3: "settings"}
 FLAG_CHARGING = 0x01
 FLAG_CAPTURE_READY = 0x02
 FLAG_BATT_CRITICAL = 0x04
+FLAG_BATT_UNKNOWN = 0x08
 
 
 class ProtocolError(Exception):
@@ -187,6 +188,10 @@ class Status:
     @property
     def battery_critical(self) -> bool:
         return bool(self.flags & FLAG_BATT_CRITICAL)
+
+    @property
+    def battery_known(self) -> bool:
+        return not (self.flags & FLAG_BATT_UNKNOWN)
 
 
 STATUS_FIXED = struct.Struct("<BBBBHIIHB")   # 17 bytes, esp_comm.h STATUS v1

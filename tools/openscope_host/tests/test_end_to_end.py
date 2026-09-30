@@ -266,6 +266,43 @@ class TestSharedStream(unittest.TestCase):
         self.assertEqual(dev.link.L.shim_presses(), 0)
 
 
+class TestRound3(unittest.TestCase):
+    def test_second_write_failure_is_a_device_error(self):
+        dev = device()
+        def always_fail(data):
+            raise OSError(6, "Device not configured")
+        dev.link.write = always_fail
+        for call in (dev.ping, dev.status, lambda: dev.press("OK"), lambda: dev.shell("version")):
+            with self.assertRaises(DeviceError) as cm:
+                call()
+            self.assertIn("port lost twice", str(cm.exception))
+
+    def test_unknown_major_refused_before_anything_acts(self):
+        dev = device()
+        with mock.patch.object(proto, "PROTO_MAJOR", 2):
+            with self.assertRaises(proto.ProtocolError):
+                dev._check_version()
+        self.assertEqual(dev.link.L.shim_presses(), 0)
+
+    def test_version_rechecked_after_reopen(self):
+        dev = device()
+        dev._check_version()
+        dev.link.fail_next_write = True
+        with mock.patch.object(proto, "PROTO_MAJOR", 2):
+            with self.assertRaises(proto.ProtocolError):
+                dev.press("OK")                 # the reopened port speaks another major
+        self.assertEqual(dev.link.L.shim_presses(), 0, "pressed on a firmware we cannot speak to")
+
+    def test_battery_unknown_is_not_printed_as_zero(self):
+        dev = device()
+        dev.link.L.shim_set_status(0, 0, proto.FLAG_CHARGING | proto.FLAG_BATT_UNKNOWN, 0, 1000, 0, 0)
+        out = io.StringIO()
+        with mock.patch.object(cli.Device, "open", return_value=dev), redirect_stdout(out):
+            cli.main(["info"])
+        self.assertIn("battery   unknown (no sample yet, charging)", out.getvalue())
+        self.assertNotIn("0%", out.getvalue())
+
+
 class TestTransportLoss(unittest.TestCase):
     def test_button_is_not_resent_after_its_write_went_through(self):
         dev = device()

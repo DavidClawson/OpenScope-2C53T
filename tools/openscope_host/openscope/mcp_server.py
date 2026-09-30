@@ -72,8 +72,8 @@ class ScopeSession:
                 "firmware": dev.ping(),
                 "protocol_version": st.proto_version,
                 "mode": st.mode_name,
-                "battery_pct": st.battery_pct,
-                "battery_mv": st.battery_mv,
+                "battery_pct": st.battery_pct if st.battery_known else None,
+                "battery_mv": st.battery_mv if st.battery_known else None,
                 "charging": st.charging,
                 "battery_critical": st.battery_critical,
                 "capture_ready": st.capture_ready,
@@ -101,9 +101,17 @@ class ScopeSession:
                                "and end the session); start the server with --allow-raw-shell")
 
         def run(dev: Device) -> str:
+            done = []
             for b in buttons:
-                dev.press(b)
-            return "pressed " + " ".join(b.upper() for b in buttons)
+                try:
+                    dev.press(b)
+                except Exception as e:
+                    # Say exactly what already acted, so a retry does not press it twice.
+                    already = ("pressed " + " ".join(done) + "; ") if done else "nothing pressed; "
+                    raise DeviceError(f"{already}{b.upper()} not pressed ({e}); "
+                                      f"remaining not sent: {' '.join(x.upper() for x in buttons[len(done) + 1:]) or '-'}") from None
+                done.append(b.upper())
+            return "pressed " + " ".join(done)
         return self._call(run)
 
     def shell(self, command: str) -> str:

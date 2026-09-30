@@ -46,8 +46,10 @@ def looked_where() -> str:
 class SerialLink:
     """Byte pipe over pyserial with reopen-on-loss."""
 
-    def __init__(self, port: Optional[str] = None, reopen_wait: float = 6.0):
+    def __init__(self, port: Optional[str] = None, reopen_wait: float = 6.0,
+                 drain_timeout: float = 2.0):
         self.requested = port
+        self.drain_timeout = drain_timeout
         self.port: Optional[str] = None
         self.reopen_wait = reopen_wait
         self._ser = None
@@ -98,9 +100,19 @@ class SerialLink:
         """OSError = nothing may have been sent; FlushFailed = the bytes were
         handed to the OS and may well have reached the device."""
         self._ser.write(data)
+        # Not ser.flush(): on POSIX that is an unbounded tcdrain, and the device
+        # only re-arms its OUT endpoint when the shell task polls, so a busy or
+        # wedged device would hang the host with no timeout at all. Wait for
+        # the OS queue to empty, but only up to a deadline.
+        deadline = time.time() + self.drain_timeout
         try:
-            self._ser.flush()
-        except Exception as e:      # pyserial's POSIX flush is a bare tcdrain: termios.error
+            while self._ser.out_waiting:
+                if time.time() > deadline:
+                    raise FlushFailed(f"device not accepting data after {self.drain_timeout:.0f} s")
+                time.sleep(0.005)
+        except FlushFailed:
+            raise
+        except Exception as e:      # port vanished while draining (termios/serial errors)
             raise FlushFailed(f"port lost after write: {e}") from e
 
     def read(self, n: int = 4096) -> bytes:
