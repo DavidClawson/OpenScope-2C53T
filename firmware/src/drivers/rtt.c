@@ -35,7 +35,9 @@
  * guest link, and the main stack has to live in that gap. Nothing is lost by
  * being small — when a host is attached, a full buffer makes the writer wait
  * for drain rather than drop. */
-#define RTT_UP_SIZE        2048u   /* target -> host */
+#ifndef RTT_UP_SIZE
+#define RTT_UP_SIZE        2048u   /* target -> host (a build may shrink it for RAM) */
+#endif
 #define RTT_DOWN_SIZE       128u   /* host -> target, one command line      */
 #define RTT_TX_TIMEOUT_MS    50u   /* max stall when an attached host lags  */
 

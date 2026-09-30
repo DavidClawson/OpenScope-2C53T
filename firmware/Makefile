@@ -995,6 +995,16 @@ guest-coldtrace: CFLAGS += -DGUEST_BUILD -DFPGA_WARM_HANDOFF_TEST=1 -DFPGA_USART
 guest-coldtrace: LDSCRIPT = ld/at32f403a_guest.ld
 guest-coldtrace: clean all
 
+# guest-coldtrace-crumbs — coldtrace whose RAM installer (fwapply/fwswap) leaves
+# a trail in backup registers BPR DT11..16; read it with `fwcrumb` after a
+# MENU+pinhole recovery (EXP-57 follow-up: which of the installer's exits
+# fires on genuine-Winbond units). The trail is ~500 B of RAM code and RAM is
+# full, so this build shrinks the RTT up-buffer (SWD console) 2048 -> 512 B.
+.PHONY: guest-coldtrace-crumbs
+guest-coldtrace-crumbs: CFLAGS += -DGUEST_BUILD -DFPGA_WARM_HANDOFF_TEST=1 -DFPGA_USART_SILENT_SCOPE=1 -DFPGA_CONFIG_B=1 -DFPGA_CONFIG_B_ARM=1 -DFWL_INSTALL_CRUMBS=1 -DRTT_UP_SIZE=512u
+guest-coldtrace-crumbs: LDSCRIPT = ld/at32f403a_guest.ld
+guest-coldtrace-crumbs: clean all
+
 # [M1 2026-09-04] guest-coldtrace-meter — coldtrace plus reachable meter submodes.
 #
 # EXP-23 measured the actual gap in guest-coldtrace: the meter is NOT dead (a

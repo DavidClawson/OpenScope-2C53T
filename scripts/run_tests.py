@@ -55,6 +55,8 @@ SUITES = (
     "test_shell_table.py",
     "test_stock_caplog.py",
     "test_firmware_build.py",
+    "test_remote_proto.py",
+    "test_openscope_host.py",
 )
 
 RAN_RE = re.compile(r"^Ran (\d+) test", re.MULTILINE)

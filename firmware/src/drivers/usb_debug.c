@@ -721,6 +721,56 @@ static void cmd_version(void)
     );
 }
 
+/* fwcrumb — read the RAM installer's breadcrumbs (fw_loader.c, BPR DT11..16).
+ * They survive the reset that follows a hung install, so after a MENU+pinhole
+ * recovery this says where `fwapply`/`fwswap` stopped. */
+static volatile uint32_t *fwcrumb_reg(unsigned n)
+{
+    return (volatile uint32_t *)(0x40006C00u + 0x40u + 4u * (n - 11u));
+}
+
+static void cmd_fwcrumb(void)
+{
+    static const char *const site[] = {
+        "none", "size/ceiling check", "flash unlock", "busy before erase",
+        "erase (timeout/error)", "busy before program", "program (timeout/error)",
+        "read-back verify mismatch",
+    };
+    crm_periph_clock_enable(CRM_PWC_PERIPH_CLOCK, TRUE);
+    crm_periph_clock_enable(CRM_BPR_PERIPH_CLOCK, TRUE);
+    uint32_t magic = *fwcrumb_reg(11) & 0xFFFFu;
+    uint32_t st    = *fwcrumb_reg(12) & 0xFFFFu;
+    if (magic != 0xFC57u) {
+        usb_debug_printf("fwcrumb: no trail (DT11=0x%04lX) - no install ran since the last clear/power loss\r\n",
+                         (unsigned long)magic);
+        return;
+    }
+    unsigned dead = (unsigned)(st >> 8), stage = (unsigned)(st & 0xFFu);
+    usb_debug_printf(
+        "fwcrumb: last stage 0x%02X (%s%s) dead-site %u (%s)\r\n"
+        "  page %lu (0x%08lX) byte %lu  sts/aux 0x%04lX ctrl 0x%04lX\r\n",
+        stage,
+        stage == 8 ? "verified, reset issued" :
+        (stage & 0x0Fu) == 3 ? "unlock" : (stage & 0x0Fu) == 4 ? "erase" :
+        (stage & 0x0Fu) == 5 ? "program/verify" : (stage & 0x0Fu) == 2 ? "size ok" : "entered",
+        (stage & 0x10u) ? ", bank 1" : "",
+        dead, dead < sizeof(site) / sizeof(site[0]) ? site[dead] : "?",
+        (unsigned long)(*fwcrumb_reg(13) & 0xFFFFu),
+        (unsigned long)(0x08007000u + (*fwcrumb_reg(13) & 0xFFFFu) * 2048u),
+        (unsigned long)(*fwcrumb_reg(14) & 0xFFFFu),
+        (unsigned long)(*fwcrumb_reg(15) & 0xFFFFu),
+        (unsigned long)(*fwcrumb_reg(16) & 0xFFFFu));
+}
+
+static void cmd_fwcrumb_clear(void)
+{
+    crm_periph_clock_enable(CRM_PWC_PERIPH_CLOCK, TRUE);
+    crm_periph_clock_enable(CRM_BPR_PERIPH_CLOCK, TRUE);
+    PWC->ctrl_bit.bpwen = TRUE;
+    for (unsigned n = 11; n <= 16; n++) *fwcrumb_reg(n) = 0;
+    usb_send_str("fwcrumb: cleared\r\n");
+}
+
 /* usbstat — CDC transport health (issue #39) and remote protocol RX stats. */
 static void cmd_usbstat(void)
 {
@@ -7687,6 +7737,10 @@ static const shell_cmd_t shell_cmds[] = {
           "  then stream exactly <size> raw bytes (scripts/cdc_flash.py does both)\r\n"),
     CMD_V("fwstat", cmd_fwstat, SC_EXACT,
           "fwstat                          Staging state / byte count / verdict\r\n"),
+    CMD_V("fwcrumb", cmd_fwcrumb, SC_EXACT,
+          "fwcrumb                         Where the last fwapply/fwswap install stopped (BPR trail)\r\n"),
+    CMD_V("fwcrumb clear", cmd_fwcrumb_clear, SC_EXACT,
+          "fwcrumb clear                   Erase the install trail\r\n"),
     CMD_V("fwapply", cmd_fwapply, SC_EXACT,
           "fwapply                         Install the staged image over the app slot\r\n"),
     CMD_A("fwswap", cmd_fwswap, SC_NEEDARGS,
