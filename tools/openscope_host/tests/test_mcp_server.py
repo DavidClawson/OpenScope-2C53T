@@ -91,9 +91,10 @@ class TestSession(unittest.TestCase):
         with self.assertRaises(RuntimeError):
             s.press(["POWER"])
         self.assertEqual(d.link.L.shim_presses(), 0)
-        s2, d2 = session(allow_raw=True)
-        s2.press(["POWER"])
-        self.assertEqual(d2.link.L.shim_last_button(), 15)
+        s2, d2 = session(allow_raw=True)        # --allow-raw-shell no longer lifts it
+        with self.assertRaises(RuntimeError):
+            s2.press(["POWER"])
+        self.assertEqual(d2.link.L.shim_presses(), 0)
 
     def test_shell_allowlist(self):
         s, d = session()
