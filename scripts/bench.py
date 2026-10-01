@@ -50,6 +50,7 @@ import argparse
 import glob
 import re
 import sys
+import os
 import time
 from dataclasses import dataclass, field
 from typing import Callable, Iterable, Optional, Sequence
@@ -418,6 +419,9 @@ class Scope:
 
     def __init__(self, port: Optional[str] = "/dev/ttyACM0", baud: int = 115200,
                  transport: Optional[Transport] = None, settle: float = 0.4):
+        self._port, self._baud, self._settle = port, baud, settle
+        self.reconnects = 0          #: times opread() reopened the port after an empty window
+        self._last_transport_error: Optional[BaseException] = None
         if transport is not None:
             self._t = transport
         else:
@@ -458,13 +462,57 @@ class Scope:
         if timeout is None:
             # ~3 chars of hex per byte at 115200, plus SPI time and slack.
             timeout = 3.0 + n / 300.0
-        text = self.cmd("spi3 opread %02x %d dump" % (op, n), timeout)
-        raw = parse_dump(text)
+        line = "spi3 opread %02x %d dump" % (op, n)
+        raw = self._opread_once(line, timeout)
+        if len(raw) == 0 and self._reconnect():
+            # EXP-66: the device's CDC self-heal (#39) drops it off the bus for
+            # ~200 ms and it comes back on the same node; a window read across
+            # that gap is empty, not short. One reopen, one retry, then the
+            # error stands. A SHORT window (some bytes) is never retried: it
+            # is a torn record, and retrying would hide how often that is.
+            raw = self._opread_once(line, timeout)
         if len(raw) < n:
+            why = ("" if self._last_transport_error is None
+                   else " (transport: %s)" % self._last_transport_error)
+            self._last_transport_error = None
             raise ShortReadError(
-                "opread %02X: asked for %d bytes, parsed %d — window unusable"
-                % (op, n, len(raw)))
+                "opread %02X: asked for %d bytes, parsed %d — window unusable%s"
+                % (op, n, len(raw), why))
         return raw[drop:drop + (n - drop)].astype(dtype)
+
+    def _opread_once(self, line: str, timeout: float) -> np.ndarray:
+        try:
+            return parse_dump(self.cmd(line, timeout))
+        except (PromptTimeout, OSError) as exc:
+            # The port vanished mid-command (device re-enumerating): the
+            # caller treats this as an empty window and may reconnect.
+            self._last_transport_error = exc
+            return np.zeros(0)
+
+    def _reconnect(self, wait_s: float = 30.0) -> bool:
+        """Reopen the serial port after the device re-enumerated. False when
+        this Scope was given a transport (tests, selftest) or the port does
+        not come back within ``wait_s``."""
+        if not isinstance(self._t, SerialTransport):
+            return False
+        port = self._t.port
+        try:
+            self._t.close()
+        except Exception:                              # pragma: no cover
+            pass
+        deadline = time.time() + wait_s
+        while time.time() < deadline:
+            if os.path.exists(port):
+                try:
+                    time.sleep(1.0)        # let the host finish enumerating
+                    self._t = SerialTransport(port, self._baud, prompt=b">", settle=self._settle,
+                                              patterns=(port,))
+                    self.reconnects += 1
+                    return True
+                except BenchError:
+                    pass
+            time.sleep(0.25)
+        return False
 
     def opread_stats(self, op: int, n: int = STOCK_WINDOW_BYTES,
                      timeout: Optional[float] = None) -> OpreadStats:

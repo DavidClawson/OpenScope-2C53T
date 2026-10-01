@@ -369,5 +369,58 @@ class DryRunTests(unittest.TestCase):
                 self.assertIn("done", out)
 
 
+
+class TestScopeOpreadReconnect(unittest.TestCase):
+    """EXP-66: a window read across the device's CDC self-heal comes back
+    EMPTY (the port vanished mid-command). Scope.opread() may reopen once and
+    retry; a SHORT window (torn record) is never retried."""
+
+    @staticmethod
+    def _dump(n):
+        lines = []
+        for off in range(0, n, 16):
+            chunk = " ".join("%02x" % ((off + i) & 0xFF) for i in range(min(16, n - off)))
+            lines.append("%04X: %s" % (off, chunk))
+        return "spi3 opread 04 %d dump\r\n" % n + "\r\n".join(lines) + "\r\n> "
+
+    def _scope(self, replies):
+        calls = {"n": 0}
+
+        def reply(line):
+            calls["n"] += 1
+            r = replies[min(calls["n"], len(replies)) - 1]
+            if isinstance(r, Exception):
+                raise r
+            return r
+        return bench.Scope(transport=bench.ScriptedTransport(reply)), calls
+
+    def test_empty_window_retries_once_after_a_reconnect(self):
+        sc, calls = self._scope([bench.PromptTimeout("port gone"), self._dump(64)])
+        sc._reconnect = lambda wait_s=30.0: True          # the port came back
+        v = sc.opread(0x04, n=64)
+        self.assertEqual(len(v), 62)                     # 64 minus the 2 header bytes
+        self.assertEqual(calls["n"], 2)
+
+    def test_empty_window_without_a_port_is_an_error_that_names_the_cause(self):
+        sc, calls = self._scope([bench.PromptTimeout("no prompt b'>' within 6.4s")])
+        sc._reconnect = lambda wait_s=30.0: False         # device never came back
+        with self.assertRaises(bench.ShortReadError) as cm:
+            sc.opread(0x04, n=64)
+        self.assertIn("parsed 0", str(cm.exception))
+        self.assertIn("no prompt", str(cm.exception))
+        self.assertEqual(calls["n"], 1)
+
+    def test_a_short_window_is_never_retried(self):
+        sc, calls = self._scope([self._dump(48), self._dump(64)])
+        sc._reconnect = lambda wait_s=30.0: self.fail("a torn window must not trigger a reconnect")
+        with self.assertRaises(bench.ShortReadError):
+            sc.opread(0x04, n=64)
+        self.assertEqual(calls["n"], 1)
+
+    def test_a_scripted_transport_never_reconnects(self):
+        sc, _ = self._scope([bench.PromptTimeout("x")])
+        self.assertFalse(sc._reconnect(wait_s=0.0))
+
+
 if __name__ == "__main__":
     unittest.main()
