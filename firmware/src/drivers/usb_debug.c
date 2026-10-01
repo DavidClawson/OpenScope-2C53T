@@ -152,6 +152,11 @@ typedef struct {
     volatile uint8_t dtr;        /* last DTR from the host */
     volatile uint8_t dtr_seen;   /* a SET_CONTROL_LINE_STATE arrived since enumeration */
     volatile uint8_t dtr_opened; /* DTR was 1 at some point since enumeration */
+    uint32_t pending_cleared_tick; /* when a completed send last cleared a PENDING stall:
+                                  * the IN path was dead from stall_tick until here. Over
+                                  * CDC `pending=` always reads 0 (the command's own echo
+                                  * completes a send before usbstat runs); this tick is
+                                  * what says how long the stall lasted. 0 = never. */
 } usb_health_t;
 
 static usb_health_t s_usb = { .heal_enabled = USB_TX_SELF_HEAL };
@@ -312,6 +317,9 @@ static void cdc_send_bytes(const uint8_t *data, uint16_t len)
             return;
         }
         s_usb.consecutive = 0;
+        if (g_usb_ev.flags & USB_EV_FLAG_PENDING) {
+            s_usb.pending_cleared_tick = xTaskGetTickCount();
+        }
         usb_ev_send_completed(&g_usb_ev);   /* the IN path works: no stall pending */
 
         if (usb_vcp_send_data(&usb_core_dev, (uint8_t *)data, chunk) != SUCCESS) {
@@ -813,12 +821,13 @@ static void cmd_usbstat(void)
         (unsigned long)s_usb.tx_send_errors, (unsigned long)s_usb.tx_dropped_closed,
         (unsigned)g_usb_ev.heals);
     usb_debug_printf(
-        "last stall: tick=%lu tx_completed=%u ept1=0x%08lX pending=%u\r\n"
+        "last stall: tick=%lu tx_completed=%u ept1=0x%08lX pending=%u cleared_at=%lu\r\n"
         "proto rx: ok=%lu bad_chk=%lu bad_len=%lu gap_timeouts=%lu\r\n",
         (unsigned long)g_usb_ev.stall_tick,
         (g_usb_ev.flags & USB_EV_FLAG_STALL_TXC) ? 1u : 0u,
         (unsigned long)g_usb_ev.stall_ept,
         (g_usb_ev.flags & USB_EV_FLAG_PENDING) ? 1u : 0u,
+        (unsigned long)s_usb.pending_cleared_tick,
         (unsigned long)rx.frames_ok, (unsigned long)rx.bad_checksum,
         (unsigned long)rx.bad_length, (unsigned long)rx.gap_timeouts);
     usb_print_prev_session(true);

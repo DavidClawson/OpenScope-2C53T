@@ -9,9 +9,10 @@ of the rehearsal unattended:
   1. opens the port (DTR asserted) and sends `usbstat`. That completed write
      clears this session's PENDING flag (usb_ev_send_completed), which is what
      makes a reset done now the *clean* control. Note that `pending=` in any
-     usbstat read over CDC is 0 by construction: the first chunk of the reply
-     completes before the field is formatted. The log shows the session number
-     and the counters, not the pre-request pending state;
+     usbstat read over CDC is 0 by construction: the command's own echo
+     completes a send before the field is formatted. `cleared_at=` next to it
+     is the tick of that clearing send, so the log still shows how long the
+     stall lasted, plus the session number and the counters;
   2. keeps reading until the port vanishes, logs the time, waits for the
      device to re-enumerate (listing only, no probe open: a DTR 1->0 makes the
      firmware drop its banner instead of stalling on it), opens it once and
