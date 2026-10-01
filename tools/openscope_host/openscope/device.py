@@ -73,12 +73,28 @@ BENCH_SHELL = (
     "fpga postedge", "fpga pollgap", "fpga autowait", "fpga rearmwait", "fpga rearm",
     "fpga acqgate", "fpga acqbr", "fpga pairgap", "fpga unrotate", "fpga edgefilter",
     "fpga holdread", "fpga diag clear",
+    # one FPGA read window, limited to the channel-read opcodes (BENCH_ARG_RULES)
+    "spi3 opread",
     # measurements and reads
     "fpga scope measure", "fpga scope freq", "fpga scope cal",
-    "spi3 read", "spi3 opread", "spi3 frame", "gpio read", "gpio scan",
+    "spi3 read", "spi3 frame", "gpio read", "gpio scan",
     "meter dump", "meter trace", "meter frontend", "meter adc-snapshot",
     "cal status", "settings", "ui dump", "flash jedec", "flash read", "flash dump",
 )
+
+# At --level bench these commands also need their arguments (everything
+# after the name) to match: name -> (pattern, what it allows, why).
+BENCH_ARG_RULES = {
+    # `spi3 opread <op> [len [dump]]` clocks 0xFF filler under ANY opcode.
+    # On the configured design 01/02/06/07/08 are register WRITES the filler
+    # smashes (01 is the run register; `spi3 opsweep` skips them for that
+    # reason) and config-port opcodes (11, 41, 15, 3A, 3B, 3C) desynchronise
+    # it; 04/05 are the channel reads. Other opcodes need --level unsafe.
+    "spi3 opread": (
+        re.compile(r"(?:0[xX])?0?[45](?: (?:[0-9]{1,4}|0[xX][0-9a-fA-F]{1,4})(?: dump)?)?"),
+        "only opcode 04 or 05, as `spi3 opread 04|05 [len [dump]]`",
+        "other opcodes write FPGA registers under the 0xFF filler or hit the config port"),
+}
 
 # Never reachable over MCP, at any level: these erase or write flash, change
 # what the scope boots, drive GPIO pins directly or reset it. Name -> why.
@@ -149,19 +165,35 @@ def shell_refusal(line: str, level: str) -> Optional[str]:
                     "If it is really needed, ask the human at the bench to run it.")
     if cmd in READ_ONLY_SHELL or level == "unsafe":
         return None
-    bench = any(_word_prefix(cmd, name) for name in BENCH_SHELL)
+    bench, limit = _bench_verdict(cmd)
     if level == "bench":
         if bench:
             return None
+        if limit:
+            return (f"'{cmd}' is not allowed at --level bench, where {limit}. This form "
+                    "needs --level unsafe, which only whoever starts the MCP server can choose.")
         return (f"'{cmd}' is not allowed at --level bench (bench adds to the read-only "
                 f"commands: {', '.join(BENCH_SHELL)}). It needs --level unsafe, which only "
                 "whoever starts the MCP server can choose.")
     return (f"'{cmd}' is not allowed at --level readonly, the default (allowed: "
             f"{', '.join(READ_ONLY_SHELL)}). "
             + ("It is a bench command: it needs --level bench or unsafe. " if bench
+               else f"At --level bench {limit}, so this form needs --level unsafe. " if limit
                else "It needs --level unsafe. ")
             + "Only whoever starts the MCP server can choose the level: the raw shell "
             "can erase flash or desynchronise the FPGA.")
+
+
+def _bench_verdict(cmd: str) -> Tuple[bool, str]:
+    """(allowed at bench, why not if a BENCH_ARG_RULES limit refused it)."""
+    names = [n for n in BENCH_SHELL if _word_prefix(cmd, n)]
+    if not names:
+        return False, ""
+    name = max(names, key=len)          # the row the firmware would dispatch to
+    rule = BENCH_ARG_RULES.get(name)
+    if rule and not rule[0].fullmatch(cmd[len(name):].strip()):
+        return False, f"`{name}` takes {rule[1]} ({rule[2]})"
+    return True, ""
 
 
 SCREEN_HDR = re.compile(
