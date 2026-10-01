@@ -1,5 +1,11 @@
 # FPGA Future Possibilities (Gowin GW1N-UV2)
 
+> **Superseded for planning (noted 2026-10-01)** by [`fpga_gateware_plan.md`](fpga_gateware_plan.md)
+> (2026-08-13), which says so itself; the FPGA Specifications table below remains valid. Out of date
+> below: the MCU is an AT32F403A at 240 MHz ([README § Hardware](../../README.md#hardware)), not a
+> GD32F307 at 120 MHz, and the "MCU as FPGA programmer" shortcut under Prerequisites is how the
+> firmware has configured the FPGA from a cold boot since 2026-08-13 (bit-banged SSPI).
+
 *Research compiled March 2026*
 
 ## FPGA Specifications
