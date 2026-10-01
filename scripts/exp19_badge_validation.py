@@ -57,8 +57,14 @@ M_RE = re.compile(
     r"(?:rise1_smp100=\S+\s+fall1_smp100=\S+\s+)?pp2=(\d+)\s+Vpp2_uV=(\S+)")
 
 
+RAW_LOG = None   # set from --raw-log: every `fpga scope measure` reply, verbatim
+
+
 def read_measure(sc, reps=10):
     out = sc.cmd(f"fpga scope measure {reps}", timeout=reps * 0.3 + 5)
+    if RAW_LOG:
+        with open(RAW_LOG, "a", encoding="utf-8") as f:
+            f.write(out if out.endswith("\n") else out + "\n")
     rows = []
     for m in M_RE.finditer(out):
         rows.append({
@@ -88,8 +94,13 @@ def main():
                     help="a timebase code with NO rate in the device's build, for the "
                          "frequency-refusal control (default 0x0C; use 0x05 on a build "
                          "that carries EXP-63's rows)")
+    ap.add_argument("--raw-log", default=None, metavar="FILE",
+                    help="append every `fpga scope measure` reply verbatim (the M lines "
+                         "carry pp/duty/period/edge fields the summary drops)")
     add_source_args(ap)
     args = ap.parse_args()
+    global RAW_LOG
+    RAW_LOG = args.raw_log
 
     if args.source == "kodedot":
         sc, src, _sim = open_bench(args, waveform="square")

@@ -122,6 +122,23 @@ Decision cells (r6, r7), per §2:
 - **r8/r9 (context):** r8 Vrms +33–37% and Vpp +40–48% on all codes — not quantisation (±2 of 13 counts is 15%): the r8 row's k does not fit this unit's CH1, as EXP-64 run 1b/2 also measured (CH1 r8 static 4744–5013 mV for 3303). r9 Vrms −12 to −18% with frequency answered 0–4/10 (10 counts of span).
 - Refusals: range 2 reports no Vpp; 0x0C reports no frequency and still reports Vpp. The pipeline refuses where the table says.
 
+### Runs 2–3 — the r7 flicker, chased to its cause (`dumps/exp67_run2_r7.log`, `exp67_run3_r7.log` + `exp67_run3_r7_raw.log`)
+- Rerun of r7 alone: 0x10 answered 10/10 (0/10 in run 1), 0x0F 5/10, 0x0E 8/10, 0x12 6/10 — the flicker moves between codes; by hand at r7/0x10 `fpga scope measure 6` answered 6/6. Not reproducible per code: a per-read effect.
+- With every `measure` reply logged (`--raw-log`, added for this), the declined reads show **`per1_smp100=3103` with `f1_mHz=-`**: the Schmitt period detector finds the period (31.03 samples = 800 Hz at 24,979 S/s) on every read; what refuses is `scope_freq_estimate()` (`scope_freq.c`), the FFT estimator the badge actually uses, whose harmonic-aware sharpness must reach 0.90.
+- Replica of `analyse()` on real records (`spi3 read 1024`, 800 Hz, 0x0F), sharpness with the firmware's harmonic windows at integer multiples of the integer peak bin vs. windows at multiples of the interpolated fractional bin:
+
+| range | pp | fundamental bin | sharp (firmware: integer harmonics) | sharp (fractional harmonics) |
+|---|---|---|---|---|
+| r7 | 44 | 32.82 | 0.876 → refused | 0.930 |
+| r7 | 45 | 33.06 | 0.790 → refused | 0.790 |
+| r7 | 45 | 32.77 | 0.898 → refused | 0.962 |
+| r7 | 45 | 32.76 | 0.905 | 0.970 |
+| r7 | 44 | 33.24 | 0.735 → refused | 0.695 |
+| r7 | 45 | 33.00 | 0.804 → refused | 0.804 |
+| r6 | 87 | 32.76 | 0.906 / 0.904 / 0.905 / 0.906 / 0.905 (one record at pp 109: 0.900 → refused) | 0.967–0.970 |
+
+  Two effects: (1) **harmonic-window drift**: the fundamental sits at bin 32.76, the windows are placed at 33·h ± 1, so from the 7th harmonic (229.3 vs window 230–232) upward the square's harmonic power is counted as "not signal"; that alone leaves a clean square at 0.90–0.91, exactly on the gate, which is why r6 passes by 0.005 and r7 (less signal over the same quantisation noise) does not. Windows at round(32.76·h) ± 1 lift the same records to 0.93–0.97. (2) **Records with a discontinuity** (fundamental bin reading 33.00–33.24 instead of 32.76, sharpness 0.70–0.80 under either rule): a phase jump inside the raw acq buffer — the seam the renderer un-rotates before drawing (EXP-22) — which the period detector tolerates (one odd cycle) and the FFT does not. The measure path feeds `fpga_get_ch1_buf()` raw.
+
 ## 6. Blind spots
 - V_ref is the unit's own meter mode (EXP-60/64): Vpp/Vrms agreement is scope-vs-meter consistency; a wrong rail reading would move both.
 - One amplitude (the rail); nothing about linearity or the clipping edge is tested; r5 would clip (164 counts + the low rail at 128).
@@ -130,7 +147,7 @@ Decision cells (r6, r7), per §2:
 - Only CH1's badges are decoded by the script (CH2 contributes `pp2`/`Vpp2` only).
 
 ## 7. Conclusion
-- **Established:** on unit #3 the badge pipeline reports a known 3.303 V square correctly at r6 through the UI's own range path (Vrms ≤ 1.4%, frequency ≤ 0.11%, answered on every read, four codes from 2.5 k to 50 kS/s), and refuses on a range without cal and on a code without a rate. The frequency badge's period detector fails or flickers when the record's span is ~41 counts at ~31 samples per period (r7 at 0x10/0x0F/0x0E), while 25 samples per period at the same span (0x12) is answered 10/10 — so the limit is not amplitude alone.
+- **Established:** on unit #3 the badge pipeline reports a known 3.303 V square correctly at r6 through the UI's own range path (Vrms ≤ 1.4%, frequency ≤ 0.11%, answered on every read, four codes from 2.5 k to 50 kS/s), and refuses on a range without cal and on a code without a rate. The frequency badge flickers on a clean square because `scope_freq_estimate()`'s sharpness gate (0.90) is met by only ~0.005 for a square whose fundamental falls between bins (harmonic windows placed at integer multiples of the integer peak bin lose the ≥ 7th harmonics), and because the raw acq buffer sometimes carries a seam the FFT cannot forgive; the Schmitt period detector reports the right period on every one of those reads.
 - **Excluded:** a wrong k selection or a missing ×0.92 in the badge path (k1_uV matches the table); mean-removal errors in Vrms (a square's mean would give ≈ 0.75 × V_ref); a frequency badge that invents a value where the table has no rate.
 - **NOT excluded (explicitly):** that the r7 and r8 rows of unit #1's table are wrong for this unit by ~5% and ~40% on CH1 (two independent methods now agree; one unit, one amplitude); the detector's actual criterion (hysteresis in counts? edges per record?) — to be read in `scope_measure.c`; CH2's badges.
-- **Follow-up:** read the period detector's thresholds and reproduce the r7 flicker with a synthetic record in the host test (`test_scope_measure.c`) before any change — a detector that keys on an absolute count threshold would explain 41-count failures; then an issue (core src). Rerun r7 with a build carrying EXP-63's table to see whether the badge answers at 0x0D–0x0A, where more samples per period are available at the same span.
+- **Follow-up:** (1) place the harmonic windows at multiples of the interpolated fundamental bin (one line in `analyse()`), with a host test on a synthetic 44-count square at a fractional bin that the integer rule refuses; (2) measure on the un-rotated record, or fall back to the Schmitt period when it is valid with many cycles — the maintainer's call (issue, core src); (3) rerun this r7 row on a build with (1) and count answers. Rerun r7 with a build carrying EXP-63's table to see whether the badge answers at 0x0D–0x0A.
