@@ -601,22 +601,34 @@ test-scope-freq: $(BUILD_DIR)/test_scope_freq
 	./$<
 
 # Settings persistence: config.c + settings_store.c against a NOR flash model
-# (erase sets 0xFF, program only clears bits, page programs cannot cross a page).
+# (erase sets 0xFF, program only clears bits, page programs cannot cross a page),
+# with power cuts injected into the real write path.
 # Proves the round trip, the fallbacks (first boot / torn record / bad checksum /
-# foreign version), and — the one that matters — that the settings writer cannot
-# reach a read-only region. See tests/test_config_persist.c.
-$(BUILD_DIR)/test_config_persist: tests/test_config_persist.c src/util/config.c src/util/config.h \
-                                  src/util/settings_store.c src/util/settings_store.h \
-                                  src/drivers/flash_regions.c src/drivers/flash_regions.h \
-                                  src/ui/theme.c src/ui/scope_state.c \
-                                  src/ui/scope_cal.c src/ui/scope_timebase.c | $(BUILD_DIR)
-	$(HOST_CC) -std=c11 -Wall -Wextra -Werror -O1 -DSETTINGS_PERSIST_WRITES=1 \
-		-Isrc/util -Isrc/drivers -Isrc/ui -Isrc/dsp \
-		$< src/util/config.c src/util/settings_store.c src/drivers/flash_regions.c \
-		src/ui/theme.c src/ui/scope_state.c src/ui/scope_cal.c src/ui/scope_timebase.c -o $@
+# foreign version / damage anywhere in the log), a change -> power cycle ->
+# verify loop across compaction, and — the one that matters — that the settings
+# writer cannot reach a read-only region. See tests/test_config_persist.c.
+#
+# The same file is built two ways:
+#   test_config_persist                SETTINGS_PERSIST_WRITES=1, must pass
+#   test_config_persist_nowrite        SETTINGS_PERSIST_WRITES=0, the negative
+#                                      control: the change/cycle/verify loop must
+#                                      FAIL to persist (spec settings-persistence S3)
+CONFIG_PERSIST_SRCS = src/util/config.c src/util/settings_store.c src/drivers/flash_regions.c \
+                      src/ui/theme.c src/ui/scope_state.c src/ui/scope_cal.c src/ui/scope_timebase.c
+CONFIG_PERSIST_DEPS = tests/test_config_persist.c $(CONFIG_PERSIST_SRCS) \
+                      src/util/config.h src/util/settings_store.h src/drivers/flash_regions.h
+CONFIG_PERSIST_CC   = $(HOST_CC) -std=c11 -Wall -Wextra -Werror -O1 \
+                      -Isrc/util -Isrc/drivers -Isrc/ui -Isrc/dsp
 
-test-config-persist: $(BUILD_DIR)/test_config_persist
-	$<
+$(BUILD_DIR)/test_config_persist: $(CONFIG_PERSIST_DEPS) | $(BUILD_DIR)
+	$(CONFIG_PERSIST_CC) -DSETTINGS_PERSIST_WRITES=1 $< $(CONFIG_PERSIST_SRCS) -o $@
+
+$(BUILD_DIR)/test_config_persist_nowrite: $(CONFIG_PERSIST_DEPS) | $(BUILD_DIR)
+	$(CONFIG_PERSIST_CC) -DSETTINGS_PERSIST_WRITES=0 $< $(CONFIG_PERSIST_SRCS) -o $@
+
+test-config-persist: $(BUILD_DIR)/test_config_persist $(BUILD_DIR)/test_config_persist_nowrite
+	$(BUILD_DIR)/test_config_persist
+	$(BUILD_DIR)/test_config_persist_nowrite
 
 test-stock-meter-literals:
 	python3 ../scripts/test_stock_meter_literals.py

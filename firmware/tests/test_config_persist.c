@@ -26,8 +26,21 @@
  * settings through the region layer is that a bug in THIS code cannot reach it.
  * That test aims the settings writer straight at a read-only region and checks
  * the bytes are still there afterwards.
+ *
+ * TWO BUILDS OF THIS ONE FILE (all from the Makefile; one flash model)
+ * ----------------------------------------------------------------------
+ *   test_config_persist            -DSETTINGS_PERSIST_WRITES=1   must be green
+ *   test_config_persist_nowrite    -DSETTINGS_PERSIST_WRITES=0   must be green
+ *       The negative control (settings-persistence spec, S3): the write path
+ *       stubbed by the real build-time switch. Runs ONLY the change -> power
+ *       cycle -> verify loop and requires that nothing survives — and that the
+ *       positive version of that test goes red. A loop that passes with the
+ *       writes compiled out is not testing persistence.
+ *
+ * `make test-config-persist` builds and runs both.
  */
 
+#include <stddef.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -62,12 +75,15 @@ volatile uint8_t  meter_layout  = 0;
 static int tests_run = 0;
 static int tests_failed = 0;
 static int current_failed = 0;
+static bool quiet_checks = false;   /* run_expect_red(): failures are the point */
 
 #define CHECK(cond, ...) do {                                   \
     if (!(cond)) {                                              \
-        printf("  FAIL (line %d): ", __LINE__);                 \
-        printf(__VA_ARGS__);                                    \
-        printf("\n");                                           \
+        if (!quiet_checks) {                                    \
+            printf("  FAIL (line %d): ", __LINE__);             \
+            printf(__VA_ARGS__);                                \
+            printf("\n");                                       \
+        }                                                       \
         current_failed++;                                       \
     }                                                           \
 } while (0)
@@ -97,6 +113,25 @@ static void run(const char *name, test_fn fn)
     }
 }
 
+/* Run a test that MUST fail — the negative control's way of proving that a
+ * positive test can go red. Its own CHECK output is suppressed (every line of
+ * it would be an expected failure); what is reported is whether it failed. */
+static void run_expect_red(const char *name, test_fn fn)
+{
+    current_failed = 0;
+    tests_run++;
+    quiet_checks = true;
+    fn();
+    quiet_checks = false;
+    if (current_failed) {
+        printf("ok    %s (red as required: %d failed check(s))\n", name, current_failed);
+    } else {
+        tests_failed++;
+        printf("FAIL  %s (passed, but it must fail in this build)\n", name);
+    }
+    current_failed = 0;
+}
+
 /* ═══════════════════════════════════════════════════════════════════
  * NOR flash model (same semantics as tests/test_flash_regions.c)
  * ═══════════════════════════════════════════════════════════════════ */
@@ -113,6 +148,41 @@ typedef struct {
 } nor_model_t;
 
 static nor_model_t model;
+
+/* Power-cut injection. Armed with a budget of programmed bytes and of sector
+ * erases; the operation that would exceed either budget is the one the power
+ * dies in. A program is cut byte-granular — the bytes before the cut land,
+ * the rest stay as they were — and an erase is cut whole (it either completed
+ * before the cut or never started). From then on the chip is unpowered: every
+ * read, program and erase fails and changes nothing, so the code under test
+ * unwinds through its own error paths and the flash image is frozen exactly as
+ * the cut left it. power_cycle() restores power.
+ *
+ * This drives the REAL write path in the code's own order, so a torn record
+ * here is whatever config_save() -> flash_region_append() actually leaves —
+ * not the test's belief about the order. A real NOR tear is bit-granular;
+ * the byte prefix is a representative subset of it. */
+typedef struct {
+    bool     armed;
+    bool     dead;
+    uint32_t program_bytes_left;
+    uint32_t erases_left;
+} power_cut_t;
+
+static power_cut_t cut;
+
+static void model_cut_power_after(uint32_t program_bytes, uint32_t erases)
+{
+    cut.armed = true;
+    cut.dead = false;
+    cut.program_bytes_left = program_bytes;
+    cut.erases_left = erases;
+}
+
+static void model_restore_power(void)
+{
+    memset(&cut, 0, sizeof cut);
+}
 
 static void model_alloc(void)
 {
@@ -139,6 +209,7 @@ static void model_blank(void)
     model_alloc();
     memset(model.mem, 0xFF, MODEL_SIZE);
     model_counters_reset();
+    model_restore_power();
 }
 
 static void model_touch(uint32_t addr, uint32_t len)
@@ -154,6 +225,7 @@ static int model_read(void *ctx, uint32_t addr, void *buf, uint32_t len)
         printf("  MODEL VIOLATION: read out of range 0x%X+%u\n", addr, len);
         exit(3);
     }
+    if (cut.dead) return -1;
     model.reads++;
     memcpy(buf, model.mem + addr, len);
     return 0;
@@ -165,6 +237,14 @@ static int model_erase(void *ctx, uint32_t addr)
     if (addr % FLASH_REGION_SECTOR_SIZE || addr >= MODEL_SIZE) {
         printf("  MODEL VIOLATION: bad erase 0x%X\n", addr);
         exit(3);
+    }
+    if (cut.dead) return -1;
+    if (cut.armed) {
+        if (cut.erases_left == 0) {
+            cut.dead = true;                /* power dies before this erase */
+            return -1;
+        }
+        cut.erases_left--;
     }
     model.erases++;
     model_touch(addr, FLASH_REGION_SECTOR_SIZE);
@@ -185,12 +265,19 @@ static int model_program(void *ctx, uint32_t addr, const void *data, uint32_t le
         printf("  MODEL VIOLATION: program crosses a page boundary 0x%X+%u\n", addr, len);
         exit(3);
     }
+    if (cut.dead) return -1;
+    uint32_t landed = len;
+    if (cut.armed && cut.program_bytes_left < len) {
+        landed = cut.program_bytes_left;    /* power dies inside this program */
+        cut.dead = true;
+    }
+    if (cut.armed) cut.program_bytes_left -= landed;
     model.programs++;
     model_touch(addr, len);
-    for (uint32_t i = 0; i < len; i++) {
+    for (uint32_t i = 0; i < landed; i++) {
         model.mem[addr + i] &= src[i];      /* NOR: bits only go 1 -> 0 */
     }
-    return 0;
+    return cut.dead ? -1 : 0;
 }
 
 static const flash_region_backend_t model_backend = {
@@ -281,6 +368,7 @@ static void fresh_device(void)
 /* Simulate a power cycle: flash contents survive, all RAM state does not. */
 static void power_cycle(void)
 {
+    model_restore_power();
     model_counters_reset();
     theme_init(THEME_DARK_BLUE);
     scope_state_init(scope_state_get());
@@ -1035,48 +1123,616 @@ static void test_capture_apply_round_trip_is_symmetric(void)
 }
 
 /* ═══════════════════════════════════════════════════════════════════
+ * Shared by sections 6-8
+ * ═══════════════════════════════════════════════════════════════════ */
+
+/* One record slot: header + config payload padded to 4 (64 B today). */
+#define REC_SLOT  (REC_HDR_SIZE + ((uint32_t)(sizeof(device_config_t) + 3u) & ~3u))
+
+/* Header layout (flash_regions.c, "Append log"): magic u16, len u16, crc u32.
+ * A cut that lands at or after this many header bytes leaves a header whose
+ * magic and length are both readable. */
+#define HDR_MAGIC_AND_LEN_BYTES  4u
+
+/* Distinctive ch1 volts/div codes, none of them the config default (3). */
+#define MARK_A  1u      /* an older good record                       */
+#define MARK_B  7u      /* the damaged / torn record: must never load */
+#define MARK_C  4u      /* a newer good record                        */
+
+/* Boot: RAM state gone, store re-initialised from whatever the chip holds. */
+static void boot(void)
+{
+    power_cycle();
+    settings_store_init();
+}
+
+static uint8_t default_ch1_vdiv(void)
+{
+    device_config_t d;
+    config_init_defaults(&d);
+    return d.scope_ch1_vdiv;
+}
+
+static bool slot_is_blank(uint32_t offset)
+{
+    const uint8_t *p = model.mem + settings_start() + offset;
+    for (uint32_t i = 0; i < REC_SLOT; i++) {
+        if (p[i] != 0xFFu) return false;
+    }
+    return true;
+}
+
+static uint32_t settings_capacity(void)
+{
+    return flash_region_get(FLASH_REGION_SETTINGS)->length / REC_SLOT;
+}
+
+/* A stamped, valid config told apart from the others by ch1 vdiv alone. */
+static device_config_t marked_config(uint8_t ch1_vdiv)
+{
+    device_config_t c;
+    config_init_defaults(&c);
+    c.scope_ch1_vdiv = ch1_vdiv;
+    c.checksum = config_compute_checksum(&c);
+    return c;
+}
+
+static uint32_t forge_config(uint32_t offset, const device_config_t *c)
+{
+    uint8_t payload[sizeof *c];
+    memcpy(payload, c, sizeof payload);
+    return forge_record(offset, payload, (uint16_t)sizeof payload,
+                        crc32_of(payload, sizeof payload));
+}
+
+/* ═══════════════════════════════════════════════════════════════════
+ * 6. Damage anywhere in the log
+ *
+ * Section 2 damages only the NEWEST record. Here the damaged record B sits
+ * either between two good ones ([A][B][C]) or at the end ([A][B]), for every
+ * kind of damage the scanner distinguishes. The invariant for every row: B is
+ * never applied — the device boots on a good record or on defaults.
+ *
+ * Which record wins is pinned per kind, because the scanner treats damage in
+ * two different ways (flash_regions.c log_scan()):
+ *   - a CRC failure is SKIPPED by the length in the header, so the scan
+ *     carries on and a later good record (C) still wins;
+ *   - an unparsable header (magic, zero / oversized length) STOPS the scan,
+ *     and so does a wrong-but-plausible length, which steps into the middle
+ *     of the next record and finds no magic there. Nothing past B is seen:
+ *     the last good record BEFORE it (A) wins and C is unreachable.
+ * A record that passes CRC32 but fails the config's own magic / version /
+ * checksum is a different case again: the region layer hands back the newest
+ * CRC-valid record and config.c validates only that one, so at the end of the
+ * log the device comes up on DEFAULTS, not on A. config.h says so ("Anything
+ * that fails either check falls back to defaults"); it is pinned here as the
+ * documented behaviour, not endorsed as the only reasonable one.
+ * ═══════════════════════════════════════════════════════════════════ */
+
+typedef enum {
+    DMG_PAYLOAD_BIT,        /* one payload bit flipped: CRC32 fails          */
+    DMG_MAGIC,              /* header magic damaged                          */
+    DMG_LEN_ZERO,           /* header length 0                               */
+    DMG_LEN_OVER_MAX,       /* header length > FLASH_REGION_RECORD_MAX       */
+    DMG_LEN_PLAUSIBLE,      /* header length sane, but not what was written  */
+    DMG_CONFIG_CHECKSUM,    /* CRC32 good, config checksum bad               */
+} damage_t;
+
+#define WINNER_DEFAULTS  0xFFu
+
+static const struct {
+    damage_t    kind;
+    const char *name;
+    uint8_t     mid_winner;     /* [A][B][C] */
+    uint8_t     end_winner;     /* [A][B]    */
+} DAMAGE_CASES[] = {
+    { DMG_PAYLOAD_BIT,     "payload bit flip",            MARK_C, MARK_A          },
+    { DMG_MAGIC,           "damaged magic",               MARK_A, MARK_A          },
+    { DMG_LEN_ZERO,        "zero length",                 MARK_A, MARK_A          },
+    { DMG_LEN_OVER_MAX,    "length over the record max",  MARK_A, MARK_A          },
+    { DMG_LEN_PLAUSIBLE,   "plausible but wrong length",  MARK_A, MARK_A          },
+    { DMG_CONFIG_CHECKSUM, "CRC good, checksum bad",      MARK_C, WINNER_DEFAULTS },
+};
+
+static void put_le16(uint8_t *p, uint16_t v)
+{
+    p[0] = (uint8_t)(v & 0xFFu);
+    p[1] = (uint8_t)(v >> 8);
+}
+
+/* Write record B (ch1 vdiv = MARK_B) at `offset`, damaged as `kind`. Returns
+ * the offset of the slot after it, as the undamaged record would occupy. */
+static uint32_t forge_damaged(uint32_t offset, damage_t kind)
+{
+    device_config_t b = marked_config(MARK_B);
+    if (kind == DMG_CONFIG_CHECKSUM) {
+        b.meter_layout = 2;                 /* mutate AFTER checksumming */
+    }
+    uint32_t next = forge_config(offset, &b);
+    uint8_t *rec = model.mem + settings_start() + offset;
+
+    switch (kind) {
+    case DMG_PAYLOAD_BIT:
+        /* Not the vdiv byte: if B were applied anyway, MARK_B must show. */
+        rec[REC_HDR_SIZE + offsetof(device_config_t, language)] ^= 0x04u;
+        break;
+    case DMG_MAGIC:
+        rec[1] ^= 0x80u;
+        break;
+    case DMG_LEN_ZERO:
+        put_le16(rec + 2, 0u);
+        break;
+    case DMG_LEN_OVER_MAX:
+        put_le16(rec + 2, (uint16_t)(FLASH_REGION_RECORD_MAX + 1u));
+        break;
+    case DMG_LEN_PLAUSIBLE:
+        put_le16(rec + 2, (uint16_t)(sizeof(device_config_t) - 4u));
+        break;
+    case DMG_CONFIG_CHECKSUM:
+        break;
+    }
+    return next;
+}
+
+static void check_damage_case(unsigned row, bool mid_log)
+{
+    fresh_device();
+
+    device_config_t a = marked_config(MARK_A);
+    device_config_t c = marked_config(MARK_C);
+    uint32_t off = forge_config(0, &a);
+    off = forge_damaged(off, DAMAGE_CASES[row].kind);
+    if (mid_log) {
+        (void)forge_config(off, &c);
+    }
+    uint8_t *snap = snapshot();
+
+    boot();
+
+    uint8_t want = mid_log ? DAMAGE_CASES[row].mid_winner : DAMAGE_CASES[row].end_winner;
+    config_load_result_t want_result = CONFIG_LOAD_OK;
+    if (want == WINNER_DEFAULTS) {
+        want = default_ch1_vdiv();
+        want_result = CONFIG_LOAD_INVALID;
+    }
+    uint8_t got = scope_state_get()->ch1.vdiv_idx;
+    const char *where = mid_log ? "mid-log" : "end of log";
+
+    CHECK(got != MARK_B, "%s, %s: the damaged record was applied (vdiv %u)",
+          DAMAGE_CASES[row].name, where, got);
+    CHECK(got == want, "%s, %s: booted on vdiv %u, expected %u",
+          DAMAGE_CASES[row].name, where, got, want);
+    CHECK(settings_store_get_status()->load_result == want_result,
+          "%s, %s: load result \"%s\", expected \"%s\"", DAMAGE_CASES[row].name, where,
+          config_load_result_name(settings_store_get_status()->load_result),
+          config_load_result_name(want_result));
+    CHECK(unchanged_since(snap), "%s, %s: booting modified the chip",
+          DAMAGE_CASES[row].name, where);
+    free(snap);
+}
+
+static void test_damage_mid_log_is_never_applied(void)
+{
+    for (unsigned i = 0; i < sizeof DAMAGE_CASES / sizeof DAMAGE_CASES[0]; i++) {
+        check_damage_case(i, true);
+    }
+}
+
+static void test_damage_at_the_end_of_the_log_is_never_applied(void)
+{
+    for (unsigned i = 0; i < sizeof DAMAGE_CASES / sizeof DAMAGE_CASES[0]; i++) {
+        check_damage_case(i, false);
+    }
+}
+
+/* ═══════════════════════════════════════════════════════════════════
+ * 7. Power cuts, injected into the real write path
+ *
+ * flash_region_append() programs the 8-byte header first and the payload
+ * second, as two page programs. Every byte boundary of that sequence is a
+ * place the power can die; these tests cut at each one in turn.
+ * ═══════════════════════════════════════════════════════════════════ */
+
+/* A fresh device that has saved MARK_A through the store, then a save of
+ * MARK_B whose power dies after `budget` programmed bytes. Returns what the
+ * cut save reported. The chip is left exactly as the cut left it. */
+static bool save_cut_after(uint32_t budget)
+{
+    fresh_device();
+    boot();
+    scope_state_get()->ch1.vdiv_idx = MARK_A;
+    CHECK(settings_store_flush(1000), "the good save before the cut failed");
+
+    scope_state_get()->ch1.vdiv_idx = MARK_B;
+    model_cut_power_after(budget, UINT32_MAX);
+    return settings_store_flush(2000);
+}
+
+static void test_a_save_torn_at_any_byte_is_never_applied(void)
+{
+    for (uint32_t b = 1; b < REC_SLOT && !current_failed; b++) {
+        bool wrote = save_cut_after(b);
+        CHECK(!wrote, "cut after %u bytes: the torn save reported success", b);
+        CHECK(!slot_is_blank(REC_SLOT),
+              "cut after %u bytes: nothing landed — the cut did not tear the record", b);
+
+        boot();
+        uint8_t got = scope_state_get()->ch1.vdiv_idx;
+        CHECK(got != MARK_B, "cut after %u bytes: the torn record was applied", b);
+        CHECK(got == MARK_A, "cut after %u bytes: booted on vdiv %u, expected the previous "
+              "good record (%u)", b, got, MARK_A);
+        CHECK(settings_store_get_status()->load_result == CONFIG_LOAD_OK,
+              "cut after %u bytes: load result \"%s\"", b,
+              config_load_result_name(settings_store_get_status()->load_result));
+    }
+}
+
+/* The guarantee config.h and flash_regions.c document: a torn record "of known
+ * length whose CRC fails" is stepped over and the log keeps working. That holds
+ * once the header's magic and length have landed — every cut from byte 4 to the
+ * last payload byte. */
+static void test_a_save_torn_after_its_length_does_not_stop_later_saves(void)
+{
+    for (uint32_t b = HDR_MAGIC_AND_LEN_BYTES; b < REC_SLOT && !current_failed; b++) {
+        (void)save_cut_after(b);
+
+        boot();
+        scope_state_get()->ch1.vdiv_idx = MARK_C;
+        CHECK(settings_store_flush(3000), "cut after %u bytes: the next save failed "
+              "(last save status %d)", b, (int)config_persist_stats()->last_save_status);
+
+        boot();
+        CHECK(scope_state_get()->ch1.vdiv_idx == MARK_C,
+              "cut after %u bytes: the save after the torn record did not survive (vdiv %u)",
+              b, scope_state_get()->ch1.vdiv_idx);
+    }
+}
+
+/* Fill the log with saves until it has no room for one more record. Each save
+ * differs from the one before (else it is elided). Returns the last config
+ * saved — the newest record in a full log. */
+static device_config_t fill_log(void)
+{
+    device_config_t cfg;
+    config_init_defaults(&cfg);
+    for (uint32_t i = 0; i < settings_capacity(); i++) {
+        cfg.scope_ch1_vdiv = (uint8_t)(i % VDIV_COUNT);
+        cfg.scope_timebase = (uint8_t)(i % TIMEBASE_COUNT);
+        cfg.checksum = config_compute_checksum(&cfg);   /* == the record's bytes */
+        CHECK(config_save(&cfg), "fill save %u failed", i);
+        if (current_failed) break;
+    }
+    uint32_t used = 0, free_bytes = 0;
+    CHECK(flash_region_log_info(FLASH_REGION_SETTINGS, &used, &free_bytes, NULL) ==
+          FLASH_REGION_OK, "log info failed");
+    CHECK(free_bytes < REC_SLOT, "the log is not full after filling (%u bytes free)",
+          free_bytes);
+    CHECK(config_persist_stats()->compactions == 0, "filling the log compacted it early");
+    return cfg;
+}
+
+/* The next save after a full log is the compaction: erase the region, re-append.
+ * Power dies before the first sector erase. Nothing was lost — the full log is
+ * still there — and the save after the reboot compacts properly. */
+static void test_a_compaction_cut_before_its_erase_keeps_the_old_log(void)
+{
+    fresh_device();
+    device_config_t last = fill_log();
+    uint8_t *snap = snapshot();
+
+    device_config_t next = marked_config(MARK_C);
+    next.scope_timebase = 2;
+    model_cut_power_after(UINT32_MAX, 0);
+    CHECK(!config_save(&next), "the cut compaction reported success");
+    CHECK(unchanged_since(snap), "a compaction cut before its first erase changed the chip");
+    free(snap);
+
+    power_cycle();
+    device_config_t loaded;
+    CHECK_LOAD(config_load_or_defaults(&loaded), CONFIG_LOAD_OK);
+    CHECK(memcmp(&loaded, &last, sizeof loaded) == 0,
+          "the newest record of the full log did not load after the cut");
+
+    uint32_t compactions0 = config_persist_stats()->compactions;
+    CHECK(config_save(&next), "the save after the cut failed");
+    CHECK(config_persist_stats()->compactions == compactions0 + 1,
+          "the save after the cut did not compact");
+    power_cycle();
+    CHECK_LOAD(config_load_or_defaults(&loaded), CONFIG_LOAD_OK);
+    CHECK(loaded.scope_ch1_vdiv == MARK_C, "the save after the cut did not survive");
+}
+
+/* Power dies after the compaction erased its first sector. config.c says what
+ * that costs: "A power cut between the reset and the re-append costs the
+ * settings and the device comes up on defaults". Pinned: defaults, never a
+ * half-erased record, and saving works again straight away. */
+static void test_a_compaction_cut_mid_erase_boots_on_defaults_and_saves_again(void)
+{
+    fresh_device();
+    (void)fill_log();
+
+    device_config_t next = marked_config(MARK_B);
+    model_cut_power_after(UINT32_MAX, 1);
+    CHECK(!config_save(&next), "the cut compaction reported success");
+    CHECK(slot_is_blank(0), "the first sector was not erased before the cut");
+
+    boot();
+    CHECK(settings_store_get_status()->load_result == CONFIG_LOAD_EMPTY,
+          "expected an empty log after the cut, got \"%s\"",
+          config_load_result_name(settings_store_get_status()->load_result));
+    CHECK(scope_state_get()->ch1.vdiv_idx == default_ch1_vdiv(),
+          "did not boot on defaults (vdiv %u)", scope_state_get()->ch1.vdiv_idx);
+
+    scope_state_get()->ch1.vdiv_idx = MARK_C;
+    CHECK(settings_store_flush(1000), "the save after the cut failed");
+    boot();
+    CHECK(scope_state_get()->ch1.vdiv_idx == MARK_C, "the save after the cut did not survive");
+}
+
+/* ═══════════════════════════════════════════════════════════════════
+ * 8. Change -> power cycle -> verify, through the store, across compaction
+ *
+ * The S3 acceptance loop, on the host. Each cycle changes ONE setting through
+ * live UI state, commits it the way the device does (alternately: a later
+ * press after the settle window, and a flush at a mode change / power off),
+ * power-cycles, and checks that the change came back and nothing else moved.
+ * Every new value differs from both the current value and the boot default,
+ * so with the writes stubbed out a cycle cannot pass by coincidence.
+ * ═══════════════════════════════════════════════════════════════════ */
+
+typedef enum {
+    F_CH1_VDIV, F_CH2_VDIV, F_TIMEBASE, F_TRIG_LEVEL, F_TRIG_MODE,
+    F_CH1_COUPLING, F_THEME, F_MATH_OP, F_METER_SUBMODE, F_METER_LAYOUT,
+    F_COUNT
+} field_t;
+
+static int field_span(field_t f)
+{
+    switch (f) {
+    case F_CH1_VDIV:      return VDIV_COUNT;
+    case F_CH2_VDIV:      return VDIV_COUNT;
+    case F_TIMEBASE:      return TIMEBASE_COUNT;
+    case F_TRIG_LEVEL:    return 2 * 103 + 1;     /* code k <-> level k - 103 */
+    case F_TRIG_MODE:     return TRIG_COUNT;
+    case F_CH1_COUPLING:  return COUPLING_COUNT;
+    case F_THEME:         return THEME_COUNT;
+    case F_MATH_OP:       return MATH_COUNT;
+    case F_METER_SUBMODE: return METER_SUBMODE_COUNT;
+    case F_METER_LAYOUT:  return METER_LAYOUT_COUNT;
+    case F_COUNT:         break;
+    }
+    return 0;
+}
+
+static int field_get(field_t f)
+{
+    const scope_state_t *ss = scope_state_get();
+    switch (f) {
+    case F_CH1_VDIV:      return ss->ch1.vdiv_idx;
+    case F_CH2_VDIV:      return ss->ch2.vdiv_idx;
+    case F_TIMEBASE:      return ss->timebase_idx;
+    case F_TRIG_LEVEL:    return ss->trigger.level + 103;
+    case F_TRIG_MODE:     return (int)ss->trigger.mode;
+    case F_CH1_COUPLING:  return (int)ss->ch1.coupling;
+    case F_THEME:         return (int)theme_get_id();
+    case F_MATH_OP:       return math_op;
+    case F_METER_SUBMODE: return meter_submode;
+    case F_METER_LAYOUT:  return meter_layout;
+    case F_COUNT:         break;
+    }
+    return -1;
+}
+
+static void field_set(field_t f, int v)
+{
+    scope_state_t *ss = scope_state_get();
+    switch (f) {
+    case F_CH1_VDIV:      ss->ch1.vdiv_idx = (uint8_t)v; break;
+    case F_CH2_VDIV:      ss->ch2.vdiv_idx = (uint8_t)v; break;
+    case F_TIMEBASE:      ss->timebase_idx = (uint8_t)v; break;
+    case F_TRIG_LEVEL:    ss->trigger.level = (int16_t)(v - 103); break;
+    case F_TRIG_MODE:     ss->trigger.mode = (trigger_mode_t)v; break;
+    case F_CH1_COUPLING:  ss->ch1.coupling = (coupling_t)v; break;
+    case F_THEME:         theme_set((theme_id_t)v); break;
+    case F_MATH_OP:       math_op = (uint8_t)v; break;
+    case F_METER_SUBMODE: meter_submode = (uint8_t)v; break;
+    case F_METER_LAYOUT:  meter_layout = (uint8_t)v; break;
+    case F_COUNT:         break;
+    }
+}
+
+static void fields_read(int out[F_COUNT])
+{
+    for (int f = 0; f < F_COUNT; f++) out[f] = field_get((field_t)f);
+}
+
+/* A value for f that is neither its current nor its boot-default value. Every
+ * field in the table has at least three values, so one always exists. */
+static int next_value(field_t f, int current, int boot_default, uint32_t cycle)
+{
+    int span = field_span(f);
+    for (int step = 1 + (int)(cycle % 5u); ; step++) {
+        int v = (current + step) % span;
+        if (v != current && v != boot_default) return v;
+    }
+}
+
+typedef struct {
+    uint32_t cycles;
+    uint32_t commits_ok;        /* commits that reported a record written      */
+    uint32_t survived;          /* cycles whose change came back after reboot  */
+    uint32_t intact;            /* cycles where EVERY tracked setting came back */
+    int32_t  first_bad;         /* first cycle not fully intact, or -1         */
+    int32_t  first_compaction;  /* cycle whose commit compacted the log, or -1 */
+    uint32_t compactions;
+} cycle_result_t;
+
+static cycle_result_t change_cycle_verify(uint32_t cycles)
+{
+    cycle_result_t r = { .cycles = cycles, .first_bad = -1, .first_compaction = -1 };
+    int boot_default[F_COUNT], expect[F_COUNT], got[F_COUNT];
+
+    boot();
+    fields_read(boot_default);
+    memcpy(expect, boot_default, sizeof expect);
+    const uint32_t compactions0 = config_persist_stats()->compactions;
+    uint32_t now = 1000u;
+
+    for (uint32_t i = 0; i < cycles; i++) {
+        field_t f = (field_t)(i % F_COUNT);
+        int v = next_value(f, expect[f], boot_default[f], i);
+        field_set(f, v);
+        expect[f] = v;
+
+        uint32_t before = config_persist_stats()->compactions;
+        bool wrote;
+        if (i & 1u) {
+            wrote = settings_store_flush(now);              /* MENU / power off */
+        } else {
+            settings_store_note_change(now);                /* the change...    */
+            settings_store_note_change(now + SETTINGS_STORE_SETTLE_MS);  /* a later press */
+            wrote = settings_store_service(now + SETTINGS_STORE_SETTLE_MS);
+        }
+        now += 10u * SETTINGS_STORE_SETTLE_MS;
+        if (wrote) r.commits_ok++;
+        if (config_persist_stats()->compactions != before && r.first_compaction < 0) {
+            r.first_compaction = (int32_t)i;
+        }
+
+        boot();
+        fields_read(got);
+        if (got[f] == v) r.survived++;
+        if (memcmp(got, expect, sizeof got) == 0) {
+            r.intact++;
+        } else if (r.first_bad < 0) {
+            r.first_bad = (int32_t)i;
+        }
+        /* Judge each cycle on its own change: carry on from what came back. */
+        memcpy(expect, got, sizeof expect);
+    }
+    r.compactions = config_persist_stats()->compactions - compactions0;
+    return r;
+}
+
+static void test_changes_survive_power_cycles_across_compaction(void)
+{
+    fresh_device();
+
+    /* One record per cycle; the log holds settings_capacity() of them, so
+     * this many cycles compacts it once and keeps going well past that. */
+    const uint32_t cycles = settings_capacity() + 64u;
+    cycle_result_t r = change_cycle_verify(cycles);
+
+    CHECK(r.commits_ok == cycles, "%u of %u commits wrote a record", r.commits_ok, cycles);
+    CHECK(r.survived == cycles, "%u of %u changes survived a power cycle", r.survived, cycles);
+    CHECK(r.intact == cycles, "%u of %u cycles came back intact; first bad cycle %d",
+          r.intact, cycles, (int)r.first_bad);
+    CHECK(r.compactions >= 1, "the loop never compacted the log — it did not test the wrap");
+    CHECK(r.first_compaction >= 0 && (uint32_t)r.first_compaction + 32u < cycles,
+          "compaction at cycle %d leaves too few verified cycles after it",
+          (int)r.first_compaction);
+}
+
+/* ── Negative control (built with SETTINGS_PERSIST_WRITES=0) ─────────── */
+
+static void test_with_writes_stubbed_no_change_survives(void)
+{
+    fresh_device();
+    uint8_t *snap = snapshot();
+
+    const uint32_t cycles = 2u * F_COUNT;
+    cycle_result_t r = change_cycle_verify(cycles);
+
+    CHECK(r.commits_ok == 0, "%u commits claimed a write with writes compiled out",
+          r.commits_ok);
+    CHECK(r.survived == 0, "%u of %u changes survived with writes compiled out",
+          r.survived, cycles);
+    CHECK(r.intact == 0, "%u cycles came back intact with writes compiled out", r.intact);
+    CHECK(unchanged_since(snap), "the chip changed with writes compiled out");
+
+    /* config.h: a refusal we chose is not a failure we suffered. */
+    const config_persist_stats_t *cs = config_persist_stats();
+    CHECK(!cs->writes_enabled, "stats claim writes are enabled in a stubbed build");
+    CHECK(cs->saves_disabled == cycles, "expected %u refused saves, counted %u",
+          cycles, cs->saves_disabled);
+    CHECK(cs->saves_failed == 0, "%u chosen refusals were counted as failures",
+          cs->saves_failed);
+    free(snap);
+}
+
+/* ═══════════════════════════════════════════════════════════════════
  * main
  * ═══════════════════════════════════════════════════════════════════ */
 
+enum { MODE_MAIN, MODE_NEGATIVE_CONTROL };
+#if !SETTINGS_PERSIST_WRITES
+#define BUILD_MODE  MODE_NEGATIVE_CONTROL
+#else
+#define BUILD_MODE  MODE_MAIN
+#endif
+
 int main(void)
 {
-    printf("=== settings persistence ===\n");
+    printf("=== settings persistence (%s) ===\n",
+           BUILD_MODE == MODE_MAIN ? "SETTINGS_PERSIST_WRITES=1"
+                                   : "negative control: SETTINGS_PERSIST_WRITES=0");
     printf("(device_config_t is %u bytes; record slot %u)\n",
-           (unsigned)sizeof(device_config_t),
-           (unsigned)(REC_HDR_SIZE + ((sizeof(device_config_t) + 3u) & ~3u)));
+           (unsigned)sizeof(device_config_t), (unsigned)REC_SLOT);
 
-    run("first boot on blank flash yields defaults", test_first_boot_on_blank_flash_yields_defaults);
-    run("save then power cycle round-trips", test_save_then_power_cycle_round_trips);
-    run("newest record wins", test_newest_record_wins);
-    run("saving unchanged settings is free", test_saving_the_same_settings_twice_is_free);
+    if (BUILD_MODE == MODE_MAIN) {
+        run("first boot on blank flash yields defaults", test_first_boot_on_blank_flash_yields_defaults);
+        run("save then power cycle round-trips", test_save_then_power_cycle_round_trips);
+        run("newest record wins", test_newest_record_wins);
+        run("saving unchanged settings is free", test_saving_the_same_settings_twice_is_free);
 
-    run("torn record falls back to the previous one", test_torn_record_falls_back_to_the_previous_one);
-    run("corrupt checksum falls back to defaults", test_corrupt_checksum_falls_back_to_defaults);
-    run("a rejected record never lands in the caller's struct",
-        test_a_rejected_record_never_lands_in_the_callers_struct);
-    run("version mismatch falls back to defaults", test_version_mismatch_falls_back_to_defaults);
-    run("wrong-size record falls back to defaults", test_wrong_size_record_falls_back_to_defaults);
-    run("a destroyed log falls back to defaults", test_completely_corrupt_log_falls_back_to_defaults);
+        run("torn record falls back to the previous one", test_torn_record_falls_back_to_the_previous_one);
+        run("corrupt checksum falls back to defaults", test_corrupt_checksum_falls_back_to_defaults);
+        run("a rejected record never lands in the caller's struct",
+            test_a_rejected_record_never_lands_in_the_callers_struct);
+        run("version mismatch falls back to defaults", test_version_mismatch_falls_back_to_defaults);
+        run("wrong-size record falls back to defaults", test_wrong_size_record_falls_back_to_defaults);
+        run("a destroyed log falls back to defaults", test_completely_corrupt_log_falls_back_to_defaults);
 
-    run("the writer cannot reach a read-only region", test_writer_cannot_reach_a_readonly_region);
-    run("normal operation never leaves the settings region",
-        test_normal_operation_never_leaves_the_settings_region);
-    run("no storage bound refuses rather than pretending",
-        test_no_storage_bound_refuses_rather_than_pretending);
+        run("the writer cannot reach a read-only region", test_writer_cannot_reach_a_readonly_region);
+        run("normal operation never leaves the settings region",
+            test_normal_operation_never_leaves_the_settings_region);
+        run("no storage bound refuses rather than pretending",
+            test_no_storage_bound_refuses_rather_than_pretending);
 
-    run("autosave settle window", test_autosave_settle_window);
-    run("autosave survives a tick wrap", test_autosave_survives_tick_wrap);
+        run("autosave settle window", test_autosave_settle_window);
+        run("autosave survives a tick wrap", test_autosave_survives_tick_wrap);
 
-    run("live settings survive a power cycle", test_live_settings_survive_a_power_cycle);
-    run("presses that change nothing never write", test_presses_that_change_nothing_never_write);
-    run("a change undone before settling costs nothing",
-        test_a_change_undone_before_settling_costs_nothing);
-    run("flush ignores the settle window", test_flush_ignores_the_settle_window);
-    run("a corrupt record cannot produce an out-of-range index",
-        test_corrupt_record_cannot_produce_an_out_of_range_index);
-    run("a failing write is not retried on every press",
-        test_a_failing_write_is_not_retried_on_every_press);
-    run("capture/apply round trip is symmetric", test_capture_apply_round_trip_is_symmetric);
+        run("live settings survive a power cycle", test_live_settings_survive_a_power_cycle);
+        run("presses that change nothing never write", test_presses_that_change_nothing_never_write);
+        run("a change undone before settling costs nothing",
+            test_a_change_undone_before_settling_costs_nothing);
+        run("flush ignores the settle window", test_flush_ignores_the_settle_window);
+        run("a corrupt record cannot produce an out-of-range index",
+            test_corrupt_record_cannot_produce_an_out_of_range_index);
+        run("a failing write is not retried on every press",
+            test_a_failing_write_is_not_retried_on_every_press);
+        run("capture/apply round trip is symmetric", test_capture_apply_round_trip_is_symmetric);
+
+        run("damage mid-log is never applied", test_damage_mid_log_is_never_applied);
+        run("damage at the end of the log is never applied",
+            test_damage_at_the_end_of_the_log_is_never_applied);
+        run("a save torn at any byte is never applied", test_a_save_torn_at_any_byte_is_never_applied);
+        run("a save torn after its length does not stop later saves",
+            test_a_save_torn_after_its_length_does_not_stop_later_saves);
+        run("a compaction cut before its erase keeps the old log",
+            test_a_compaction_cut_before_its_erase_keeps_the_old_log);
+        run("a compaction cut mid-erase boots on defaults and saves again",
+            test_a_compaction_cut_mid_erase_boots_on_defaults_and_saves_again);
+        run("changes survive power cycles across compaction",
+            test_changes_survive_power_cycles_across_compaction);
+    }
+
+    if (BUILD_MODE == MODE_NEGATIVE_CONTROL) {
+        run("with writes stubbed, no change survives a power cycle",
+            test_with_writes_stubbed_no_change_survives);
+        run_expect_red("with writes stubbed, \"changes survive power cycles across compaction\" goes red",
+                       test_changes_survive_power_cycles_across_compaction);
+    }
 
     printf("\n%d tests, %d failed\n", tests_run, tests_failed);
     if (tests_failed == 0) {
