@@ -49,6 +49,7 @@
 #include "ui.h"
 #include "../ui/scope_state.h"
 #include "../util/settings_store.h"
+#include "../util/usb_evidence.h"
 #include "../ui/scope_cal.h"
 #include "../ui/scope_freq.h"
 #include "../ui/scope_measure.h"
@@ -129,6 +130,11 @@ void USBFS_L_CAN1_RX0_IRQHandler(void)
  * resets g_tx_completed. `usbstat` shows the counters and the endpoint
  * register captured at the last stall, which tells a lost completion
  * (EPT TX = NAK, flag 0) from a host that stopped reading (EPT TX = VALID).
+ *
+ * That evidence has to outlive the reset that recovers a wedge, so it is
+ * kept in g_usb_ev (.noinit, util/usb_evidence.h), not in s_usb: after a
+ * reset, `usbstat` and the banner say what the previous session was doing
+ * when it was reset. s_usb keeps only live control state.
  * ═══════════════════════════════════════════════════════════════════ */
 
 #ifndef USB_TX_SELF_HEAL
@@ -139,22 +145,32 @@ void USBFS_L_CAN1_RX0_IRQHandler(void)
 #define CDC_SET_CONTROL_LINE_STATE 0x22
 
 typedef struct {
-    uint32_t tx_stalls;          /* waits for g_tx_completed that timed out */
     uint32_t tx_send_errors;     /* usb_vcp_send_data() refused */
     uint32_t tx_dropped_closed;  /* writes dropped: host closed the port (DTR 1 -> 0) */
-    uint32_t tx_host_slow;       /* stalls with the packet still VALID: host not reading */
-    uint16_t heals;              /* soft reconnects performed */
-    uint8_t  consecutive;        /* stalls since the last completed send */
+    uint8_t  consecutive;        /* lost-completion stalls since the last completed send */
     uint8_t  heal_enabled;
     volatile uint8_t dtr;        /* last DTR from the host */
     volatile uint8_t dtr_seen;   /* a SET_CONTROL_LINE_STATE arrived since enumeration */
     volatile uint8_t dtr_opened; /* DTR was 1 at some point since enumeration */
-    uint8_t  stall_flag;         /* g_tx_completed at the last stall */
-    uint32_t stall_ept;          /* USB->ept[1] at the last stall */
-    uint32_t stall_tick;
 } usb_health_t;
 
 static usb_health_t s_usb = { .heal_enabled = USB_TX_SELF_HEAL };
+
+/* Stall/heal counters, the last stall snapshot, the shell loop's alive tick
+ * and a copy of the remote protocol RX stats (field reasons: usb_evidence.h).
+ * .noinit is NOLOAD, so startup leaves it alone and it survives a reset;
+ * after a power cycle it is noise, which usb_ev_begin_session() refuses.
+ *
+ * Plain, not volatile like g_fault: only the usb_dbg task writes it, always
+ * through usb_evidence.c (another translation unit, so each update is in
+ * memory when the call returns); the USB ISR never touches it. Non-static so
+ * nm gives its address for an SWD read of a unit whose shell is silent. */
+usb_evidence_t g_usb_ev __attribute__((section(".noinit")));
+
+/* What the previous session left, as found at boot (NULL: nothing valid,
+ * i.e. cold power-up). Points into vUsbDebugTask's frame: SRAM is a few
+ * dozen bytes from the link limit, so there is no static copy. */
+static const usb_evidence_t *s_usb_prev;
 
 #ifndef EMULATOR_BUILD
 static usbd_class_handler s_cdc_handler;
@@ -172,24 +188,28 @@ static usb_sts_type cdc_setup_spy(void *udev, usb_setup_type *setup)
 
 static void usb_tx_stalled(cdc_struct_type *pcdc)
 {
-    s_usb.tx_stalls++;
-    s_usb.stall_flag = pcdc->g_tx_completed;
-    s_usb.stall_ept  = USB->ept[USBD_CDC_BULK_IN_EPT & 0x0F];
-    s_usb.stall_tick = xTaskGetTickCount();
+    uint8_t  tx_completed = pcdc->g_tx_completed;
+    uint32_t ept = USB->ept[USBD_CDC_BULK_IN_EPT & 0x0F];
 
     /* TX status still VALID = the packet is armed and waiting for IN tokens:
      * the host has simply stopped reading (paused terminal, full OS buffer).
      * That is not a wedge and must not cost the host its port. Only a stall
      * with the endpoint NAK/disabled — packet gone, completion never seen —
      * is the lost-completion case #39 is about. */
-    if ((s_usb.stall_ept & USB_TXSTS) == USB_TX_VALID) {
-        s_usb.tx_host_slow++;
+    bool host_slow = (ept & USB_TXSTS) == USB_TX_VALID;
+
+    /* Recorded, and marked pending, either way: the endpoint state lets
+     * whoever reads it after a reset tell the two cases apart. */
+    usb_ev_stall(&g_usb_ev, xTaskGetTickCount(), ept,
+                 tx_completed != 0, s_usb.dtr != 0, host_slow);
+
+    if (host_slow) {
         s_usb.consecutive = 0;              /* a slow reader never counts toward a heal */
         return;
     }
     /* The task can be preempted between the timeout and this capture; if the
      * completion landed meanwhile the endpoint is free, not wedged. */
-    if (s_usb.stall_flag) {
+    if (tx_completed) {
         s_usb.consecutive = 0;
         return;
     }
@@ -204,7 +224,7 @@ static void usb_tx_stalled(cdc_struct_type *pcdc)
         s_usb.dtr_seen = 0;
         s_usb.dtr_opened = 0;
         s_usb.consecutive = 0;
-        s_usb.heals++;
+        usb_ev_heal(&g_usb_ev);
         usbd_connect(&usb_core_dev);
     }
 }
@@ -292,6 +312,7 @@ static void cdc_send_bytes(const uint8_t *data, uint16_t len)
             return;
         }
         s_usb.consecutive = 0;
+        usb_ev_send_completed(&g_usb_ev);   /* the IN path works: no stall pending */
 
         if (usb_vcp_send_data(&usb_core_dev, (uint8_t *)data, chunk) != SUCCESS) {
             s_usb.tx_send_errors++;
@@ -745,25 +766,62 @@ static void cmd_version(void)
     );
 }
 
-/* usbstat — CDC transport health (issue #39) and remote protocol RX stats. */
+/* The previous session's evidence (#39), one line. `always` = usbstat, which
+ * also says when there is nothing to report; the banner prints only a
+ * pending stall. */
+static void usb_print_prev_session(bool always)
+{
+    const usb_evidence_t *p = s_usb_prev;
+
+    if (p != NULL && (p->flags & USB_EV_FLAG_PENDING)) {
+        usb_debug_printf(
+            "previous session #%u: STALL PENDING at %lu ms (tx_completed=%u ept1=0x%08lX dtr=%u), "
+            "alive until %lu ms; stalls=%lu host_slow=%lu heals=%u; "
+            "rx ok=%lu bad_chk=%u bad_len=%u gap=%u\r\n",
+            (unsigned)p->seq, (unsigned long)p->stall_tick,
+            (p->flags & USB_EV_FLAG_STALL_TXC) ? 1u : 0u, (unsigned long)p->stall_ept,
+            (p->flags & USB_EV_FLAG_STALL_DTR) ? 1u : 0u,
+            (unsigned long)p->alive_tick,
+            (unsigned long)p->tx_stalls, (unsigned long)p->tx_host_slow, (unsigned)p->heals,
+            (unsigned long)p->rx_frames_ok, (unsigned)p->rx_bad_checksum,
+            (unsigned)p->rx_bad_length, (unsigned)p->rx_gap_timeouts);
+    } else if (always && p != NULL) {
+        usb_debug_printf(
+            "previous session #%u: no stall pending (alive until %lu ms; stalls=%lu heals=%u)\r\n",
+            (unsigned)p->seq, (unsigned long)p->alive_tick,
+            (unsigned long)p->tx_stalls, (unsigned)p->heals);
+    } else if (always) {
+        usb_send_str("previous session: none (cold power-up, or its record did not validate)\r\n");
+    }
+}
+
+/* usbstat — CDC transport health (issue #39) and remote protocol RX stats.
+ * Two printf calls: at full-width counters one format would overrun
+ * usb_debug_printf's 256-byte buffer and truncate silently. */
 static void cmd_usbstat(void)
 {
     esp_rx_stats_t rx;
     esp_comm_get_rx_stats(&rx);
     usb_debug_printf(
-        "usb: dtr=%u (seen=%u) heal=%s\r\n"
-        "tx: stalls=%lu (host_slow=%lu) consecutive=%u send_err=%lu dropped_closed=%lu heals=%u\r\n"
-        "last stall: tick=%lu tx_completed=%u ept1=0x%08lX\r\n"
-        "proto rx: ok=%lu bad_chk=%lu bad_len=%lu gap_timeouts=%lu\r\n",
+        "usb: session #%u dtr=%u (seen=%u) heal=%s\r\n"
+        "tx: stalls=%lu (host_slow=%lu) consecutive=%u send_err=%lu dropped_closed=%lu heals=%u\r\n",
+        (unsigned)g_usb_ev.seq,
         (unsigned)s_usb.dtr, (unsigned)s_usb.dtr_seen,
         s_usb.heal_enabled ? "on" : "off",
-        (unsigned long)s_usb.tx_stalls, (unsigned long)s_usb.tx_host_slow, (unsigned)s_usb.consecutive,
+        (unsigned long)g_usb_ev.tx_stalls, (unsigned long)g_usb_ev.tx_host_slow,
+        (unsigned)s_usb.consecutive,
         (unsigned long)s_usb.tx_send_errors, (unsigned long)s_usb.tx_dropped_closed,
-        (unsigned)s_usb.heals,
-        (unsigned long)s_usb.stall_tick, (unsigned)s_usb.stall_flag,
-        (unsigned long)s_usb.stall_ept,
+        (unsigned)g_usb_ev.heals);
+    usb_debug_printf(
+        "last stall: tick=%lu tx_completed=%u ept1=0x%08lX pending=%u\r\n"
+        "proto rx: ok=%lu bad_chk=%lu bad_len=%lu gap_timeouts=%lu\r\n",
+        (unsigned long)g_usb_ev.stall_tick,
+        (g_usb_ev.flags & USB_EV_FLAG_STALL_TXC) ? 1u : 0u,
+        (unsigned long)g_usb_ev.stall_ept,
+        (g_usb_ev.flags & USB_EV_FLAG_PENDING) ? 1u : 0u,
         (unsigned long)rx.frames_ok, (unsigned long)rx.bad_checksum,
         (unsigned long)rx.bad_length, (unsigned long)rx.gap_timeouts);
+    usb_print_prev_session(true);
 }
 
 static void cmd_usbstat_heal(const char *args)
@@ -8352,6 +8410,18 @@ static const char shell_banner[] =
     "+----------------------------------+\r\n"
     "\r\n> ";
 
+/* The banner, preceded by one line when the previous session was reset with
+ * a CDC stall still pending (#39). Otherwise it is the same single write as
+ * before: each separate write to a port the host has not opened yet costs
+ * its own 1 s stall, so the line is only a second write when there is
+ * something to say. A banner sent before the host opens the port is lost
+ * (EXP-61: a host_slow stall), which is why `usbstat` prints the line too. */
+static void shell_send_banner(void)
+{
+    usb_print_prev_session(false);
+    usb_send_str(shell_banner);
+}
+
 /* ─── Remote protocol binding (issue #10, docs/design/remote_protocol.md) ───
  * The binary protocol shares the CDC OUT endpoint with this shell: every
  * received chunk goes through esp_comm_route(), which takes frames starting
@@ -8372,8 +8442,8 @@ static void remote_status(esp_status_snapshot_t *st)
                            * above the charge threshold): 0 % / 0 mV is not a reading */
                           (st->battery_mv == 0   ? ESP_STATUS_FLAG_BATT_UNKNOWN : 0));
     st->uptime_ms     = (uint32_t)xTaskGetTickCount() * portTICK_PERIOD_MS;
-    st->usb_tx_stalls = s_usb.tx_stalls;
-    st->usb_heals     = s_usb.heals;
+    st->usb_tx_stalls = g_usb_ev.tx_stalls;
+    st->usb_heals     = g_usb_ev.heals;
     st->fw_version    = s_fw_version;
 }
 
@@ -8459,6 +8529,16 @@ static void vUsbDebugTask(void *pvParameters)
     fw_loader_attach_scratch(shell_bus_scratch, sizeof(shell_bus_scratch));
     fw_loader_breadcrumb_capture();   /* last install's record, read once and cleared */
 
+    /* #39 evidence: keep what the previous session left in .noinit, then
+     * start this session's record. Done here, before the loop, because every
+     * writer of g_usb_ev runs on this task. The copy lives in this frame for
+     * the task's lifetime (it never returns); usbstat and the banner reach it
+     * through s_usb_prev. */
+    usb_evidence_t prev_ev;
+    if (usb_ev_begin_session(&g_usb_ev, &prev_ev) != USB_EV_PREV_NONE) {
+        s_usb_prev = &prev_ev;
+    }
+
     esp_comm_init();
     esp_comm_set_block_writer(cdc_send_bytes);
     esp_comm_set_status_provider(remote_status);
@@ -8468,6 +8548,16 @@ static void vUsbDebugTask(void *pvParameters)
     for (;;) {
         bool did_work = false;
         dbg_shell_loops++;
+
+        /* Alive tick (#39): after a reset, alive past the last stall means
+         * this loop kept running with the port silent; alive at or before
+         * the stall means the task itself stopped. Plus the RX stats then. */
+        {
+            esp_rx_stats_t rx;
+            esp_comm_get_rx_stats(&rx);
+            usb_ev_alive(&g_usb_ev, xTaskGetTickCount(), rx.frames_ok,
+                         rx.bad_checksum, rx.bad_length, rx.gap_timeouts);
+        }
 
 #if defined(FAULT_SELFTEST) && FAULT_SELFTEST
         /* Deliberate, self-inflicted fault ~10 s after boot, from a task (so the
@@ -8492,7 +8582,7 @@ static void vUsbDebugTask(void *pvParameters)
 
         /* ---- RTT (SWD) transport ---- */
         if (!rtt_banner_sent && rtt_host_attached()) {
-            usb_send_str(shell_banner);
+            shell_send_banner();
             rtt_banner_sent = true;
         }
 
@@ -8502,7 +8592,7 @@ static void vUsbDebugTask(void *pvParameters)
             /* Attaching mid-session: the host may never have moved read_pos
              * before typing, so print the banner on first input too. */
             if (!rtt_banner_sent) {
-                usb_send_str(shell_banner);
+                shell_send_banner();
                 rtt_banner_sent = true;
             }
             shell_feed(rtt_buf, (uint16_t)rtt_len, false);
@@ -8517,7 +8607,7 @@ static void vUsbDebugTask(void *pvParameters)
                 if (usb_settle < 50) {
                     usb_settle++;
                 } else {
-                    usb_send_str(shell_banner);
+                    shell_send_banner();
                     usb_banner_sent = true;
                 }
             } else {
