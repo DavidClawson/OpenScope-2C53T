@@ -158,31 +158,73 @@ static nor_model_t model;
 /* Power-cut injection. Armed with a budget of programmed bytes and of sector
  * erases; the operation that would exceed either budget is the one the power
  * dies in. A program is cut byte-granular — the bytes before the cut land,
- * the rest stay as they were — and an erase is cut whole (it either completed
- * before the cut or never started). From then on the chip is unpowered: every
- * read, program and erase fails and changes nothing, so the code under test
- * unwinds through its own error paths and the flash image is frozen exactly as
- * the cut left it. power_cycle() restores power.
+ * the rest stay as they were. An erase is cut one of two ways:
+ *   - whole (model_cut_power_after): it either completed before the cut or
+ *     never started;
+ *   - part-way (model_cut_power_inside_erase): the erase had started moving
+ *     the sector's bits towards 1 and stopped. The sector is left neither blank
+ *     nor as it was — see ERASE_DISTURB. This is the likeliest cut of all
+ *     during a compaction: up to 16 sequential 4 KB sector erases, each one
+ *     far longer than a 64-byte record program.
+ * From then on the chip is unpowered: every read, program and erase fails and
+ * changes nothing, so the code under test unwinds through its own error paths
+ * and the flash image is frozen exactly as the cut left it. power_cycle()
+ * restores power.
  *
  * This drives the REAL write path in the code's own order, so a torn record
  * here is whatever config_save() -> flash_region_append() actually leaves —
  * not the test's belief about the order. A real NOR tear is bit-granular;
- * the byte prefix is a representative subset of it. */
+ * the byte prefix is a representative subset of it (the non-prefix subsets
+ * are forged from cut_report.torn_* — see save_torn_header()). */
 typedef struct {
     bool     armed;
     bool     dead;
+    bool     partial_erase;     /* the erase the power dies in is left half done */
     uint32_t program_bytes_left;
     uint32_t erases_left;
 } power_cut_t;
 
 static power_cut_t cut;
 
-static void model_cut_power_after(uint32_t program_bytes, uint32_t erases)
+/* What the last armed cut actually did, so a test can check it landed where
+ * the test meant it to (a cut that lands nowhere tests nothing). Unlike `cut`
+ * it survives power_cycle(); arming a new cut clears it. */
+static struct {
+    uint32_t torn_addr;                             /* the program the power died in */
+    uint32_t torn_len;                              /* 0: no program was cut          */
+    uint8_t  torn_data[FLASH_REGION_PAGE_SIZE];     /* what it was programming        */
+    uint32_t disturbed_sector;                      /* the erase it died in, or       */
+} cut_report;                                       /* UINT32_MAX                     */
+
+/* A partly erased sector. An erase drives bits 0 -> 1, so a stopped one is the
+ * old content with some bits set: OR-ing a fixed pattern over the whole sector
+ * models that deterministically. 0x3C is chosen so that no record header in
+ * the sector parses afterwards — magic C3 A5 becomes FF BD (neither blank nor
+ * REC_MAGIC) and the length 38 00 becomes 3C 3C (15420, over the record max) —
+ * while every slot that held a record is still visibly not blank. */
+#define ERASE_DISTURB  0x3Cu
+
+static void model_arm(uint32_t program_bytes, uint32_t erases, bool partial_erase)
 {
     cut.armed = true;
     cut.dead = false;
+    cut.partial_erase = partial_erase;
     cut.program_bytes_left = program_bytes;
     cut.erases_left = erases;
+    memset(&cut_report, 0, sizeof cut_report);
+    cut_report.disturbed_sector = UINT32_MAX;
+}
+
+static void model_cut_power_after(uint32_t program_bytes, uint32_t erases)
+{
+    model_arm(program_bytes, erases, false);
+}
+
+/* `erases_before` sector erases complete; the power dies part-way through the
+ * next one. Programs are not limited. */
+static void model_cut_power_inside_erase(uint32_t erases_before)
+{
+    model_arm(UINT32_MAX, erases_before, true);
 }
 
 static void model_restore_power(void)
@@ -247,7 +289,16 @@ static int model_erase(void *ctx, uint32_t addr)
     if (cut.dead) return -1;
     if (cut.armed) {
         if (cut.erases_left == 0) {
-            cut.dead = true;                /* power dies before this erase */
+            cut.dead = true;                /* power dies before / inside this erase */
+            if (cut.partial_erase) {
+                /* Started, not finished. Not counted in model.erases, which
+                 * counts COMPLETED erases. */
+                for (uint32_t i = 0; i < FLASH_REGION_SECTOR_SIZE; i++) {
+                    model.mem[addr + i] |= ERASE_DISTURB;
+                }
+                model_touch(addr, FLASH_REGION_SECTOR_SIZE);
+                cut_report.disturbed_sector = addr;
+            }
             return -1;
         }
         cut.erases_left--;
@@ -276,6 +327,9 @@ static int model_program(void *ctx, uint32_t addr, const void *data, uint32_t le
     if (cut.armed && cut.program_bytes_left < len) {
         landed = cut.program_bytes_left;    /* power dies inside this program */
         cut.dead = true;
+        cut_report.torn_addr = addr;
+        cut_report.torn_len = len;
+        memcpy(cut_report.torn_data, src, len);
     }
     if (cut.armed) cut.program_bytes_left -= landed;
     model.programs++;
@@ -1227,6 +1281,122 @@ static uint32_t forge_config(uint32_t offset, const device_config_t *c)
                         crc32_of(payload, sizeof payload));
 }
 
+/* Was `c` a whole, CRC-valid record in the settings log of `image` (a chip
+ * snapshot)? Walks the 64-byte grid every record this suite writes sits on. */
+static bool record_existed_in(const uint8_t *image, const device_config_t *c)
+{
+    const flash_region_t *set = flash_region_get(FLASH_REGION_SETTINGS);
+    for (uint32_t off = 0; off + REC_SLOT <= set->length; off += REC_SLOT) {
+        const uint8_t *rec = image + set->start + off;
+        uint32_t magic = (uint32_t)rec[0] | ((uint32_t)rec[1] << 8);
+        uint32_t len   = (uint32_t)rec[2] | ((uint32_t)rec[3] << 8);
+        uint32_t crc   = (uint32_t)rec[4] | ((uint32_t)rec[5] << 8) |
+                         ((uint32_t)rec[6] << 16) | ((uint32_t)rec[7] << 24);
+        if (magic != REC_MAGIC || len != sizeof *c) continue;
+        if (crc32_of(rec + REC_HDR_SIZE, len) != crc) continue;
+        if (memcmp(rec + REC_HDR_SIZE, c, sizeof *c) == 0) return true;
+    }
+    return false;
+}
+
+/* The save a compaction cut interrupts: MARK_B, made unique with a trigger
+ * level fill_log() never writes. fill_log() walks ch1 vdiv through every code,
+ * so MARK_B alone is no marker there — its record i = 157 (vdiv 7, timebase 10)
+ * is byte-identical to marked_config(MARK_B). */
+static device_config_t compaction_cut_config(void)
+{
+    device_config_t c = marked_config(MARK_B);
+    c.scope_trigger_level = -77;
+    c.checksum = config_compute_checksum(&c);
+    return c;
+}
+
+/* The boot after a compaction was cut, by whatever means. The config that
+ * loads is never the save that was cut, and is either defaults on an empty log
+ * or a record that was in the log, whole and CRC-valid, before the compaction
+ * began (`before`). Which of the two is NOT pinned: it depends on the order the
+ * region is erased in, and erasing high-to-low is one valid fix for #58. */
+static void check_boot_after_compaction_cut(const uint8_t *before, const device_config_t *cut_cfg,
+                                            const char *what)
+{
+    device_config_t loaded;
+    config_load_result_t r = config_load_or_defaults(&loaded);
+
+    /* If a fix ever writes the new record BEFORE erasing (copy-forward), a
+     * complete MARK_B could legitimately survive a later cut; revisit this
+     * line then. With erase-then-append it can only be a half-written one. */
+    CHECK(memcmp(&loaded, cut_cfg, sizeof loaded) != 0,
+          "%s: the save that was cut (MARK_B) is what loaded", what);
+    if (r == CONFIG_LOAD_OK) {
+        CHECK(record_existed_in(before, &loaded),
+              "%s: loaded a record (vdiv %u, timebase %u, level %d) that was not in the log "
+              "before the compaction", what, loaded.scope_ch1_vdiv, loaded.scope_timebase,
+              loaded.scope_trigger_level);
+    } else {
+        device_config_t defaults;
+        config_init_defaults(&defaults);
+        CHECK(r == CONFIG_LOAD_EMPTY, "%s: load result \"%s\", expected \"%s\" (defaults) or "
+              "\"%s\" (a pre-compaction record)", what, config_load_result_name(r),
+              config_load_result_name(CONFIG_LOAD_EMPTY), config_load_result_name(CONFIG_LOAD_OK));
+        CHECK(memcmp(&loaded, &defaults, sizeof loaded) == 0,
+              "%s: not loaded, and not left on defaults either", what);
+    }
+}
+
+/* The power died inside an erase (model_cut_power_inside_erase) and left that
+ * sector half erased: in the settings region, changed, not blank, and with no
+ * slot that held a record still parsing as one or as blank. A cut that landed
+ * nowhere — or that the model quietly completed or skipped — fails here. */
+static void check_erase_cut_landed(const uint8_t *before, const char *what)
+{
+    const flash_region_t *set = flash_region_get(FLASH_REGION_SETTINGS);
+    const uint32_t sec = cut_report.disturbed_sector;
+    CHECK(sec != UINT32_MAX, "%s: the power did not die inside an erase", what);
+    if (sec == UINT32_MAX) return;
+    CHECK(sec >= set->start && sec + FLASH_REGION_SECTOR_SIZE <= set->start + set->length,
+          "%s: the cut erase 0x%X is outside the settings region", what, sec);
+
+    bool blank = true;
+    for (uint32_t i = 0; i < FLASH_REGION_SECTOR_SIZE; i++) {
+        if (model.mem[sec + i] != 0xFFu) { blank = false; break; }
+    }
+    CHECK(!blank, "%s: the cut sector 0x%X reads blank — the erase finished", what, sec);
+    CHECK(memcmp(model.mem + sec, before + sec, FLASH_REGION_SECTOR_SIZE) != 0,
+          "%s: the cut sector 0x%X is unchanged — the erase never started", what, sec);
+    uint32_t readable = 0, first = UINT32_MAX;
+    for (uint32_t off = 0; off < FLASH_REGION_SECTOR_SIZE; off += REC_SLOT) {
+        const uint8_t *was = before + sec + off, *now = model.mem + sec + off;
+        if ((was[0] | (was[1] << 8)) != REC_MAGIC) continue;     /* held no record */
+        uint32_t magic = (uint32_t)now[0] | ((uint32_t)now[1] << 8);
+        if (magic == REC_MAGIC || magic == 0xFFFFu) {
+            readable++;
+            if (first == UINT32_MAX) first = sec + off;
+        }
+    }
+    CHECK(readable == 0, "%s: %u slot(s) of the cut sector still read as a record header "
+          "or as blank (first 0x%X)", what, readable, first);
+}
+
+/* After a boot on a torn or damaged log: three separate changes, then a power
+ * cycle. Some save must succeed, and the newest change must be what comes back. */
+static void check_later_saves_survive(const char *what)
+{
+    bool any_saved = false;
+    for (uint8_t k = 0; k < 3; k++) {          /* three separate changes */
+        scope_state_get()->ch1.vdiv_idx = (uint8_t)(MARK_C + k);
+        any_saved |= settings_store_flush(3000u + k);
+    }
+    CHECK(any_saved, "%s: no later save succeeded (last save status %d = %s)", what,
+          (int)config_persist_stats()->last_save_status,
+          flash_region_strerror((flash_region_status_t)
+                                config_persist_stats()->last_save_status));
+
+    boot();
+    CHECK(scope_state_get()->ch1.vdiv_idx == MARK_C + 2u,
+          "%s: the newest change did not survive a power cycle (booted on vdiv %u)",
+          what, scope_state_get()->ch1.vdiv_idx);
+}
+
 /* ═══════════════════════════════════════════════════════════════════
  * 6. Damage anywhere in the log
  *
@@ -1402,6 +1572,65 @@ static bool save_cut_after(uint32_t budget)
     return settings_store_flush(2000);
 }
 
+/* Non-prefix header tears. A NOR program does not land byte by byte in order:
+ * a header cut part-way can hold ANY subset of the bits it was clearing, not
+ * only a byte prefix. Each case starts from save_cut_after(0) — the header
+ * program is the one the power dies in, before any of it lands — and then
+ * lands only the chosen bits of what that program was writing
+ * (cut_report.torn_data), so the forged bits are the code's own. */
+typedef enum {
+    TEAR_CRC_ONLY,              /* bytes 4..7 landed; magic still 0xFFFF       */
+    TEAR_MAGIC_ONE_LEN_BIT,     /* magic landed; one bit of the length cleared */
+    TEAR_ONE_MAGIC_BIT,         /* one bit of the magic cleared, nothing else  */
+    TEAR_COUNT
+} header_tear_t;
+
+static const char *const TEAR_NAMES[TEAR_COUNT] = {
+    "tear: only the CRC bytes landed (magic still 0xFFFF)",
+    "tear: magic landed, one bit of the length cleared",
+    "tear: one bit of the magic cleared, nothing else",
+};
+
+/* The lowest bit that programming `want` over erased flash clears (0: none). */
+static uint8_t lowest_cleared_bit(uint8_t want)
+{
+    uint8_t cleared = (uint8_t)~want;
+    return (uint8_t)(cleared & (uint8_t)(0u - cleared));
+}
+
+/* Returns false if the cut did not fall on MARK_B's header program — the forge
+ * would then be meaningless, and the caller says so. */
+static bool save_torn_header(header_tear_t kind)
+{
+    (void)save_cut_after(0);
+    if (cut_report.torn_len != REC_HDR_SIZE ||
+        cut_report.torn_addr != settings_start() + REC_SLOT) {
+        return false;
+    }
+    const uint8_t *want = cut_report.torn_data;
+    uint8_t keep[REC_HDR_SIZE] = { 0 };          /* bits of `want` that land */
+    switch (kind) {
+    case TEAR_CRC_ONLY:
+        keep[4] = keep[5] = keep[6] = keep[7] = 0xFFu;
+        break;
+    case TEAR_MAGIC_ONE_LEN_BIT:
+        keep[0] = keep[1] = 0xFFu;
+        keep[3] = lowest_cleared_bit(want[3]);   /* length high byte */
+        if (keep[3] == 0u) keep[2] = lowest_cleared_bit(want[2]);
+        break;
+    case TEAR_ONE_MAGIC_BIT:
+        keep[0] = lowest_cleared_bit(want[0]);
+        break;
+    case TEAR_COUNT:
+        break;
+    }
+    uint8_t *slot = model.mem + cut_report.torn_addr;
+    for (uint32_t i = 0; i < REC_HDR_SIZE; i++) {
+        slot[i] &= (uint8_t)(want[i] | (uint8_t)~keep[i]);   /* NOR: 1 -> 0 only */
+    }
+    return true;
+}
+
 static void test_a_save_torn_at_any_byte_is_never_applied(void)
 {
     for (uint32_t b = 1; b < REC_SLOT && !current_failed; b++) {
@@ -1419,6 +1648,21 @@ static void test_a_save_torn_at_any_byte_is_never_applied(void)
               "cut after %u bytes: load result \"%s\"", b,
               config_load_result_name(settings_store_get_status()->load_result));
     }
+
+    /* And the non-prefix tears. (Whether saving still works after them is the
+     * known-defects build, #57; that they are never applied belongs here.) */
+    for (int t = 0; t < TEAR_COUNT && !current_failed; t++) {
+        CHECK(save_torn_header((header_tear_t)t),
+              "%s: the cut did not fall on the header program", TEAR_NAMES[t]);
+        CHECK(!slot_is_blank(REC_SLOT), "%s: nothing landed", TEAR_NAMES[t]);
+
+        boot();
+        uint8_t got = scope_state_get()->ch1.vdiv_idx;
+        CHECK(got == MARK_A && settings_store_get_status()->load_result == CONFIG_LOAD_OK,
+              "%s: booted on vdiv %u (\"%s\"), expected the previous good record (%u)",
+              TEAR_NAMES[t], got,
+              config_load_result_name(settings_store_get_status()->load_result), MARK_A);
+    }
 }
 
 /* The guarantee config.h and flash_regions.c document: a torn record "of known
@@ -1428,7 +1672,9 @@ static void test_a_save_torn_at_any_byte_is_never_applied(void)
 static void test_a_save_torn_after_its_length_does_not_stop_later_saves(void)
 {
     for (uint32_t b = HDR_MAGIC_AND_LEN_BYTES; b < REC_SLOT && !current_failed; b++) {
-        (void)save_cut_after(b);
+        bool wrote = save_cut_after(b);
+        CHECK(!wrote, "cut after %u bytes: the torn save reported success", b);
+        CHECK(!slot_is_blank(REC_SLOT), "cut after %u bytes: nothing landed", b);
 
         boot();
         scope_state_get()->ch1.vdiv_idx = MARK_C;
@@ -1496,31 +1742,83 @@ static void test_a_compaction_cut_before_its_erase_keeps_the_old_log(void)
     CHECK(loaded.scope_ch1_vdiv == MARK_C, "the save after the cut did not survive");
 }
 
-/* Power dies after the compaction erased its first sector. config.c says what
- * that costs: "A power cut between the reset and the re-append costs the
- * settings and the device comes up on defaults". Pinned: defaults, never a
- * half-erased record, and saving works again straight away. */
-static void test_a_compaction_cut_mid_erase_boots_on_defaults_and_saves_again(void)
+/* Power dies BETWEEN two of the compaction's sector erases: one completed, the
+ * next never started. config.c says what that may cost: "A power cut between
+ * the reset and the re-append costs the settings and the device comes up on
+ * defaults". Held to invariants, not to today's erase order: erasing
+ * low-to-high (today) leaves sector 0 blank and boots EMPTY on defaults;
+ * erasing high-to-low — one valid fix for #58 — boots on the newest surviving
+ * pre-compaction record instead. Either is fine. What is not: loading the save
+ * that was cut, loading anything that was not a whole record before, or a
+ * device that cannot save afterwards. */
+static void test_a_compaction_cut_between_sector_erases_loads_old_settings_or_defaults(void)
 {
     fresh_device();
     (void)fill_log();
+    uint8_t *before = snapshot();
+    const device_config_t cut_cfg = compaction_cut_config();
 
-    device_config_t next = marked_config(MARK_B);
+    const uint32_t erases0 = model.erases;
     model_cut_power_after(UINT32_MAX, 1);
-    CHECK(!config_save(&next), "the cut compaction reported success");
-    CHECK(slot_is_blank(0), "the first sector was not erased before the cut");
+    CHECK(!config_save(&cut_cfg), "the cut compaction reported success");
+    CHECK(model.erases - erases0 == 1u,
+          "expected exactly one completed sector erase before the cut, saw %u",
+          model.erases - erases0);
+
+    power_cycle();
+    check_boot_after_compaction_cut(before, &cut_cfg, "cut after one sector erase");
+    free(before);
 
     boot();
-    CHECK(settings_store_get_status()->load_result == CONFIG_LOAD_EMPTY,
-          "expected an empty log after the cut, got \"%s\"",
-          config_load_result_name(settings_store_get_status()->load_result));
-    CHECK(scope_state_get()->ch1.vdiv_idx == default_ch1_vdiv(),
-          "did not boot on defaults (vdiv %u)", scope_state_get()->ch1.vdiv_idx);
-
-    scope_state_get()->ch1.vdiv_idx = MARK_C;
-    CHECK(settings_store_flush(1000), "the save after the cut failed");
+    const uint8_t want = (scope_state_get()->ch1.vdiv_idx == MARK_C) ? MARK_A : MARK_C;
+    scope_state_get()->ch1.vdiv_idx = want;
+    CHECK(settings_store_flush(1000), "the save after the cut failed (last save status %d = %s)",
+          (int)config_persist_stats()->last_save_status,
+          flash_region_strerror((flash_region_status_t)
+                                config_persist_stats()->last_save_status));
     boot();
-    CHECK(scope_state_get()->ch1.vdiv_idx == MARK_C, "the save after the cut did not survive");
+    CHECK(scope_state_get()->ch1.vdiv_idx == want,
+          "the save after the cut did not survive (booted on vdiv %u)",
+          scope_state_get()->ch1.vdiv_idx);
+}
+
+/* Power dies PART-WAY THROUGH one of the compaction's sector erases (see
+ * ERASE_DISTURB) — each erase in turn, so this holds whatever order, and
+ * however many sectors, a compaction erases. The half-erased sector is never
+ * applied as a record: the boot comes up on a record that was in the log,
+ * whole and CRC-valid, before the compaction began, or on defaults, and
+ * booting writes nothing. Whether saving works afterwards is the known-defects
+ * build: today it does not (#57). */
+static void test_a_compaction_cut_inside_a_sector_erase_is_never_applied(void)
+{
+    fresh_device();
+    (void)fill_log();
+    uint8_t *full = snapshot();
+    const device_config_t cut_cfg = compaction_cut_config();
+
+    for (uint32_t k = 0; !current_failed; k++) {
+        char what[48];
+        snprintf(what, sizeof what, "cut inside erase #%u", (unsigned)k);
+        memcpy(model.mem, full, MODEL_SIZE);
+        power_cycle();
+
+        model_cut_power_inside_erase(k);
+        bool saved = config_save(&cut_cfg);
+        if (k > 0 && cut_report.disturbed_sector == UINT32_MAX) {
+            break;                  /* the compaction erases only k sectors: done */
+        }
+        CHECK(!saved, "%s: the cut compaction reported success", what);
+        CHECK(model.erases == k, "%s: %u sector erases completed before it, expected %u",
+              what, model.erases, k);
+        check_erase_cut_landed(full, what);
+        uint8_t *after = snapshot();
+
+        power_cycle();
+        check_boot_after_compaction_cut(full, &cut_cfg, what);
+        CHECK(unchanged_since(after), "%s: booting modified the chip", what);
+        free(after);
+    }
+    free(full);
 }
 
 /* ═══════════════════════════════════════════════════════════════════
@@ -1720,10 +2018,19 @@ static void test_with_writes_stubbed_no_change_survives(void)
  * Each test asserts the behaviour the firmware's own comments promise, for a
  * case where it does not deliver it today. They are EXPECTED TO FAIL until
  * the firmware is fixed; do not "fix" them by weakening the assertion.
+ *
+ * Two defects, filed as issues:
+ *   #57  a header that does not parse (a torn or damaged magic / length, or a
+ *        half-erased sector) stops log_scan() short of a non-blank slot, and
+ *        every later save is refused with NEEDS_ERASE — permanently;
+ *   #58  a compaction cut after some, not all, of its sector erases later
+ *        resurrects the pre-compaction settings as the newest record.
+ * Each test checks that its cut or damage actually landed before it asserts
+ * anything else, so a broken model cannot make one pass vacuously.
  * ═══════════════════════════════════════════════════════════════════ */
 
-/* DEFECT: a power cut inside the 8-byte header program, before the magic and
- * length have both landed, stops every later save — permanently.
+/* DEFECT #57: a power cut inside the 8-byte header program, before the magic
+ * and length have both landed, stops every later save — permanently.
  *
  * config.h promises "a save interrupted by a power cut leaves a record of
  * known length whose CRC fails; the scanner steps over it". That is true only
@@ -1734,37 +2041,44 @@ static void test_with_writes_stubbed_no_change_survives(void)
  * compacts only on FULL and deliberately not on NEEDS_ERASE — and FULL is now
  * unreachable, because the scan never gets past the torn header. Loads still
  * return the last good record, so nothing looks wrong at boot: every setting
- * change from then on is silently lost. */
+ * change from then on is silently lost.
+ *
+ * Byte-prefix cuts first (what the model's program cut leaves), then the
+ * non-prefix tears a real bit-granular NOR cut can also leave (save_torn_header):
+ * the CRC landed with the magic still blank, one stray bit in the length, one
+ * stray bit in the magic. All of them wedge the log the same way today. */
 static void test_a_save_torn_inside_its_magic_or_length_does_not_stop_later_saves(void)
 {
+    char what[48];
     for (uint32_t b = 1; b < HDR_MAGIC_AND_LEN_BYTES; b++) {
-        (void)save_cut_after(b);
+        bool wrote = save_cut_after(b);
+        CHECK(!wrote, "cut after %u bytes: the torn save reported success", b);
+        CHECK(!slot_is_blank(REC_SLOT), "cut after %u bytes: nothing landed", b);
 
         boot();
         CHECK(scope_state_get()->ch1.vdiv_idx == MARK_A,
               "cut after %u bytes: did not boot on the last good record", b);
 
-        bool any_saved = false;
-        for (uint8_t k = 0; k < 3; k++) {          /* three separate changes */
-            scope_state_get()->ch1.vdiv_idx = (uint8_t)(MARK_C + k);
-            any_saved |= settings_store_flush(3000u + k);
-        }
-        CHECK(any_saved, "cut after %u bytes: no later save succeeded (last save status "
-              "%d = %s)", b, (int)config_persist_stats()->last_save_status,
-              flash_region_strerror((flash_region_status_t)
-                                    config_persist_stats()->last_save_status));
+        snprintf(what, sizeof what, "cut after %u bytes", (unsigned)b);
+        check_later_saves_survive(what);
+    }
+
+    for (int t = 0; t < TEAR_COUNT; t++) {
+        CHECK(save_torn_header((header_tear_t)t),
+              "%s: the cut did not fall on the header program", TEAR_NAMES[t]);
+        CHECK(!slot_is_blank(REC_SLOT), "%s: nothing landed", TEAR_NAMES[t]);
 
         boot();
-        CHECK(scope_state_get()->ch1.vdiv_idx == MARK_C + 2u,
-              "cut after %u bytes: the newest change did not survive a power cycle "
-              "(booted on vdiv %u, the record from before the cut)",
-              b, scope_state_get()->ch1.vdiv_idx);
+        CHECK(scope_state_get()->ch1.vdiv_idx == MARK_A,
+              "%s: did not boot on the last good record", TEAR_NAMES[t]);
+
+        check_later_saves_survive(TEAR_NAMES[t]);
     }
 }
 
-/* DEFECT: the same wedge from damage instead of a cut. One header anywhere in
- * the log that no longer parses (a flipped bit in the magic) hides every record
- * after it AND stops every later save, for the same reason as above. */
+/* DEFECT #57: the same wedge from damage instead of a cut. One header anywhere
+ * in the log that no longer parses (a flipped bit in the magic) hides every
+ * record after it AND stops every later save, for the same reason as above. */
 static void test_a_damaged_header_mid_log_does_not_stop_later_saves(void)
 {
     fresh_device();
@@ -1786,8 +2100,37 @@ static void test_a_damaged_header_mid_log_does_not_stop_later_saves(void)
           scope_state_get()->ch1.vdiv_idx);
 }
 
-/* DEFECT: a compaction cut after it erased some, not all, of the region later
- * resurrects the PRE-compaction settings as the newest record.
+/* DEFECT #57, by erase instead of by program: power dies PART-WAY THROUGH the
+ * first sector erase of a compaction — of every cut a compaction can take, the
+ * likeliest, because the sector erases are its long operations. The half-erased
+ * sector holds headers that parse as neither blank nor a record (ERASE_DISTURB),
+ * so log_scan() stops at its first slot; flash_region_append() finds that slot
+ * not blank and refuses with NEEDS_ERASE; config_save() compacts only on FULL,
+ * which a stopped scan never reports. The device boots (on defaults, today) and
+ * every save from then on is refused, silently and permanently.
+ *
+ * The cut is checked where it actually landed (cut_report), not assumed to be
+ * region offset 0, so the test means the same thing under any erase order: a
+ * high-to-low erase puts the half-erased sector at the top of the region and
+ * wedges the log there instead. */
+static void test_a_compaction_cut_inside_the_first_sectors_erase_does_not_stop_later_saves(void)
+{
+    fresh_device();
+    (void)fill_log();
+    uint8_t *full = snapshot();
+    const device_config_t cut_cfg = compaction_cut_config();
+
+    model_cut_power_inside_erase(0);
+    CHECK(!config_save(&cut_cfg), "the cut compaction reported success");
+    check_erase_cut_landed(full, "cut inside the first erase");
+    free(full);
+
+    boot();
+    check_later_saves_survive("cut inside the first erase");
+}
+
+/* DEFECT #58: a compaction cut after it erased some, not all, of the region
+ * later resurrects the PRE-compaction settings as the newest record.
  *
  * The region is erased sector by sector from offset 0 (flash_regions.c
  * erase_checked()). Cut after sector 0: the device boots on defaults (the
@@ -1920,8 +2263,10 @@ int main(void)
             test_a_save_torn_after_its_length_does_not_stop_later_saves);
         run("a compaction cut before its erase keeps the old log",
             test_a_compaction_cut_before_its_erase_keeps_the_old_log);
-        run("a compaction cut mid-erase boots on defaults and saves again",
-            test_a_compaction_cut_mid_erase_boots_on_defaults_and_saves_again);
+        run("a compaction cut between sector erases loads old settings or defaults",
+            test_a_compaction_cut_between_sector_erases_loads_old_settings_or_defaults);
+        run("a compaction cut inside a sector erase is never applied",
+            test_a_compaction_cut_inside_a_sector_erase_is_never_applied);
         run("changes survive power cycles across compaction",
             test_changes_survive_power_cycles_across_compaction);
     }
@@ -1938,6 +2283,8 @@ int main(void)
             test_a_save_torn_inside_its_magic_or_length_does_not_stop_later_saves);
         run("a damaged header mid-log does not stop later saves",
             test_a_damaged_header_mid_log_does_not_stop_later_saves);
+        run("a compaction cut inside the first sector's erase does not stop later saves",
+            test_a_compaction_cut_inside_the_first_sectors_erase_does_not_stop_later_saves);
         run("a compaction cut mid-erase never resurrects old settings",
             test_a_compaction_cut_mid_erase_never_resurrects_old_settings);
     }

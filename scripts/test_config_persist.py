@@ -24,6 +24,11 @@ not the guard does anything. Each mutation takes a copy of one source file,
 deletes or inverts one guarantee, rebuilds, and REQUIRES the named C tests to
 go red. Literal substitutions: if a target string is no longer found exactly
 once, this suite fails loudly instead of silently skipping the check.
+
+The last mutations break the TEST's own fault injection instead of the
+firmware (file "tests/test_config_persist.c"): a power-cut test is only as good
+as the cut it injects, so a cut that quietly lands nowhere — or finishes the
+operation it was meant to interrupt — must turn the test red too.
 """
 
 from __future__ import annotations
@@ -38,7 +43,8 @@ from pathlib import Path
 
 REPO = Path(__file__).resolve().parent.parent
 FW = REPO / "firmware"
-TEST_C = FW / "tests" / "test_config_persist.c"
+TEST_REL = "tests/test_config_persist.c"
+TEST_C = FW / TEST_REL
 
 # Must match CONFIG_PERSIST_SRCS / CONFIG_PERSIST_CC in firmware/Makefile.
 SRCS = (
@@ -60,17 +66,23 @@ BUILDS = {
 }
 
 KNOWN_DEFECTS = (
-    "a save torn inside its magic or length does not stop later saves",
-    "a damaged header mid-log does not stop later saves",
-    "a compaction cut mid-erase never resurrects old settings",
+    "a save torn inside its magic or length does not stop later saves",          # 57
+    "a damaged header mid-log does not stop later saves",                        # 57
+    "a compaction cut inside the first sector's erase does not stop later saves",  # 57
+    "a compaction cut mid-erase never resurrects old settings",                  # 58
 )
 
 
 def build_and_run(build: str, workdir: Path,
                   replace: tuple[str, str] | None = None) -> subprocess.CompletedProcess:
-    """Compile one build (optionally with one source file swapped for mutated
-    text) and run it. Never raises on a non-zero exit: red is the expected
-    result for a mutation and for the known-defects build."""
+    """Compile one build (optionally with one source file — or the test file
+    itself — swapped for mutated text) and run it. Never raises on a non-zero
+    exit: red is the expected result for a mutation and for the known-defects
+    build."""
+    test_c = TEST_C
+    if replace is not None and replace[0] == TEST_REL:
+        test_c = workdir / TEST_C.name
+        test_c.write_text(replace[1])
     sources = []
     for rel in SRCS:
         if replace is not None and rel == replace[0]:
@@ -84,7 +96,7 @@ def build_and_run(build: str, workdir: Path,
     cmd = ["gcc", *CFLAGS, *BUILDS[build]]
     for inc in INCLUDES:
         cmd += ["-I", str(FW / inc)]
-    cmd += [str(TEST_C), *sources, "-o", str(binary)]
+    cmd += [str(test_c), *sources, "-o", str(binary)]
     built = subprocess.run(cmd, capture_output=True, text=True)
     if built.returncode != 0:
         return built
@@ -198,6 +210,34 @@ MUTATIONS: tuple[Mutation, ...] = (
         new="    (void)0;  /* mutant: meter_layout not restored */\n",
         expect_fail=("changes survive power cycles across compaction",),
     ),
+    # ── the test's own fault injection ──────────────────────────────────
+    Mutation(
+        # The cut "inside" an erase degrades to the old atomic model: the
+        # erase never starts, the full log survives, and the sweep would test
+        # an ordinary cut-before-erase sixteen times over.
+        name="partial-erase cut in the test's flash model (cut never lands)",
+        file=TEST_REL,
+        old="            if (cut.partial_erase) {\n",
+        new="            if (0) {  /* mutant: the partial erase never happens */\n",
+        expect_fail=("a compaction cut inside a sector erase is never applied",),
+    ),
+    Mutation(
+        # The cut erase runs to completion: the sector reads blank, which the
+        # firmware handles fine — so a test that did not check where its cut
+        # landed would pass on a cut that tore nothing.
+        name="partial-erase disturb pattern in the test's flash model (erase completes)",
+        file=TEST_REL,
+        old="                    model.mem[addr + i] |= ERASE_DISTURB;\n",
+        new="                    model.mem[addr + i] |= 0xFFu;  /* mutant: erase completes */\n",
+        expect_fail=("a compaction cut inside a sector erase is never applied",),
+    ),
+    Mutation(
+        name="non-prefix header tear forge in the test (nothing lands)",
+        file=TEST_REL,
+        old="        slot[i] &= (uint8_t)(want[i] | (uint8_t)~keep[i]);   /* NOR: 1 -> 0 only */\n",
+        new="        (void)slot; (void)want; (void)keep;  /* mutant: the tear lands nothing */\n",
+        expect_fail=("a save torn at any byte is never applied",),
+    ),
 )
 
 
@@ -222,7 +262,7 @@ class SettingsPersistHostTests(unittest.TestCase):
     def test_main_build_is_not_trivially_small(self) -> None:
         """Guard against the suite quietly shrinking."""
         count = int(self.main.stdout.rsplit("\n", 2)[-2].split()[0])
-        self.assertGreaterEqual(count, 30, f"only {count} settings persistence tests ran")
+        self.assertGreaterEqual(count, 31, f"only {count} settings persistence tests ran")
 
     def test_negative_control_passes(self) -> None:
         """Writes compiled out: nothing persists, and the positive loop goes red."""

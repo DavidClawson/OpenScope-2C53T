@@ -638,10 +638,12 @@ test-config-persist: $(BUILD_DIR)/test_config_persist $(BUILD_DIR)/test_config_p
 # ⚠ THIS TARGET IS EXPECTED TO FAIL, and is deliberately NOT part of
 # test-config-persist or any other aggregate (same convention as
 # test-meter-word-map). Each test asserts the correct behaviour for a power-cut
-# case the append log gets wrong today: a cut inside a record's magic/length
-# stops every later save, and a cut part-way through a compaction erase later
-# resurrects pre-compaction settings. The firmware fix turning this green IS
-# the verification; promote the tests into the main build when it does.
+# case the append log gets wrong today: a header that does not parse — a cut
+# inside a record's magic/length, a damaged header, or a cut part-way through a
+# compaction's sector erase — stops every later save (#57), and a compaction
+# cut between its sector erases later resurrects pre-compaction settings (#58).
+# The firmware fix turning this green IS the verification; promote the tests
+# into the main build when it does.
 .PHONY: test-config-persist-known-defects
 test-config-persist-known-defects: $(BUILD_DIR)/test_config_persist_known_defects
 	@echo "note: this target is EXPECTED to fail until the append-log power-cut defects are fixed"
