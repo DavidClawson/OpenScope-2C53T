@@ -605,9 +605,12 @@ static uint16_t count_post_h2_non_ff_snapshot(
 
 static void cmd_version(void)
 {
+    /* The compiler rides on the Build line: whether the RAM installer called
+     * flash-resident memset (issue #42) depended on the toolchain, and every
+     * bench script already logs the line that starts with "Build:". */
     usb_debug_printf(
         "OpenScope 2C53T\r\n"
-        "Build: " __DATE__ " " __TIME__ "\r\n"
+        "Build: " __DATE__ " " __TIME__ ", gcc " __VERSION__ "\r\n"
 #ifdef FPGA_ALT_BITSTREAM
         "FPGA payload: " FPGA_BITSTREAM_NAME " (ALT — not the stock scope design)\r\n"
 #endif
@@ -7497,7 +7500,8 @@ static void cmd_fwswap(const char *args)
     }
     usb_send_str("verifying slot, then: erase+program+verify from RAM and\r\n"
                  "SYSTEM RESET into the image. keep USB attached (it carries\r\n"
-                 "the rail through the reset). recovery = MENU+Power IAP.\r\n");
+                 "the rail through the reset). recovery = hold MENU through\r\n"
+                 "a pinhole reset (IAP), not MENU+Power.\r\n");
     vTaskDelay(pdMS_TO_TICKS(300));
     if (!fw_loader_install_slot(slot)) {
         fwl_print_status();
@@ -7514,7 +7518,8 @@ static void cmd_fwapply(void)
     usb_send_str("applying: erase+program+verify from RAM, then SYSTEM RESET\r\n"
                  "into the new image (a clean boot, not a jump). this port\r\n"
                  "drops now. keep USB attached — it carries the rail through\r\n"
-                 "the reset. recovery = MENU+Power IAP.\r\n");
+                 "the reset. recovery = hold MENU through a pinhole reset\r\n"
+                 "(IAP), not MENU+Power.\r\n");
     vTaskDelay(pdMS_TO_TICKS(300));   /* let the goodbye reach the host */
     if (!fw_loader_apply()) {
         fwl_print_status();           /* only reached on a refused apply */
