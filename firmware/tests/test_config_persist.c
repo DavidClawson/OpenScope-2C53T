@@ -459,6 +459,42 @@ static void test_first_boot_on_blank_flash_yields_defaults(void)
     free(snap);
 }
 
+/* A DOCUMENTED FACT, NOT A VERDICT. The two places that define a "default"
+ * scope state disagree on CH1 volts/div and on the timebase, although each
+ * one's comment calls its value 2V/div and 50us/div:
+ *   config_init_defaults()   ch1 vdiv index 3, timebase index 10
+ *   scope_state_init()       ch1 vdiv index 8, timebase index 12
+ * On the device scope_state_init() runs first and settings_store_init() then
+ * applies the loaded config, or config.c's defaults, over it (main.c), so a
+ * first boot comes up on 3 / 10 — and settings_store_apply()'s out-of-range
+ * clamps fall back to 3 / 10 as well. Which pair is right is a question for
+ * the scope front end, not for this suite. Pinned so that reconciling them is
+ * a deliberate change: whoever does it updates this test. */
+static void test_config_defaults_and_scope_state_init_disagree(void)
+{
+    device_config_t d;
+    config_init_defaults(&d);
+    scope_state_t s;
+    memset(&s, 0, sizeof s);
+    scope_state_init(&s);
+
+    CHECK(d.scope_ch1_vdiv == 3u && d.scope_timebase == 10u,
+          "config_init_defaults(): ch1 vdiv %u, timebase %u (pinned: 3, 10)",
+          d.scope_ch1_vdiv, d.scope_timebase);
+    CHECK(s.ch1.vdiv_idx == 8u && s.timebase_idx == 12u,
+          "scope_state_init(): ch1 vdiv %u, timebase %u (pinned: 8, 12)",
+          s.ch1.vdiv_idx, s.timebase_idx);
+
+    /* What a user sees: a first boot on blank flash is config.c's pair. */
+    fresh_device();
+    power_cycle();
+    settings_store_init();
+    CHECK(scope_state_get()->ch1.vdiv_idx == d.scope_ch1_vdiv &&
+          scope_state_get()->timebase_idx == d.scope_timebase,
+          "a first boot came up on ch1 vdiv %u, timebase %u, not config_init_defaults()'s",
+          scope_state_get()->ch1.vdiv_idx, scope_state_get()->timebase_idx);
+}
+
 static void test_save_then_power_cycle_round_trips(void)
 {
     fresh_device();
@@ -1196,23 +1232,31 @@ static uint32_t forge_config(uint32_t offset, const device_config_t *c)
  *
  * Section 2 damages only the NEWEST record. Here the damaged record B sits
  * either between two good ones ([A][B][C]) or at the end ([A][B]), for every
- * kind of damage the scanner distinguishes. The invariant for every row: B is
- * never applied — the device boots on a good record or on defaults.
+ * kind of damage the scanner distinguishes.
  *
- * Which record wins is pinned per kind, because the scanner treats damage in
- * two different ways (flash_regions.c log_scan()):
- *   - a CRC failure is SKIPPED by the length in the header, so the scan
- *     carries on and a later good record (C) still wins;
- *   - an unparsable header (magic, zero / oversized length) STOPS the scan,
- *     and so does a wrong-but-plausible length, which steps into the middle
- *     of the next record and finds no magic there. Nothing past B is seen:
- *     the last good record BEFORE it (A) wins and C is unreachable.
- * A record that passes CRC32 but fails the config's own magic / version /
- * checksum is a different case again: the region layer hands back the newest
- * CRC-valid record and config.c validates only that one, so at the end of the
- * log the device comes up on DEFAULTS, not on A. config.h says so ("Anything
- * that fails either check falls back to defaults"); it is pinned here as the
- * documented behaviour, not endorsed as the only reasonable one.
+ * THE INVARIANT, for every row: B is never applied, and the device boots with
+ * CONFIG_LOAD_OK on a good record that is in the log (A, or C when there is
+ * one). Two rows are held to more than that, because the firmware documents
+ * more for them:
+ *   - a CRC failure (payload bit flip) is SKIPPED by the length in the header
+ *     (flash_regions.c, "Append log"; log_scan()), so mid-log the newest good
+ *     record C must win, not A;
+ *   - a record that passes CRC32 but fails the config's own magic / version /
+ *     checksum: the region layer hands back the newest CRC-valid record and
+ *     config.c validates only that one. Mid-log that is C, which loads. At the
+ *     end of the log it is B itself, and config.h says what follows ("Anything
+ *     that fails either check falls back to defaults"): defaults with
+ *     CONFIG_LOAD_INVALID — accepted there, as is A, should the load path ever
+ *     learn to fall back to an older record.
+ *
+ * ROWS THAT TODAY SIT ON A KNOWN DEFECT (#57), not on correct behaviour:
+ * damaged magic, zero length, length over the max, plausible-but-wrong length.
+ * log_scan() STOPS at each of them — an unparsable header, or a wrong length
+ * that steps into the middle of the next record and finds no magic — so the
+ * device boots on A, the newer good record C is unreachable, and (the worse
+ * half of #57, section 9) every later save is refused. A is accepted for those
+ * rows only because it is not B; a fix that reaches C stays green, and nothing
+ * here should be read as saying A is the right answer mid-log.
  * ═══════════════════════════════════════════════════════════════════ */
 
 typedef enum {
@@ -1224,20 +1268,18 @@ typedef enum {
     DMG_CONFIG_CHECKSUM,    /* CRC32 good, config checksum bad               */
 } damage_t;
 
-#define WINNER_DEFAULTS  0xFFu
-
 static const struct {
     damage_t    kind;
     const char *name;
-    uint8_t     mid_winner;     /* [A][B][C] */
-    uint8_t     end_winner;     /* [A][B]    */
+    bool        mid_needs_c;        /* [A][B][C]: documented to reach C        */
+    bool        end_may_default;    /* [A][B]: documented fallback to defaults */
 } DAMAGE_CASES[] = {
-    { DMG_PAYLOAD_BIT,     "payload bit flip",            MARK_C, MARK_A          },
-    { DMG_MAGIC,           "damaged magic",               MARK_A, MARK_A          },
-    { DMG_LEN_ZERO,        "zero length",                 MARK_A, MARK_A          },
-    { DMG_LEN_OVER_MAX,    "length over the record max",  MARK_A, MARK_A          },
-    { DMG_LEN_PLAUSIBLE,   "plausible but wrong length",  MARK_A, MARK_A          },
-    { DMG_CONFIG_CHECKSUM, "CRC good, checksum bad",      MARK_C, WINNER_DEFAULTS },
+    { DMG_PAYLOAD_BIT,     "payload bit flip",           true,  false },
+    { DMG_MAGIC,           "damaged magic",              false, false },  /* #57 */
+    { DMG_LEN_ZERO,        "zero length",                false, false },  /* #57 */
+    { DMG_LEN_OVER_MAX,    "length over the record max", false, false },  /* #57 */
+    { DMG_LEN_PLAUSIBLE,   "plausible but wrong length", false, false },  /* #57 */
+    { DMG_CONFIG_CHECKSUM, "CRC good, checksum bad",     true,  true  },
 };
 
 static void put_le16(uint8_t *p, uint16_t v)
@@ -1295,25 +1337,31 @@ static void check_damage_case(unsigned row, bool mid_log)
 
     boot();
 
-    uint8_t want = mid_log ? DAMAGE_CASES[row].mid_winner : DAMAGE_CASES[row].end_winner;
-    config_load_result_t want_result = CONFIG_LOAD_OK;
-    if (want == WINNER_DEFAULTS) {
-        want = default_ch1_vdiv();
-        want_result = CONFIG_LOAD_INVALID;
-    }
-    uint8_t got = scope_state_get()->ch1.vdiv_idx;
+    const char *name  = DAMAGE_CASES[row].name;
     const char *where = mid_log ? "mid-log" : "end of log";
+    const uint8_t got = scope_state_get()->ch1.vdiv_idx;
+    const config_load_result_t res = settings_store_get_status()->load_result;
+    const bool ok          = (res == CONFIG_LOAD_OK);
+    const bool on_a        = ok && got == MARK_A;
+    const bool on_c        = ok && mid_log && got == MARK_C;
+    const bool on_defaults = res == CONFIG_LOAD_INVALID && got == default_ch1_vdiv();
 
-    CHECK(got != MARK_B, "%s, %s: the damaged record was applied (vdiv %u)",
-          DAMAGE_CASES[row].name, where, got);
-    CHECK(got == want, "%s, %s: booted on vdiv %u, expected %u",
-          DAMAGE_CASES[row].name, where, got, want);
-    CHECK(settings_store_get_status()->load_result == want_result,
-          "%s, %s: load result \"%s\", expected \"%s\"", DAMAGE_CASES[row].name, where,
-          config_load_result_name(settings_store_get_status()->load_result),
-          config_load_result_name(want_result));
-    CHECK(unchanged_since(snap), "%s, %s: booting modified the chip",
-          DAMAGE_CASES[row].name, where);
+    CHECK(got != MARK_B, "%s, %s: the damaged record was applied (vdiv %u)", name, where, got);
+    if (mid_log && DAMAGE_CASES[row].mid_needs_c) {
+        CHECK(on_c, "%s, %s: booted on vdiv %u (\"%s\"), expected the newer good record C "
+              "(%u): the scan must step over B", name, where, got,
+              config_load_result_name(res), MARK_C);
+    } else if (!mid_log && DAMAGE_CASES[row].end_may_default) {
+        CHECK(on_a || on_defaults, "%s, %s: booted on vdiv %u (\"%s\"), expected A (%u) "
+              "or defaults (%u, \"%s\")", name, where, got, config_load_result_name(res),
+              MARK_A, default_ch1_vdiv(), config_load_result_name(CONFIG_LOAD_INVALID));
+    } else {
+        CHECK(on_a || on_c, "%s, %s: booted on vdiv %u (\"%s\"), expected a good record "
+              "in the log (A = %u, or C = %u mid-log) with \"%s\"", name, where, got,
+              config_load_result_name(res), MARK_A, MARK_C,
+              config_load_result_name(CONFIG_LOAD_OK));
+    }
+    CHECK(unchanged_since(snap), "%s, %s: booting modified the chip", name, where);
     free(snap);
 }
 
@@ -1830,6 +1878,8 @@ int main(void)
 
     if (BUILD_MODE == MODE_MAIN) {
         run("first boot on blank flash yields defaults", test_first_boot_on_blank_flash_yields_defaults);
+        run("config defaults and scope_state_init disagree (pinned fact)",
+            test_config_defaults_and_scope_state_init_disagree);
         run("save then power cycle round-trips", test_save_then_power_cycle_round_trips);
         run("newest record wins", test_newest_record_wins);
         run("saving unchanged settings is free", test_saving_the_same_settings_twice_is_free);

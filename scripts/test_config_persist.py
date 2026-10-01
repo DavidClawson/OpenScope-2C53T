@@ -222,7 +222,7 @@ class SettingsPersistHostTests(unittest.TestCase):
     def test_main_build_is_not_trivially_small(self) -> None:
         """Guard against the suite quietly shrinking."""
         count = int(self.main.stdout.rsplit("\n", 2)[-2].split()[0])
-        self.assertGreaterEqual(count, 29, f"only {count} settings persistence tests ran")
+        self.assertGreaterEqual(count, 30, f"only {count} settings persistence tests ran")
 
     def test_negative_control_passes(self) -> None:
         """Writes compiled out: nothing persists, and the positive loop goes red."""
