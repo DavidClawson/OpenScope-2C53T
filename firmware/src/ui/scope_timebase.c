@@ -188,6 +188,14 @@ static const float sample_rate[SCOPE_TIMEBASE_CODE_COUNT] = {
  *   0x06 24,849,896   R2 0.9973, no fold; the 250 k and 500 k   PROVISIONAL
  *                     tones land ~20% high, reproducibly, unexplained
  *
+ * 0x07 / 0x06 ARE PROVISIONAL BY PRECEDENT, NOT BY THE LETTER of EXP-63's
+ * pre-registered rules: a tone whose peak bin matches no ladder rate was to
+ * leave the code at 0.0f, and 0x06's 250 k / 500 k tones (bins 13 / 26,
+ * ~19.7 MS/s implied) do exactly that. They are entered the way 0x0D was in
+ * EXP-18 (two tones in bins 1 and 3, "a direction"): the >= 1.2 MHz tones,
+ * the slope and the ladder agree within 0.6%, and the ~ marker says the rest.
+ * Anyone who prefers the letter of the rule should treat both rows as 0.0f.
+ *
  * THE 2.5/2/2 CADENCE CONTINUES: ratios 0x0D->0x08 are 2.001, 2.000, 2.498,
  * 2.001, 1.995. Controls on unit #3 reproduce unit #1's 0x10 / 0x0F / 0x0E
  * within 0.01% / 0.12% / 0.18%, which is why one table holds both units.
