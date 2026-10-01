@@ -350,6 +350,13 @@ The page is populated, and every structural prediction of §4–§5 holds:
   defaults on this unit
 - `[0x130]`–`[0x1FF]` = RAM garbage (stack addresses `0x2002DF7C`, `0x080374F1`…), exactly
   as predicted by "the writer programs 512 bytes but the struct is only 304"
+  > **Correction (2026-10-01, issue #28):** "garbage" overstated it. The never-flashed
+  > unit #3's tail is **byte-identical** to this unit's (0/208 bytes differ, pointers
+  > included), so it is not random per-unit or per-write noise. It is still not
+  > calibration, and stock's own later saves have changed it on a used unit (live unit #1
+  > differed ~124/208 on 2026-08-14), so a tail diff still means "stock re-saved", never
+  > "calibration moved". Whether the shared content is a factory-written image or the
+  > deterministic residue of one save path is open. See `archive/factory_cal/README.md`.
 - `[0x200]`–`[0x7FF]` = **all `0xFF`**, exactly as predicted by "erase 2 KB, program 512 B"
 
 Five independent structural predictions confirmed on data the model was not derived from.

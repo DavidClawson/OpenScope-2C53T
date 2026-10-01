@@ -193,17 +193,25 @@ static void draw_summary(const cal_stats_t *s)
      *   0x000-0x02F  header + settings (signature 0x55 at 0)
      *   0x030-0x0AF  CALIBRATION block A (uint16 pairs, ~1600-1716)
      *   0x0B0-0x12F  CALIBRATION block B (uint16 pairs, ~3195-3306)
-     *   0x130-0x1FF  zeros, then RAM POINTERS (0x2002xxxx) — uninitialised
-     *                stack flushed out with stock's 512-byte staging buffer.
-     *                This region differs on EVERY write and means nothing.
+     *   0x130-0x1FF  tail: zeros, then words that look like RAM POINTERS
+     *                (0x2002xxxx) — the part of stock's 512-byte staging buffer
+     *                beyond its 0x130-byte settings struct. NOT calibration, but
+     *                not random per-write noise either: on the never-flashed
+     *                unit #3 it is byte-identical to unit #1's 2026-06-12
+     *                archive (0/208 bytes differ, pointers included), so it is
+     *                the same content on two independent units. Stock's
+     *                own later saves do change it (unit #1 live differed ~124/208
+     *                on 2026-08-14), so a tail difference means "stock re-saved
+     *                its settings", never "the calibration moved".
+     *                (Issue #28; scripts/cal_page_decode.py decodes and diffs.)
      *
-     * A whole-page byte count conflates the meaningless tail with the data we
-     * care about. Splitting it is the difference between "settings changed"
-     * and "stock overwrote the calibration with its compiled-in defaults". */
+     * A whole-page byte count conflates the tail with the data we care about.
+     * Splitting it is the difference between "settings changed" and "stock
+     * overwrote the calibration with its compiled-in defaults". */
     static const struct { uint32_t lo, hi; const char *name; } regions[] = {
         { 0x000, 0x030, "hdr/settings" },
         { 0x030, 0x130, "CALIBRATION"  },
-        { 0x130, 0x200, "tail(RAM gbg)"},
+        { 0x130, 0x200, "tail(not cal)"},
     };
     for (unsigned r = 0; r < 3; r++) {
         uint32_t n = 0;
