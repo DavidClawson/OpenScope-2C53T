@@ -1,5 +1,10 @@
 # Platform Architecture: From Firmware to SDK
 
+> **Partly superseded (noted 2026-10-01).** The "Current State vs Target" table below is a
+> March 2026 snapshot; feature status now lives in
+> [README § Feature maturity](../../README.md#feature-maturity) and [`docs/specs/`](../specs/),
+> as [`roadmap.md`](../roadmap.md) set out on 2026-08-20. The layer design is not superseded.
+
 *Goal: Structure the codebase so that the hard reverse-engineering and hardware bring-up work becomes a reusable platform. Developers should be able to build custom applications — a different meter UI, a dedicated automotive tool, a logic analyzer — without understanding FPGA protocols, EXMC timing, or SPI flash layout.*
 
 ## The Vision
