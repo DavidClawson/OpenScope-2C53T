@@ -2657,6 +2657,42 @@ class SimBench:
             med = int(np.median(self.record(ch)))
             return ("CH%d range %d: center %s=%d (median=%d)\r\n> "
                     % (ch, r, "TMR13_C1DT" if ch == 2 else "DAC1", self.dac[ch], med))
+        m = re.fullmatch(r"fpga scope vdiv ([12]) (\d)", line)
+        if m:
+            # The vdiv BUTTON's path: display state AND the relay bank (one channel).
+            ch, r = int(m.group(1)), int(m.group(2))
+            self.range[ch] = r
+            return "vdiv CH%d = range %d (sim/div)\r\n> " % (ch, r)
+        m = re.fullmatch(r"fpga scope measure (\d+)", line)
+        if m:
+            # The badge pipeline, as `fpga scope measure` prints it: pp from the
+            # record's extremes, Vpp/Vrms through the channel's k (refused as
+            # "-" when the range has no cal), the frequency from the record's
+            # period at the code's rate (refused when the code has no rate).
+            reps = int(m.group(1))
+            fs = self.FS_BY_CODE.get(self.code)
+            out = ["badge sources: rng1=%d k1_uV=%d  rng2=%d k2_uV=%d  tb=0x%02X inforce=0x%02X fs=%s"
+                   % (self.range[1], int(self.gains[1][self.range[1]] * 1000),
+                      self.range[2], int(self.gains[2][self.range[2]] * 1000),
+                      self.code, self.code, int(fs) if fs else 0)]
+            for i in range(reps):
+                rec = {ch: self.record(ch) for ch in (1, 2)}
+                pp = {ch: int(rec[ch].max() - rec[ch].min()) for ch in (1, 2)}
+                k = {ch: self.gains[ch][self.range[ch]] for ch in (1, 2)}
+                ac = rec[1] - rec[1].mean()
+                vpp1 = "-" if k[1] <= 0 else str(int(pp[1] * k[1] * 1000))
+                vrms1 = "-" if k[1] <= 0 else str(int(float(np.sqrt(np.mean(ac * ac))) * k[1] * 1000))
+                vpp2 = "-" if k[2] <= 0 else str(int(pp[2] * k[2] * 1000))
+                hz = self._source_hz()
+                if fs and hz and pp[1] > 8:
+                    per = fs / hz
+                    per_s, f_m = "%d" % int(per * 100), "%d" % int(hz * 1000)
+                else:
+                    per_s, f_m = "-", "-"
+                out.append("M %2d pp1=%d ppr1=%d Vpp1_uV=%s Vrms1_uV=%s duty1_pm=500 "
+                           "per1_smp100=%s f1_mHz=%s rise1_smp100=- fall1_smp100=- pp2=%d Vpp2_uV=%s"
+                           % (i, pp[1], max(0, pp[1] - 1), vpp1, vrms1, per_s, f_m, pp[2], vpp2))
+            return line + "\r\n" + "\r\n".join(out) + "\r\n> "
         m = re.fullmatch(r"(trig2?) raw (\d+)", line)
         if m:
             ch = 2 if m.group(1) == "trig2" else 1
@@ -2671,6 +2707,15 @@ class SimBench:
         if toks[:2] == ["spi3", "read"] and len(toks) == 3:
             return "%s\r\n%s\r\n> " % (line, _synth_dump(list(self.record(1, int(toks[2])))))
         raise BenchError("SimBench scope: no simulated reply for %r" % line)
+
+    def _source_hz(self) -> float:
+        """The frequency the simulated stimulus is producing, 0 when quiet."""
+        if self.kind == "kodedot":
+            return float(self.kd.get("hz", 0.0)) if self.kd.get("mode") == "pwm" else 0.0
+        if self.kind == "esp32":
+            e = self.esp[1]
+            return float(e["hz"]) if e["mode"] != "dc" else 0.0
+        return float(self.man["hz"]) if self.man["what"] != "quiet" else 0.0
 
     def _kd_freq_rec(self) -> str:
         p = self.kd

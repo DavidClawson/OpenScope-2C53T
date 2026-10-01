@@ -18,6 +18,15 @@ clean sine must show 1/(2*sqrt(2)) = 0.3536 regardless of scale.
 Usage:
     python3 scripts/exp19_badge_validation.py
     python3 scripts/exp19_badge_validation.py --ranges 5 6 7 --codes 0x10 0x12
+    python3 scripts/exp19_badge_validation.py --source kodedot --v3v3 3.303 \
+        --ranges 6 7 8 9 --codes 0x10 0x12 0x0F 0x0E --norate-code 0x0C
+
+With ``--source kodedot`` (EXP-67, 2026-10-01) the stimulus is a 0 V / rail
+SQUARE at the Dot's register-reported frequency: one amplitude per range (the
+rail, ``--v3v3``), expected Vrms/Vpp = 0.5 (a 50 % square, mean removed), and
+the frequency truth is what the Dot reports. The vertical reference is then
+whatever measured ``--v3v3``; on the 2026-10-01 bench that was the unit's own
+meter mode, so Vpp/Vrms agreement is scope-vs-meter consistency, not volts.
 """
 import argparse
 import re
@@ -26,19 +35,26 @@ import sys
 import time
 
 sys.path.insert(0, "scripts")
-from bench import Scope, Siggen  # noqa: E402
+from bench import Scope, Siggen, add_source_args, open_bench  # noqa: E402
 
-SINE_RATIO = 0.35355  # Vrms/Vpp for a pure sine
+SINE_RATIO = 0.35355    # Vrms/Vpp for a pure sine
+SQUARE_RATIO = 0.5      # Vrms/Vpp for a 50 % square, mean removed
 
 # Amplitudes per range, chosen to use a healthy slice of each range's span
 # without clipping (gains ~21.8 / 43.0 / 88.4 mV/count on r5/6/7).
 AMPS = {5: [800, 2000, 3000], 6: [1500, 3000], 7: [2000, 3300]}
 # Tone per code: lands in a comfortable bin (>>MIN_BIN, <<Nyquist/2).
-TONE = {0x10: 400.0, 0x12: 100.0, 0x0F: 800.0, 0x0E: 1600.0}
+TONE = {0x10: 400.0, 0x12: 100.0, 0x0F: 800.0, 0x0E: 1600.0,
+        # EXP-63 rates (only a build carrying them answers a frequency here)
+        0x0D: 4000.0, 0x0C: 10000.0, 0x0B: 20000.0, 0x0A: 50000.0}
 
+# The firmware grew `rise1_smp100= fall1_smp100=` between f1_mHz and pp2
+# (edge-time badges); both forms parse. A regex that silently matched nothing
+# raised "no M lines parsed" — found on the 2026-10-01 bench, not in a test.
 M_RE = re.compile(
     r"M\s+\d+\s+pp1=(\d+)\s+ppr1=(\d+)\s+Vpp1_uV=(\S+)\s+Vrms1_uV=(\S+)\s+"
-    r"duty1_pm=(\d+)\s+per1_smp100=(\S+)\s+f1_mHz=(\S+)\s+pp2=(\d+)\s+Vpp2_uV=(\S+)")
+    r"duty1_pm=(\d+)\s+per1_smp100=(\S+)\s+f1_mHz=(\S+)\s+"
+    r"(?:rise1_smp100=\S+\s+fall1_smp100=\S+\s+)?pp2=(\d+)\s+Vpp2_uV=(\S+)")
 
 
 def read_measure(sc, reps=10):
@@ -68,19 +84,43 @@ def main():
     ap.add_argument("--codes", type=lambda x: int(x, 0), nargs="+",
                     default=[0x10, 0x12])
     ap.add_argument("--reps", type=int, default=10)
+    ap.add_argument("--norate-code", type=lambda x: int(x, 0), default=0x0C,
+                    help="a timebase code with NO rate in the device's build, for the "
+                         "frequency-refusal control (default 0x0C; use 0x05 on a build "
+                         "that carries EXP-63's rows)")
+    add_source_args(ap)
     args = ap.parse_args()
 
-    sc = Scope()
-    sg = Siggen()
-    # EXP-14's documented trap, walked into by this harness's first run: the
-    # source's loop rate depends on its CHANNEL CONFIGURATION (~300 Hz per
-    # waveform channel), so it must be measured in the exact config the sweep
-    # runs in. Run 1 measured it with a stale config and every frequency came
-    # back a constant -0.93%. Configure first, measure second.
-    sg.sine(400.0, ch=1)
-    sg.off(2)
-    true_per_commanded = sg.use_measured_fs(True)  # frequency truth
-    print(f"# source correction (ch1 sine + ch2 off): {true_per_commanded}")
+    if args.source == "kodedot":
+        sc, src, _sim = open_bench(args, waveform="square")
+        sg = None
+        ratio_ref = SQUARE_RATIO
+        print(f"# source: {src.describe()}; square, Vrms/Vpp expected {SQUARE_RATIO}")
+    else:
+        sc = Scope(args.scope_port) if args.scope_port else Scope()
+        sg = Siggen(args.source_port) if args.source_port else Siggen()
+        src = None
+        ratio_ref = SINE_RATIO
+        # EXP-14's documented trap, walked into by this harness's first run: the
+        # source's loop rate depends on its CHANNEL CONFIGURATION (~300 Hz per
+        # waveform channel), so it must be measured in the exact config the sweep
+        # runs in. Run 1 measured it with a stale config and every frequency came
+        # back a constant -0.93%. Configure first, measure second.
+        sg.sine(400.0, ch=1)
+        sg.off(2)
+        true_per_commanded = sg.use_measured_fs(True)  # frequency truth
+        print(f"# source correction (ch1 sine + ch2 off): {true_per_commanded}")
+
+    def set_tone(hz, mvpp):
+        """Drive the stimulus; return (true Hz, true mVpp) as the source reports."""
+        if src is not None:
+            true_hz = src.tone(hz, waveform="square")
+            return true_hz, src.fixed_vpp_mv
+        sg.sine(hz, ch=1)
+        sg.amp(mvpp, ch=1)
+        return hz, mvpp
+
+    print("build:", sc.version().strip().replace("\r\n", " | "))
 
     results = []
     fails = 0
@@ -91,10 +131,11 @@ def main():
         print(sc.timebase(code).strip())
         for r in args.ranges:
             sc.vdiv(1, r)
-            sc.cmd(f"fpga scope center ch1 {r}", timeout=25)
-            for mvpp in AMPS[r]:
-                sg.sine(tone, ch=1)
-                sg.amp(mvpp, ch=1)
+            sc.cmd(f"fpga scope center ch1 {r}", timeout=60)
+            amps = [None] if src is not None else AMPS[r]
+            for want_mvpp in amps:
+                true_hz, mvpp = set_tone(tone, want_mvpp)
+                mvpp = int(round(mvpp))
                 time.sleep(0.6)
                 rows = read_measure(sc, args.reps)
                 vpp = med(rows, "vpp_uV")
@@ -104,15 +145,15 @@ def main():
                 ratio = (vrms / vpp) if (vpp and vrms) else None
                 f_hz = f / 1000.0 if f else None
                 vpp_err = (vpp_mv / mvpp - 1) * 100 if vpp_mv else None
-                f_err = ((f_hz / tone - 1) * 100) if f_hz else None
-                ratio_err = ((ratio / SINE_RATIO - 1) * 100) if ratio else None
+                f_err = ((f_hz / true_hz - 1) * 100) if f_hz else None
+                ratio_err = ((ratio / ratio_ref - 1) * 100) if ratio else None
                 # Vrms vs commanded*0.3536 is the primary vertical criterion:
                 # pp is an extreme-value statistic and noise inflates it (run
                 # 2 measured +3..+10%, shrinking with amplitude — the additive
                 # signature), while rms barely moves. Judging the ratio would
                 # double-count pp's noise.
                 vrms_mv = vrms / 1000.0 if vrms else None
-                vrms_err = ((vrms_mv / (mvpp * SINE_RATIO) - 1) * 100
+                vrms_err = ((vrms_mv / (mvpp * ratio_ref) - 1) * 100
                             if vrms_mv else None)
                 row = dict(code=code, rng=r, mvpp=mvpp, vpp_mv=vpp_mv,
                            vpp_err=vpp_err, vrms_err=vrms_err,
@@ -134,8 +175,7 @@ def main():
 
     # -- refusal controls (must refuse, not report) -------------------------
     print("\n== refusal controls ==")
-    sg.sine(TONE[0x10], ch=1)
-    sg.amp(2000, ch=1)
+    set_tone(TONE[0x10], 2000)
 
     sc.timebase(0x10)
     sc.vdiv(1, 2)                 # range 2: rails, cal tier NONE, k = 0
@@ -144,18 +184,22 @@ def main():
     c1 = all(r["vpp_uV"] is None for r in rows)
     print(f"  range 2 (no cal): Vpp refuses on all reads: {c1}")
 
-    sc.vdiv(1, 5)
-    sc.cmd("fpga scope center ch1 5", timeout=25)
-    sc.timebase(0x0C)             # 0x0C: no measured rate
+    rng_ctl = 6 if src is not None else 5          # the rail clips r5
+    sc.vdiv(1, rng_ctl)
+    sc.cmd(f"fpga scope center ch1 {rng_ctl}", timeout=60)
+    sc.timebase(args.norate_code)   # a code with no measured rate in this build
     time.sleep(0.6)
     rows = read_measure(sc, 5)
     c2 = all(r["f_mHz"] is None for r in rows)
     vpp_still = med(rows, "vpp_uV") is not None
-    print(f"  code 0x0C (no rate): freq refuses on all reads: {c2}; "
+    print(f"  code 0x{args.norate_code:02X} (no rate): freq refuses on all reads: {c2}; "
           f"Vpp still reports (independent axes): {vpp_still}")
 
     sc.timebase(0x10)             # leave the device in a sane state
-    sg.off(1)
+    if src is not None:
+        src.quiet()
+    else:
+        sg.off(1)
 
     ok = fails == 0 and c1 and c2 and vpp_still
     verdict = ("PASS" if ok else
