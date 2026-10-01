@@ -86,6 +86,15 @@
  *                    reproduce. This is a statement about the device.
  *                  - all other codes: never measured at all.
  *
+ * UPDATED 2026-10-01 (EXP-63, unit #3, Kode Dot source, acq path): MEASURED
+ * now also covers 0x08-0x0D (R^2 1.0000, fold-tested, 0x08 through 8.5 MHz);
+ * PROVISIONAL is 0x07 and 0x06 (fitted within 0.6% of the ladder, R^2 >=
+ * 0.997, but the fold band is above the source's 10 MHz and 0x06's two lowest
+ * tones sit ~20% high); NONE is 0x00-0x05, never measured. The 0x08
+ * INCOHERENT verdict above was the opread read path, not the device: the same
+ * run read 0x08 through opread and acq and only opread tore. The text above
+ * is kept as the record of how that was found out.
+ *
  * A NONE entry returns 0.0f and callers MUST fall back to samples — the same
  * contract scope_cal.h imposes for counts. Printing a frequency derived from
  * an assumed rate is exactly the invention this module exists to prevent.

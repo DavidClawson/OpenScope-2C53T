@@ -8,9 +8,10 @@
  *   1. A code with no trustworthy rate returns exactly 0.0f, so a caller that
  *      forgets to check gets an obviously-zero frequency rather than a
  *      plausible one.
- *   2. Code 0x08 in particular returns nothing. Three different rates have
- *      been published for it and all three were artifacts; if someone
- *      re-enters one, this fails.
+ *   2. Code 0x08 carries the EXP-63 rate (4,990,070 S/s, fold-tested on the
+ *      acq path) and none of the three withdrawn artifacts (1.07 kS/s,
+ *      1,660, 1,414/1,526), which were opread tearing; if someone re-enters
+ *      one, this fails.
  *   3. Out-of-range codes refuse rather than wrap.
  *   4. Derived quantities really are derived — s/div from the rate and the
  *      renderer's samples-per-division, Hz from the rate and a period.
@@ -70,6 +71,41 @@ static void test_measured_codes(void)
     }
 
     /*
+     * EXP-63 (unit #3, Kode Dot source, acq path): the ladder above 0x0D,
+     * every row R2 1.0000 and fold-tested. 0x0D moved from the provisional
+     * 123,662.7 (unit #1, bins 4-25) to 124,968 (bins 10-205).
+     */
+    const struct { uint8_t code; float fs; } fast[] = {
+        { 0x0D, 124968.0f }, { 0x0C, 250089.0f }, { 0x0B, 500203.0f },
+        { 0x0A, 1249691.0f }, { 0x09, 2500893.0f }, { 0x08, 4990070.0f },
+    };
+    for (unsigned i = 0; i < 6; i++) {
+        CHECK(fabsf(scope_timebase_sample_rate(fast[i].code) - fast[i].fs) < 1.0f,
+              "code 0x%02X: expected %.0f S/s, got %.0f", fast[i].code,
+              (double)fast[i].fs,
+              (double)scope_timebase_sample_rate(fast[i].code));
+        CHECK(scope_timebase_get_tier(fast[i].code) == SCOPE_TB_MEASURED,
+              "code 0x%02X should be MEASURED (EXP-63)", fast[i].code);
+    }
+    /* The cadence continues 2 / 2 / 2.5 / 2 / 2 from 0x0D to 0x08 (within 0.3%). */
+    const struct { uint8_t hi, lo; float ratio; } fast_steps[] = {
+        { 0x0C, 0x0D, 2.0f }, { 0x0B, 0x0C, 2.0f }, { 0x0A, 0x0B, 2.5f },
+        { 0x09, 0x0A, 2.0f }, { 0x08, 0x09, 2.0f },
+    };
+    for (unsigned i = 0; i < 5; i++) {
+        const float r = scope_timebase_sample_rate(fast_steps[i].hi) /
+                        scope_timebase_sample_rate(fast_steps[i].lo);
+        CHECK(fabsf(r / fast_steps[i].ratio - 1.0f) < 0.003f,
+              "0x%02X/0x%02X should be %.1f within 0.3%%, got %.4f",
+              fast_steps[i].hi, fast_steps[i].lo, (double)fast_steps[i].ratio, (double)r);
+    }
+    /* 0x07 and 0x06 are fitted but not fold-checked: PROVISIONAL, and marked. */
+    CHECK(scope_timebase_get_tier(0x07) == SCOPE_TB_PROVISIONAL, "0x07 should be PROVISIONAL");
+    CHECK(scope_timebase_get_tier(0x06) == SCOPE_TB_PROVISIONAL, "0x06 should be PROVISIONAL");
+    CHECK(fabsf(scope_timebase_sample_rate(0x07) - 12498676.0f) < 1.0f, "0x07 rate");
+    CHECK(fabsf(scope_timebase_sample_rate(0x06) - 24849896.0f) < 1.0f, "0x06 rate");
+
+    /*
      * The ladder is 1-2.5-5, NOT uniform x2 -- predicting 6,250 for 0x11 by
      * assuming each step doubles was wrong by 25%. Encode the real shape so a
      * future "correction" toward a uniform ladder fails here.
@@ -94,23 +130,33 @@ static void test_measured_codes(void)
           "0x0E should be about double 0x0F");
 }
 
-static void test_code_08_stays_withdrawn(void)
+static void test_code_08_artifacts_stay_out(void)
 {
     /*
-     * 0x08 has had three published rates — 1.07 kS/s, 1,660 S/s, and a
-     * two-pass 1,414/1,526 — and every one was fitted to a record that does
-     * not reproduce between reads. This test exists so that re-entering any of
-     * them fails the build.
+     * 0x08 had three published rates — 1.07 kS/s, 1,660 S/s, and a two-pass
+     * 1,414/1,526 — every one fitted to opread records that did not reproduce
+     * between reads, and it sat at 0.0f (INCOHERENT) from EXP-12 to EXP-63.
+     * EXP-63 read it through the acq path with tones placed for 5 MS/s:
+     * 4,990,070 S/s, R2 1.0000, fold within 3 bins through 8.5 MHz. This test
+     * keeps the artifacts out and the measurement in.
      */
-    CHECK(scope_timebase_sample_rate(0x08) == 0.0f,
-          "code 0x08 is INCOHERENT and must return exactly 0.0f, got %.1f",
+    const float bad[] = { 1070.0f, 1660.0f, 1414.0f, 1526.0f, 0.0f };
+    for (unsigned i = 0; i < sizeof(bad) / sizeof(bad[0]); i++) {
+        CHECK(fabsf(scope_timebase_sample_rate(0x08) - bad[i]) > 1.0f,
+              "code 0x08 is back at a withdrawn value %.0f", (double)bad[i]);
+    }
+    CHECK(fabsf(scope_timebase_sample_rate(0x08) - 4990070.0f) < 1.0f,
+          "code 0x08 should carry EXP-63's 4,990,070 S/s, got %.0f",
           (double)scope_timebase_sample_rate(0x08));
-    CHECK(scope_timebase_get_tier(0x08) == SCOPE_TB_NONE,
-          "code 0x08 must be tier NONE");
-    CHECK(scope_timebase_seconds_per_div(0x08) == 0.0f,
-          "code 0x08 must have no seconds/div");
-    CHECK(scope_timebase_hz_from_period(0x08, 50.0f) == 0.0f,
-          "code 0x08 must not yield a frequency");
+    CHECK(scope_timebase_get_tier(0x08) == SCOPE_TB_MEASURED,
+          "code 0x08 must be tier MEASURED");
+    /* 32 samples/div at 4,990,070 S/s = 6.41 us/div. */
+    CHECK(fabsf(scope_timebase_seconds_per_div(0x08) - 6.4127e-6f) < 1e-8f,
+          "code 0x08 seconds/div, got %g", (double)scope_timebase_seconds_per_div(0x08));
+    /* A 50-sample period at 4.99 MS/s is 99,801 Hz. */
+    CHECK(fabsf(scope_timebase_hz_from_period(0x08, 50.0f) - 99801.4f) < 1.0f,
+          "code 0x08 Hz from a 50-sample period, got %.1f",
+          (double)scope_timebase_hz_from_period(0x08, 50.0f));
 }
 
 static void test_precorrection_rates_stay_out(void)
@@ -181,7 +227,7 @@ static void test_precorrection_rates_stay_out(void)
 
 static void test_unmeasured_codes_return_zero(void)
 {
-    const uint8_t none[] = { 0, 1, 5, 7, 9, 0x0A, 0x0B, 0x0C };
+    const uint8_t none[] = { 0, 1, 2, 3, 4, 5 };   /* 0x06-0x14 all carry a rate since EXP-63 */
 
     for (unsigned i = 0; i < sizeof(none) / sizeof(none[0]); i++) {
         CHECK(scope_timebase_sample_rate(none[i]) == 0.0f,
@@ -245,16 +291,22 @@ static void test_labels(void)
     CHECK(strcmp(buf, "641us") == 0,
           "0x0E label should be 641us, got \"%s\"", buf);
 
-    /* Provisional carries the marker. 0x0D was re-measured in EXP-18 (R2
-     * 0.9997, up from 0.947) but stays provisional: at ~124 kS/s the bench
-     * source only reaches bin 25, so it is the least-resolved row and misses
-     * the round ladder by 1.07% where every other code is inside 0.2%. */
+    /* 0x0D was PROVISIONAL (EXP-18, bins 4-25) until EXP-63 re-measured it
+     * at 124,968 S/s with the tones at bins 10-205 and a fold test: no
+     * marker now. 124,968 S/s -> 256 us/div. */
     scope_timebase_label(0x0D, buf, sizeof(buf));
-    CHECK(buf[0] == '~', "0x0D is PROVISIONAL and must be marked, got \"%s\"", buf);
+    CHECK(strcmp(buf, "256us") == 0, "0x0D label should be 256us, got \"%s\"", buf);
+
+    /* Provisional carries the marker: 0x07 (EXP-63, fitted, not fold-checked).
+     * 12,498,676 S/s -> 2.56 us/div, rounded to "3us". */
+    scope_timebase_label(0x07, buf, sizeof(buf));
+    CHECK(strcmp(buf, "~3us") == 0, "0x07 is PROVISIONAL and must be marked, got \"%s\"", buf);
+
+    /* 0x08 carries a rate since EXP-63: 6.41 us/div. */
+    scope_timebase_label(0x08, buf, sizeof(buf));
+    CHECK(strcmp(buf, "6us") == 0, "0x08 label should be 6us, got \"%s\"", buf);
 
     /* No rate -> explicit nothing, never a nominal number. */
-    scope_timebase_label(0x08, buf, sizeof(buf));
-    CHECK(strcmp(buf, "--") == 0, "0x08 label should be \"--\", got \"%s\"", buf);
     scope_timebase_label(0x00, buf, sizeof(buf));
     CHECK(strcmp(buf, "--") == 0, "0x00 label should be \"--\", got \"%s\"", buf);
 
@@ -267,7 +319,7 @@ static void test_labels(void)
 int main(void)
 {
     test_measured_codes();
-    test_code_08_stays_withdrawn();
+    test_code_08_artifacts_stay_out();
     test_precorrection_rates_stay_out();
     test_unmeasured_codes_return_zero();
     test_out_of_range();

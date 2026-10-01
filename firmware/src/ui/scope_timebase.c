@@ -12,8 +12,9 @@
 #include <stdio.h>
 
 /*
- * Capture sample rate in S/s, indexed by reg-0x01 code, bench unit #1.
- * Source: docs/experiments/2026-08-18-10-time-axis.md and -12-.
+ * Capture sample rate in S/s, indexed by reg-0x01 code. 0x0E-0x14: bench
+ * unit #1 (docs/experiments/2026-08-18-10-time-axis.md, -12-, -17-, -18-).
+ * 0x06-0x0D: unit #3, 2026-10-01-63 (see EXTENDED 2026-10-01 below).
  *
  * 0.0f means "no trustworthy rate", and the three reasons for that are
  * genuinely different — see the tier table below. Do not collapse them.
@@ -49,14 +50,15 @@
  */
 static const float sample_rate[SCOPE_TIMEBASE_CODE_COUNT] = {
     /* 0x00-0x05 */ 0.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f,
-    /* 0x06 */      0.0f,        /* INCOHERENT — see the block below      */
-    /* 0x07 */      0.0f,        /* INCOHERENT                            */
-    /* 0x08 */      0.0f,        /* INCOHERENT — measured, no rate exists */
-    /* 0x09 */      0.0f,        /* INCOHERENT                            */
-    /* 0x0A */      0.0f,        /* source too slow to measure (R2 -1.03)   */
-    /* 0x0B */      0.0f,        /* source too slow to measure (R2 -0.05)   */
-    /* 0x0C */      0.0f,        /* source too slow to measure (R2  0.60)   */
-    /* 0x0D */     123662.7f,   /* EXP-18 R2 0.9997 — provisional, bins 4-25 */
+    /* 0x06 */  24849896.0f,   /* EXP-63 R2 0.9973, no fold possible — PROVISIONAL */
+    /* 0x07 */  12498676.0f,   /* EXP-63 R2 0.9996, no fold possible — PROVISIONAL */
+    /* 0x08 */   4990070.0f,   /* EXP-63 R2 1.0000, fold 3 bins (acq path)   */
+    /* 0x09 */   2500893.0f,   /* EXP-63 R2 1.0000, fold 1 bin               */
+    /* 0x0A */   1249691.0f,   /* EXP-63 R2 1.0000, fold 1 bin               */
+    /* 0x0B */    500203.0f,   /* EXP-63 R2 1.0000, fold 1 bin               */
+    /* 0x0C */    250089.0f,   /* EXP-63 R2 1.0000, fold 1 bin               */
+    /* 0x0D */    124968.0f,   /* EXP-63 R2 1.0000, fold 1 bin, bins 10-205;
+                                * was 123662.7 PROVISIONAL (EXP-18, unit #1) */
     /* 0x0E */       49930.1f,   /* EXP-17 slope fit, n=37, SE 31 S/s       */
     /* 0x0F */       24979.1f,   /* EXP-17 slope fit, n=29, SE 10 S/s       */
     /* 0x10 */       12490.0f,   /* EXP-17 slope fit, n=49, SE  2 S/s       */
@@ -158,6 +160,9 @@ static const float sample_rate[SCOPE_TIMEBASE_CODE_COUNT] = {
  * bin 25, so this is the least-resolved code in the table and -1.07% is a
  * bigger miss than every other code by a factor of five.
  *
+ * SUPERSEDED 2026-10-01 (EXP-63): the INCOHERENT band was the opread read
+ * path, not the device; see EXTENDED 2026-10-01 below. Kept as written:
+ *
  * NOT CHASED, worth recording: the INCOHERENT band 0x06-0x09 fitted to
  * 1,231 / 1,595 / 1,350 / 1,550 S/s -- all close to 0x13's 1,250. If the rate
  * field is narrower than the codes we write, or those codes select roll mode
@@ -166,7 +171,42 @@ static const float sample_rate[SCOPE_TIMEBASE_CODE_COUNT] = {
  */
 
 /*
+ * EXTENDED 2026-10-01 (EXP-63, unit #3, docs/experiments/2026-10-01-63-*.md).
+ * The ladder went from 8 codes to 15. Source: a Kode Dot (ESP32-P4) LEDC
+ * square whose frequency is read back from its own timer registers
+ * (crystal-derived, 10 MHz ceiling), so every tone sits where a 1024-sample
+ * record resolves it. Read path: acq (`spi3 read`), the snapshot path.
+ *
+ *   0x0D    124,968   R2 1.0000, fold 1 bin   (-0.03% from 125 k)
+ *   0x0C    250,089   R2 1.0000, fold 1 bin
+ *   0x0B    500,203   R2 1.0000, fold 1 bin
+ *   0x0A  1,249,691   R2 1.0000, fold 1 bin   (a 250 kHz tone at bin 205,
+ *                                              not the 256 of a uniform x2)
+ *   0x09  2,500,893   R2 1.0000, fold 1 bin
+ *   0x08  4,990,070   R2 1.0000, fold 3 bins through 8.5 MHz
+ *   0x07 12,498,676   R2 0.9996, no fold (fold tones > 10 MHz)   PROVISIONAL
+ *   0x06 24,849,896   R2 0.9973, no fold; the 250 k and 500 k   PROVISIONAL
+ *                     tones land ~20% high, reproducibly, unexplained
+ *
+ * THE 2.5/2/2 CADENCE CONTINUES: ratios 0x0D->0x08 are 2.001, 2.000, 2.498,
+ * 2.001, 1.995. Controls on unit #3 reproduce unit #1's 0x10 / 0x0F / 0x0E
+ * within 0.01% / 0.12% / 0.18%, which is why one table holds both units.
+ *
+ * 0x08 AND 0x09 WERE NEVER INCOHERENT IN THE DEVICE. Read through acq with
+ * tones placed for their real rate they are as clean as 0x10; read through
+ * `spi3 opread` on the same code, unit, build and tones in the same run, the
+ * record tears (R2 0.09 / -0.22, folds miss by 100-200 bins). EXP-12/15 read
+ * them through opread with 40-420 Hz tones, which at 2.5-5 MS/s cover a
+ * fraction of a period per record: the "INCOHERENT" verdict was the
+ * instrument, exactly the possibility EXP-15 §6 left open. The mechanism of
+ * the tearing itself (Stlkv, #18) is still not established.
+ *
+ * As before, what is stored is what was fitted, never the round number.
+ */
+
+/*
  * Why each code is where it is. Three distinct kinds of "no":
+ * (SUPERSEDED 2026-10-01 for 0x06-0x0C: see EXTENDED above. Kept as written.)
  *
  *   0x06-0x09     INCOHERENT. Measured, and the records do not reproduce.
  *                 EXP-15 (2026-08-19) widened this from 0x08 alone: fitting all
@@ -195,14 +235,14 @@ static const float sample_rate[SCOPE_TIMEBASE_CODE_COUNT] = {
 static const scope_tb_tier_t tier_by_code[SCOPE_TIMEBASE_CODE_COUNT] = {
     SCOPE_TB_NONE, SCOPE_TB_NONE, SCOPE_TB_NONE, SCOPE_TB_NONE,
     SCOPE_TB_NONE, SCOPE_TB_NONE,
-    SCOPE_TB_NONE,          /* 0x06 incoherent   */
-    SCOPE_TB_NONE,          /* 0x07 incoherent   */
-    SCOPE_TB_NONE,          /* 0x08 incoherent   */
-    SCOPE_TB_NONE,          /* 0x09 incoherent   */
-    SCOPE_TB_NONE,          /* 0x0A unmeasurable */
-    SCOPE_TB_NONE,          /* 0x0B unmeasurable */
-    SCOPE_TB_NONE,          /* 0x0C unmeasurable */
-    SCOPE_TB_PROVISIONAL,   /* 0x0D              */
+    SCOPE_TB_PROVISIONAL,   /* 0x06 EXP-63, no fold, low tones off */
+    SCOPE_TB_PROVISIONAL,   /* 0x07 EXP-63, no fold */
+    SCOPE_TB_MEASURED,      /* 0x08 EXP-63       */
+    SCOPE_TB_MEASURED,      /* 0x09 EXP-63       */
+    SCOPE_TB_MEASURED,      /* 0x0A EXP-63       */
+    SCOPE_TB_MEASURED,      /* 0x0B EXP-63       */
+    SCOPE_TB_MEASURED,      /* 0x0C EXP-63       */
+    SCOPE_TB_MEASURED,      /* 0x0D EXP-63 (was PROVISIONAL, EXP-18) */
     SCOPE_TB_MEASURED,      /* 0x0E              */
     SCOPE_TB_MEASURED,      /* 0x0F              */
     SCOPE_TB_MEASURED,      /* 0x10              */
