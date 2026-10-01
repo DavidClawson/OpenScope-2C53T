@@ -394,7 +394,16 @@ uint32_t fw_loader_slot_crc(uint8_t slot)
 /* ── The installer ──────────────────────────────────────────────────── */
 #ifndef FW_LOADER_HOST_TEST
 
-#define RF __attribute__((section(".data.ramfunc"), noinline, used))
+/* RAM-resident. Besides the section, forbid the compiler from turning a loop
+ * into a call to memset/memcpy: those live in the app slot the installer is
+ * erasing. The maintainer-built v0.4.0 installer had exactly that — an
+ * unguarded `bl memset` (veneer in .data -> 0x08007C59, app-slot page 1)
+ * emitted for the 0xFF fill after rf_w25q_read_raw() — and hung on every
+ * bank-crossing install (EXP-57, EXP-59, EXP-62 A/B); GCC 15.3 at -Os
+ * happened to inline it. scripts/test_ramfunc_isolated.py fails the build
+ * if any branch from .data.ramfunc leaves RAM. */
+#define RF __attribute__((section(".data.ramfunc"), noinline, used, \
+                          optimize("no-tree-loop-distribute-patterns")))
 
 /* SPI2 + GPIOB, raw (CS = PB12, same wiring the flash_fs driver uses). */
 #define R_SPI2_STS  (*(volatile uint32_t *)0x40003808u)
