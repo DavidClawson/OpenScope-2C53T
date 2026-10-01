@@ -131,6 +131,19 @@ def main():
         sg.amp(mvpp, ch=1)
         return hz, mvpp
 
+    # The acq RAM buffer the badges read is refilled once per record: at a slow
+    # code (0x12: 410 ms per 1024 samples) a 0.6 s wait after a tone change can
+    # still measure the OLD tone (EXP-67 run 4: four reads of a 3.12-sample
+    # period = the previous cell's 800 Hz at 2,495 S/s). Wait at least three
+    # record durations, from the rates this build knows about.
+    FS_HINT = {0x10: 12490.0, 0x11: 4990.8, 0x12: 2494.9, 0x13: 1250.4, 0x14: 500.2,
+               0x0F: 24979.1, 0x0E: 49930.1, 0x0D: 124968.0, 0x0C: 250089.0,
+               0x0B: 500203.0, 0x0A: 1249691.0}
+
+    def settle_for(code):
+        fs = FS_HINT.get(code, 12490.0)
+        time.sleep(max(0.6, 3.0 * 1024.0 / fs))
+
     print("build:", sc.version().strip().replace("\r\n", " | "))
 
     results = []
@@ -147,7 +160,7 @@ def main():
             for want_mvpp in amps:
                 true_hz, mvpp = set_tone(tone, want_mvpp)
                 mvpp = int(round(mvpp))
-                time.sleep(0.6)
+                settle_for(code)
                 rows = read_measure(sc, args.reps)
                 vpp = med(rows, "vpp_uV")
                 vrms = med(rows, "vrms_uV")
