@@ -66,6 +66,7 @@ static esp_write_block_fn block_write = 0;
 static esp_status_fn status_provider = 0;
 static esp_button_fn button_injector = 0;
 static esp_meter_fn meter_provider = 0;
+static esp_wave_fn wave_provider = 0;
 
 /* Reported only when no status provider is bound (host tests, bare ESP32
  * bring-up). The firmware binds the real build string. */
@@ -120,6 +121,11 @@ void esp_comm_set_button_injector(esp_button_fn fn)
 void esp_comm_set_meter_provider(esp_meter_fn fn)
 {
     meter_provider = fn;
+}
+
+void esp_comm_set_waveform_provider(esp_wave_fn fn)
+{
+    wave_provider = fn;
 }
 
 void esp_comm_get_rx_stats(esp_rx_stats_t *out)
@@ -265,18 +271,27 @@ const esp_packet_t *esp_comm_get_packet(void)
 
 /* ─── Packet sender ─── */
 
-void esp_comm_send_response(uint8_t cmd, const uint8_t *payload, uint16_t len)
+/* One frame whose payload is two parts sent back to back (a header built on
+ * the stack and samples that live elsewhere), so a 1 KB record is never
+ * copied a second time just to sit behind its header. RAM is ~1.5 KB from
+ * full: there is no room for a contiguous 1048-byte response buffer. */
+static void send_frame2(uint8_t cmd, const uint8_t *a, uint16_t alen,
+                        const uint8_t *b, uint16_t blen)
 {
+    uint16_t len = (uint16_t)(alen + blen);
     uint8_t hdr[ESP_HEADER_SIZE] = {
         ESP_SYNC_BYTE, cmd, (uint8_t)(len >> 8), (uint8_t)(len & 0xFF)
     };
-    uint8_t chk = (uint8_t)(cmd ^ hdr[2] ^ hdr[3]) ^ esp_comm_checksum(payload, len);
+    uint8_t chk = (uint8_t)(cmd ^ hdr[2] ^ hdr[3]) ^ esp_comm_checksum(a, alen)
+                                                  ^ esp_comm_checksum(b, blen);
 
     if (block_write) {
-        /* Three writes, one task: nothing else can interleave on the port. */
+        /* One task writes the whole frame: nothing else can interleave. */
         block_write(hdr, ESP_HEADER_SIZE);
-        if (len)
-            block_write(payload, len);
+        if (alen)
+            block_write(a, alen);
+        if (blen)
+            block_write(b, blen);
         block_write(&chk, ESP_CHECKSUM_SIZE);
         return;
     }
@@ -285,9 +300,16 @@ void esp_comm_send_response(uint8_t cmd, const uint8_t *payload, uint16_t len)
     uint16_t i;
     for (i = 0; i < ESP_HEADER_SIZE; i++)
         uart_write(hdr[i]);
-    for (i = 0; i < len; i++)
-        uart_write(payload[i]);
+    for (i = 0; i < alen; i++)
+        uart_write(a[i]);
+    for (i = 0; i < blen; i++)
+        uart_write(b[i]);
     uart_write(chk);
+}
+
+void esp_comm_send_response(uint8_t cmd, const uint8_t *payload, uint16_t len)
+{
+    send_frame2(cmd, payload, len, 0, 0);
 }
 
 void esp_comm_send_ack(void)
@@ -437,6 +459,111 @@ static void handle_get_meter(const esp_packet_t *pkt)
     n = (uint16_t)(n + put_str(&out[n], m.unit));
     n = (uint16_t)(n + put_str(&out[n], m.display));
     esp_comm_send_response(ESP_RSP_METER_FRAME, out, n);
+}
+
+/* A measured number goes on the wire only with the confidence that makes it
+ * one: MEASURED or PROVISIONAL, and non-zero. A value the tier disowns (NONE)
+ * is zeroed rather than sent bare — derive the guard, do not trust the
+ * provider to keep the number and its tier in agreement (scope_cal.c). */
+static uint8_t tier_flag(uint8_t tier, uint32_t value, uint8_t measured, uint8_t provisional)
+{
+    if (value == 0)
+        return 0;
+    if (tier == ESP_TIER_MEASURED)
+        return measured;
+    if (tier == ESP_TIER_PROVISIONAL)
+        return provisional;
+    return 0;
+}
+
+static bool wave_channel_ok(const esp_wave_channel_t *ch)
+{
+    return ch->samples != 0 && ch->count != 0 && ch->count <= ESP_WAVE_MAX_SAMPLES;
+}
+
+static void send_wave_channel(const esp_wave_snapshot_t *w, uint8_t c)
+{
+    const esp_wave_channel_t *ch = &w->ch[c];
+    uint8_t hdr[ESP_WAVE_HDR_LEN];
+    uint8_t f = 0;      /* bit0 calibrated stays clear: no per-unit cal exists (§3.5) */
+    uint8_t tb, vd;
+
+    tb = w->timebase_disagrees ? 0      /* the rate belongs to a code not in force */
+                               : tier_flag(w->timebase_tier, w->sample_rate_hz,
+                                           ESP_WAVE_FLAG_TB_MEASURED,
+                                           ESP_WAVE_FLAG_TB_PROVISIONAL);
+    vd = tier_flag(ch->vdiv_tier, ch->uv_per_div,
+                   ESP_WAVE_FLAG_VDIV_MEASURED, ESP_WAVE_FLAG_VDIV_PROVISIONAL);
+    f |= tb | vd;
+    if (w->time_ordered)       f |= ESP_WAVE_FLAG_TIME_ORDERED;
+    if (w->timebase_disagrees) f |= ESP_WAVE_FLAG_TB_DISAGREES;
+
+    put_u32(&hdr[0], w->frame_id);
+    hdr[4] = c;
+    hdr[5] = f;
+    hdr[6] = w->timebase_idx;
+    hdr[7] = ch->vdiv_idx;
+    put_u16(&hdr[8], ch->count);
+    put_u16(&hdr[10], ESP_WAVE_HDR_LEN);
+    put_u32(&hdr[12], tb ? w->sample_rate_hz : 0);
+    put_u32(&hdr[16], vd ? ch->uv_per_div : 0);
+    put_u16(&hdr[20], w->counts_per_div);
+    put_u16(&hdr[22], w->head_skip);
+    send_frame2(ESP_RSP_WAVEFORM_FRAME, hdr, ESP_WAVE_HDR_LEN, ch->samples, ch->count);
+}
+
+/* WAVEFORM_FRAME v1 — layout in esp_comm.h (ESP_WAVE_HDR_LEN). */
+static void handle_get_waveform(const esp_packet_t *pkt)
+{
+    esp_wave_snapshot_t w;
+    uint8_t mask, c;
+
+    if (pkt->payload_len != 1) {
+        esp_comm_send_nak(ESP_ERR_BAD_LENGTH);
+        return;
+    }
+    mask = pkt->payload[0];
+    if (mask == 0 || (mask & (uint8_t)~ESP_WAVE_MASK_ALL) != 0) {
+        esp_comm_send_nak(ESP_ERR_BAD_ARG);
+        return;
+    }
+    if (!wave_provider) {
+        esp_comm_send_nak(ESP_ERR_UNSUPPORTED);
+        return;
+    }
+    memset(&w, 0, sizeof(w));
+    switch (wave_provider(mask, &w)) {
+    case ESP_WAVE_OK:
+        break;
+    case ESP_WAVE_WRONG_MODE:
+        esp_comm_send_nak(ESP_ERR_UNSUPPORTED_IN_MODE);   /* buffers not live outside scope mode */
+        return;
+    case ESP_WAVE_BUSY:
+        esp_comm_send_nak(ESP_ERR_NOT_READY);             /* no tear-free copy: retry */
+        return;
+    default:
+        esp_comm_send_nak(ESP_ERR_NO_CAPTURE_DATA);       /* no capture yet: never the demo trace */
+        return;
+    }
+    /* §2.3: the demo trace (or anything else that is not a capture) is
+     * refused, not sent with a flag the host might ignore. A provider that
+     * says OK and hands over a synthetic record is caught here. */
+    if (w.synthetic || w.frame_id == 0) {
+        esp_comm_send_nak(ESP_ERR_NO_CAPTURE_DATA);       /* refused whole: not a real record */
+        return;
+    }
+    /* All or nothing: check every requested channel before the first byte
+     * goes out, so a host never receives CH1 followed by a refusal. */
+    for (c = 0; c < 2; c++) {
+        if ((mask & (1u << c)) && !wave_channel_ok(&w.ch[c])) {
+            esp_comm_send_nak(ESP_ERR_NO_CAPTURE_DATA);   /* a channel without a record */
+            return;
+        }
+    }
+    for (c = 0; c < 2; c++) {
+        if (mask & (1u << c))
+            send_wave_channel(&w, c);
+    }
 }
 
 #if ESP_COMM_TRANSFER_STUBS
@@ -634,6 +761,7 @@ void esp_comm_process(const esp_packet_t *pkt)
     case ESP_CMD_STATUS:            handle_status(pkt); break;
     case ESP_CMD_BUTTON:            handle_button(pkt); break;
     case ESP_CMD_GET_METER:         handle_get_meter(pkt); break;
+    case ESP_CMD_GET_WAVEFORM:      handle_get_waveform(pkt); break;
 #if ESP_COMM_TRANSFER_STUBS
     /* ESP32 co-processor staging. The flash writes are still TODO, so these
      * are compiled only where that is understood (the legacy flow tests). */

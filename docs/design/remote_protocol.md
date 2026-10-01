@@ -1,7 +1,8 @@
 # OpenScope Remote Protocol — design spec
 
-**Status:** §6 first task implemented, plus `BUTTON` (M4) and `GET_METER` (M3 one-shot);
-see §9 for what changed from this design and why. Written 2026-08-13 in answer to
+**Status:** §6 first task implemented, plus `BUTTON` (M4), `GET_METER` (M3 one-shot) and
+`GET_WAVEFORM` (M5 one-shot; no stream, no live view yet); see §9 for what changed from this
+design and why. Written 2026-08-13 in answer to
 [issue #10](https://github.com/DavidClawson/OpenScope-2C53T/issues/10) (PC remote view/control).
 
 **Audience:** anyone who wants to build the host-side tool or the firmware-side endpoint.
@@ -291,7 +292,9 @@ u16  reserved
 u8[] samples             unsigned 8-bit ADC counts, as read from the FPGA
 ```
 
-12-byte header + 1024 samples = 1036 bytes, one packet per channel. This exceeds
+12-byte header + 1024 samples = 1036 bytes, one packet per channel. *(Implemented with a
+24-byte header — the measured sample rate and volts/div travel in it; see §9 and
+`esp_comm.h` for the final layout.)* This exceeds
 `ESP_MAX_PAYLOAD`, which is legal in this direction (§2.2) — but a `_Static_assert` or a runtime
 guard should document that the 256-byte cap is receive-only, so nobody "fixes" it later.
 
@@ -458,8 +461,9 @@ good configuration.
 ## 9. Implementation notes (2026-10-01)
 
 What exists now: `esp_comm` bound to CDC (`usb_debug.c`), host tool
-`tools/openscope_host/` (`openscope ports|info|press|meter|shell|screenshot`) and an MCP
-server over it. Gated by `scripts/test_remote_proto.py` (C suite + guard mutations) and
+`tools/openscope_host/` (`openscope ports|info|press|meter|scope|shell|screenshot`) and an MCP
+server over it (`scope_waveform` returns header, samples and a summary computed after the
+record-head defect). Gated by `scripts/test_remote_proto.py` (C suite + guard mutations) and
 `scripts/test_openscope_host.py` (host suites, including an end-to-end run against the real
 `esp_comm.c` compiled into a ctypes shim).
 
@@ -477,6 +481,12 @@ Where the implementation departs from, or sharpens, the design above:
 | Host after an error | — | waits > 50 ms and drains before the next request | so nothing stale lands in, or answers, the next request |
 | `GET_METER` payload | §3.5 | §3.5 plus length-prefixed display text; `NOT_READY` before the first reading; `UNSUPPORTED_IN_MODE` outside meter mode | keeps "OL" etc.; never a zero reading, never the frozen last reading |
 | STATUS battery | — | flag bit3 = battery unknown (no sample yet, e.g. booted on USB) | 0 % / 0 mV is not a measurement |
+| `WAVEFORM_FRAME` header | 12 B, `u16 reserved` | 24 B: `reserved` is `header_len`; appended `u32 sample_rate_hz`, `u32 uv_per_div`, `u16 counts_per_div`, `u16 head_skip` (`esp_comm.h`) | the host must not guess the scale: the rate and gain are the bench-measured tables (`scope_timebase.c`, `scope_cal.c`), 0 where none exists; `header_len` lets fields be appended without a major bump |
+| `WAVEFORM_FRAME` flags | bit0 calibrated | bit0 calibrated (always 0), bit1/bit2 rate/volts MEASURED, bit3 synthetic (never set), bit4/bit5 PROVISIONAL, bit6 time-ordered (trigger at 512), bit7 display/hardware timebase disagree (rate withheld) | flags are derived by the encoder from the tiers, never copied from the provider; a number its tier disowns is zeroed |
+| Synthetic data | `synthetic` flag if ever sent | never sent: `NO_CAPTURE_DATA` when `fpga_data_ready()` is false, when no record was ever committed (generation 0), or when the provider marks the record synthetic | a flag the host might ignore is weaker than a refusal (§2.3) |
+| `GET_WAVEFORM` coherence | — | `spi3 frame`'s generation bracket: CH1+CH2 copied into the shell scratch under one unchanged even `fpga_acq_frame_generation()`; `frame_id` is that generation | RAM-only, acquisition never parked; one request = one capture on both channels; no new static RAM (+4 B bss) |
+| `timebase_idx` | `scope_state` index | the reg 0x01 code in force (`fpga_acq_rate_idx_get()`); rate withheld when the display disagrees | the samples were taken at the hardware's code (the 2026-08-19 divergence) |
+| `GET_WAVEFORM` gates | — | `UNSUPPORTED_IN_MODE` outside scope mode; `NOT_READY` if no tear-free copy in 8 tries; `BAD_ARG` for mask 0 or bits above CH2; all channels validated before the first byte | the buffers are not live outside scope mode; never CH1 followed by a NAK |
 | Version | `"0.2.0-dev"` | the build string | the constant was stale |
 
 Transport health (issue #39): the Artery CDC class ignores `SET_CONTROL_LINE_STATE`, so a

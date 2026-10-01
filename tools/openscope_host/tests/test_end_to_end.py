@@ -52,6 +52,11 @@ def lib():
         L.shim_set_meter.argtypes = [ctypes.c_uint32, ctypes.c_float] + [ctypes.c_int] * 4 + [ctypes.c_char_p] * 2
         L.shim_set_meter_wrong_mode.argtypes = [ctypes.c_int]
         L.shim_set_status.argtypes = [ctypes.c_int] * 4 + [ctypes.c_uint32, ctypes.c_uint32, ctypes.c_int]
+        L.shim_set_wave_state.argtypes = [ctypes.c_int]
+        L.shim_set_waveform.argtypes = [ctypes.c_uint32, ctypes.c_int, ctypes.c_int, ctypes.c_int,
+                                        ctypes.c_uint32, ctypes.c_int, ctypes.c_int, ctypes.c_int]
+        L.shim_set_wave_channel.argtypes = [ctypes.c_int, ctypes.c_char_p, ctypes.c_int, ctypes.c_int,
+                                            ctypes.c_int, ctypes.c_uint32]
         _LIB = L
     return _LIB
 
@@ -259,6 +264,195 @@ class TestMeter(unittest.TestCase):
         rows = list(csv.DictReader(open(log)))
         self.assertEqual(rows[0]["display"], "3.300")
         self.assertEqual(rows[0]["raw_bcd"], "3300")
+
+
+def sine(period, n=1024, mid=128, amp=60, head_zeros=0):
+    import math
+    s = [max(0, min(255, int(round(mid + amp * math.sin(2 * math.pi * i / period))))) for i in range(n)]
+    for i in range(head_zeros):
+        s[i] = 0                                     # the record-head defect (scope_record.h)
+    return bytes(s)
+
+
+def arm_waveform(dev, frame_id=1000, step=2, tb=0x10, tb_tier=2, rate=12490, ordered=1, disagrees=0,
+                 ch1=None, ch2=None, vdiv1=(6, 2, 1264486), vdiv2=(8, 1, 6586022)):
+    L = dev.link.L
+    L.shim_set_waveform(frame_id, step, tb, tb_tier, rate, ordered, disagrees, 128)
+    c1 = ch1 if ch1 is not None else sine(40.0, head_zeros=64)
+    c2 = ch2 if ch2 is not None else bytes((0xAA ^ i) & 0xFF for i in range(1024))
+    L.shim_set_wave_channel(0, c1, len(c1), *vdiv1)
+    L.shim_set_wave_channel(1, c2, len(c2), *vdiv2)
+    return c1, c2
+
+
+class TestWaveform(unittest.TestCase):
+    """GET_WAVEFORM through the firmware's own encoder (esp_comm.c)."""
+
+    def test_both_channels_roundtrip(self):
+        dev = device()
+        c1, c2 = arm_waveform(dev)
+        w1, w2 = dev.waveform(3)
+        self.assertEqual((w1.channel, w2.channel), (0, 1))
+        self.assertEqual(w1.frame_id, w2.frame_id, "one request = one capture")
+        self.assertEqual((w1.samples, w2.samples), (c1, c2), "samples byte for byte (CH2 holds 0xAA bytes)")
+        self.assertEqual((w1.timebase_idx, w1.sample_rate_hz, w1.timebase_tier), (0x10, 12490, "measured"))
+        self.assertEqual((w1.vdiv_idx, w1.uv_per_div, w1.vdiv_tier), (6, 1264486, "measured"))
+        self.assertEqual((w2.vdiv_idx, w2.vdiv_tier), (8, "provisional"))
+        self.assertTrue(w1.time_ordered and not w1.calibrated and not w1.timebase_disagrees)
+        self.assertEqual((w1.counts_per_div, w1.head_skip, w1.sample_count), (32, 128, 1024))
+
+    def test_single_channel_and_frame_id_advances(self):
+        dev = device()
+        arm_waveform(dev, frame_id=1000, step=2)
+        a = dev.waveform(2)
+        b = dev.waveform(2)
+        self.assertEqual([w.channel for w in a], [1])
+        self.assertEqual(b[0].frame_id, a[0].frame_id + 2)
+
+    def test_no_capture_data_is_a_refusal_not_a_trace(self):
+        dev = device()                                   # shim starts with no capture
+        with self.assertRaises(Nak) as cm:
+            dev.waveform(1)
+        self.assertEqual(proto.ERRORS[cm.exception.code], "NO_CAPTURE_DATA")
+        err = io.StringIO()
+        with mock.patch.object(cli.Device, "open", return_value=dev), redirect_stderr(err), \
+                redirect_stdout(io.StringIO()):
+            self.assertEqual(cli.main(["scope", "--out", os.path.join(tempfile.mkdtemp(), "x.csv")]), 2)
+        self.assertIn("NO_CAPTURE_DATA", err.getvalue())
+        self.assertIn("demo", err.getvalue())
+
+    def test_lying_provider_never_reaches_the_host(self):
+        dev = device()
+        arm_waveform(dev)
+        dev.link.L.shim_set_wave_state(4)                # provider: OK + synthetic record
+        with self.assertRaises(Nak) as cm:
+            dev.waveform(3)
+        self.assertEqual(proto.ERRORS[cm.exception.code], "NO_CAPTURE_DATA")
+
+    def test_wrong_mode_and_busy(self):
+        dev = device()
+        arm_waveform(dev)
+        dev.link.L.shim_set_wave_state(2)
+        with self.assertRaises(Nak) as cm:
+            dev.waveform(1)
+        self.assertEqual(proto.ERRORS[cm.exception.code], "UNSUPPORTED_IN_MODE")
+        dev.link.L.shim_set_wave_state(3)
+        with self.assertRaises(Nak) as cm:
+            dev.waveform(1)
+        self.assertEqual(proto.ERRORS[cm.exception.code], "NOT_READY")
+
+    def test_bad_mask_refused_on_both_sides(self):
+        dev = device()
+        arm_waveform(dev)
+        for bad in (0, 4, 7):
+            with self.assertRaises(ValueError):
+                dev.waveform(bad)
+        with self.assertRaises(Nak) as cm:               # the firmware's own guard, bypassing the host's
+            dev.request_many(proto.CMD_GET_WAVEFORM, b"\x04", (proto.RSP_WAVEFORM_FRAME,))
+        self.assertEqual(proto.ERRORS[cm.exception.code], "BAD_ARG")
+
+    def test_unmeasured_numbers_are_withheld(self):
+        dev = device()
+        arm_waveform(dev, tb=0x08, tb_tier=0, rate=1414, vdiv1=(2, 0, 9999))   # incoherent code, railed range
+        w = dev.waveform(1)[0]
+        self.assertEqual((w.sample_rate_hz, w.uv_per_div), (0, 0), "a number its tier disowns never travels")
+        self.assertIsNone(w.volts_per_count)
+        sm = w.summary()
+        self.assertIsNone(sm["vpp_volts"])
+        self.assertIn("no measured volts/div", sm["vpp_note"])
+        self.assertIsNone(sm["frequency_hz"])
+        self.assertAlmostEqual(sm["period_samples"], 40.0, delta=0.3)
+
+    def test_display_hardware_disagreement_withholds_rate(self):
+        dev = device()
+        arm_waveform(dev, disagrees=1)
+        w = dev.waveform(1)[0]
+        self.assertTrue(w.timebase_disagrees)
+        self.assertEqual(w.sample_rate_hz, 0)
+        self.assertIn("disagree", w.summary()["frequency_note"])
+
+    def test_summary_skips_the_head_defect(self):
+        dev = device()
+        arm_waveform(dev)                                # sine 128 +/- 60 with 64 zeros at the head
+        sm = dev.waveform(1)[0].summary()
+        self.assertEqual(sm["analysed_from"], 128)
+        self.assertGreaterEqual(sm["min_counts"], 60, "the zeroed head leaked into the statistics")
+        self.assertNotIn("clipped", sm)
+        self.assertAlmostEqual(sm["frequency_hz"], 12490 / 40.0, delta=2.0)
+        self.assertAlmostEqual(sm["vpp_volts"], 120 * 1264486 / 1e6 / 32, delta=0.05)
+
+    def test_cli_scope_writes_csv(self):
+        import csv
+        dev = device()
+        c1, c2 = arm_waveform(dev, step=2)
+        out = os.path.join(tempfile.mkdtemp(), "cap.csv")
+        so = io.StringIO()
+        with mock.patch.object(cli.Device, "open", return_value=dev), mock.patch("time.sleep"), \
+                redirect_stdout(so):
+            self.assertEqual(cli.main(["scope", "--frames", "2", "--channels", "1,2", "--out", out]), 0)
+        with open(out, newline="") as f:
+            rows = list(csv.DictReader(f))
+        self.assertEqual(len(rows), 2 * 2 * 1024)
+        self.assertEqual(rows[0]["frame_id"], "1000")
+        self.assertEqual(rows[-1]["frame_id"], "1002", "two DISTINCT captures")
+        ch2 = [int(r["sample"]) for r in rows if r["frame_id"] == "1000" and r["channel"] == "2"]
+        self.assertEqual(bytes(ch2), c2)
+        self.assertEqual(rows[0]["in_head_defect"], "1")
+        self.assertEqual(rows[128]["in_head_defect"], "0")
+        self.assertAlmostEqual(float(rows[100]["t_s"]), 100 / 12490, places=9)
+        self.assertEqual(rows[0]["sample_rate_hz"], "12490")
+        self.assertIn("saved", so.getvalue())
+
+    def test_cli_scope_gives_up_on_a_held_capture(self):
+        dev = device()
+        arm_waveform(dev, step=0)                        # frame_id never advances (STOP / SINGLE)
+        clock = {"t": 0.0}
+
+        def fake_now():
+            clock["t"] += 1.0
+            return clock["t"]
+        out = os.path.join(tempfile.mkdtemp(), "held.csv")
+        err = io.StringIO()
+        with mock.patch.object(cli.Device, "open", return_value=dev), mock.patch("time.sleep"), \
+                mock.patch.object(cli, "_now", fake_now), redirect_stdout(io.StringIO()), redirect_stderr(err):
+            self.assertEqual(cli.main(["scope", "--frames", "3", "--out", out]), 2)
+        self.assertIn("stopped or held", err.getvalue())
+        self.assertTrue(os.path.exists(out), "the one real capture is still saved (marked partial)")
+
+    def test_cli_scope_npz(self):
+        try:
+            import numpy as np
+        except ImportError:
+            self.skipTest("numpy not installed (npz is optional; CSV is always available)")
+        dev = device()
+        c1, c2 = arm_waveform(dev, step=2)
+        out = os.path.join(tempfile.mkdtemp(), "cap.npz")
+        with mock.patch.object(cli.Device, "open", return_value=dev), mock.patch("time.sleep"), \
+                redirect_stdout(io.StringIO()):
+            self.assertEqual(cli.main(["scope", "--frames", "3", "--channels", "1,2", "--out", out]), 0)
+        z = np.load(out)
+        self.assertEqual(z["samples"].shape, (3, 2, 1024))
+        self.assertEqual(bytes(z["samples"][0, 0]), c1)
+        self.assertEqual(list(z["frame_id"]), [1000, 1002, 1004])
+        self.assertEqual(list(z["channels"]), [1, 2])
+        self.assertEqual(int(z["sample_rate_hz"][0]), 12490)
+        self.assertIn("not calibrated", str(z["note"]))
+
+    def test_cli_npz_without_numpy_is_a_usage_error_before_capturing(self):
+        import builtins
+        real_import = builtins.__import__
+
+        def no_numpy(name, *a, **kw):
+            if name == "numpy":
+                raise ImportError("no numpy")
+            return real_import(name, *a, **kw)
+        dev = device()
+        arm_waveform(dev)
+        err = io.StringIO()
+        with mock.patch.object(cli.Device, "open", return_value=dev), \
+                mock.patch("builtins.__import__", no_numpy), redirect_stderr(err):
+            self.assertEqual(cli.main(["scope", "--out", "x.npz"]), cli.EXIT_USAGE)
+        self.assertIn("numpy", err.getvalue())
 
 
 class TestSharedStream(unittest.TestCase):

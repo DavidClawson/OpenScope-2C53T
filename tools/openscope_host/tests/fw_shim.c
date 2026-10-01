@@ -18,6 +18,43 @@ static esp_meter_result_t meter(esp_meter_snapshot_t *o) { if (meter_wrong) retu
 void shim_set_meter_wrong_mode(int w) { meter_wrong = w; }
 static bool inject(uint8_t id) { if (!inject_ok) return false; last_button = id; presses++; return true; }
 
+/* Waveform provider. wave_state: 0 ok, 1 no capture data, 2 wrong mode,
+ * 3 busy, 4 = LIES: answers OK with a synthetic record (must be refused).
+ * wave_step > 0 advances frame_id by that much per request, like a live
+ * acquisition; 0 holds it (a stopped scope). */
+static esp_wave_snapshot_t wv;
+static uint8_t wv_s[2][ESP_WAVE_MAX_SAMPLES];
+static int wave_state = 1, wave_step = 0;
+static esp_wave_result_t wave(uint8_t mask, esp_wave_snapshot_t *o)
+{
+    (void)mask;
+    if (wave_state == 1) return ESP_WAVE_NO_DATA;
+    if (wave_state == 2) return ESP_WAVE_WRONG_MODE;
+    if (wave_state == 3) return ESP_WAVE_BUSY;
+    *o = wv;
+    o->synthetic = (wave_state == 4);
+    wv.frame_id += (uint32_t)wave_step;
+    return ESP_WAVE_OK;
+}
+void shim_set_wave_state(int state) { wave_state = state; }
+void shim_set_waveform(uint32_t frame_id, int step, int tb_idx, int tb_tier, uint32_t rate_hz,
+                       int time_ordered, int tb_disagrees, int head_skip)
+{
+    wv.frame_id = frame_id; wave_step = step; wv.timebase_idx = (uint8_t)tb_idx;
+    wv.timebase_tier = (uint8_t)tb_tier; wv.sample_rate_hz = rate_hz;
+    wv.time_ordered = time_ordered != 0; wv.timebase_disagrees = tb_disagrees != 0;
+    wv.counts_per_div = 32; wv.head_skip = (uint16_t)head_skip;
+    wave_state = 0;
+}
+void shim_set_wave_channel(int ch, const uint8_t *samples, int n, int vdiv_idx, int vdiv_tier, uint32_t uv_per_div)
+{
+    esp_wave_channel_t *c = &wv.ch[ch ? 1 : 0];
+    if (n > ESP_WAVE_MAX_SAMPLES) n = ESP_WAVE_MAX_SAMPLES;
+    memcpy(wv_s[ch ? 1 : 0], samples, (size_t)n);
+    c->samples = wv_s[ch ? 1 : 0]; c->count = (uint16_t)n;
+    c->vdiv_idx = (uint8_t)vdiv_idx; c->vdiv_tier = (uint8_t)vdiv_tier; c->uv_per_div = uv_per_div;
+}
+
 void shim_init(void)
 {
     esp_comm_init();
@@ -25,6 +62,8 @@ void shim_init(void)
     esp_comm_set_status_provider(status);
     esp_comm_set_button_injector(inject);
     esp_comm_set_meter_provider(meter);
+    esp_comm_set_waveform_provider(wave);
+    memset(&wv, 0, sizeof wv); wave_state = 1; wave_step = 0;
     meter_ok = 0; meter_wrong = 0; memset(&mt, 0, sizeof mt);
     tx_n = sh_n = 0; presses = 0; last_button = -1; inject_ok = 1;
     memset(&st, 0, sizeof st);

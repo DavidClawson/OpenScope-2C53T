@@ -54,6 +54,7 @@
 #include "../ui/scope_measure.h"
 #include "../ui/scope_timebase.h"
 #include "../ui/scope_mask.h"
+#include "../ui/scope_record.h"
 #include "../ui/meter_voltage_wave.h"
 
 #include "fpga_cal_table.h"
@@ -8402,6 +8403,108 @@ static esp_meter_result_t remote_meter(esp_meter_snapshot_t *m)
     return ESP_METER_OK;
 }
 
+/* GET_WAVEFORM (§3.4/§3.5): a coherent copy of the committed record, never
+ * the live buffer and never the demo trace.
+ *
+ * Coherence is `spi3 frame`'s, not a bus park: the acq task commits CH1+CH2
+ * with two memcpys bracketed by the frame generation (odd = committing), so
+ * a copy bracketed by one unchanged EVEN generation is one capture on both
+ * channels. RAM only — no SPI3 traffic, acquisition stays live, nothing to
+ * release on any exit. (fpga_acq_pause() exists for shell commands that
+ * drive the bus; parking the acq task for up to 1 s to copy 2 KB of RAM
+ * would perturb the cadence the trace depends on, for no gain.)
+ *
+ * Generation 0 is refused as NO_DATA: it means no record was ever committed
+ * through staging — roll mode publishes data_ready without one, and a failed
+ * staging allocation writes in place, where no copy can be proven untorn.
+ *
+ * The copy lands in shell_bus_scratch (CH1 at [0], CH2 at [1024]): this runs
+ * on the shell task, between shell commands, and never while fw_loader owns
+ * the scratch (its RX bypasses remote_route()). The bytes are sent before
+ * the next shell command can run, so nothing overwrites them in flight. */
+_Static_assert(sizeof(shell_bus_scratch) >= 2u * FPGA_ADC_BUF_SIZE,
+               "GET_WAVEFORM copies both channels into the shell scratch");
+_Static_assert(FPGA_ADC_BUF_SIZE <= ESP_WAVE_MAX_SAMPLES,
+               "a record must fit one WAVEFORM_FRAME");
+_Static_assert((int)SCOPE_CAL_NONE == ESP_TIER_NONE &&
+               (int)SCOPE_CAL_PROVISIONAL == ESP_TIER_PROVISIONAL &&
+               (int)SCOPE_CAL_MEASURED == ESP_TIER_MEASURED &&
+               (int)SCOPE_TB_NONE == ESP_TIER_NONE &&
+               (int)SCOPE_TB_PROVISIONAL == ESP_TIER_PROVISIONAL &&
+               (int)SCOPE_TB_MEASURED == ESP_TIER_MEASURED,
+               "wire tiers mirror scope_cal / scope_timebase tiers");
+
+static uint32_t round_u32(float v)
+{
+    return (v > 0.0f) ? (uint32_t)(v + 0.5f) : 0u;
+}
+
+static esp_wave_result_t remote_waveform(uint8_t mask, esp_wave_snapshot_t *w)
+{
+    const volatile uint8_t *c1, *c2;
+    uint8_t *s1 = shell_bus_scratch;
+    uint8_t *s2 = shell_bus_scratch + FPGA_ADC_BUF_SIZE;
+    uint32_t g0 = 0, g1 = 1;
+    bool ordered = false;
+
+    if (current_mode != MODE_OSCILLOSCOPE)
+        return ESP_WAVE_WRONG_MODE;
+    if (!fpga_data_ready())
+        return ESP_WAVE_NO_DATA;
+    c1 = fpga_get_ch1_buf();
+    c2 = fpga_get_ch2_buf();
+    if (!c1 || !c2)
+        return ESP_WAVE_NO_DATA;
+
+    for (uint8_t tries = 0; tries < 8; tries++) {
+        g0 = fpga_acq_frame_generation();
+        if (g0 == 0u)
+            return ESP_WAVE_NO_DATA;        /* no committed record (see above) */
+        if (g0 & 1u) {                      /* mid-commit: wait it out */
+            vTaskDelay(pdMS_TO_TICKS(1));
+            continue;
+        }
+        if (mask & ESP_WAVE_MASK_CH1)
+            for (uint32_t i = 0; i < FPGA_ADC_BUF_SIZE; i++) s1[i] = c1[i];
+        if (mask & ESP_WAVE_MASK_CH2)
+            for (uint32_t i = 0; i < FPGA_ADC_BUF_SIZE; i++) s2[i] = c2[i];
+        ordered = fpga_acq_record_time_ordered();   /* published inside the same seqlock */
+        g1 = fpga_acq_frame_generation();
+        if (g1 == g0)
+            break;
+        vTaskDelay(pdMS_TO_TICKS(1));
+    }
+    if (g1 != g0 || (g0 & 1u))
+        return ESP_WAVE_BUSY;
+
+    const scope_state_t *ss = scope_state_get();
+    const uint8_t code = fpga_acq_rate_idx_get();   /* what the FPGA samples at */
+
+    w->frame_id           = g0;
+    w->timebase_idx       = code;
+    /* Same rule as fft_live_rate_in_force(): a rate is claimed only when the
+     * display and the hardware agree on the code (the 2026-08-19 divergence). */
+    w->timebase_disagrees = (code != ss->timebase_idx);
+    w->timebase_tier      = (uint8_t)scope_timebase_get_tier(code);
+    w->sample_rate_hz     = round_u32(scope_timebase_sample_rate(code));
+    w->time_ordered       = ordered;
+    w->synthetic          = false;          /* the FPGA buffers only ever hold captures */
+    w->counts_per_div     = (uint16_t)SCOPE_CAL_COUNTS_PER_DIV;
+    w->head_skip          = SCOPE_RECORD_HEAD_SKIP;
+    for (uint8_t c = 0; c < 2; c++) {
+        const uint8_t ch = (uint8_t)(c + 1u);
+        const uint8_t r = c ? ss->ch2.vdiv_idx : ss->ch1.vdiv_idx;
+        if (!(mask & (1u << c)))
+            continue;
+        w->ch[c].samples    = c ? s2 : s1;
+        w->ch[c].count      = FPGA_ADC_BUF_SIZE;
+        w->ch[c].vdiv_idx   = r;
+        w->ch[c].vdiv_tier  = (uint8_t)scope_cal_get_tier(ch, r);
+        w->ch[c].uv_per_div = round_u32(scope_cal_volts_per_div(ch, r) * 1e6f);
+    }
+    return ESP_WAVE_OK;
+}
+
 static void remote_to_shell(const uint8_t *data, uint16_t len, void *ctx)
 {
     (void)ctx;
@@ -8464,6 +8567,7 @@ static void vUsbDebugTask(void *pvParameters)
     esp_comm_set_status_provider(remote_status);
     esp_comm_set_button_injector(button_scan_inject);
     esp_comm_set_meter_provider(remote_meter);
+    esp_comm_set_waveform_provider(remote_waveform);
 
     for (;;) {
         bool did_work = false;

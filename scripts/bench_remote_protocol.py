@@ -17,6 +17,13 @@ Steps
   mode     acceptance criterion of remote_protocol.md §6: the operator changes
            mode on the device; STATUS must follow (interactive, --no-interactive skips)
   meter    10 GET_METER readings (meter mode) or the expected UNSUPPORTED_IN_MODE
+  waveform GET_WAVEFORM (M5). Outside scope mode: must be UNSUPPORTED_IN_MODE; with
+           STATUS capture_ready false: must be NO_CAPTURE_DATA. Otherwise controls:
+           synthetic/calibrated flags clear; CH1/CH2 one frame_id; the record is not
+           flat (VOID: feed a signal) and not an exactly-repeating LUT pattern (the
+           demo trace's shape); two reads within 3 s carry different frame_ids; and,
+           when `spi3 frame` (RAM-only) lands on the same generation, its bytes must
+           equal the frame's. Saves waveform_first.csv.
   soak     #39: `flash dump` the W25Q for --soak-mb MB in 1 KB requests, first
            with `usbstat heal off` (the control: it must wedge) and then `heal on`; records stalls,
            host_slow, heals, reconnects and the endpoint register at the stall.
@@ -27,16 +34,18 @@ from __future__ import annotations
 import argparse
 import json
 import os
+import re
 import sys
 import time
 import zlib
 
 sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "tools", "openscope_host"))
 from openscope import proto  # noqa: E402
+from openscope.cli import write_capture_csv  # noqa: E402
 from openscope.device import Device, DeviceError, Nak, Timeout  # noqa: E402
 from openscope.screen import png_bytes  # noqa: E402
 
-STEPS = ("info", "crumbs", "press", "mode", "meter", "soak")
+STEPS = ("info", "crumbs", "press", "mode", "meter", "waveform", "soak")
 
 
 def shot(dev, out, name, log):
@@ -135,6 +144,114 @@ def step_meter(dev, a, r, log):
     return fresh
 
 
+def _repeating_period(body, max_period=64):
+    """Shortest p in 2..max_period with body[i] == body[i-p] for EVERY i. The
+    UI's demo trace comes from a 64-entry LUT stepped per pixel; a real ADC
+    record never repeats byte-exactly across ~900 samples. Call on a body that
+    is not flat (a flat record repeats with every period)."""
+    for p in range(2, max_period + 1):
+        if all(body[i] == body[i - p] for i in range(p, len(body))):
+            return p
+    return None
+
+
+SPI3_FRAME_HDR = re.compile(r"FRAME gen=(\d+) coherent=(\d)")
+
+
+def _parse_spi3_frame(text):
+    """`spi3 frame` -> (gen, coherent, ch1 bytes, ch2 bytes), or None."""
+    m = SPI3_FRAME_HDR.search(text)
+    if not m:
+        return None
+    chans, cur = {}, None
+    for line in text.splitlines():
+        line = line.strip()
+        if line.startswith(("CH1 (", "CH2 (")):
+            cur = line[:3]
+            chans[cur] = bytearray()
+        elif cur and re.match(r"^[0-9A-F]{4}:", line):
+            chans[cur] += bytes(int(x, 16) for x in line[5:].split())
+    if len(chans.get("CH1", b"")) != 1024 or len(chans.get("CH2", b"")) != 1024:
+        return None
+    return int(m.group(1)), m.group(2) == "1", bytes(chans["CH1"]), bytes(chans["CH2"])
+
+
+def step_waveform(dev, a, r, log):
+    st = dev.status()
+    res = {"mode": st.mode_name, "capture_ready": st.capture_ready}
+    r["waveform"] = res
+    if st.mode_name != "scope" or not st.capture_ready:
+        expect = "UNSUPPORTED_IN_MODE" if st.mode_name != "scope" else "NO_CAPTURE_DATA"
+        try:
+            w = dev.waveform(1)
+            res["error"] = f"answered with frame {w[0].frame_id} where {expect} was due"
+            log(f"  FAIL: {res['error']}")
+            return False
+        except Nak as e:
+            res["refusal"] = proto.ERRORS.get(e.code, hex(e.code))
+        log(f"  mode {st.mode_name}, capture_ready {st.capture_ready}: refused with "
+            f"{res['refusal']} (expected {expect}). Switch to scope mode with a live "
+            "capture to run the capture controls.")
+        return res["refusal"] == expect
+
+    checks = {}
+    w = dev.waveform(3)
+    write_capture_csv(os.path.join(a.out, "waveform_first.csv"), [(time.time(), w)])
+    res["first"] = [dict(x.header(), summary=x.summary()) for x in w]
+    for x in w:
+        log(f"  {x.channel_name} #{x.frame_id}: {x.summary()}")
+    checks["synthetic_and_calibrated_clear"] = all(
+        not (x.flags & (proto.WAVE_FLAG_SYNTHETIC | proto.WAVE_FLAG_CALIBRATED)) for x in w)
+    checks["one_frame_id_for_both_channels"] = w[0].frame_id == w[1].frame_id
+    body = w[0].body
+    if len(set(body)) == 1:
+        res["void"] = f"CH1 is flat ({body[0]}): cannot tell a capture from a constant; feed a signal"
+        log(f"  VOID: {res['void']}")
+        checks["not_a_repeating_pattern"] = None
+    else:
+        period = _repeating_period(body)
+        checks["not_a_repeating_pattern"] = period is None
+        if period:
+            log(f"  CH1 repeats EXACTLY every {period} samples: a synthesised pattern, not a capture")
+
+    ids = [w[0].frame_id]
+    deadline = time.time() + 3.0
+    while time.time() < deadline and len(set(ids)) < 2:
+        time.sleep(0.1)
+        ids.append(dev.waveform(1)[0].frame_id)
+    checks["frame_id_advances"] = len(set(ids)) > 1
+    if not checks["frame_id_advances"]:
+        log(f"  frame_id stuck at {ids[0]} for 3 s: acquisition stopped/held (RUN/STOP, SINGLE?)")
+
+    # Identity: the frame's bytes are the acquisition buffer's, when both
+    # reads catch the same generation. Live AUTO rarely allows it (a commit
+    # every ~30 ms vs a ~0.2 s shell dump): no match is inconclusive, a
+    # mismatch AT THE SAME generation is a failure.
+    identity = None
+    for _ in range(a.wave_tries):
+        w = dev.waveform(3)
+        parsed = _parse_spi3_frame(dev.shell("spi3 frame", timeout=10.0))
+        if parsed is None:
+            log("  `spi3 frame` output not parseable; identity check skipped")
+            break
+        gen, coherent, c1, c2 = parsed
+        if coherent and gen == w[0].frame_id:
+            identity = (c1 == w[0].samples and c2 == w[1].samples)
+            log(f"  same generation {gen}: frame bytes {'==' if identity else '!='} `spi3 frame` bytes")
+            break
+    if identity is None:
+        log("  identity vs `spi3 frame`: inconclusive (never the same generation; a held record "
+            "- trigmode single - makes it decisive)")
+    checks["identity_vs_spi3_frame"] = identity
+    res["checks"] = checks
+    res["frame_ids"] = ids
+    log(f"  checks: {checks}")
+    gating = [v for k, v in checks.items() if k != "identity_vs_spi3_frame"]
+    if None in gating:
+        return False                                   # VOID is not a pass
+    return all(gating) and identity is not False
+
+
 def _flash_dump(dev, addr, n, deadline_s=4.0):
     ser = dev.link._ser
     ser.reset_input_buffer()
@@ -213,6 +330,8 @@ def main():
     ap.add_argument("--only", help="comma-separated subset of: " + ",".join(STEPS))
     ap.add_argument("--soak-mb", type=int, default=16)
     ap.add_argument("--no-interactive", action="store_true")
+    ap.add_argument("--wave-tries", type=int, default=10,
+                    help="waveform: attempts to catch `spi3 frame` on the same generation")
     a = ap.parse_args()
     os.makedirs(a.out, exist_ok=True)
     steps = a.only.split(",") if a.only else list(STEPS)

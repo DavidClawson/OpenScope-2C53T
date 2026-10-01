@@ -37,6 +37,7 @@ class ScopeSession:
         self._opener = opener
         self._dev: Optional[Device] = None
         self._lock = threading.Lock()
+        self._last_frame_id: Optional[int] = None
 
     def _device(self) -> Device:
         if self._dev is None:
@@ -91,6 +92,44 @@ class ScopeSession:
                 "raw_bcd": m.raw_bcd, "decimal_pos": m.decimal_pos, "update_count": m.update_count,
                 "submode": m.submode, "ac": m.ac, "autorange": m.autorange, "hold": m.hold,
                 "note": "absolute accuracy is unverified on this unit; raw_bcd is what the meter chip reported",
+            }
+        return self._call(run)
+
+    def waveform(self, channels: Optional[List[int]] = None) -> dict:
+        """One capture as header + raw samples + a compact summary per channel.
+        Refusals are explained, never papered over: no capture yet, wrong
+        mode, unmeasured volts or rate all say what is missing and why."""
+        try:
+            mask = proto.channel_mask(channels if channels else [1])
+        except ValueError as e:
+            raise RuntimeError(str(e)) from None
+
+        def run(dev: Device) -> dict:
+            try:
+                waves = dev.waveform(mask)
+            except Nak as e:
+                name = proto.ERRORS.get(e.code, "")
+                raise RuntimeError(f"{e}: {proto.NAK_HINTS.get(name, 'refused')}") from None
+            fid = waves[0].frame_id
+            notes = [
+                "samples are raw unsigned 8-bit ADC counts (0..255); calibrated=false: this unit has "
+                "no calibration, so there are no absolute volts",
+                f"samples[0:{waves[0].head_skip}] are a known record-head defect; the summary uses "
+                "the rest",
+            ]
+            if waves[0].time_ordered:
+                notes.append("record is time-ordered: the hardware trigger is at index 512")
+            else:
+                notes.append("record is not time-ordered: the trigger position in it is unknown")
+            if fid == self._last_frame_id:
+                notes.append("same frame_id as the previous call: no new capture since then "
+                             "(acquisition stopped or held: RUN/STOP, SINGLE, or NORMAL without a trigger)")
+            self._last_frame_id = fid
+            return {
+                "frame_id": fid,
+                "channels": [dict(w.header(), summary=w.summary(), samples=list(w.samples))
+                             for w in waves],
+                "notes": notes,
             }
         return self._call(run)
 
@@ -177,6 +216,17 @@ def build_server(session: ScopeSession):
         call again to see whether the value moved. NOT_READY means no reading yet;
         UNSUPPORTED_IN_MODE means the scope is not in meter mode (press MENU to change)."""
         return expected(lambda: session.meter())()
+
+    @mcp.tool(annotations=read_only)
+    def scope_waveform(channels: Optional[List[int]] = None) -> dict:
+        """One captured waveform per channel ([1], [2] or [1, 2]; default [1]), both from
+        the same capture (same frame_id). Each channel: header (sample rate and volts/div
+        only where bench-measured, else null with the reason), a summary (min/max/mean
+        counts, approximate Vpp, period and frequency estimate - computed after the
+        record-head defect), and the 1024 raw ADC-count samples. Call again: a new
+        frame_id means a new capture. NO_CAPTURE_DATA means the scope has no real capture
+        (it never sends its demo trace); UNSUPPORTED_IN_MODE means it is not in scope mode."""
+        return expected(lambda: session.waveform(channels))()
 
     @mcp.tool(annotations=ToolAnnotations(readOnlyHint=False, destructiveHint=False,
                                           idempotentHint=False, openWorldHint=False))
