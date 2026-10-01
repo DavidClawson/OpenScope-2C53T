@@ -147,7 +147,21 @@ Decision cells (r6, r7), per §2:
 - Only CH1's badges are decoded by the script (CH2 contributes `pp2`/`Vpp2` only).
 
 ## 7. Conclusion
+### Run 4 — r7 and r6 on a build with the harmonic windows on the interpolated comb (`dumps/exp67_run4.log`, `exp67_run4_raw.log`)
+Build: `guest-coldtrace` from `fix/freq-sharpness-fractional-harmonics` (origin/main + the one-line change in `scope_freq.c`), `Build: Oct  1 2026 18:39:14`; same wiring, same script, same tones.
+
+| code | r7 freq answered (runs 1–3 → run 4) | r7 f err | r6 freq answered | r7 Vrms err | r7 Vpp err |
+|---|---|---|---|---|---|
+| 0x0F | 9/10, 5/10, 0/10 → **10/10** | +0.22% | 10/10 | +3.6% | +9.6% |
+| 0x10 | 0/10, 10/10, 10/10 → **10/10** | +0.06% | 10/10 | +5.7% | +13.3% |
+| 0x0E | 7/10, 8/10 → **10/10** | +0.01% | 10/10 | +4.7% | +10.8% |
+| 0x12 | 10/10, 6/10, 7/10 → **6/10** | −0.18% | 10/10 | +6.5% | +10.8% |
+
+- The three codes with the fundamental between bins (32.8) now answer on every read; the comb placement was their cause. r6 answers 40/40 as before.
+- r7 at 0x12 (100 Hz at 2,495 S/s: 25 samples per period, bin 41.0 — on a bin, so the comb never drifted there) still declines 4 of 10: those reads carry a valid `per1` and are the second cause, a record with a discontinuity (see runs 2–3), which this change does not address and was not expected to.
+- Refusal controls still hold (range 2: no Vpp 5/5; 0x0C: no frequency 5/5, Vpp reported).
+
 - **Established:** on unit #3 the badge pipeline reports a known 3.303 V square correctly at r6 through the UI's own range path (Vrms ≤ 1.4%, frequency ≤ 0.11%, answered on every read, four codes from 2.5 k to 50 kS/s), and refuses on a range without cal and on a code without a rate. The frequency badge flickers on a clean square because `scope_freq_estimate()`'s sharpness gate (0.90) is met by only ~0.005 for a square whose fundamental falls between bins (harmonic windows placed at integer multiples of the integer peak bin lose the ≥ 7th harmonics), and because the raw acq buffer sometimes carries a seam the FFT cannot forgive; the Schmitt period detector reports the right period on every one of those reads.
 - **Excluded:** a wrong k selection or a missing ×0.92 in the badge path (k1_uV matches the table); mean-removal errors in Vrms (a square's mean would give ≈ 0.75 × V_ref); a frequency badge that invents a value where the table has no rate.
 - **NOT excluded (explicitly):** that the r7 and r8 rows of unit #1's table are wrong for this unit by ~5% and ~40% on CH1 (two independent methods now agree; one unit, one amplitude); the detector's actual criterion (hysteresis in counts? edges per record?) — to be read in `scope_measure.c`; CH2's badges.
-- **Follow-up:** (1) place the harmonic windows at multiples of the interpolated fundamental bin (one line in `analyse()`), with a host test on a synthetic 44-count square at a fractional bin that the integer rule refuses; (2) measure on the un-rotated record, or fall back to the Schmitt period when it is valid with many cycles — the maintainer's call (issue, core src); (3) rerun this r7 row on a build with (1) and count answers. Rerun r7 with a build carrying EXP-63's table to see whether the badge answers at 0x0D–0x0A.
+- **Follow-up:** (1) **done** — harmonic windows at multiples of the interpolated fundamental bin (`fix/freq-sharpness-fractional-harmonics`, host test on a 44-count square between bins that the integer comb fails at 0.916), run 4 above is its hardware check; (2) measure on the un-rotated record, or fall back to the Schmitt period when it is valid with many cycles — the maintainer's call (issue, core src); (3) rerun this r7 row on a build with (1) and count answers. Rerun r7 with a build carrying EXP-63's table to see whether the badge answers at 0x0D–0x0A.
