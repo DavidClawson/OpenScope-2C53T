@@ -39,6 +39,7 @@ import hashlib
 import os
 import platform
 import plistlib
+import re
 import shutil
 import subprocess
 import sys
@@ -76,6 +77,17 @@ IMAGE_SEARCH = [
 IMAGE_EXCLUDE = ("w25q", "dump", "option_bytes", "bootsector", "test_", "payload")
 
 FLASH_TIMEOUT_S = 40
+
+# The app slot the bootloader writes: 0x08007000..0x080C0000, the same ceiling
+# firmware/src/drivers/fw_loader.c enforces (0x080C0000 up is the 2C23T port's
+# store). Stock V1.2.0 is 751 232 B, 6.5 KB under it.
+APP_SLOT_BASE    = 0x08007000
+APP_SLOT_CEILING = 0x080C0000
+APP_SLOT_MAX     = APP_SLOT_CEILING - APP_SLOT_BASE   # 757 760 B = 740 KB
+
+# dd/mtools errors that mean the IAP disk left the bus under a write.
+VANISH_ERRORS = ("not configured", "no such file", "no such device",
+                 "i/o error", "input/output error")
 
 # ───────────────────────── tiny UI kit ─────────────────────────
 
@@ -212,11 +224,18 @@ def detect_usb_mode_macos():
     return None
 
 def find_iap_disk_macos():
-    """Return /dev/diskN backing the IAP volume, or None."""
+    """Return /dev/diskN backing the IAP volume, or None.
+
+    A disk whose volume is labelled IAP wins; an AT32/MSC media name is a
+    fallback for when diskutil reports no volume name. "Some small USB disk"
+    is not a candidate: an 8 MB stick is not the scope. Either way the label
+    is checked again on the volume's own FAT before anything is written
+    (_write_image_macos)."""
     try:
         plist = plistlib.loads(_run(["diskutil", "list", "-plist"]).stdout.encode())
     except Exception:
         return None
+    hinted = None
     for name in plist.get("AllDisks", []):
         try:
             info_pl = plistlib.loads(
@@ -225,16 +244,11 @@ def find_iap_disk_macos():
             continue
         vol   = (info_pl.get("VolumeName") or "")
         media = (info_pl.get("MediaName") or "") + (info_pl.get("IORegistryEntryName") or "")
-        bus   = info_pl.get("BusProtocol") or ""
-        size  = info_pl.get("TotalSize") or info_pl.get("Size") or 0
-        looks_iap = (
-            vol.upper() == IAP_VOLUME_LABEL
-            or "msc" in media.lower() or "at32" in media.lower()
-            or (bus == "USB" and 0 < size < 32 * 1024 * 1024)
-        )
-        if looks_iap:
+        if vol.upper() == IAP_VOLUME_LABEL:
             return f"/dev/{name}"
-    return None
+        if hinted is None and ("msc" in media.lower() or "at32" in media.lower()):
+            hinted = f"/dev/{name}"
+    return hinted
 
 def find_iap_disk_linux():
     """Return /dev/sdX backing the IAP volume, or None (via lsblk JSON)."""
@@ -244,17 +258,19 @@ def find_iap_disk_linux():
         data = json.loads(out)
     except Exception:
         return None
-    def walk(nodes):
+    def walk(nodes, want):
         for n in nodes:
-            label = (n.get("label") or "").upper()
-            vendor = (n.get("vendor") or "").upper()
-            if label == IAP_VOLUME_LABEL or "AT32" in vendor:
+            if want(n):
                 return "/dev/" + n["name"]
-            r = walk(n.get("children", []))
+            r = walk(n.get("children", []), want)
             if r:
                 return r
         return None
-    return walk(data.get("blockdevices", []))
+    nodes = data.get("blockdevices", [])
+    # The label wins; an AT32 vendor string is only a fallback, and the label
+    # is read again off the FAT before mcopy writes (_write_image_linux).
+    return (walk(nodes, lambda n: (n.get("label") or "").upper() == IAP_VOLUME_LABEL)
+            or walk(nodes, lambda n: "AT32" in (n.get("vendor") or "").upper()))
 
 def find_device():
     """Unified probe. Returns dict: {mode, dev}."""
@@ -272,9 +288,13 @@ def find_device():
 def print_device_status(d):
     hdr("Device")
     mode, dev = d["mode"], d["dev"]
-    if mode == "iap":
+    if mode == "iap" and dev:
         ok(f"Upgrade mode — ready to flash  ({dev})")
         return True
+    if mode == "iap":
+        err("Upgrade mode seen on USB (2e3c:5720), but no disk with a FAT volume labelled IAP.")
+        info("Refusing to guess which disk to write. Replug, wait for the IAP drive, retry.")
+        return False
     if mode == "running":
         warn("Device is running normally (CDC), not in upgrade mode.")
         info("Enter upgrade mode:  hold MENU + tap Power  (or pinhole reset while holding MENU).")
@@ -413,6 +433,70 @@ def read_marker(dev):
         return MARKER_READY
     return ""
 
+def fat_volume_labels(img):
+    """Volume labels a FAT12/16 image carries: the root-directory label entry
+    and the boot sector's BPB label. Either may be the one the OS shows."""
+    labels = []
+    if len(img) < 0x40:
+        return labels
+    bps = int.from_bytes(img[0x0B:0x0D], "little")
+    reserved = int.from_bytes(img[0x0E:0x10], "little")
+    nfats = img[0x10]
+    root_entries = int.from_bytes(img[0x11:0x13], "little")
+    fat_sectors = int.from_bytes(img[0x16:0x18], "little")
+    if bps and root_entries and fat_sectors:
+        start = (reserved + nfats * fat_sectors) * bps
+        for off in range(start, min(start + 32 * root_entries, len(img) - 31), 32):
+            entry = img[off:off + 32]
+            if entry[0] == 0x00:
+                break
+            if entry[0] != 0xE5 and entry[11] & 0x08 and entry[11] != 0x0F:
+                labels.append(entry[:11].decode("ascii", "replace").strip())
+                break
+    if img[0x26] == 0x29:
+        bpb = img[0x2B:0x36].decode("ascii", "replace").strip()
+        if bpb and bpb.upper() != "NO NAME":
+            labels.append(bpb)
+    return labels
+
+def is_iap_volume(labels):
+    return any(l.upper() == IAP_VOLUME_LABEL for l in labels)
+
+def mdir_volume_label(listing):
+    """The label in `mdir` output, or ''. Plain: " Volume in drive : is IAP".
+    mtools 4.0.49 shows a label that has an LFN entry as
+    "IAP___ (abbr=IAP        )"; the 8.3 abbreviation is the FAT label."""
+    m = re.search(r"Volume in drive \S+ is (.+)", listing or "")
+    if not m:
+        return ""
+    abbr = re.search(r"\(abbr=([^)]*)\)", m.group(1))
+    return (abbr.group(1) if abbr else m.group(1)).strip()
+
+def split_last_sector(runs):
+    """The dd calls for the changed-sector runs, in sector order, with the
+    image's last sector in a call of its own: the bootloader takes the file
+    when that sector lands, so only on that call is a vanishing disk news of
+    success."""
+    s, e = runs[-1]
+    calls = list(runs[:-1]) + ([(s, e - 1)] if e - s > 1 else [])
+    return calls + [(e - 1, e)]
+
+def classify_dd_failure(stderr, last_call):
+    """'flashed' | 'incomplete' | 'error' for a dd write call that failed.
+
+    BSD dd prints its "N+M records in" summary once it is past opening both
+    files (verified: none on an open error, "1+0 records in / 0+0 records
+    out" on a failed write). On the last-sector call a summary means that
+    sector was handed to the device as it left the bus; no summary means the
+    disk was already gone before it went out."""
+    low = (stderr or "").lower()
+    if not any(x in low for x in VANISH_ERRORS):
+        return "error"
+    if not last_call:
+        return "incomplete"
+    m = re.search(r"(\d+)\+(\d+) records in", stderr)
+    return "flashed" if m and int(m.group(1)) + int(m.group(2)) >= 1 else "incomplete"
+
 def _write_image(dev, path):
     """Write the app image onto the IAP volume. Returns (ok, message)."""
     return _write_image_macos(dev, path) if MACOS else _write_image_linux(dev, path)
@@ -435,6 +519,14 @@ def _write_image_macos(dev, path):
                            capture_output=True, text=True)
         if r.returncode != 0:
             return (False, "reading volume (dd): " + (r.stderr or "").strip())
+        # 1b. the snapshot is the volume we are about to write: its own FAT
+        #     must say IAP, whatever diskutil matched on
+        with open(before, "rb") as fb:
+            labels = fat_volume_labels(fb.read(1 << 20))
+        if not is_iap_volume(labels):
+            return (False, f"refusing to write {dev}: its FAT volume label is "
+                           f"{', '.join(labels) or 'missing'}, not {IAP_VOLUME_LABEL} "
+                           "(not the 2C53T upgrade-mode drive)")
         # 2. after = before + our file (mtools on a plain file — no constraints)
         shutil.copyfile(before, after)
         mc = shutil.which("mcopy") or "mcopy"
@@ -461,20 +553,28 @@ def _write_image_macos(dev, path):
         if not runs:
             return (False, "mcopy changed nothing (FAT read incoherent?)")
         # 4. write only those runs to the raw device, block-aligned
-        for s, e in runs:
+        calls = split_last_sector(runs)
+        total, done = sum(e - s for s, e in runs), 0
+        for i, (s, e) in enumerate(calls):
             w = subprocess.run(
                 ["sudo", "dd", f"if={after}", f"of={raw}", "bs=2048",
                  f"skip={s}", f"seek={s}", f"count={e - s}", "conv=notrunc"],
                 capture_output=True, text=True)
             if w.returncode != 0:
-                serr = (w.stderr or "").lower()
                 # The bootloader reboots the instant it has the complete file,
-                # yanking the disk out mid-write — an expected success signal.
-                if any(x in serr for x in ("not configured", "no such file",
-                                           "no such device", "i/o error",
-                                           "input/output error")):
-                    return (True, "device rebooted mid-write (flashed)")
+                # yanking the disk out under the last write — a success
+                # signal, but ONLY there: earlier, the file was not whole.
+                verdict = classify_dd_failure(w.stderr, i == len(calls) - 1)
+                if verdict == "flashed":
+                    return (True, f"all {total} changed sectors written; the "
+                                  "device left the bus as the last one went out")
+                if verdict == "incomplete":
+                    return (False, f"the IAP disk disappeared with {done} of "
+                                   f"{total} changed sectors written: the image "
+                                   "did NOT reach the device whole (unplug? "
+                                   "brown-out?). dd: " + (w.stderr or "").strip())
                 return (False, "writing run (dd): " + (w.stderr or "").strip())
+            done += e - s
         subprocess.run(["sync"])
         return (True, "")
     finally:
@@ -485,6 +585,13 @@ def _write_image_macos(dev, path):
                 pass
 
 def _write_image_linux(dev, path):
+    d = _mtools_with_fallback(["mdir", "-i", dev, "::/"], dev)
+    label = mdir_volume_label(d.stdout)
+    if d.returncode != 0 or label.upper() != IAP_VOLUME_LABEL:
+        return (False, f"refusing to write {dev}: its FAT volume label is "
+                       f"{label or 'missing'}, not {IAP_VOLUME_LABEL} "
+                       "(not the 2C53T upgrade-mode drive) "
+                       + (d.stderr or "").strip())
     m = _mtools_with_fallback(["mcopy", "-o", "-i", dev, str(path), f"::/{path.name}"], dev)
     if m.returncode != 0:
         return (False, (m.stderr or m.stdout or "").strip())
@@ -494,16 +601,31 @@ def _write_image_linux(dev, path):
     subprocess.run(["sync"])
     return (True, "")
 
+def image_size_error(size):
+    """Why an image of `size` bytes cannot go into the app slot, or ''."""
+    if size <= 0:
+        return "the image is empty"
+    if size > APP_SLOT_MAX:
+        return (f"the image is {size} bytes; the app slot 0x{APP_SLOT_BASE:08X}.."
+                f"0x{APP_SLOT_CEILING:08X} holds {APP_SLOT_MAX} ({human(APP_SLOT_MAX)})")
+    return ""
+
 def flash_image(dev, image):
-    path, size = image["path"], image["size"]
+    path = image["path"]
+    size = path.stat().st_size
     sha = sha256_of(path)
     tag = KNOWN_SHA.get(sha)
 
     hdr("Flash plan")
     print(f"  Image:   {C.BOLD}{path.name}{C.RESET}")
-    print(f"  Size:    {human(size)}  ({size} bytes)")
-    print(f"  SHA256:  {sha[:16]}…  " + (f"{C.GREEN}✓ {tag}{C.RESET}" if tag else f"{C.YELLOW}(unrecognized — flash at your own risk){C.RESET}"))
+    print(f"  Size:    {human(size)}  ({size} bytes; app slot holds {APP_SLOT_MAX})")
+    print(f"  SHA256:  {sha}")
+    print("           " + (f"{C.GREEN}✓ {tag}{C.RESET}" if tag else f"{C.YELLOW}(unrecognized — flash at your own risk){C.RESET}"))
     print(f"  Target:  {dev}  (IAP volume)")
+    too_big = image_size_error(size)
+    if too_big:
+        err(f"Refusing: {too_big}.")
+        return False
     info("Overwrites the device application. Recovery: re-run this tool and flash any image.")
 
     try:
@@ -552,7 +674,12 @@ def flash_image(dev, image):
 
     if outcome in ("success", "rebooted"):
         hdr("Done")
-        ok("Firmware flashed — the device is rebooting into the new image.")
+        ok("Firmware flashed — " + (
+            "the bootloader wrote SUCCESS.TXT." if outcome == "success" else
+            "the whole image was written and the IAP drive then left the bus "
+            "(the bootloader flashes and reboots)."))
+        if wmsg:
+            info(wmsg)
         if "build" in str(path):
             info("If this was a debug build with a USB CDC shell, replug USB to enumerate it.")
         return True
