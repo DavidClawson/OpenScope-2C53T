@@ -44,7 +44,7 @@
 #define USB_EV_FLAG_STALL_DTR 0x02u  /* host DTR was set at the last stall */
 #define USB_EV_FLAG_STALL_TXC 0x04u  /* g_tx_completed was nonzero at the last stall */
 
-/* 44 bytes, no padding (asserted in usb_evidence.c). Field by field, why: */
+/* 52 bytes, no padding (asserted in usb_evidence.c). Field by field, why: */
 typedef struct {
     uint32_t magic;            /* USB_EV_MAGIC: written by this firmware, not power-up noise */
     uint16_t seq;              /* session number since cold power-up (1 = first boot after
@@ -65,6 +65,13 @@ typedef struct {
     uint16_t rx_bad_checksum;  /* RX error counters; they saturate at 0xFFFF here (usbstat's */
     uint16_t rx_bad_length;    /*   live line still prints esp_comm's 32-bit originals) */
     uint16_t rx_gap_timeouts;
+    uint32_t heal_stall_tick;  /* the stall that fired the self-heal (its tick) and its
+                                * endpoint register: kept apart from stall_tick/stall_ept
+                                * because the host_slow stalls that follow a heal (the
+                                * host has usually abandoned the port by then) overwrite
+                                * the last-stall snapshot. EXP-66 lost the one #39 wedge
+                                * ever caught that way. 0 until a heal happens. */
+    uint32_t heal_stall_ept;
     uint32_t check;            /* usb_ev_checksum() of every byte above; MUST stay last */
 } usb_evidence_t;
 
@@ -94,7 +101,9 @@ void usb_ev_stall(usb_evidence_t *ev, uint32_t tick, uint32_t ept,
  * Called per 64-byte chunk, so it only reseals when PENDING was set. */
 void usb_ev_send_completed(usb_evidence_t *ev);
 
-/* A soft reconnect was performed. */
+/* A soft reconnect was performed: count it and copy the stall that fired it
+ * (the current stall snapshot) into heal_stall_tick/ept, where later stalls
+ * cannot overwrite it. */
 void usb_ev_heal(usb_evidence_t *ev);
 
 /* Once per usb_dbg loop: the alive tick and a copy of the esp_comm RX stats.
