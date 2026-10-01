@@ -130,5 +130,27 @@ class TestFastMcpWiring(unittest.TestCase):
                          ["scope_info", "scope_meter", "scope_press", "scope_screenshot", "scope_shell"])
 
 
+class TestRefusalsReachTheModel(unittest.TestCase):
+    def test_tool_error_carries_the_device_reason(self):
+        try:
+            import mcp  # noqa: F401
+        except ImportError:
+            self.skipTest("mcp SDK not installed (needs Python >= 3.10)")
+        import asyncio
+        s, d = session()
+        d.link.L.shim_set_meter_wrong_mode(1)
+        server = mcp_server.build_server(s)
+        try:
+            from mcp.server.mcpserver.exceptions import ToolError   # mcp >= 2
+        except ImportError:
+            ToolError = Exception                                   # mcp 1.x wraps every message
+        with self.assertRaises(Exception) as cm:
+            asyncio.run(server.call_tool("scope_meter", {}))
+        # mcp >= 2 forwards only a ToolError's message to the model; anything
+        # else reaches it as a bare "Error executing tool scope_meter".
+        self.assertIsInstance(cm.exception, ToolError)
+        self.assertIn("UNSUPPORTED_IN_MODE", str(cm.exception))
+
+
 if __name__ == "__main__":
     unittest.main(verbosity=2)

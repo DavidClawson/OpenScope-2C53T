@@ -2342,6 +2342,8 @@ static void cmd_screen_dumpbin(const char *args)
     usb_debug_printf("SCREENBIN x=%lu y=%lu w=%lu h=%lu format=indexed4 len=%lu crc32=%08lX\r\n",
                      x, y, w, h, len, crc);
 
+    uint32_t crc_sent = 0;
+
     for (uint32_t row = 0; row < h; row++) {
         uint32_t sy = y + row;
         memset(out_row, 0, row_len);
@@ -2355,10 +2357,17 @@ static void cmd_screen_dumpbin(const char *args)
                 out_row[col >> 1] |= idx;
             }
         }
+        crc_sent = crc32_update(crc_sent, out_row, row_len);
         usb_send_bytes(out_row, (uint16_t)row_len);
     }
 
-    usb_send_str("\r\nSCREENBIN END\r\n");
+    /* The header CRC is of a first pass; on a live screen (moving trace) the
+     * shadow changes before the second pass sends it, so the two never match
+     * and a live capture is impossible. The trailer CRC is of exactly the
+     * bytes sent: a host can tell "transport intact, frame torn" (trailer ok,
+     * header differs) from "transport corrupt" (trailer wrong). Hosts that
+     * only read the header (scripts/screenshot.py) are unaffected. */
+    usb_debug_printf("\r\nSCREENBIN END crc32=%08lX\r\n", crc_sent);
 }
 
 static void cmd_screen_shadow(const char *args)

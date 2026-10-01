@@ -398,6 +398,42 @@ class TestRound6(unittest.TestCase):
         self.assertNotIsInstance(cm.exception, Nak)
 
 
+def _dumpbin(data, hdr_crc, trailer_crc):
+    import zlib  # noqa: F401
+    t = b"" if trailer_crc is None else (b" crc32=%08X" % trailer_crc)
+    return (b"SCREENBIN x=0 y=0 w=4 h=2 format=indexed4 len=%d crc32=%08X\r\n" % (len(data), hdr_crc)
+            + data + b"\r\nSCREENBIN END" + t + b"\r\n")
+
+
+class TestScreenshot(unittest.TestCase):
+    DATA = bytes([0x01, 0x23, 0x45, 0xAA])                       # contains 0xAA on purpose
+
+    def capture(self, hdr_ok, trailer):
+        import zlib
+        crc = zlib.crc32(self.DATA) & 0xFFFFFFFF
+        reply = _dumpbin(self.DATA, crc if hdr_ok else crc ^ 1, trailer if trailer != "ok" else crc)
+        dev = device()
+        with mock.patch.object(FakeLink, "_shell_reply", staticmethod(
+                lambda line: reply if line.startswith("screen dumpbin") else b"?\r\n")):
+            return dev.screenshot(attempts=2, timeout=0.5)
+
+    def test_consistent_frame(self):
+        s = self.capture(hdr_ok=True, trailer="ok")
+        self.assertEqual((s.indexed4, s.torn), (self.DATA, False))
+
+    def test_live_screen_returns_a_torn_but_intact_frame(self):
+        s = self.capture(hdr_ok=False, trailer="ok")
+        self.assertEqual((s.indexed4, s.torn), (self.DATA, True))
+
+    def test_transport_corruption_is_refused(self):
+        with self.assertRaises(DeviceError):
+            self.capture(hdr_ok=False, trailer=0x12345678)
+
+    def test_old_firmware_without_trailer_still_fails_closed(self):
+        with self.assertRaises(DeviceError):
+            self.capture(hdr_ok=False, trailer=None)
+
+
 class TestTransportLoss(unittest.TestCase):
     def test_button_is_not_resent_after_its_write_went_through(self):
         dev = device()
