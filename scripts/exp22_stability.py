@@ -58,10 +58,24 @@ Edge: the FPGA fires on either edge and reg 0x02 does not select one
 EDGE rising / EDGE falling check that every committed record on a 2 Hz
 triangle has the chosen slope; NEGCTL edge filter off must show both.
 
+KODE DOT (--source kodedot, 2026-10-02, EXP-68): one 0 V / rail square of
+exact frequency from ONE pin on both probes, so only the trigger/acquisition
+block runs (the display matrix needs two independent sines with amplitude and
+phase control). Each scenario's sine becomes a square at the same whole-hertz
+frequency (201.2 -> 201 Hz; named "... sine-as-square" / "(square)"), every
+amplitude and offset becomes the rail, and the frequency checks use the Hz the
+Dot REPORTS. The edge-filter, un-rotation and trigger-position scenarios are
+SKIPPED, the reason printed: their checks need the record's seam to stand out,
+and a square's every edge is a step as large as the seam.
+
 Usage:
   exp22_stability.py                run the full matrix on hardware
   exp22_stability.py --selftest     validate the metric math on synthetic
                                     frames, no hardware needed
+  exp22_stability.py --source kodedot --v3v3 3.303 --trigger-only
+                                    the trigger block on a Kode Dot square
+  exp22_stability.py --source kodedot --trigger-only --dry-run
+                                    the same flow against bench.SimBench
 """
 import argparse
 import math
@@ -73,7 +87,12 @@ import time
 import numpy as np
 
 sys.path.insert(0, os.path.dirname(__file__))
-from bench import Scope, JDS6600, BenchError, parse_dump  # noqa: E402
+from bench import (Scope, JDS6600, BenchError, parse_dump,  # noqa: E402
+                   add_source_args, open_bench)
+
+#: Every wait goes through here; --dry-run (SimBench, which has no clock)
+#: replaces it with a no-op. The hardware paths call time.sleep as before.
+_sleep = time.sleep
 
 FRAME_RE = re.compile(
     r"FRAME gen=(\d+) coherent=(\d+) src=CH(\d) off=(\d+) soft=(\d+)(?: tx=(-?\d+) anchor=(\d+))?(?: ord=(\d))?")
@@ -115,7 +134,9 @@ def load_rates():
     src = os.path.join(os.path.dirname(__file__), "..", "firmware",
                        "src", "ui", "scope_timebase.c")
     rates = {}
-    for line in open(src):
+    with open(src) as fh:
+        lines = fh.read().splitlines()
+    for line in lines:
         m = re.match(r"\s*/\*\s*(0x[0-9A-Fa-f]{2})\s*\*/\s*([0-9.]+)f", line)
         if m:
             rates[int(m.group(1), 16)] = float(m.group(2))
@@ -342,7 +363,7 @@ def fresh_frame(sc, commits=2, timeout=6.0):
         if time.time() - t0 > timeout:
             raise BenchError("no fresh commit within %.0f s (gen stuck at %d)"
                              % (timeout, fr["gen"]))
-        time.sleep(0.15)
+        _sleep(0.15)
 
 
 def centre_ch1_host(sc, target=114.0, tol=4.0, dac=2400, slope=0.125, iters=8):
@@ -428,23 +449,88 @@ def trigger_scenarios():
     ]
 
 
+# -- a square-only, single-output source (--source kodedot) -------------------
+
+#: Why a scenario cannot run on one 0 V / rail square pin; printed verbatim.
+SQUARE_SKIP = {
+    "seam": "SEAM -- the edge and time-order checks read the record around its "
+            "seam, and both the firmware's seam finders (trig_edge.c: one step "
+            ">= 2x every other, or a unique LPC error peak) and host_seam() need the "
+            "seam to be the one step that stands out; on a 0/rail square every edge "
+            "is a step as large as the seam, so the edge filter answers "
+            "UNCLASSIFIED, un-rotation leaves the record raw and the checks have "
+            "nothing to read (written for a slow triangle)",
+    "breaks": "SEAM -- un-rotation must find the seam to time-order a record "
+              "(trig_edge_find_seam_any); a square's edges tie it, so un-rotation ON "
+              "cannot be told from OFF and the internal-break count tests nothing "
+              "(written for a sine)",
+    "hpos": "HPOS -- the hardware anchor exists only on time-ordered records, and "
+            "the check reads the sample at the trigger column against the level "
+            "(+-6 counts): a square gives neither (seam not found; it jumps past the "
+            "level within one sample)",
+    "hpos-ctl": "HPOS -- negative control of the HPOS checks, which cannot run on "
+                "a square (see HPOS x=...)",
+}
+
+
+def square_drive(f, rail_mv):
+    """The (wave, f, amp, off) drive key of a Dot square: whole hertz, the rail
+    as amplitude (V), its midpoint as offset (V)."""
+    return ("square", int(round(f)), round(rail_mv / 1000.0, 3),
+            round(rail_mv / 2000.0, 3))
+
+
+def square_plan(scen, rail_mv):
+    """``(scenario, None)`` to run ``scen`` on a square-only, single-output
+    source, or ``(None, reason)`` to SKIP it. A sine becomes a square at the
+    same whole-hertz frequency (and says so in its name), every amplitude and
+    offset the rail; the edge/un-rotation/position scenarios are skipped (see
+    SQUARE_SKIP). Nothing is dropped silently: the caller prints the reason
+    and lists the scenario as SKIP."""
+    if scen["check_edge"] or scen["check_order"]:
+        return None, SQUARE_SKIP["seam"]
+    if scen["check_breaks"]:
+        return None, SQUARE_SKIP["breaks"]
+    if scen["check_hpos"]:
+        return None, SQUARE_SKIP["hpos" if scen["check_hpos"] == "hw" else "hpos-ctl"]
+    if scen["wave"] not in ("sine", "square"):
+        return None, "WAVE -- needs a %s; the source makes squares only" % scen["wave"]
+    d = dict(scen)
+    wave, hz, amp, off = square_drive(scen["f"], rail_mv)
+    d.update(wave=wave, f=hz, amp=amp, off=off, square_drive=True,
+             drive_note="square %d Hz, 0 V / %.0f mV, one pin on both probes -- "
+                        "for the JDS %s %g Hz %.1f Vpp %+.1f V"
+                        % (hz, rail_mv, scen["wave"], scen["f"], scen["amp"], scen["off"]))
+    if scen["wave"] == "sine":
+        d["name"] = (scen["name"].replace("sine", "sine-as-square")
+                     if "sine" in scen["name"] else scen["name"] + " (square)")
+    return d, None
+
+
 def apply_trigger_scenario(sc, sg, scen, state):
     """Send only what changed, through the same entry points the UI uses.
     A timebase change is made in AUTO (the acq loop re-primes on the write;
-    EXP-54 switched to AUTO around it) and the mode is re-applied after."""
+    EXP-54 switched to AUTO around it) and the mode is re-applied after.
+    For a square_plan() scenario ``sg`` is the SignalSource, and the frequency
+    it REPORTS is stored as ``scen["f_src"]`` for the checks."""
     if (scen["wave"], scen["f"], scen["amp"], scen["off"]) != state.get("drive"):
-        sg.waveform(scen["wave"], 1)
-        sg.freq(scen["f"], 1)
-        sg.amp(scen["amp"], 1)
-        sg.offset(scen["off"], 1)
+        if scen.get("square_drive"):
+            state["hz"] = sg.tone(scen["f"], "square")
+        else:
+            sg.waveform(scen["wave"], 1)
+            sg.freq(scen["f"], 1)
+            sg.amp(scen["amp"], 1)
+            sg.offset(scen["off"], 1)
         state["drive"] = (scen["wave"], scen["f"], scen["amp"], scen["off"])
-        time.sleep(0.8)
+        _sleep(0.8)
+    if scen.get("square_drive"):
+        scen["f_src"] = state["hz"]
     if scen["tb"] != state.get("tb"):
         sc.trigger_mode("auto")
         sc.timebase(scen["tb"])
         state["tb"] = scen["tb"]
         state["mode"] = "auto"
-        time.sleep(0.5)
+        _sleep(0.5)
     if scen["hpos"] != state.get("hpos"):
         sc.cmd("fpga scope hpos %d" % scen["hpos"])
         state["hpos"] = scen["hpos"]
@@ -467,25 +553,25 @@ def apply_trigger_scenario(sc, sg, scen, state):
     if scen["mode"] != state.get("mode") or scen["mode"] == "single":
         sc.trigger_mode(scen["mode"])
         state["mode"] = scen["mode"]
-    time.sleep(scen["settle"])
+    _sleep(scen["settle"])
 
 
 def run_trigger_scenario(sc, scen):
     """Returns dict(frames, st0, st1, g0) -- g0 only for SINGLE."""
     if scen["expect"] == "single":
         # Arm from AUTO so the one-shot has a fresh generation to beat.
-        sc.trigger_mode("auto"); time.sleep(0.4)
+        sc.trigger_mode("auto"); _sleep(0.4)
         g0 = grab_frame(sc)["gen"]
-        sc.trigger_mode("single"); time.sleep(scen["settle"])
+        sc.trigger_mode("single"); _sleep(scen["settle"])
         frames = [grab_frame(sc) for _ in range(3)]
         return dict(frames=frames, st0=None, st1=None, g0=g0)
     st0 = read_status(sc)
     frames = []
     for _ in range(scen["n"]):
         frames.append(grab_frame(sc))
-        time.sleep(scen["gap"])
+        _sleep(scen["gap"])
     if scen["auto_window"]:
-        time.sleep(scen["auto_window"])
+        _sleep(scen["auto_window"])
     st1 = read_status(sc)
     return dict(frames=frames, st0=st0, st1=st1, g0=None)
 
@@ -516,6 +602,16 @@ def eval_trigger_scenario(scen, run, fs):
     out.append("        status         edges +%d commits +%d dropped +%d unclassified +%d latency %d ms polls-before-last %d"
                % (edges, commits, dropped, st1["unclassified"] - st0["unclassified"],
                   st1["latency"], st1["polls"]))
+    if scen.get("square_drive"):
+        # An observation, not a check (EXP-68 sec. 2, H-sq): the classifier and
+        # un-rotation cannot place a square's seam, so every strobed record is
+        # expected UNCLASSIFIED and no frame time-ordered (unit #1, v20: 4 Hz
+        # and 1 Hz squares read unclassified == edges).
+        out.append("        square         edge filter kept +%d dropped +%d unclassified +%d "
+                   "of %d strobes; time-ordered (ord=1) %d/%d frames"
+                   % (st1["kept"] - st0["kept"], dropped,
+                      st1["unclassified"] - st0["unclassified"], edges,
+                      sum(1 for fr in frames if fr.get("ord") == 1), len(frames)))
 
     if scen["expect"] == "advance":
         chk(state == "advancing", "advancing",
@@ -615,15 +711,21 @@ def eval_trigger_scenario(scen, run, fs):
             want = scen["check_edge"][0]
             chk(len(uniq) >= 3 and all(s == want for s in uniq), "edge",
                 "%d distinct records, all %s (%s)" % (len(uniq), scen["check_edge"], tag))
-    if scen["body"] and scen["wave"] == "sine":
-        tears = [tear_clusters(fr["ch1"], scen["f"], fs, tol_deg=TEAR_STEP_DEG) for fr in frames]
+    if scen["body"] and (scen["wave"] == "sine" or scen.get("square_drive")):
+        # On a square drive: the same metric (validated on squares in
+        # --selftest) against the frequency the source REPORTS.
+        sq = scen.get("square_drive", False)
+        f = scen.get("f_src", scen["f"])
+        tears = [tear_clusters(fr["ch1"], f, fs, tol_deg=TEAR_STEP_DEG) for fr in frames]
         runs = [t[0] for t in tears]
         chk(max(runs) <= TEAR_MAX_RUNS, "body",
-            "phase-step anomaly runs %s (<= %d: one seam, no tear; max step %.0f deg)"
-            % (runs, TEAR_MAX_RUNS, max(t[1] for t in tears)))
+            "phase-step anomaly runs %s (<= %d: one seam, no tear; max step %.0f deg)%s"
+            % (runs, TEAR_MAX_RUNS, max(t[1] for t in tears),
+               " [square; metric checked on squares in --selftest]" if sq else ""))
         fm = float(np.mean([freq_peak(fr["ch1"], fs) for fr in frames]))
-        chk(abs(fm / scen["f"] - 1.0) <= FREQ_TOL, "freq",
-            "%.1f Hz vs %.1f commanded (%+.2f%%)" % (fm, scen["f"], (fm / scen["f"] - 1) * 100))
+        chk(abs(fm / f - 1.0) <= FREQ_TOL, "freq",
+            ("%.1f Hz vs %.3f reported by the source (%+.2f%%)" if sq else
+             "%.1f Hz vs %.1f commanded (%+.2f%%)") % (fm, f, (fm / f - 1) * 100))
     return out, ok
 
 
@@ -673,7 +775,7 @@ def apply_scenario(sc, sg, scen, state):
     if scen["ph"] != state.get("ph"):
         sg.phase(scen["ph"])
         state["ph"] = scen["ph"]
-    time.sleep(0.6)
+    _sleep(0.6)
 
 
 def eval_scenario(scen, frames, fs, base_rel):
@@ -783,6 +885,16 @@ def _synth(f, fs, t0, rel_deg=90.0, amp=52.0, noise=1.2, seed=0):
     return c1, c2
 
 
+def _synth_wave(shape, f, fs, t0=0.0, amp=52.0, noise=1.2, seed=0):
+    """One channel of a 50 % square (shape "square") or a sine, as _synth."""
+    rng = np.random.default_rng(seed)
+    p = f * (np.arange(BUF_N) / fs + t0)
+    s = np.where(np.mod(p, 1.0) < 0.5, 1.0, -1.0) if shape == "square" \
+        else np.sin(2 * np.pi * p)
+    return np.clip(np.round(128 + amp * s + rng.normal(0, noise, BUF_N)),
+                   0, 255).astype(np.uint8)
+
+
 def selftest():
     fs, f = 12490.0, 500.0
     rng = np.random.default_rng(42)
@@ -854,6 +966,36 @@ def selftest():
     runs, mx = tear_clusters(torn, f, fs)
     chk(runs >= 2, "torn record (tear at 600 + wrap): %d runs > %d (metric detects a tear; max step %.0f deg)"
         % (runs, TEAR_MAX_RUNS, mx))
+
+    # The same three shapes as a 50 % SQUARE (--source kodedot runs the body
+    # check on squares): the fundamental's phase carries a square's tear too.
+    q1 = _synth_wave("square", f, fs, seed=7)
+    runs, mx = tear_clusters(q1, f, fs)
+    chk(runs == 0, "clean synthetic SQUARE: %d anomaly runs (max step %.0f deg)" % (runs, mx))
+    q480 = _synth_wave("square", 480.0, fs, seed=8)
+    runs, mx = tear_clusters(np.roll(q480, 300), 480.0, fs)
+    chk(runs == 1, "rotated committed SQUARE (seam at 300): %d run, not a tear (max step %.0f deg)" % (runs, mx))
+    runs, mx = tear_clusters(np.r_[q1[:600], np.roll(q1, 137)[600:]], f, fs)
+    chk(runs >= 2, "torn SQUARE (tear at 600 + wrap): %d runs > %d (metric detects a tear; max step %.0f deg)"
+        % (runs, TEAR_MAX_RUNS, mx))
+    # ...and at the Dot's 201 Hz on the three body codes it answers as it does
+    # on a sine: 60 seeded records + splices per code (random capture phase,
+    # splice point and phase jump), square vs sine run counts compared pairwise.
+    agree = total = 0
+    for fs_b in (12490.0, 4990.8, 2494.9):
+        r = np.random.default_rng(11)
+        for i in range(60):
+            t0, k, jump = r.uniform(0, 1), int(r.integers(200, 824)), r.uniform(0.1, 0.9)
+            got = []
+            for shape in ("sine", "square"):
+                a_ = _synth_wave(shape, 201.0, fs_b, t0, seed=i)
+                b_ = _synth_wave(shape, 201.0, fs_b, t0 + jump / 201.0, seed=i + 1000)
+                got.append((tear_clusters(a_, 201.0, fs_b)[0],
+                            tear_clusters(np.r_[a_[:k], b_[k:]], 201.0, fs_b)[0]))
+            agree += got[0] == got[1]
+            total += 1
+    chk(agree >= 0.9 * total, "201 Hz square vs sine at 0x10/0x11/0x12: same run counts on %d/%d "
+        "clean+spliced pairs (>= 90%%)" % (agree, total))
     chk(gens_state([10, 10, 10, 10, 10]) == "held", "gens 10x5 -> held")
     chk(gens_state([10, 12, 12, 14, 16]) == "advancing", "gens 10,12,12,14,16 -> advancing")
     chk(gens_state([10, 10, 10, 10, 12]) == "ambiguous", "gens one new of five -> ambiguous (not 'advancing')")
@@ -864,10 +1006,20 @@ def selftest():
 
 # ---------------------------------------------------------------------------
 
-def main():
+SOURCE_HELP = ("stimulus: jds6600 = the JDS6600 two-channel generator on --jds-port, "
+               "scope on --scope-port or /dev/ttyACM0 (the full matrix, as before); "
+               "kodedot = a Kode Dot running sigsrc, one square pin on both probes, "
+               "--trigger-only (default: %(default)s)")
+
+SKIP_TAG = {"SEAM": "SKIP (square: seam not separable)",
+            "HPOS": "SKIP (square: no level sample, no hw anchor)",
+            "WAVE": "SKIP (square only)"}
+
+
+def main(argv=None):
+    global _sleep
     ap = argparse.ArgumentParser()
     ap.add_argument("--selftest", action="store_true")
-    ap.add_argument("--scope-port", default="/dev/ttyACM0")
     ap.add_argument("--jds-port", default="/dev/ttyUSB0")
     ap.add_argument("--frames", type=int, default=N_FRAMES)
     ap.add_argument("--skip-center", action="store_true",
@@ -881,39 +1033,61 @@ def main():
                     help="skip the display matrix; run the trigger/acquisition block")
     ap.add_argument("--no-trigger", action="store_true",
                     help="run the display matrix only")
-    a = ap.parse_args()
+    add_source_args(ap, default="jds6600", kinds=("jds6600", "kodedot"),
+                    source_help=SOURCE_HELP)
+    a = ap.parse_args(argv)
 
     if a.selftest:
         sys.exit(0 if selftest() else 1)
 
+    dot = a.source == "kodedot"
+    if dot and (not a.trigger_only or a.no_trigger):
+        ap.error("--source kodedot runs the trigger/acquisition block only: pass "
+                 "--trigger-only (the display matrix needs two independent sine "
+                 "channels with amplitude and phase control; one square pin has none)")
+    if a.dry_run and not dot:
+        ap.error("--dry-run simulates a Kode Dot bench (bench.SimBench); the JDS6600 "
+                 "path has no simulator -- use --source kodedot --trigger-only --dry-run")
+
     rates = load_rates()
-    sc = Scope(a.scope_port)
-    sg = JDS6600(a.jds_port)
+    if dot:
+        sc, sg, sim = open_bench(a, waveform="square")
+        if sim is not None:
+            _sleep = lambda _s: None
+            print("DRY RUN against bench.SimBench: nothing below is evidence about "
+                  "the hardware (waits skipped; the acquisition loop is a policy model)")
+    else:
+        sc = Scope(a.scope_port or "/dev/ttyACM0")
+        sg = JDS6600(a.jds_port)
 
     build = next((l for l in sc.version().splitlines()
                   if l.startswith("Build:")), "?")
     print("device %s" % build)
 
     # -- setup ------------------------------------------------------------
-    print("setup: range 6 both channels, timebase 0x10, soft trigger on")
-    sc.vdiv(1, 6)
-    sc.vdiv(2, 6)
-    sc.timebase(0x10)
-    sc.cmd("fpga scope softtrig on")
+    if dot:
+        print("setup: display-matrix setup skipped (--source kodedot: trigger block only)")
+        sg.prepare_frequency(log=lambda s: print("  " + s))
+    else:
+        print("setup: range 6 both channels, timebase 0x10, soft trigger on")
+        sc.vdiv(1, 6)
+        sc.vdiv(2, 6)
+        sc.timebase(0x10)
+        sc.cmd("fpga scope softtrig on")
 
-    sg.waveform("sine", 1); sg.waveform("sine", 2)
-    sg.freq(500, 1);        sg.freq(500, 2)
-    sg.amp(2.0, 1);         sg.amp(2.0, 2)
-    sg.offset(0.0, 1);      sg.offset(0.0, 2)
-    sg.phase(0.0)
-    sg.output(True, True)
+        sg.waveform("sine", 1); sg.waveform("sine", 2)
+        sg.freq(500, 1);        sg.freq(500, 2)
+        sg.amp(2.0, 1);         sg.amp(2.0, 2)
+        sg.offset(0.0, 1);      sg.offset(0.0, 2)
+        sg.phase(0.0)
+        sg.output(True, True)
 
-    if not a.skip_center:
-        for ch in (1, 2):
-            print("centering ch%d..." % ch, end=" ", flush=True)
-            r = sc.cmd("fpga scope center ch%d 6" % ch, timeout=60.0)
-            line = next((l for l in r.splitlines() if "center" in l), "?")
-            print(line.strip())
+        if not a.skip_center:
+            for ch in (1, 2):
+                print("centering ch%d..." % ch, end=" ", flush=True)
+                r = sc.cmd("fpga scope center ch%d 6" % ch, timeout=60.0)
+                line = next((l for l in r.splitlines() if "center" in l), "?")
+                print(line.strip())
 
     # -- matrix -----------------------------------------------------------
     state = {"tb": 0x10, "softtrig": True, "ph": 0.0}
@@ -929,7 +1103,7 @@ def main():
         frames = []
         for _ in range(a.frames):
             frames.append(grab_frame(sc))
-            time.sleep(FRAME_GAP_S)
+            _sleep(FRAME_GAP_S)
         if a.save:
             key = scen["name"].replace(" ", "_")
             saved[key + "__ch1"] = np.stack([fr["ch1"] for fr in frames])
@@ -946,9 +1120,14 @@ def main():
         print("\nraw frames saved to %s" % a.save)
 
     # -- trigger / acquisition block --------------------------------------
+    skip_why, pre_ok = {}, None
     if not a.no_trigger:
         print("\n===== TRIGGER / ACQUISITION BLOCK (EXP-54 arms) =====")
-        print("setup: range 5 CH1, level 0, AUTO; JDS CH1 only")
+        if dot:
+            print("setup: range 5 CH1, level 0, AUTO; %s, one pin on both probes"
+                  % sg.describe())
+        else:
+            print("setup: range 5 CH1, level 0, AUTO; JDS CH1 only")
         for c in ("fpga pollgap", "fpga postedge", "fpga autowait"):
             print("  " + next((l.strip() for l in sc.cmd(c).splitlines()
                                 if l.strip() and not l.strip().startswith(">") and c not in l), "?")[:110])
@@ -956,9 +1135,16 @@ def main():
         sc.trigger_level(0)
         sc.timebase(0x10)
         sc.vdiv(1, 5)
-        sg.waveform("sine", 1); sg.freq(201.2, 1); sg.amp(2.0, 1); sg.offset(0.0, 1)
-        sg.output(True, True)
-        time.sleep(0.8)
+        if dot:
+            # The block's base drive (the 201.2 Hz sine) as the Dot's square.
+            hz0 = square_drive(201.2, sg.fixed_vpp_mv)[1]
+            sg.drive(sg.fixed_vpp_mv, "square", hz0)
+            print("  source: square %d Hz asked, %.6f Hz reported, 0 V / %.0f mV"
+                  % (hz0, sg.freq_hz, sg.fixed_vpp_mv))
+        else:
+            sg.waveform("sine", 1); sg.freq(201.2, 1); sg.amp(2.0, 1); sg.offset(0.0, 1)
+            sg.output(True, True)
+        _sleep(0.8)
         # Precondition, checked by readback: centre range 5 with the drive on,
         # then require a record that is in range. The first run of this block
         # (2026-09-22) skipped centring and read CH1 pinned at code 227 --
@@ -973,14 +1159,30 @@ def main():
                  "OK" if pre_ok else "VOID (railed or no signal)"))
         if not pre_ok:
             results.append(("trigger block precondition", False))
-        tstate = {"tb": 0x10, "mode": "auto", "level": 0,
-                  "drive": ("sine", 201.2, 2.0, 0.0)}
+        if dot:
+            tstate = {"tb": 0x10, "mode": "auto", "level": 0,
+                      "drive": square_drive(201.2, sg.fixed_vpp_mv), "hz": sg.freq_hz}
+        else:
+            tstate = {"tb": 0x10, "mode": "auto", "level": 0,
+                      "drive": ("sine", 201.2, 2.0, 0.0)}
         for scen in (trigger_scenarios() if pre_ok else []):
             if a.only and a.only not in scen["name"]:
                 continue
+            if dot:
+                plan, why = square_plan(scen, sg.fixed_vpp_mv)
+                if plan is None:
+                    print("\n== %s  (fs %.0f S/s, %s, level %+d) ==\n  SKIP  %s"
+                          % (scen["name"], rates[scen["tb"]], scen["mode"], scen["level"], why))
+                    skip_why[scen["name"]] = SKIP_TAG[why.split(" ", 1)[0]]
+                    results.append((scen["name"], None))
+                    continue
+                scen = plan
             fs = rates[scen["tb"]]
             print("\n== %s  (fs %.0f S/s, %s, level %+d) ==" % (scen["name"], fs, scen["mode"], scen["level"]))
             apply_trigger_scenario(sc, sg, scen, tstate)
+            if dot:
+                print("        drive          %s; reported %.6f Hz"
+                      % (scen["drive_note"], scen["f_src"]))
             run = run_trigger_scenario(sc, scen)
             if a.save:
                 key = "TRIG_" + scen["name"].replace(" ", "_")
@@ -1006,16 +1208,38 @@ def main():
         np.savez_compressed(a.save, **saved)
         print("\ntrigger-block frames saved to %s" % a.save)
 
-    sg.output(False, False)
+    if dot:
+        if sg.end_check(log=print) is False:
+            results.append(("source clock unchanged", False))
+        sg.quiet()
+        sg.close()
+    else:
+        sg.output(False, False)
 
     print("\n===== EXP-22 SUMMARY =====")
     for name, ok in results:
-        print("  %-22s %s" % (name, "PASS" if ok else "FAIL"))
-    total_ok = all(ok for _, ok in results)
-    print("OVERALL: %s" % ("PASS -- trace holds still under phase/amp/freq "
-                           "changes on both channels; acquisition loop "
-                           "triggers, holds and single-shots as specified"
-                           if total_ok else "FAIL"))
+        print("  %-22s %s" % (name, skip_why.get(name, "SKIP") if ok is None
+                              else "PASS" if ok else "FAIL"))
+    ran = [ok for _, ok in results if ok is not None]
+    total_ok = all(ran)
+    if dot:
+        n_skip = len(results) - len(ran)
+        total_ok = total_ok and bool(ran)
+        print("OVERALL: %s" % (
+            "PASS -- trigger block on a square-only, single-output source: %d scenarios "
+            "run, all pass; %d SKIPPED and NOT tested by this run (edge filter, "
+            "un-rotation, trigger position)" % (len(ran), n_skip)
+            if total_ok else
+            "VOID -- the precondition failed (CH1 record railed or no signal): "
+            "the acquisition loop was not tested" if pre_ok is False else
+            "VOID -- no scenario ran" if not ran else
+            "FAIL -- %d of %d scenarios run failed; %d skipped"
+            % (sum(1 for ok in ran if not ok), len(ran), n_skip)))
+    else:
+        print("OVERALL: %s" % ("PASS -- trace holds still under phase/amp/freq "
+                               "changes on both channels; acquisition loop "
+                               "triggers, holds and single-shots as specified"
+                               if total_ok else "FAIL"))
     sys.exit(0 if total_ok else 1)
 
 

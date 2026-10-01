@@ -31,12 +31,18 @@ catch (in a scratch copy of the scripts) and watching it go red:
   M7  KodeDotSource.freq_hz reports the request, not the actual     -> caught
   M8  range_coverage() uses the full span for a low-rail-centred
       square (midpoint geometry), so range 5 "fits"                 -> caught
+  M9  SimBench NORMAL commits an unstrobed read (no hold)           -> caught
+  M10 SimBench offset DAC back to the pre-EXP-64 sign               -> caught
+  M11 exp22 runs the edge/order scenarios on a square               -> caught
+  M12 exp22 checks against the commanded, not the reported, Hz      -> caught
+  M13 SimBench level code with Python floor division (C truncates)  -> caught
 
 Run: python3 scripts/test_bench_source.py
 """
 
 from __future__ import annotations
 
+import argparse
 import contextlib
 import io
 import sys
@@ -50,8 +56,10 @@ sys.path.insert(0, str(SCRIPTS))
 import bench  # noqa: E402
 from bench import (BenchError, KodeDotSource, ManualSource, ScriptedTransport,  # noqa: E402
                    expected_span_counts, find_port, vpp_from_reading)
+import exp22_stability  # noqa: E402
 import measure_sample_rate  # noqa: E402
 import verify_scope_cal  # noqa: E402
+import numpy as np  # noqa: E402
 
 # What the sigsrc app prints (kodeOS console framing), and the bare form the
 # command set was first specified with.
@@ -303,6 +311,41 @@ class CliTests(unittest.TestCase):
     def test_sample_rate_flags_need_codes(self):
         self.assertIn("give --codes", self.refused(measure_sample_rate, ["--tones", "100"]))
 
+    def test_a_script_can_offer_its_own_instrument_as_a_source(self):
+        ap = argparse.ArgumentParser()
+        bench.add_source_args(ap, default="jds6600", kinds=("jds6600", "kodedot"))
+        self.assertEqual(ap.parse_args([]).source, "jds6600")
+        self.assertEqual(ap.parse_args(["--source", "kodedot"]).source, "kodedot")
+        with contextlib.redirect_stderr(io.StringIO()), self.assertRaises(SystemExit):
+            ap.parse_args(["--source", "esp32"])                # not offered here
+        args = ap.parse_args([])
+        with self.assertRaisesRegex(BenchError, "unknown source 'jds6600'"):
+            bench.open_source(args)                             # the script opens it
+        args.dry_run = True
+        with self.assertRaisesRegex(BenchError, "SimBench source"):
+            bench.open_bench(args)
+
+    def exp22_refused(self, argv) -> str:
+        """exp22 must refuse with a usage error BEFORE opening any device."""
+        mod = exp22_stability
+        real = (mod.open_bench, mod.Scope, mod.JDS6600)
+        mod.open_bench = mod.Scope = mod.JDS6600 = \
+            lambda *a, **k: self.fail("a device was opened before refusing")
+        err = io.StringIO()
+        try:
+            with contextlib.redirect_stderr(err), self.assertRaises(SystemExit) as cm:
+                mod.main(argv)
+        finally:
+            mod.open_bench, mod.Scope, mod.JDS6600 = real
+        self.assertEqual(cm.exception.code, 2)
+        return err.getvalue()
+
+    def test_exp22_kodedot_is_trigger_block_only_and_jds_has_no_dry_run(self):
+        self.assertIn("pass --trigger-only", self.exp22_refused(["--source", "kodedot"]))
+        self.assertIn("pass --trigger-only", self.exp22_refused(
+            ["--source", "kodedot", "--trigger-only", "--no-trigger"]))
+        self.assertIn("no simulator", self.exp22_refused(["--trigger-only", "--dry-run"]))
+
 
 class PortDiscoveryTests(unittest.TestCase):
     @staticmethod
@@ -368,6 +411,89 @@ class DryRunTests(unittest.TestCase):
                 self.assertEqual(out.count("FOLD HOLDS"), 2)
                 self.assertIn("done", out)
 
+
+
+    def test_exp22_trigger_block_kodedot(self):
+        out = io.StringIO()
+        with contextlib.redirect_stdout(out), self.assertRaises(SystemExit) as cm:
+            exp22_stability.main(["--source", "kodedot", "--trigger-only", "--dry-run"])
+        text = out.getvalue()
+        self.assertEqual(cm.exception.code, 0, text[-2000:])
+        self.assertIn("OVERALL: PASS -- trigger block on a square-only", text)
+        self.assertIn("11 scenarios run, all pass; 10 SKIPPED", text)
+        self.assertNotIn("FAIL", text)
+        # every skip says why, at the scenario and in the summary
+        self.assertEqual(text.count("\n  SKIP  SEAM --"), 6)
+        self.assertEqual(text.count("\n  SKIP  HPOS --"), 4)
+        self.assertEqual(text.count("SKIP (square:"), 10)
+        # sines are run as squares, named so, checked against the REPORTED Hz
+        self.assertIn("NORMAL 0x10 sine-as-square PASS", text)
+        self.assertIn("vs 200.997 reported by the source", text)
+        self.assertEqual(text.count("PASS  body"), 3)          # 0x10, 0x11, 0x12
+        self.assertIn("negctl-strobe", text)                   # the hold metric's control ran
+
+
+class SimAcquisitionTests(unittest.TestCase):
+    """bench.SimBench's acquisition loop: the policy exp22's trigger block
+    checks, through the same parsers exp22 uses (grab_frame, read_status)."""
+
+    def setUp(self):
+        self.sim = bench.SimBench(source="kodedot")
+        self.sc = self.sim.scope()
+        self.sim.source().tone(201)
+        self.sc.vdiv(1, 5)
+        self.sc.cmd("trig raw 1504")          # record midline ~114 (exp22's host centre)
+
+    def grab(self):
+        return exp22_stability.grab_frame(self.sc)
+
+    def run_mode(self, mode, level, n=4):
+        self.sc.trigger_level(level)
+        self.sc.trigger_mode(mode)
+        st0 = exp22_stability.read_status(self.sc)
+        gens = [self.grab()["gen"] for _ in range(n)]
+        st1 = exp22_stability.read_status(self.sc)
+        return gens, st1["edges"] - st0["edges"], st1["ok"] - st0["ok"]
+
+    def test_level_code_is_the_firmware_mapping(self):
+        # fpga_trigger_code_from_level(): 128 + level*256/206, C truncation
+        self.assertEqual([bench.SimBench.trig_code(v) for v in (-100, -1, 0, 1, 30, 100)],
+                         [4, 127, 128, 129, 165, 252])
+        self.assertIn("reg 0x08 code 0xA5 in force", self.sc.trigger_level(30))
+
+    def test_normal_holds_above_the_signal_and_auto_falls_back(self):
+        gens, edges, ok = self.run_mode("normal", 100)
+        self.assertEqual((len(set(gens)), edges, ok), (1, 0, 0))
+        gens, edges, ok = self.run_mode("auto", 100)            # the fallback
+        self.assertEqual((len(set(gens)), edges, ok), (4, 0, 4))
+        gens, edges, ok = self.run_mode("normal", 0)
+        self.assertEqual((len(set(gens)), edges, ok), (4, 4, 4))  # every commit strobed
+
+    def test_single_takes_one_record_until_the_mode_is_selected_anew(self):
+        self.sc.trigger_level(0)
+        self.sc.trigger_mode("auto")
+        g0 = self.grab()["gen"]
+        self.sc.trigger_mode("single")
+        self.assertEqual([self.grab()["gen"] for _ in range(3)], [g0 + 2] * 3)
+        self.sc.trigger_mode("single")                           # same mode: no re-arm
+        self.assertEqual(self.grab()["gen"], g0 + 2)
+
+    def test_a_strobed_record_crosses_the_level_at_512(self):
+        self.sc.trigger_level(0)
+        self.sc.trigger_mode("normal")
+        v = np.asarray(self.grab()["ch1"], float)
+        lvl = 128 - 28                                           # record units
+        self.assertTrue((v[500:510].mean() - lvl) * (v[514:524].mean() - lvl) < 0)
+        self.assertLessEqual(v.max(), 227)                       # ADC - 28
+
+    def test_a_higher_offset_dac_code_raises_the_trace(self):
+        # EXP-64 run 2, unit #3: about 8 DAC codes per count, rising
+        self.sc.trigger_mode("auto")
+        self.sc.cmd("trig raw 1400")
+        lo = np.mean(self.grab()["ch1"])
+        self.sc.cmd("trig raw 1600")
+        hi = np.mean(self.grab()["ch1"])
+        self.assertAlmostEqual(hi - lo, 200 / 8.0, delta=3.0)
 
 
 class TestScopeOpreadReconnect(unittest.TestCase):

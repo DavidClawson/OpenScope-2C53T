@@ -1847,17 +1847,25 @@ class ManualSource(SignalSource):
 
 # -- the --source CLI convention ----------------------------------------------
 
-def add_source_args(ap: argparse.ArgumentParser, default: str = "esp32") -> None:
+def add_source_args(ap: argparse.ArgumentParser, default: str = "esp32",
+                    kinds: Sequence[str] = SOURCE_KINDS,
+                    source_help: Optional[str] = None) -> None:
     """Add the shared bench-device flags to a script's parser.
 
     ``--source esp32|kodedot|manual``, ``--source-port`` (``--siggen-port`` is
     kept as an alias), ``--source-serial``, ``--scope-port``, ``--v3v3`` and
     ``--dry-run``.  Ports default to discovery: the scope by USB VID:PID
     2e3c:5740, a Kode Dot by Espressif's VID 0x303A, the ESP32 siggen by its
-    USB-serial glob as before."""
+    USB-serial glob as before.
+
+    ``kinds`` is what this script offers as ``--source``: a subset of
+    SOURCE_KINDS, plus any instrument the script drives itself (exp22's
+    ``jds6600``), with ``source_help`` describing them.  open_source() and
+    open_bench() only open SOURCE_KINDS and refuse anything else."""
     g = ap.add_argument_group("bench devices")
-    g.add_argument("--source", choices=SOURCE_KINDS, default=default,
-                   help="stimulus: esp32 = the ESP32 siggen sketch; kodedot = a Kode "
+    g.add_argument("--source", choices=tuple(kinds), default=default,
+                   help=source_help or
+                        "stimulus: esp32 = the ESP32 siggen sketch; kodedot = a Kode "
                         "Dot running sigsrc (square, crystal-derived, fixed "
                         "amplitude); manual = any generator, the operator types what "
                         "a counter/DMM reads (default: %(default)s)")
@@ -2535,6 +2543,15 @@ class SimBench:
     1-2.5-5 ladder (including GUESSES for 0x06-0x0C), its gains a smooth
     ladder, its records perfectly coherent.  A dry run that "measures" 0x0A at
     1.25 MS/s has measured this class.
+
+    The acquisition loop (``spi3 frame``, ``status`` and the trigger knobs
+    exp22's trigger block turns) is a model of the POLICY only: each
+    ``spi3 frame`` runs one acquisition cycle; a cycle is "strobed" when the
+    CH1 input straddles the reg-0x08 level; NORMAL commits only strobed
+    cycles, SINGLE one strobed cycle per arm, AUTO every cycle (unstrobed
+    ones are the fallback).  It does not model seams, rotation, the edge
+    classifier or timing, so it can show that a script runs, never that the
+    firmware triggers.
     """
 
     #: Ladder rates; 0x0A-0x0C continue the 1-2.5-5 pattern (a guess), and
@@ -2547,7 +2564,14 @@ class SimBench:
     GAINS = {1: [0, 0, 0, 0, 12.95, 20.08, 39.51, 81.35, 256.7, 324.0],
              2: [0, 0, 0, 0, 8.73, 19.28, 38.37, 77.09, 205.8, 391.0]}
     DAC_MID = 2048
-    DAC_PER_COUNT = 4.0         # offset-DAC codes per ADC count, every range
+    #: Offset-DAC codes per ADC count, every range; a HIGHER code raises the
+    #: trace.  Unit #3, EXP-64 run 2, range 5: CH1 low rail 2422 / high rail
+    #: 1084 over 164 counts (8.2 codes per count, "rising DAC"; CH2 2458 / 1127
+    #: over 171), and exp22's hand sweep on unit #1 (+0.125 counts per DAC1
+    #: step).  Until 2026-10-01 this was 4.0 with the opposite sign, which a
+    #: host servo that assumes the measured direction (exp22 centre_ch1_host)
+    #: drove to the rail.
+    DAC_PER_COUNT = 8.0
     LEDC_CLK = 80_000_000
 
     def __init__(self, source: str = "kodedot", v3v3_mv: float = 3292.0,
@@ -2569,11 +2593,25 @@ class SimBench:
         self.esp = {ch: {"mode": "dc", "hz": 0.0, "amp": 2000, "mid": 1650,
                          "duty": 50, "phase": 0} for ch in (1, 2)}
         self.man = {"what": "quiet", "hz": 1000.0, "vpp": 0.0, "waveform": "sine"}
+        # acquisition loop (exp22's trigger block): policy and counters only.
+        # Boot state of the firmware: AUTO, level 0 (reg 0x08 = 0x80), Rising,
+        # edge filter and un-rotation on, trigger column 160, soft trigger on.
+        self.trig = {"mode": "auto", "level": 0, "code": self.trig_code(0),
+                     "edge": "rising", "edgefilter": True, "unrotate": True,
+                     "hpos": 160, "soft": True}
+        self.acq = {"gen": 0, "edges": 0, "ok": 0, "kept": 0, "dropped": 0,
+                    "unknown": 0, "latency": 0, "polls_last": 0, "poll_reads": 0,
+                    "single_done": False, "last_mode": "auto"}
+        self.frame = None                  # published (CH1, CH2) records
 
     # -- the input voltage seen by both scope channels ---------------------
 
     def _ledc_plan(self, hz: int) -> dict:
-        for bits in range(13, 0, -1):
+        # 13 bits down first (what the app reports at 1 kHz); below ~9.5 Hz
+        # the divider overflows at 13 bits, so wider timers are tried for the
+        # 1..9 Hz tones the app accepts.  Which width the real app picks there
+        # is not modelled, only that it reaches 1 Hz.
+        for bits in list(range(13, 0, -1)) + list(range(14, 21)):
             div_q8 = int(round(self.LEDC_CLK * 256.0 / (hz * (1 << bits))))
             if 256 <= div_q8 <= 0x3FFFF:
                 return {"bits": bits, "div_q8": div_q8,
@@ -2622,9 +2660,213 @@ class SimBench:
         k = self.gains[ch][self.range[ch]]
         if k <= 0:
             return np.full(n, 255, dtype=int)        # railed, as ranges 0-3 are
-        v_off = (self.dac[ch] - self.DAC_MID) / self.DAC_PER_COUNT * k
-        codes = 128 + (self.vin(ch, t) - v_off) / k + self.rng.normal(0, self.noise, n)
+        codes = self._code(ch, self.vin(ch, t)) + self.rng.normal(0, self.noise, n)
         return np.clip(np.round(codes), 0, 255).astype(int)
+
+    def _code(self, ch: int, mv):
+        """Noise-free ADC code for ``mv`` at the probe tip (range, offset DAC)."""
+        k = self.gains[ch][self.range[ch]]
+        return 128 + np.asarray(mv, dtype=float) / k + (self.dac[ch] - self.DAC_MID) / self.DAC_PER_COUNT
+
+    # -- the acquisition loop (policy only; see the class docstring) ----------
+
+    #: fpga.h FPGA_ADC_OFFSET: the acq task stores ADC code - 28, so a record's
+    #: top is 227 and the FPGA's comparator fires at (reg 0x08 code - 28).
+    ACQ_OFFSET = -28
+
+    @staticmethod
+    def trig_code(level: int) -> int:
+        """fpga_trigger_code_from_level() (fpga.c): ``128 + level*256/206``
+        in C integer arithmetic (truncation toward zero), clamped to 1..254."""
+        level = max(-100, min(100, int(level)))
+        q = abs(level) * 256 // 206
+        return max(1, min(254, 128 + (q if level >= 0 else -q)))
+
+    def _adc(self, ch: int, t: np.ndarray, noise: bool = True) -> np.ndarray:
+        """ADC codes 0..255 for channel ``ch`` at times ``t``."""
+        if self.gains[ch][self.range[ch]] <= 0:
+            return np.full(len(t), 255.0)             # railed, as ranges 0-3 are
+        c = self._code(ch, self.vin(ch, t))
+        if noise:
+            c = np.round(c + self.rng.normal(0, self.noise, len(t)))
+        return np.clip(c, 0, 255)
+
+    def _acq_records(self, t: np.ndarray) -> tuple:
+        """Both channels' records at ``t`` as the acq task stores them:
+        ADC + ACQ_OFFSET clamped to 0..255 (fpga_warmtest_read_channel)."""
+        return tuple(np.clip(self._adc(ch, t) + self.ACQ_OFFSET, 0, 255).astype(int)
+                     for ch in (1, 2))
+
+    def _acq_cycle(self) -> None:
+        """One pass of fpga_warmtest_acq_task's poll loop (fpga.c), as policy.
+
+        The FPGA waits for CH1 to cross reg 0x08 (either edge) and holds the
+        record with the crossing at index 512, so a cycle is STROBED when the
+        noise-free CH1 input crosses the level anywhere in a stretch of two
+        periods plus two records; the published record then has the crossing
+        at 512, time-ordered.  Counters follow the firmware: a strobe is one
+        PC0 edge; a commit is generation +2 (odd while copying, even when
+        stable) and SPI3 OK +1; NORMAL/SINGLE hold on an unstrobed read; AUTO
+        commits it (the fallback; the edge-wait budget is not modelled);
+        SINGLE holds after one strobed commit until the mode is selected anew.
+        The edge filter does not run: with it on, every strobed record is
+        counted UNCLASSIFIED (never kept or dropped), so a dry run cannot
+        claim the classifier worked.  Seams, rotation and timing: not modelled.
+        """
+        a, tr = self.acq, self.trig
+        mode = tr["mode"]
+        if mode != a["last_mode"]:                    # re-selecting SINGLE re-arms it
+            a["single_done"] = False
+            a["last_mode"] = mode
+        if mode == "single" and a["single_done"]:
+            return                                    # hold the one record
+        fs = self.FS_BY_CODE.get(self.code, 12500.0)
+        hz = self._source_hz()
+        n = 2 * STOCK_SAMPLES + (int(2.0 * fs / hz) if hz > 0 else 0)
+        n = min(n, 1 << 18)
+        t = self.rng.uniform(0.0, 1.0) + np.arange(n) / fs
+        c1 = self._adc(1, t, noise=False)
+        lvl = tr["code"]
+        cross = np.nonzero(((c1[:-1] < lvl) & (c1[1:] >= lvl))
+                           | ((c1[:-1] >= lvl) & (c1[1:] < lvl)))[0] + 1
+        half = STOCK_SAMPLES // 2
+        cross = cross[(cross >= half) & (cross <= n - half)]
+        strobed = cross.size > 0
+        i0 = (int(cross[0]) - half if strobed
+              else int(self.rng.integers(0, n - STOCK_SAMPLES + 1)))   # the roll
+        if strobed:
+            a["edges"] += 1
+            a["polls_last"], a["latency"] = 0, 1
+            if tr["edgefilter"]:
+                a["unknown"] += 1
+        else:
+            a["poll_reads"] += 1
+            if mode != "auto":
+                return                                # NORMAL/SINGLE: hold, poll again
+        self.frame = self._acq_records(t[i0:i0 + STOCK_SAMPLES])
+        a["gen"] += 2
+        a["ok"] += 1
+        if mode == "single" and strobed:
+            a["single_done"] = True
+
+    def _spi3_frame_reply(self) -> str:
+        """``spi3 frame`` (usb_debug.c cmd_spi3_frame): one acquisition cycle,
+        then the published buffers.  Firmware formats:
+        ``"FRAME gen=%lu coherent=%u src=CH%u off=%u soft=%u tx=%d anchor=%u ord=%u\\r\\n"``
+        then spi3_frame_dump(): ``"%s (%u bytes):\\r\\n"`` and ``"%04lX:"`` +
+        16 x ``" %02X"`` per line.  The renderer's fields are not modelled:
+        off=0 (no soft-trigger offset), tx=-1 / anchor=0 (g_trig_x_actual /
+        g_trig_anchor before any render), ord=0 (never time-ordered)."""
+        self._acq_cycle()
+        if self.frame is None:                        # nothing committed since boot
+            fs = self.FS_BY_CODE.get(self.code, 12500.0)
+            self.frame = self._acq_records(np.arange(STOCK_SAMPLES) / fs)
+        r1, r2 = self.frame
+        return ("spi3 frame\r\nFRAME gen=%d coherent=1 src=CH1 off=0 soft=%d tx=-1 "
+                "anchor=0 ord=0\r\nCH1 (%d bytes):\r\n%s\r\nCH2 (%d bytes):\r\n%s\r\n> "
+                % (self.acq["gen"], 1 if self.trig["soft"] else 0,
+                   STOCK_SAMPLES, _synth_dump(list(r1)), STOCK_SAMPLES, _synth_dump(list(r2))))
+
+    def _status_reply(self) -> str:
+        """``status`` (usb_debug.c cmd_status), the FPGA part only, with the
+        acquisition counters the model keeps.  Formats quoted from the source:
+        ``"SPI3 OK: %u\\r\\n"``, ``"PC0 edges: %lu\\r\\n"``,
+        ``"acq latency: %lu ms (strobe -> commit, last cycle); poll reads before it: %lu (total %lu)\\r\\n"``,
+        ``"acq edge filter: %s  kept %lu  dropped %lu  unclassified %lu\\r\\n"``,
+        ``"acq rotation: %ld samples (seam of the last strobed record; -1 = none)\\r\\n"``.
+        The TX-frame history and the FPGA Diag block that follow are omitted."""
+        a = self.acq
+        return ("status\r\n=== System ===\r\nUptime: 1s\r\nSYSCLK: 240MHz\r\n"
+                "\r\n=== FPGA ===\r\nInitialized: YES\r\nSPI3 active: YES\r\n"
+                "SPI3 OK: %d\r\nSPI3 timeouts: 0 (total 0, hw poll expiries 0)\r\n"
+                "SPI3 first byte: 0x7C\r\n"
+                "PC0 edges: %d\r\n"
+                "acq latency: %d ms (strobe -> commit, last cycle); poll reads before it: %d (total %d)\r\n"
+                "acq edge filter: %s  kept %d  dropped %d  unclassified %d\r\n"
+                "acq rotation: -1 samples (seam of the last strobed record; -1 = none)\r\n> "
+                % (a["ok"], a["edges"], a["latency"], a["polls_last"], a["poll_reads"],
+                   "ON" if self.trig["edgefilter"] else "OFF",
+                   a["kept"], a["dropped"], a["unknown"]))
+
+    def _acq_derived_ms(self) -> tuple:
+        """(post-edge, auto-wait) in ms as fpga.c derives them from the rate:
+        fpga_acq_post_edge_get() = fill + 100 (cap 5000, 600 without a rate);
+        fpga_acq_auto_wait_get() = 3 fills + 230 (25..1000)."""
+        fs = self.FS_BY_CODE.get(self.code, 0.0)
+        if fs <= 0:
+            return 600, 25
+        fill = 1024.0 / fs * 1000.0
+        return int(min(5000.0, fill + 100.0)), int(max(25.0, min(1000.0, 3 * fill + 230.0)))
+
+    def _acq_knob_reply(self, line: str) -> Optional[str]:
+        """The acquisition knobs exp22's trigger block turns, read or set, in
+        the firmware's words (usb_debug.c); None if ``line`` is not one."""
+        tr, a = self.trig, self.acq
+        post, auto = self._acq_derived_ms()
+        if line == "fpga pollgap":
+            # "acq poll gap %u ms; poll starts %u ms after a handover (%s); last handover after %lu poll reads, %lu total\r\n"
+            return ("acq poll gap 30 ms; poll starts %d ms after a handover (derived: fill + 100 ms); "
+                    "last handover after %d poll reads, %d total\r\n> "
+                    % (post, a["polls_last"], a["poll_reads"]))
+        if line == "fpga postedge":
+            # "acq poll start %u ms after a handover (%s, rate idx 0x%02X)\r\n"
+            return ("acq poll start %d ms after a handover (derived: fill + 100 ms, rate idx 0x%02X)\r\n> "
+                    % (post, self.code))
+        if line == "fpga autowait":
+            # "acq AUTO edge-wait %u ms before the free-run fallback read (%s, rate idx 0x%02X)\r\n"
+            return ("acq AUTO edge-wait %d ms before the free-run fallback read (derived from "
+                    "timebase, rate idx 0x%02X)\r\n> " % (auto, self.code))
+        m = re.fullmatch(r"fpga scope trigmode (auto|normal|single)", line)
+        if m:
+            # "trigger mode %s (acq wait policy: AUTO falls back after the edge-wait; NORMAL/SINGLE hold)\r\n"
+            tr["mode"] = m.group(1)
+            return ("trigger mode %s (acq wait policy: AUTO falls back after the edge-wait; "
+                    "NORMAL/SINGLE hold)\r\n> " % m.group(1).capitalize())
+        m = re.fullmatch(r"fpga scope level (-?\d+)", line)
+        if m:
+            lv = int(m.group(1))
+            if abs(lv) > 100:
+                return "usage: fpga scope level [-100..100]\r\n> "
+            tr["level"], tr["code"] = lv, self.trig_code(lv)
+            # "trigger level %d -> reg 0x08 code 0x%02X in force (boot reconcile wrote 0x%02X)\r\n"
+            return ("trigger level %d -> reg 0x08 code 0x%02X in force (boot reconcile wrote "
+                    "0x%02X)\r\n> " % (lv, tr["code"], self.trig_code(0)))
+        m = re.fullmatch(r"fpga scope softtrig (on|off)", line)
+        if m:
+            tr["soft"] = m.group(1) == "on"
+            # "softtrig: %s   (level=%d px, %s, src=CH%d)\r\n"
+            return ("softtrig: %s   (level=%d px, %s, src=CH1)\r\n> "
+                    % ("ON (trace locked to trigger)" if tr["soft"] else "off (free-run / dancing)",
+                       tr["level"], tr["edge"]))
+        m = re.fullmatch(r"fpga scope hpos (\d+)", line)
+        if m:
+            v = int(m.group(1))
+            if not 8 <= v <= 312:
+                return "usage: fpga scope hpos [8..312]\r\n> "
+            tr["hpos"] = v
+            # "trigger position: asked column %d; last window landed at %d (anchor %s)\r\n"
+            return ("trigger position: asked column %d; last window landed at -1 (anchor none)\r\n> "
+                    % v)
+        m = re.fullmatch(r"fpga unrotate (on|off)", line)
+        if m:
+            tr["unrotate"] = m.group(1) == "on"
+            # "acq unrotate %s (seam-based); last strobed record's seam at %ld (-1 = none found)\r\n"
+            return ("acq unrotate %s (seam-based); last strobed record's seam at -1 (-1 = none found)\r\n> "
+                    % ("ON" if tr["unrotate"] else "OFF"))
+        m = re.fullmatch(r"fpga scope edge (rising|falling)", line)
+        if m:
+            tr["edge"] = m.group(1)
+            # "trigger edge %s (edge filter %s)\r\n"
+            return ("trigger edge %s (edge filter %s)\r\n> "
+                    % (tr["edge"].capitalize(), "ON" if tr["edgefilter"] else "OFF"))
+        m = re.fullmatch(r"fpga edgefilter (on|off)", line)
+        if m:
+            tr["edgefilter"] = m.group(1) == "on"
+            # "edge filter %s, edge %s: kept %lu dropped %lu unclassified %lu\r\n"
+            return ("edge filter %s, edge %s: kept %d dropped %d unclassified %d\r\n> "
+                    % ("ON" if tr["edgefilter"] else "OFF", tr["edge"].capitalize(),
+                       a["kept"], a["dropped"], a["unknown"]))
+        return None
 
     # -- transports ---------------------------------------------------------
 
@@ -2653,7 +2895,7 @@ class SimBench:
                 fs = self.FS_BY_CODE.get(self.code, 12500.0)
                 level = float(np.median(self.vin(ch, np.arange(STOCK_SAMPLES) / fs)))
                 self.dac[ch] = int(min(4095, max(0, round(
-                    self.DAC_MID + self.DAC_PER_COUNT * level / k))))
+                    self.DAC_MID - self.DAC_PER_COUNT * level / k))))
             med = int(np.median(self.record(ch)))
             return ("CH%d range %d: center %s=%d (median=%d)\r\n> "
                     % (ch, r, "TMR13_C1DT" if ch == 2 else "DAC1", self.dac[ch], med))
@@ -2697,8 +2939,13 @@ class SimBench:
         if m:
             ch = 2 if m.group(1) == "trig2" else 1
             self.dac[ch] = min(4095, int(m.group(2)))
-            return ("%s = code %d\r\n> "
-                    % ("TMR13_C1DT(PA6)" if ch == 2 else "DAC1(PA4)", self.dac[ch]))
+            mv = self.dac[ch] * 3300 // 4095
+            # usb_debug.c: "DAC1(PA4) = code %u (0x%03X)  ~%lu.%03lu V expected\r\n"
+            #              "TMR13_C1DT(PA6) = code %u (0x%03X)  duty ~%lu.%03lu V after RC\r\n"
+            return ("%s = code %d (0x%03X)  %s%d.%03d V %s\r\n> "
+                    % ("TMR13_C1DT(PA6)" if ch == 2 else "DAC1(PA4)", self.dac[ch], self.dac[ch],
+                       "duty ~" if ch == 2 else "~", mv // 1000, mv % 1000,
+                       "after RC" if ch == 2 else "expected"))
         m = re.fullmatch(r"spi3 opread (0[45]) (\d+) dump", line)
         if m:
             op, n = int(m.group(1), 16), int(m.group(2))
@@ -2706,6 +2953,13 @@ class SimBench:
             return _fake_opread_reply(op, vals)
         if toks[:2] == ["spi3", "read"] and len(toks) == 3:
             return "%s\r\n%s\r\n> " % (line, _synth_dump(list(self.record(1, int(toks[2])))))
+        if line == "spi3 frame":
+            return self._spi3_frame_reply()
+        if line == "status":
+            return self._status_reply()
+        knob = self._acq_knob_reply(line)
+        if knob is not None:
+            return knob
         raise BenchError("SimBench scope: no simulated reply for %r" % line)
 
     def _source_hz(self) -> float:
