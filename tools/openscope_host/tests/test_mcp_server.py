@@ -174,8 +174,15 @@ BENCH_LINES = (
     "trig 3 40", "trig raw 2048", "trig2 raw 100", "mode meter 1", "mode 0", "mode",
     "fpga postedge 0", "fpga acqbr off", "fpga pairgap 0", "fpga rearm off",
     "fpga scope measure 3", "fpga scope freq", "spi3 read 1024", "spi3 opread 04 1026 dump",
+    "spi3 opread 05", "spi3 opread 4 16", "spi3 opread 0x05 0x400 dump",
     "spi3 frame", "gpio read B11", "gpio scan", "meter trace", "cal status", "flash jedec",
-) + devmod.BENCH_SHELL
+) + tuple(n for n in devmod.BENCH_SHELL if n not in devmod.BENCH_ARG_RULES)
+# Bench names whose arguments fall outside BENCH_ARG_RULES: unsafe only.
+BENCH_ARG_REFUSED = (
+    "spi3 opread 01 4", "spi3 opread 41", "spi3 opread 3C 1", "spi3 opread 06 2048 dump",
+    "spi3 opread 15", "spi3 opread 004", "spi3 opread 04 16 dump x", "spi3 opread 04 16 DUMP",
+    "spi3 opread",
+)
 UNSAFE_ONLY_LINES = (
     "spi3 seq 01 1A", "spi3 xfer 11 00 00 00", "fpga frame 0x05 0x14", "fpga cmd 05 14",
     "usart tx 05 14", "usbstat heal on", "mem read 0x40021000 4", "meter stream 10",
@@ -239,6 +246,9 @@ class TestShellLevels(unittest.TestCase):
             self.assertRefused("readonly", line, "--level readonly", "--level bench")
         for line in UNSAFE_ONLY_LINES:
             self.assertRefused("readonly", line, "--level readonly", "--level unsafe")
+        for line in BENCH_ARG_REFUSED:
+            msg = self.assertRefused("readonly", line, "--level unsafe")
+            self.assertNotIn("It is a bench command", msg, line)
         self.assertRefused("readonly", "versionx")
         self.assertRefused("readonly", "fwcrumb now")
 
@@ -248,8 +258,14 @@ class TestShellLevels(unittest.TestCase):
         for line in UNSAFE_ONLY_LINES:
             self.assertRefused("bench", line, "--level bench", "--level unsafe")
 
+    def test_bench_spi3_opread_only_reads_the_channels(self):
+        for line in BENCH_ARG_REFUSED:
+            self.assertRefused("bench", line, "--level bench", "only opcode 04 or 05", "--level unsafe")
+        for line in BENCH_ARG_REFUSED[:4]:
+            self.assertAccepted("unsafe", line)
+
     def test_unsafe_is_everything_but_the_deny_list(self):
-        for line in devmod.READ_ONLY_SHELL + BENCH_LINES + UNSAFE_ONLY_LINES:
+        for line in devmod.READ_ONLY_SHELL + BENCH_LINES + UNSAFE_ONLY_LINES + BENCH_ARG_REFUSED:
             self.assertAccepted("unsafe", line)
 
     def test_deny_list_holds_at_every_level(self):
@@ -358,7 +374,9 @@ class TestDenyListAgainstFirmwareTable(unittest.TestCase):
 
     def test_no_bench_command_is_denied(self):
         for b in devmod.BENCH_SHELL:
-            self.assertIsNone(devmod.shell_refusal(b, "bench"), b)
+            self.assertNotIn("never", devmod.shell_refusal(b, "bench") or "", b)
+        for b in devmod.BENCH_ARG_RULES:
+            self.assertIn(b, devmod.BENCH_SHELL)
 
 
 class TestAllowRawShellAlias(unittest.TestCase):
@@ -438,7 +456,9 @@ class TestLevelsOverMcp(unittest.TestCase):
                 self.assertIn(name, sh.description, f"{lvl}: deny-list entry {name!r} not described")
             self.assertIn("POWER is refused at every server level",
                           " ".join(t["scope_press"].description.split()))
-        self.assertIn("fpga scope timebase", self.tools("bench")["scope_shell"].description)
+        bench = self.tools("bench")["scope_shell"].description
+        self.assertIn("fpga scope timebase", bench)
+        self.assertIn("spi3 opread takes only opcode 04 or 05", bench)
 
     def call(self, lvl, tool, args):
         """What the model receives: (is_error, text). With mcp >= 2 through a
@@ -477,7 +497,8 @@ class TestLevelsOverMcp(unittest.TestCase):
                       (lvl, "scope_press", {"buttons": ["POWER"]}, "POWER is refused at every --level"),
                       (lvl, "scope_press", {"buttons": ["NOPE"]}, "unknown button")]
         cases += [("readonly", "scope_shell", {"command": "fpga scope timebase 1A"}, "--level bench"),
-                  ("bench", "scope_shell", {"command": "spi3 seq 01 1A"}, "--level unsafe")]
+                  ("bench", "scope_shell", {"command": "spi3 seq 01 1A"}, "--level unsafe"),
+                  ("bench", "scope_shell", {"command": "spi3 opread 01 4"}, "only opcode 04 or 05")]
         for lvl, tool, args, reason in cases:
             is_error, text, d = self.call(lvl, tool, args)
             self.assertTrue(is_error, (lvl, tool, args))

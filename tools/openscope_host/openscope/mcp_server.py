@@ -32,8 +32,8 @@ from .link import NoDevice
 from .screen import png_bytes
 
 # What an agent may run at each level (device.py owns the lists).
-from .device import (BENCH_SHELL, NEVER_SHELL, READ_ONLY_SHELL,  # noqa: E402
-                     SHELL_LEVELS, shell_refusal)
+from .device import (BENCH_ARG_RULES, BENCH_SHELL, NEVER_SHELL,  # noqa: E402
+                     READ_ONLY_SHELL, SHELL_LEVELS, shell_refusal)
 
 
 class Refused(RuntimeError):
@@ -164,8 +164,10 @@ def shell_tool_description(level: str) -> str:
     elif level == "bench":
         body = (f"This server runs at --level bench: the read-only commands "
                 f"({', '.join(READ_ONLY_SHELL)}) plus these bench commands and their "
-                f"arguments: {', '.join(BENCH_SHELL)}. They change scope/acquisition "
-                "settings or read; anything else needs --level unsafe. ")
+                f"arguments: {', '.join(BENCH_SHELL)}. Argument limits at bench: "
+                + "; ".join(f"{n} takes {r[1]}" for n, r in BENCH_ARG_RULES.items())
+                + ". They change scope/acquisition settings or read; anything else "
+                "needs --level unsafe. ")
     else:
         body = ("This server runs at --level unsafe: every shell command except the list "
                 "below. Raw commands can desynchronise the FPGA or the acquisition; "
