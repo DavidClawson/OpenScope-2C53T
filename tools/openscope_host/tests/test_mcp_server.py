@@ -187,6 +187,7 @@ NEVER_LINES = (
     "cal restore force CONFIRM", "flash wtest 0x1000 CONFIRM", "mem write 0x40010C10 0x800",
     "mode startup meter", "mode startup", "reboot bootloader", "gpio set B11 1",
     "gpio mode A6 out", "bench restore", "spi3 armtest pb11", "fpga dbgclk 10", "fpga dbgarm",
+    "fpga reinit", "fpga reinit 0 100 600 c9", "fpga reinit 0 100 600 rl",
     "flash erase 0", "flash write 0 00", "iap", "dfu", "reset",
     # spellings that must not slip past the name check
     "FWAPPLY", "  fwapply  ", "Gpio Set B11 1", "mode  startup   meter", "reboot",
@@ -312,7 +313,7 @@ class TestDenyListAgainstFirmwareTable(unittest.TestCase):
         "fpga scope beat", "fpga scope entry", "fpga scope timing", "fpga scope trig",
         "meter autoscan", "meter auto", "meter probe-tail", "meter boot-sequence",
         "meter pc11-timing", "meter mux-arms", "meter mux-stream", "meter stream",
-        "meter wave", "fpga acq", "fpga reinit", "spi3 xfer", "spi3 seq", "spi3 acqread",
+        "meter wave", "fpga acq", "spi3 xfer", "spi3 seq", "spi3 acqread",
         "spi3 opsweep", "spi3 gowin", "spi3 edgecap", "spi3 scopetest", "spi3 acqtest",
         "spi3 stock-readback", "spi3 h2txdiag", "spi3 h2verify", "spi3 probe",
     }
