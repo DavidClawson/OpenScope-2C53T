@@ -99,6 +99,9 @@ NEVER_SHELL_ROWS = {
     "spi3 armtest": "pulses the FPGA run pin (PB11 or PC6) directly",
     "fpga dbgclk": "reconfigures PC6 as an output and clocks it",
     "fpga dbgarm": "reconfigures PB11 as an output and drives it",
+    "fpga reinit": "replays the FPGA bitstream handshake (`rl` = Gowin RELOAD) and drives "
+                   "PB11; its <a-e><pin> option makes any pin a push-pull output and pulses "
+                   "it LOW for 10 ms, and `c9` is PC9, the power hold: the scope switches off",
 }
 # No such rows today. Denied so that a future command with one of these
 # names cannot reach --level unsafe before anyone has reviewed it.
