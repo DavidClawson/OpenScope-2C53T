@@ -59,6 +59,40 @@ static void test_synthetic(void)
           (double)r.sharpness);
     CHECK(r.window == MAXN, "a clean record must not need the half-window");
 
+    /* EXP-67 (unit #3, 2026-10-01): a clean 44-count square at 800 Hz,
+     * 24,979 S/s (fundamental at bin 32.8, BETWEEN bins) refused 5 of 6 real
+     * records at sharpness 0.73-0.90. With the harmonic windows at integer
+     * multiples of the integer peak bin (33h) the comb drifts off the
+     * square's harmonics by 0.2 bin per order and the >= 7th harmonics are
+     * counted as noise: 0.90-0.91 on a perfect record, so quantisation alone
+     * tips it. Windows on the interpolated comb (32.8h) read 0.93-0.97 on the
+     * same records. Deterministic +/-0.5-count quantisation noise below (an
+     * LCG, so the record is the same every run). Revert the comb placement
+     * and the sharpness check fails. */
+    {
+        uint32_t lcg = 0x2C53u;
+        for (int i = 0; i < MAXN; i++) {
+            double ph = fmod(800.0 * i / 24979.0, 1.0);
+            lcg = lcg * 1664525u + 1013904223u;
+            int q = (int)((lcg >> 24) % 2u);          /* 0 or 1 count of noise */
+            s[i] = (uint8_t)((ph < 0.5 ? 150 : 106) + q);
+        }
+        /* The bench records also carry one sample of edge overshoot (probe,
+         * ESD clamp): +/-6 counts right after each edge. */
+        for (int i = 1; i < MAXN; i++) {
+            if (s[i] > s[i - 1] + 20) s[i] = (uint8_t)(s[i] + 6);
+            else if (s[i] + 20 < s[i - 1]) s[i] = (uint8_t)(s[i] - 6);
+        }
+        CHECK(scope_freq_estimate(s, MAXN, 24979.0f, &r),
+              "a clean 44-count square between bins must be accepted (EXP-67)");
+        CHECK(fabsf(r.hz - 800.0f) < 8.0f,
+              "44-count 800 Hz square read as %.1f Hz", (double)r.hz);
+        CHECK(r.sharpness >= 0.95f,
+              "harmonic windows must follow the fractional comb: sharpness %.3f "
+              "(windows at integer multiples of the integer peak give ~0.92 here "
+              "and 0.73-0.90 on the bench records)", (double)r.sharpness);
+    }
+
     /* A clean 50% square at 500 Hz, 12,575 S/s: same fundamental bin as the
      * sine above (40.7). An ideal square's fundamental carries only 8/pi^2 =
      * 0.811 of the total power, so the old mainlobe-only sharpness capped here
