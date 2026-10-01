@@ -27,7 +27,7 @@
  * That test aims the settings writer straight at a read-only region and checks
  * the bytes are still there afterwards.
  *
- * TWO BUILDS OF THIS ONE FILE (all from the Makefile; one flash model)
+ * THREE BUILDS OF THIS ONE FILE (all from the Makefile; one flash model)
  * ----------------------------------------------------------------------
  *   test_config_persist            -DSETTINGS_PERSIST_WRITES=1   must be green
  *   test_config_persist_nowrite    -DSETTINGS_PERSIST_WRITES=0   must be green
@@ -36,8 +36,14 @@
  *       cycle -> verify loop and requires that nothing survives — and that the
  *       positive version of that test goes red. A loop that passes with the
  *       writes compiled out is not testing persistence.
+ *   test_config_persist_known_defects  -DCONFIG_PERSIST_KNOWN_DEFECTS=1
+ *       EXPECTED TO FAIL. Each test asserts the CORRECT behaviour for a power-
+ *       cut case the firmware currently gets wrong, so the fix turning it green
+ *       is the verification. Run by name (`make test-config-persist-known-
+ *       defects`); deliberately not part of `make test-config-persist`, the
+ *       same convention as test-meter-word-map.
  *
- * `make test-config-persist` builds and runs both.
+ * `make test-config-persist` builds and runs the first two.
  */
 
 #include <stddef.h>
@@ -1123,7 +1129,7 @@ static void test_capture_apply_round_trip_is_symmetric(void)
 }
 
 /* ═══════════════════════════════════════════════════════════════════
- * Shared by sections 6-8
+ * Shared by sections 6-9
  * ═══════════════════════════════════════════════════════════════════ */
 
 /* One record slot: header + config payload padded to 4 (64 B today). */
@@ -1370,7 +1376,7 @@ static void test_a_save_torn_at_any_byte_is_never_applied(void)
 /* The guarantee config.h and flash_regions.c document: a torn record "of known
  * length whose CRC fails" is stepped over and the log keeps working. That holds
  * once the header's magic and length have landed — every cut from byte 4 to the
- * last payload byte. */
+ * last payload byte. (Cuts inside bytes 0..3 are the known-defects build.) */
 static void test_a_save_torn_after_its_length_does_not_stop_later_saves(void)
 {
     for (uint32_t b = HDR_MAGIC_AND_LEN_BYTES; b < REC_SLOT && !current_failed; b++) {
@@ -1661,21 +1667,164 @@ static void test_with_writes_stubbed_no_change_survives(void)
 }
 
 /* ═══════════════════════════════════════════════════════════════════
+ * 9. KNOWN DEFECTS — built only with CONFIG_PERSIST_KNOWN_DEFECTS=1
+ *
+ * Each test asserts the behaviour the firmware's own comments promise, for a
+ * case where it does not deliver it today. They are EXPECTED TO FAIL until
+ * the firmware is fixed; do not "fix" them by weakening the assertion.
+ * ═══════════════════════════════════════════════════════════════════ */
+
+/* DEFECT: a power cut inside the 8-byte header program, before the magic and
+ * length have both landed, stops every later save — permanently.
+ *
+ * config.h promises "a save interrupted by a power cut leaves a record of
+ * known length whose CRC fails; the scanner steps over it". That is true only
+ * once bytes 0..3 (magic, length) are down. With the cut earlier, log_scan()
+ * (flash_regions.c, the magic / length checks) stops at the unparsable header
+ * and reports next_offset = that slot; flash_region_append()'s blank-slot check
+ * finds the bytes that did land and refuses with NEEDS_ERASE; config_save()
+ * compacts only on FULL and deliberately not on NEEDS_ERASE — and FULL is now
+ * unreachable, because the scan never gets past the torn header. Loads still
+ * return the last good record, so nothing looks wrong at boot: every setting
+ * change from then on is silently lost. */
+static void test_a_save_torn_inside_its_magic_or_length_does_not_stop_later_saves(void)
+{
+    for (uint32_t b = 1; b < HDR_MAGIC_AND_LEN_BYTES; b++) {
+        (void)save_cut_after(b);
+
+        boot();
+        CHECK(scope_state_get()->ch1.vdiv_idx == MARK_A,
+              "cut after %u bytes: did not boot on the last good record", b);
+
+        bool any_saved = false;
+        for (uint8_t k = 0; k < 3; k++) {          /* three separate changes */
+            scope_state_get()->ch1.vdiv_idx = (uint8_t)(MARK_C + k);
+            any_saved |= settings_store_flush(3000u + k);
+        }
+        CHECK(any_saved, "cut after %u bytes: no later save succeeded (last save status "
+              "%d = %s)", b, (int)config_persist_stats()->last_save_status,
+              flash_region_strerror((flash_region_status_t)
+                                    config_persist_stats()->last_save_status));
+
+        boot();
+        CHECK(scope_state_get()->ch1.vdiv_idx == MARK_C + 2u,
+              "cut after %u bytes: the newest change did not survive a power cycle "
+              "(booted on vdiv %u, the record from before the cut)",
+              b, scope_state_get()->ch1.vdiv_idx);
+    }
+}
+
+/* DEFECT: the same wedge from damage instead of a cut. One header anywhere in
+ * the log that no longer parses (a flipped bit in the magic) hides every record
+ * after it AND stops every later save, for the same reason as above. */
+static void test_a_damaged_header_mid_log_does_not_stop_later_saves(void)
+{
+    fresh_device();
+    device_config_t a = marked_config(MARK_A);
+    device_config_t c = marked_config(MARK_C);
+    uint32_t off = forge_config(0, &a);
+    off = forge_damaged(off, DMG_MAGIC);
+    (void)forge_config(off, &c);
+
+    boot();
+    scope_state_get()->ch1.vdiv_idx = 9;
+    CHECK(settings_store_flush(1000), "a save after a damaged header failed (last save "
+          "status %d = %s)", (int)config_persist_stats()->last_save_status,
+          flash_region_strerror((flash_region_status_t)
+                                config_persist_stats()->last_save_status));
+    boot();
+    CHECK(scope_state_get()->ch1.vdiv_idx == 9,
+          "the save after a damaged header did not survive (booted on vdiv %u)",
+          scope_state_get()->ch1.vdiv_idx);
+}
+
+/* DEFECT: a compaction cut after it erased some, not all, of the region later
+ * resurrects the PRE-compaction settings as the newest record.
+ *
+ * The region is erased sector by sector from offset 0 (flash_regions.c
+ * erase_checked()). Cut after sector 0: the device boots on defaults (the
+ * documented cost) and new records fill sector 0 from offset 0. Once they fill
+ * it, log_scan() walks straight on into sector 1, which still holds the old,
+ * CRC-valid records, laid out on the same 64-byte grid — and the newest of
+ * THOSE wins. The device boots on settings from before the compaction, over
+ * 64 newer saves. (The next save then finds the log full and compacts, which
+ * hides the symptom again until the next boot-before-save.) */
+static void test_a_compaction_cut_mid_erase_never_resurrects_old_settings(void)
+{
+    fresh_device();
+    device_config_t old_newest = fill_log();
+
+    device_config_t next = marked_config(MARK_B);
+    model_cut_power_after(UINT32_MAX, 1);
+    CHECK(!config_save(&next), "the cut compaction reported success");
+    power_cycle();
+
+    const uint32_t per_sector = FLASH_REGION_SECTOR_SIZE / REC_SLOT;
+    device_config_t cfg;
+    config_init_defaults(&cfg);
+    for (uint32_t i = 0; i < per_sector + 2u && !current_failed; i++) {
+        cfg.scope_trigger_level = (int16_t)(i % 100u) - 50;    /* each save differs */
+        cfg.scope_ch1_vdiv = (uint8_t)(i % 2u ? MARK_A : MARK_C);
+        CHECK(config_save(&cfg), "save %u after the cut failed", i);
+
+        power_cycle();
+        device_config_t loaded;
+        CHECK_LOAD(config_load_or_defaults(&loaded), CONFIG_LOAD_OK);
+        CHECK(loaded.scope_trigger_level == cfg.scope_trigger_level &&
+              loaded.scope_ch1_vdiv == cfg.scope_ch1_vdiv,
+              "after %u saves since the cut, the boot loaded %s (vdiv %u, level %d) instead "
+              "of the newest save (vdiv %u, level %d)", i + 1u,
+              memcmp(&loaded, &old_newest, sizeof loaded) == 0
+                  ? "the PRE-COMPACTION newest record" : "some other record",
+              loaded.scope_ch1_vdiv, loaded.scope_trigger_level,
+              cfg.scope_ch1_vdiv, cfg.scope_trigger_level);
+    }
+}
+
+/* ═══════════════════════════════════════════════════════════════════
  * main
  * ═══════════════════════════════════════════════════════════════════ */
 
-enum { MODE_MAIN, MODE_NEGATIVE_CONTROL };
-#if !SETTINGS_PERSIST_WRITES
+#ifndef CONFIG_PERSIST_KNOWN_DEFECTS
+#define CONFIG_PERSIST_KNOWN_DEFECTS 0
+#endif
+#if CONFIG_PERSIST_KNOWN_DEFECTS && !SETTINGS_PERSIST_WRITES
+#error "the known-defects build needs the write path: build it with SETTINGS_PERSIST_WRITES=1"
+#endif
+
+enum { MODE_MAIN, MODE_NEGATIVE_CONTROL, MODE_KNOWN_DEFECTS };
+#if CONFIG_PERSIST_KNOWN_DEFECTS
+#define BUILD_MODE  MODE_KNOWN_DEFECTS
+#elif !SETTINGS_PERSIST_WRITES
 #define BUILD_MODE  MODE_NEGATIVE_CONTROL
 #else
 #define BUILD_MODE  MODE_MAIN
 #endif
 
+static void print_known_defects_banner(void)
+{
+    printf("\n");
+    printf("=========================================================================\n");
+    printf(" settings persistence -- KNOWN DEFECTS (power cuts)\n");
+    printf("\n");
+    printf(" THIS BUILD IS EXPECTED TO FAIL until the firmware is fixed.\n");
+    printf(" A red result here is a DOCUMENTED, KNOWN DEFECT, not a broken build.\n");
+    printf(" It is deliberately excluded from `make test-config-persist`.\n");
+    printf(" Each test asserts the correct behaviour; see section 9 of\n");
+    printf(" tests/test_config_persist.c for the mechanism behind each one.\n");
+    printf("=========================================================================\n");
+    printf("\n");
+}
+
 int main(void)
 {
+    if (BUILD_MODE == MODE_KNOWN_DEFECTS) {
+        print_known_defects_banner();
+    }
     printf("=== settings persistence (%s) ===\n",
-           BUILD_MODE == MODE_MAIN ? "SETTINGS_PERSIST_WRITES=1"
-                                   : "negative control: SETTINGS_PERSIST_WRITES=0");
+           BUILD_MODE == MODE_MAIN             ? "SETTINGS_PERSIST_WRITES=1" :
+           BUILD_MODE == MODE_NEGATIVE_CONTROL ? "negative control: SETTINGS_PERSIST_WRITES=0" :
+                                                 "KNOWN DEFECTS: expected to fail");
     printf("(device_config_t is %u bytes; record slot %u)\n",
            (unsigned)sizeof(device_config_t), (unsigned)REC_SLOT);
 
@@ -1732,6 +1881,15 @@ int main(void)
             test_with_writes_stubbed_no_change_survives);
         run_expect_red("with writes stubbed, \"changes survive power cycles across compaction\" goes red",
                        test_changes_survive_power_cycles_across_compaction);
+    }
+
+    if (BUILD_MODE == MODE_KNOWN_DEFECTS) {
+        run("a save torn inside its magic or length does not stop later saves",
+            test_a_save_torn_inside_its_magic_or_length_does_not_stop_later_saves);
+        run("a damaged header mid-log does not stop later saves",
+            test_a_damaged_header_mid_log_does_not_stop_later_saves);
+        run("a compaction cut mid-erase never resurrects old settings",
+            test_a_compaction_cut_mid_erase_never_resurrects_old_settings);
     }
 
     printf("\n%d tests, %d failed\n", tests_run, tests_failed);
