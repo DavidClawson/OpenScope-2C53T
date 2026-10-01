@@ -507,6 +507,18 @@ def square_plan(scen, rail_mv):
     return d, None
 
 
+def dot_square_on(src, log=print):
+    """Status, 50 % duty, and the pin back on the square: the previous run
+    (and every quiet()) leaves the Dot at `dc 0`, and whether `f`/`d` alone
+    resume the square is not documented, so `pwm` is sent when `s` says the
+    pin is not on it."""
+    src.prepare_frequency(log=log)
+    if src.status_seen is None or src.status_seen.mode != "pwm":
+        log("Dot pin at %s: `pwm` to resume the square"
+            % (src.status_seen.mode if src.status_seen else "unknown mode"))
+        src.pwm()
+
+
 def apply_trigger_scenario(sc, sg, scen, state):
     """Send only what changed, through the same entry points the UI uses.
     A timebase change is made in AUTO (the acq loop re-primes on the write;
@@ -1067,7 +1079,7 @@ def main(argv=None):
     # -- setup ------------------------------------------------------------
     if dot:
         print("setup: display-matrix setup skipped (--source kodedot: trigger block only)")
-        sg.prepare_frequency(log=lambda s: print("  " + s))
+        dot_square_on(sg, log=lambda s: print("  " + s))
     else:
         print("setup: range 6 both channels, timebase 0x10, soft trigger on")
         sc.vdiv(1, 6)

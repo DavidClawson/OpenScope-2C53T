@@ -36,6 +36,7 @@ catch (in a scratch copy of the scripts) and watching it go red:
   M11 exp22 runs the edge/order scenarios on a square               -> caught
   M12 exp22 checks against the commanded, not the reported, Hz      -> caught
   M13 SimBench level code with Python floor division (C truncates)  -> caught
+  M14 exp22 leaves a quiet (dc 0) Dot off the square at setup       -> caught
 
 Run: python3 scripts/test_bench_source.py
 """
@@ -485,6 +486,14 @@ class SimAcquisitionTests(unittest.TestCase):
         lvl = 128 - 28                                           # record units
         self.assertTrue((v[500:510].mean() - lvl) * (v[514:524].mean() - lvl) < 0)
         self.assertLessEqual(v.max(), 227)                       # ADC - 28
+
+    def test_exp22_puts_a_quiet_dot_back_on_the_square(self):
+        src = self.sim.source()
+        src.quiet()                                              # how a run leaves it
+        self.assertEqual(self.sim.kd["mode"], "dc_low")
+        exp22_stability.dot_square_on(src, log=lambda _s: None)
+        self.assertEqual(self.sim.kd["mode"], "pwm")
+        self.assertIn(("kodedot", "pwm"), self.sim.log)
 
     def test_a_higher_offset_dac_code_raises_the_trace(self):
         # EXP-64 run 2, unit #3: about 8 DAC codes per count, rising

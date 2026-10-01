@@ -2,7 +2,7 @@
 
 - **Date:** 2026-10-02 (pre-registered before the run)
 - **Unit:** unit #3 (V1.4). Every trigger-block result so far is unit #1 with a JDS6600 (EXP-54; exp22 block v13–v20, `reverse_engineering/captures/exp54/`).
-- **Build:** record the `device Build:` line the script prints. Expected: evidence v3 (`feat/usb-wedge-evidence` @ `170d9f3`, `Build: Oct  1 2026 16:56:51`, the EXP-67 build), which carries the trigger-block firmware (edge filter `276b368`, LPC seam finder `659c6e8`, trigger position `c1930f4`, `ord` flag `08b647d` are all its ancestors). Scripts: `bench/signal-source-abstraction` @ `db309bf` (`exp22_stability.py --source kodedot`). Source: Kode Dot running `kodedot_sigsource` standalone, GPIO9 (EXP2, J3 pin 4), 0 V / 3.303 V square (EXP-64 §3).
+- **Build:** record the `device Build:` line the script prints. Expected: evidence v3 (`feat/usb-wedge-evidence` @ `170d9f3`, `Build: Oct  1 2026 16:56:51`, the EXP-67 build), which carries the trigger-block firmware (edge filter `276b368`, LPC seam finder `659c6e8`, trigger position `c1930f4`, `ord` flag `08b647d` are all its ancestors). Scripts: `bench/signal-source-abstraction` @ `db309bf` (`exp22_stability.py --source kodedot`) plus the setup `pwm` guard committed right after this file (`exp22: put a quiet Dot back on the square`). Source: Kode Dot running `kodedot_sigsource` standalone, GPIO9 (EXP2, J3 pin 4), 0 V / 3.303 V square (EXP-64 §3).
 - **Status:** OPEN
 
 ## 1. Problem
@@ -62,6 +62,7 @@ If the run aborts, for example when the CDC self-heal of EXP-66 fires during a 7
 |---|---|---|
 | `device Build:` | evidence v3 or a later build carrying the trigger-block firmware | |
 | `fpga pollgap` / `postedge` / `autowait` lines at block start | poll gap 30 ms; poll start 181 ms (derived, 0x10); AUTO edge-wait 475 ms (derived), as unit #1 v20. A `usage`/unknown-command reply means a build without the poll loop: **stop** | |
+| Dot back on the square at setup (the script leaves it at `dc 0`; if `s` reports another mode it sends `pwm` and prints `Dot pin at ...`) | `mode=pwm` | |
 | Dot accepts `f 201`, `f 4`, `f 1` (try by hand first; a refusal aborts the run at that scenario) | `>ok`, `hz=` ≈ 200.997 / 4.000000 / 1.000000 | |
 | `host centre` line | DAC1 ≈ 1870, midline 114 ± 4. Basis: EXP-64 r5 CH1 midpoint 1753 on opread; the acq record sits 28 below opread; +14 counts × 8.2 codes/count | |
 | `precondition` line: CH1 record min..max, span | ≈ 30..200, span ≈ 164–170 (EXP-64 r5 CH1 rail-to-rail 163 counts; EXP-67 +3–4 % edge overshoot). The script requires min > 5, max < 222 and span > 40; otherwise the block is **VOID** | |
