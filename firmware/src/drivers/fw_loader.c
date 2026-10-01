@@ -394,7 +394,16 @@ uint32_t fw_loader_slot_crc(uint8_t slot)
 /* ── The installer ──────────────────────────────────────────────────── */
 #ifndef FW_LOADER_HOST_TEST
 
-#define RF __attribute__((section(".data.ramfunc"), noinline, used))
+/* RAM-resident. Besides the section, forbid the compiler from turning a loop
+ * into a call to memset/memcpy: those live in the app slot the installer is
+ * erasing. The maintainer-built v0.4.0 installer had exactly that — an
+ * unguarded `bl memset` (veneer in .data -> 0x08007C59, app-slot page 1)
+ * emitted for the 0xFF fill after rf_w25q_read_raw() — and hung on every
+ * bank-crossing install (EXP-57, EXP-59, EXP-62 A/B); GCC 15.3 at -Os
+ * happened to inline it. scripts/test_ramfunc_isolated.py fails the build
+ * if any branch from .data.ramfunc leaves RAM. */
+#define RF __attribute__((section(".data.ramfunc"), noinline, used, \
+                          optimize("no-tree-loop-distribute-patterns")))
 
 /* SPI2 + GPIOB, raw (CS = PB12, same wiring the flash_fs driver uses). */
 #define R_SPI2_STS  (*(volatile uint32_t *)0x40003808u)
@@ -427,10 +436,45 @@ RF static void rf_w25q_read_raw(uint32_t addr, uint8_t *dst, uint32_t len)
     R_GPIOB_SCR = 1u << 12;
 }
 
+/* ── Install breadcrumbs (EXP-57 follow-up) ─────────────────────────────
+ * The installer runs with interrupts off and, on failure, parks in `dead:`
+ * with nothing on screen or USB — EXP-57 could not tell which of its eight
+ * exits fired. These macros leave a trail in battery-domain backup
+ * registers BPR DT11..DT16, which survive SYSRESETREQ and the pinhole reset
+ * (not a full power loss without VBAT). `fwcrumb` in the shell prints them.
+ * Plain MMIO stores, so they are RAM-safe like everything else here.
+ *   DT11 magic 0xFC57   DT12 stage (low byte) | dead-site (high byte)
+ *   DT13 page index (addr - app base) / 2 KB   DT14 byte offset in page
+ *   DT15 flash STS at the last step            DT16 flash CTRL
+ * DT1..DT10 are left alone: a factory bootloader is the likelier user. */
+#ifndef FWL_INSTALL_CRUMBS
+#define FWL_INSTALL_CRUMBS 0    /* the trail costs ~500 B of RAM code; see Makefile */
+#endif
+#if FWL_INSTALL_CRUMBS
+#define FWL_BPR(n)      (*(volatile uint32_t *)(0x40006C00u + 0x40u + 4u * ((n) - 11u)))
+#define FWL_CRUMB_MAGIC 0xFC57u
+#define FWL_STAGE(st)   (FWL_BPR(12) = (FWL_BPR(12) & 0xFF00u) | (uint32_t)(st))
+#define FWL_DEAD_AT(site, sts_v, ctrl_v, page_i, byte_i) do { \
+        FWL_BPR(12) = ((uint32_t)(site) << 8) | (FWL_BPR(12) & 0xFFu); \
+        FWL_BPR(13) = (uint32_t)(page_i) & 0xFFFFu;                    \
+        FWL_BPR(14) = (uint32_t)(byte_i) & 0xFFFFu;                    \
+        FWL_BPR(15) = (uint32_t)(sts_v) & 0xFFFFu;                     \
+        FWL_BPR(16) = (uint32_t)(ctrl_v) & 0xFFFFu;                    \
+        goto dead; } while (0)
+#else
+#define FWL_STAGE(st)   ((void)0)
+#define FWL_DEAD_AT(site, sts_v, ctrl_v, page_i, byte_i) goto dead
+#endif
+
 /* Erase + program + verify the app slot from a W25Q source, routing
  * between the two internal-flash banks by address, then SYSRESETREQ.
  * Bank 0 regs at +0x0C/+0x10/+0x14 (KEYR +0x04), bank 1 at +0x4C/+0x50/
  * +0x54 (KEYR2 +0x44). */
+bool fw_loader_records_crumbs(void)
+{
+    return FWL_INSTALL_CRUMBS != 0;
+}
+
 RF static void fwl_ram_install(uint32_t src, uint32_t size)
 {
     uint8_t *page = fwl_buf;
@@ -443,6 +487,16 @@ RF static void fwl_ram_install(uint32_t src, uint32_t size)
     *(volatile uint32_t *)0x40021018u |= (1u << 4);
     *(volatile uint32_t *)0x40011010u = 1u << 9;
 
+#if FWL_INSTALL_CRUMBS
+    /* Breadcrumbs: PWC + BPR clocks on (CRM APB1EN bits 28/27), backup
+     * domain write enable (PWC CTRL bit 8), then start a fresh trail. */
+    *(volatile uint32_t *)0x4002101Cu |= (1u << 28) | (1u << 27);
+    *(volatile uint32_t *)0x40007000u |= 1u << 8;
+    FWL_BPR(11) = FWL_CRUMB_MAGIC;
+    FWL_BPR(12) = 1u;                       /* stage 1: entered, no dead site */
+    FWL_BPR(13) = 0; FWL_BPR(14) = 0; FWL_BPR(15) = 0; FWL_BPR(16) = 0;
+#endif
+
     /* Reclaim SPI2 from whatever the RTOS had in flight. */
     {
         uint32_t t = 0x000FFFFFu;
@@ -452,8 +506,9 @@ RF static void fwl_ram_install(uint32_t src, uint32_t size)
     }
 
     if (size == 0 || (size & 1u) || end > FWL_APP_CEILING) {
-        goto dead;
+        FWL_DEAD_AT(1, 0, 0, 0, 0);
     }
+    FWL_STAGE(2);
 
     for (uint32_t addr = FWL_APP_BASE; addr < end; addr += FWL_PAGE_SIZE) {
         /* Feed the FWDGT (cmd register, reload key). Non-guest builds arm
@@ -488,8 +543,12 @@ RF static void fwl_ram_install(uint32_t src, uint32_t size)
             *keyr = 0x45670123u;
             *keyr = 0xCDEF89ABu;
         }
+#if FWL_INSTALL_CRUMBS
+        FWL_BPR(13) = off / FWL_PAGE_SIZE;
+#endif
+        FWL_STAGE(bank1 ? 0x13u : 0x03u);   /* unlock (0x1x = bank 1) */
         if (*ctrl & (1u << 7)) {
-            goto dead;
+            FWL_DEAD_AT(2, *sts, *ctrl, off / FWL_PAGE_SIZE, 0);
         }
 
         /* Erase the whole 2 KB page... */
@@ -497,8 +556,9 @@ RF static void fwl_ram_install(uint32_t src, uint32_t size)
         while ((*sts & 1u) && --t) {
         }
         if (!t) {
-            goto dead;
+            FWL_DEAD_AT(3, *sts, *ctrl, off / FWL_PAGE_SIZE, 0);
         }
+        FWL_STAGE(bank1 ? 0x14u : 0x04u);   /* erase */
         *sts = (1u << 5) | (1u << 2) | (1u << 4);
         *ctrl |= 1u << 1;
         *fadr = addr;
@@ -508,8 +568,9 @@ RF static void fwl_ram_install(uint32_t src, uint32_t size)
         }
         *ctrl &= ~(1u << 1);
         if (!t || (*sts & ((1u << 2) | (1u << 4)))) {
-            goto dead;
+            FWL_DEAD_AT(4, *sts, *ctrl, off / FWL_PAGE_SIZE, 0);
         }
+        FWL_STAGE(bank1 ? 0x15u : 0x05u);   /* program */
 
         /* ...then program and verify it in 512-byte passes (RAM budget). */
         for (uint32_t sub = 0; sub < FWL_PAGE_SIZE; sub += FWL_CHUNK) {
@@ -532,7 +593,7 @@ RF static void fwl_ram_install(uint32_t src, uint32_t size)
                 while ((*sts & 1u) && --t) {
                 }
                 if (!t) {
-                    goto dead;
+                    FWL_DEAD_AT(5, *sts, *ctrl, off / FWL_PAGE_SIZE, sub + i);
                 }
                 *sts = (1u << 5) | (1u << 2) | (1u << 4);
                 *ctrl |= 1u;
@@ -542,18 +603,24 @@ RF static void fwl_ram_install(uint32_t src, uint32_t size)
                 }
                 *ctrl &= ~1u;
                 if (!t || (*sts & ((1u << 2) | (1u << 4)))) {
-                    goto dead;
+                    FWL_DEAD_AT(6, *sts, *ctrl, off / FWL_PAGE_SIZE, sub + i);
                 }
             }
 
             for (uint32_t i = 0; i < FWL_CHUNK; ++i) {
-                if (*(volatile uint8_t *)(addr + sub + i) != page[i]) {
-                    goto dead;
+                uint8_t got = *(volatile uint8_t *)(addr + sub + i);
+                if (got != page[i]) {
+                    /* DT15 = (read << 8) | expected: the SAME read that
+                     * failed the compare — a marginal cell may read right
+                     * the second time. */
+                    FWL_DEAD_AT(7, ((uint32_t)got << 8) | page[i],
+                                *ctrl, off / FWL_PAGE_SIZE, sub + i);
                 }
             }
         }
     }
 
+    FWL_STAGE(8);                           /* all pages verified: resetting */
     *(volatile uint32_t *)0xE000ED0Cu = 0x05FA0004u; /* SYSRESETREQ */
 
 dead:
