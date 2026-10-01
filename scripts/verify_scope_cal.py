@@ -225,6 +225,13 @@ def build_parser():
                     help="drive frequency for kodedot/manual (default 330 Hz)")
     ap.add_argument("--channels", type=int, nargs="+", choices=(1, 2), default=[1, 2],
                     help="scope channels to measure (default: both)")
+    ap.add_argument("--center-path", choices=("acq", "opread"), default="acq",
+                    help="which read path the quiet-input centring servos on: acq = the "
+                         "firmware's `fpga scope center` (its RAM buffer); opread = a "
+                         "bench-side servo of the offset DAC (`trig raw` / `trig2 raw`) on "
+                         "the same `spi3 opread` captures this script measures with. "
+                         "EXP-64 run 1 (unit #3): the two paths sit 27.6 counts apart in DC, "
+                         "so centring on acq left no headroom on opread (default: acq)")
     ap.add_argument("--center-mid", action="store_true",
                     help="kodedot: centre on each rail and set the offset DAC to the "
                          "midpoint, so the square may use the whole ADC span")
@@ -348,6 +355,50 @@ def run(args, sc, src, table, scale, plan, chans, ranges, wf, two_amps, lo_mv, h
     def span(op):
         return capture(op)[0]
 
+    def servo_center(ch, r):
+        """Centre the QUIET input at CENTRE_CODE on the opread path by servoing
+        the channel's offset DAC directly (CH1: DAC1 via `trig raw`, CH2:
+        TMR13_C1DT via `trig2 raw`). Direction is measured, not assumed (the
+        PWM-DAC's polarity is documented as assumed in the firmware): two
+        probe codes decide the sign, then a binary search over 0..4095.
+        Returns the same shape parse_center() gives, so callers cannot tell
+        the paths apart."""
+        cmd = "trig" if ch == 1 else "trig2"
+        op = OPCODE[ch]
+
+        def mean_at(code):
+            sc.cmd(f"{cmd} raw {int(code)}")
+            sleep(max(0.25, args.settle / 4))
+            return capture(op)[1]
+
+        m_lo, m_hi = mean_at(1200), mean_at(2900)
+        rising = m_hi >= m_lo
+        lo, hi = 0, 4095
+        best = (None, 1e9)
+        for _ in range(12):
+            mid = (lo + hi) // 2
+            m = mean_at(mid)
+            if abs(m - CENTRE_CODE) < best[1]:
+                best = (mid, abs(m - CENTRE_CODE), m)
+            if (m < CENTRE_CODE) == rising:
+                lo = mid + 1
+            else:
+                hi = mid - 1
+            if lo > hi:
+                break
+        dac, _err, median = best[0], best[1], best[2]
+        sc.cmd(f"{cmd} raw {dac}")
+        sleep(max(0.25, args.settle / 4))
+        median = capture(op)[1]
+        print(f"  r{r} CH{ch}: opread servo {cmd} raw {dac} -> mean {median:.1f} "
+              f"(target {CENTRE_CODE}, {'rising' if rising else 'falling'} DAC)")
+        return {"dac": dac, "median": median, "stale": False}
+
+    def center_once(ch, r):
+        if args.center_path == "opread":
+            return servo_center(ch, r)
+        return parse_center(sc.cmd(f"fpga scope center ch{ch} {r}", timeout=60))
+
     def center_mid(r):
         """Centre on each rail, then put the offset DAC at the midpoint.
 
@@ -363,10 +414,10 @@ def run(args, sc, src, table, scale, plan, chans, ranges, wf, two_amps, lo_mv, h
         for ch in chans:
             src.hold(0)
             sleep(args.settle)
-            lo = parse_center(sc.cmd(f"fpga scope center ch{ch} {r}", timeout=60))
+            lo = center_once(ch, r)
             src.hold(1)
             sleep(args.settle)
-            hi = parse_center(sc.cmd(f"fpga scope center ch{ch} {r}", timeout=60))
+            hi = center_once(ch, r)
             got[ch] = (lo, hi)
         for ch, (lo, hi) in got.items():
             good = all(c is not None and not c["stale"]
@@ -392,7 +443,7 @@ def run(args, sc, src, table, scale, plan, chans, ranges, wf, two_amps, lo_mv, h
             center_mid(r)
         else:
             for ch in chans:
-                sc.cmd(f"fpga scope center ch{ch} {r}", timeout=60)
+                center_once(ch, r)
         sleep(args.settle)
 
     def drive(mvpp):
