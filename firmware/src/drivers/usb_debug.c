@@ -774,6 +774,20 @@ static void cmd_version(void)
     );
 }
 
+/* The stall that fired a self-heal, kept apart from the last-stall snapshot
+ * (EXP-66: the host_slow stalls after a heal overwrote the one wedge caught).
+ * Printed only when a heal happened. */
+static void usb_print_heal_line(const char *who, const usb_evidence_t *ev)
+{
+    if (ev->heals == 0u) {
+        return;
+    }
+    usb_debug_printf("%s heal: fired at %lu ms on ept1=0x%08lX (%s)\r\n",
+                     who, (unsigned long)ev->heal_stall_tick, (unsigned long)ev->heal_stall_ept,
+                     ((ev->heal_stall_ept & USB_TXSTS) == USB_TX_VALID) ? "TX VALID: host not reading?"
+                                                                       : "TX not VALID: lost completion");
+}
+
 /* The previous session's evidence (#39), one line. `always` = usbstat, which
  * also says when there is nothing to report; the banner prints only a
  * pending stall. */
@@ -793,11 +807,13 @@ static void usb_print_prev_session(bool always)
             (unsigned long)p->tx_stalls, (unsigned long)p->tx_host_slow, (unsigned)p->heals,
             (unsigned long)p->rx_frames_ok, (unsigned)p->rx_bad_checksum,
             (unsigned)p->rx_bad_length, (unsigned)p->rx_gap_timeouts);
+        usb_print_heal_line("previous session", p);
     } else if (always && p != NULL) {
         usb_debug_printf(
             "previous session #%u: no stall pending (alive until %lu ms; stalls=%lu heals=%u)\r\n",
             (unsigned)p->seq, (unsigned long)p->alive_tick,
             (unsigned long)p->tx_stalls, (unsigned)p->heals);
+        usb_print_heal_line("previous session", p);
     } else if (always) {
         usb_send_str("previous session: none (cold power-up, or its record did not validate)\r\n");
     }
@@ -830,6 +846,7 @@ static void cmd_usbstat(void)
         (unsigned long)s_usb.pending_cleared_tick,
         (unsigned long)rx.frames_ok, (unsigned long)rx.bad_checksum,
         (unsigned long)rx.bad_length, (unsigned long)rx.gap_timeouts);
+    usb_print_heal_line("this session", &g_usb_ev);
     usb_print_prev_session(true);
 }
 

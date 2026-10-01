@@ -96,6 +96,11 @@ MUTATIONS: tuple[Mutation, ...] = (
         new="        *prev = *ev;",
     ),
     Mutation(
+        name="heal does not snapshot its stall -> the wedge's endpoint state is overwritten (EXP-66)",
+        old="    ev->heal_stall_tick = ev->stall_tick;\n    ev->heal_stall_ept = ev->stall_ept;",
+        new="",
+    ),
+    Mutation(
         name="session number not advanced -> a reset looks like a power cycle",
         old="seq = (uint16_t)(prev->seq + 1u);",
         new="seq = prev->seq;",

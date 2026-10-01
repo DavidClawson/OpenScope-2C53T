@@ -13,7 +13,7 @@
 /* The record sits in .noinit on an SRAM that is ~100 B from the
  * link limit, so it must stay small; and `check` must cover every other byte
  * (no padding where power-up noise could sit outside the checksum). */
-_Static_assert(sizeof(usb_evidence_t) == 44u, "usb_evidence_t layout changed");
+_Static_assert(sizeof(usb_evidence_t) == 52u, "usb_evidence_t layout changed");
 _Static_assert(sizeof(usb_evidence_t) <= 64u, "usb_evidence_t must stay tiny (.noinit)");
 _Static_assert(offsetof(usb_evidence_t, check) + sizeof(uint32_t) == sizeof(usb_evidence_t),
                "check must be the last field, with no padding after it");
@@ -101,6 +101,8 @@ void usb_ev_heal(usb_evidence_t *ev)
     if (ev->heals < 0xFFFFu) {
         ev->heals++;
     }
+    ev->heal_stall_tick = ev->stall_tick;
+    ev->heal_stall_ept = ev->stall_ept;
     usb_ev_seal(ev);
 }
 
