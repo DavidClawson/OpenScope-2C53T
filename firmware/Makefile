@@ -86,6 +86,7 @@ C_SOURCES += src/util/config.c
 C_SOURCES += src/util/cal_dump.c
 C_SOURCES += src/util/cal_backup_core.c
 C_SOURCES += src/util/cal_backup.c
+C_SOURCES += src/util/usb_evidence.c
 C_SOURCES += src/util/cal_reference.c
 C_SOURCES += src/util/settings_store.c
 C_SOURCES += src/util/screenshot.c
@@ -565,6 +566,33 @@ $(BUILD_DIR)/test_fw_loader: tests/test_fw_loader.c src/drivers/fw_loader.c src/
 test-fw-loader: $(BUILD_DIR)/test_fw_loader
 	$<
 
+.PHONY: test-esp-comm test-remote-proto
+# Remote protocol over the shared CDC stream (issue #10). test_esp_comm keeps
+# the ESP32 staging flow covered with its (still TODO-on-flash) handlers
+# compiled in; test_remote_proto covers what the USB binding relies on.
+$(BUILD_DIR)/test_esp_comm: tests/test_esp_comm.c src/drivers/esp_comm.c src/drivers/esp_comm.h | $(BUILD_DIR)
+	$(HOST_CC) -std=gnu11 -Wall -Wextra -DESP_COMM_TRANSFER_STUBS=1 -Isrc/drivers $< src/drivers/esp_comm.c -o $@
+
+test-esp-comm: $(BUILD_DIR)/test_esp_comm
+	$<
+
+$(BUILD_DIR)/test_remote_proto: tests/test_remote_proto.c src/drivers/esp_comm.c src/drivers/esp_comm.h | $(BUILD_DIR)
+	$(HOST_CC) -std=gnu11 -Wall -Wextra -Werror -Isrc/drivers $< src/drivers/esp_comm.c -o $@
+
+test-remote-proto: $(BUILD_DIR)/test_remote_proto test-esp-comm
+	$<
+
+.PHONY: test-usb-evidence
+# CDC wedge evidence record (issue #39): the .noinit record that carries the
+# last stall across the reset that recovers the port. Trust rule (magic AND
+# checksum over every byte) and session lifecycle; scripts/test_usb_evidence.py
+# also deletes each guard and requires this suite to fail.
+$(BUILD_DIR)/test_usb_evidence: tests/test_usb_evidence.c src/util/usb_evidence.c src/util/usb_evidence.h | $(BUILD_DIR)
+	$(HOST_CC) -std=c11 -Wall -Wextra -Werror -Isrc/util $< src/util/usb_evidence.c -o $@
+
+test-usb-evidence: $(BUILD_DIR)/test_usb_evidence
+	$<
+
 $(BUILD_DIR)/test_scope_timebase: tests/test_scope_timebase.c src/ui/scope_timebase.c src/ui/scope_timebase.h | $(BUILD_DIR)
 	$(HOST_CC) -std=gnu11 -Wall -Wextra -Isrc/ui $< src/ui/scope_timebase.c -lm -o $@
 
@@ -978,6 +1006,16 @@ guest-coldtrace-usart: clean all
 guest-coldtrace: CFLAGS += -DGUEST_BUILD -DFPGA_WARM_HANDOFF_TEST=1 -DFPGA_USART_SILENT_SCOPE=1 -DFPGA_CONFIG_B=1 -DFPGA_CONFIG_B_ARM=1
 guest-coldtrace: LDSCRIPT = ld/at32f403a_guest.ld
 guest-coldtrace: clean all
+
+# guest-coldtrace-crumbs — coldtrace whose RAM installer (fwapply/fwswap) leaves
+# a trail in backup registers BPR DT11..16; read it with `fwcrumb` after a
+# MENU+pinhole recovery (EXP-57 follow-up: which of the installer's exits
+# fires on genuine-Winbond units). The trail is ~500 B of RAM code and RAM is
+# full, so this build shrinks the RTT up-buffer (SWD console) 2048 -> 512 B.
+.PHONY: guest-coldtrace-crumbs
+guest-coldtrace-crumbs: CFLAGS += -DGUEST_BUILD -DFPGA_WARM_HANDOFF_TEST=1 -DFPGA_USART_SILENT_SCOPE=1 -DFPGA_CONFIG_B=1 -DFPGA_CONFIG_B_ARM=1 -DFWL_INSTALL_CRUMBS=1 -DRTT_UP_SIZE=512u
+guest-coldtrace-crumbs: LDSCRIPT = ld/at32f403a_guest.ld
+guest-coldtrace-crumbs: clean all
 
 # [M1 2026-09-04] guest-coldtrace-meter — coldtrace plus reachable meter submodes.
 #

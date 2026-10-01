@@ -145,6 +145,16 @@ SECTIONS
     __bss_end__ = _ebss;
   } >RAM
 
+  /* Preserved across reset -- not zeroed by startup code (fault.c g_fault,
+   * usb_debug.c g_usb_ev). Same block as at32f403a_app.ld / _guest.ld; without
+   * it the section was placed here anyway, as an orphan. */
+  .noinit (NOLOAD) :
+  {
+    . = ALIGN(4);
+    *(.noinit)
+    . = ALIGN(4);
+  } >RAM
+
   /* User_heap_stack section, used to check that there is enough RAM left */
   ._user_heap_stack :
   {

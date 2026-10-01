@@ -38,6 +38,7 @@
 #define ESP_CMD_SIGNAL_CONFIG   0x0B    /* Set signal injection config */
 #define ESP_CMD_MODULE_LIST     0x0C    /* List installed modules */
 #define ESP_CMD_MODULE_DELETE   0x0D    /* Delete a module by slot */
+#define ESP_CMD_GET_METER       0x21    /* remote_protocol.md §3.4: one meter reading */
 
 /* Responses: GD32 → ESP32 */
 #define ESP_RSP_ACK             0x81    /* Command accepted */
@@ -46,6 +47,7 @@
 #define ESP_RSP_FRAMEBUFFER     0x84    /* Framebuffer data (multi-packet) */
 #define ESP_RSP_STATUS          0x85    /* Status response */
 #define ESP_RSP_MODULE_LIST     0x86    /* Module list response */
+#define ESP_RSP_METER_FRAME     0x90    /* §3.5 METER_FRAME */
 
 /* NAK error codes */
 #define ESP_ERR_UNKNOWN_CMD     0x01
@@ -56,6 +58,114 @@
 #define ESP_ERR_INVALID_SLOT    0x06
 #define ESP_ERR_NOT_READY       0x07
 #define ESP_ERR_TRANSFER_ACTIVE 0x08
+#define ESP_ERR_UNSUPPORTED     0x09    /* command exists but is not implemented on this build */
+#define ESP_ERR_RESERVED_0A     0x0A    /* reserved: never sent (a gap timeout is silent, see esp_comm_rx_poll) */
+#define ESP_ERR_NO_CAPTURE_DATA 0x0B    /* remote_protocol.md §3.4 — never substitute the demo trace */
+#define ESP_ERR_UNSUPPORTED_IN_MODE 0x0C
+#define ESP_ERR_BAD_ARG         0x0D    /* argument out of range */
+
+/* ─── Remote protocol (issue #10, docs/design/remote_protocol.md) ───
+ *
+ * Wire-format version reported in STATUS byte 0. Bump the major on any
+ * incompatible change; the host refuses unknown majors (§3.7). */
+#define ESP_PROTO_VERSION       1
+
+/* A frame whose bytes stop arriving for this long is abandoned and the
+ * receiver resyncs. Without it a truncated packet leaves the parser in
+ * PAYLOAD and, on the shared CDC endpoint, it would swallow the operator's
+ * shell text (and any later 0xAA) as payload. USB delivers a host write in
+ * back-to-back 64-byte packets, so a real gap of this size means the host
+ * gave up, not that it is slow. */
+#define ESP_RX_GAP_MS           50
+
+/* STATUS payload v1 — explicit little-endian layout, NOT a C struct dump
+ * (a struct's padding and enum width depend on the compiler):
+ *   [0]    u8   proto_version   (ESP_PROTO_VERSION)
+ *   [1]    u8   current_mode    (device_mode_t: 0 scope 1 meter 2 siggen 3 settings)
+ *   [2]    u8   battery_pct     (0..100)
+ *   [3]    u8   flags           bit0 charging, bit1 capture data ready,
+ *                               bit2 battery critical, bit3 battery UNKNOWN
+ *                               (no sample yet: battery_pct/mv are 0 and
+ *                               must not be read as a measurement)
+ *   [4..5] u16  battery_mv
+ *   [6..9] u32  uptime_ms
+ *   [10..13] u32 usb_tx_stalls  (CDC IN waits that timed out, issue #39)
+ *   [14..15] u16 usb_heals      (transport self-heal reconnects, issue #39)
+ *   [16]   u8   fw_len
+ *   [17..] char fw_version[fw_len]  (no NUL)
+ */
+#define ESP_STATUS_FIXED_LEN    17
+#define ESP_FW_VERSION_MAX      48      /* bytes of fw_version sent; also sizes the STATUS buffer */
+#define ESP_STATUS_FLAG_CHARGING      0x01
+#define ESP_STATUS_FLAG_CAPTURE_READY 0x02
+#define ESP_STATUS_FLAG_BATT_CRITICAL 0x04
+#define ESP_STATUS_FLAG_BATT_UNKNOWN  0x08
+
+/* Snapshot the firmware fills in for STATUS/PING. esp_comm itself knows
+ * nothing about the device, so the host tests can inject any state. */
+typedef struct {
+    uint8_t     current_mode;
+    uint8_t     battery_pct;
+    uint8_t     flags;
+    uint16_t    battery_mv;
+    uint32_t    uptime_ms;
+    uint32_t    usb_tx_stalls;
+    uint16_t    usb_heals;
+    const char *fw_version;     /* NUL-terminated; truncated to ESP_FW_VERSION_MAX on the wire */
+} esp_status_snapshot_t;
+
+typedef void (*esp_status_fn)(esp_status_snapshot_t *out);
+
+/* METER_FRAME payload v1 (remote_protocol.md §3.5, plus the display text):
+ *   [0..3]   u32  update_count   monotonic: a host sees drops and stale reads
+ *   [4..7]   f32  value          as the firmware scaled it (IEEE-754 LE)
+ *   [8..9]   i16  raw_bcd        the instrument's own digits, uncalibrated —
+ *                                per-device cal (#28) means a log should keep
+ *                                what the meter saw, not only what we concluded
+ *   [10]     u8   decimal_pos
+ *   [11]     u8   result_class   meter_result_class_t (NORMAL, OL, …)
+ *   [12]     u8   flags          bit0 negative, bit1 ac, bit2 autorange, bit3 hold
+ *   [13]     u8   submode
+ *   [14]     u8   unit_variant
+ *   [15]     u8   unit_len, then unit[unit_len] (ASCII, e.g. "V", "kOhm")
+ *   [..]     u8   display_len, then display[display_len] (what the LCD shows)
+ */
+#define ESP_METER_FIXED_LEN     16
+#define ESP_METER_FLAG_NEGATIVE 0x01
+#define ESP_METER_FLAG_AC       0x02
+#define ESP_METER_FLAG_AUTO     0x04
+#define ESP_METER_FLAG_HOLD     0x08
+
+typedef struct {
+    uint32_t    update_count;
+    float       value;
+    int16_t     raw_bcd;
+    uint8_t     decimal_pos;
+    uint8_t     result_class;
+    uint8_t     flags;
+    uint8_t     submode;
+    uint8_t     unit_variant;
+    char        unit[16];       /* copied, NUL-terminated: the provider's own */
+    char        display[16];    /* snapshot is gone by the time we encode */
+} esp_meter_snapshot_t;
+
+/* Fill a coherent reading. Anything but ESP_METER_OK is answered with a NAK:
+ * a reading the instrument is not currently producing must never be sent as
+ * if it were live (§2.3). */
+typedef enum {
+    ESP_METER_OK = 0,
+    ESP_METER_NOT_READY,        /* in meter mode, no reading parsed yet */
+    ESP_METER_WRONG_MODE,       /* not in meter mode: the last reading is frozen */
+} esp_meter_result_t;
+typedef esp_meter_result_t (*esp_meter_fn)(esp_meter_snapshot_t *out);
+/* Inject a button press (id 1..15 = button_id_t). Return false if it could
+ * not be queued, so the host gets NAK instead of a false ACK. */
+typedef bool (*esp_button_fn)(uint8_t button_id);
+/* Block writer: the whole of `len` bytes, in order. Preferred over the
+ * byte writer — the USB CDC path sends 64-byte packets, not bytes. */
+typedef void (*esp_write_block_fn)(const uint8_t *data, uint16_t len);
+/* Where non-protocol bytes go when routing a shared stream (§3.2). */
+typedef void (*esp_passthrough_fn)(const uint8_t *data, uint16_t len, void *ctx);
 
 /* Module slots */
 #define ESP_MODULE_SLOT_COUNT   4
@@ -144,6 +254,43 @@ void esp_comm_send_nak(uint8_t error_code);
 
 /* Check if a module transfer or firmware update is in progress */
 bool esp_comm_transfer_active(void);
+
+/* ─── Remote protocol bindings ─── */
+
+void esp_comm_set_block_writer(esp_write_block_fn fn);
+void esp_comm_set_status_provider(esp_status_fn fn);
+void esp_comm_set_button_injector(esp_button_fn fn);
+void esp_comm_set_meter_provider(esp_meter_fn fn);
+
+/* True while a frame is being received (sync seen, checksum not yet). */
+bool esp_comm_rx_in_frame(void);
+
+/* Abandon a frame whose bytes stopped arriving ESP_RX_GAP_MS ago.
+ * Returns true if a frame was abandoned. Nothing is sent: without request
+ * ids an unsolicited reply would be mistaken for the next request's answer. */
+bool esp_comm_rx_poll(uint32_t now_ms);
+
+/* Refresh the gap clock of a frame still open (no-op otherwise). Call after
+ * esp_comm_route() returns, with a fresh time: route() stamps a whole chunk
+ * with its entry time, and work inside the chunk may have taken a while. */
+void esp_comm_rx_touch(uint32_t now_ms);
+
+/* Route a chunk from a stream shared with the ASCII shell (§3.2):
+ * bytes belonging to a frame (starting at 0xAA) go to the parser and every
+ * completed frame is dispatched; all other bytes are handed, in order and
+ * in contiguous runs, to `passthrough`. Malformed frames are answered with
+ * NAK (bad checksum / bad length) rather than dropped silently. */
+void esp_comm_route(const uint8_t *data, uint16_t len, uint32_t now_ms,
+                    esp_passthrough_fn passthrough, void *ctx);
+
+/* Diagnostics for `usbstat`/tests. */
+typedef struct {
+    uint32_t frames_ok;
+    uint32_t bad_checksum;
+    uint32_t bad_length;
+    uint32_t gap_timeouts;
+} esp_rx_stats_t;
+void esp_comm_get_rx_stats(esp_rx_stats_t *out);
 
 /* Compute XOR checksum */
 uint8_t esp_comm_checksum(const uint8_t *data, uint16_t len);
