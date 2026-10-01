@@ -2,8 +2,9 @@
 
 - **Date:** 2026-10-01
 - **Unit:** bench unit #3 (V1.4). The rate table being tested is unit #1's.
-- **Build:** unit #3 on a build of PR #41/#47 (record the `build:` line the script prints). Scripts at
-  `bench/signal-source-abstraction` @ `2ce8a3a`. Source: `kodedot_sigsource` on a Kode Dot (ESP32-P4).
+- **Build:** unit #3 on PR #48's branch (`feat/usb-wedge-evidence` @ `f912890` = #41 + the evidence record; no
+  timebase or acquisition change vs #41), `Build: Oct  1 2026 14:36:14`. Scripts at `bench/signal-source-abstraction`
+  @ `66a1802`. Source: `kodedot_sigsource` on a Kode Dot (ESP32-P4), standalone, output GPIO9 (§3).
 - **Status:** OPEN — pre-registered before any capture. Thresholds below are fixed now.
 
 ## 1. Problem
@@ -41,13 +42,19 @@ Falsifier: scatter > 20 bins on acq at both placements. Opread is expected torn 
 run 4 its column is the contrast, not a test.
 
 ## 3. Procedure
+**Deviations from the pre-registration (2026-10-01, before any run):**
+- Source pin is **GPIO9** (EXP2, J3 pin 4), not GPIO14: the operator's probes were already there. GPIO9 sits behind the ESDA6V1SC6 array (~190 pF) with the 68 Ω series resistor (τ ≈ 13 ns), which rounds MHz edges; the fits use the fundamental's peak bin, so the edges do not matter for the rates, but the fold tones above ~1 MHz lose harmonic content. `kodedot_sigsource` was changed to make GPIO9 its default output (`p 14` / `p 21` still select the low-capacitance pins).
+- The Dot runs `kodedot_sigsource` **standalone** (its flash was rewritten with the operator's consent: no kodeOS on this unit, no panel assembly, no KTD2026 LED). The SDK's LED driver retried every 40 ms and logged each attempt on the console, so (a) that log is silenced in the app and (b) `bench._DotSerialTransport` now reads replies to the `>ok`/`>err` terminator instead of quiet time (commit 66a1802).
+- **CH1 is the crocodile-clip lead** (no attenuator, ×1 by construction) for every run below; the operator's ×1 probe does not conduct. Shown before run 1, with the Dot's square on GPIO9 at 0x10, range 6: the lead's channel saw 86–89 codes p-p at 1000 Hz, the probe's channel 2–4 codes (noise) through (a) a static `dc 0`/`dc 1` step (lead: 141 → 225 codes; probe: 81.3 → 81.3), (b) a pin finder — the app was extended to drive any of the 14 J3 GPIOs (`p <gpio>`) and the square was walked over all of them: only GPIO9 moved the lead's channel, nothing moved the probe's — and (c) swapping the two BNCs at the scope: the square followed the lead to CH1 and the probe stayed flat on CH2. CH1's input itself is fine (at range 0 it picks up 50 Hz, 22× the floor, as an open high-impedance input does; after the swap it shows the square). The lead is on GPIO9, its ground clip on the GND pair beside GPIO14/GPIO21. CH2 (dead probe) is set to the same range and ignored.
+- `ppm 35` is set by hand after each Dot reset (not persisted).
+
 **Preconditions verified by readback** (not assumed):
 | what | expected | measured |
 |---|---|---|
-| `version` (the `build:` line, all four runs) | one string, recorded | |
-| `fpga scope timebase`, no argument, by hand: before run 1 / after each run (script restores 0x10) | `0xNN (reg 0x01 = 0xNN)`, equal / `0x10 (reg 0x01 = 0x10)  12490 S/s` | |
-| Dot `s`: sigsrc up, `clk_hz`; `ppm` | `80000000`; 35 (reported only, not applied to the fits) | |
-| probes ×1 (switch checked by eye), tips J3 pin 9, springs pins 10/11 | both channels on one pin | |
+| `version` (the `build:` line, all four runs) | one string, recorded | `OpenScope 2C53T | Build: Oct  1 2026 14:36:14 | MCU: AT32F403A @ 240MHz | SRAM: 224KB (EOPB0=0xFE)` (runs 1, 2) |
+| `fpga scope timebase`, no argument, by hand: before run 1 / after each run (script restores 0x10) | `0xNN (reg 0x01 = 0xNN)`, equal / `0x10 (reg 0x01 = 0x10)  12490 S/s` | before run 1: `timebase 0x08 (reg 0x01 = 0x08)  0 S/s --/div` (the UI's own setting; the script sets 0x10 itself); after the runs: see §5 |
+| Dot `s`: sigsrc up, `clk_hz`; `ppm` | `80000000`; 35 (reported only, not applied to the fits) | `clock src=PLL_F80M clk_hz=80000000 (SPLL=12x X1 40 MHz, /6)`; `xtal ppm=+35.000` |
+| probes ×1 (switch checked by eye), tips J3 pin 9, springs pins 10/11 | both channels on one pin | **deviation:** CH1 = crocodile lead on GPIO9 (the ×1 probe is dead, see above); CH2 = the dead probe, ignored |
 
 ```
 python3 scripts/measure_sample_rate.py --source kodedot --codes 0x0F 0x0E 0x0D                    # run 1
@@ -77,20 +84,74 @@ gap on record (0x10 vs Stlkv's rig, 0.43%). Integer-bin quantisation alone gives
 
 | control | expected | measured | passed? |
 |---|---|---|---|
-| 0x10 opread vs acq (script's own check) | agree < 5%, `PASS` | | |
-| 0x10, each path vs table 12,490.0 | within 1% | | |
-| 0x0F vs table 24,979.1 | within 1% | | |
-| 0x0E vs table 49,930.1 | within 1% | | |
-| 0x0D vs table 123,662.7 (PROVISIONAL, −1.07% from round 125 k) | within 1.5%; ~125,000 passes | | |
-| fold at 0x0F / 0x0E / 0x0D | worst miss ≤ 12 bins | | |
-| closing `source at end` clock check | `PASS` | | |
+| 0x10 opread vs acq (script's own check) | agree < 5%, `PASS` | run 1: 12489 / 12489 S/s, `paths agree to 0.0%  PASS` | yes |
+| 0x10, each path vs table 12,490.0 | within 1% | 12489 S/s both paths: −0.01% | yes |
+| 0x0F vs table 24,979.1 | within 1% | 25009 S/s: +0.12% | yes |
+| 0x0E vs table 49,930.1 | within 1% | 50020 S/s: +0.18% | yes |
+| 0x0D vs table 123,662.7 (PROVISIONAL, −1.07% from round 125 k) | within 1.5%; ~125,000 passes | 124968 S/s: +1.06% vs the table, −0.03% vs round 125 k | yes |
+| fold at 0x0F / 0x0E / 0x0D | worst miss ≤ 12 bins | 1 / 1 / 1 bins | yes |
+| closing `source at end` clock check | `PASS` | `Kode Dot clk 80000000 Hz … PASS` (run 1) | yes |
 
 Runs 2–4 repeat the 0x10 control at their start; if it fails, that run is **VOID, not negative**. A 0x0D
 miss beyond 1.5% voids runs 2–4: it is the nearest known code and uses the method the new codes use.
 H2's own control is the opread/acq contrast under identical conditions.
 
 ## 5. Results
-_Empty until the runs are done. Raw `fs`, R², per-tone bins and the fold table, pasted unedited._
+### Run 2, first attempt — aborted by the instrument, not the device
+`fpga scope center ch1 6` answered nothing within the script's 20 s (`got 25 bytes`); by hand the same command completed in **20.4 s** (`CH1 range 6: center DAC1=2639 (median=128)`), so run 1 had passed the same step with < 0.4 s to spare. The scope's shell and protocol answered normally afterwards (`usbstat`: no stall; `dropped_closed=4` = the lines the device printed after the script had closed the port). Timeout raised to 60 s in both bench scripts; run 2 repeated from the start, controls included.
+
+### Run 1 — controls and 0x0F/0x0E/0x0D (`dumps/exp63_run1.log`, unedited)
+```
+source: Kode Dot LEDC square (clk 80000000 Hz; PLL_F80M = X1 40 MHz x12/6); every frequency below is the one its timer registers produce
+build: version | OpenScope 2C53T | Build: Oct  1 2026 14:36:14 | MCU: AT32F403A @ 240MHz | SRAM: 224KB (EOPB0=0xFE) | >  | >
+
+=== CONTROL — the two read paths at 0x10 ===
+    0x10 opread: fs =     12489 S/s  R2 +1.0000   [250->20  500->41  1000->82  2000->164  3500->287]
+    0x10 acq   : fs =     12489 S/s  R2 +1.0000   [250->20  500->41  1000->82  2000->164  3500->287]
+    paths agree to 0.0%  PASS
+
+=== reg 0x01 = 0x0F, acq read ===
+  table: 24979.1 S/s; tones placed for ~24979 S/s (scope_timebase.c)
+    0x0F acq   : fs =     25009 S/s  R2 +1.0000   [250->10  500->20  1200->49  2500->102  5000->205]
+    acq vs table 24979.1 S/s: +0.12%
+    0x0F acq    fold check (Nyquist 12504 Hz):
+        16000 Hz  predicted  369  measured  369  miss    0
+        20000 Hz  predicted  205  measured  205  miss    0
+        28001 Hz  predicted  123  measured  123  miss    0
+        33999 Hz  predicted  368  measured  369  miss    1
+        43000 Hz  predicted  287  measured  287  miss    0
+      worst miss 1 bins -> FOLD HOLDS
+
+=== reg 0x01 = 0x0E, acq read ===
+  table: 49930.1 S/s; tones placed for ~49930 S/s (scope_timebase.c)
+    0x0E acq   : fs =     50020 S/s  R2 +1.0000   [500->10  1000->20  2500->51  5000->102  10000->205]
+    acq vs table 49930.1 S/s: +0.18%
+    0x0E acq    fold check (Nyquist 25010 Hz):
+        31000 Hz  predicted  389  measured  389  miss    0
+        41000 Hz  predicted  185  measured  184  miss    1
+        57000 Hz  predicted  143  measured  143  miss    0
+        69000 Hz  predicted  389  measured  389  miss    0
+        86000 Hz  predicted  287  measured  287  miss    0
+      worst miss 1 bins -> FOLD HOLDS
+
+=== reg 0x01 = 0x0D, acq read ===
+  table: 123662.7 S/s; tones placed for ~123663 S/s (scope_timebase.c)
+    0x0D acq   : fs =    124968 S/s  R2 +1.0000   [1200->10  2500->20  6200->51  11999->98  25000->205]
+    acq vs table 123662.7 S/s: +1.06%
+    0x0D acq    fold check (Nyquist 62484 Hz):
+        76997 Hz  predicted  393  measured  393  miss    0
+       100000 Hz  predicted  205  measured  205  miss    0
+       140000 Hz  predicted  123  measured  123  miss    0
+       170001 Hz  predicted  369  measured  369  miss    0
+       210000 Hz  predicted  327  measured  328  miss    1
+      worst miss 1 bins -> FOLD HOLDS
+
+source at end: Kode Dot clk 80000000 Hz — crystal-derived, no loop to drift; X1 error (+31..+41 ppm on three Dots) is below this method's resolution  PASS
+
+Kode Dot off; timebase restored to 0x10.
+done
+```
+- Every control passes (§4). 0x0D fits 124,968 S/s: the table's PROVISIONAL 123,662.7 is 1.06% low and the round 125,000 is within 0.03%, on a second unit and a second source (EXP-18 measured it on unit #1 with the ESP32 sketch).
 
 ## 6. Blind spots
 - **One unit, one session.** Unit #3 against unit #1's table; a 1% control miss could be unit-to-unit

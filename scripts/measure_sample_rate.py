@@ -250,7 +250,7 @@ def run(args, sc, src, rates, sleep):
     sc.scope_range(args.range, 2)
     if src.center_on_quiet:
         src.quiet()
-    sc.cmd(f"fpga scope center ch1 {args.range}", timeout=20)
+    sc.cmd(f"fpga scope center ch1 {args.range}", timeout=60)  # 20.4 s measured on unit #3 (EXP-63)
     sleep(args.settle)
 
     def read_opread():

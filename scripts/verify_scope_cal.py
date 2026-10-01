@@ -363,10 +363,10 @@ def run(args, sc, src, table, scale, plan, chans, ranges, wf, two_amps, lo_mv, h
         for ch in chans:
             src.hold(0)
             sleep(args.settle)
-            lo = parse_center(sc.cmd(f"fpga scope center ch{ch} {r}", timeout=20))
+            lo = parse_center(sc.cmd(f"fpga scope center ch{ch} {r}", timeout=60))
             src.hold(1)
             sleep(args.settle)
-            hi = parse_center(sc.cmd(f"fpga scope center ch{ch} {r}", timeout=20))
+            hi = parse_center(sc.cmd(f"fpga scope center ch{ch} {r}", timeout=60))
             got[ch] = (lo, hi)
         for ch, (lo, hi) in got.items():
             good = all(c is not None and not c["stale"]
@@ -392,7 +392,7 @@ def run(args, sc, src, table, scale, plan, chans, ranges, wf, two_amps, lo_mv, h
             center_mid(r)
         else:
             for ch in chans:
-                sc.cmd(f"fpga scope center ch{ch} {r}", timeout=20)
+                sc.cmd(f"fpga scope center ch{ch} {r}", timeout=60)
         sleep(args.settle)
 
     def drive(mvpp):
