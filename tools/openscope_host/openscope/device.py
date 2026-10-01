@@ -96,8 +96,13 @@ BENCH_ARG_RULES = {
         "other opcodes write FPGA registers under the 0xFF filler or hit the config port"),
 }
 
-# Never reachable over MCP, at any level: these erase or write flash, change
-# what the scope boots, drive GPIO pins directly or reset it. Name -> why.
+# scope_shell never sends these, at any level: they erase or write flash,
+# change what the scope boots, drive GPIO pins directly or reset it.
+# Name -> why. This covers the debug shell only: front-panel presses
+# (scope_press) are not filtered by level and can reach Settings > Startup
+# on Boot (an MCU flash write) and Settings > Firmware Update (reboot into
+# DFU); see mcp_server.py.
+NEVER_SHELL_WHAT = "flash writes, boot changes, resets, direct GPIO/memory writes"
 NEVER_SHELL_ROWS = {
     "fwload": "stages a firmware image into the W25Q cache (erases and writes it)",
     "fwapply": "erases and reprograms the MCU application flash, then resets",
@@ -160,9 +165,10 @@ def shell_refusal(line: str, level: str) -> Optional[str]:
     low = cmd.lower()
     for name, why in NEVER_SHELL.items():
         if _word_prefix(low, name):
-            return (f"'{cmd}' is never available over MCP, at any --level "
-                    f"({', '.join(SHELL_LEVELS)}): `{name}` {why}. "
-                    "If it is really needed, ask the human at the bench to run it.")
+            return (f"scope_shell never sends '{cmd}', at any --level "
+                    f"({', '.join(SHELL_LEVELS)}): `{name}` {why}. This shell command is "
+                    "never available over MCP; if it is really needed, ask the human at "
+                    "the bench to run it.")
     if cmd in READ_ONLY_SHELL or level == "unsafe":
         return None
     bench, limit = _bench_verdict(cmd)
