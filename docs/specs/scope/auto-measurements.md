@@ -42,6 +42,9 @@ matter:
   constant, pending a calibrated source).
 - **Horizontal:** `scope_timebase.c` — 8 of 21 codes measured
   (`docs/experiments/2026-08-19-17…`, EXP-18).
+  *Update 2026-10-01:* [EXP-63](https://github.com/DavidClawson/OpenScope-2C53T/pull/51) measured `0x0D`–`0x08` on bench
+  unit #3 (up to 4.99 MS/s, fold-tested) and fitted `0x07`/`0x06`
+  (PROVISIONAL); once PR #51 enters them, 15 of 21 codes carry a rate.
 
 `firmware/src/ui/scope_measure.h` predicted this moment in its header: it
 withheld volts/seconds *because* no cal and no timebase existed, and states
