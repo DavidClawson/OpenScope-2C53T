@@ -15,9 +15,13 @@ of it the agent may reach (device.py owns the tables):
     --level bench      + BENCH_SHELL: scope/acquisition settings and reads
     --level unsafe     the whole shell, for bench work with a human watching
 
-NEVER_SHELL (flash writes, boot changes, resets, direct GPIO/memory writes)
-and the POWER button are refused at every level. `--allow-raw-shell` is a
-deprecated alias for `--level unsafe`.
+scope_shell never sends NEVER_SHELL (see NEVER_SHELL_WHAT) at any level, and
+scope_press refuses POWER at every level. Other presses are NOT filtered: they
+can reach Settings > Startup on Boot (OK/LEFT/RIGHT erase and rewrite an MCU
+flash sector), Settings > Firmware Update (OK reboots into DFU) and Settings >
+FPGA SPI Scanner (OK starts a long SPI3/USART sweep that only the physical
+POWER button stops). `--allow-raw-shell` is a deprecated alias for
+`--level unsafe`.
 """
 from __future__ import annotations
 
@@ -33,7 +37,7 @@ from .screen import png_bytes
 
 # What an agent may run at each level (device.py owns the lists).
 from .device import (BENCH_ARG_RULES, BENCH_SHELL, NEVER_SHELL,  # noqa: E402
-                     READ_ONLY_SHELL, SHELL_LEVELS, shell_refusal)
+                     NEVER_SHELL_WHAT, READ_ONLY_SHELL, SHELL_LEVELS, shell_refusal)
 
 
 class Refused(RuntimeError):
@@ -113,6 +117,9 @@ class ScopeSession:
         return self._call(run)
 
     def press(self, buttons: List[str]) -> str:
+        """POWER is refused; nothing else is filtered, so a sequence can reach
+        Settings > Startup on Boot (MCU flash write), > Firmware Update (DFU
+        reboot) or > FPGA SPI Scanner (see the scope_press description)."""
         ids = [proto.button_id(b) for b in buttons]      # validate all before pressing any
         if proto.BUTTONS["POWER"] in ids:
             raise Refused("POWER is refused at every --level: it can switch the scope off and "
@@ -174,8 +181,8 @@ def shell_tool_description(level: str) -> str:
                 "a human should be watching. ")
     return (head + body
             + "Levels (readonly < bench < unsafe) are chosen by whoever starts the server. "
-            + f"Never available over MCP at any level (flash writes, boot changes, resets, "
-              f"direct GPIO/memory writes): {never}.")
+            + f"scope_shell never sends these at any level ({NEVER_SHELL_WHAT}): {never}. "
+            + "This list covers the shell only; for front-panel presses see scope_press.")
 
 
 def build_server(session: ScopeSession):
@@ -226,8 +233,14 @@ def build_server(session: ScopeSession):
     def scope_press(buttons: List[str]) -> str:
         """Press front-panel buttons in order, like a person would. Names: CH1 CH2 MOVE
         SELECT TRIGGER PRM AUTO SAVE MENU UP DOWN LEFT RIGHT OK. POWER is refused at
-        every server level (it can switch the scope off and end the session). Take a
-        screenshot afterwards to see the effect."""
+        every server level (it can switch the scope off and end the session). Other
+        presses are NOT filtered by level, and they reach the Settings menu: there OK,
+        LEFT or RIGHT on "Startup on Boot" erases and rewrites an MCU flash sector, OK
+        on "Firmware Update" reboots the scope into the DFU bootloader (ending the
+        session), and OK on "FPGA SPI Scanner" starts a sweep of over an hour that
+        sends FPGA config opcodes and that only the physical POWER button stops. Do
+        not activate those items unless the human asked for it. Take a screenshot
+        afterwards to see the effect."""
         return expected(lambda: session.press(buttons))()
 
     @mcp.tool(annotations=read_only)
@@ -255,8 +268,10 @@ def parse_args(argv=None) -> argparse.Namespace:
     ap.add_argument("--level", choices=SHELL_LEVELS, default=None,
                     help="what scope_shell may run: readonly (default; status-type reads), "
                          "bench (+ scope/acquisition settings and measurement reads), "
-                         "unsafe (whole shell, human watching). Flash writes, boot "
-                         "changes, resets, GPIO writes and POWER are refused at every level.")
+                         "unsafe (whole shell, human watching). scope_shell never sends "
+                         f"{NEVER_SHELL_WHAT} at any level, and scope_press refuses POWER; "
+                         "other presses can still reach Settings > Startup on Boot (flash "
+                         "write) and Settings > Firmware Update (reboot to DFU).")
     ap.add_argument("--allow-raw-shell", action="store_true",
                     help="deprecated alias for --level unsafe")
     a = ap.parse_args(argv)
@@ -264,9 +279,9 @@ def parse_args(argv=None) -> argparse.Namespace:
         if a.level not in (None, "unsafe"):
             ap.error(f"--allow-raw-shell means --level unsafe; it conflicts with --level {a.level}")
         sys.stderr.write("openscope-mcp: --allow-raw-shell is deprecated, use --level unsafe. "
-                         "It no longer lifts the POWER refusal, and the never-over-MCP "
-                         "commands (fwapply, flash writes, reboot, gpio set, ...) stay "
-                         "refused at every level.\n")
+                         "It no longer lifts the POWER refusal, and scope_shell still "
+                         "never sends the deny-listed commands (fwapply, flash writes, "
+                         "reboot, gpio set, ...).\n")
         a.level = "unsafe"
     if a.level is None:
         a.level = "readonly"

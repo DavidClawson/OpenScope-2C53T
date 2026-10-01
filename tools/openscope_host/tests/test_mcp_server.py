@@ -271,7 +271,8 @@ class TestShellLevels(unittest.TestCase):
     def test_deny_list_holds_at_every_level(self):
         for lvl in LEVELS:
             for line in NEVER_LINES:
-                msg = self.assertRefused(lvl, line, "never available over MCP", "at any --level")
+                msg = self.assertRefused(lvl, line, "scope_shell never sends", "at any --level",
+                                         "never available over MCP")
                 self.assertIn("readonly, bench, unsafe", msg)
 
     def test_lines_the_firmware_would_rewrite_are_refused_everywhere(self):
@@ -454,8 +455,14 @@ class TestLevelsOverMcp(unittest.TestCase):
             self.assertIn(f"--level {lvl}", sh.description)
             for name in devmod.NEVER_SHELL:
                 self.assertIn(name, sh.description, f"{lvl}: deny-list entry {name!r} not described")
-            self.assertIn("POWER is refused at every server level",
-                          " ".join(t["scope_press"].description.split()))
+            self.assertIn("scope_shell never sends these at any level", sh.description)
+            self.assertNotIn("Never available over MCP", sh.description)
+            press = " ".join(t["scope_press"].description.split())
+            self.assertIn("POWER is refused at every server level", press)
+            for item in ('"Startup on Boot" erases and rewrites an MCU flash sector',
+                         '"Firmware Update" reboots the scope into the DFU bootloader',
+                         '"FPGA SPI Scanner"'):
+                self.assertIn(item, press)
         bench = self.tools("bench")["scope_shell"].description
         self.assertIn("fpga scope timebase", bench)
         self.assertIn("spi3 opread takes only opcode 04 or 05", bench)
