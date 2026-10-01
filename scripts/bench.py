@@ -63,6 +63,12 @@ __all__ = [
     "Transport", "SerialTransport", "ScriptedTransport",
     # devices
     "Scope", "Siggen", "JDS6600", "SiggenStatus", "PwmStatus", "OpreadStats",
+    # signal sources (the --source convention) and the dry-run bench
+    "SignalSource", "Esp32Source", "KodeDotSource", "KodeDotStatus", "ManualSource",
+    "SimBench", "SOURCE_KINDS", "WAVEFORMS", "SCOPE_USB_ID", "ESPRESSIF_VID",
+    "find_port", "add_source_args", "open_scope", "open_source", "open_bench",
+    "parse_kodedot_reply", "parse_hz_text", "parse_amplitude_text",
+    "vpp_from_reading", "expected_span_counts",
     # parsing
     "parse_dump", "parse_opread_stats", "parse_siggen_status", "parse_pwm_status",
     # analysis
@@ -986,6 +992,842 @@ class JDS6600:
 
 
 # ---------------------------------------------------------------------------
+# Signal sources — one contract for the ESP32 siggen, a Kode Dot, or a person
+# ---------------------------------------------------------------------------
+#
+# The bench scripts were written against one rig: the ESP32 sketch on
+# /dev/ttyUSB0.  A contributor with a different stimulus could not run them
+# at all.  :class:`SignalSource` is the part of a stimulus a script actually
+# uses — set a tone and learn the frequency it REALLY has, set a drive level
+# and learn the amplitude it REALLY has, go quiet — and three implementations
+# sit behind it:
+#
+#   esp32    :class:`Esp32Source`, a thin adapter over :class:`Siggen`
+#            (which is left exactly as it was).
+#   kodedot  :class:`KodeDotSource`, a Kode Dot (ESP32-P4) running the
+#            sigsrc app: LEDC square on a J3 header pin, crystal-derived,
+#            and it reports the frequency computed from its timer registers.
+#   manual   :class:`ManualSource`, any generator plus a counter and a DMM:
+#            the operator sets it and types what the instruments read.
+#
+# The contract is the Siggen one: a setter that cannot confirm what it asked
+# for RAISES.  ``freq_hz`` is what the source reports it is generating, never
+# the number that was requested.
+
+#: USB IDs for port discovery.  On macOS the 2C53T's CDC shell and an
+#: ESP32-P4's USB-Serial-JTAG BOTH enumerate as /dev/cu.usbmodem*, so a glob
+#: picks whichever sorts first.  The vendor ID cannot be confused.
+SCOPE_USB_ID = (0x2E3C, 0x5740)      # 2C53T app running: the CDC debug shell
+ESPRESSIF_VID = 0x303A               # Kode Dot: ESP32-P4 USB-Serial-JTAG
+
+SOURCE_KINDS = ("esp32", "kodedot", "manual")
+WAVEFORMS = ("sine", "square")
+
+
+def find_port(vid: int, pid: Optional[int] = None,
+              serial_number: Optional[str] = None, what: str = "device",
+              ports=None) -> str:
+    """The one serial port whose USB VID (and PID / serial, if given) match.
+
+    Raises rather than guessing: no match, or more than one, is reported with
+    every port that WAS seen, so the operator can pass the right one.
+    ``ports`` is injectable for tests (objects with ``device``, ``vid``,
+    ``pid``, ``serial_number``); by default pyserial enumerates them, which
+    lists devices without opening any."""
+    if ports is None:
+        from serial.tools import list_ports   # lazy: `import bench` needs no pyserial
+        ports = list_ports.comports()
+    ports = list(ports)
+
+    def ident(p) -> str:
+        if getattr(p, "vid", None) is None:
+            return "%s (no USB id)" % p.device
+        return "%s (%04x:%04x%s)" % (
+            p.device, p.vid, p.pid or 0,
+            " sn %s" % p.serial_number if getattr(p, "serial_number", None) else "")
+
+    hits = [p for p in ports
+            if getattr(p, "vid", None) == vid
+            and (pid is None or getattr(p, "pid", None) == pid)
+            and (serial_number is None
+                 or (getattr(p, "serial_number", None) or "") == serial_number)]
+    # macOS can list a device as /dev/cu.X and /dev/tty.X: one device, prefer cu.
+    uniq: dict = {}
+    for p in hits:
+        key = (p.pid, getattr(p, "serial_number", None), getattr(p, "location", None),
+               p.device.replace("/dev/tty.", "/dev/cu."))
+        if key not in uniq or p.device.startswith("/dev/cu."):
+            uniq[key] = p
+    want = "%04x:%s%s" % (vid, "%04x" % pid if pid is not None else "*",
+                          " serial %s" % serial_number if serial_number else "")
+    if not uniq:
+        raise BenchError(
+            "no %s with USB id %s. Ports seen: %s. Plug it in, or pass the port "
+            "explicitly." % (what, want, ", ".join(ident(p) for p in ports) or "none"))
+    if len(uniq) > 1:
+        raise BenchError(
+            "%d ports match %s (%s): %s. Pick one by USB serial number or pass "
+            "the port explicitly." % (len(uniq), what, want,
+                                      ", ".join(ident(p) for p in uniq.values())))
+    return next(iter(uniq.values())).device
+
+
+# -- amplitude and frequency maths that depend on the waveform ---------------
+
+_HZ_TEXT_RE = re.compile(
+    r"^\s*([0-9]*\.?[0-9]+(?:[eE][+-]?\d+)?)\s*([kKM]?)\s*(?:[hH][zZ])?\s*$")
+_AMP_TEXT_RE = re.compile(
+    r"^\s*([0-9]*\.?[0-9]+)\s*(m?)V\s*(pp|p-p|rms|dc)?\s*$", re.IGNORECASE)
+
+
+def parse_hz_text(text: str) -> Optional[float]:
+    """Operator input like ``999.98``, ``1k``, ``1.0001 kHz``, ``2 MHz`` -> Hz.
+
+    Lower-case ``m`` is refused rather than read as milli or mega: a counter
+    reading is never millihertz here, and guessing is how 1 kHz becomes 1 MHz."""
+    m = _HZ_TEXT_RE.match(text or "")
+    if not m:
+        return None
+    val = float(m.group(1)) * {"": 1.0, "k": 1e3, "K": 1e3, "M": 1e6}[m.group(2)]
+    return val if val > 0 else None
+
+
+def parse_amplitude_text(text: str) -> Optional[tuple]:
+    """Operator input -> ``(millivolts, unit)``, unit one of ``pp``/``rms``/``dc``.
+
+    ``2.000 Vpp``, ``707 mVrms``, ``3.292 V`` (a DC level: the high level of
+    a square whose low level is 0 V).  A bare number has no unit and returns
+    None — Vpp, Vrms and a DC level differ by up to 2.8x, and the caller asks
+    again rather than guessing."""
+    m = _AMP_TEXT_RE.match(text or "")
+    if not m:
+        return None
+    mv = float(m.group(1)) * (1.0 if m.group(2) else 1000.0)
+    unit = (m.group(3) or "dc").lower().replace("p-p", "pp")
+    return (mv, unit) if mv > 0 else None
+
+
+def vpp_from_reading(value_mv: float, unit: str, waveform: str,
+                     duty: float = 0.5) -> float:
+    """Peak-to-peak millivolts from an amplitude reading.
+
+    The span a capture shows is peak-to-peak, so every reference has to be
+    turned into Vpp first, and HOW depends on the waveform:
+
+    * ``pp``  — already peak-to-peak.
+    * ``rms`` — a true-RMS DMM on AC.  Sine: Vpp = 2*sqrt(2)*Vrms.  Square of
+      duty d: the AC-coupled RMS is Vpp*sqrt(d(1-d)), so at 50 % Vpp = 2*Vrms —
+      NOT 2.83*Vrms.  Using the sine factor on a square over-states it 41 %.
+    * ``dc``  — a DC reading of a square's high level whose low level is 0 V
+      (the Kode Dot's 3V3 rail, ``dc 1`` on its pin): Vpp = Vhigh.  Meaningless
+      for a sine, so refused.
+    """
+    if value_mv <= 0:
+        raise BenchError("amplitude reading must be positive, got %r" % (value_mv,))
+    if waveform not in WAVEFORMS:
+        raise BenchError("waveform must be one of %s, got %r" % (WAVEFORMS, waveform))
+    if unit == "pp":
+        return float(value_mv)
+    if unit == "rms":
+        if waveform == "sine":
+            return float(value_mv) * 2.0 * float(np.sqrt(2.0))
+        if not 0.0 < duty < 1.0:
+            raise BenchError("square duty must be inside (0, 1) for an RMS reading")
+        return float(value_mv) / float(np.sqrt(duty * (1.0 - duty)))
+    if unit == "dc":
+        if waveform != "square":
+            raise BenchError("a DC level gives a square's Vpp (low = 0 V), not a "
+                             "sine's — enter the sine as Vpp or Vrms")
+        return float(value_mv)
+    raise BenchError("unit must be pp, rms or dc, got %r" % (unit,))
+
+
+def expected_span_counts(vpp_mv: float, mv_per_count: float) -> float:
+    """ADC counts a capture's peak-to-peak span should show for ``vpp_mv``.
+
+    The span of a square IS its Vpp (its plateaus are its extremes), and so is
+    a sine's; the waveform enters only through :func:`vpp_from_reading`.  A
+    range with no calibration (gain 0) has no expected count and raises."""
+    if mv_per_count <= 0:
+        raise BenchError("range has no calibration (gain %r mV/count)" % (mv_per_count,))
+    return float(vpp_mv) / float(mv_per_count)
+
+
+# -- the contract -------------------------------------------------------------
+
+class SignalSource:
+    """What a bench script needs from a stimulus.  See the block comment above.
+
+    ``tone()`` and ``drive()`` return what the source REPORTS (frequency in Hz,
+    amplitude in mVpp), and raise if it did not confirm.  Scripts must use the
+    returned value, not the one they asked for — that is the whole of the
+    EXP-14 lesson (a generator delivering 0.825x what it was told)."""
+
+    kind = "?"
+    label = "source"            # what closing lines call it ("siggen off; ...")
+    max_hz: Optional[float] = None
+    waveforms: tuple = WAVEFORMS
+    default_waveform = "sine"
+    #: Fixed amplitude in mVpp, or None if the amplitude is adjustable.
+    fixed_vpp_mv: Optional[float] = None
+    #: Does quiet() sit at the MIDPOINT of the waveform (a bipolar generator
+    #: switched off, the ESP32 parked at 1650 mV) or at its LOW level (a logic
+    #: source)?  Centring on the quiet level puts it at code 128, so this
+    #: decides how much of the ADC span a drive can use.
+    quiet_is_midpoint = True
+    #: Should a script go quiet() before `fpga scope center`?  The servo wants
+    #: a quiet input (it centres the median).  Esp32Source says no: the
+    #: historical flow centred with the previous drive running, and the
+    #: maintainer's numbers stay comparable only if that is kept.
+    center_on_quiet = True
+    #: Can it hold a static low/high level (``hold(0|1)``)?
+    can_hold = False
+    #: Is the reference amplitude an independent measurement (a DMM), rather
+    #: than what the generator was told?  Only then is measured/reference an
+    #: accuracy figure.
+    trusted_amplitude = False
+    #: How many independent outputs.  One means both probes on the same pin,
+    #: and the two-SHAPES two-channel control is not available.
+    outputs = 1
+
+    def __init__(self):
+        self._freq_hz: Optional[float] = None
+
+    @property
+    def freq_hz(self) -> Optional[float]:
+        """The frequency the source last REPORTED (None before any tone)."""
+        return self._freq_hz
+
+    def describe(self) -> str:
+        return self.kind
+
+    def can_produce(self, mvpp: float) -> bool:
+        return mvpp >= 0
+
+    def prepare_frequency(self, log: Callable[[str], None] = print) -> None:
+        """Anything needed before this source's frequencies can be trusted."""
+
+    def end_check(self, log: Callable[[str], None] = print) -> Optional[bool]:
+        """Closing control on the source itself; None if it has none."""
+        return None
+
+    def tone(self, hz: float, waveform: Optional[str] = None) -> float:
+        raise NotImplementedError
+
+    def drive(self, mvpp: float, waveform: Optional[str] = None,
+              hz: Optional[float] = None) -> float:
+        raise NotImplementedError
+
+    def quiet(self) -> None:
+        raise NotImplementedError
+
+    def hold(self, level: int) -> None:
+        raise BenchError("%s cannot hold a static level" % self.kind)
+
+    def close(self) -> None:
+        pass
+
+
+class Esp32Source(SignalSource):
+    """:class:`Siggen` behind the :class:`SignalSource` contract.
+
+    Does exactly what the scripts used to do inline, so the maintainer's rig
+    gives the same numbers: ``tone()`` is CH1 sine at ``amp_mv``, ``drive()``
+    is the historical pair — CH1 triangle 250 Hz, CH2 square 400 Hz, two
+    different SHAPES — and ``quiet()`` parks both at their 1650 mV midpoint.
+    ``Siggen`` itself is untouched."""
+
+    kind = "esp32"
+    label = "siggen"
+    max_hz = 4500.0             # software DDS; the README's useful ceiling
+    default_waveform = "pair"
+    waveforms = ("pair",) + WAVEFORMS
+    outputs = 2
+    center_on_quiet = False     # historical order; see SignalSource
+    MAX_VPP_MV = 3300.0         # DAC 0..3.3 V around a 1650 mV midpoint
+    PAIR = ((1, "tri", 250.0), (2, "square", 400.0))
+
+    def __init__(self, siggen: Siggen, amp_mv: int = 2000,
+                 settle: Optional[float] = None, fs_window: float = 8.0):
+        super().__init__()
+        self.sg = siggen
+        self.amp_mv = amp_mv
+        self.fs_window = fs_window
+        self._kw = {} if settle is None else {"settle": settle}
+        self._fs_start: Optional[float] = None
+
+    def describe(self) -> str:
+        return "ESP32 siggen (esp32_siggen/), commanded mVpp"
+
+    def can_produce(self, mvpp: float) -> bool:
+        return 0 <= mvpp <= self.MAX_VPP_MV
+
+    def prepare_frequency(self, log=print) -> None:
+        # Verbatim from measure_sample_rate.py before the abstraction: park
+        # CH2 and put CH1 in the sweep's mode FIRST, then measure the loop
+        # rate (each live channel costs ~300 Hz of it), then divide by it.
+        self.sg.off(2, **self._kw)
+        self.sg.sine(1000, ch=1, **self._kw)
+        fs_hz, ratio = self.sg.fs(window=self.fs_window)
+        div = self.sg.use_measured_fs(True, window=0.0)
+        log(f"source: CH1 sine + CH2 parked -> DDS loop {fs_hz:.1f} Hz "
+            f"({ratio:.4f} x nominal); set_freq divides by {div:.1f}")
+        if not 0.5 < ratio < 1.05:
+            raise SystemExit("source rate ratio %.4f is not credible — stop and look"
+                             % ratio)
+        self._fs_start = fs_hz
+
+    def end_check(self, log=print) -> Optional[bool]:
+        if self._fs_start is None:
+            return None
+        self.sg.sine(1000, ch=1, **self._kw)
+        fs_end, r_end = self.sg.fs(window=self.fs_window)
+        drift = abs(fs_end - self._fs_start) / self._fs_start
+        ok = drift < 0.002
+        log(f"\nsource at end: {fs_end:.1f} Hz ({r_end:.4f}) — drift {drift*100:.2f}%  "
+            f"{'PASS' if ok else 'FAIL — rates above are not traceable'}")
+        return ok
+
+    def tone(self, hz: float, waveform: Optional[str] = None) -> float:
+        if waveform not in (None, "sine"):
+            raise BenchError("Esp32Source.tone() is the historical CH1 sine")
+        st = self.sg.sine(hz, ch=1, **self._kw)
+        self.sg.amp(self.amp_mv, ch=1, **self._kw)
+        self._freq_hz = st.freq_hz
+        return st.freq_hz
+
+    def drive(self, mvpp: float, waveform: Optional[str] = None,
+              hz: Optional[float] = None) -> float:
+        if mvpp == 0:
+            self.quiet()
+            return 0.0
+        if not self.can_produce(mvpp):
+            raise BenchError("ESP32 siggen cannot produce %g mVpp (0..%g)"
+                             % (mvpp, self.MAX_VPP_MV))
+        wf = waveform or self.default_waveform
+        for ch, pair_shape, pair_hz in self.PAIR:
+            shape = pair_shape if wf == "pair" else ("sine" if wf == "sine" else "square")
+            getattr(self.sg, shape)(pair_hz, ch=ch, **self._kw)
+            self.sg.amp(int(mvpp), ch=ch, **self._kw)
+        return float(mvpp)
+
+    def quiet(self) -> None:
+        self.sg.off(1, **self._kw)
+        self.sg.off(2, **self._kw)
+
+    def close(self) -> None:
+        self.sg.close()
+
+
+# -- Kode Dot -----------------------------------------------------------------
+
+@dataclass(frozen=True)
+class KodeDotStatus:
+    """What the Kode Dot sigsrc app reports.  ``hz`` is computed by the app from
+    the LEDC timer registers read back after configuration —
+    clk*256/(div_q8*2^bits), clk = PLL_F80M = X1 40 MHz x12/6 — so it is as
+    accurate as the crystal (three Dots measured X1 at +31..+41 ppm)."""
+    mode: Optional[str] = None          # pwm | dc_low | dc_high
+    hz: Optional[float] = None
+    req_hz: Optional[int] = None
+    duty_pct: Optional[float] = None
+    duty_step_pct: Optional[float] = None
+    bits: Optional[int] = None
+    div: Optional[float] = None
+    timing: Optional[str] = None
+    clk_hz: Optional[int] = None
+    hz_xtal_corr: Optional[float] = None
+
+
+# Two reply shapes are accepted.  The app's console framing — records start
+# ">|", the command ends ">ok" or ">err msg=..." — e.g.
+#   >|freq hz=999.984741 req_hz=1000 err_ppm=-15.259 bits=13 div=9.765625 timing=frac-edge
+#   >|duty=50.0000% req=50.000% count=4096/8192 step=0.0122%
+#   >ok
+# and the bare form the command set was first specified with:
+#   freq 999.98 Hz (req 1000, clk 80000000 res 13 div 9765.6)
+_KD_FREQ_RE = re.compile(
+    r"\bfreq\s+(?:hz=)?(?P<hz>\d+(?:\.\d+)?)(?:\s*Hz)?\b.*?\breq(?:_hz)?[=\s]+(?P<req>\d+)",
+    re.IGNORECASE)
+_KD_DUTY_RE = re.compile(
+    r"\bduty[=\s]+(?P<act>\d+(?:\.\d+)?)\s*%(?:.*?\breq[=\s]+(?P<req>\d+(?:\.\d+)?)\s*%)?"
+    r"(?:.*?\bstep=(?P<step>\d+(?:\.\d+)?)\s*%)?", re.IGNORECASE)
+_KD_MODE_RE = re.compile(r"\bmode=(\w+)")
+_KD_CLK_RE = re.compile(r"\bclk(?:_hz)?[=\s]+(\d+)")
+_KD_BITS_RE = re.compile(r"\b(?:bits=|res\s+)(\d+)")
+_KD_DIV_RE = re.compile(r"\bdiv[=\s]+(\d+(?:\.\d+)?)")
+_KD_TIMING_RE = re.compile(r"\btiming=([\w-]+)")
+_KD_CORR_RE = re.compile(r"\bhz_xtal_corr=(\d+(?:\.\d+)?)")
+_KD_ERR_RE = re.compile(r"^\s*>err(?:\s+msg=(.*))?$", re.MULTILINE)
+
+
+def _kd_records(text: str) -> tuple:
+    """``(records, framed, ok)``.  Framed replies keep only ``>|`` records, so
+    log lines the console interleaves (sweep steps, KLOG) cannot be parsed as
+    the answer; a bare reply keeps every non-empty line."""
+    lines = [ln.strip() for ln in text.replace("\r", "\n").split("\n") if ln.strip()]
+    recs = [ln[2:].strip() for ln in lines if ln.startswith(">|")]
+    ok = any(ln == ">ok" for ln in lines)
+    framed = bool(recs) or ok or any(ln.startswith(">err") for ln in lines)
+    return (recs if framed else lines), framed, ok
+
+
+def parse_kodedot_reply(text: str) -> KodeDotStatus:
+    """Parse any sigsrc reply into a :class:`KodeDotStatus`; absent fields are None."""
+    recs, _framed, _ok = _kd_records(text)
+    f: dict = {}
+    for rec in recs:
+        m = _KD_FREQ_RE.search(rec)
+        if m and "hz" not in f:
+            f["hz"] = float(m.group("hz"))
+            f["req_hz"] = int(m.group("req"))
+            for key, rx, cast in (("bits", _KD_BITS_RE, int), ("div", _KD_DIV_RE, float),
+                                  ("timing", _KD_TIMING_RE, str),
+                                  ("hz_xtal_corr", _KD_CORR_RE, float)):
+                mm = rx.search(rec)
+                if mm:
+                    f[key] = cast(mm.group(1))
+        m = _KD_DUTY_RE.search(rec)
+        if m and "duty_pct" not in f:
+            f["duty_pct"] = float(m.group("act"))
+            if m.group("step"):
+                f["duty_step_pct"] = float(m.group("step"))
+        m = _KD_MODE_RE.search(rec)
+        if m and "mode" not in f:
+            f["mode"] = m.group(1)
+        m = _KD_CLK_RE.search(rec)
+        if m and "clk_hz" not in f:
+            f["clk_hz"] = int(m.group(1))
+    return KodeDotStatus(**f)
+
+
+class _DotSerialTransport(SerialTransport):
+    """SerialTransport that never leaves DTR low with RTS high.
+
+    On the P4's USB-Serial-JTAG, DTR=0 with RTS=1 holds the chip in reset,
+    which drops the Dot out of the sigsrc app back to kodeOS.  pyserial opens
+    with both asserted (DTR first, so it never passes through that state); on
+    close, release RTS BEFORE DTR for the same reason."""
+
+    def close(self) -> None:
+        try:
+            self._ser.rts = False
+            self._ser.dtr = False
+        except Exception:                              # pragma: no cover
+            pass
+        super().close()
+
+
+class KodeDotSource(SignalSource):
+    """A Kode Dot running the sigsrc app: LEDC square wave on a J3 header pin.
+
+    Command set: ``f <hz>`` (whole hertz, 1..10 MHz; replies with the ACTUAL
+    frequency), ``d <percent>``, ``dc 0|1`` (hold the pin low/high), ``pwm``
+    (back to the square), ``s`` (status), ``sweep [stop]``.  Levels are 0 V and
+    the 3V3 rail, so the amplitude is fixed: ``v3v3_mv`` must be MEASURED (a
+    DMM on the pin with ``dc 1``), and it is the reference Vpp.
+
+    Port: the USB device with Espressif's VID 0x303A, or the one with
+    ``serial_number`` when there are several.  Opened with DTR and RTS
+    asserted (pyserial's default) — see :class:`_DotSerialTransport`.
+    """
+
+    kind = "kodedot"
+    label = "Kode Dot"
+    max_hz = 10_000_000.0
+    waveforms = ("square",)
+    default_waveform = "square"
+    quiet_is_midpoint = False       # quiet = dc 0 = the LOW rail
+    can_hold = True
+    trusted_amplitude = True
+    outputs = 1
+    HZ_MIN, HZ_MAX = 1, 10_000_000
+    #: An --amp request within this fraction of the measured rail is "the rail".
+    AMP_TOLERANCE = 0.05
+    #: Square frequency for drive() when none is given: not a sub-multiple of
+    #: any timebase rate on the 1-2.5-5 ladder, so no code samples one phase.
+    DRIVE_HZ = 330
+
+    def __init__(self, port: Optional[str] = None, serial_number: Optional[str] = None,
+                 baud: int = 115200, transport: Optional[Transport] = None,
+                 v3v3_mv: float = 3292.0, settle: float = 0.0,
+                 timeout: float = 1.5, check_alive: bool = True):
+        super().__init__()
+        if v3v3_mv <= 0:
+            raise BenchError("v3v3_mv must be the measured high level, > 0")
+        self.v3v3_mv = float(v3v3_mv)
+        self.fixed_vpp_mv = self.v3v3_mv
+        self.settle = settle
+        self.timeout = timeout
+        self.status_seen: Optional[KodeDotStatus] = None
+        self._clk_start: Optional[int] = None
+        if transport is not None:
+            self._t = transport
+        else:
+            if port is None:
+                port = find_port(ESPRESSIF_VID, serial_number=serial_number,
+                                 what="Kode Dot (Espressif VID 0x303A)")
+            self._t = _DotSerialTransport(port, baud, prompt=None, settle=0.3,
+                                          patterns=(port,), quiet_time=0.15)
+        if check_alive:
+            st = self.status()
+            if st.mode is None and st.hz is None:
+                raise BenchError(
+                    "the Dot answered `s` without a sigsrc status — is the sigsrc "
+                    "app running (not the kodeOS launcher)?")
+
+    def describe(self) -> str:
+        return ("Kode Dot LEDC square, 0 V / %.0f mV (DMM-measured rail)"
+                % self.v3v3_mv)
+
+    # -- raw ---------------------------------------------------------------
+
+    def send(self, line: str, timeout: Optional[float] = None) -> str:
+        """One command; return the raw reply.  Raises on ``>err``."""
+        text = self._t.exchange(line, self.timeout if timeout is None else timeout)
+        m = _KD_ERR_RE.search(text)
+        if m:
+            raise BenchError("kodedot refused %r: %s" % (line, (m.group(1) or "").strip()))
+        if self.settle:
+            time.sleep(self.settle)
+        return text
+
+    def _confirmed(self, line: str, text: str) -> KodeDotStatus:
+        _recs, framed, ok = _kd_records(text)
+        if framed and not ok:
+            raise BenchError(
+                "kodedot: no '>ok' after %r — reply was:\n%s\n(an unterminated "
+                "reply is not treated as success)" % (line, text.strip()))
+        return parse_kodedot_reply(text)
+
+    # -- setters, each confirmed from the echo ----------------------------
+
+    def freq(self, hz) -> KodeDotStatus:
+        """``f <hz>``.  Whole hertz only — the app refuses fractions, so this
+        refuses them first rather than rounding behind the caller's back."""
+        if isinstance(hz, float):
+            if not hz.is_integer():
+                raise BenchError("kodedot takes whole hertz; asked for %r "
+                                 "(round it, and use the returned actual)" % hz)
+            hz = int(hz)
+        if not isinstance(hz, int) or not self.HZ_MIN <= hz <= self.HZ_MAX:
+            raise BenchError("kodedot frequency must be %d..%d Hz, got %r"
+                             % (self.HZ_MIN, self.HZ_MAX, hz))
+        line = "f %d" % hz
+        text = self.send(line)
+        st = self._confirmed(line, text)
+        if st.hz is None or st.req_hz is None:
+            raise BenchError("kodedot did not report a frequency for %r — reply:\n%s"
+                             % (line, text.strip()))
+        if st.req_hz != hz:
+            raise BenchError("kodedot: asked for %d Hz, device reports req %d Hz"
+                             % (hz, st.req_hz))
+        if abs(st.hz - hz) > 0.05 * hz:
+            raise BenchError("kodedot: asked for %d Hz, device reports %.6f Hz actual"
+                             % (hz, st.hz))
+        self._freq_hz = st.hz
+        return st
+
+    def duty(self, pct: float) -> KodeDotStatus:
+        """``d <percent>``; the app quantises to the timer's resolution and says
+        so, so the check allows one reported step (or 0.5 % if none is given)."""
+        if not 0.0 <= pct <= 100.0:
+            raise BenchError("duty must be 0..100 %%, got %r" % (pct,))
+        line = "d %g" % pct
+        text = self.send(line)
+        st = self._confirmed(line, text)
+        if st.duty_pct is None:
+            raise BenchError("kodedot did not report a duty for %r — reply:\n%s"
+                             % (line, text.strip()))
+        tol = max(st.duty_step_pct or 0.0, 0.5)
+        if abs(st.duty_pct - pct) > tol:
+            raise BenchError("kodedot: asked for %g %% duty, device reports %g %%"
+                             % (pct, st.duty_pct))
+        return st
+
+    def dc(self, level: int) -> KodeDotStatus:
+        """``dc 0|1`` — hold the pin at the low or high rail."""
+        if level not in (0, 1):
+            raise BenchError("dc level must be 0 or 1, got %r" % (level,))
+        line = "dc %d" % level
+        text = self.send(line)
+        st = self._confirmed(line, text)
+        want = "dc_high" if level else "dc_low"
+        if st.mode != want:
+            raise BenchError("kodedot: asked for %s, device reports mode=%s — reply:\n%s"
+                             % (want, st.mode, text.strip()))
+        return st
+
+    def pwm(self) -> KodeDotStatus:
+        """``pwm`` — back to the square wave after ``dc``."""
+        text = self.send("pwm")
+        st = self._confirmed("pwm", text)
+        if st.hz is None:
+            raise BenchError("kodedot did not confirm `pwm` — reply:\n%s" % text.strip())
+        self._freq_hz = st.hz
+        return st
+
+    def status(self) -> KodeDotStatus:
+        """``s`` — parsed; fields the reply lacks are None."""
+        text = self.send("s")
+        st = self._confirmed("s", text)
+        if st.hz is not None:
+            self._freq_hz = st.hz
+        self.status_seen = st
+        return st
+
+    def sweep(self, stop: bool = False) -> str:
+        """``sweep`` / ``sweep stop``.  Returns the reply; steps after the first
+        arrive later as log lines, which is why scripts set tones with ``f``."""
+        line = "sweep stop" if stop else "sweep"
+        text = self.send(line)
+        self._confirmed(line, text)
+        return text
+
+    # -- SignalSource ------------------------------------------------------
+
+    def can_produce(self, mvpp: float) -> bool:
+        return mvpp == 0 or abs(mvpp - self.v3v3_mv) <= self.AMP_TOLERANCE * self.v3v3_mv
+
+    def prepare_frequency(self, log=print) -> None:
+        st = self.status()
+        self._clk_start = st.clk_hz
+        self.duty(50)
+        clk = ("clk %d Hz" % st.clk_hz) if st.clk_hz else "clock not reported"
+        log("source: Kode Dot LEDC square (%s; PLL_F80M = X1 40 MHz x12/6); every "
+            "frequency below is the one its timer registers produce" % clk)
+
+    def end_check(self, log=print) -> Optional[bool]:
+        st = self.status()
+        same = self._clk_start is None or st.clk_hz in (None, self._clk_start)
+        log("\nsource at end: Kode Dot %s — crystal-derived, no loop to drift; X1 "
+            "error (+31..+41 ppm on three Dots) is below this method's resolution  %s"
+            % ("clk %d Hz" % st.clk_hz if st.clk_hz else "status OK",
+               "PASS" if same else "FAIL — the clock changed during the run"))
+        return same
+
+    def tone(self, hz: float, waveform: Optional[str] = None) -> float:
+        if waveform not in (None, "square"):
+            raise BenchError("kodedot produces a square wave only, not %r" % waveform)
+        return self.freq(int(round(hz))).hz
+
+    def drive(self, mvpp: float, waveform: Optional[str] = None,
+              hz: Optional[float] = None) -> float:
+        if waveform not in (None, "square"):
+            raise BenchError("kodedot produces a square wave only, not %r" % waveform)
+        if mvpp == 0:
+            self.quiet()
+            return 0.0
+        if not self.can_produce(mvpp):
+            raise BenchError("kodedot cannot produce %g mVpp: its only amplitude is "
+                             "its rail, %.0f mVpp" % (mvpp, self.v3v3_mv))
+        st = self.freq(int(round(hz or self.DRIVE_HZ)))
+        if st.duty_pct is not None and \
+                abs(st.duty_pct - 50.0) > max(st.duty_step_pct or 0.0, 0.5):
+            self.duty(50)
+        return self.v3v3_mv
+
+    def quiet(self) -> None:
+        self.dc(0)
+
+    def hold(self, level: int) -> None:
+        self.dc(level)
+
+    def close(self) -> None:
+        self._t.close()
+
+
+# -- a person with a generator, a counter and a DMM ----------------------------
+
+class ManualSource(SignalSource):
+    """Any bench generator, driven by the operator at the keyboard.
+
+    Each step prints what to set, waits for Enter, then asks for what the
+    instruments READ — the counter's frequency, the DMM's amplitude with its
+    unit — and returns that.  Unparseable or implausible input is asked for
+    again (``attempts`` times), never guessed.  ``input_fn`` is injectable so
+    tests and ``--dry-run`` can answer for the operator; ``pending`` and
+    ``stage`` say what is being asked when it is called.
+    """
+
+    kind = "manual"
+    label = "generator"
+    trusted_amplitude = True        # it is a measurement, if the DMM is good
+    #: A typed frequency further than this from the request is assumed a typo.
+    FREQ_TOLERANCE = 0.10
+    DRIVE_HZ = 330
+
+    def __init__(self, waveform: str = "sine", input_fn: Callable[[str], str] = input,
+                 print_fn: Callable[[str], None] = print, attempts: int = 3,
+                 duty: float = 0.5):
+        super().__init__()
+        if waveform not in WAVEFORMS:
+            raise BenchError("waveform must be one of %s" % (WAVEFORMS,))
+        self.waveform = waveform
+        self.default_waveform = waveform
+        self.input_fn = input_fn
+        self.print_fn = print_fn
+        self.attempts = attempts
+        self.duty = duty
+        self.pending: dict = {}
+        self.stage = ""
+        self._last_amp: dict = {}
+
+    def describe(self) -> str:
+        return "manual generator (%s), operator-entered counter/DMM readings" % self.waveform
+
+    def _ask(self, stage: str, prompt: str) -> str:
+        self.stage = stage
+        return self.input_fn(prompt)
+
+    def _ask_parsed(self, stage: str, prompt: str, parse, check, explain: str):
+        for _ in range(self.attempts):
+            raw = self._ask(stage, prompt)
+            val = parse(raw)
+            if val is None:
+                self.print_fn("  could not read %r — %s" % (raw, explain))
+                continue
+            problem = check(val)
+            if problem:
+                self.print_fn("  %s" % problem)
+                continue
+            return val
+        raise BenchError("manual source: no usable answer after %d attempts" % self.attempts)
+
+    def tone(self, hz: float, waveform: Optional[str] = None) -> float:
+        wf = waveform or self.waveform
+        self.pending = {"what": "tone", "hz": float(hz), "waveform": wf}
+        self._ask("set", "[manual] set the generator to %g Hz %s, output ON; press Enter "
+                  "when it is running: " % (hz, wf))
+
+        def check(v):
+            if abs(v - hz) > self.FREQ_TOLERANCE * hz:
+                return ("%g Hz is %.0f%% from the %g Hz asked for — a typo is likelier "
+                        "than a generator that far off; set it again and re-read"
+                        % (v, 100.0 * abs(v - hz) / hz, hz))
+            return None
+        actual = self._ask_parsed(
+            "freq", "[manual] the ACTUAL frequency your counter reads, in Hz: ",
+            parse_hz_text, check, "type a number such as 999.98, 1k or 1.0001 kHz")
+        self._freq_hz = float(actual)
+        return float(actual)
+
+    def drive(self, mvpp: float, waveform: Optional[str] = None,
+              hz: Optional[float] = None) -> float:
+        wf = waveform or self.waveform
+        if mvpp == 0:
+            self.quiet()
+            return 0.0
+        hz = hz or self.DRIVE_HZ
+        self.pending = {"what": "drive", "mvpp": float(mvpp), "hz": float(hz),
+                        "waveform": wf}
+        self._ask("set", "[manual] set the generator to about %g mVpp %s at %g Hz, centred "
+                  "on its quiet level; press Enter: " % (mvpp, wf, hz))
+        last = self._last_amp.get((round(mvpp), wf))
+        hint = ("square: 3.292 V = a high level over a 0 V low"
+                if wf == "square" else "sine: give Vpp or Vrms")
+        prompt = ("[manual] the amplitude your DMM/scope reads, with its unit (e.g. "
+                  "2.000 Vpp, 0.707 Vrms; %s)%s: "
+                  % (hint, " [Enter = %.1f mVpp again]" % last if last else ""))
+
+        def parse(raw):
+            if last and not (raw or "").strip():
+                return (last, "pp")
+            return parse_amplitude_text(raw)
+
+        def check(reading):
+            try:
+                vpp = vpp_from_reading(reading[0], reading[1], wf, self.duty)
+            except BenchError as exc:
+                return str(exc)
+            if not 0.5 * mvpp <= vpp <= 2.0 * mvpp:
+                return ("that is %.0f mVpp, far from the %g mVpp asked for — check the "
+                        "unit (Vpp / Vrms / V) and re-enter" % (vpp, mvpp))
+            return None
+        reading = self._ask_parsed("amp", prompt, parse, check,
+                                   "give a number AND a unit: Vpp, mVpp, Vrms, mVrms or V")
+        vpp = vpp_from_reading(reading[0], reading[1], wf, self.duty)
+        self._last_amp[(round(mvpp), wf)] = vpp
+        return vpp
+
+    def quiet(self) -> None:
+        if self.pending.get("what") == "quiet":
+            return                  # already quiet: do not make the operator re-confirm
+        self.pending = {"what": "quiet"}
+        self._ask("set", "[manual] make the output QUIET at the waveform's midpoint (output "
+                  "off for a generator centred on 0 V); press Enter: ")
+
+
+# -- the --source CLI convention ----------------------------------------------
+
+def add_source_args(ap: argparse.ArgumentParser, default: str = "esp32") -> None:
+    """Add the shared bench-device flags to a script's parser.
+
+    ``--source esp32|kodedot|manual``, ``--source-port`` (``--siggen-port`` is
+    kept as an alias), ``--source-serial``, ``--scope-port``, ``--v3v3`` and
+    ``--dry-run``.  Ports default to discovery: the scope by USB VID:PID
+    2e3c:5740, a Kode Dot by Espressif's VID 0x303A, the ESP32 siggen by its
+    USB-serial glob as before."""
+    g = ap.add_argument_group("bench devices")
+    g.add_argument("--source", choices=SOURCE_KINDS, default=default,
+                   help="stimulus: esp32 = the ESP32 siggen sketch; kodedot = a Kode "
+                        "Dot running sigsrc (square, crystal-derived, fixed "
+                        "amplitude); manual = any generator, the operator types what "
+                        "a counter/DMM reads (default: %(default)s)")
+    g.add_argument("--source-port", "--siggen-port", dest="source_port", default=None,
+                   help="source serial port (default: discover — kodedot by USB VID "
+                        "0x303A, esp32 by /dev/ttyUSB* | /dev/cu.usbserial*)")
+    g.add_argument("--source-serial", default=None,
+                   help="kodedot: USB serial number, to pick one of several "
+                        "Espressif devices")
+    g.add_argument("--scope-port", default=None,
+                   help="2C53T debug shell (default: discover by USB VID:PID "
+                        "%04x:%04x)" % SCOPE_USB_ID)
+    g.add_argument("--v3v3", type=float, default=3.292, metavar="VOLTS",
+                   help="kodedot: the pin's high level, MEASURED with a DMM (`dc 1`); "
+                        "the low level is taken as 0 V (default: %(default)s)")
+    g.add_argument("--dry-run", action="store_true",
+                   help="run the whole flow against a simulated scope and source; "
+                        "opens no port")
+
+
+def open_scope(args) -> Scope:
+    port = args.scope_port or find_port(*SCOPE_USB_ID, what="2C53T debug shell")
+    return Scope(port)
+
+
+def open_source(args, waveform: Optional[str] = None,
+                input_fn: Callable[[str], str] = input,
+                print_fn: Callable[[str], None] = print) -> SignalSource:
+    if args.source == "esp32":
+        return Esp32Source(Siggen(args.source_port))
+    if args.source == "kodedot":
+        return KodeDotSource(port=args.source_port, serial_number=args.source_serial,
+                             v3v3_mv=args.v3v3 * 1000.0)
+    if args.source == "manual":
+        return ManualSource(waveform=waveform or "sine", input_fn=input_fn,
+                            print_fn=print_fn)
+    raise BenchError("unknown source %r" % (args.source,))
+
+
+def open_bench(args, waveform: Optional[str] = None, gains: Optional[dict] = None):
+    """``(scope, source, sim)`` for a script's parsed ``args``.
+
+    With ``--dry-run`` both ends are a :class:`SimBench` and ``sim`` is it;
+    otherwise ``sim`` is None and real ports are opened (scope first, so a
+    missing scope fails before the source is touched)."""
+    if getattr(args, "dry_run", False):
+        sim = SimBench(source=args.source, v3v3_mv=args.v3v3 * 1000.0, gains=gains)
+        return sim.scope(), sim.source(waveform=waveform), sim
+    scope = open_scope(args)
+    try:
+        return scope, open_source(args, waveform=waveform), None
+    except BaseException:
+        scope.close()
+        raise
+
+
+# ---------------------------------------------------------------------------
 # Analysis
 # ---------------------------------------------------------------------------
 
@@ -1592,6 +2434,280 @@ def _fake_opread_reply(op: int, values: Sequence[int], **kw) -> str:
     return "spi3 opread %02x %d dump\r\n%s\r\n%s\r\n> " % (op, len(values), body, stats)
 
 
+class SimBench:
+    """A simulated bench: a 2C53T debug shell and one stimulus, for ``--dry-run``.
+
+    It answers every command the bench scripts send with a well-formed,
+    self-consistent reply: each timebase code has a rate, each range a gain,
+    the offset DAC moves the trace, and the input is whatever the fake source
+    was last told.  One Kode Dot pin drives both channels, as on the bench.
+    It exists so a script's whole flow — argument handling, sequencing,
+    parsing, maths and report — can run with no hardware attached.
+
+    NOTHING IT PRODUCES IS EVIDENCE ABOUT THE HARDWARE.  Its rates are the
+    1-2.5-5 ladder (including GUESSES for 0x06-0x0C), its gains a smooth
+    ladder, its records perfectly coherent.  A dry run that "measures" 0x0A at
+    1.25 MS/s has measured this class.
+    """
+
+    #: Ladder rates; 0x0A-0x0C continue the 1-2.5-5 pattern (a guess), and
+    #: 0x06-0x09 sit at EXP-15's ~1.25 kS/s cluster (also a guess).
+    FS_BY_CODE = {0x06: 1250.0, 0x07: 1250.0, 0x08: 1250.0, 0x09: 1250.0,
+                  0x0A: 1.25e6, 0x0B: 5e5, 0x0C: 2.5e5, 0x0D: 1.25e5, 0x0E: 5e4,
+                  0x0F: 2.5e4, 0x10: 1.25e4, 0x11: 5e3, 0x12: 2.5e3, 0x13: 1250.0,
+                  0x14: 500.0}
+    #: True mV/count per range when no table is supplied (0 = railed range).
+    GAINS = {1: [0, 0, 0, 0, 12.95, 20.08, 39.51, 81.35, 256.7, 324.0],
+             2: [0, 0, 0, 0, 8.73, 19.28, 38.37, 77.09, 205.8, 391.0]}
+    DAC_MID = 2048
+    DAC_PER_COUNT = 4.0         # offset-DAC codes per ADC count, every range
+    LEDC_CLK = 80_000_000
+
+    def __init__(self, source: str = "kodedot", v3v3_mv: float = 3292.0,
+                 gains: Optional[dict] = None, noise: float = 0.6, seed: int = 1):
+        if source not in SOURCE_KINDS:
+            raise BenchError("SimBench source must be one of %s" % (SOURCE_KINDS,))
+        self.kind = source
+        self.v3v3 = float(v3v3_mv)
+        self.gains = {ch: list(g) for ch, g in (gains or self.GAINS).items()}
+        self.noise = noise
+        self.rng = np.random.default_rng(seed)
+        self.code = 0x10
+        self.range = {1: 6, 2: 6}
+        self.dac = {1: self.DAC_MID, 2: self.DAC_MID}
+        self.log: list = []
+        # stimulus state
+        self.kd = {"mode": "pwm", "req": 1000, "duty": 50.0}
+        self.kd.update(self._ledc_plan(1000))
+        self.esp = {ch: {"mode": "dc", "hz": 0.0, "amp": 2000, "mid": 1650,
+                         "duty": 50, "phase": 0} for ch in (1, 2)}
+        self.man = {"what": "quiet", "hz": 1000.0, "vpp": 0.0, "waveform": "sine"}
+
+    # -- the input voltage seen by both scope channels ---------------------
+
+    def _ledc_plan(self, hz: int) -> dict:
+        for bits in range(13, 0, -1):
+            div_q8 = int(round(self.LEDC_CLK * 256.0 / (hz * (1 << bits))))
+            if 256 <= div_q8 <= 0x3FFFF:
+                return {"bits": bits, "div_q8": div_q8,
+                        "hz": self.LEDC_CLK * 256.0 / (div_q8 * (1 << bits))}
+        raise BenchError("no LEDC setting for %d Hz" % hz)
+
+    @staticmethod
+    def _shape(shape: str, phase: np.ndarray, duty: float = 0.5) -> np.ndarray:
+        """Unit waveform in [-1, 1] at cycle phase ``phase`` (in cycles)."""
+        p = np.mod(phase, 1.0)
+        if shape == "sine":
+            return np.sin(2 * np.pi * p)
+        if shape == "square":
+            return np.where(p < duty, 1.0, -1.0)
+        if shape == "tri":
+            return 1.0 - 4.0 * np.abs(p - 0.5)
+        if shape == "saw":
+            return 2.0 * p - 1.0
+        return np.zeros_like(p)
+
+    def vin(self, ch: int, t: np.ndarray) -> np.ndarray:
+        """Millivolts at channel ``ch``'s probe tip at times ``t``."""
+        if self.kind == "kodedot":            # one pin, both probes
+            mode = self.kd["mode"]
+            if mode == "dc_low":
+                return np.zeros_like(t)
+            if mode == "dc_high":
+                return np.full_like(t, self.v3v3)
+            high = self._shape("square", t * self.kd["hz"], self.kd["duty"] / 100.0) > 0
+            return np.where(high, self.v3v3, 0.0)
+        if self.kind == "esp32":
+            s = self.esp[ch]
+            if s["mode"] == "dc":
+                return np.full_like(t, float(s["mid"]))
+            return s["mid"] + 0.5 * s["amp"] * self._shape(
+                s["mode"], t * s["hz"] + s["phase"] / 360.0, s["duty"] / 100.0)
+        m = self.man                           # manual: bipolar, centred on 0 V
+        if m["what"] == "quiet":
+            return np.zeros_like(t)
+        return 0.5 * m["vpp"] * self._shape(m["waveform"], t * m["hz"])
+
+    def record(self, ch: int, n: int = STOCK_SAMPLES) -> np.ndarray:
+        """One capture: ``n`` ADC codes at the current code/range/offset."""
+        fs = self.FS_BY_CODE.get(self.code, 12500.0)
+        t = self.rng.uniform(0.0, 1.0) + np.arange(n) / fs
+        k = self.gains[ch][self.range[ch]]
+        if k <= 0:
+            return np.full(n, 255, dtype=int)        # railed, as ranges 0-3 are
+        v_off = (self.dac[ch] - self.DAC_MID) / self.DAC_PER_COUNT * k
+        codes = 128 + (self.vin(ch, t) - v_off) / k + self.rng.normal(0, self.noise, n)
+        return np.clip(np.round(codes), 0, 255).astype(int)
+
+    # -- transports ---------------------------------------------------------
+
+    def _scope_reply(self, line: str) -> str:
+        self.log.append(("scope", line))
+        toks = line.split()
+        if line == "version":
+            return "OpenScope SIMULATED (bench.py SimBench, --dry-run) - no hardware\r\n> "
+        m = re.fullmatch(r"fpga scope timebase ([0-9A-Fa-f]{1,2})", line)
+        if m:
+            self.code = int(m.group(1), 16)
+            return "timebase 0x%02X (display + reg 0x01)\r\n> " % self.code
+        m = re.fullmatch(r"fpga scope range (\d) ?([12])?", line)
+        if m:
+            r = int(m.group(1))
+            for ch in ((int(m.group(2)),) if m.group(2) else (1, 2)):
+                self.range[ch] = r
+            return "range %d on %s\r\n> " % (r, "CH" + m.group(2) if m.group(2) else "both")
+        m = re.fullmatch(r"fpga scope center (ch[12] )?(\d)", line)
+        if m:
+            ch = int(m.group(1)[2]) if m.group(1) else 1
+            r = int(m.group(2))
+            self.range[1] = self.range[2] = r       # the firmware applies both banks
+            k = self.gains[ch][r]
+            if k > 0:
+                fs = self.FS_BY_CODE.get(self.code, 12500.0)
+                level = float(np.median(self.vin(ch, np.arange(STOCK_SAMPLES) / fs)))
+                self.dac[ch] = int(min(4095, max(0, round(
+                    self.DAC_MID + self.DAC_PER_COUNT * level / k))))
+            med = int(np.median(self.record(ch)))
+            return ("CH%d range %d: center %s=%d (median=%d)\r\n> "
+                    % (ch, r, "TMR13_C1DT" if ch == 2 else "DAC1", self.dac[ch], med))
+        m = re.fullmatch(r"(trig2?) raw (\d+)", line)
+        if m:
+            ch = 2 if m.group(1) == "trig2" else 1
+            self.dac[ch] = min(4095, int(m.group(2)))
+            return ("%s = code %d\r\n> "
+                    % ("TMR13_C1DT(PA6)" if ch == 2 else "DAC1(PA4)", self.dac[ch]))
+        m = re.fullmatch(r"spi3 opread (0[45]) (\d+) dump", line)
+        if m:
+            op, n = int(m.group(1), 16), int(m.group(2))
+            vals = [0x7C, 0x79] + list(self.record(1 if op == 0x04 else 2, n - 2))
+            return _fake_opread_reply(op, vals)
+        if toks[:2] == ["spi3", "read"] and len(toks) == 3:
+            return "%s\r\n%s\r\n> " % (line, _synth_dump(list(self.record(1, int(toks[2])))))
+        raise BenchError("SimBench scope: no simulated reply for %r" % line)
+
+    def _kd_freq_rec(self) -> str:
+        p = self.kd
+        return (">|freq hz=%.6f req_hz=%d err_ppm=%+.3f bits=%d div=%.8g timing=%s"
+                % (p["hz"], p["req"], (p["hz"] - p["req"]) / p["req"] * 1e6, p["bits"],
+                   p["div_q8"] / 256.0, "clean" if p["div_q8"] % 256 == 0 else "frac-edge"))
+
+    def _kd_duty_rec(self) -> str:
+        full = 1 << self.kd["bits"]
+        cnt = int(round(self.kd["duty"] / 100.0 * full))
+        return (">|duty=%.4f%% req=%.3f%% count=%d/%d step=%.4f%%"
+                % (100.0 * cnt / full, self.kd["duty"], cnt, full, 100.0 / full))
+
+    def _kodedot_reply(self, line: str) -> str:
+        self.log.append(("kodedot", line))
+        toks = line.split()
+        cmd, arg = toks[0].lower(), (toks[1] if len(toks) > 1 else None)
+        out = []
+        if cmd == "f" and arg and arg.isdigit() and 1 <= int(arg) <= 10_000_000:
+            self.kd.update({"mode": "pwm", "req": int(arg)})
+            self.kd.update(self._ledc_plan(int(arg)))
+            out = [self._kd_freq_rec(), self._kd_duty_rec()]
+        elif cmd == "d" and arg is not None:
+            self.kd.update({"mode": "pwm", "duty": float(arg)})
+            out = [self._kd_duty_rec()]
+        elif cmd == "dc" and arg in ("0", "1"):
+            self.kd["mode"] = "dc_high" if arg == "1" else "dc_low"
+            out = [">|out mode=%s pin=GPIO14 j3_pin=9" % self.kd["mode"]]
+        elif cmd == "pwm":
+            self.kd["mode"] = "pwm"
+            out = [self._kd_freq_rec(), self._kd_duty_rec()]
+        elif cmd in ("s", "status"):
+            out = [">|out mode=%s pin=GPIO14 j3_pin=9 exp=7 gnd_j3_pins=10,11" % self.kd["mode"],
+                   self._kd_freq_rec(),
+                   ">|clock src=PLL_F80M clk_hz=%d (SPLL=12x X1 40 MHz, /6) div_raw=0x%05X"
+                   % (self.LEDC_CLK, self.kd["div_q8"]),
+                   self._kd_duty_rec(), ">|xtal ppm=+0.000 (nominal 40 MHz assumed)",
+                   ">|sweep idle"]
+        elif cmd == "sweep":
+            out = [">|sweep idle"] if arg == "stop" else \
+                  [">|sweep step=1/15 hold_s=5 hz=10.000000 req_hz=10"]
+        else:
+            return ">err msg=unknown_command_%s_try_help\r\n" % cmd
+        return "\r\n".join(out + [">ok"]) + "\r\n"
+
+    def _siggen_line(self, ch: int) -> str:
+        s = self.esp[ch]
+        return ("[siggen] CH%d mode=%s  freq=%.1f Hz  amp=%d mVpp  mid=%d mV  duty=%d%%  "
+                "phase=%d deg" % (ch, s["mode"], s["hz"], s["amp"], s["mid"], s["duty"],
+                                  s["phase"]))
+
+    def _siggen_reply(self, line: str) -> str:
+        self.log.append(("siggen", line))
+        toks = line.split()
+        if toks == ["fs"]:
+            return ("[fs] nominal=40000  achieved=32999.5 Hz  ratio=0.8250  n=264000  "
+                    "dt=8.00s  set_freq uses MEASURED\n")
+        if toks == ["fs", "reset"]:
+            return "[fs] window reset\n"
+        if toks[:1] == ["usefs"]:
+            on = len(toks) > 1 and toks[1] != "0"
+            return ("[fs] set_freq now divides by %s\n"
+                    % ("32999.5 (MEASURED)" if on else "40000.0 (nominal)"))
+        if toks == ["status"]:
+            return "\n".join([self._siggen_line(1), self._siggen_line(2),
+                              "[pwm] GPIO27 off"]) + "\n"
+        if len(toks) >= 2 and toks[0] in ("1", "2"):
+            ch, cmd, args = int(toks[0]), toks[1], toks[2:]
+            s = self.esp[ch]
+            if cmd in ("sine", "square", "tri", "saw"):
+                s["mode"] = cmd
+                if args:
+                    s["hz"] = float(args[0])
+                if cmd == "square" and len(args) > 1:
+                    s["duty"] = int(args[1])
+            elif cmd == "amp" and args:
+                s["amp"] = int(int(args[0]) * 255 // 3300 * 3300 // 255)
+            elif cmd == "off":
+                s["mode"] = "dc"
+            elif cmd == "phase" and args:
+                s["phase"] = int(args[0]) % 360
+            else:
+                return "[siggen] ? unknown: %s\n" % cmd
+            return self._siggen_line(ch) + "\n"
+        return "[siggen] ? unknown: %s\n" % line
+
+    def operator(self, src: "ManualSource") -> Callable[[str], str]:
+        """An ``input_fn`` for :class:`ManualSource` that answers as an operator
+        with a perfect counter and DMM would, and sets the simulated input."""
+        def answer(_prompt: str) -> str:
+            self.log.append(("operator", src.stage, dict(src.pending)))
+            what = src.pending.get("what")
+            if src.stage == "set":
+                if what == "quiet":
+                    self.man["what"] = "quiet"
+                else:
+                    self.man.update({"what": what, "hz": src.pending["hz"],
+                                     "waveform": src.pending.get("waveform", "sine"),
+                                     "vpp": src.pending.get("mvpp", 2000.0)})
+                return ""
+            if src.stage == "freq":
+                return "%.4f" % self.man["hz"]
+            if src.stage == "amp":
+                return "%.4f Vpp" % (self.man["vpp"] / 1000.0)
+            raise BenchError("SimBench operator: unexpected stage %r" % src.stage)
+        return answer
+
+    # -- devices wired to this bench ----------------------------------------
+
+    def scope(self) -> "Scope":
+        return Scope(transport=ScriptedTransport(self._scope_reply))
+
+    def source(self, waveform: Optional[str] = None) -> "SignalSource":
+        if self.kind == "kodedot":
+            return KodeDotSource(transport=ScriptedTransport(self._kodedot_reply),
+                                 v3v3_mv=self.v3v3)
+        if self.kind == "esp32":
+            return Esp32Source(Siggen(transport=ScriptedTransport(self._siggen_reply)),
+                               settle=0, fs_window=0.0)
+        src = ManualSource(waveform=waveform or "sine", input_fn=lambda _p: "")
+        src.input_fn = self.operator(src)
+        return src
+
+
 class _T:
     """Tiny test harness: prints PASS/FAIL, tallies failures."""
 
@@ -1794,6 +2910,85 @@ def selftest() -> int:
          "status() parses both channels and the PWM")
     t.ok(sg.pwm(1000, 50, settle=0).actual_hz == 1000, "pwm() parses actual_hz")
     t.ok(sg.pwm_off(settle=0).on is False, "pwm off parses")
+
+    print("\n10. Kode Dot source — the ACTUAL frequency, and refusing to assume")
+    status = (">|out mode=pwm pin=GPIO14 j3_pin=9\r\n>|freq hz=1000.000000 req_hz=1000 "
+              "bits=13 div=9.765625 timing=clean\r\n>|clock src=PLL_F80M clk_hz=80000000\r\n"
+              ">|duty=50.0000% req=50.000% count=4096/8192 step=0.0122%\r\n>ok\r\n")
+    f1000 = (">|freq hz=999.984741 req_hz=1000 err_ppm=-15.259 bits=13 div=9.765625 "
+             "timing=frac-edge\r\n>|duty=50.0000% req=50.000% count=4096/8192 step=0.0122%"
+             "\r\n>ok\r\n")
+    kd = KodeDotSource(transport=ScriptedTransport({
+        "s": status,
+        "f 1000": f1000,
+        "f 2000": f1000,                                            # device kept 1 kHz
+        "f 3000": ">err msg=no_ledc_setting_for_3000_hz\r\n",
+        "f 4000": f1000.replace(">ok\r\n", ""),                     # unterminated
+        "f 5000": "freq 4999.98 Hz (req 5000, clk 80000000 res 13 div 1953.1)\r\n",
+        "dc 1": ">|out mode=dc_high pin=GPIO14 j3_pin=9\r\n>ok\r\n",
+        "dc 0": ">|out mode=dc_high pin=GPIO14 j3_pin=9\r\n>ok\r\n",  # did not move
+    }))
+    t.ok(abs(kd.tone(1000) - 999.984741) < 1e-6 and kd.freq_hz != 1000.0,
+         "tone() returns the reported actual, not the request", "%.6f" % kd.freq_hz)
+    t.ok(abs(kd.freq(5000).hz - 4999.98) < 1e-9, "the bare `freq ... (req ...)` form parses")
+    t.raises(lambda: kd.freq(2000), "a frequency the device did not adopt raises")
+    t.raises(lambda: kd.freq(3000), "'>err msg=' raises with the device's reason")
+    t.raises(lambda: kd.freq(4000), "a framed reply without '>ok' is not success")
+    t.raises(lambda: kd.freq(12.5), "fractional hertz is refused (the app wants whole Hz)")
+    t.ok(kd.dc(1).mode == "dc_high", "dc 1 is confirmed from 'mode=dc_high'")
+    t.raises(lambda: kd.dc(0), "dc 0 answered with mode=dc_high raises")
+    t.ok(kd.can_produce(3300) and not kd.can_produce(1000),
+         "one amplitude: the rail (within 5 %), nothing else")
+    t.raises(lambda: KodeDotSource(transport=ScriptedTransport({"s": "kodeOS> \r\n"})),
+             "a port answering without a sigsrc status is refused")
+
+    print("\n11. manual source and waveform-aware amplitudes")
+    answers = iter(["", "oops", "1.0001 kHz", "", "3.292", "1.646 Vrms"])
+    ms = ManualSource(waveform="square", input_fn=lambda _p: next(answers),
+                      print_fn=lambda _m: None)
+    t.ok(abs(ms.tone(1000) - 1000.1) < 1e-9,
+         "the operator's counter reading is returned; garbage is asked again")
+    t.ok(abs(ms.drive(3300) - 3292.0) < 1e-9,
+         "a square's 1.646 Vrms is 3292 mVpp (2 x), after a unit-less answer is refused")
+    t.ok(abs(vpp_from_reading(1000.0, "rms", "sine") - 2828.43) < 0.01,
+         "a sine's Vrms is x 2*sqrt(2)")
+    t.ok(abs(expected_span_counts(vpp_from_reading(3292.0, "dc", "square"), 20.0)
+             - 164.6) < 1e-9, "square expected counts = Vpp / gain (3292 mV at 20 mV/ct)")
+    t.raises(lambda: vpp_from_reading(3292.0, "dc", "sine"),
+             "a DC level is not a sine's amplitude")
+    t.raises(lambda: expected_span_counts(1000.0, 0.0), "a no-cal range has no expected count")
+
+    print("\n12. port discovery by USB id (no port opened)")
+    P = lambda d, v, p, sn=None: type("P", (), {"device": d, "vid": v, "pid": p,  # noqa: E731
+                                                "serial_number": sn, "location": None})
+    ports = [P("/dev/cu.usbmodem101", 0x303A, 0x1001, "A"),
+             P("/dev/cu.usbmodem2101", 0x2E3C, 0x5740)]
+    t.ok(find_port(ESPRESSIF_VID, ports=ports) == "/dev/cu.usbmodem101" and
+         find_port(*SCOPE_USB_ID, ports=ports) == "/dev/cu.usbmodem2101",
+         "VID separates the Dot from the scope (both /dev/cu.usbmodem*)")
+    t.raises(lambda: find_port(ESPRESSIF_VID, ports=ports + [
+        P("/dev/cu.usbmodem301", 0x303A, 0x1001, "B")]),
+        "two Espressif devices and no serial number: refused, not guessed")
+    t.raises(lambda: find_port(0x303A, ports=[]), "no match raises")
+
+    print("\n13. SimBench — the --dry-run bench is self-consistent")
+    sim = SimBench(source="kodedot")
+    ssc, ssrc = sim.scope(), sim.source()
+    ssc.timebase(0x0C)
+    hz = ssrc.tone(50000)
+    v = parse_dump(ssc.cmd("spi3 read 1024")).astype(float)
+    want = bin_of(hz, SimBench.FS_BY_CODE[0x0C])
+    t.ok(abs(peaks(v, 1)[0][0] - want) <= 1,
+         "a 50 kHz Dot square at simulated 0x0C peaks at its bin, not a harmonic",
+         "bin %d vs %.1f" % (peaks(v, 1)[0][0], want))
+    ssc.scope_range(6, 1)
+    ssrc.quiet()
+    ssc.cmd("fpga scope center ch1 6")
+    lo = ssc.opread(0x04).mean()
+    ssrc.hold(1)
+    hi = ssc.opread(0x04).mean()
+    t.ok(abs((hi - lo) - 3292.0 / SimBench.GAINS[1][6]) < 1.0,
+         "static levels differ by Vpp / gain counts", "%.1f counts" % (hi - lo))
 
     print("\n%d checks, %d failures" % (t.n, t.fail))
     return 1 if t.fail else 0
