@@ -20,7 +20,9 @@
 
 /* Packet framing */
 #define ESP_SYNC_BYTE       0xAA
-#define ESP_MAX_PAYLOAD     256
+#define ESP_MAX_PAYLOAD     256     /* RECEIVE cap only (host->device). Responses are not
+                                     * capped: a WAVEFORM_FRAME is 1048 B. Do not "fix" the
+                                     * asymmetry (remote_protocol.md §2.2, §3.5). */
 #define ESP_HEADER_SIZE     4       /* sync + cmd + len_hi + len_lo */
 #define ESP_CHECKSUM_SIZE   1
 
@@ -39,6 +41,7 @@
 #define ESP_CMD_MODULE_LIST     0x0C    /* List installed modules */
 #define ESP_CMD_MODULE_DELETE   0x0D    /* Delete a module by slot */
 #define ESP_CMD_GET_METER       0x21    /* remote_protocol.md §3.4: one meter reading */
+#define ESP_CMD_GET_WAVEFORM    0x22    /* §3.4: u8 channel_mask -> one WAVEFORM_FRAME per channel */
 
 /* Responses: GD32 → ESP32 */
 #define ESP_RSP_ACK             0x81    /* Command accepted */
@@ -48,6 +51,7 @@
 #define ESP_RSP_STATUS          0x85    /* Status response */
 #define ESP_RSP_MODULE_LIST     0x86    /* Module list response */
 #define ESP_RSP_METER_FRAME     0x90    /* §3.5 METER_FRAME */
+#define ESP_RSP_WAVEFORM_FRAME  0x91    /* §3.5 WAVEFORM_FRAME */
 
 /* NAK error codes */
 #define ESP_ERR_UNKNOWN_CMD     0x01
@@ -158,6 +162,103 @@ typedef enum {
     ESP_METER_WRONG_MODE,       /* not in meter mode: the last reading is frozen */
 } esp_meter_result_t;
 typedef esp_meter_result_t (*esp_meter_fn)(esp_meter_snapshot_t *out);
+
+/* WAVEFORM_FRAME payload v1 (remote_protocol.md §3.5, header extended). One
+ * frame per requested channel, CH1 first; all frames of one request are ONE
+ * capture (same frame_id). Header, little-endian:
+ *   [0..3]   u32  frame_id        acquisition generation of the copied record
+ *                                 (fpga_acq_frame_generation(): even, +2 per
+ *                                 committed capture — the `gen=` that `spi3
+ *                                 frame` prints). Never 0: no record, no frame.
+ *   [4]      u8   channel         0 = CH1, 1 = CH2
+ *   [5]      u8   flags           ESP_WAVE_FLAG_* below — derived HERE from the
+ *                                 provider's facts, never copied from it
+ *   [6]      u8   timebase_idx    reg 0x01 code IN FORCE in the FPGA (what the
+ *                                 samples were taken at, not the display's) when
+ *                                 the frame was requested: a record HELD across a
+ *                                 timebase change (STOP, SINGLE, NORMAL with no
+ *                                 crossing) is labelled with the new code, as on
+ *                                 the LCD — the code is not yet published with
+ *                                 the record
+ *   [7]      u8   vdiv_idx        frontend range index of this channel
+ *   [8..9]   u16  sample_count    1024 today
+ *   [10..11] u16  header_len      offset of samples[0] (§3.5's "reserved"):
+ *                                 a host skips to it, so fields can be appended
+ *                                 without a major bump
+ *   [12..15] u32  sample_rate_hz  bench-measured rate of this code
+ *                                 (scope_timebase.c, bench unit #1), rounded;
+ *                                 0 = no trustworthy rate (never measured,
+ *                                 incoherent, or display != hardware)
+ *   [16..19] u32  uv_per_div      bench-measured volts/div of this channel and
+ *                                 range (scope_cal.c, bench unit #1), in uV, at
+ *                                 the BNC (no probe factor); 0 = the range has
+ *                                 no volts meaning. A GAIN only: the zero
+ *                                 point is uncalibrated, so counts->volts
+ *                                 gives Vpp, not absolute volts.
+ *   [20..21] u16  counts_per_div  ADC counts one division of uv_per_div spans
+ *   [22..23] u16  head_skip       samples [0, head_skip) are the known record-
+ *                                 head defect (scope_record.h): analyse from here
+ *   [24..]   u8   samples[sample_count]  unsigned ADC counts as committed by the
+ *                                 acquisition task (a coherent copy, not the
+ *                                 live buffer)
+ */
+#define ESP_WAVE_HDR_LEN        24
+#define ESP_WAVE_MAX_SAMPLES    1024    /* one FPGA record (FPGA_ADC_BUF_SIZE) */
+#define ESP_WAVE_MASK_CH1       0x01
+#define ESP_WAVE_MASK_CH2       0x02
+#define ESP_WAVE_MASK_ALL       (ESP_WAVE_MASK_CH1 | ESP_WAVE_MASK_CH2)
+
+#define ESP_WAVE_FLAG_CALIBRATED   0x01  /* per-unit calibration: always 0 until
+                                          * that work is bench-validated (§3.5) */
+#define ESP_WAVE_FLAG_TB_MEASURED  0x02  /* sample_rate_hz is tier MEASURED   */
+#define ESP_WAVE_FLAG_VDIV_MEASURED 0x04 /* uv_per_div is tier MEASURED       */
+#define ESP_WAVE_FLAG_SYNTHETIC    0x08  /* never set: a synthetic record is
+                                          * refused, not labelled (§2.3)      */
+#define ESP_WAVE_FLAG_TB_PROVISIONAL   0x10  /* rate is right order of magnitude
+                                              * only ('~' on the LCD)         */
+#define ESP_WAVE_FLAG_VDIV_PROVISIONAL 0x20  /* same for uv_per_div           */
+#define ESP_WAVE_FLAG_TIME_ORDERED 0x40  /* record un-rotated at its seam: the
+                                          * hardware trigger sits at index 512 */
+#define ESP_WAVE_FLAG_TB_DISAGREES 0x80  /* the display's timebase is not the
+                                          * one in force: rate withheld (0)   */
+
+/* Confidence of a measured number — numerically identical to scope_cal_tier_t
+ * and scope_tb_tier_t (usb_debug.c asserts it). */
+#define ESP_TIER_NONE           0
+#define ESP_TIER_PROVISIONAL    1
+#define ESP_TIER_MEASURED       2
+
+typedef struct {
+    const uint8_t *samples;     /* a coherent COPY of the record, or NULL */
+    uint16_t    count;          /* 1..ESP_WAVE_MAX_SAMPLES */
+    uint8_t     vdiv_idx;
+    uint8_t     vdiv_tier;      /* ESP_TIER_* of uv_per_div */
+    uint32_t    uv_per_div;     /* 0 = no volts meaning */
+} esp_wave_channel_t;
+
+typedef struct {
+    uint32_t    frame_id;       /* generation of the copy; 0 = none (refused) */
+    uint8_t     timebase_idx;   /* code in force */
+    uint8_t     timebase_tier;  /* ESP_TIER_* of sample_rate_hz */
+    bool        timebase_disagrees;
+    bool        time_ordered;
+    bool        synthetic;      /* anything but a real capture: the encoder refuses */
+    uint32_t    sample_rate_hz;
+    uint16_t    counts_per_div;
+    uint16_t    head_skip;
+    esp_wave_channel_t ch[2];   /* [0] CH1, [1] CH2; only requested ones are read */
+} esp_wave_snapshot_t;
+
+/* Fill a coherent snapshot of the channels in `channel_mask`. Anything but
+ * ESP_WAVE_OK is answered with a NAK — a record the instrument is not
+ * currently producing must never be sent as if it were (§2.3). */
+typedef enum {
+    ESP_WAVE_OK = 0,
+    ESP_WAVE_NO_DATA,           /* fpga_data_ready() false / no committed record */
+    ESP_WAVE_WRONG_MODE,        /* not in scope mode: the buffers are not live */
+    ESP_WAVE_BUSY,              /* no tear-free copy within the retry budget */
+} esp_wave_result_t;
+typedef esp_wave_result_t (*esp_wave_fn)(uint8_t channel_mask, esp_wave_snapshot_t *out);
 /* Inject a button press (id 1..15 = button_id_t). Return false if it could
  * not be queued, so the host gets NAK instead of a false ACK. */
 typedef bool (*esp_button_fn)(uint8_t button_id);
@@ -261,6 +362,7 @@ void esp_comm_set_block_writer(esp_write_block_fn fn);
 void esp_comm_set_status_provider(esp_status_fn fn);
 void esp_comm_set_button_injector(esp_button_fn fn);
 void esp_comm_set_meter_provider(esp_meter_fn fn);
+void esp_comm_set_waveform_provider(esp_wave_fn fn);
 
 /* True while a frame is being received (sync seen, checksum not yet). */
 bool esp_comm_rx_in_frame(void);

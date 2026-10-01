@@ -11,7 +11,7 @@ import re
 import time
 import zlib
 from dataclasses import dataclass
-from typing import Callable, Optional, Tuple
+from typing import Callable, List, Optional, Tuple
 
 from . import proto
 from .link import FlushFailed, NoDevice, SerialLink
@@ -41,7 +41,8 @@ class _WriteFailed(DeviceError):
 
 
 # Queries: re-sending after a lost reply cannot change the instrument.
-IDEMPOTENT = frozenset({proto.CMD_PING, proto.CMD_STATUS, proto.CMD_GET_METER})
+IDEMPOTENT = frozenset({proto.CMD_PING, proto.CMD_STATUS, proto.CMD_GET_METER,
+                        proto.CMD_GET_WAVEFORM})
 
 # Shell commands that only read. The shell also has commands that reset the
 # device (fwapply, fwswap, reboot bootloader) or write flash, so a shell line
@@ -126,6 +127,14 @@ class Device:
     # ── binary protocol ───────────────────────────────────────────
     def request(self, cmd: int, payload: bytes = b"", expect=(proto.RSP_ACK,)) -> proto.Frame:
         """Send one frame, return the matching reply. NAK raises Nak.
+        (One reply; request_many() for commands answered with several.)"""
+        return self.request_many(cmd, payload, expect, 1)[0]
+
+    def request_many(self, cmd: int, payload: bytes = b"", expect=(proto.RSP_ACK,),
+                     count: int = 1) -> List[proto.Frame]:
+        """Send one frame, return the `count` matching replies in order.
+        A NAK at any point raises Nak (the firmware validates a whole request
+        before answering, so a NAK never follows a partial answer).
 
         If the port vanishes (reboot, IAP flash, the firmware's CDC self-heal
         from #39 — all look like a replug) it is reopened once. The request is
@@ -137,13 +146,13 @@ class Device:
         if cmd != proto.CMD_STATUS:
             self._ensure_verified()
         try:
-            return self._request_once(cmd, payload, expect)
+            return self._request_frames(cmd, payload, expect, count)
         except (Timeout, Nak):
             self._resync()
             raise
         except _WriteFailed as e:
             self._reopen()
-            return self._retry(cmd, payload, expect, e.__cause__)
+            return self._retry(cmd, payload, expect, e.__cause__, count)
         except OSError as e:
             if cmd not in IDEMPOTENT:
                 # The frame left the host: whatever happens while reopening
@@ -158,11 +167,11 @@ class Device:
                 raise DeviceError(f"port lost after 0x{cmd:02X} was sent; not re-sending "
                                   f"(it may already have acted): {e}{note}") from None
             self._reopen()
-            return self._retry(cmd, payload, expect, e)
+            return self._retry(cmd, payload, expect, e, count)
 
-    def _retry(self, cmd, payload, expect, first) -> proto.Frame:
+    def _retry(self, cmd, payload, expect, first, count=1) -> List[proto.Frame]:
         try:
-            return self._request_once(cmd, payload, expect)
+            return self._request_frames(cmd, payload, expect, count)
         except (Timeout, Nak):
             self._resync()          # same rule as the first attempt: nothing stale survives
             raise
@@ -203,7 +212,13 @@ class Device:
             raise _WriteFailed() from e
 
     def _request_once(self, cmd: int, payload: bytes, expect) -> proto.Frame:
-        wanted = set(expect) | {proto.RSP_NAK}
+        return self._request_frames(cmd, payload, expect, 1)[0]
+
+    def _request_frames(self, cmd: int, payload: bytes, expect, count: int) -> List[proto.Frame]:
+        # One feed() can return several frames (both channels of a waveform
+        # in one USB read): every one is kept, none dropped after the first.
+        wanted = set(expect)
+        got: List[proto.Frame] = []
         self._write(proto.encode(cmd, payload))
         deadline = time.time() + self.timeout
         while time.time() < deadline:
@@ -214,8 +229,11 @@ class Device:
                 if f.cmd == proto.RSP_NAK:
                     raise Nak(cmd, f.payload[0] if f.payload else 0xFF)
                 if f.cmd in wanted:
-                    return f
-        raise Timeout(f"no reply to 0x{cmd:02X} within {self.timeout:.1f} s "
+                    got.append(f)
+                    if len(got) == count:
+                        return got
+        what = f"{len(got)} of {count} replies" if count > 1 else "no reply"
+        raise Timeout(f"{what} to 0x{cmd:02X} within {self.timeout:.1f} s "
                       f"(held {self.decoder.pending()} B, text {len(self.decoder.text)} B)")
 
     def ping(self) -> str:
@@ -227,6 +245,28 @@ class Device:
     def meter(self) -> proto.MeterReading:
         """One coherent multimeter reading (raises Nak NOT_READY before the first)."""
         return proto.parse_meter(self.request(proto.CMD_GET_METER, expect=(proto.RSP_METER_FRAME,)).payload)
+
+    def waveform(self, mask: int = proto.WAVE_MASK_CH1) -> List[proto.Waveform]:
+        """One capture: a Waveform per channel in `mask` (bit0 CH1, bit1 CH2),
+        CH1 first, all from the same acquisition (same frame_id).
+
+        Raises Nak NO_CAPTURE_DATA when the scope has no real capture (never a
+        demo trace), UNSUPPORTED_IN_MODE outside scope mode, NOT_READY if no
+        tear-free copy could be taken."""
+        if not isinstance(mask, int) or not 1 <= mask <= 3:
+            raise ValueError(f"channel mask {mask!r}: 1 = CH1, 2 = CH2, 3 = both")
+        count = bin(mask).count("1")
+        frames = self.request_many(proto.CMD_GET_WAVEFORM, bytes([mask]),
+                                   expect=(proto.RSP_WAVEFORM_FRAME,), count=count)
+        waves = [proto.parse_waveform(f.payload) for f in frames]
+        wanted = [c for c in (0, 1) if mask & (1 << c)]
+        if [w.channel for w in waves] != wanted:
+            raise proto.ProtocolError(f"asked for channels {[c + 1 for c in wanted]}, got "
+                                      f"{[w.channel + 1 for w in waves]}")
+        if len({w.frame_id for w in waves}) != 1:
+            raise proto.ProtocolError("channels of one request carry different frame ids "
+                                      f"{[w.frame_id for w in waves]}: not one capture")
+        return waves
 
     def press(self, button) -> None:
         self.request(proto.CMD_BUTTON, bytes([proto.button_id(button)]))

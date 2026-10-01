@@ -136,6 +136,75 @@ class TestMeter(unittest.TestCase):
                 proto.parse_meter(bad)
 
 
+def wave_payload(fid=42, ch=0, flags=0x06, tb=0x10, vdiv=6, samples=bytes(range(16)), hlen=24,
+                 rate=12490, uv=1264486, cpd=32, skip=4, extra=b""):
+    hdr = struct.pack("<IBBBBHHIIHH", fid, ch, flags, tb, vdiv, len(samples), hlen, rate, uv, cpd, skip)
+    return hdr + extra + samples
+
+
+class TestWaveform(unittest.TestCase):
+    def test_parse(self):
+        w = proto.parse_waveform(wave_payload())
+        self.assertEqual((w.frame_id, w.channel_name, w.sample_rate_hz, w.uv_per_div), (42, "CH1", 12490, 1264486))
+        self.assertTrue(w.timebase_measured and w.vdiv_measured and not w.calibrated)
+        self.assertEqual(w.samples, bytes(range(16)))
+        self.assertEqual(w.body, bytes(range(4, 16)), "body starts after head_skip")
+        self.assertAlmostEqual(w.volts_per_count, 1.264486 / 32)
+
+    def test_longer_header_is_skipped_not_misread(self):
+        """header_len lets the firmware append fields without a major bump."""
+        w = proto.parse_waveform(wave_payload(hlen=28, extra=b"\xEE" * 4))
+        self.assertEqual(w.samples, bytes(range(16)))
+
+    def test_rejections(self):
+        good = wave_payload()
+        for bad, why in ((good[:-1], "short"), (good + b"x", "long"), (good[:20], "no header"),
+                         (wave_payload(hlen=20), "header_len below the fixed part"),
+                         (wave_payload(ch=2), "no CH3"),
+                         (wave_payload(fid=0), "frame_id 0 = no record"),
+                         (wave_payload(flags=proto.WAVE_FLAG_SYNTHETIC), "synthetic is refused, not returned")):
+            with self.assertRaises(proto.ProtocolError, msg=why):
+                proto.parse_waveform(bad)
+
+    def test_unmeasured_numbers_are_not_invented(self):
+        w = proto.parse_waveform(wave_payload(flags=0, rate=0, uv=0))
+        self.assertIsNone(w.volts_per_count)
+        self.assertIsNone(w.seconds_per_sample)
+        self.assertEqual((w.timebase_tier, w.vdiv_tier), ("none", "none"))
+        h = w.header()
+        self.assertIsNone(h["sample_rate_hz"])
+        self.assertIsNone(h["uv_per_div"])
+
+    def test_channel_mask(self):
+        self.assertEqual(proto.channel_mask([1]), 1)
+        self.assertEqual(proto.channel_mask("1,2"), 3)
+        self.assertEqual(proto.channel_mask(["CH2"]), 2)
+        for bad in ([], [3], "0", [1, 3]):
+            with self.assertRaises(ValueError):
+                proto.channel_mask(bad)
+
+
+class TestPeriodEstimate(unittest.TestCase):
+    def test_sine_and_square(self):
+        import math
+        sine = [int(round(128 + 60 * math.sin(2 * math.pi * i / 37.3))) for i in range(900)]
+        self.assertAlmostEqual(proto.estimate_period(sine), 37.3, delta=0.2)
+        square = [200 if (i // 25) % 2 else 50 for i in range(900)]
+        self.assertAlmostEqual(proto.estimate_period(square), 50.0, delta=0.01)
+
+    def test_noise_at_the_level_does_not_add_crossings(self):
+        import math
+        noisy = [int(round(128 + 60 * math.sin(2 * math.pi * i / 50) + (3 if i % 2 else -3)))
+                 for i in range(900)]
+        self.assertAlmostEqual(proto.estimate_period(noisy), 50.0, delta=0.5)
+
+    def test_refuses_what_it_cannot_know(self):
+        self.assertIsNone(proto.estimate_period([128] * 900), "flat")
+        self.assertIsNone(proto.estimate_period([127, 128, 129, 128] * 225), "span below the floor")
+        one = [200 if 300 <= i < 600 else 50 for i in range(900)]
+        self.assertIsNone(proto.estimate_period(one), "one edge is not a period")
+
+
 class TestButtons(unittest.TestCase):
     def test_names_and_ids(self):
         self.assertEqual(proto.button_id("menu"), 9)

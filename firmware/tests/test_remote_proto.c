@@ -71,6 +71,62 @@ static esp_meter_result_t meter_provider(esp_meter_snapshot_t *out)
     return ESP_METER_OK;
 }
 
+/* Waveform provider: a coherent record per channel, or a refusal. `wave_lie`
+ * is a provider that answers OK while handing over a synthetic record — the
+ * encoder must refuse it, not label it. */
+static esp_wave_snapshot_t fake_wave;
+static esp_wave_result_t wave_result;
+static bool wave_lie;
+static uint8_t wave_mask_seen;
+static int wave_calls;
+static uint8_t wave_ch1[ESP_WAVE_MAX_SAMPLES + 8];
+static uint8_t wave_ch2[ESP_WAVE_MAX_SAMPLES + 8];
+static esp_wave_result_t wave_provider(uint8_t mask, esp_wave_snapshot_t *out)
+{
+    wave_calls++;
+    wave_mask_seen = mask;
+    /* Filled even when refusing: a refusal must be honoured on its own,
+     * not only because an empty snapshot happens to look like no record. */
+    *out = fake_wave;
+    if (wave_result != ESP_WAVE_OK) return wave_result;
+    if (wave_lie) out->synthetic = true;
+    return ESP_WAVE_OK;
+}
+
+static void wave_defaults(void)
+{
+    for (int i = 0; i < (int)sizeof(wave_ch1); i++) {
+        wave_ch1[i] = (uint8_t)(i * 7 + 3);
+        wave_ch2[i] = (uint8_t)(0xAA ^ i);              /* contains 0xAA bytes on purpose */
+    }
+    /* Both patterns cover every byte value 4 times over 1024 samples, so
+     * their XOR is 0 and a checksum that skipped them would still pass. */
+    wave_ch1[1] ^= 0x01;
+    wave_ch2[1] ^= 0x01;
+    memset(&fake_wave, 0, sizeof(fake_wave));
+    fake_wave.frame_id = 0x01020304;
+    fake_wave.timebase_idx = 0x10;
+    fake_wave.timebase_tier = ESP_TIER_MEASURED;
+    fake_wave.sample_rate_hz = 12490;
+    fake_wave.time_ordered = true;
+    fake_wave.counts_per_div = 32;
+    fake_wave.head_skip = 128;
+    fake_wave.ch[0].samples = wave_ch1;
+    fake_wave.ch[0].count = ESP_WAVE_MAX_SAMPLES;
+    fake_wave.ch[0].vdiv_idx = 6;
+    fake_wave.ch[0].vdiv_tier = ESP_TIER_MEASURED;
+    fake_wave.ch[0].uv_per_div = 1264486;
+    fake_wave.ch[1].samples = wave_ch2;
+    fake_wave.ch[1].count = ESP_WAVE_MAX_SAMPLES;
+    fake_wave.ch[1].vdiv_idx = 8;
+    fake_wave.ch[1].vdiv_tier = ESP_TIER_PROVISIONAL;
+    fake_wave.ch[1].uv_per_div = 6586022;
+    wave_result = ESP_WAVE_OK;
+    wave_lie = false;
+    wave_mask_seen = 0;
+    wave_calls = 0;
+}
+
 static void reset(void)
 {
     esp_comm_init();
@@ -79,6 +135,8 @@ static void reset(void)
     esp_comm_set_status_provider(0);
     esp_comm_set_button_injector(0);
     esp_comm_set_meter_provider(0);
+    esp_comm_set_waveform_provider(0);
+    wave_defaults();
     meter_ready = false;
     meter_wrong_mode = false;
     tx_len = 0; block_calls = 0; tx_bytes_len = 0;
@@ -428,6 +486,212 @@ static void test_touch_refreshes_open_frame_only(void)
     CHECK(!esp_comm_rx_in_frame(), "touch never opens a frame");
 }
 
+/* ─── GET_WAVEFORM / WAVEFORM_FRAME ─── */
+
+static uint8_t wp[ESP_WAVE_HDR_LEN + ESP_WAVE_MAX_SAMPLES + 64];
+
+static uint32_t u32le(const uint8_t *p) { return (uint32_t)p[0] | ((uint32_t)p[1] << 8) | ((uint32_t)p[2] << 16) | ((uint32_t)p[3] << 24); }
+static uint16_t u16le(const uint8_t *p) { return (uint16_t)(p[0] | (p[1] << 8)); }
+
+static void get_waveform(uint8_t mask)
+{
+    uint8_t buf[16];
+    route(buf, frame(buf, ESP_CMD_GET_WAVEFORM, &mask, 1), 0);
+}
+
+/* Exactly one NAK with `code` and nothing else: no frame went out before it. */
+static bool only_nak(uint8_t code)
+{
+    size_t off = 0; uint16_t pl = 0;
+    return take(&off, wp, &pl) == ESP_RSP_NAK && pl == 1 && wp[0] == code && off == tx_len;
+}
+
+static void test_waveform_layout(void)
+{
+    size_t off = 0; uint16_t pl = 0;
+    reset(); esp_comm_set_waveform_provider(wave_provider);
+    get_waveform(ESP_WAVE_MASK_CH1);
+    CHECK(take(&off, wp, &pl) == ESP_RSP_WAVEFORM_FRAME, "GET_WAVEFORM(CH1) -> WAVEFORM_FRAME");
+    CHECK(off == tx_len, "CH1 only: exactly one frame");
+    CHECK(wave_mask_seen == ESP_WAVE_MASK_CH1, "provider asked for the requested mask only");
+    CHECK(pl == ESP_WAVE_HDR_LEN + ESP_WAVE_MAX_SAMPLES, "length = header + 1024 samples (> the 256 B receive cap: legal outbound)");
+    CHECK(u32le(wp + 0) == 0x01020304, "frame_id little-endian");
+    CHECK(wp[4] == 0, "channel 0 = CH1");
+    CHECK(wp[5] == (ESP_WAVE_FLAG_TB_MEASURED | ESP_WAVE_FLAG_VDIV_MEASURED | ESP_WAVE_FLAG_TIME_ORDERED),
+          "flags: rate + volts measured, time-ordered, not calibrated, not synthetic");
+    CHECK(wp[6] == 0x10 && wp[7] == 6, "timebase code in force, vdiv index");
+    CHECK(u16le(wp + 8) == ESP_WAVE_MAX_SAMPLES, "sample_count");
+    CHECK(u16le(wp + 10) == ESP_WAVE_HDR_LEN, "header_len where §3.5 had 'reserved'");
+    CHECK(u32le(wp + 12) == 12490, "sample_rate_hz");
+    CHECK(u32le(wp + 16) == 1264486, "uv_per_div");
+    CHECK(u16le(wp + 20) == 32 && u16le(wp + 22) == 128, "counts_per_div, head_skip");
+    CHECK(memcmp(wp + ESP_WAVE_HDR_LEN, wave_ch1, ESP_WAVE_MAX_SAMPLES) == 0, "samples are the provider's record, byte for byte");
+    CHECK(block_calls == 4, "one frame = sync/len, header, samples, checksum (the record is not re-copied)");
+    CHECK(esp_comm_checksum(wave_ch1, ESP_WAVE_MAX_SAMPLES) != 0,
+          "test data: the samples' XOR is non-zero, so the frame checksum really covers them");
+}
+
+static void test_waveform_both_channels_one_capture(void)
+{
+    size_t off = 0; uint16_t pl = 0; uint32_t id1;
+    reset(); esp_comm_set_waveform_provider(wave_provider);
+    get_waveform(ESP_WAVE_MASK_ALL);
+    CHECK(wave_calls == 1, "one snapshot serves both channels (one capture, not two)");
+    CHECK(take(&off, wp, &pl) == ESP_RSP_WAVEFORM_FRAME && wp[4] == 0, "first frame is CH1");
+    id1 = u32le(wp);
+    CHECK(take(&off, wp, &pl) == ESP_RSP_WAVEFORM_FRAME && wp[4] == 1, "second frame is CH2");
+    CHECK(u32le(wp) == id1, "CH1 and CH2 carry the same frame_id");
+    CHECK(wp[7] == 8 && u32le(wp + 16) == 6586022, "CH2 carries its own range and volts/div");
+    CHECK(wp[5] == (ESP_WAVE_FLAG_TB_MEASURED | ESP_WAVE_FLAG_VDIV_PROVISIONAL | ESP_WAVE_FLAG_TIME_ORDERED),
+          "a PROVISIONAL range is flagged provisional, not measured");
+    CHECK(memcmp(wp + ESP_WAVE_HDR_LEN, wave_ch2, ESP_WAVE_MAX_SAMPLES) == 0, "CH2 samples (0xAA inside a payload is fine)");
+    CHECK(off == tx_len, "nothing after the two frames");
+
+    reset(); esp_comm_set_waveform_provider(wave_provider);
+    get_waveform(ESP_WAVE_MASK_CH2);
+    off = 0;
+    CHECK(take(&off, wp, &pl) == ESP_RSP_WAVEFORM_FRAME && wp[4] == 1 && off == tx_len, "CH2 alone: one CH2 frame");
+}
+
+static void test_waveform_refusals(void)
+{
+    reset();
+    get_waveform(ESP_WAVE_MASK_CH1);
+    CHECK(only_nak(ESP_ERR_UNSUPPORTED), "no provider bound: UNSUPPORTED");
+
+    reset(); esp_comm_set_waveform_provider(wave_provider); wave_result = ESP_WAVE_NO_DATA;
+    get_waveform(ESP_WAVE_MASK_CH1);
+    CHECK(only_nak(ESP_ERR_NO_CAPTURE_DATA), "fpga_data_ready() false: NO_CAPTURE_DATA, never a demo/zero frame");
+
+    reset(); esp_comm_set_waveform_provider(wave_provider); wave_result = ESP_WAVE_WRONG_MODE;
+    get_waveform(ESP_WAVE_MASK_CH1);
+    CHECK(only_nak(ESP_ERR_UNSUPPORTED_IN_MODE), "outside scope mode: UNSUPPORTED_IN_MODE, never the frozen record");
+
+    reset(); esp_comm_set_waveform_provider(wave_provider); wave_result = ESP_WAVE_BUSY;
+    get_waveform(ESP_WAVE_MASK_CH1);
+    CHECK(only_nak(ESP_ERR_NOT_READY), "no tear-free copy: NOT_READY");
+
+    reset(); esp_comm_set_waveform_provider(wave_provider); fake_wave.frame_id = 0;
+    get_waveform(ESP_WAVE_MASK_CH1);
+    CHECK(only_nak(ESP_ERR_NO_CAPTURE_DATA), "frame_id 0 (no committed record) is refused");
+}
+
+static void test_waveform_lying_provider_is_refused(void)
+{
+    reset(); esp_comm_set_waveform_provider(wave_provider); wave_lie = true;
+    get_waveform(ESP_WAVE_MASK_ALL);
+    CHECK(only_nak(ESP_ERR_NO_CAPTURE_DATA),
+          "provider says OK but the record is synthetic: refused whole, no frame with a flag the host might ignore");
+}
+
+static void test_waveform_args(void)
+{
+    uint8_t buf[16], two[2] = { 1, 1 };
+    reset(); esp_comm_set_waveform_provider(wave_provider);
+    get_waveform(0);
+    CHECK(only_nak(ESP_ERR_BAD_ARG) && wave_calls == 0, "mask 0 asks for nothing: BAD_ARG");
+    reset(); esp_comm_set_waveform_provider(wave_provider);
+    get_waveform(0x04);
+    CHECK(only_nak(ESP_ERR_BAD_ARG) && wave_calls == 0, "mask bit 2 (no such channel): BAD_ARG");
+    reset(); esp_comm_set_waveform_provider(wave_provider);
+    get_waveform(0x83);
+    CHECK(only_nak(ESP_ERR_BAD_ARG) && wave_calls == 0, "stray high bit next to valid ones: BAD_ARG");
+    reset(); esp_comm_set_waveform_provider(wave_provider);
+    route(buf, frame(buf, ESP_CMD_GET_WAVEFORM, 0, 0), 0);
+    CHECK(only_nak(ESP_ERR_BAD_LENGTH), "no mask byte: BAD_LENGTH");
+    reset(); esp_comm_set_waveform_provider(wave_provider);
+    route(buf, frame(buf, ESP_CMD_GET_WAVEFORM, two, 2), 0);
+    CHECK(only_nak(ESP_ERR_BAD_LENGTH), "two payload bytes: BAD_LENGTH");
+}
+
+static void test_waveform_all_or_nothing(void)
+{
+    reset(); esp_comm_set_waveform_provider(wave_provider); fake_wave.ch[1].samples = 0;
+    get_waveform(ESP_WAVE_MASK_ALL);
+    CHECK(only_nak(ESP_ERR_NO_CAPTURE_DATA), "CH2 has no record: one NAK, and CH1 was NOT sent first");
+
+    reset(); esp_comm_set_waveform_provider(wave_provider); fake_wave.ch[1].samples = 0;
+    get_waveform(ESP_WAVE_MASK_CH1);
+    CHECK(tx_len > 0 && tx[1] == ESP_RSP_WAVEFORM_FRAME, "an unrequested channel is not checked");
+
+    reset(); esp_comm_set_waveform_provider(wave_provider); fake_wave.ch[0].count = 0;
+    get_waveform(ESP_WAVE_MASK_CH1);
+    CHECK(only_nak(ESP_ERR_NO_CAPTURE_DATA), "zero samples is not a record");
+
+    reset(); esp_comm_set_waveform_provider(wave_provider); fake_wave.ch[0].count = ESP_WAVE_MAX_SAMPLES + 1;
+    get_waveform(ESP_WAVE_MASK_CH1);
+    CHECK(only_nak(ESP_ERR_NO_CAPTURE_DATA), "more samples than one FPGA record: refused (bound holds)");
+}
+
+static void test_waveform_flags_are_derived(void)
+{
+    size_t off; uint16_t pl;
+
+    /* A tier that disowns its number: the number does not travel. */
+    reset(); esp_comm_set_waveform_provider(wave_provider);
+    fake_wave.timebase_tier = ESP_TIER_NONE;            /* e.g. incoherent code 0x08 */
+    fake_wave.ch[0].vdiv_tier = ESP_TIER_NONE;          /* e.g. railed range 2 */
+    get_waveform(ESP_WAVE_MASK_CH1); off = 0;
+    CHECK(take(&off, wp, &pl) == ESP_RSP_WAVEFORM_FRAME, "frame sent");
+    CHECK(u32le(wp + 12) == 0 && u32le(wp + 16) == 0, "tier NONE: rate and volts zeroed on the wire");
+    CHECK((wp[5] & (ESP_WAVE_FLAG_TB_MEASURED | ESP_WAVE_FLAG_TB_PROVISIONAL |
+                    ESP_WAVE_FLAG_VDIV_MEASURED | ESP_WAVE_FLAG_VDIV_PROVISIONAL)) == 0,
+          "tier NONE: neither measured nor provisional");
+
+    /* A tier that claims a number that is not there. */
+    reset(); esp_comm_set_waveform_provider(wave_provider);
+    fake_wave.sample_rate_hz = 0; fake_wave.ch[0].uv_per_div = 0;
+    get_waveform(ESP_WAVE_MASK_CH1); off = 0;
+    take(&off, wp, &pl);
+    CHECK((wp[5] & (ESP_WAVE_FLAG_TB_MEASURED | ESP_WAVE_FLAG_VDIV_MEASURED)) == 0,
+          "MEASURED tier with a 0 value is not reported as measured");
+
+    /* Provisional rate (code 0x0D). */
+    reset(); esp_comm_set_waveform_provider(wave_provider);
+    fake_wave.timebase_tier = ESP_TIER_PROVISIONAL; fake_wave.sample_rate_hz = 123663;
+    get_waveform(ESP_WAVE_MASK_CH1); off = 0;
+    take(&off, wp, &pl);
+    CHECK((wp[5] & ESP_WAVE_FLAG_TB_PROVISIONAL) && !(wp[5] & ESP_WAVE_FLAG_TB_MEASURED) &&
+          u32le(wp + 12) == 123663, "PROVISIONAL rate travels flagged provisional, not measured");
+
+    /* Display and hardware disagree on the timebase: the rate is withheld. */
+    reset(); esp_comm_set_waveform_provider(wave_provider);
+    fake_wave.timebase_disagrees = true;
+    get_waveform(ESP_WAVE_MASK_CH1); off = 0;
+    take(&off, wp, &pl);
+    CHECK(u32le(wp + 12) == 0, "display != hardware timebase: rate withheld");
+    CHECK((wp[5] & ESP_WAVE_FLAG_TB_DISAGREES) && !(wp[5] & ESP_WAVE_FLAG_TB_MEASURED),
+          "…and flagged, so a 0 rate on a measured code is explained");
+
+    /* Not time-ordered. */
+    reset(); esp_comm_set_waveform_provider(wave_provider);
+    fake_wave.time_ordered = false;
+    get_waveform(ESP_WAVE_MASK_CH1); off = 0;
+    take(&off, wp, &pl);
+    CHECK(!(wp[5] & ESP_WAVE_FLAG_TIME_ORDERED), "time_ordered follows the record");
+
+    /* No snapshot can make the frame claim calibration or synthesis. */
+    reset(); esp_comm_set_waveform_provider(wave_provider);
+    get_waveform(ESP_WAVE_MASK_ALL); off = 0;
+    take(&off, wp, &pl);
+    CHECK(!(wp[5] & (ESP_WAVE_FLAG_CALIBRATED | ESP_WAVE_FLAG_SYNTHETIC)), "CH1: calibrated and synthetic clear");
+    take(&off, wp, &pl);
+    CHECK(!(wp[5] & (ESP_WAVE_FLAG_CALIBRATED | ESP_WAVE_FLAG_SYNTHETIC)), "CH2: calibrated and synthetic clear");
+}
+
+static void test_waveform_byte_writer_agrees(void)
+{
+    static uint8_t copy[2 * (ESP_WAVE_HDR_LEN + ESP_WAVE_MAX_SAMPLES + 5)];
+    size_t a;
+    reset(); esp_comm_set_waveform_provider(wave_provider);
+    get_waveform(ESP_WAVE_MASK_ALL);
+    a = tx_len; memcpy(copy, tx, a);
+    esp_comm_set_block_writer(0);
+    esp_comm_set_writer(byte_writer);
+    get_waveform(ESP_WAVE_MASK_ALL);
+    CHECK(tx_bytes_len == a && memcmp(tx_bytes, copy, a) == 0, "byte writer emits the identical two-part frames");
+}
+
 int main(void)
 {
     printf("test_remote_proto\n");
@@ -449,6 +713,14 @@ int main(void)
     test_long_version_is_capped();
     test_oversize_then_silence_does_not_deafen_shell();
     test_touch_refreshes_open_frame_only();
+    test_waveform_layout();
+    test_waveform_both_channels_one_capture();
+    test_waveform_refusals();
+    test_waveform_lying_provider_is_refused();
+    test_waveform_args();
+    test_waveform_all_or_nothing();
+    test_waveform_flags_are_derived();
+    test_waveform_byte_writer_agrees();
     printf("%d/%d checks passed\n", checks - failures, checks);
     return failures ? 1 : 0;
 }

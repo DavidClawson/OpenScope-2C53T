@@ -132,6 +132,112 @@ MUTATIONS: tuple[Mutation, ...] = (
         old="    put_u16(&out[8], (uint16_t)m.raw_bcd);",
         new="    put_u16(&out[8], 0);",
     ),
+    # ── GET_WAVEFORM (M5): every guard below stops one specific lie ──
+    Mutation(
+        name="waveform: synthetic record sent (flagged) instead of refused",
+        old="    if (w.synthetic || w.frame_id == 0) {",
+        new="    if (w.frame_id == 0) {",
+    ),
+    Mutation(
+        name="waveform: frame_id 0 (no committed record) sent as a capture",
+        old="    if (w.synthetic || w.frame_id == 0) {",
+        new="    if (w.synthetic) {",
+    ),
+    Mutation(
+        name="waveform: NO_DATA answered with a frame instead of NO_CAPTURE_DATA",
+        old="    default:\n        esp_comm_send_nak(ESP_ERR_NO_CAPTURE_DATA);       /* no capture yet: never the demo trace */\n        return;",
+        new="    default:\n        break;",
+    ),
+    Mutation(
+        name="waveform: frozen record sent outside scope mode",
+        old="    case ESP_WAVE_WRONG_MODE:\n        esp_comm_send_nak(ESP_ERR_UNSUPPORTED_IN_MODE);   /* buffers not live outside scope mode */\n        return;",
+        new="    case ESP_WAVE_WRONG_MODE:\n        break;",
+    ),
+    Mutation(
+        name="waveform: torn copy (BUSY) sent anyway",
+        old="    case ESP_WAVE_BUSY:\n        esp_comm_send_nak(ESP_ERR_NOT_READY);             /* no tear-free copy: retry */\n        return;",
+        new="    case ESP_WAVE_BUSY:\n        break;",
+    ),
+    Mutation(
+        name="waveform: no provider answers with an empty success",
+        old="    if (!wave_provider) {\n        esp_comm_send_nak(ESP_ERR_UNSUPPORTED);\n        return;\n    }",
+        new="    if (!wave_provider) {\n        return;\n    }",
+    ),
+    Mutation(
+        name="waveform: mask 0 accepted",
+        old="    if (mask == 0 || (mask & (uint8_t)~ESP_WAVE_MASK_ALL) != 0) {",
+        new="    if ((mask & (uint8_t)~ESP_WAVE_MASK_ALL) != 0) {",
+    ),
+    Mutation(
+        name="waveform: unknown channel bits accepted",
+        old="    if (mask == 0 || (mask & (uint8_t)~ESP_WAVE_MASK_ALL) != 0) {",
+        new="    if (mask == 0) {",
+    ),
+    Mutation(
+        name="waveform: payload length unchecked",
+        old="    if (pkt->payload_len != 1) {\n        esp_comm_send_nak(ESP_ERR_BAD_LENGTH);\n        return;\n    }\n    mask = pkt->payload[0];",
+        new="    mask = pkt->payload[0];",
+    ),
+    Mutation(
+        name="waveform: sample count bound removed",
+        old="ch->count != 0 && ch->count <= ESP_WAVE_MAX_SAMPLES;",
+        new="ch->count != 0;",
+    ),
+    Mutation(
+        name="waveform: empty record accepted",
+        old="ch->samples != 0 && ch->count != 0 && ",
+        new="ch->samples != 0 && ",
+    ),
+    Mutation(
+        name="waveform: CH1 sent before CH2 is validated (not all-or-nothing)",
+        old="        if ((mask & (1u << c)) && !wave_channel_ok(&w.ch[c])) {",
+        new="        if ((mask & (1u << c)) && c == 0 && !wave_channel_ok(&w.ch[c])) {",
+    ),
+    Mutation(
+        name="waveform: frame claims calibration",
+        old="    uint8_t f = 0;      /* bit0 calibrated stays clear: no per-unit cal exists (§3.5) */",
+        new="    uint8_t f = ESP_WAVE_FLAG_CALIBRATED;",
+    ),
+    Mutation(
+        name="waveform: tier NONE rate still sent",
+        old="    put_u32(&hdr[12], tb ? w->sample_rate_hz : 0);",
+        new="    put_u32(&hdr[12], w->timebase_disagrees ? 0 : w->sample_rate_hz);",
+    ),
+    Mutation(
+        name="waveform: tier NONE volts/div still sent",
+        old="    put_u32(&hdr[16], vd ? ch->uv_per_div : 0);",
+        new="    put_u32(&hdr[16], ch->uv_per_div);",
+    ),
+    Mutation(
+        name="waveform: rate claimed while display and hardware disagree",
+        old="    tb = w->timebase_disagrees ? 0      /* the rate belongs to a code not in force */\n                               : tier_flag(",
+        new="    tb = 0 ? 0\n                               : tier_flag(",
+    ),
+    Mutation(
+        name="waveform: PROVISIONAL reported as MEASURED",
+        old="    if (tier == ESP_TIER_PROVISIONAL)\n        return provisional;",
+        new="    if (tier == ESP_TIER_PROVISIONAL)\n        return measured;",
+    ),
+    Mutation(
+        name="waveform: zero value flagged measured",
+        old="    if (value == 0)\n        return 0;\n    if (tier == ESP_TIER_MEASURED)",
+        new="    if (tier == ESP_TIER_MEASURED)",
+    ),
+    Mutation(
+        name="waveform: every frame labelled CH1",
+        old="    hdr[4] = c;",
+        new="    hdr[4] = 0;",
+    ),
+    Mutation(
+        name="waveform: checksum ignores the samples part",
+        old="                                                  ^ esp_comm_checksum(b, blen);",
+        new="                                                  ;",
+    ),
+    Mutation(
+        name="waveform: byte writer drops the samples part",
+        old="    for (i = 0; i < blen; i++)\n        uart_write(b[i]);\n",
+        new="",
+    ),
     Mutation(
         name="router passes frame bytes to the shell",
         old="        if (!esp_comm_rx_in_frame() && b != ESP_SYNC_BYTE)\n            continue;",
