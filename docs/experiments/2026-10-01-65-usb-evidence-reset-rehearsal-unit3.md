@@ -2,7 +2,7 @@
 
 - **Date:** 2026-10-01
 - **Unit:** unit #3 (V1.4, Quero)
-- **Build:** `make guest-coldtrace-crumbs` at commit `8e692ed` (PR #48: #41 + the evidence record), banner `OpenScope Oct  1 2026 13:45:50`, image `openscope-rp-evidence-crumbs.bin` sha256 `aa6d7089…`, installed over USB with `cdc_flash.py` (PR #46)
+- **Build:** `make guest-coldtrace-crumbs` at commit `8e692ed` (PR #48: #41 + the evidence record), banner `OpenScope Oct  1 2026 13:45:50`, image `openscope-rp-evidence-crumbs.bin` sha256 `aa6d7089…`, installed over USB with `cdc_flash.py` (PR #46); steps 5–6 on v2 = the same plus `cleared_at=` in `usbstat` (+4 B `.bss`), banner `Oct  1 2026 14:36:14`, `openscope-rp-evidence-crumbs-v2.bin` sha256 `ecf15ceb…`
 - **Status:** **CONFIRMED** (the qualitative predictions and both controls; one numeric estimate from PR #48's description missed and is explained post hoc, §5)
 
 ## 1. Problem
@@ -17,11 +17,14 @@ With no host having opened the port since enumeration (DTR never raised), the bo
 - **Cold-power control:** no VBUS and PC9 LOW for ~10 s, power on, replug → `previous session: none (cold power-up …)` and `session #1`. If the record validates, the trust rule is not doing its job (or SRAM is retained by the rail), and a fake wedge after a power-up is possible.
 
 ## 3. Procedure
-Host: macOS, `tools/openscope_host` (`openscope info|shell usbstat`), then `scripts/bench_usb_evidence.py --log dumps/exp65_usbstat.log` (holds the port open with DTR asserted, reconnects after each event and sends `usbstat`). Timestamps below are the script's wall clock. **The version that ran differs from the committed one:** its `wait_for_port` probe-opened and closed the port as soon as it re-enumerated (so the firmware saw DTR 1→0 before the banner); the committed script only lists the port, so a post-event session is expected to show `stalls=1 (host_slow=1) dropped_closed=0` instead of `dropped_closed=1 stalls=0` — not yet run on hardware (follow-up).
+Host: macOS, `tools/openscope_host` (`openscope info|shell usbstat`), then `scripts/bench_usb_evidence.py --log dumps/exp65_usbstat.log` (holds the port open with DTR asserted, reconnects after each event and sends `usbstat`). Timestamps below are the script's wall clock. **The version that ran differs from the committed one:** its `wait_for_port` probe-opened and closed the port as soon as it re-enumerated (so the firmware saw DTR 1→0 before the banner); the committed script only lists the port, so a post-event session is expected to show `stalls=1 (host_slow=1) dropped_closed=0` instead of `dropped_closed=1 stalls=0` — run as step 4: confirmed.
 
 1. Rehearsal: all host processes closed (no DTR since enumeration). Operator: pinhole reset, wait ≥3 s, pinhole reset again. Then `openscope info` + `openscope shell usbstat` by hand (output in `dumps/exp65_first_read.txt`; wall time not logged, implied ≈14:01:56).
 2. Clean control: `bench_usb_evidence.py` holding the port. Session #4's PENDING had already been cleared by the step-1 readout (a completed reply; `pending=0` at uptime 242.8 s) and again by the holder's own `usbstat` at 14:05:57. Operator: one pinhole reset. Script reconnects and reads `usbstat`.
 3. Cold-power control: script still holding the port. Operator (as instructed; reported done, not independently observed): unplug USB, hold POWER (3 s, "Goodbye!", PC9 LOW), 10 s off, POWER on from battery, replug USB. Order differs from the skill's "POWER → Goodbye → unplug": same end state (no VBUS, PC9 LOW), the rails drop at the POWER release instead of at the unplug. Script reconnects and reads `usbstat`; then `fwcrumb` by hand.
+4. Committed script (`--once`), started 14:31:35 in the session after the cold cycle. Operator: one pinhole reset (14:40:29). Script reconnects and reads `usbstat`.
+5. Install v2 (`cdc_flash.py`: fwload + fwapply, SYSRESETREQ from the RAM installer), then `usbstat` by hand. The only difference to the running build is +4 B of `.bss` (`s_usb.pending_cleared_tick`).
+6. On v2: `fwswap b` (reinstalls the same image, SYSRESETREQ), port closed until 5.0 s after it is listed again (so the banner stalls), then `openscope shell usbstat` by hand.
 
 **Preconditions verified by readback**
 | what | expected | measured |
@@ -77,7 +80,41 @@ Cold-power control (step 3), script log (lines 30–39, same elision):
 - 32 s between the unplug and the port returning (hold + ~10 s off + boot + replug, per the instruction; the off time was not measured). The counter restarted at #1: the record did not validate after the rails dropped.
 - `fwcrumb` afterwards: `no trail (DT11=0x0000) - no install ran since the last clear/power loss`. A stage-8 trail was *expected* beforehand (PR #48's `fwswap b` ran this crumbs build's RAM installer, which writes DT11=0xFC57 on entry, and nothing but `fwcrumb clear` erases it), but DT11 was **not read before the cycle**, so this is consistent with the power cycle clearing the BPR trail, not a measurement of it. BPR survival across resets is EXP-62's result (SYSRESETREQ and pinhole), not re-read here.
 
-Raw material: `dumps/exp65_usbstat.log` (holder) and `dumps/exp65_first_read.txt` (the by-hand step-1 and `fwcrumb` outputs) in the bench workspace, not in the repo.
+Committed script (step 4), log lines 59–71 (same elision), session #1 = the one started by the cold cycle:
+```
+14:40:29.829 port lost (SerialException); waiting for re-enumeration
+14:40:32.688 port back after 2.9 s; settling 1.5 s
+14:40:37.081   < 
+14:40:37.081   < +----------------------------------+
+14:40:37.081   < |  OpenScope 2C53T Debusbstat
+14:40:37.081   < usb: session #2 dtr=1 (seen=1) heal=on
+14:40:37.081   < tx: stalls=1 (host_slow=1) consecutive=0 send_err=0 dropped_closed=0 heals=0
+14:40:37.081   < last stall: tick=1822 tx_completed=0 ept1=0x00003031 pending=0
+14:40:37.081   < previous session #1: no stall pending (alive until 1889612 ms; stalls=0 heals=0)
+```
+- As stated in §3 before the run: `stalls=1 (host_slow=1) dropped_closed=0`, stall tick 1822 (1824 in session #3, 1823 in step 6: the banner timing is stable to ±1 ms on this host). Session #1 lived 1889.6 s: 14:40:29.8 − 1889.6 s = 14:09:00.2 for its boot, 4.6 s before the port was listed at 14:09:04.8 ✓.
+- The reply starts with `\r\n\r\n+----…+\r\n|  OpenScope 2C53T Deb` = exactly 64 bytes, then the `usbstat` echo. That is the banner's first chunk, armed at boot and delivered the moment the host opened the port; the second chunk is the one that stalled and the rest of the banner was never sent (`cdc_send_bytes` returns on the stall). Direct observation of the mechanism assumed in §5 above.
+
+v2 install (step 5), by hand right after `cdc_flash.py` reported the new build (`dumps/exp65_first_read.txt`):
+```
+usb: session #1 dtr=1 (seen=1) heal=on
+tx: stalls=0 (host_slow=0) consecutive=0 send_err=0 dropped_closed=0 heals=0
+last stall: tick=0 tx_completed=0 ept1=0x00000000 pending=0 cleared_at=0
+previous session: none (cold power-up, or its record did not validate)
+```
+- **Not predicted:** the previous session (#2 of the old build, reset by the installer's SYSRESETREQ) reads as `none`. Cause, from the ELF: `.noinit` is placed right after `.bss` (`g_usb_ev` = `_ebss` = 0x20037508 in v2), so the 4 B added to `.bss` moved the record by 4 B and the new build validated 44 B that start at the old record's `seq` field. The trust rule did its job (no fake session), but the record is tied to the build's RAM layout: **a firmware update loses it**, and so does `g_fault` (same section). `stalls=0` because `cdc_flash.py` opened the port before the banner's second chunk timed out.
+
+`cleared_at` (step 6), v2, `fwswap b` then port closed for 5.0 s after it was listed:
+```
+usb: session #2 dtr=1 (seen=1) heal=on
+tx: stalls=1 (host_slow=1) consecutive=0 send_err=0 dropped_closed=0 heals=0
+last stall: tick=1823 tx_completed=0 ept1=0x00003031 pending=0 cleared_at=5773
+proto rx: ok=1 bad_chk=0 bad_len=0 gap_timeouts=0
+previous session #1: no stall pending (alive until 100521 ms; stalls=0 heals=0)
+```
+- `pending=0` as always over CDC, and `cleared_at=5773`: the IN path was dead from 1823 ms until the host's open at ≈5.7 s (5.0 s after listing + boot-to-listing). The field says what `pending=` cannot. `previous session #1` = the v2 install session (≈100 s), so on the same build the record survives the installer's SYSRESETREQ too (as PR #48's `fwswap b` run).
+
+Raw material: `dumps/exp65_usbstat.log` (holder) and `dumps/exp65_first_read.txt` (the by-hand outputs: step 1, `fwcrumb`, steps 5–6) in the bench workspace, not in the repo.
 
 ## 6. Blind spots
 - The rehearsal stall is a **host_slow** stall (nobody had opened the port). The lost-completion stall (#39 proper: `ept1` TX NAK/disabled, `tx_completed=0`) has still never been seen through this record; EXP-61 could not reproduce the wedge. What is shown is that the record survives and reports the stall snapshot; what the snapshot will say at a real wedge is not.
@@ -86,10 +123,11 @@ Raw material: `dumps/exp65_usbstat.log` (holder) and `dumps/exp65_first_read.txt
 - The BPR half of the power-cycle statement rests on an expected-but-unread DT11 (§5).
 - One unit, one host (macOS). The 2.7 s re-enumeration and the ≈825 ms banner time are host/OS dependent, and so are the record's absolute ticks (`stall_tick` = banner time + ~1 s) and the boot stall counts (session #5 shows 0 stalls only because of the probe); the meaning of the fields (PENDING, EPT1 TX VALID vs NAK, DTR, alive past the stall) is not.
 - A reset that lands between an update's first field store and its seal reads as "none" and restarts at session #1. `usb_ev_alive` does one such update per ~10 ms loop pass; the window is a few hundred cycles unless the `usb_dbg` task (priority 2) is preempted mid-update. The three resets here did not hit it; nothing here bounds how often it would.
+- The record's address is wherever `.bss` ends, so "previous session" only means anything between two boots of the same build (step 5). A record left by another build is rejected, never misread, but the evidence of the session before an update is gone.
 - Steps 2 and 3 were done by the operator from a written instruction; "Goodbye!" on screen, the dark screen and the off time were reported done, not observed by the instrument. Whether the unit powered on from battery or only at the replug does not change the reading (`none`, `#1` either way).
 
 ## 7. Conclusion
-- **Established:** across the pinhole reset the factory IAP + startup leave the 44-byte `.noinit` record intact (sessions #3→#4→#5 chained, counters and ticks consistent with the operator's timing); `usbstat` reports the previous session's stall snapshot, endpoint state, DTR and alive tick; the same reset after a completed write reports "no stall pending"; 1/1 power-off of ~10 s (unmeasured) with no VBUS gave "none" and restarted at session #1. The record tells "nobody was reading the port" from "nothing wrong" and from "cold power-up".
+- **Established:** across the pinhole reset the factory IAP + startup leave the 44-byte `.noinit` record intact (sessions #3→#4→#5 chained, counters and ticks consistent with the operator's timing); `usbstat` reports the previous session's stall snapshot, endpoint state, DTR and alive tick; the same reset after a completed write reports "no stall pending"; 1/1 power-off of ~10 s (unmeasured) with no VBUS gave "none" and restarted at session #1; on v2 the record also survives the installer's SYSRESETREQ, and `cleared_at` reports when a stalled IN path came back (1823 → 5773 ms). The record tells "nobody was reading the port" from "nothing wrong" and from "cold power-up". The banner's first 64-byte chunk is delivered whenever the host first opens the port; the rest is lost to the stall.
 - **Excluded:** that the pinhole reset path clears `.noinit` (SYSRESETREQ was already shown in PR #48).
-- **NOT excluded (explicitly):** that the lost-completion wedge of #39 leaves a readable snapshot (never observed); that other reset paths (watchdog, brown-out, `fault.c` handler) preserve the record; that a short power interruption keeps SRAM and continues `seq`; that the BPR trail was present before the power cycle.
-- **Follow-up:** leave this build in daily use; at the next natural wedge, press the pinhole reset *without* replugging first and read `usbstat` (`openscope shell usbstat`) — the `previous session` line is the evidence #39 lacks. Run the committed `bench_usb_evidence.py` through one pinhole reset and record the post-event lines here. Next cold-power run: read `fwcrumb` right before the power-off. PR #48's description is updated from the "~600 ms" estimate to the measured 1824 ms.
+- **NOT excluded (explicitly):** that the lost-completion wedge of #39 leaves a readable snapshot (never observed); that other reset paths (watchdog, brown-out, `fault.c` handler) preserve the record; that a short power interruption keeps SRAM and continues `seq`; that the BPR trail was present before the power cycle; that a record survives a firmware update (shown NOT to, when `.bss` changes size).
+- **Follow-up:** leave this build in daily use; at the next natural wedge, press the pinhole reset *without* replugging first and read `usbstat` (`openscope shell usbstat`) — the `previous session` line is the evidence #39 lacks. Give `.noinit` a fixed address so the record (and `g_fault`) survive an update: a small window just below the DFU magic at 0x20037FE0 (`_estack` moved down by its size), after checking that no bootloader on the reset path (factory IAP: SP 0x20001A08, fine; the HID bootloader of the full path: unknown) runs its stack through it. Next cold-power run: read `fwcrumb` right before the power-off. PR #48's description is updated from the "~600 ms" estimate to the measured 1824 ms.
