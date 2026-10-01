@@ -186,7 +186,8 @@ BENCH_ARG_REFUSED = (
 UNSAFE_ONLY_LINES = (
     "spi3 seq 01 1A", "spi3 xfer 11 00 00 00", "fpga frame 0x05 0x14", "fpga cmd 05 14",
     "usart tx 05 14", "usbstat heal on", "mem read 0x40021000 4", "meter stream 10",
-    "fpga stock commit", "fpga busrelease", "flash diag", "screen dump", "?",
+    "fpga stock commit", "meter mux-arms 01 02", "meter pc11-timing", "flash diag",
+    "screen dump", "?",
     "nosuchcommand", "version; fwapply",
 )
 NEVER_LINES = (
@@ -195,6 +196,7 @@ NEVER_LINES = (
     "mode startup meter", "mode startup", "reboot bootloader", "gpio set B11 1",
     "gpio mode A6 out", "bench restore", "spi3 armtest pb11", "fpga dbgclk 10", "fpga dbgarm",
     "fpga reinit", "fpga reinit 0 100 600 c9", "fpga reinit 0 100 600 rl",
+    "fpga busrelease", "fpga busreacquire", "fpga configbb", "spi3 edgecap", "spi3 edgecap 16",
     "flash erase 0", "flash write 0 00", "iap", "dfu", "reset",
     # spellings that must not slip past the name check
     "FWAPPLY", "  fwapply  ", "Gpio Set B11 1", "mode  startup   meter", "reboot",
@@ -312,15 +314,17 @@ class TestDenyListAgainstFirmwareTable(unittest.TestCase):
     classified would be reachable at --level unsafe without a deny review,
     so every row must be read-only, bench, denied or in REVIEWED_UNSAFE_ONLY."""
 
-    # Rows reviewed and left at --level unsafe: raw FPGA/SPI3/USART access,
-    # stock-bringup probes, streams that can outlast the 5 s shell timeout,
-    # reads with side effects (mem read has no address guard; flash diag
-    # leaves the W25Q write-enable latch set), screen-capture plumbing.
+    # Rows reviewed and left at --level unsafe: raw FPGA/SPI3/USART traffic
+    # through the SPI peripheral with acquisition parked, stock-bringup
+    # probes, fixed frontend pin patterns (meter mux-arms, meter pc11-timing),
+    # streams that can outlast the 5 s shell timeout, reads with side effects
+    # (mem read has no address guard; flash diag leaves the W25Q write-enable
+    # latch set), screen-capture plumbing.
     REVIEWED_UNSAFE_ONLY = {
         "?", "usbstat heal", "usart raw", "usart tx", "bench snapshot", "buzzer test",
         "mem read", "flash diag", "screen dump", "screen dumpbin", "screen shadow",
-        "fpga cmd", "fpga frame", "fpga selftest", "fpga busrelease", "fpga busreacquire",
-        "fpga configbb", "fpga stock diag", "fpga stock clear", "fpga stock set",
+        "fpga cmd", "fpga frame", "fpga selftest", "fpga stock diag", "fpga stock clear",
+        "fpga stock set",
         "fpga stock preset", "fpga stock base2", "fpga stock state5", "fpga stock state6",
         "fpga stock prev", "fpga stock next", "fpga stock select", "fpga stock toggle",
         "fpga stock commit", "fpga stock consume", "fpga stock bridge fixed",
@@ -331,7 +335,7 @@ class TestDenyListAgainstFirmwareTable(unittest.TestCase):
         "meter autoscan", "meter auto", "meter probe-tail", "meter boot-sequence",
         "meter pc11-timing", "meter mux-arms", "meter mux-stream", "meter stream",
         "meter wave", "fpga acq", "spi3 xfer", "spi3 seq", "spi3 acqread",
-        "spi3 opsweep", "spi3 gowin", "spi3 edgecap", "spi3 scopetest", "spi3 acqtest",
+        "spi3 opsweep", "spi3 gowin", "spi3 scopetest", "spi3 acqtest",
         "spi3 stock-readback", "spi3 h2txdiag", "spi3 h2verify", "spi3 probe",
     }
 

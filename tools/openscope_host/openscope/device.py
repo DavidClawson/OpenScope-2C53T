@@ -96,13 +96,17 @@ BENCH_ARG_RULES = {
         "other opcodes write FPGA registers under the 0xFF filler or hit the config port"),
 }
 
-# scope_shell never sends these, at any level: they erase or write flash,
-# change what the scope boots, drive GPIO pins directly or reset it.
-# Name -> why. This covers the debug shell only: front-panel presses
-# (scope_press) are not filtered by level and can reach Settings > Startup
-# on Boot (an MCU flash write) and Settings > Firmware Update (reboot into
-# DFU); see mcp_server.py.
-NEVER_SHELL_WHAT = "flash writes, boot changes, resets, direct GPIO/memory writes"
+# scope_shell never sends these, at any level. The rule: flash writes, boot
+# changes, resets, writes to caller-chosen addresses or pins, FPGA run-pin
+# pulses, and taking over the SPI3 pins (bit-bang, release, re-init outside
+# the acquisition park). Commands that drive a FIXED set of frontend pins to
+# caller-chosen levels or timings (`meter mux-arms`, `meter pc11-timing`, the
+# range relays) are not in it and stay at --level unsafe. Name -> why.
+# This covers the debug shell only: front-panel presses (scope_press) are not
+# filtered by level and can reach Settings > Startup on Boot (an MCU flash
+# write) and Settings > Firmware Update (reboot into DFU); see mcp_server.py.
+NEVER_SHELL_WHAT = ("flash writes, boot changes, resets, writes to caller-chosen addresses "
+                    "or pins, FPGA run-pin pulses, SPI3 pin takeover")
 NEVER_SHELL_ROWS = {
     "fwload": "stages a firmware image into the W25Q cache (erases and writes it)",
     "fwapply": "erases and reprograms the MCU application flash, then resets",
@@ -116,13 +120,23 @@ NEVER_SHELL_ROWS = {
     "reboot": "reboots the scope (`reboot bootloader` = into the USB updater)",
     "gpio set": "drives a GPIO pin",
     "gpio mode": "changes a GPIO pin's direction",
-    "bench restore": "rewrites the frontend/FPGA pins' modes and levels",
+    "bench restore": "rewrites the modes and levels of 14 frontend/FPGA pins, including "
+                     "PB11, PC6 (FPGA SPI enable) and PB6 (SPI3 chip select)",
     "spi3 armtest": "pulses the FPGA run pin (PB11 or PC6) directly",
     "fpga dbgclk": "reconfigures PC6 as an output and clocks it",
     "fpga dbgarm": "reconfigures PB11 as an output and drives it",
     "fpga reinit": "replays the FPGA bitstream handshake (`rl` = Gowin RELOAD) and drives "
                    "PB11; its <a-e><pin> option makes any pin a push-pull output and pulses "
                    "it LOW for 10 ms, and `c9` is PC9, the power hold: the scope switches off",
+    "fpga busrelease": "hands SPI3 to an external master: PB3/PB5/PB6 become inputs and "
+                       "PB11/PC6 are driven HIGH; untested, and its source says to re-flash "
+                       "or power-cycle to undo it",
+    "fpga busreacquire": "re-initialises the SPI3 pins (PB3-PB6, PC6) and peripheral at /2 "
+                         "without parking acquisition (the undo of busrelease)",
+    "fpga configbb": "takes over the SPI3 pins and bit-bangs an FPGA SSPI configuration "
+                     "(FPGA_CONFIG_B builds)",
+    "spi3 edgecap": "takes over the SPI3 pins and bit-bangs CONFIG_ENABLE (0x15) frames "
+                    "(FPGA_CONFIG_B builds)",
 }
 # No such rows today. Denied so that a future command with one of these
 # names cannot reach --level unsafe before anyone has reviewed it.
