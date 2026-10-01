@@ -133,6 +133,7 @@ class ScopeSession:
         if not 1 <= scale <= 4:
             raise RuntimeError("scale must be 1..4")
         s = self._call(lambda dev: dev.screenshot())
+        self.last_screenshot_torn = s.torn
         return png_bytes(s.w, s.h, s.indexed4, scale)
 
 
@@ -145,15 +146,29 @@ def build_server(session: ScopeSession):
     except ImportError:                     # mcp 1.x
         from mcp.server.fastmcp import FastMCP as Server, Image
     from mcp.types import ToolAnnotations
+    try:                                    # mcp >= 2: only a ToolError's message reaches
+        from mcp.server.mcpserver.exceptions import ToolError   # the model; any other
+    except ImportError:                     # exception is reported as a bare
+        ToolError = RuntimeError            # "Error executing tool <name>"
 
     read_only = ToolAnnotations(readOnlyHint=True, openWorldHint=False)
     mcp = Server("openscope")
+
+    def expected(fn):
+        """Device refusals (not in meter mode, queue full, no device, allowlist)
+        are outcomes the agent must read and act on, not server faults."""
+        def run(*a, **kw):
+            try:
+                return fn(*a, **kw)
+            except RuntimeError as e:
+                raise ToolError(str(e)) from None
+        return run
 
     @mcp.tool(annotations=read_only)
     def scope_info() -> dict:
         """Status of the OpenScope 2C53T: firmware build, current mode (scope/meter/
         siggen/settings), battery, whether real capture data exists yet, USB health."""
-        return session.info()
+        return expected(lambda: session.info())()
 
     @mcp.tool(annotations=read_only)
     def scope_meter() -> dict:
@@ -161,7 +176,7 @@ def build_server(session: ScopeSession):
         coldtrace build measures DC volts). update_count increases ~4 times a second;
         call again to see whether the value moved. NOT_READY means no reading yet;
         UNSUPPORTED_IN_MODE means the scope is not in meter mode (press MENU to change)."""
-        return session.meter()
+        return expected(lambda: session.meter())()
 
     @mcp.tool(annotations=ToolAnnotations(readOnlyHint=False, destructiveHint=False,
                                           idempotentHint=False, openWorldHint=False))
@@ -169,20 +184,21 @@ def build_server(session: ScopeSession):
         """Press front-panel buttons in order, like a person would. Names: CH1 CH2 MOVE
         SELECT TRIGGER PRM AUTO SAVE MENU UP DOWN LEFT RIGHT OK (POWER needs
         --allow-raw-shell). Take a screenshot afterwards to see the effect."""
-        return session.press(buttons)
+        return expected(lambda: session.press(buttons))()
 
     @mcp.tool(annotations=read_only)
     def scope_screenshot(scale: int = 2) -> Image:
-        """The scope's screen (320x240, CRC-checked, 16-colour palette so colours are
-        approximate). scale 1..4 enlarges it."""
-        return Image(data=session.screenshot_png(scale), format="png")
+        """The scope's screen (320x240, transport CRC-checked, 16-colour palette so
+        colours are approximate). scale 1..4 enlarges it. On a live trace the frame
+        can be slightly torn (the trace moved during the ~1 s transfer)."""
+        return Image(data=expected(session.screenshot_png)(scale), format="png")
 
     @mcp.tool(annotations=ToolAnnotations(readOnlyHint=not session.allow_raw_shell,
                                           openWorldHint=False))
     def scope_shell(command: str) -> str:
         """Run one debug-shell command and return its text output. By default only
         read-only commands are allowed: version, status, uptime, usbstat, fwstat, fwcrumb, help."""
-        return session.shell(command)
+        return expected(lambda: session.shell(command))()
 
     return mcp
 

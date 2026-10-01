@@ -106,7 +106,8 @@ def _screenshot(dev: Device, a) -> int:
     from .screen import save_png
     s = dev.screenshot()
     save_png(a.out, s.w, s.h, s.indexed4, scale=a.scale)
-    print(f"saved {a.out} ({s.w}x{s.h}, CRC verified)")
+    note = "transport verified; the live screen changed during capture (torn)" if s.torn else "CRC verified"
+    print(f"saved {a.out} ({s.w}x{s.h}, {note})")
     return EXIT_OK
 
 

@@ -52,6 +52,7 @@ READ_ONLY_SHELL = ("version", "status", "uptime", "usbstat", "fwstat", "fwcrumb"
 
 SCREEN_HDR = re.compile(
     rb"SCREENBIN x=(\d+) y=(\d+) w=(\d+) h=(\d+) format=indexed4 len=(\d+) crc32=([0-9A-F]{8})\r\n")
+SCREEN_END = re.compile(rb"SCREENBIN END(?: crc32=([0-9A-F]{8}))?\r\n")
 PROMPT = b"> "
 RX_GAP_S = 0.06    # > ESP_RX_GAP_MS (firmware/src/drivers/esp_comm.h)
 
@@ -63,6 +64,7 @@ class Screen:
     w: int
     h: int
     indexed4: bytes     # 2 pixels per byte, high nibble first, rows padded to bytes
+    torn: bool = False  # transport verified, but the screen changed during the capture
 
 
 class Device:
@@ -315,11 +317,17 @@ class Device:
         return self._with_reopen(lambda: self._screenshot_once(region, attempts, timeout))
 
     def _screenshot_once(self, region, attempts: int, timeout: float) -> Screen:
+        """Prefer a frame whose header CRC matches (consistent). On a live
+        screen that may never happen: then accept a frame whose TRAILER CRC
+        (firmware: CRC of the bytes actually sent) matches — transport intact,
+        frame possibly torn — and mark it torn instead of failing. Firmware
+        without the trailer behaves as before (header CRC or failure)."""
         cmd = "screen dumpbin" + ("" if region is None else " %d %d %d %d" % tuple(region))
         last = ""
+        torn_frame = None
         for _ in range(attempts):
             self.link.drain(quiet=0.05, max_wait=0.3)
-            self.link.write(cmd.encode() + b"\r")
+            self._write(cmd.encode() + b"\r")
             buf = bytearray()
             t0 = time.time()
             m = None
@@ -330,13 +338,28 @@ class Device:
                 last = "no SCREENBIN header"
                 continue
             x, y, w, h, n = (int(m.group(i)) for i in range(1, 6))
-            crc = int(m.group(6), 16)
-            data = bytearray(buf[m.end():])
-            while len(data) < n and time.time() - t0 < timeout:
-                data += self.link.read(n - len(data))
-            data = bytes(data[:n])
+            crc_hdr = int(m.group(6), 16)
+            rest = bytearray(buf[m.end():])
+            while len(rest) < n and time.time() - t0 < timeout:
+                rest += self.link.read(n - len(rest))
+            data = bytes(rest[:n])
+            tail = bytearray(rest[n:])
+            end = SCREEN_END.search(tail)
+            while not end and time.time() - t0 < min(timeout, 3.0):
+                tail += self.link.read()
+                end = SCREEN_END.search(tail)
             self._settle()
-            if len(data) == n and (zlib.crc32(data) & 0xFFFFFFFF) == crc:
+            if len(data) != n:
+                last = f"short capture ({len(data)}/{n} B)"
+                continue
+            got = zlib.crc32(data) & 0xFFFFFFFF
+            if got == crc_hdr:
                 return Screen(x, y, w, h, data)
-            last = f"CRC/length mismatch ({len(data)}/{n} B)"
+            if end and end.group(1) and got == int(end.group(1), 16):
+                torn_frame = Screen(x, y, w, h, data, torn=True)
+                last = "screen changed during capture"
+                continue
+            last = f"CRC mismatch (transport): got {got:08X}"
+        if torn_frame is not None:
+            return torn_frame
         raise DeviceError(f"screenshot failed after {attempts} attempts: {last}")
