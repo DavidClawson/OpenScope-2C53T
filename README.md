@@ -10,7 +10,7 @@ The FNIRSI 2C53T is a capable $75 handheld 3-in-1 instrument held back by buggy 
 
 > ### 🛑 This firmware is for the FNIRSI **2C53T** only
 >
-> **Do not flash it to a 2C23T, a 2C53P, or any other FNIRSI model.** The boards are close relatives but not interchangeable: different pin assignments, different FPGA transport, different application base address, and a different factory bootloader. Flashing this to the wrong model will not work and, if you follow [First-Time Hardware Setup](#first-time-hardware-setup), it will overwrite that device's factory bootloader with one built for the 2C53T.
+> **Do not flash it to a 2C23T, a 2C53P, or any other FNIRSI model.** The boards are close relatives but not interchangeable: different pin assignments, different FPGA transport, different application base address, and a different factory bootloader. Flashing this to the wrong model will not work and, if you follow Path B of [First-Time Hardware Setup](#first-time-hardware-setup), it will overwrite that device's factory bootloader with one built for the 2C53T. (Path A, the `guest` images, leaves the bootloader alone, but is still built for the 2C53T's hardware and not for any other model.)
 >
 > - **FNIRSI 2C23T** → use [rosenrot00/OpenScope-2C23T](https://github.com/rosenrot00/OpenScope-2C23T), which is written for that hardware.
 > - **Anything else** → there is no open firmware for it yet. Please don't experiment with this one.
@@ -20,6 +20,8 @@ The FNIRSI 2C53T is a capable $75 handheld 3-in-1 instrument held back by buggy 
 > **🎉 The oscilloscope captures.** As of **2026-08-13**, the `make guest-coldtrace` build cold-boots, configures the Gowin GW1N-UV2 FPGA itself, arms the capture engine, and renders live, probe-responsive waveforms — no stock firmware, no warm handoff, no opening the case. The FPGA configuration problem that owned this project's critical path from April to August is **solved**. [How to see it](#seeing-live-waveforms-today) · [the story](docs/devlog/2026-08-13-cold-boot-to-scope.md) · [issue #18](https://github.com/DavidClawson/OpenScope-2C53T/issues/18)
 
 > ### ⚠️ This is development firmware — don't depend on it for real measurements
+>
+> **Back up your factory calibration before your first flash.** Every unit carries its own calibration in one 4 KB page of MCU flash (`0x08006000`), and OpenScope images overwrite it. Nothing we hold can regenerate it ([#28](https://github.com/DavidClawson/OpenScope-2C53T/issues/28)). It is a one-time step of a few minutes, and it cannot be done after the fact: [how](#back-up-your-factory-calibration-first).
 >
 > **The scope captures, and both axes now carry measured numbers — but it is validated on one physical unit.** Timebase control reaches the hardware and 8 of 21 rate codes are bench-measured; the rest display `--` rather than a guess. Vertical ranges 5/6/7 are measured and cross-validated four ways, 4/8/9 are provisional and marked `~`, and 0–3 rail and fall back to honest ADC counts. The measurement badges are real measurements, not placeholders. What is *not* settled: **absolute vertical scale** traces to a bench source never checked against a reference (the error is uniform and recoverable with one constant), the **vertical graticule autoscales by default** so a division does not mean the printed volts/div, **CH2 has one usable attenuator tap**, and the acquisition record carries stale data at its edges. If you need a scope you can trust unsupervised today, stay on stock.
 >
@@ -41,6 +43,8 @@ Captured from bench unit #1 running v0.4.0, over USB with `scripts/screenshot.py
 
 ### Seeing live waveforms today
 
+> **Before the first flash, back up your factory calibration** — [how](#back-up-your-factory-calibration-first). The image below overwrites the page that holds it, and a copy cannot be made afterwards.
+
 Live capture lives in **one specific build target**. `make` and `make guest` do *not* configure the FPGA and will *not* capture — only `guest-coldtrace` runs the configuration path:
 
 ```bash
@@ -48,7 +52,7 @@ cd firmware && make guest-coldtrace
 python3 ../scripts/iap_flash.py     # MENU + tap Power → upgrade mode → detect → flash
 ```
 
-`guest-coldtrace` is a **guest image**: it links at `0x08007000` and runs under the FNIRSI *stock* IAP bootloader (the `MENU + Power` upgrade mode described [below](#restoring-stock-or-flashing-via-usb-c-macos--linux)), rather than under our HID bootloader. It still needs the one-time 224KB SRAM option byte from [First-Time Hardware Setup](#first-time-hardware-setup). Power-cycle the device, open scope mode, and probe something slow (a few Hz). The firmware ships a synthetic demo square wave as a fallback — **when the demo trace disappears, you are looking at real samples.**
+`guest-coldtrace` is a **guest image**: it links at `0x08007000` and runs under the FNIRSI *stock* IAP bootloader (the `MENU + Power` upgrade mode described [below](#restoring-stock-or-flashing-via-usb-c-macos--linux)), rather than under our HID bootloader. It flashes with the case closed and never touches the factory bootloader. The 224 KB SRAM option byte it needs is already set on any unit that has ever booted FNIRSI's own firmware, so ROM DFU is not needed in the usual case — see Path A in [First-Time Hardware Setup](#first-time-hardware-setup). Power-cycle the device, open scope mode, and probe something slow (a few Hz). The firmware ships a synthetic demo square wave as a fallback — **when the demo trace disappears, you are looking at real samples.**
 
 Three caveats, stated plainly:
 
@@ -140,6 +144,34 @@ The story of how we got here — including the six weeks lost to a mis-clocked r
 
 ## Getting Started
 
+### Back up your factory calibration first
+
+Do this once per unit, before the first OpenScope flash. It cannot be done afterwards.
+
+Each 2C53T carries its own calibration in one 4 KB page of MCU flash, `0x08006000`–`0x08006FFF`. The values are per unit: 127 of the 256 calibration bytes differ between a pristine V1.4 unit and bench unit #1, and the three units compared in [`archive/factory_cal/`](archive/factory_cal/README.md) differ pairwise across the whole block ([#28](https://github.com/DavidClawson/OpenScope-2C53T/issues/28)). No firmware we hold computes the values, so a page that is lost has nothing to be restored from. The v0.4.0 release notes state that OpenScope images overwrite it.
+
+Two kinds of backup, and only one of them restores:
+
+| What you keep | Can you write it back? |
+|---|---|
+| Photos of the LCD and the CRC32 that the release `caldump` image shows | No. The CRC32 lets you check that a restored page matches; the photos are a record. |
+| A 4096-byte dump of the page ([PR #41](https://github.com/DavidClawson/OpenScope-2C53T/pull/41): `caldump`, then `mem read 0x08006000 1024` over the shell; the `mem read` command itself is already on `main` and prints 32-bit words as hex text, which you convert to a 4096-byte binary file) | Yes, byte for byte, with the ROM DFU command below. |
+
+Steps, before you flash anything else:
+
+1. Enter upgrade mode: **MENU + tap Power**. The unit mounts a drive named `IAP`.
+2. Flash the release asset `openscope-2c53t-v0.4.0-caldump.bin` (`python3 scripts/iap_flash.py flash <path>`, or drag it onto the `IAP` drive on Windows). It is read-only: it writes nothing, it only reports the page.
+3. The unit reboots into it. Photograph the screen and write down the CRC32. If you can run PR #41's `caldump` and `mem read 0x08006000 1024`, save the 4096 bytes too — that is the copy you can restore from.
+4. Re-enter upgrade mode and flash the scope image.
+
+To put your own page back later, enter ROM DFU (open case, BOOT0 + pinhole reset; see the [DFU Mode Guide](docs/dfu_mode_guide.md)) and run:
+
+```bash
+dfu-util -a 0 -d 2e3c:df11 -s 0x08006000 -D <your-caldump.bin>
+```
+
+where `<your-caldump.bin>` is the 4096-byte file from step 3. The recovery recipe in the DFU guide needs this step: the archived factory bootloader carries unit #1's page and overwrites yours ([#38](https://github.com/DavidClawson/OpenScope-2C53T/issues/38)).
+
 ### Prerequisites
 
 **Toolchain:**
@@ -181,9 +213,27 @@ This populates `firmware/build/` with `firmware.bin` (the application) and `opti
 
 ### First-Time Hardware Setup
 
-The first flash requires opening the case to enter the AT32's **ROM DFU mode** — this is the only mode that can write option bytes. After the initial flash installs the USB HID bootloader, all future updates go over USB-C with the case closed.
+There are two ways in. They differ in whether you open the case and in what happens to the factory bootloader at `0x08000000`. Back up your calibration first either way ([above](#back-up-your-factory-calibration-first)).
 
-> **Two bootloaders — don't confuse them.** *ROM DFU* (entered via BOOT0 + pinhole reset, LCD dark, `2e3c:df11`) is required for the one-time EOPB0 setup. The *USB HID bootloader* (Settings → Firmware Update, or POWER+PRM during reset, "BOOTLOADER MODE" on the LCD) handles every update after that but cannot write option bytes.
+#### Path A: a guest image through the factory IAP (default; case closed; nothing erased)
+
+`make guest-coldtrace` and the release's `*-coldtrace.bin` link at `0x08007000` and run under FNIRSI's own bootloader. Hold **MENU + tap Power**, the unit mounts the `IAP` drive, and `scripts/iap_flash.py` writes the image ([Restoring Stock or Flashing via USB-C](#restoring-stock-or-flashing-via-usb-c-macos--linux)). The factory bootloader is never touched, so MENU + Power keeps working, and no step on this path can wipe it.
+
+**You do not need ROM DFU if the unit has ever run FNIRSI's firmware.** The stock app sets EOPB0 = `0xFE` (224 KB SRAM) itself on its first boot (disassembly: [`stock_iap_bootloader.md`](reverse_engineering/analysis_v120/stock_iap_bootloader.md) §5A, guard at `0x1FFFF810`), and it cannot run in 96 KB mode: its initial stack pointer is `0x20036F90`. A unit that has ever booted stock therefore already has the byte. Checked on a pristine V1.4 (unit #3): the v0.4.0 `caldump` and `coldtrace` images booted through the IAP drive with no DFU step.
+
+To check your unit, flash the guest image. If it comes up, the unit is in 224 KB mode and you are done. A 96 KB unit should not get that far (not observed): the guest images put the stack at `0x20037FE0`, above the 96 KB ceiling at `0x20018000`. On builds where the shell enumerates, `version` prints `SRAM: 224KB (EOPB0=0xFE)`. Be aware that this line is a fixed string in the firmware (`firmware/src/drivers/usb_debug.c`), not a read of the option byte, so it tells you the image is running and nothing more.
+
+ROM DFU is needed only for a unit that has never booted FNIRSI's firmware and still has the 96 KB default. If it still has the stock image, power it up into stock once and let it reach the scope screen. The disassembly says the stock app sets the byte on that boot; this has not been observed on a unit that was in 96 KB mode. If there is no stock image to boot, step 5 of Path B is the fix, with the warning that goes with it. Note that the `caldump` image is a guest image too and will not run on such a unit either, so the calibration backup above is not possible there and there is no verified way to take it. Ask in an issue before step 5.
+
+Use the `IAP` drive for the first flash, not the USB-staged `fwapply` installer: the v0.4.0 release build of that installer hangs ([#42](https://github.com/DavidClawson/OpenScope-2C53T/issues/42), EXP-57/EXP-59).
+
+#### Path B: OpenScope's HID bootloader through ROM DFU (case open)
+
+Choose this only if you want our USB HID bootloader (`make flash`, Settings → Firmware Update) in place of FNIRSI's. It needs the case open and the AT32's **ROM DFU mode**, and `make flash-all` replaces the factory bootloader. After the first flash, all later updates go over USB-C with the case closed.
+
+> **The option-byte write (step 5 below) is the dangerous step.** The blob also writes FAP = `0xA5`, i.e. read protection off (layout comment above `option_bytes48.bin` in `firmware/Makefile`), which is more than the SRAM size. Changing read protection is the operation on this MCU that can erase internal flash wholesale, and a failed option-byte write (`SET_ADDRESS not correctly executed`) leads to the `:unprotect:force` recovery in the [DFU guide's troubleshooting](docs/dfu_mode_guide.md#troubleshooting), which does erase all of it: factory IAP bootloader and calibration page included. Back up the calibration first. Path B with step 5 skipped, on a unit that already has the 224 KB byte, has not been tested, so do not assume `make flash-all` works without it.
+
+> **Two bootloaders — don't confuse them.** *ROM DFU* (entered via BOOT0 + pinhole reset, LCD dark, `2e3c:df11`) is the only mode that can write option bytes. You need it for Path B, and for the one-time EOPB0 setup on a unit that has never run stock. The *USB HID bootloader* (Settings → Firmware Update, or POWER+PRM during reset, "BOOTLOADER MODE" on the LCD) handles every update after that but cannot write option bytes.
 
 **See the full walkthrough with photos: [DFU Mode Guide](docs/dfu_mode_guide.md)**
 
@@ -195,9 +245,9 @@ The short version:
 2. Use a jumper wire to bridge 3.3V (from the SWD header near USB-C) to the BOOT0 pull-down resistor (MCU side, near the main chip)
 3. While holding 3.3V on BOOT0, press the pinhole reset button, then release both
 4. Verify ROM DFU: `dfu-util -l` should list `2e3c:df11` with alt interfaces 0 (Internal Flash) and 1 (Option Byte)
-> **⚠ Step 6 is the irreversible-feeling one.** `make flash-all` writes our bootloader over flash address `0x08000000`, replacing the FNIRSI factory IAP bootloader. Before you run it, confirm one last time that the device is a **2C53T** — this is the step that removes a wrong-model device's way back. Everything before it is recoverable by simply not continuing. If you want to keep the stock bootloader entirely, use the [MENU + Power channel](#restoring-stock-or-flashing-via-usb-c-macos--linux) with a `guest` build instead, which never touches `0x08000000`.
+> **⚠ Step 6 is the irreversible-feeling one.** `make flash-all` writes our bootloader over flash address `0x08000000`, replacing the FNIRSI factory IAP bootloader. Before you run it, confirm one last time that the device is a **2C53T** — this is the step that removes a wrong-model device's way back. Everything before it is recoverable by simply not continuing. If you want to keep the stock bootloader entirely, use Path A, the [MENU + Power channel](#restoring-stock-or-flashing-via-usb-c-macos--linux) with a `guest` build, which never touches `0x08000000`.
 
-5. Set EOPB0 = 0xFE → 224KB SRAM mode (one-time):
+5. Set EOPB0 = 0xFE → 224KB SRAM mode (one-time; the byte is already set on a unit that has run stock, but skipping this step is untested, and it also writes FAP — see the warning above):
    ```bash
    cd firmware
    dfu-util -a 1 -d 2e3c:df11 -s 0x1FFFF800 -D build/option_bytes48.bin
@@ -242,6 +292,8 @@ python3 scripts/iap_flash.py         # detect device → pick firmware → flash
 It auto-detects the device and available images, verifies the stock firmware by SHA-256, and shows a progress bar. Subcommands: `status`, `list`, `flash <path>`, `doctor` (prerequisite check), `guide` (full walkthrough). A bad flash is never a brick — re-enter upgrade mode and reflash any image.
 
 **Windows** users can skip the tool — drag-drop the `.bin` onto the `IAP` drive (the official FNIRSI method; Windows' FAT driver handles the volume cleanly).
+
+If the factory bootloader itself is gone (MENU + Power no longer mounts `IAP`), the way back is the [full factory restore](docs/dfu_mode_guide.md#full-factory-restore-recover-menupower-upgrade-mode). Read its calibration warning first ([#38](https://github.com/DavidClawson/OpenScope-2C53T/issues/38)).
 
 ### Build
 
