@@ -86,6 +86,7 @@ C_SOURCES += src/util/config.c
 C_SOURCES += src/util/cal_dump.c
 C_SOURCES += src/util/cal_backup_core.c
 C_SOURCES += src/util/cal_backup.c
+C_SOURCES += src/util/usb_evidence.c
 C_SOURCES += src/util/cal_reference.c
 C_SOURCES += src/util/settings_store.c
 C_SOURCES += src/util/screenshot.c
@@ -579,6 +580,17 @@ $(BUILD_DIR)/test_remote_proto: tests/test_remote_proto.c src/drivers/esp_comm.c
 	$(HOST_CC) -std=gnu11 -Wall -Wextra -Werror -Isrc/drivers $< src/drivers/esp_comm.c -o $@
 
 test-remote-proto: $(BUILD_DIR)/test_remote_proto test-esp-comm
+	$<
+
+.PHONY: test-usb-evidence
+# CDC wedge evidence record (issue #39): the .noinit record that carries the
+# last stall across the reset that recovers the port. Trust rule (magic AND
+# checksum over every byte) and session lifecycle; scripts/test_usb_evidence.py
+# also deletes each guard and requires this suite to fail.
+$(BUILD_DIR)/test_usb_evidence: tests/test_usb_evidence.c src/util/usb_evidence.c src/util/usb_evidence.h | $(BUILD_DIR)
+	$(HOST_CC) -std=c11 -Wall -Wextra -Werror -Isrc/util $< src/util/usb_evidence.c -o $@
+
+test-usb-evidence: $(BUILD_DIR)/test_usb_evidence
 	$<
 
 $(BUILD_DIR)/test_scope_timebase: tests/test_scope_timebase.c src/ui/scope_timebase.c src/ui/scope_timebase.h | $(BUILD_DIR)
