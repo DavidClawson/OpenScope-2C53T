@@ -496,5 +496,8 @@ answered. With DTR open, a stall whose IN endpoint is still VALID is a host that
 (counted, left alone); two consecutive stalls with the endpoint NAK/disabled — packet taken,
 completion lost — trigger a soft disconnect/reconnect, which the host tool handles as a replug
 (re-sending only queries, never a BUTTON that may already have acted). `usbstat` shows the counters and the endpoint register
-captured at the last stall; `usbstat heal on|off` exists for A/B. **Not yet validated on
-hardware** — see the PR for the bench plan.
+captured at the last stall; `usbstat heal on|off` exists for A/B. **Hardware status (2026-10-01):**
+EXP-61 could not reproduce the wedge on demand (48 MB clean); EXP-66 (PR #48's branch) caught a natural
+one two hours into a session — two consecutive lost-completion stalls during an `opread` dump — and the
+heal fired once: the port re-enumerated by itself, no reset, no replug. One occurrence; the wedge's
+mechanism is still open, and PR #48 keeps the triggering stall's snapshot in its own fields.
