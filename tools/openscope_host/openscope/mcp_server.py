@@ -116,10 +116,19 @@ class ScopeSession:
             }
         return self._call(run)
 
+    #: Buttons that ACT on a Settings item (OK applies it; LEFT/RIGHT adjust
+    #: "Startup on Boot", which erases and rewrites an MCU flash sector). MENU,
+    #: UP and DOWN only move around the menu and are always allowed.
+    SETTINGS_ACTING = ("OK", "LEFT", "RIGHT")
+
     def press(self, buttons: List[str]) -> str:
-        """POWER is refused; nothing else is filtered, so a sequence can reach
-        Settings > Startup on Boot (MCU flash write), > Firmware Update (DFU
-        reboot) or > FPGA SPI Scanner (see the scope_press description)."""
+        """POWER is refused at every level. Below `unsafe`, a button that would
+        act on a Settings item (OK, LEFT, RIGHT) is refused while STATUS reports
+        the scope in the Settings menu (mode 3): that is where "Startup on Boot"
+        (MCU flash write), "Firmware Update" (DFU reboot) and "FPGA SPI Scanner"
+        (an hour-long sweep) live. STATUS is read right before each such press,
+        so a sequence like MENU OK is caught at the OK. At `unsafe` nothing but
+        POWER is filtered."""
         ids = [proto.button_id(b) for b in buttons]      # validate all before pressing any
         if proto.BUTTONS["POWER"] in ids:
             raise Refused("POWER is refused at every --level: it can switch the scope off and "
@@ -128,6 +137,17 @@ class ScopeSession:
         def run(dev: Device) -> str:
             done = []
             for b in buttons:
+                if self.level != "unsafe" and b.upper() in self.SETTINGS_ACTING:
+                    mode = dev.status().mode_name
+                    if mode == "settings":
+                        already = ("pressed " + " ".join(done) + "; ") if done else ""
+                        raise Refused(
+                            f"{already}{b.upper()} refused at --level {self.level}: the scope is "
+                            "in the Settings menu, where OK/LEFT/RIGHT can rewrite the MCU's "
+                            "boot-mode flash sector (Startup on Boot), reboot into DFU "
+                            "(Firmware Update) or start an hour-long FPGA sweep (FPGA SPI "
+                            "Scanner). MENU/UP/DOWN still work; start the server with "
+                            "--level unsafe to act on Settings items.")
                 try:
                     dev.press(b)
                 except Exception as e:
@@ -233,13 +253,14 @@ def build_server(session: ScopeSession):
     def scope_press(buttons: List[str]) -> str:
         """Press front-panel buttons in order, like a person would. Names: CH1 CH2 MOVE
         SELECT TRIGGER PRM AUTO SAVE MENU UP DOWN LEFT RIGHT OK. POWER is refused at
-        every server level (it can switch the scope off and end the session). Other
-        presses are NOT filtered by level, and they reach the Settings menu: there OK,
-        LEFT or RIGHT on "Startup on Boot" erases and rewrites an MCU flash sector, OK
-        on "Firmware Update" reboots the scope into the DFU bootloader (ending the
-        session), and OK on "FPGA SPI Scanner" starts a sweep of over an hour that
-        sends FPGA config opcodes and that only the physical POWER button stops. Do
-        not activate those items unless the human asked for it. Take a screenshot
+        every server level (it can switch the scope off and end the session). Below
+        --level unsafe, OK, LEFT and RIGHT are refused while the scope is in the
+        Settings menu (STATUS mode 3), because there OK/LEFT/RIGHT on "Startup on
+        Boot" erases and rewrites an MCU flash sector, OK on "Firmware Update" reboots
+        the scope into the DFU bootloader (ending the session), and OK on "FPGA SPI
+        Scanner" starts a sweep of over an hour that only the physical POWER button
+        stops; MENU/UP/DOWN still navigate. At unsafe nothing but POWER is filtered:
+        do not activate those items unless the human asked for it. Take a screenshot
         afterwards to see the effect."""
         return expected(lambda: session.press(buttons))()
 

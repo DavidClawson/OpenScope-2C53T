@@ -351,8 +351,11 @@ class TestRound5(unittest.TestCase):
         dev2.link.fail_next_read_after_write = True
         dev2.link.nak_status_after_reopen = True
         s = mcp_server.ScopeSession(opener=lambda port: dev2)
+        # MENU, not OK: below --level unsafe an OK is preceded by a STATUS read
+        # (Settings-menu gate), which would consume the scripted port drop. The
+        # claim under test is about the BUTTON's own lost reply.
         with self.assertRaises(RuntimeError) as cm2:
-            s.press(["OK"])
+            s.press(["MENU"])
         self.assertIn("MAY OR MAY NOT", str(cm2.exception))
         self.assertNotIn("NOT pressed (", str(cm2.exception).replace("MAY OR MAY NOT", ""))
 

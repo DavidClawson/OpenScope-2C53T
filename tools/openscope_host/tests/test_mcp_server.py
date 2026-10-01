@@ -299,6 +299,40 @@ class TestShellLevels(unittest.TestCase):
                 self.assertIn("every --level", str(cm.exception))
                 self.assertEqual(d.link.L.shim_presses(), 0, f"{lvl}: {buttons} pressed something")
 
+    def test_settings_acting_presses_refused_below_unsafe(self):
+        """In the Settings menu (STATUS mode 3) OK/LEFT/RIGHT can rewrite the
+        boot-mode flash sector, reboot into DFU or start the FPGA sweep. Below
+        unsafe they are refused there, the navigation keys are not, and a
+        sequence is cut exactly at the acting key with what already acted
+        named. At unsafe nothing but POWER is filtered."""
+        for lvl in ("readonly", "bench"):
+            for acting in (["OK"], ["LEFT"], ["right"]):
+                s, d = session(level=lvl)
+                d.link.L.shim_set_status(3, 80, 0, 4000, 1000, 0, 0)     # settings
+                with self.assertRaises(mcp_server.Refused) as cm:
+                    s.press(acting)
+                self.assertIn("Settings", str(cm.exception))
+                self.assertIn(f"--level {lvl}", str(cm.exception))
+                self.assertEqual(d.link.L.shim_presses(), 0, f"{lvl}: {acting} acted in Settings")
+            s, d = session(level=lvl)
+            d.link.L.shim_set_status(3, 80, 0, 4000, 1000, 0, 0)
+            s.press(["MENU", "UP", "DOWN"])                             # navigation is fine
+            self.assertEqual(d.link.L.shim_presses(), 3)
+            s, d = session(level=lvl)
+            d.link.L.shim_set_status(3, 80, 0, 4000, 1000, 0, 0)
+            with self.assertRaises(mcp_server.Refused) as cm:
+                s.press(["MENU", "OK"])                                 # cut at the OK
+            self.assertIn("pressed MENU;", str(cm.exception))
+            self.assertEqual(d.link.L.shim_presses(), 1)
+            s, d = session(level=lvl)
+            d.link.L.shim_set_status(0, 80, 0, 4000, 1000, 0, 0)         # scope mode: OK is a normal key
+            s.press(["OK"])
+            self.assertEqual(d.link.L.shim_presses(), 1)
+        s, d = session(level="unsafe")
+        d.link.L.shim_set_status(3, 80, 0, 4000, 1000, 0, 0)
+        s.press(["OK", "LEFT"])
+        self.assertEqual(d.link.L.shim_presses(), 2)
+
     def test_session_levels(self):
         self.assertEqual(mcp_server.ScopeSession().level, "readonly")
         self.assertEqual(mcp_server.ScopeSession(allow_raw_shell=True).level, "unsafe")
