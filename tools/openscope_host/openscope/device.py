@@ -50,6 +50,117 @@ IDEMPOTENT = frozenset({proto.CMD_PING, proto.CMD_STATUS, proto.CMD_GET_METER})
 READ_ONLY_SHELL = ("version", "status", "uptime", "usbstat", "fwstat", "fwcrumb", "help")
 
 
+# ── Shell levels for the MCP server (mcp_server.py --level) ──────────────
+# Names are rows of the firmware's shell table (shell_cmds[] in
+# firmware/src/drivers/usb_debug.c). A name matches a line it is a
+# whole-word prefix of, as in the firmware's dispatcher, so "trig" never
+# matches "trig2 ..." and "fwcrumb clear" is not "fwcrumb".
+# tests/test_mcp_server.py checks every name below against that table and
+# fails when a row is added that nobody has classified.
+SHELL_LEVELS = ("readonly", "bench", "unsafe")
+
+# --level bench = READ_ONLY_SHELL plus these: the scope/acquisition setters
+# and measurement reads the experiment scripts use (scripts/bench.py,
+# scripts/exp*.py). They change volatile state only (RAM, FPGA registers,
+# the trigger DAC) or read; the one flash-writing form of `mode`
+# (`mode startup ...`) is in NEVER_SHELL, which is checked first.
+BENCH_SHELL = (
+    # scope settings, through the same entry points the UI uses
+    "fpga scope timebase", "fpga scope range", "fpga scope center", "fpga scope vdiv",
+    "fpga scope trigmode", "fpga scope level", "fpga scope edge", "fpga scope hpos",
+    "fpga scope softtrig", "fpga scope graticule", "trig", "trig2", "mode",
+    # acquisition knobs of the seam/poll experiments (EXP-29..54)
+    "fpga postedge", "fpga pollgap", "fpga autowait", "fpga rearmwait", "fpga rearm",
+    "fpga acqgate", "fpga acqbr", "fpga pairgap", "fpga unrotate", "fpga edgefilter",
+    "fpga holdread", "fpga diag clear",
+    # measurements and reads
+    "fpga scope measure", "fpga scope freq", "fpga scope cal",
+    "spi3 read", "spi3 opread", "spi3 frame", "gpio read", "gpio scan",
+    "meter dump", "meter trace", "meter frontend", "meter adc-snapshot",
+    "cal status", "settings", "ui dump", "flash jedec", "flash read", "flash dump",
+)
+
+# Never reachable over MCP, at any level: these erase or write flash, change
+# what the scope boots, drive GPIO pins directly or reset it. Name -> why.
+NEVER_SHELL_ROWS = {
+    "fwload": "stages a firmware image into the W25Q cache (erases and writes it)",
+    "fwapply": "erases and reprograms the MCU application flash, then resets",
+    "fwswap": "installs a cached image over the MCU application flash, then resets",
+    "fwcrumb clear": "erases the firmware-install trail (backup registers)",
+    "cal backup": "erases and rewrites the factory-calibration backup in the W25Q",
+    "cal restore": "rewrites the MCU factory-calibration page (0x08006000)",
+    "flash wtest": "erases and writes a W25Q sector",
+    "mem write": "writes any address (flash controller, GPIO, clocks, ...)",
+    "mode startup": "erases and rewrites the MCU flash sector that sets what the scope boots into",
+    "reboot": "reboots the scope (`reboot bootloader` = into the USB updater)",
+    "gpio set": "drives a GPIO pin",
+    "gpio mode": "changes a GPIO pin's direction",
+    "bench restore": "rewrites the frontend/FPGA pins' modes and levels",
+    "spi3 armtest": "pulses the FPGA run pin (PB11 or PC6) directly",
+    "fpga dbgclk": "reconfigures PC6 as an output and clocks it",
+    "fpga dbgarm": "reconfigures PB11 as an output and drives it",
+}
+# No such rows today. Denied so that a future command with one of these
+# names cannot reach --level unsafe before anyone has reviewed it.
+NEVER_SHELL_RESERVED = {
+    "flash erase": "would erase flash",
+    "flash write": "would write flash",
+    "iap": "would enter the IAP updater",
+    "dfu": "would enter DFU",
+    "reset": "would reset the scope",
+}
+NEVER_SHELL = {**NEVER_SHELL_ROWS, **NEVER_SHELL_RESERVED}
+
+SHELL_LINE_MAX = 127    # firmware CMD_BUF_SIZE - 1; it silently drops the rest
+
+
+def _word_prefix(line: str, name: str) -> bool:
+    return line == name or line.startswith(name + " ")
+
+
+def shell_refusal(line: str, level: str) -> Optional[str]:
+    """Why the MCP server must not send `line` at `level`, or None if it may.
+
+    What is checked is what runs: the caller sends " ".join(line.split()).
+    A control character is refused outright because the firmware's line
+    editor would rewrite the line after this check (backspace/DEL delete,
+    tabs are dropped: "fw<TAB>apply" runs fwapply). The deny-list is checked
+    before any allowlist, case-insensitively, so no level can lift it."""
+    if level not in SHELL_LEVELS:
+        raise ValueError(f"unknown shell level {level!r} (one of {', '.join(SHELL_LEVELS)})")
+    raw = line.strip()
+    if any(not (" " <= ch <= "~") for ch in raw):
+        return (f"{raw!r} is refused at every --level: it contains a control or non-ASCII "
+                "character, and the firmware's line editor applies backspace/DEL and drops "
+                "tabs, so what ran could differ from what was checked. "
+                "Send one plain printable-ASCII command.")
+    if len(raw) > SHELL_LINE_MAX:
+        return (f"refused at every --level: the command is {len(raw)} characters; the "
+                f"firmware's line buffer keeps {SHELL_LINE_MAX} and silently drops the rest.")
+    cmd = " ".join(raw.split())
+    low = cmd.lower()
+    for name, why in NEVER_SHELL.items():
+        if _word_prefix(low, name):
+            return (f"'{cmd}' is never available over MCP, at any --level "
+                    f"({', '.join(SHELL_LEVELS)}): `{name}` {why}. "
+                    "If it is really needed, ask the human at the bench to run it.")
+    if cmd in READ_ONLY_SHELL or level == "unsafe":
+        return None
+    bench = any(_word_prefix(cmd, name) for name in BENCH_SHELL)
+    if level == "bench":
+        if bench:
+            return None
+        return (f"'{cmd}' is not allowed at --level bench (bench adds to the read-only "
+                f"commands: {', '.join(BENCH_SHELL)}). It needs --level unsafe, which only "
+                "whoever starts the MCP server can choose.")
+    return (f"'{cmd}' is not allowed at --level readonly, the default (allowed: "
+            f"{', '.join(READ_ONLY_SHELL)}). "
+            + ("It is a bench command: it needs --level bench or unsafe. " if bench
+               else "It needs --level unsafe. ")
+            + "Only whoever starts the MCP server can choose the level: the raw shell "
+            "can erase flash or desynchronise the FPGA.")
+
+
 SCREEN_HDR = re.compile(
     rb"SCREENBIN x=(\d+) y=(\d+) w=(\d+) h=(\d+) format=indexed4 len=(\d+) crc32=([0-9A-F]{8})\r\n")
 SCREEN_END = re.compile(rb"SCREENBIN END(?: crc32=([0-9A-F]{8}))?\r\n")
