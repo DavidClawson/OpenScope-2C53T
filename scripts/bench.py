@@ -1409,6 +1409,45 @@ class _DotSerialTransport(SerialTransport):
     with both asserted (DTR first, so it never passes through that state); on
     close, release RTS BEFORE DTR for the same reason."""
 
+    #: kodeOS console terminators: every command ends in exactly one of these.
+    _TERMINATORS = (b"\n>ok", b"\n>err")
+
+    def exchange(self, line: str, timeout: float) -> str:
+        """Read until the console's ``>ok`` / ``>err`` terminator, not until the
+        port goes quiet.  The Dot's log lines (``!I``/``!W``/``!E``) share the
+        port and can arrive continuously: on a Dot without its panel assembly
+        the LED driver (KTD2026) retries every 40 ms and logs each attempt,
+        so a quiet-time read never ends and every command costs its full
+        timeout (EXP-63 bring-up, 2026-10-01).  A terminator read is what the
+        protocol defines anyway.  On timeout the partial buffer is returned,
+        as for any prompt-less device: ``_confirmed`` then refuses a framed
+        reply that lacks its ``>ok``."""
+        self._ser.reset_input_buffer()
+        self._ser.write((line + "\r\n").encode())
+        self._ser.flush()
+        deadline = time.time() + timeout
+        buf = bytearray()
+        while time.time() < deadline:
+            chunk = self._ser.read(8192)
+            if chunk:
+                buf += chunk
+                tail = buf[-4096:]
+                if any(t in tail for t in self._TERMINATORS):
+                    # Let the terminator's own line end arrive, then stop.
+                    end = time.time() + 0.05
+                    while time.time() < end:
+                        more = self._ser.read(8192)
+                        if more:
+                            buf += more
+                        if b"\n>ok" in buf[-64:] and buf.endswith(b"\n"):
+                            break
+                        if b">err" in buf[-256:] and buf.endswith(b"\n"):
+                            break
+                    return buf.decode("utf-8", "replace")
+            else:
+                time.sleep(0.005)
+        return buf.decode("utf-8", "replace")
+
     def close(self) -> None:
         try:
             self._ser.rts = False
