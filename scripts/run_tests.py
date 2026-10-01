@@ -19,6 +19,23 @@ Usage:
   python3 scripts/run_tests.py             # run all, report skips prominently
   python3 scripts/run_tests.py --strict    # exit non-zero if anything skipped
   python3 scripts/run_tests.py -k iap      # only suites matching a substring
+
+  # --strict, minus skips that are named in advance (see ALLOWING SKIPS)
+  python3 scripts/run_tests.py --strict \\
+      --allow-skip 'test_stock_caplog.py:stock archive'
+
+ALLOWING SKIPS
+--------------
+Some coverage cannot exist everywhere: the stock FNIRSI image under archive/ is
+copyrighted, gitignored and never in CI. `--strict` would then fail forever, and
+the tempting fix -- drop `--strict` -- brings back exactly the quiet "(skipped=5)"
+this runner exists to prevent.
+
+`--allow-skip SUITE:REASON` is the narrower fix. It names ONE suite and a
+substring of ONE skip reason; a skip is tolerated only if both match. Every
+other skip -- a different suite, or the same suite skipping for a new reason
+(say, a missing toolchain) -- still fails `--strict`. Allowed skips are still
+listed in the report, marked [allowed]; they are named, not hidden.
 """
 
 from __future__ import annotations
@@ -54,6 +71,7 @@ SUITES = (
     "test_stock_settings_diff.py",
     "test_shell_table.py",
     "test_stock_caplog.py",
+    "test_run_tests.py",
     "test_firmware_build.py",
 )
 
@@ -78,6 +96,32 @@ SKIP_LINE_RE = re.compile(
 )
 # the non-unittest suites print a bare:  skipped 'reason'
 BARE_SKIP_RE = re.compile(r"^skipped ['\"](.*)['\"]\s*$", re.MULTILINE)
+
+AllowRule = tuple[str, str]  # (suite filename, substring of the skip reason)
+
+
+def parse_allow_skip(spec: str) -> AllowRule:
+    """argparse `type=` for --allow-skip: 'SUITE:REASON' -> (SUITE, REASON).
+
+    Both halves are mandatory. A bare suite name would blind that suite to
+    every future skip, which is the failure --strict exists to prevent. The
+    suite must be a real one, so a typo is an error rather than a rule that
+    silently allows nothing.
+    """
+    suite, sep, reason = spec.partition(":")
+    suite, reason = suite.strip(), reason.strip()
+    if not sep or not suite or not reason:
+        raise argparse.ArgumentTypeError(
+            f"{spec!r}: expected SUITE:REASON, e.g. 'test_stock_caplog.py:stock archive'"
+        )
+    if suite not in SUITES:
+        raise argparse.ArgumentTypeError(f"{spec!r}: {suite!r} is not one of the suites in SUITES")
+    return suite, reason
+
+
+def skip_is_allowed(suite: str, reason: str, rules: list[AllowRule]) -> bool:
+    return any(suite == s and why in reason for s, why in rules)
+
 
 GREEN, RED, YELLOW, BOLD, DIM, RESET = (
     ("\033[32m", "\033[31m", "\033[33m", "\033[1m", "\033[2m", "\033[0m")
@@ -134,12 +178,21 @@ def run_suite(name: str) -> SuiteResult:
     return result
 
 
-def main() -> int:
+def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     parser.add_argument("--strict", action="store_true", help="exit non-zero if any test was skipped")
+    parser.add_argument(
+        "--allow-skip",
+        metavar="SUITE:REASON",
+        type=parse_allow_skip,
+        action="append",
+        default=[],
+        help="with --strict, tolerate skips of SUITE whose reason contains REASON (repeatable); "
+        "any other skip still fails",
+    )
     parser.add_argument("-k", metavar="SUBSTR", help="only run suites whose filename contains SUBSTR")
     parser.add_argument("-v", "--verbose", action="store_true", help="print full output of failing suites")
-    args = parser.parse_args()
+    args = parser.parse_args(argv)
 
     suites = [s for s in SUITES if not args.k or args.k in s]
     if not suites:
@@ -156,6 +209,8 @@ def main() -> int:
 
     failed = [r for r in results if not r.ok]
     skipped = [(r, name, reason) for r in results for name, reason in r.skipped]
+    unexpected = [s for s in skipped if not skip_is_allowed(s[0].name, s[2], args.allow_skip)]
+    allowed = len(skipped) - len(unexpected)
     total_ran = sum(r.ran for r in results)
 
     if failed and args.verbose:
@@ -166,12 +221,14 @@ def main() -> int:
 
     if skipped:
         # The whole point: skips get a headline, not a suffix.
-        print(f"\n{YELLOW}{BOLD}⚠  {len(skipped)} TEST(S) DID NOT RUN{RESET}")
+        on_list = f" ({allowed} on the --allow-skip list, {len(unexpected)} not)" if args.allow_skip else ""
+        print(f"\n{YELLOW}{BOLD}⚠  {len(skipped)} TEST(S) DID NOT RUN{on_list}{RESET}")
         print(f"{YELLOW}   A skipped test is not a passing test. Most skips here mean a local")
         print(f"   artifact is missing, which removes real coverage -- often the checks")
         print(f"   that inspect built binaries rather than source text.{RESET}\n")
         for r, name, reason in skipped:
-            print(f"   {DIM}{r.name}{RESET}  {name}\n      {YELLOW}{reason}{RESET}")
+            tag = "" if (r, name, reason) in unexpected else f"  {DIM}[allowed]{RESET}"
+            print(f"   {DIM}{r.name}{RESET}  {name}{tag}\n      {YELLOW}{reason}{RESET}")
         print(
             f"\n   {DIM}Most are fixed by building first (make -C firmware/bootloader, etc.)\n"
             f"   and providing archive/2C53T Firmware V1.2.0/.{RESET}"
@@ -182,9 +239,12 @@ def main() -> int:
         if not args.verbose:
             print(f"{DIM}Re-run with -v for full output.{RESET}")
         return 1
-    if skipped and args.strict:
-        print(f"\n{RED}{BOLD}--strict: failing because {len(skipped)} test(s) were skipped.{RESET}")
+    if unexpected and args.strict:
+        why = "were skipped outside the --allow-skip list" if args.allow_skip else "were skipped"
+        print(f"\n{RED}{BOLD}--strict: failing because {len(unexpected)} test(s) {why}.{RESET}")
         return 1
+    if skipped and args.strict:
+        print(f"\n{YELLOW}--strict: {allowed} skip(s), all on the --allow-skip list. Nothing else was skipped.{RESET}")
     if not skipped:
         print(f"{GREEN}All tests ran. No skips.{RESET}")
     return 0
