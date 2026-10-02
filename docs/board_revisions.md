@@ -15,7 +15,7 @@ Where a statement was checked independently on another unit, the check is named.
 |---|---|---|
 | Revision marking | silkscreen `2C53T-V1.4_20250507` | none on silkscreen or copper |
 | Example units | bench units #1 and #2, @mquerostudio's unit #3 | @saulvalenzuela23 (bought March 2025, stock V1.0.6) |
-| OpenScope v0.4.0 | **runs** (units #1 and #3) | **untested — do not flash yet** (see below) |
+| OpenScope v0.4.0 | **runs** (units #1 and #3) | **runs** (@saulvalenzuela23, 2026-10-02: live capture, meter 3.299 V on a 3.300 V supply) |
 | Battery / boost | Silergy **SY7088DGC** boost, marked `VTxyz` (e.g. `VTHZA`, `VTHnA`) | **TC4056A** linear charger + **SB6284** boost (`B6284`), 4.7 µH, SS34 |
 | ADC | AD9288-compatible dual 8-bit (pinout traced by @maksidze) | **MXT2088**, dual 8-bit 100 MS/s (marking read under angled light) |
 | Multimeter | separate meter chip on a UART (behaviour) | **SDIC SD7501/SD7502** behind a **π122U31** digital isolator |
@@ -86,12 +86,16 @@ converter instead.
 
 - **V1.4:** v0.4.0 runs on bench unit #1 and on @mquerostudio's unit #3 (flashed through the factory
   `IAP` drive, no case opening).
-- **Unlabelled:** **not tested, and not recommended yet.** The power path differs, and the first thing
-  OpenScope does at boot is drive PC9 to hold the power on. Whether PC9 does the same job on this board
-  is unknown. The read-only `caldump` image is the safe first step: it only reads and displays, and
-  MENU + Power brings stock back. @saulvalenzuela23 has run it: see
-  [#12](https://github.com/DavidClawson/OpenScope-2C53T/issues/12) and
-  [#28](https://github.com/DavidClawson/OpenScope-2C53T/issues/28) (CRC32 `A9DFD19B`, 345 non-FF bytes).
+- **Unlabelled:** **v0.4.0 runs** (@saulvalenzuela23, 2026-10-02, [#37](https://github.com/DavidClawson/OpenScope-2C53T/issues/37)):
+  it boots to the OpenScope screen, the scope captures live through the FPGA, and the meter read
+  3.299 V against a 3.300 V bench supply. So PC9 holds the power on this board too. He then returned the
+  unit to stock with his own calibration page restored, and checked the static calibration tables
+  (`0x08006000`–`0x0800612F`) byte-for-byte against his pre-flash backup; stock rewrites runtime UI state
+  at `0x08006130`–`0x080061DF`. His calibration dump: [#28](https://github.com/DavidClawson/OpenScope-2C53T/issues/28)
+  (CRC32 `A9DFD19B`, 345 non-FF bytes).
+- **ROM DFU on the unlabelled board** needs the **power button held** for the whole session: the ROM
+  bootloader does not drive the board's power latch, so a pinhole reset with BOOT0 bridged just drops
+  the rail. See the DFU guide.
 
 **Back up your calibration first, on any board.** See the README's
 [calibration backup](../README.md#back-up-your-factory-calibration-first).
@@ -107,7 +111,7 @@ issue, especially around the FPGA, the ADC, the meter chip and the charger.
 
 ## Open questions
 
-1. Does PC9 hold the power on the unlabelled board, as it does on V1.4?
+1. ~~Does PC9 hold the power on the unlabelled board?~~ Yes: v0.4.0 runs there (2026-10-02).
 2. What does bit 7 of telemetry byte 8 mean?
 3. Is the V1.4 meter chip also an SD7501 behind an isolator? Its behaviour on the wire is identical.
 4. Are there more revisions? Purchase dates and stock firmware versions help place them.
