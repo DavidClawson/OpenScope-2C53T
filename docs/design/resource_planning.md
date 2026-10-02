@@ -1,5 +1,13 @@
 # Resource Planning — RAM, Flash, and Module Strategy
 
+> **Superseded (noted 2026-10-01)** for its numbers and its module plan by
+> [`roadmap.md` § Memory and resource headroom](../roadmap.md#memory-and-resource-headroom),
+> measured 2026-08-13 on `make guest`: SRAM is 224 KB, not 256 KB; the image fills 48.6% of
+> the 996 KB app slot, not 18%; the waterfall buffer already lives in the shared pool (`935d020`);
+> and modules are planned as data plus a firmware-side interpreter, not loadable binaries
+> (roadmap, and [`docs/specs/modules/module-loader.md`](../specs/modules/module-loader.md)).
+> The pool-lifecycle ideas below are kept for reference.
+
 *2026-03-29. Living document — update as hardware bringup reveals actual usage patterns.*
 
 ## Current Resource State
