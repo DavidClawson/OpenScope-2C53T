@@ -79,6 +79,16 @@ The BOOT0 pin is accessible on the MCU side of a pull-down resistor near the bot
 
 4. **While holding 3.3V on BOOT0, press and hold the reset button.** The pinhole reset button is accessible from the outside of the case, or you can press the NRST tactile switch on the PCB directly.
 
+> ### ⚠️ Hardware Variation: Power-Latch During ROM DFU (Early / Unlabelled Boards)
+>
+> On some hardware revisions (such as the early unlabelled board batch), the soft-latch power circuit drops power immediately when hitting the pinhole reset button while `BOOT0` is bridged. Because the AT32's internal ROM bootloader does not assert FNIRSI's board-specific power-latch GPIO pin, the device will immediately cut the 3.3V rail and fail to enumerate over USB (`2e3c:df11`).
+>
+> **Procedure for these units:**
+> 1. Bridge `BOOT0` to 3.3V.
+> 2. Plug the USB cable into your computer.
+> 3. Press and **hold the physical Power button down**.
+> 4. **Once the Power button is held, you can remove the `BOOT0` 3.3V jumper**, but you **must continue holding the physical Power button** throughout the entire DFU flashing session.
+
 5. **Release the reset button, then release the 3.3V jumper.** The order matters — release reset first so the MCU samples BOOT0 = HIGH during startup.
 
 6. **Verify DFU mode.** The device should enumerate as a USB DFU device:
