@@ -380,7 +380,7 @@ The old ask here said netlist analysis showed **no sample-rate register in the F
 Every vertical gain in this firmware traces to an amplitude *commanded* from a bench generator that has never been checked against a reference, and we found out the hard way that the same generator was delivering 0.825× its commanded **frequency**. The relative numbers are cross-validated and solid; the absolute scale is one unknown constant. If you have a 2C53T and a calibrated source, a handful of known amplitudes at known frequencies would close it — `python3 scripts/verify_scope_cal.py` exists to consume exactly that.
 
 ### 4. Board variant documentation
-We've confirmed one board revision (V1.4) and one user has reported a different layout with no version marking. If your 2C53T looks different from [our photos](docs/images/), photos of your PCB (top and bottom) are extremely valuable — especially near the FPGA, SPI flash, and analog frontend.
+We know of two board revisions: V1.4, and an earlier unlabelled board documented in detail by [@saulvalenzuela23](https://github.com/saulvalenzuela23). What is known about each, and which one OpenScope runs on, is in [docs/board_revisions.md](docs/board_revisions.md). If your 2C53T looks different from [our photos](docs/images/), photos of your PCB (top and bottom) are extremely valuable — especially near the FPGA, SPI flash, and analog frontend.
 
 ### 5. Everything else
 - **Test on your hardware** — different units reveal things a single bench unit can't

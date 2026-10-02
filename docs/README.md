@@ -9,6 +9,7 @@ Open-source replacement firmware for the FNIRSI 2C53T handheld oscilloscope / mu
 ## Top-Level
 
 - [Feature specs](specs/) — the plan: one promotion-ladder spec per feature, plus the catalog of what's missing and the community-demand audit
+- [Board revisions](board_revisions.md) — V1.4 vs the earlier unlabelled board: parts identified on each (ADC, meter chip, boost/charger), the stock meter command table, and which board OpenScope runs on
 - [Current dev plan (2026-09-22)](dev_plan_2026-09-22.md) — after the EXP-53/54 acquisition session: the missing trigger-level control, free pre-trigger capture, un-rotating the record, M1 + v0.4.0, the community queue
 - [Dev plan (2026-09-12)](dev_plan_2026-09-12.md) — superseded; the meter-session plan, mostly ticked
 - [Structural audit 2026-08-20](structural_audit_2026-08-20.md) — RTOS/reliability pass: bus ownership, torn buffers, silent-success error paths, decorative controls, dead weight — prioritized P0–P3
