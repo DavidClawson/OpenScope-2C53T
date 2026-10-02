@@ -57,7 +57,7 @@ python3 ../scripts/iap_flash.py     # MENU + tap Power → upgrade mode → dete
 Three caveats, stated plainly:
 
 - The **multimeter in this image reads DC Voltage only**, alongside the scope (EXP-23). It runs the meter chip's own auto mode. The fix for the other functions — [@Stlkv](https://github.com/Stlkv)'s corrected command header and display decoder ([#33](https://github.com/DavidClawson/OpenScope-2C53T/pull/33), [#35](https://github.com/DavidClawson/OpenScope-2C53T/pull/35)) — builds as `guest-coldtrace-meter`, tested on his unit, and becomes the default once validated on ours.
-- It has been validated on two physical units: bench unit #1 (V1.4) and unit #2 (early unlabelled revision by @saulvalenzuela23).
+- v0.4.0 has run on **three units across both known board revisions**: bench unit #1 and [@mquerostudio](https://github.com/mquerostudio)'s unit #3 (both V1.4), and [@saulvalenzuela23](https://github.com/saulvalenzuela23)'s early unlabelled board ([#37](https://github.com/DavidClawson/OpenScope-2C53T/issues/37)). Bench unit #2 is [@Stlkv](https://github.com/Stlkv)'s V1.4, which ran development builds.
 - **It is not the default `make guest` boot path yet.** Folding it in is on the roadmap.
 
 ### Working on hardware today
@@ -98,7 +98,7 @@ reviewable promotion-ladder spec per feature.
 | Feature | Stage | Where it actually stands |
 |---|---|---|
 | Cold-boot FPGA configuration | **S2** | Bit-banged SSPI only. The same bytes through the SPI3 peripheral are still silently discarded. |
-| Live capture, CH1 | **S2** | Reproducible across power cycles on two independent units (V1.4 and unlabelled early board). |
+| Live capture, CH1 | **S2** | Reproducible across power cycles on bench unit #1; v0.4.0 also captures live on unit #3 (V1.4) and on the unlabelled early board. |
 | Live capture, CH2 | **S2** | Armed at boot in `guest-coldtrace` (EXP-38): a fresh boot reads CH2's own tone beside CH1's, no shell command. The CH2 attenuator ladder has not been re-measured since arming. |
 | Vertical scale (volts/div) | **S3** | Ranges 5/6/7 measured and cross-validated four ways; 4/8/9 provisional and marked `~`; 0–3 rail and return `0.0`, with callers falling back to ADC counts. **Absolute scale is unverified** — every gain traces to an amplitude commanded from an unchecked source. One constant fixes it when a trusted source arrives. |
 | Horizontal scale (time/div) | **S3** | 8 of 21 timebase codes measured; the rest show `--` rather than a guess. The UI button reaches the FPGA as of 2026-08-19 — before that it moved a label and nothing else. |
