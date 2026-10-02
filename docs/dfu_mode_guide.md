@@ -19,11 +19,17 @@
 >
 > The SRAM option-byte step was almost certainly a no-op on a 2C23T (its own firmware already links ~216 KB of RAM), so there is nothing to reverse there.
 
-The first time you flash custom firmware, you need to enter the AT32's **ROM DFU mode** by pulling the BOOT0 pin high while resetting the MCU. After the initial flash installs the USB HID bootloader, **you'll never need to do this again** — all future updates go over USB-C with the case closed.
+> ## Back up your factory calibration before the first flash
+>
+> Each unit stores its own calibration in one 4 KB page of MCU flash, `0x08006000`–`0x08006FFF`, and OpenScope images overwrite it ([#28](https://github.com/DavidClawson/OpenScope-2C53T/issues/28)). Nothing we hold recomputes the values, so a page that is lost cannot be restored. Before anything on this page, and before the scope image, flash `openscope-2c53t-v0.4.0-caldump.bin` through the `IAP` drive, photograph the LCD and note the CRC32. The CRC32 lets you *check* a restore; to *write one back* you need the 4096-byte page itself ([PR #41](https://github.com/DavidClawson/OpenScope-2C53T/pull/41): `caldump`, then `mem read 0x08006000 1024`, with the hex output converted to a binary file). Full procedure: [README](../README.md#back-up-your-factory-calibration-first). Putting your own page back: step 3 of the [full factory restore](#full-factory-restore-recover-menupower-upgrade-mode) below.
+
+**You may not need this guide.** `guest` and `guest-coldtrace` images flash through FNIRSI's own bootloader (**MENU + tap Power** → `IAP` drive → `scripts/iap_flash.py`) with the case closed, and a unit that has ever booted FNIRSI's firmware already has the 224 KB SRAM option byte. Start with Path A in the [README](../README.md#first-time-hardware-setup). The rest of this page is for OpenScope's HID bootloader (Path B), for a unit that has never run stock, and for recovery.
+
+To install the HID bootloader you enter the AT32's **ROM DFU mode** by pulling the BOOT0 pin high while resetting the MCU. After that first flash, **you'll never need to do this again** — all future updates go over USB-C with the case closed.
 
 > **Two bootloaders, don't mix them up.** This device has two completely separate bootloaders:
 >
-> - **ROM DFU** — baked into AT32 silicon, entered only via BOOT0 + pinhole reset. LCD stays dark. Enumerates as `2e3c:df11`. **This is the only mode that can write option bytes** (needed once to set EOPB0 for 224KB SRAM).
+> - **ROM DFU** — baked into AT32 silicon, entered only via BOOT0 + pinhole reset. LCD stays dark. Enumerates as `2e3c:df11`. **This is the only mode that can write option bytes** (needed once to set EOPB0 for 224KB SRAM, and only on a unit that has never run FNIRSI's firmware — see above).
 > - **USB HID bootloader** — our custom bootloader at `0x08000000`, entered from **Settings → Firmware Update**. Shows "BOOTLOADER MODE" on the LCD. Used by `make flash` for all normal updates. **Cannot write option bytes.**
 >
 > If `dfu-util -l` shows "No DFU capable USB device available" while the scope is sitting on the "BOOTLOADER MODE" screen, that's why — you're in the wrong mode for what `dfu-util` expects.
@@ -87,10 +93,12 @@ Run `cd firmware && make` first — this generates `build/firmware.bin`, `build/
 
 Once in ROM DFU mode (confirmed by `dfu-util -l` showing `2e3c:df11` with alt interfaces 0 and 1):
 
+> **Step 1 does more than set the SRAM size.** The blob also writes FAP = `0xA5`, i.e. read protection off (see the layout comment above `option_bytes48.bin` in `firmware/Makefile`). Changing read protection is the operation on this MCU that can erase internal flash wholesale, and a failed option-byte write (`SET_ADDRESS not correctly executed`) leads to the `:unprotect:force` recovery under [Troubleshooting](#troubleshooting), which does erase all of it: the factory IAP bootloader and the calibration page go with it. Back up the calibration first. The SRAM part is unnecessary on a unit that has ever run stock, but this path has not been tested with step 1 skipped, so `make flash-all` working without it is unconfirmed.
+
 ```bash
 cd firmware
 
-# 1. Set EOPB0 = 0xFE → 224KB SRAM mode (one-time, AT32 defaults to 96KB)
+# 1. Set EOPB0 = 0xFE → 224KB SRAM mode (one-time; AT32 defaults to 96KB, stock sets it itself on first boot)
 dfu-util -a 1 -d 2e3c:df11 -s 0x1FFFF800 -D build/option_bytes48.bin
 
 # 2. Pinhole reset to stay in DFU, then flash bootloader + application
@@ -166,9 +174,9 @@ The `dfu-util` + `make flash-all` path above is what I use and test on macOS. Us
 
 ### Stock USB update channel — no case opening (macOS / Linux / Windows)
 
-Separate from the ROM DFU path above: the device's **stock bootloader** also accepts firmware over USB-C with the case closed. Hold **MENU + tap Power** to enter upgrade mode (LCD shows "firmware upgrade") — the device mounts a FAT12 drive named `IAP`.
+Separate from the ROM DFU path above: the device's **stock bootloader** also accepts firmware over USB-C with the case closed. Hold **MENU + tap Power** to enter upgrade mode (LCD shows "firmware upgrade") — the device mounts a FAT12 drive named `IAP`. This is the first-flash route for `guest` images (README Path A); run the `caldump` image first.
 
-> **If MENU + Power does nothing** (for example the app slot is half-written and the screen stays dark): keep USB attached, **hold MENU and press the pinhole reset**, and keep holding MENU for a few seconds. The bootloader checks MENU at reset, and on bench unit #1 this reached the `IAP` drive when MENU + Power from off did not (EXP-57, 2026-09-22). This is the channel for restoring the original FNIRSI firmware, or flashing an image without the HID bootloader.
+> **If MENU + Power does nothing** (for example the app slot is half-written and the screen stays dark): keep USB attached, **hold MENU and press the pinhole reset**, and keep holding MENU for a few seconds. The bootloader checks MENU at reset, and on bench unit #1 this reached the `IAP` drive when MENU + Power from off did not (EXP-57, 2026-09-22). A half-written app slot like this is what the USB-staged `fwapply` installer leaves behind when it hangs: the v0.4.0 release build calls a flash-resident `memset` from a page it has just erased ([#42](https://github.com/DavidClawson/OpenScope-2C53T/issues/42)). Use the `IAP` drive, not USB staging, for a first flash. This is the channel for restoring the original FNIRSI firmware, or flashing an image without the HID bootloader.
 
 - **Windows:** drag-drop the `.bin` onto the `IAP` drive — this is the official FNIRSI update method and Windows' FAT driver handles the volume cleanly.
 - **macOS:** do **not** drag-drop in Finder — macOS corrupts the write (the volume uses 2048-byte sectors and Finder adds AppleDouble `._` junk the bootloader misreads as firmware). Use the bundled flasher: `brew install mtools && python3 scripts/iap_flash.py` (auto-detects the device and images, SHA-verifies stock, shows progress). `python3 scripts/iap_flash.py guide` prints the full walkthrough.
@@ -188,9 +196,17 @@ The stock device has **three** firmware layers, and which ones you have determin
 | `0x08000000` | **Factory IAP bootloader** (28 KB) | Implements the MENU+Power `IAP` upgrade disk. **Not part of any `.bin` you can download** — it only ships pre-installed |
 | `0x08007000` | Stock application | The `APP_2C53T_V*.bin` you can download from FNIRSI |
 
+The 28 KB at `0x08000000` is two different things. `0x0000`–`0x5FFF` (24 KB) is the IAP code, identical on every unit checked. `0x6000`–`0x6FFF` (4 KB) is the stock settings and calibration page, which is **per unit**. The archive below spans both.
+
 If you flashed an alternative bootloader (e.g. an older OpenScope HID bootloader, or a community switcher branch) directly to `0x08000000`, you **overwrote the factory IAP bootloader** and MENU+Power no longer mounts the `IAP` disk. Flashing the stock app to both `0x08000000` and `0x08007000` will boot, but it does **not** restore the upgrade disk — those are app fragments, not the IAP bootloader.
 
-To fully restore factory state you need the factory IAP bootloader image. We've archived a dump from a V1.4 unit at [`archive/factory_iap_bootloader_2C53T.bin`](../archive/factory_iap_bootloader_2C53T.bin) (28,672 bytes, sha256 `0c9ec7d6…`). Restore over ROM DFU (open case, BOOT0 + pinhole reset — see top of this guide):
+To fully restore factory state you need the factory IAP bootloader image. We've archived a dump from a V1.4 unit at [`archive/factory_iap_bootloader_2C53T.bin`](../archive/factory_iap_bootloader_2C53T.bin) (28,672 bytes, sha256 `0c9ec7d6…`).
+
+> **Warning: that file carries unit #1's calibration page ([#38](https://github.com/DavidClawson/OpenScope-2C53T/issues/38)).** Its 28,672 bytes are `0x08000000`–`0x08006FFF`. Bytes `0x0000`–`0x5FFF` are the IAP code, byte-identical to a dump of a pristine V1.4 unit. Bytes `0x6000`–`0x6FFF` are bench unit #1's settings and calibration page, byte-identical to [`archive/factory_cal/unit1_mcu_settings_page_0x08006000.bin`](../archive/factory_cal/unit1_mcu_settings_page_0x08006000.bin). Step 1 below writes the whole file, so it **replaces your unit's calibration with unit #1's**. Nothing reports it; readings are just off by the difference between the two units (127 of 256 calibration bytes differ between a pristine V1.4 and unit #1, [#28](https://github.com/DavidClawson/OpenScope-2C53T/issues/28)). Restore your own page afterwards (step 3). If you never dumped it, there is no copy of yours: the unit keeps unit #1's values.
+>
+> **Proposed fix (#38, option 1; not done yet):** keep the archive trimmed to `0x6000` bytes (24,576 B, with its own sha256), so step 1 cannot write a calibration page at all. Nothing is lost: the page already lives in the `archive/factory_cal/` file above. The note in `archive/factory_cal/README.md` against truncating the bootloader archive predates that extraction and has to be updated in the same change. Until the archive is trimmed, treat step 3 as part of the recipe.
+
+Restore over ROM DFU (open case, BOOT0 + pinhole reset — see top of this guide):
 
 ```bash
 # Verify ROM DFU enumerated (2e3c:df11, alt 0 = Internal Flash)
@@ -202,6 +218,10 @@ dfu-util -a 0 -d 2e3c:df11 -s 0x08000000 -D archive/factory_iap_bootloader_2C53T
 # 2. Stock application → 0x08007000
 dfu-util -a 0 -d 2e3c:df11 -s 0x08007000 \
   -D "archive/2C53T Firmware V1.2.0/APP_2C53T_V1.2.0_251015.bin"
+
+# 3. YOUR calibration page → 0x08006000 (overwrites unit #1's page from step 1)
+#    <your-caldump.bin> = the 4096-byte dump you took before your first flash
+dfu-util -a 0 -d 2e3c:df11 -s 0x08006000 -D <your-caldump.bin>
 
 # Remove BOOT0 jumper, pinhole reset → boots bone-stock; MENU+Power mounts IAP again.
 ```
@@ -224,7 +244,7 @@ The walkthrough below comes from **[@baraa1936 in #20](https://github.com/DavidC
 2. Set **Language → English**, and confirm **Port Type** is **USB DFU**. Click through **Next**.
 3. Choose **Edit User system data**, then **Next**.
 4. Set **EOPB0** to **224KB SRAM**, then **Apply to device**.
-   This is the one-time option-byte write — the same thing `dfu-util -a 1 -s 0x1FFFF800` does in the command-line flow. Without it the MCU comes up in 96 KB SRAM mode and the firmware won't run.
+   This is the one-time option-byte write — the same thing `dfu-util -a 1 -s 0x1FFFF800` does in the command-line flow. Without it a unit that has never run FNIRSI's firmware comes up in 96 KB SRAM mode and the firmware won't run. It also writes FAP, with the caveat in the warning above.
 5. **The device will disconnect.** Re-enter ROM DFU mode (BOOT0 + pinhole reset), then click **Back** in the tool.
 6. Switch the mode selector from **Edit User system data** to **Download to device**, and add both images at their correct addresses:
 
@@ -266,7 +286,8 @@ ls -l build/option_bytes48.bin   # sanity check: should exist and be 48 bytes
 dfu-util -l
 # Expect: Found DFU: [2e3c:df11] ... alt=0 ... alt=1
 
-# 5. One-time option-byte write (sets EOPB0 = 0xFE → 224KB SRAM mode)
+# 5. One-time option-byte write (sets EOPB0 = 0xFE → 224KB SRAM mode; also writes FAP —
+#    see the warning under "First-Time Flash Commands" and back up your calibration first)
 dfu-util -a 1 -d 2e3c:df11 -s 0x1FFFF800 -D build/option_bytes48.bin
 # Ignore: "Invalid DFU suffix signature" and "Error sending dfu abort request" — cosmetic.
 # Look for:  "Download done." and "File downloaded successfully"
@@ -328,9 +349,11 @@ make flash-all
   **This erases the whole internal flash — use it only when nothing else works.**
   As well as the application, it destroys anything else you have installed,
   including the archived stock V1.2.0 image and the high recovery bootloader if
-  you set up the stock/OpenScope switcher (`scripts/switch_firmware.py`). After
-  an unprotect you are back to a bare chip and must redo first-time setup, and
-  you will need to re-archive a stock image before the switcher works again.
+  you set up the stock/OpenScope switcher (`scripts/switch_firmware.py`). It also
+  erases the factory IAP bootloader and your calibration page at `0x08006000`;
+  without a 4096-byte dump of that page, it is gone. After an unprotect you are
+  back to a bare chip and must redo first-time setup, and you will need to
+  re-archive a stock image before the switcher works again.
 - **Device shows only `BOOTLOADER MODE` after first-time setup:** ROM DFU
   installed the USB HID bootloader, but the application did not boot. Leave
   BOOT0 disconnected and run `cd firmware && make flash` while the bootloader
