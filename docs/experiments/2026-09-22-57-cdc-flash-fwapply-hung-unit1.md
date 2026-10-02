@@ -3,7 +3,20 @@
 - **Date:** 2026-09-22
 - **Unit:** bench unit #1 (genuine Winbond W25Q128JV; unit #2, where the loader was proven, has a Zbit clone)
 - **Build:** running image v10 = `make guest-coldtrace` at `1e63757` (Build Sep 22 2026 17:04:37); payload v9 = same source, Build 14:19:08, 619 676 B, crc32 `0840521D`
-- **Status:** **FAILED — device recovered.** Root cause NOT established.
+- **Status:** **FAILED — device recovered.** ~~Root cause NOT established.~~ **ROOT CAUSE FOUND 2026-10-01 by @mquerostudio (issue #42), verified here 2026-10-01.**
+
+> **CORRECTED 2026-10-01 — read before the rest.** The installer's `page[i] = 0xFF` tail-fill loop was
+> compiled into a call to newlib's `memset`, reached through a veneer, and `memset` lives in app-slot
+> page 1 (`0x08007C58`). The installer erases page 1 and then branches into it: instruction fetch from
+> erased flash, the hang seen here. All three byte sequences cited in #42 match the published v0.4.0
+> image (`3089ddae…`); the v10 image used in this experiment was built the same way. **The candidates
+> listed below — flash bank 2, genuine-vs-clone W25Q, `fwapply` vs `fwswap` — were wrong and are
+> withdrawn.** It was a build/codegen property, not a unit or bank property: the same source at `-Os`
+> with another toolchain inlines the fill and installs fine (#42's A/B on unit #3). The guard is PR #45
+> (an attribute forbidding loop-to-library rewriting in RAM functions, and a build-time checker that no
+> RAM function branches to flash). Current `main` at `ec66e5d` happens to emit no such branch (checked
+> by disassembly), unguarded. The breadcrumbs added 2026-09-30/10-01 (`c4e40bd`) remain useful but
+> would not have been needed to find this; reading the binary was.
 
 ## 1. Problem
 Can unit #1 be reflashed over the USB shell (`scripts/cdc_flash.py` → `fwload` → `fwapply`) so that
