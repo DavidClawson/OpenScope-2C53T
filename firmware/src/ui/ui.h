@@ -158,6 +158,9 @@ extern volatile bool scope_hpos_focus;
  * run) and how it was found (0 none, 1 soft midline, 2 hardware level
  * crossing of a time-ordered record). */
 int16_t scope_ui_trig_x_actual(void);
+/* Repaint the mask pass/fail readout slot (badge row 2) -- main.c calls it
+ * when scope_mask_epoch() moves. */
+void scope_ui_mask_slot_refresh(void);
 uint8_t scope_ui_trig_anchor(void);
 extern fft_result_t     fft_result;
 #endif

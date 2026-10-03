@@ -30,6 +30,7 @@
 #include "../ui/ui.h"
 #include "../ui/scope_state.h"
 #include "../ui/scope_timebase.h"
+#include "../ui/scope_mask.h"
 #include "../ui/meter_voltage_wave.h"
 #include "at32f403a_407.h"
 #include "FreeRTOS.h"
@@ -3877,6 +3878,16 @@ static void fpga_warmtest_acq_task(void *pv)
             continue;
         }
 
+        /* Mask pass/fail (docs/specs/scope/mask-pass-fail.md): apply posted
+         * requests here, in the one task that mutates the mask; and while a
+         * failed record is held (stop-on-fail) read nothing, so the failing
+         * record stays in the buffers -- the same hold SINGLE uses. */
+        scope_mask_service();
+        if (scope_mask_hold_active()) {
+            vTaskDelay(pdMS_TO_TICKS(10));
+            continue;
+        }
+
         /* EDGE-PACED ready wait — rewritten 2026-08-14 after the June-capture
          * re-read (analysis_v120/trigger_regime_findings_2026-08-14.md).
          *
@@ -4047,6 +4058,10 @@ static void fpga_warmtest_acq_task(void *pv)
             fpga.acq_last_rot = fpga_acq_unrotate_staging(triggered);   /* dev plan 2.3: seam-based */
             acq_stage_ordered = acq_unrotate && fpga.acq_last_rot >= 0;
             fpga_acq_frames_commit();
+            /* Judge (or teach from) the record just committed: exactly once,
+             * from the published buffers, in the only task that writes them. */
+            scope_mask_on_commit(fpga.ch1_buf, fpga.ch2_buf, triggered,
+                                 acq_stage_ordered, fpga_acq_frame_generation());
             last_commit_tick = last_read_tick;
             fpga.spi3_ok_count++;
             fpga.spi3_timeout_count = 0;

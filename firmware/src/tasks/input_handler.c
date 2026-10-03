@@ -12,6 +12,7 @@
  *   - Math channel, persistence, component tester (settings sub-menus)
  */
 
+#include "../ui/scope_mask.h"
 #include "input_handler.h"
 #include "ui.h"
 #include "lcd.h"
@@ -854,8 +855,16 @@ uint8_t input_handle_button(button_id_t button, QueueHandle_t dq)
             meter_layout = (meter_layout + 1) % METER_LAYOUT_COUNT;
             send_cmd(dq, cmd);
         } else if (current_mode == MODE_OSCILLOSCOPE) {
-            scope_toggle_running(ss);
-            scope_show_popup(ss->running ? "RUN" : "STOP");
+            if (scope_mask_hold_active()) {
+                /* A mask failure is being held (stop-on-fail): OK resumes
+                 * testing rather than toggling RUN/STOP, which would leave
+                 * the acquisition frozen behind a STOP the user never set. */
+                (void)scope_mask_post(SCOPE_MASK_REQ_RELEASE, 0, 0, 0);
+                scope_show_popup("MASK: RESUME");
+            } else {
+                scope_toggle_running(ss);
+                scope_show_popup(ss->running ? "RUN" : "STOP");
+            }
             send_cmd(dq, cmd);
         }
         break;

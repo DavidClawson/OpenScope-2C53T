@@ -61,4 +61,16 @@ int trig_edge_find_seam_lpc(const volatile uint8_t *rec, uint32_t *k);
 /* Value step first (never off in any test), else linear prediction. */
 int trig_edge_find_seam_any(const volatile uint8_t *rec, uint32_t *k);
 
+/* The hardware trigger point of a TIME-ORDERED record: the crossing of
+ * `crossing` (record units, = reg 0x08 code - 28, EXP-55/56) in the chosen
+ * direction nearest index 512, within +/-48 (EXP-53: 501..520). Schmitt-armed
+ * with 3 counts of hysteresis, searched over 448..560. Returns the index or
+ * -1. Only meaningful on a record un-rotated at its seam -- on a raw rotated
+ * record index 512 is not the trigger.
+ *
+ * One copy, two callers: the display's hardware anchor (scope_ui.c) and the
+ * mask pass/fail test (scope_mask.c). If they ever disagreed, the mask would
+ * test a different alignment from the one on the glass. */
+int trig_edge_anchor(const volatile uint8_t *rec, int crossing, int rising);
+
 #endif

@@ -116,7 +116,8 @@ reviewable promotion-ladder spec per feature.
 | Bode plot | **S0** | A generated demo response of a first-order low-pass. |
 | Protocol decoders (UART/SPI/I2C/CAN/K-Line) | **S0** | No call sites. |
 | Auto-measurements engine (`measurement_compute`) | **S0** | Still has no caller — superseded by `scope_measure.c`, which drives the badges above. Its one unique quantity (rise/fall time) is unwired; the rest is scheduled for deletion (see the spec). |
-| XY / roll / trend / mask testing | **S0** | No call sites. |
+| Waveform pass/fail (mask) | **S2** | Taught from N captures, aligned on the hardware trigger, refuses records it cannot compare. On unit #1 (EXP-59, twice): 0 false fails in ~40 records; +30% amplitude and +5% frequency failed every record; a trigger-level change was refused rather than scored; stop-on-fail holds the failing capture with its failing columns in red. Shell-driven (`mask …`) — no button UI yet ([spec](docs/specs/scope/mask-pass-fail.md)). |
+| XY / roll / trend | **S0** | No call sites. |
 | `modules/` | **S0** | 17 guided-procedure files across four trades, with a provisional schema ([`modules/README.md`](modules/README.md)) — but no loader: nothing in the firmware reads them. |
 
 ### Sharp edges — read before trusting the screen
@@ -325,7 +326,7 @@ firmware/               Custom replacement firmware (C + FreeRTOS + Make)
   src/ui/               Scope, meter, siggen, settings, themes
   src/dsp/              FFT, math channels, signal gen, Bode
   src/decode/           Protocol decoders (UART, SPI, I2C, CAN, K-Line)
-  src/tasks/            Measurement engine, component tester, mask test
+  src/tasks/            Measurement engine, component tester
   bootloader/           USB HID IAP bootloader (16KB)
 
 reverse_engineering/    Hardware analysis and protocol documentation

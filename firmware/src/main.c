@@ -45,6 +45,7 @@ extern void system_clock_config(void);
 #include "rtt.h"
 #include "fault.h"
 #include "redraw_gate.h"
+#include "scope_mask.h"
 
 /* ═══════════════════════════════════════════════════════════════════
  * Global State (extern'd via ui.h for UI modules)
@@ -621,6 +622,23 @@ static void vDisplayTask(void *pvParameters)
         }
         if (current_mode == MODE_OSCILLOSCOPE) {
             const scope_state_t *ss_anim = scope_state_get();
+            /* Mask pass/fail readout (badge row 2, below the live band): its
+             * own epoch, like the info bar, so a counter never sits stale
+             * waiting for a full repaint. Time view only -- the slot belongs
+             * to the time-view badge layout. */
+            {
+                static uint32_t g_mask_slot_epoch;
+                uint32_t me = scope_mask_epoch();
+#ifdef FEATURE_FFT
+                const bool time_view = (scope_view == SCOPE_VIEW_TIME);
+#else
+                const bool time_view = true;
+#endif
+                if (me != g_mask_slot_epoch && time_view) {
+                    scope_ui_mask_slot_refresh();
+                    g_mask_slot_epoch = me;
+                }
+            }
             if (ss_anim->running) {
                 /* ── Scope heartbeat / acquisition re-arm ───────────
                  * Keep the existing warmup and cadence for now, but use the

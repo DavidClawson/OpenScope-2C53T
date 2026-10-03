@@ -50,6 +50,7 @@
 #include "../ui/scope_freq.h"
 #include "../ui/scope_measure.h"
 #include "../ui/scope_timebase.h"
+#include "../ui/scope_mask.h"
 #include "../ui/meter_voltage_wave.h"
 
 #include "fpga_cal_table.h"
@@ -7529,6 +7530,185 @@ static void cmd_fwapply(void)
     }
 }
 
+/* ── `mask` — waveform pass/fail (docs/specs/scope/mask-pass-fail.md) ──────────
+ *
+ * Every mutation is a request applied by the acquisition task (scope_mask.h),
+ * so each command waits for the acknowledgement and SAYS when it did not
+ * arrive, instead of reporting the intent as the result. */
+static bool mask_post_wait(scope_mask_req_t k, uint8_t a, uint8_t b, uint16_t n)
+{
+    uint32_t seq = scope_mask_post(k, a, b, n);
+    for (int i = 0; i < 40; i++) {
+        if (scope_mask_acked(seq)) return true;
+        vTaskDelay(pdMS_TO_TICKS(10));
+    }
+    usb_send_str("NOT APPLIED: the acquisition loop did not pick the request up in 400 ms\r\n"
+                 "(not a live-scope build, scope not initialised, or acq parked).\r\n");
+    return false;
+}
+
+static const char *mask_state_str(mask_pf_state_t s)
+{
+    return s == MASK_PF_READY ? "READY" : s == MASK_PF_TEACHING ? "TEACHING" : "EMPTY";
+}
+
+static const char *mask_verdict_str(mask_pf_verdict_t v)
+{
+    return v == MASK_PF_V_PASS ? "PASS" : v == MASK_PF_V_FAIL ? "FAIL" :
+           v == MASK_PF_V_SKIP ? "SKIP" : "-";
+}
+
+static void mask_print_cond_diff(uint8_t d)
+{
+    if (d & MASK_PF_C_RANGE1)     usb_send_str(" CH1-range");
+    if (d & MASK_PF_C_RANGE2)     usb_send_str(" CH2-range");
+    if (d & MASK_PF_C_COUPLING)   usb_send_str(" coupling");
+    if (d & MASK_PF_C_TIMEBASE)   usb_send_str(" timebase");
+    if (d & MASK_PF_C_TRIG_LEVEL) usb_send_str(" trig-level");
+    if (d & MASK_PF_C_TRIG_EDGE)  usb_send_str(" trig-edge");
+    if (d & MASK_PF_C_TRIG_SRC)   usb_send_str(" trig-source");
+}
+
+static void mask_print_status(void)
+{
+    scope_mask_summary_t s;
+    scope_mask_summary(&s);
+    usb_debug_printf("mask %s  chans %s%s  span 320 from anchor-%d  tol v=%u cnt h=%u smp%s\r\n",
+                     mask_state_str(s.state), (s.chans & 1u) ? "CH1" : "",
+                     (s.chans & 2u) ? ((s.chans & 1u) ? "+CH2" : "CH2") : "",
+                     (int)s.pre, (unsigned)s.tol_v, (unsigned)s.tol_h,
+                     s.rail_limited ? "  RAIL-LIMITED" : "");
+    if (s.state == MASK_PF_TEACHING || s.teach_rejects) {
+        usb_debug_printf("teach %u/%u  rejected %lu", (unsigned)s.teach_got,
+                         (unsigned)s.teach_target, (unsigned long)s.teach_rejects);
+        if (s.teach_last_reject != MASK_PF_R_OK)
+            usb_debug_printf(" (last: %s)", mask_pf_reason_str(s.teach_last_reject));
+        usb_send_str("\r\n");
+    }
+    if (s.state == MASK_PF_READY) {
+        usb_debug_printf("taught under: range %u/%u coupling %u/%u tb 0x%02X trig code %u %s src CH%u  spread %u cnt\r\n",
+                         s.cond.range[0], s.cond.range[1], s.cond.coupling[0], s.cond.coupling[1],
+                         s.cond.timebase, s.cond.trig_code, s.cond.trig_edge ? "falling" : "rising",
+                         (unsigned)s.cond.trig_src + 1u, (unsigned)s.spread);
+    }
+    usb_debug_printf("tested %lu  pass %lu  fail %lu  skipped %lu  missed %lu  max-consec-fail %lu\r\n",
+                     (unsigned long)s.tested, (unsigned long)s.passed, (unsigned long)s.failed,
+                     (unsigned long)s.skipped, (unsigned long)s.missed,
+                     (unsigned long)s.max_consec_fail);
+    const mask_pf_t *m = scope_mask_raw();
+    if (s.skipped && m != NULL) {
+        usb_send_str("skips:");
+        for (unsigned r = 1; r < MASK_PF_R_COUNT; r++)
+            if (m->skipped[r]) usb_debug_printf(" %s=%lu", mask_pf_reason_str((mask_pf_reason_t)r),
+                                                (unsigned long)m->skipped[r]);
+        usb_send_str("\r\n");
+    }
+    usb_debug_printf("last %s gen %lu", mask_verdict_str(s.last.verdict), (unsigned long)s.last.gen);
+    if (s.last.verdict == MASK_PF_V_SKIP) {
+        usb_debug_printf(" (%s", mask_pf_reason_str(s.last.reason));
+        if (s.last.reason == MASK_PF_R_SETTINGS) mask_print_cond_diff(s.last.cond_diff);
+        usb_send_str(")");
+    }
+    usb_send_str("\r\n");
+    if (s.failed)
+        usb_debug_printf("last FAIL gen %lu: %u samples out, first CH%d col %d, worst %d cnt\r\n",
+                         (unsigned long)s.last_fail.gen, (unsigned)s.last_fail.violations,
+                         (int)s.last_fail.first_ch + 1, (int)s.last_fail.first_col,
+                         (int)s.last_fail.worst);
+    usb_debug_printf("stop-on-fail %s%s\r\n", s.stop_on_fail ? "ON" : "OFF",
+                     s.hold ? "  -- HOLDING a failed record (mask run / OK to resume)" : "");
+    usb_debug_printf("heap free %lu (min ever %lu)\r\n", (unsigned long)xPortGetFreeHeapSize(),
+                     (unsigned long)xPortGetMinimumEverFreeHeapSize());
+}
+
+static void cmd_mask(const char *args)
+{
+    while (*args == ' ') args++;
+    if (*args == 0 || strncmp(args, "status", 6) == 0) {
+        mask_print_status();
+        return;
+    }
+    if (strncmp(args, "teach", 5) == 0) {
+        const char *p = args + 5;
+        uint32_t n = 0;
+        uint8_t ch = 0;
+        while (*p) {
+            while (*p == ' ') p++;
+            if (!*p) break;
+            if (strncmp(p, "ch1", 3) == 0)       ch = 1;
+            else if (strncmp(p, "ch2", 3) == 0)  ch = 2;
+            else if (strncmp(p, "both", 4) == 0) ch = 3;
+            else if (parse_int(p, &n) != 0 || n == 0 || n > MASK_PF_TEACH_MAX) {
+                usb_debug_printf("usage: mask teach [1..%u] [ch1|ch2|both]\r\n", MASK_PF_TEACH_MAX);
+                return;
+            }
+            while (*p && *p != ' ') p++;
+        }
+        if (!mask_post_wait(SCOPE_MASK_REQ_TEACH, ch, 0, (uint16_t)n)) return;
+        const char *why = scope_mask_teach_refusal();
+        if (why) { usb_debug_printf("teach REFUSED: %s\r\n", why); return; }
+        mask_print_status();
+        return;
+    }
+    if (strncmp(args, "tol", 3) == 0) {
+        const char *p = args + 3;
+        while (*p == ' ') p++;
+        uint32_t v = 0, h = MASK_PF_TOL_H_DEFAULT;
+        if (parse_int(p, &v) != 0 || v > 255u) {
+            usb_debug_printf("usage: mask tol <v counts 0..255> [h samples 0..%u]\r\n", MASK_PF_HMAX);
+            return;
+        }
+        while (*p && *p != ' ') p++;
+        while (*p == ' ') p++;
+        if (*p && (parse_int(p, &h) != 0 || h > MASK_PF_HMAX)) {
+            usb_debug_printf("usage: mask tol <v counts 0..255> [h samples 0..%u]\r\n", MASK_PF_HMAX);
+            return;
+        }
+        if (mask_post_wait(SCOPE_MASK_REQ_TOL, (uint8_t)v, (uint8_t)h, 0)) mask_print_status();
+        return;
+    }
+    if (strncmp(args, "clear", 5) == 0) {
+        if (mask_post_wait(SCOPE_MASK_REQ_CLEAR, 0, 0, 0)) usb_send_str("mask cleared\r\n");
+        return;
+    }
+    if (strncmp(args, "reset", 5) == 0) {
+        if (mask_post_wait(SCOPE_MASK_REQ_RESET, 0, 0, 0)) mask_print_status();
+        return;
+    }
+    if (strncmp(args, "run", 3) == 0) {
+        if (mask_post_wait(SCOPE_MASK_REQ_RELEASE, 0, 0, 0)) usb_send_str("hold released\r\n");
+        return;
+    }
+    if (strncmp(args, "stop", 4) == 0) {
+        const char *p = args + 4;
+        while (*p == ' ') p++;
+        uint8_t on;
+        if (strncmp(p, "on", 2) == 0)       on = 1;
+        else if (strncmp(p, "off", 3) == 0) on = 0;
+        else { usb_send_str("usage: mask stop on|off\r\n"); return; }
+        if (mask_post_wait(SCOPE_MASK_REQ_STOPFAIL, on, 0, 0)) mask_print_status();
+        return;
+    }
+    if (strncmp(args, "dump", 4) == 0) {
+        /* One line per column: col lo hi [lo2 hi2] [*] -- * = outside in the
+         * last FAIL. Machine-readable for bench scripts. */
+        const mask_pf_t *m = scope_mask_raw();
+        if (m == NULL || m->state != MASK_PF_READY) { usb_send_str("no finished mask\r\n"); return; }
+        usb_debug_printf("mask dump pre %d chans %u\r\n", (int)m->pre, (unsigned)m->chans);
+        for (unsigned i = 0; i < MASK_PF_SPAN; i++) {
+            uint8_t l1 = 0, h1 = 0, l2 = 0, h2 = 0;
+            (void)mask_pf_bounds(m, 0, (uint16_t)i, &l1, &h1);   /* 0 0 = not in mask */
+            (void)mask_pf_bounds(m, 1, (uint16_t)i, &l2, &h2);
+            usb_debug_printf("%u %u %u %u %u%s%s\r\n", i, l1, h1, l2, h2,
+                             mask_pf_fail_col(m, 0, (uint16_t)i) ? " *1" : "",
+                             mask_pf_fail_col(m, 1, (uint16_t)i) ? " *2" : "");
+        }
+        usb_send_str("end\r\n");
+        return;
+    }
+    usb_send_str("usage: mask [status|teach [n] [ch1|ch2|both]|tol <v> [h]|clear|reset|run|stop on|off|dump]\r\n");
+}
+
 typedef struct {
     const char *name;                    /* full command word(s) */
     void (*fn_args)(const char *args);   /* exactly one of these two is set */
@@ -7690,6 +7870,13 @@ static const shell_cmd_t shell_cmds[] = {
           "fpga scope hpos [8..312]        Screen column of the trigger point (default 160)\r\n"),
     CMD_A("fpga scope edge", cmd_fpga_scope_edge, 0,
           "fpga scope edge [rising|falling] Trigger edge (display soft trigger + MCU edge filter)\r\n"),
+    CMD_A("mask", cmd_mask, 0,
+          "mask [status]                   Waveform pass/fail: state, counts, last verdict\r\n"
+          "mask teach [n] [ch1|ch2|both]   Teach from the next n good records (default 8)\r\n"
+          "mask tol <v> [h]                Tolerance: v ADC counts, h samples 0..16 (default 8 2)\r\n"
+          "mask clear|reset|run            Drop mask | zero counts | release a fail hold\r\n"
+          "mask stop on|off                Hold the acquisition on a failed record\r\n"
+          "mask dump                       Bounds per column (bench scripts)\r\n"),
     CMD_A("fpga edgefilter", cmd_fpga_edgefilter, 0,
           "fpga edgefilter [on|off]        MCU trigger edge filter: keep Rising/Falling records (default on)\r\n"),
     CMD_A("fpga pollgap", cmd_fpga_pollgap, 0,

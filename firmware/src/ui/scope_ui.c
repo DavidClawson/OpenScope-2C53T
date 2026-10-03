@@ -26,6 +26,8 @@
 #include "fpga.h"
 #include "FreeRTOS.h"   /* pvPortMalloc — the X-Y snapshot buffers */
 #include "scope_trigger.h"
+#include "trig_edge.h"
+#include "scope_mask.h"
 #ifdef FEATURE_FFT
 #include "fft_live.h"
 #include "fft_test_signals.h"
@@ -448,6 +450,84 @@ _Static_assert(SCOPE_CURSOR_SAMPLES_PER_PIXEL == 1.0f,
                "cursor dt and 1/dt would be wrong");
 
 /*
+ * Mask readout: the third slot of badge row 2 (where the legend sits when no
+ * mask exists). Below the live band, so the compositor never paints over it,
+ * and refreshed on its own epoch from main.c (scope_ui_mask_slot_refresh) --
+ * the measurement badges' "stale until the next full repaint" is exactly the
+ * defect a pass/fail counter must not have. A SKIP is shown as such: a
+ * frozen PASS count over records that are no longer being judged would be
+ * the project's signature stable-plausible-wrong number.
+ */
+#define MASK_SLOT_X ((uint16_t)(2u + 2u * (BADGE_W + 2u)))
+
+static const char *mask_skip_short(mask_pf_reason_t r)
+{
+    switch (r) {
+    case MASK_PF_R_STALE:       return "stale";
+    case MASK_PF_R_UNTRIGGERED: return "free-run";
+    case MASK_PF_R_NOT_ORDERED: return "no seam";
+    case MASK_PF_R_NO_ANCHOR:   return "no trig";
+    case MASK_PF_R_SETTINGS:    return "settings";
+    case MASK_PF_R_SPAN:        return "span";
+    case MASK_PF_R_CLIPPED:     return "clipped";
+    default:                    return "?";
+    }
+}
+
+static void draw_legend_slot(const theme_t *th, bool live)
+{
+    const uint16_t x = MASK_SLOT_X, y = BADGE_ROW2_Y;
+    const char *note = live ? "cnt=ADC raw  --=no tb/cal" : "DEMO trace - no capture";
+    lcd_fill_rect(x, y, (uint16_t)(LCD_WIDTH - x), BADGE_H, th->background);
+    if (font_string_width(note, &font_small) > LCD_WIDTH - x)
+        note = live ? "--=no tb/cal" : "DEMO trace";
+    font_draw_string(x, y + 1, note, th->text_secondary, th->background, &font_small);
+}
+
+static void draw_mask_slot(const theme_t *th)
+{
+    scope_mask_summary_t m;
+    scope_mask_summary(&m);
+    char b[32];
+    uint16_t c = th->text_secondary;
+    const uint16_t x = MASK_SLOT_X, y = BADGE_ROW2_Y;
+
+    if (m.state == MASK_PF_TEACHING) {
+        if (m.teach_last_reject != MASK_PF_R_OK)
+            snprintf(b, sizeof(b), "MASK teach %u/%u %s", (unsigned)m.teach_got,
+                     (unsigned)m.teach_target, mask_skip_short(m.teach_last_reject));
+        else
+            snprintf(b, sizeof(b), "MASK teach %u/%u", (unsigned)m.teach_got,
+                     (unsigned)m.teach_target);
+        c = th->highlight;
+    } else if (m.hold) {
+        snprintf(b, sizeof(b), "FAIL %lu/%lu HOLD-OK", (unsigned long)m.failed,
+                 (unsigned long)m.tested);
+        c = th->warning;
+    } else if (m.last.verdict == MASK_PF_V_SKIP) {
+        snprintf(b, sizeof(b), "MASK skip: %s", mask_skip_short(m.last.reason));
+        c = th->highlight;
+    } else if (m.tested == 0u) {
+        snprintf(b, sizeof(b), "MASK ready");
+        c = th->success;
+    } else {
+        snprintf(b, sizeof(b), "P%lu F%lu", (unsigned long)m.passed,
+                 (unsigned long)m.failed);
+        c = (m.last.verdict == MASK_PF_V_FAIL) ? th->warning : th->success;
+    }
+    lcd_fill_rect(x, y, (uint16_t)(LCD_WIDTH - x), BADGE_H, th->background);
+    font_draw_string(x, y + 1, b, c, th->background, &font_small);
+}
+
+void scope_ui_mask_slot_refresh(void)
+{
+    if (scope_mask_state() == MASK_PF_EMPTY)
+        draw_legend_slot(theme_get(), fpga_data_ready());   /* mask just cleared */
+    else
+        draw_mask_slot(theme_get());
+}
+
+/*
  * Measurement badges.
  *
  * Until 2026-08-13 this function printed the string literals "1.00kHz",
@@ -639,15 +719,11 @@ static void draw_measurement_badges(const scope_state_t *ss, const theme_t *th)
      * without the source: it says, on the instrument itself, whether the
      * trace is real and why the missing values are missing.
      */
-    {
-        const char *note = (have1 || have2) ? "cnt=ADC raw  --=no tb/cal"
-                                            : "DEMO trace - no capture";
-        lcd_fill_rect(x, y2, (uint16_t)(LCD_WIDTH - x), BADGE_H,
-                      th->background);
-        if (font_string_width(note, &font_small) > LCD_WIDTH - x)
-            note = (have1 || have2) ? "--=no tb/cal" : "DEMO trace";
-        font_draw_string(x, y2 + 1, note, na, th->background, &font_small);
-    }
+    (void)x; (void)na;
+    if (scope_mask_state() != MASK_PF_EMPTY)
+        draw_mask_slot(th);        /* the mask readout takes the legend's slot */
+    else
+        draw_legend_slot(th, have1 || have2);
 }
 
 /* ═══════════════════════════════════════════════════════════════════
@@ -867,25 +943,95 @@ static int16_t trigger_marker_y_full(const scope_state_t *ss)
     return trigger_marker_y(ss, &a);
 }
 
+/*
+ * Mask pass/fail overlay (docs/specs/scope/mask-pass-fail.md).
+ *
+ * The verdict is computed in the acquisition task (scope_mask.c); this only
+ * PAINTS it, per column, from the result already recorded -- no analysis on
+ * the display path. Painted only when the window is on the HARDWARE anchor
+ * (g_trig_anchor == 2: the alignment the mask was taught on) and only for the
+ * frame generation that was actually judged; anything else draws as if there
+ * were no mask, rather than colouring a frame the verdict does not describe.
+ *
+ *   trace   CH1/CH2 trace pixels turn th->warning on columns that were
+ *           outside the mask in that record.
+ *   strip   3 px at the bottom of the live band over the masked span:
+ *           green = passed, red = this column failed, dotted red = the record
+ *           failed elsewhere, dotted amber = refused (SKIP), amber = teaching.
+ */
+static uint8_t  g_trig_anchor = 0;        /* see scope_soft_trigger_offset() */
+static int16_t  g_trig_x_actual = -1;
+static bool     g_mask_ov_on;
+static uint32_t g_mask_ov_gen;
+
+static void mask_overlay_begin(void)
+{
+    g_mask_ov_on = (g_trig_anchor == 2u) && g_trig_x_actual >= 0 &&
+                   scope_mask_state() != MASK_PF_EMPTY;
+    g_mask_ov_gen = fpga_acq_frame_generation();
+}
+
+static inline bool mask_px_fail(int8_t ch, int x)
+{
+    return g_mask_ov_on && ch >= 0 &&
+           scope_mask_column((uint8_t)ch, x, g_trig_x_actual, g_mask_ov_gen) == SCOPE_MASK_COL_FAIL;
+}
+
+/* Strip colour for column x, or 0 for none; *dotted = paint every other px. */
+static uint16_t mask_strip_color(int x, const theme_t *th, bool *dotted)
+{
+    *dotted = false;
+    if (!g_mask_ov_on) return 0;
+    scope_mask_col_t a = scope_mask_column(0, x, g_trig_x_actual, g_mask_ov_gen);
+    scope_mask_col_t b = scope_mask_column(1, x, g_trig_x_actual, g_mask_ov_gen);
+    scope_mask_col_t k = (a > b) ? a : b;        /* enum order = severity */
+    switch (k) {
+    case SCOPE_MASK_COL_PASS:       return th->success;
+    case SCOPE_MASK_COL_FAIL:       return th->warning;
+    case SCOPE_MASK_COL_FAIL_FRAME: *dotted = true; return th->warning;
+    case SCOPE_MASK_COL_SKIP:       *dotted = true; return th->highlight;
+    case SCOPE_MASK_COL_TEACH:      return th->highlight;
+    default:                        return 0;
+    }
+}
+
+#define MASK_STRIP_H 3u
+
+/* Full-path strip (the compositor paints the same rows per pixel). */
+static void draw_mask_strip(const theme_t *th, uint16_t band_bot)
+{
+    if (!g_mask_ov_on) return;
+    for (int x = 0; x < LCD_WIDTH; x++) {
+        bool dotted;
+        uint16_t c = mask_strip_color(x, th, &dotted);
+        if (!c) continue;
+        for (uint16_t y = band_bot - MASK_STRIP_H; y < band_bot; y++)
+            if (!dotted || ((x + y) & 1u) == 0u)
+                lcd_set_pixel((uint16_t)x, y, c);
+    }
+}
+
 /* Returns the ADC counts one screen row was worth in the frame it just drew,
  * for the cursor readout. */
 static float draw_channel_autofit(const volatile uint8_t *buf, uint16_t color,
-                                  int16_t y_top, int16_t y_bot)
+                                  int16_t y_top, int16_t y_bot, int8_t mask_ch)
 {
     uint16_t n = (LCD_WIDTH < 512u) ? (uint16_t)LCD_WIDTH : 512u;
     autofit_t a;
     autofit_prep(&a, buf, y_top, y_bot);
 
+    const uint16_t fail_c = theme_get()->warning;
     int16_t prev_y = -1;
     for (uint16_t x = 0; x < n; x++) {
         int16_t y = autofit_y(&a, buf[x]);
+        uint16_t cc = mask_px_fail(mask_ch, x) ? fail_c : color;
         if (prev_y >= 0) {                  /* connect prev..cur vertically */
             int16_t a = prev_y < y ? prev_y : y;
             int16_t b = prev_y < y ? y : prev_y;
             for (int16_t v = a; v <= b; v++)
-                lcd_set_pixel(x, (uint16_t)v, color);
+                lcd_set_pixel(x, (uint16_t)v, cc);
         } else {
-            lcd_set_pixel(x, (uint16_t)y, color);
+            lcd_set_pixel(x, (uint16_t)y, cc);
         }
         prev_y = y;
     }
@@ -912,10 +1058,12 @@ static float draw_channel_autofit(const volatile uint8_t *buf, uint16_t color,
  * volts/div is identical to single-channel mode and a large signal clips at the
  * half-band edge exactly as it should. */
 static float draw_channel_fixed(const volatile uint8_t *buf, uint16_t color,
-                                int16_t y_top, int16_t y_bot, uint8_t center)
+                                int16_t y_top, int16_t y_bot, uint8_t center,
+                                int8_t mask_ch)
 {
     uint16_t n = (LCD_WIDTH < 512u) ? (uint16_t)LCD_WIDTH : 512u;
     int16_t  y_mid = (int16_t)((y_top + y_bot) / 2);
+    const uint16_t fail_c = theme_get()->warning;
 
     int16_t prev_y = -1;
     for (uint16_t x = 0; x < n; x++) {
@@ -923,13 +1071,14 @@ static float draw_channel_fixed(const volatile uint8_t *buf, uint16_t color,
         if (yy < y_top)   yy = y_top;
         if (yy >= y_bot)  yy = y_bot - 1;
         int16_t y = (int16_t)yy;
+        uint16_t cc = mask_px_fail(mask_ch, x) ? fail_c : color;
         if (prev_y >= 0) {
             int16_t a = prev_y < y ? prev_y : y;
             int16_t b = prev_y < y ? y : prev_y;
             for (int16_t v = a; v <= b; v++)
-                lcd_set_pixel(x, (uint16_t)v, color);
+                lcd_set_pixel(x, (uint16_t)v, cc);
         } else {
-            lcd_set_pixel(x, (uint16_t)y, color);
+            lcd_set_pixel(x, (uint16_t)y, cc);
         }
         prev_y = y;
     }
@@ -958,8 +1107,8 @@ static float draw_channel_fixed(const volatile uint8_t *buf, uint16_t color,
  * column 0..319, or -1 when free-running. g_trig_anchor: 0 none, 1 soft
  * (midline crossing), 2 hardware (the level crossing nearest index 512 of a
  * time-ordered record). Read by the position marker and by `spi3 frame`. */
-static int16_t g_trig_x_actual = -1;
-static uint8_t g_trig_anchor = 0;
+/* g_trig_x_actual / g_trig_anchor are declared with the mask overlay above
+ * (it reads them); they start at -1 / 0 via scope_soft_trigger_offset(). */
 
 /* The hardware trigger point of a time-ordered record: the crossing of the
  * level (code - 28, EXP-55/56) in the chosen direction nearest index 512,
@@ -967,26 +1116,10 @@ static uint8_t g_trig_anchor = 0;
  * Returns the index or -1. */
 static int hw_trigger_anchor(const scope_state_t *ss, const volatile uint8_t *buf)
 {
+    /* Moved to trig_edge_anchor() 2026-10-03 so the mask test aligns on the
+     * same crossing the glass does; behaviour unchanged. */
     int c = (int)fpga_acq_trig_code_get() + (int)FPGA_ADC_OFFSET;
-    if (c < 4 || c > 251) return -1;
-    const bool rising = (ss->trigger.edge == TRIG_RISING);
-    const int hyst = 3;
-    int best = -1;
-    bool armed = false;
-    for (int i = 512 - 64; i <= 512 + 48; i++) {
-        int s = (int)buf[i];
-        if (!armed) {
-            if (rising ? (s <= c - hyst) : (s >= c + hyst)) armed = true;
-        } else if (rising ? (s >= c) : (s <= c)) {
-            if (i >= 512 - 48) {
-                int d = i - 512; if (d < 0) d = -d;
-                int db = best - 512; if (db < 0) db = -db;
-                if (best < 0 || d < db) best = i;
-            }
-            armed = false;                        /* re-arm for the next one */
-        }
-    }
-    return best;
+    return trig_edge_anchor(buf, c, ss->trigger.edge == TRIG_RISING);
 }
 
 static uint16_t scope_soft_trigger_offset(const scope_state_t *ss,
@@ -1105,6 +1238,7 @@ void draw_demo_waveform(uint32_t frame)
      * with NO transform, so it reports pixels instead of converting through a
      * scale that belongs to a trace no longer on the screen. */
     vband_clear();
+    g_mask_ov_on = false;          /* re-armed by mask_overlay_begin() on live data */
 
     /* Freeze waveform when stopped — hold the last running frame */
     static uint32_t frozen_frame = 0;
@@ -1143,6 +1277,7 @@ void draw_demo_waveform(uint32_t frame)
             (ss->trigger.source == TRIG_SRC_CH2 && ch2_buf) ? ch2_buf :
             (ch1_buf ? ch1_buf : ch2_buf);
         uint16_t toff = scope_soft_trigger_offset(ss, trig_src);
+        mask_overlay_begin();
         const volatile uint8_t *b1 = (ch1_buf != NULL) ? ch1_buf + toff : NULL;
         const volatile uint8_t *b2 = (ch2_buf != NULL) ? ch2_buf + toff : NULL;
 
@@ -1157,19 +1292,19 @@ void draw_demo_waveform(uint32_t frame)
          * cursor readout — see vband_note(). */
         if (c1 && c2) {
             vband_note(0u, 1u, ss->ch1.vdiv_idx, SCOPE_TOP, SCOPE_MID_Y - 1,
-                       fx1 ? draw_channel_fixed(b1, th->ch1, SCOPE_TOP, SCOPE_MID_Y - 1, 128u)
-                           : draw_channel_autofit(b1, th->ch1, SCOPE_TOP, SCOPE_MID_Y - 1));
+                       fx1 ? draw_channel_fixed(b1, th->ch1, SCOPE_TOP, SCOPE_MID_Y - 1, 128u, 0)
+                           : draw_channel_autofit(b1, th->ch1, SCOPE_TOP, SCOPE_MID_Y - 1, 0));
             vband_note(1u, 2u, ss->ch2.vdiv_idx, SCOPE_MID_Y + 1, SCOPE_BOT,
-                       fx2 ? draw_channel_fixed(b2, th->ch2, SCOPE_MID_Y + 1, SCOPE_BOT, 128u)
-                           : draw_channel_autofit(b2, th->ch2, SCOPE_MID_Y + 1, SCOPE_BOT));
+                       fx2 ? draw_channel_fixed(b2, th->ch2, SCOPE_MID_Y + 1, SCOPE_BOT, 128u, 1)
+                           : draw_channel_autofit(b2, th->ch2, SCOPE_MID_Y + 1, SCOPE_BOT, 1));
         } else if (c1) {
             vband_note(0u, 1u, ss->ch1.vdiv_idx, SCOPE_TOP, SCOPE_BOT,
-                       fx1 ? draw_channel_fixed(b1, th->ch1, SCOPE_TOP, SCOPE_BOT, 128u)
-                           : draw_channel_autofit(b1, th->ch1, SCOPE_TOP, SCOPE_BOT));
+                       fx1 ? draw_channel_fixed(b1, th->ch1, SCOPE_TOP, SCOPE_BOT, 128u, 0)
+                           : draw_channel_autofit(b1, th->ch1, SCOPE_TOP, SCOPE_BOT, 0));
         } else if (c2) {
             vband_note(0u, 2u, ss->ch2.vdiv_idx, SCOPE_TOP, SCOPE_BOT,
-                       fx2 ? draw_channel_fixed(b2, th->ch2, SCOPE_TOP, SCOPE_BOT, 128u)
-                           : draw_channel_autofit(b2, th->ch2, SCOPE_TOP, SCOPE_BOT));
+                       fx2 ? draw_channel_fixed(b2, th->ch2, SCOPE_TOP, SCOPE_BOT, 128u, 1)
+                           : draw_channel_autofit(b2, th->ch2, SCOPE_TOP, SCOPE_BOT, 1));
         }
         return;
     }
@@ -2038,6 +2173,10 @@ void draw_scope_screen(uint32_t frame)
     /* Layer 5: Waveform */
     draw_demo_waveform(frame);
 
+    /* Mask strip at the bottom of the live band (the compositor paints the
+     * same rows), only when draw_demo_waveform() armed the overlay. */
+    draw_mask_strip(th, BADGE_ROW2_Y);
+
     /* Trigger-position marker: a small down-pointing triangle at the top of
      * the scope area over the column where the trigger point actually landed
      * (not where it was asked to land -- the fallback may not honour it). */
@@ -2146,6 +2285,7 @@ void draw_scope_live_frame(void)
         b1 += toff;
         b2 += toff;
     }
+    mask_overlay_begin();          /* per-column mask colours, see draw_mask_strip */
 
     /* The live band stops where fixed furniture begins: the debug strip
      * (debug builds) or the measurement badge rows. Those regions repaint
@@ -2221,6 +2361,13 @@ void draw_scope_live_frame(void)
         p1 = y1;
         p2 = y2;
 
+        /* Mask overlay for this column: the strip colour and whether either
+         * trace is painted as outside the mask. */
+        bool     mdot = false;
+        uint16_t mstrip = mask_strip_color((int)x, th, &mdot);
+        uint16_t tc1 = mask_px_fail(0, (int)x) ? th->warning : th->ch1;
+        uint16_t tc2 = mask_px_fail(1, (int)x) ? th->warning : th->ch2;
+
         /* The popup is a HOLE in the live band, not a layer: its glyphs are
          * the one thing this compositor cannot recompute per pixel, so the
          * column is emitted as up to two segments that step around the box.
@@ -2249,10 +2396,13 @@ void draw_scope_live_frame(void)
             int mdx = (int)x - (int)g_trig_x_actual; if (mdx < 0) mdx = -mdx;
             if (g_trig_x_actual >= 0 && mr >= 0 && mr < 4 && mdx <= 3 - mr)
                 c = th->trigger;
+            else if (mstrip && y >= band_bot - MASK_STRIP_H &&
+                     (!mdot || ((x + y) & 1u) == 0u))
+                c = mstrip;
             else if (a2.on && (int16_t)y >= lo2 && (int16_t)y <= hi2)
-                c = th->ch2;
+                c = tc2;
             else if (a1.on && (int16_t)y >= lo1 && (int16_t)y <= hi1)
-                c = th->ch1;
+                c = tc1;
             else if ((int16_t)y == trig_y && (x & trig_step) == 0 && x < LCD_WIDTH - 6)
                 c = th->trigger;
             else if (y == SCOPE_MID_Y || x == LCD_WIDTH / 2)
