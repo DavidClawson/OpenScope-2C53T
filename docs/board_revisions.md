@@ -70,7 +70,7 @@ methods agree. OpenScope's transmit path builds exactly this frame (`meter_build
 **seven-segment display bitmasks**, not ADC counts. That matches @Stlkv's decoder
 ([#35](https://github.com/DavidClawson/OpenScope-2C53T/pull/35)). Open question: on the unlabelled
 board byte 8 read `0x82` at `0.000 V` and `0x02` at `3.299 V`, but on V1.4 unit #1 a live `1.6141 V`
-reading also carried `0x82`. So bit 7 of byte 8 is probably an annunciator, not a zero-scale flag.
+reading also carried `0x82`. So bit 7 of byte 8 is not a zero-scale flag. It is not simply auto-range either: the unlabelled-board captures were in manual DC-voltage mode (`AA 55 05 0C …`), and ours in the meter's auto mode. A range-boundary capture may settle it.
 
 ## The 8-pin part near the charger (V1.4)
 
