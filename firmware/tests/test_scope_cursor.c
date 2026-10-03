@@ -156,19 +156,22 @@ static void test_one_over_dt(void)
     r = scope_cursor_one_over_dt(code, 0);
     CHECK(r.unit == SCOPE_CURSOR_UNIT_NONE, "dx=0 must refuse");
 
-    /* No rate => no Hz either; 1/samples has no unit to fall back to. */
-    r = scope_cursor_one_over_dt(0x08u, 100);
+    /* No rate => no Hz either; 1/samples has no unit to fall back to.
+     * 0x03 has never been measured (0x08, used here until EXP-63, now has a
+     * rate: it was opread tearing, not the device). */
+    r = scope_cursor_one_over_dt(0x03u, 100);
     CHECK(r.unit == SCOPE_CURSOR_UNIT_NONE,
-          "an INCOHERENT code must not produce a frequency");
+          "a never-measured code must not produce a frequency");
 }
 
 /* ── 2. refusal where there is no calibration ────────────────────────── */
 
 static void test_unmeasured_timebase_falls_back_to_samples(void)
 {
-    /* 0x08 is the power-on default and is INCOHERENT — measured, and the
-     * records do not reproduce. It is the code most likely to be on screen. */
-    static const uint8_t none_codes[] = { 0x00u, 0x06u, 0x08u, 0x0Au, 0x0Cu };
+    /* 0x00-0x05 have never been measured. (0x08, the power-on default, was
+     * in this list as INCOHERENT until EXP-63 measured it at 4,990,070 S/s
+     * through the acq path; 0x06-0x0C all carry a rate since then.) */
+    static const uint8_t none_codes[] = { 0x00u, 0x01u, 0x03u, 0x05u };
 
     for (unsigned i = 0; i < sizeof(none_codes); i++) {
         const uint8_t code = none_codes[i];
@@ -270,17 +273,23 @@ static void test_provisional_ranges_are_marked(void)
 
 static void test_provisional_timebase_is_marked(void)
 {
-    /* 0x0D: R^2 0.9997 but only bins 4-25 of resolution, and never
-     * fold-tested at the corrected rate. */
-    CHECK(scope_timebase_get_tier(0x0Du) == SCOPE_TB_PROVISIONAL,
-          "0x0D tier changed — update this test with the evidence");
+    /* 0x07 (EXP-63): fitted at 12,498,676 S/s, R^2 0.9996, but the fold band
+     * (7.8-21 MHz) is above the source's 10 MHz, so never fold-tested.
+     * (0x0D held this role until EXP-63 re-measured it fold-tested, R^2
+     * 1.0000, tones at bins 10-205: MEASURED now.) */
+    CHECK(scope_timebase_get_tier(0x07u) == SCOPE_TB_PROVISIONAL,
+          "0x07 tier changed — update this test with the evidence");
 
-    const scope_cursor_reading_t r = scope_cursor_delta_t(0x0Du, 100);
-    CHECK(r.confidence == SCOPE_CURSOR_PROVISIONAL, "0x0D must be provisional");
+    const scope_cursor_reading_t r = scope_cursor_delta_t(0x07u, 100);
+    CHECK(r.confidence == SCOPE_CURSOR_PROVISIONAL, "0x07 must be provisional");
 
     char s[16];
     scope_cursor_format(&r, s, sizeof(s));
-    CHECK(s[0] == '~', "0x0D must carry the tilde, got %s", s);
+    CHECK(s[0] == '~', "0x07 must carry the tilde, got %s", s);
+
+    /* And 0x0D, measured now, must not be marked. */
+    const scope_cursor_reading_t rd = scope_cursor_delta_t(0x0Du, 100);
+    CHECK(rd.confidence != SCOPE_CURSOR_PROVISIONAL, "0x0D is MEASURED since EXP-63");
 }
 
 /* ── 4. formatting ──────────────────────────────────────────────────── */
