@@ -1,4 +1,6 @@
-# EXP-59 — waveform pass/fail: bench acceptance on unit #1
+# EXP-69 — waveform pass/fail: bench acceptance on unit #1
+
+> **Renumbered EXP-59 → EXP-69 on 2026-10-03, before push.** @mquerostudio's open PRs (#41, #48, #51) had already claimed EXP-59..68 on 2026-10-01/02. Commits on `bench/2026-09-14` written before the rename still say EXP-59.
 
 - **Date:** 2026-10-03
 - **Unit:** bench unit #1
@@ -95,13 +97,13 @@ resume from now), so the firmware changed, not the criterion. v2 marks that one 
 | F hold | 2→2 held, 13 after release, `stale`=1, not re-held | same |
 | G missed commits | 0 | 0 |
 
-**Screen (one held FAIL, CRC-verified dump, `captures/exp59/mask_fail_held.png`):**
+**Screen (one held FAIL, CRC-verified dump, `captures/exp69/mask_fail_held.png`):**
 - the trace is red at the peaks and troughs, which is where +30% amplitude leaves the
   mask;
 - the strip is solid red under those columns and dotted red elsewhere;
 - the readout says `FAIL 1/10 HOLD-OK`.
 
-Logs: `reverse_engineering/captures/exp59/mask_bench_run{1..4}.log`.
+Logs: `reverse_engineering/captures/exp69/mask_bench_run{1..4}.log`.
 
 ## 6. Blind spots
 - **One signal, one range, one timebase.** The sensitivity figures (spec: +18% / −20%

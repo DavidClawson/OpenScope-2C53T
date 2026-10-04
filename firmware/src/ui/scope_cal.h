@@ -212,7 +212,7 @@ void scope_cal_range_label(uint8_t ch, uint8_t range_idx, char *out, uint32_t n)
 
 /* The same label at the BNC, ignoring the probe factor: for the calibration
  * dump (`fpga scope cal`), whose table must not change with a UI setting
- * (EXP-60 addendum: the first probe build moved that column). */
+ * (EXP-70 addendum: the first probe build moved that column). */
 void scope_cal_range_label_bnc(uint8_t ch, uint8_t range_idx, char *out, uint32_t n);
 
 #ifdef __cplusplus

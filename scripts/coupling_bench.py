@@ -27,7 +27,7 @@ PASS CRITERIA, FIXED BEFORE THE RUN:
             (until 2026-10-03 the 1X/10X setting scaled nothing)
 
 Sign: scope CH2 read -50 for the same +1 V command in runs 1-2. RESOLVED by a
-cable swap (EXP-60 addendum): JDS CH1 into scope CH2 reads +50.1 twice, so the
+cable swap (EXP-70 addendum): JDS CH1 into scope CH2 reads +50.1 twice, so the
 scope does not invert; the JDS CH2 DC offset is unreliable (see bench.py).
 The criteria use |delta|, which that does not affect.
 

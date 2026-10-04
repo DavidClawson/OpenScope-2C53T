@@ -155,7 +155,7 @@ void input_handle_settings_ok(void)
         case 0: { char t[24]; channel_cycle_coupling(0, &ss->ch1, "CH1", t, sizeof(t)); } break;
         case 1: scope_cycle_probe(&ss->ch1); break;
         /* 20M limit: refused. Its only consumer was an unobeyed USART bit,
-         * so it was label-only in every build (EXP-60 audit). */
+         * so it was label-only in every build (EXP-70 audit). */
         case 2: ss->ch1.bw_limit = false; break;
         case 3: { char t[24]; channel_cycle_coupling(1, &ss->ch2, "CH2", t, sizeof(t)); } break;
         case 4: scope_cycle_probe(&ss->ch2); break;

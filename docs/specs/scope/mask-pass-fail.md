@@ -1,7 +1,7 @@
 # Spec: Waveform pass/fail (mask testing)
 
 **Track:** scope
-**Stage now:** **S2** (EXP-59, 2026-10-03). On unit #1, `scripts/mask_bench.py`
+**Stage now:** **S2** (EXP-69, 2026-10-03). On unit #1, `scripts/mask_bench.py`
 passed 9/9 twice (v2), then 10/10 with button control (v3). Two S4 items are done
 early: button control and drawn bounds. Not S3: the bench script is not in the
 regression set yet.
@@ -92,7 +92,7 @@ and indexed by screen column rather than by trigger.
   the failing record stays in the buffers. OK releases the hold instead of
   toggling RUN/STOP. The first record after a release is SKIPPED as `stale`:
   the FPGA held it through the hold, so it was captured during the fault, not
-  after OK (EXP-59 found it re-holding on exactly that record).
+  after OK (EXP-69 found it re-holding on exactly that record).
 
 ### Measured sensitivity (host, real unit #1 records, default tolerance)
 
@@ -122,10 +122,10 @@ teach spread. Tighten with `mask tol`.
 
 | To reach | Criterion (checkable) |
 |---|---|
-| ~~S1~~ | ✓ EXP-59. The mask image runs on unit #1: `mask teach` reaches READY on a live signal, the strip and red tint appear, and `OK:` keeps climbing with a mask active. |
-| ~~S2~~ | ✓ EXP-59 (2 × 9/9). `scripts/mask_bench.py` passes A–G on unit #1 against the JDS6600 (baseline false-fail ≤ 1/30 with ≥ 80% of commits judged; +30% amplitude and +5% frequency ≥ 95% FAIL; level change → SKIP not scored; stop-on-fail freezes and releases; no missed commits), written up in `docs/experiments/`. |
+| ~~S1~~ | ✓ EXP-69. The mask image runs on unit #1: `mask teach` reaches READY on a live signal, the strip and red tint appear, and `OK:` keeps climbing with a mask active. |
+| ~~S2~~ | ✓ EXP-69 (2 × 9/9). `scripts/mask_bench.py` passes A–G on unit #1 against the JDS6600 (baseline false-fail ≤ 1/30 with ≥ 80% of commits judged; +30% amplitude and +5% frequency ≥ 95% FAIL; level change → SKIP not scored; stop-on-fail freezes and releases; no missed commits), written up in `docs/experiments/`. |
 | S3 | `test_mask_pf` (held-out records + negative controls, in the build) **and** `mask_bench.py` in the regression set, with its negative controls (fault windows) passing. |
-| S4 | ~~Reachable from the buttons alone (teach, tolerance, stop-on-fail, clear)~~ ✓ v3, EXP-59 §8 (AUTO = teach/cancel/clear; MOVE → Mask: UP/DN tol_v, LT/RT tol_h, SEL stop-on-fail; OK releases). ~~Bounds drawn on the trace~~ ✓ v3. Open: refusal reasons legible on screen beyond the slot's short form; masks persisted to W25Q and reloadable by a module. |
+| S4 | ~~Reachable from the buttons alone (teach, tolerance, stop-on-fail, clear)~~ ✓ v3, EXP-69 §8 (AUTO = teach/cancel/clear; MOVE → Mask: UP/DN tol_v, LT/RT tol_h, SEL stop-on-fail; OK releases). ~~Bounds drawn on the trace~~ ✓ v3. Open: refusal reasons legible on screen beyond the slot's short form; masks persisted to W25Q and reloadable by a module. |
 
 ## Open questions
 

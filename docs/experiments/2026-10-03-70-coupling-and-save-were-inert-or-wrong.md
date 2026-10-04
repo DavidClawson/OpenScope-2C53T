@@ -1,4 +1,6 @@
-# EXP-60 — coupling buttons were label-only; SAVE flipped CH1's input path
+# EXP-70 — coupling buttons were label-only; SAVE flipped CH1's input path
+
+> **Renumbered EXP-60 → EXP-70 on 2026-10-03, before push.** @mquerostudio's open PRs (#41, #48, #51) had already claimed EXP-59..68 on 2026-10-01/02. Commits on `bench/2026-09-14` written before the rename still say EXP-60.
 
 - **Date:** 2026-10-03
 - **Unit:** bench unit #1
@@ -57,7 +59,7 @@ isolation. Both are in the table below.
 ## 5. Results
 
 **Run 1: 13/14.** The first measurement had CH2 in DC with Δ +0.1. Every later CH2 DC
-measurement gave −50. Isolation runs (`captures/exp60/jds_first_step_*.log`):
+measurement gave −50. Isolation runs (`captures/exp70/jds_first_step_*.log`):
 
 | sequence | CH1 Δ | CH2 Δ |
 |---|---|---|
@@ -149,7 +151,7 @@ scope channels DC, range 5. Predictions stated before the run:
 1 V change of either sign, and the AC/DC contrast and the isolation were measured within
 one sequence on the same channels.
 
-Log: `captures/exp60/cable_swap_sign_test.log`.
+Log: `captures/exp70/cable_swap_sign_test.log`.
 
 ## 9. Addendum — the probe setting and the 20M limit were label-only too
 
@@ -182,5 +184,5 @@ The same audit (button → what it writes → readback) on Settings → Oscillos
 Not verified on screen: the `n/a` menu text. Reaching the menu cycles through
 signal-generator mode, which shares DAC1 with CH1's offset in this image.
 
-Logs: `captures/exp60/coupling_probe_bench_v5.log`, `coupling_probe_bench_v6.log`,
+Logs: `captures/exp70/coupling_probe_bench_v5.log`, `coupling_probe_bench_v6.log`,
 `mask_bench_v5_regression.log`.

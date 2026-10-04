@@ -46,7 +46,7 @@ concrete.
 | Cursors | S1 | *needed* | Units now derive from `scope_cal` / `scope_timebase` and refuse when the table has no entry (`scope_cursor.c`, host-tested with negative controls, 2026-09-12). **Not S2: unverified on the bench** — next is a cursor delta read against a known signal, and against the badges on the same capture |
 | Autofit vs. measured graticule | S1 | *needed* | Decision pending: the vertical graticule does not mean the volts/div the status bar prints |
 | Math channels | S0 | — | After auto-measurements S2 (same input plumbing) |
-| Waveform pass/fail (mask) | **S2** (EXP-59, 2026-10-03) | [mask-pass-fail](scope/mask-pass-fail.md) | S3: `mask_bench.py` into the regression set alongside `test_mask_pf`. Button UI and drawn bounds landed early (v3) |
+| Waveform pass/fail (mask) | **S2** (EXP-69, 2026-10-03) | [mask-pass-fail](scope/mask-pass-fail.md) | S3: `mask_bench.py` into the regression set alongside `test_mask_pf`. Button UI and drawn bounds landed early (v3) |
 | XY / roll / trend | S0 | — | Unclaimed; each needs a spec before work starts |
 | Protocol decoders | S0 | — | Needs a spec: capture-depth and sample-rate reality check first (132 host tests already exist) |
 | Bode plot | S0 | — | Blocked on siggen/scope coexistence (shared DAC1) |
