@@ -1,10 +1,11 @@
 # Spec: Waveform pass/fail (mask testing)
 
 **Track:** scope
-**Stage now:** **S2** (EXP-69, 2026-10-03). On unit #1, `scripts/mask_bench.py`
-passed 9/9 twice (v2), then 10/10 with button control (v3). Two S4 items are done
-early: button control and drawn bounds. Not S3: the bench script is not in the
-regression set yet.
+**Stage now:** **S3** (2026-10-03). S2 by EXP-69: on unit #1, `scripts/mask_bench.py`
+passed 9/9 twice (v2) and 10/10 with button control (v3). S3: `test_mask_pf` (held-out
+real records, negative controls) runs in the build, and `mask_bench.py` is a suite of
+`scripts/bench_regression.py`, green on v6 (`captures/regression/2026-10-03_Oct_3_2026_20_34_50/`).
+Two S4 items (button control, drawn bounds) are done; two remain.
 **Champion:** David / Claude (2026-10-03)
 
 ## What it is
@@ -124,7 +125,7 @@ teach spread. Tighten with `mask tol`.
 |---|---|
 | ~~S1~~ | ✓ EXP-69. The mask image runs on unit #1: `mask teach` reaches READY on a live signal, the strip and red tint appear, and `OK:` keeps climbing with a mask active. |
 | ~~S2~~ | ✓ EXP-69 (2 × 9/9). `scripts/mask_bench.py` passes A–G on unit #1 against the JDS6600 (baseline false-fail ≤ 1/30 with ≥ 80% of commits judged; +30% amplitude and +5% frequency ≥ 95% FAIL; level change → SKIP not scored; stop-on-fail freezes and releases; no missed commits), written up in `docs/experiments/`. |
-| S3 | `test_mask_pf` (held-out records + negative controls, in the build) **and** `mask_bench.py` in the regression set, with its negative controls (fault windows) passing. |
+| ~~S3~~ | ✓ 2026-10-03. `test_mask_pf` (held-out records + negative controls, in the build) **and** `mask_bench.py` in the regression set (`bench_regression.py`), with its negative controls (fault windows) passing: green 10/10 on v6. |
 | S4 | ~~Reachable from the buttons alone (teach, tolerance, stop-on-fail, clear)~~ ✓ v3, EXP-69 §8 (AUTO = teach/cancel/clear; MOVE → Mask: UP/DN tol_v, LT/RT tol_h, SEL stop-on-fail; OK releases). ~~Bounds drawn on the trace~~ ✓ v3. Open: refusal reasons legible on screen beyond the slot's short form; masks persisted to W25Q and reloadable by a module. |
 
 ## Open questions

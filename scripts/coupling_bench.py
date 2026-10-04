@@ -88,8 +88,13 @@ def mean_shift(sc, sg, frames=4):
 
 
 def main():
-    sc = Scope()
-    sg = JDS6600()
+    import argparse
+    ap = argparse.ArgumentParser()
+    ap.add_argument("--scope", default="/dev/ttyACM0")
+    ap.add_argument("--jds", default="/dev/ttyUSB0")
+    a = ap.parse_args()
+    sc = Scope(a.scope)
+    sg = JDS6600(a.jds)
     print(next(l for l in sc.version().splitlines() if l.startswith("Build:")))
     sc.trigger_mode("auto")
     sc.vdiv(1, 5)
