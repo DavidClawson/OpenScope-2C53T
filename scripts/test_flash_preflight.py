@@ -3,8 +3,10 @@ from __future__ import annotations
 
 from pathlib import Path
 import argparse
+import hashlib
 import importlib.util
 import io
+import plistlib
 import struct
 import sys
 import tempfile
@@ -26,6 +28,12 @@ HID_SPEC = importlib.util.spec_from_file_location("hid_flash", HID_FLASH_PATH)
 assert HID_SPEC is not None and HID_SPEC.loader is not None
 hid_flash = importlib.util.module_from_spec(HID_SPEC)
 HID_SPEC.loader.exec_module(hid_flash)
+
+IAP_FLASH_PATH = Path(__file__).resolve().parent / "iap_flash.py"
+IAP_SPEC = importlib.util.spec_from_file_location("iap_flash", IAP_FLASH_PATH)
+assert IAP_SPEC is not None and IAP_SPEC.loader is not None
+iap_flash = importlib.util.module_from_spec(IAP_SPEC)
+IAP_SPEC.loader.exec_module(iap_flash)
 
 
 def image(sp: int = 0x20037FE0, rv: int = 0x08004040, marker: bytes = b"OpenScope") -> bytes:
@@ -511,6 +519,210 @@ class FlashPreflightTests(unittest.TestCase):
 
         commands = [struct.unpack(">H", write[1:3])[0] for write in dev.writes]
         self.assertEqual(commands, [hid_flash.CMD_CRC, hid_flash.CMD_CRC])
+
+
+IAP_SECT = 2048
+
+
+def fat12_volume(label: bytes = b"IAP        ", sectors: int = 32) -> bytes:
+    """A FAT12 volume shaped like the 2C53T IAP drive: 2048-byte sectors,
+    1 reserved + 2 FATs of 1 sector, root dir at sector 3 holding the label."""
+    vol = bytearray(IAP_SECT * sectors)
+    vol[0x0B:0x0D] = IAP_SECT.to_bytes(2, "little")
+    vol[0x0D] = 1                                  # sectors per cluster
+    vol[0x0E:0x10] = (1).to_bytes(2, "little")     # reserved
+    vol[0x10] = 2                                  # FATs
+    vol[0x11:0x13] = (64).to_bytes(2, "little")    # root entries
+    vol[0x16:0x18] = (1).to_bytes(2, "little")     # sectors per FAT
+    vol[0x26] = 0x29
+    vol[0x2B:0x36] = b"NO NAME    "
+    vol[0x36:0x3E] = b"FAT12   "
+    root = 3 * IAP_SECT
+    vol[root:root + 11] = label
+    vol[root + 11] = 0x08                          # volume-label entry
+    vol[root + 32:root + 43] = b"READY   TXT"
+    vol[root + 43] = 0x20
+    return bytes(vol)
+
+
+# BSD dd, measured on macOS: a failed write prints the summary, a failed open
+# does not.
+DD_VANISHED_MID_WRITE = ("dd: /dev/rdisk4: Device not configured\n"
+                         "1+0 records in\n0+0 records out\n"
+                         "0 bytes transferred in 0.01 secs (0 bytes/sec)\n")
+DD_VANISHED_BEFORE_OPEN = "dd: /dev/rdisk4: No such file or directory\n"
+
+
+class FakeMacDisk:
+    """subprocess.run for _write_image_macos: the snapshot dd, mcopy into the
+    snapshot copy, and the raw-device dd writes (recorded as (seek, count))."""
+
+    def __init__(self, volume: bytes, fail_call=None, fail_stderr: str = "") -> None:
+        self.volume = volume
+        self.fail_call = fail_call      # index of the raw-device write that fails
+        self.fail_stderr = fail_stderr
+        self.writes: list[tuple[int, int]] = []
+
+    def __call__(self, cmd, **kw):
+        done = types.SimpleNamespace(returncode=0, stdout="", stderr="")
+        if Path(cmd[0]).name == "mcopy":
+            # the copy changes sectors 1-2 (FATs), 3 (dir) and 10-13 (data)
+            target = Path(cmd[cmd.index("-i") + 1])
+            img = bytearray(target.read_bytes())
+            for sector in (1, 2, 3, 10, 11, 12, 13):
+                img[sector * IAP_SECT + 40] ^= 0x5A
+            target.write_bytes(bytes(img))
+            return done
+        if cmd[:2] == ["sudo", "dd"] and "bs=1m" in cmd:
+            Path(cmd[3][len("of="):]).write_bytes(self.volume)
+            return done
+        if cmd[:2] == ["sudo", "dd"] and cmd[3] == "of=/dev/rdisk4":
+            if len(self.writes) == self.fail_call:
+                self.writes.append((-1, -1))
+                return types.SimpleNamespace(returncode=1, stdout="", stderr=self.fail_stderr)
+            args = dict(a.split("=", 1) for a in cmd[2:] if "=" in a)
+            self.writes.append((int(args["seek"]), int(args["count"])))
+            return done
+        if cmd == ["sync"]:
+            return done
+        raise AssertionError(f"unexpected command {cmd}")
+
+
+class IapFlashTests(unittest.TestCase):
+    def write_macos(self, disk: FakeMacDisk):
+        with tempfile.TemporaryDirectory() as tmp:
+            image = Path(tmp) / "APP_test.bin"
+            image.write_bytes(b"\x00" * 64)
+            with mock.patch.object(iap_flash.subprocess, "run", disk):
+                return iap_flash._write_image_macos("/dev/disk4", image)
+
+    def test_iap_fat_label_read_from_root_dir_entry(self) -> None:
+        self.assertIn("IAP", iap_flash.fat_volume_labels(fat12_volume()))
+        self.assertTrue(iap_flash.is_iap_volume(iap_flash.fat_volume_labels(fat12_volume())))
+        self.assertFalse(iap_flash.is_iap_volume(
+            iap_flash.fat_volume_labels(fat12_volume(b"KINGSTON   "))))
+
+    def test_iap_mdir_label_plain_and_mtools_lfn_forms(self) -> None:
+        self.assertEqual(iap_flash.mdir_volume_label(" Volume in drive : is IAP\n"), "IAP")
+        self.assertEqual(iap_flash.mdir_volume_label(
+            " Volume in drive : is IAP___ (abbr=IAP        )\n"), "IAP")
+        self.assertEqual(iap_flash.mdir_volume_label(" Volume in drive : has no label\n"), "")
+
+    def test_iap_macos_write_refuses_a_volume_not_labelled_iap(self) -> None:
+        disk = FakeMacDisk(fat12_volume(b"KINGSTON   "))
+        ok, msg = self.write_macos(disk)
+        self.assertFalse(ok)
+        self.assertIn("not IAP", msg)
+        self.assertEqual(disk.writes, [])
+
+    def test_iap_macos_clean_write_sends_every_changed_sector_last_alone(self) -> None:
+        disk = FakeMacDisk(fat12_volume())
+        ok, msg = self.write_macos(disk)
+        self.assertTrue(ok, msg)
+        self.assertEqual(disk.writes, [(1, 3), (10, 3), (13, 1)])
+
+    def test_iap_macos_disk_vanishing_before_the_last_sector_is_not_success(self) -> None:
+        disk = FakeMacDisk(fat12_volume(), fail_call=1, fail_stderr=DD_VANISHED_MID_WRITE)
+        ok, msg = self.write_macos(disk)
+        self.assertFalse(ok)
+        self.assertIn("3 of 7 changed sectors", msg)
+
+    def test_iap_macos_disk_vanishing_on_the_last_sector_is_the_flash(self) -> None:
+        disk = FakeMacDisk(fat12_volume(), fail_call=2, fail_stderr=DD_VANISHED_MID_WRITE)
+        ok, msg = self.write_macos(disk)
+        self.assertTrue(ok, msg)
+        self.assertIn("all 7 changed sectors", msg)
+
+    def test_iap_macos_disk_gone_before_the_last_sector_opened_is_not_success(self) -> None:
+        disk = FakeMacDisk(fat12_volume(), fail_call=2, fail_stderr=DD_VANISHED_BEFORE_OPEN)
+        ok, msg = self.write_macos(disk)
+        self.assertFalse(ok)
+        self.assertIn("6 of 7 changed sectors", msg)
+
+    def test_iap_dd_failure_classifier(self) -> None:
+        classify = iap_flash.classify_dd_failure
+        self.assertEqual(classify(DD_VANISHED_MID_WRITE, last_call=True), "flashed")
+        self.assertEqual(classify(DD_VANISHED_MID_WRITE, last_call=False), "incomplete")
+        self.assertEqual(classify(DD_VANISHED_BEFORE_OPEN, last_call=True), "incomplete")
+        self.assertEqual(classify("dd: /dev/rdisk4: Permission denied\n", last_call=True), "error")
+
+    def test_iap_split_last_sector(self) -> None:
+        self.assertEqual(iap_flash.split_last_sector([(1, 4), (10, 14)]),
+                         [(1, 4), (10, 13), (13, 14)])
+        self.assertEqual(iap_flash.split_last_sector([(1, 4), (9, 10)]), [(1, 4), (9, 10)])
+
+    def test_iap_linux_write_refuses_a_volume_not_labelled_iap(self) -> None:
+        calls = []
+
+        def mtools(args, dev):
+            calls.append(args[0])
+            return types.SimpleNamespace(returncode=0, stderr="",
+                                         stdout=" Volume in drive : has no label\n")
+
+        with mock.patch.object(iap_flash, "_mtools_with_fallback", mtools):
+            ok, msg = iap_flash._write_image_linux("/dev/sdc", Path("APP_test.bin"))
+        self.assertFalse(ok)
+        self.assertIn("not IAP", msg)
+        self.assertEqual(calls, ["mdir"])
+
+    def test_iap_slot_capacity_is_740_kb_and_stock_fits(self) -> None:
+        self.assertEqual(iap_flash.APP_SLOT_MAX, 757760)
+        self.assertEqual(iap_flash.image_size_error(751232), "")      # stock V1.2.0
+        self.assertEqual(iap_flash.image_size_error(757760), "")
+        self.assertIn("holds 757760", iap_flash.image_size_error(757761))
+
+    def flash_plan(self, size: int):
+        prompts = []
+
+        def answer_no(prompt=""):
+            prompts.append(prompt)
+            return "n"
+
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "APP_test.bin"
+            data = (bytes(range(256)) * (size // 256 + 1))[:size]
+            path.write_bytes(data)
+            out = io.StringIO()
+            with mock.patch("builtins.input", answer_no), redirect_stdout(out):
+                ok = iap_flash.flash_image("/dev/disk4",
+                                           {"path": path, "size": size, "label": "test"})
+        return ok, out.getvalue(), prompts, hashlib.sha256(data).hexdigest()
+
+    def test_iap_flash_plan_refuses_an_image_over_the_slot_before_asking(self) -> None:
+        ok, out, prompts, _sha = self.flash_plan(757760 + 2)
+        self.assertFalse(ok)
+        self.assertIn("Refusing", out)
+        self.assertEqual(prompts, [])
+
+    def test_iap_flash_plan_prints_size_and_full_sha256(self) -> None:
+        ok, out, prompts, sha = self.flash_plan(4096)
+        self.assertFalse(ok)                       # answered "n"
+        self.assertIn(sha, out)
+        self.assertIn("(4096 bytes", out)
+        self.assertEqual(len(prompts), 1)
+
+    def test_iap_macos_detection_wants_the_label_not_a_small_usb_disk(self) -> None:
+        def diskutil(disks):
+            def run(cmd, **kw):
+                blob = {"AllDisks": list(disks)} if cmd[:2] == ["diskutil", "list"] else disks[cmd[-1]]
+                return types.SimpleNamespace(stdout=plistlib.dumps(blob).decode(), returncode=0)
+            return run
+
+        stick = {"VolumeName": "", "BusProtocol": "USB", "TotalSize": 8_400_000,
+                 "MediaName": "Generic Flash Disk"}
+        hinted = {"VolumeName": "", "BusProtocol": "USB", "TotalSize": 8_400_000,
+                  "MediaName": "AT32 MSC"}
+        labelled = {"VolumeName": "IAP", "BusProtocol": "USB", "TotalSize": 8_400_000,
+                    "MediaName": "Generic"}
+        with mock.patch.object(iap_flash, "_run", diskutil({"disk4": stick})):
+            self.assertIsNone(iap_flash.find_iap_disk_macos())
+        with mock.patch.object(iap_flash, "_run", diskutil({"disk3": hinted, "disk4": labelled})):
+            self.assertEqual(iap_flash.find_iap_disk_macos(), "/dev/disk4")
+
+    def test_iap_status_refuses_upgrade_mode_without_a_labelled_disk(self) -> None:
+        with redirect_stdout(io.StringIO()):
+            self.assertFalse(iap_flash.print_device_status({"mode": "iap", "dev": None}))
+            self.assertTrue(iap_flash.print_device_status({"mode": "iap", "dev": "/dev/disk4"}))
 
 
 if __name__ == "__main__":
