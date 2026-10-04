@@ -21,9 +21,10 @@ PASS CRITERIA, FIXED BEFORE THE RUN:
             each relay drives its own channel only
   label     the popup path never shows GND (GND left the cycle)
 
-Sign: CH2 moves the OPPOSITE way to CH1 for the same +1 V step (run 1:
-+50 vs -50). The criteria use |delta|; whether the inversion is the scope's
-CH2 front end or the JDS CH2 output is OPEN (needs a cable swap).
+Sign: scope CH2 read -50 for the same +1 V command in runs 1-2. RESOLVED by a
+cable swap (EXP-60 addendum): JDS CH1 into scope CH2 reads +50.1 twice, so the
+scope does not invert; the JDS CH2 DC offset is unreliable (see bench.py).
+The criteria use |delta|, which that does not affect.
 
 Usage:  python3 scripts/coupling_bench.py
 """

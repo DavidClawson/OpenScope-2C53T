@@ -1,0 +1,7 @@
+{1: {'label': 'DC', 'relay': 'DC', 'agree': True}, 2: {'label': 'DC', 'relay': 'DC', 'agree': True}}
+JDS CH1 +1V step (rep 0): scope CH1 -50.0  scope CH2 +50.1
+JDS CH1 +1V step (rep 1): scope CH1 +0.2  scope CH2 +50.1
+JDS CH2 +1V step (rep 0): scope CH1 -0.1  scope CH2 +0.2
+JDS CH2 +1V step (rep 1): scope CH1 +0.2  scope CH2 +0.2
+
+[exited with code 0]

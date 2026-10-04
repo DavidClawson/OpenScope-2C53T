@@ -87,11 +87,8 @@ after enabling outputs.
 press. CH1 Vpp held at 2.008–2.028 V, a one-count jitter.
 
 ## 6. Blind spots
-- **CH2 moves the opposite way to CH1** (+1 V → −50 counts). The criteria use |Δ|, so
-  this test cannot say which is inverted: the scope's CH2 front end, or the JDS CH2
-  output. **OPEN, and it matters.** If the scope inverts CH2, then its trace, its trigger
-  slope and any cursor voltage on CH2 are upside down. A cable swap at the generator
-  decides it.
+- ~~**CH2 moves the opposite way to CH1.**~~ **Resolved, see §8:** the scope does not
+  invert; the JDS CH2 offset misbehaves.
 - **AC's low-frequency corner** (~9 Hz from the 2026-08-15 PD12-LOW observation) was not
   re-measured; only DC blocking was.
 - **GND** was removed from the cycle, not implemented. Stock may have a ground path this
@@ -113,8 +110,42 @@ press. CH1 Vpp held at 2.008–2.028 V, a one-count jitter.
   - its coupling control was label-only;
   - its SAVE changed CH1's gain path;
   - both are in the README's Sharp edges.
-- **NOT excluded:** CH2 sign inversion in the scope; an inert BW-limit control.
+- **Excluded (§8):** CH2 sign inversion in the scope.
+- **NOT excluded:** an inert BW-limit control.
 - **Follow-up:**
-  - cable-swap test for the CH2 sign;
   - audit the BW limit and the remaining Settings → Oscilloscope items the same way;
   - add `coupling_bench.py` next to `mask_bench.py` in the regression set.
+
+## 8. Addendum — the CH2 sign is the generator's, not the scope's
+
+**Question.** Scope CH2 read about −50 counts for a +1 V command, against +50 on CH1. Is
+the scope's CH2 front end inverting, or the JDS6600's CH2 output?
+
+**Method.** Cables swapped at the generator (JDS CH1 → scope CH2, JDS CH2 → scope CH1).
+Each JDS channel stepped 0 → +1 V **on its own**, twice, with the others at 0 V; both
+scope channels DC, range 5. Predictions stated before the run:
+- **scope inverts:** JDS CH1 step → scope CH2 −50.
+- **generator inverts:** JDS CH1 step → scope CH2 +50.
+
+| step | scope CH1 Δ | scope CH2 Δ |
+|---|---|---|
+| JDS CH1 +1 V, rep 0 | **−50.0** | +50.1 |
+| JDS CH1 +1 V, rep 1 | +0.2 | **+50.1** |
+| JDS CH2 +1 V, rep 0 | −0.1 | +0.2 |
+| JDS CH2 +1 V, rep 1 | +0.2 | +0.2 |
+
+**Reading.**
+- JDS CH1 into scope CH2 reads **+50.1 on both repeats**, so **scope CH2 is not
+  inverted**. It matches scope CH1 before the swap (+49.8).
+- The JDS **CH2** output did not follow its own offset steps at all here.
+- On the first CH1 write, the JDS CH2 output moved by about −1 V (scope CH1 −50.0).
+- So the JDS CH2 DC offset is not reliable, and not independent of CH1 writes. That is
+  the source of both the "first step reads 0" effect and the −50 in runs 1–2.
+- No model of its behaviour is claimed from four readings. `bench.py` now says: do DC
+  work on JDS CH1.
+
+**Effect on §5.** None of the conclusions change. Every coupling criterion needs only a
+1 V change of either sign, and the AC/DC contrast and the isolation were measured within
+one sequence on the same channels.
+
+Log: `captures/exp60/cable_swap_sign_test.log`.
