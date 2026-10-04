@@ -1,0 +1,17 @@
+Build: Oct  3 2026 18:29:21
+  PASS  ch1 readback DC        {'label': 'DC', 'relay': 'DC', 'agree': True}
+  PASS  ch2 readback DC        {'label': 'DC', 'relay': 'DC', 'agree': True}
+  PASS  DC both                d1 +49.8 d2 -50.2 counts
+  PASS  ch1 readback AC        {'label': 'AC', 'relay': 'AC', 'agree': True}
+  PASS  ch1 AC blocks DC       delta +0.0 counts
+  PASS  ch2 isolation          CH2 (DC) delta -50.1 while CH1 is AC
+  PASS  ch1 restore readback   {'label': 'DC', 'relay': 'DC', 'agree': True}
+  PASS  ch1 restore DC         delta +49.7 counts
+  PASS  ch2 readback AC        {'label': 'AC', 'relay': 'AC', 'agree': True}
+  PASS  ch2 AC blocks DC       delta -0.2 counts
+  PASS  ch1 isolation          CH1 (DC) delta +49.7 while CH2 is AC
+  PASS  ch2 restore readback   {'label': 'DC', 'relay': 'DC', 'agree': True}
+  PASS  ch2 restore DC         delta -50.3 counts
+  PASS  no GND in cycle        labels seen ['AC', 'DC']
+
+14/14 criteria met

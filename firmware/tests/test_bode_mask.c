@@ -1,9 +1,12 @@
 /*
- * Tests for Bode Plot and Mask Testing modules
+ * Tests for the Bode Plot module
+ *
+ * (The mask half was removed 2026-10-03 with src/tasks/mask_test.c; masks are
+ * now src/dsp/mask_pf.c, tested on real records by tests/test_mask_pf.c.)
  *
  * Build:
  *   gcc -o tests/test_bode_mask tests/test_bode_mask.c \
- *       src/dsp/bode.c src/tasks/mask_test.c \
+ *       src/dsp/bode.c \
  *       -lm -Isrc/dsp -Isrc/tasks -DTEST_BUILD
  */
 
@@ -12,7 +15,6 @@
 #include <math.h>
 #include <string.h>
 #include "bode.h"
-#include "mask_test.h"
 
 #ifndef M_PI
 #define M_PI 3.14159265358979323846
@@ -231,158 +233,11 @@ static void test_bode_bandwidth(void)
 }
 
 /* ========================================================================
- * Mask Tests
- * ======================================================================== */
-static void test_mask_same_sine_pass(void)
-{
-    printf("\n--- Mask: Same sine wave -> PASS ---\n");
-
-    uint16_t num = 320;
-    int16_t *ref = malloc(num * sizeof(int16_t));
-    gen_sine(ref, num, 320.0f, 1.0f, 5000.0f, 0.0f);
-
-    mask_state_t mask;
-    mask_create_from_waveform(&mask, ref, num, 10.0f);
-
-    bool result = mask_test(&mask, ref, num);
-    ASSERT(result == true, "Same waveform passes mask test");
-
-    free(ref);
-}
-
-static void test_mask_2x_amplitude_fail(void)
-{
-    printf("\n--- Mask: 2x amplitude -> FAIL ---\n");
-
-    uint16_t num = 320;
-    int16_t *ref = malloc(num * sizeof(int16_t));
-    int16_t *big = malloc(num * sizeof(int16_t));
-
-    gen_sine(ref, num, 320.0f, 1.0f, 5000.0f, 0.0f);
-    gen_sine(big, num, 320.0f, 1.0f, 10000.0f, 0.0f);
-
-    mask_state_t mask;
-    mask_create_from_waveform(&mask, ref, num, 10.0f);
-
-    bool result = mask_test(&mask, big, num);
-    ASSERT(result == false, "2x amplitude fails mask test");
-
-    free(ref);
-    free(big);
-}
-
-static void test_mask_slight_variation_pass(void)
-{
-    printf("\n--- Mask: Slight variation within tolerance -> PASS ---\n");
-
-    uint16_t num = 320;
-    int16_t *ref   = malloc(num * sizeof(int16_t));
-    int16_t *noisy = malloc(num * sizeof(int16_t));
-
-    gen_sine(ref, num, 320.0f, 1.0f, 5000.0f, 0.0f);
-
-    /* Add small noise (well within 10% tolerance + 100 minimum margin) */
-    for (uint16_t i = 0; i < num; i++) {
-        noisy[i] = ref[i] + (int16_t)(50 * sinf(13.0f * i));
-    }
-
-    mask_state_t mask;
-    mask_create_from_waveform(&mask, ref, num, 10.0f);
-
-    bool result = mask_test(&mask, noisy, num);
-    ASSERT(result == true, "Small noise within tolerance passes");
-
-    free(ref);
-    free(noisy);
-}
-
-static void test_mask_pass_rate(void)
-{
-    printf("\n--- Mask: Pass rate calculation ---\n");
-
-    uint16_t num = 320;
-    int16_t *ref = malloc(num * sizeof(int16_t));
-    int16_t *big = malloc(num * sizeof(int16_t));
-
-    gen_sine(ref, num, 320.0f, 1.0f, 5000.0f, 0.0f);
-    gen_sine(big, num, 320.0f, 1.0f, 10000.0f, 0.0f);
-
-    mask_state_t mask;
-    mask_create_from_waveform(&mask, ref, num, 10.0f);
-
-    /* 8 passes */
-    for (int i = 0; i < 8; i++) {
-        mask_test(&mask, ref, num);
-    }
-    /* 2 fails */
-    for (int i = 0; i < 2; i++) {
-        mask_test(&mask, big, num);
-    }
-
-    float rate = mask_pass_rate(&mask);
-    ASSERT_NEAR(rate, 80.0f, 0.01f, "8 pass + 2 fail = 80%");
-    ASSERT(mask.total_tests == 10, "Total tests = 10");
-    ASSERT(mask.pass_count == 8, "Pass count = 8");
-    ASSERT(mask.fail_count == 2, "Fail count = 2");
-
-    free(ref);
-    free(big);
-}
-
-static void test_mask_reset_counts(void)
-{
-    printf("\n--- Mask: Reset counters ---\n");
-
-    uint16_t num = 320;
-    int16_t *ref = malloc(num * sizeof(int16_t));
-    gen_sine(ref, num, 320.0f, 1.0f, 5000.0f, 0.0f);
-
-    mask_state_t mask;
-    mask_create_from_waveform(&mask, ref, num, 10.0f);
-
-    mask_test(&mask, ref, num);
-    mask_test(&mask, ref, num);
-    mask_reset_counts(&mask);
-
-    ASSERT(mask.total_tests == 0, "total_tests = 0 after reset");
-    ASSERT(mask.pass_count == 0, "pass_count = 0 after reset");
-    ASSERT(mask.fail_count == 0, "fail_count = 0 after reset");
-
-    free(ref);
-}
-
-static void test_mask_clear(void)
-{
-    printf("\n--- Mask: Clear mask ---\n");
-
-    uint16_t num = 320;
-    int16_t *ref = malloc(num * sizeof(int16_t));
-    gen_sine(ref, num, 320.0f, 1.0f, 5000.0f, 0.0f);
-
-    mask_state_t mask;
-    mask_create_from_waveform(&mask, ref, num, 10.0f);
-
-    ASSERT(mask.enabled == true, "Mask is enabled after creation");
-
-    mask_clear(&mask);
-
-    ASSERT(mask.enabled == false, "Mask is disabled after clear");
-
-    int any_defined = 0;
-    for (int i = 0; i < MASK_WIDTH; i++) {
-        if (mask.defined[i]) { any_defined = 1; break; }
-    }
-    ASSERT(any_defined == 0, "All defined[] = false after clear");
-
-    free(ref);
-}
-
-/* ========================================================================
  * Main
  * ======================================================================== */
 int main(void)
 {
-    printf("=== Bode Plot & Mask Testing Unit Tests ===\n");
+    printf("=== Bode Plot Unit Tests ===\n");
 
     /* Bode tests */
     test_bode_log_sweep();
@@ -392,13 +247,6 @@ int main(void)
     test_bode_phase();
     test_bode_bandwidth();
 
-    /* Mask tests */
-    test_mask_same_sine_pass();
-    test_mask_2x_amplitude_fail();
-    test_mask_slight_variation_pass();
-    test_mask_pass_rate();
-    test_mask_reset_counts();
-    test_mask_clear();
 
     printf("\n=== Results: %d/%d passed ===\n", tests_passed, tests_run);
 

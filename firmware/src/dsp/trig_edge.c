@@ -176,3 +176,26 @@ int trig_edge_find_seam_any(const volatile uint8_t *rec, uint32_t *k)
 {
     return trig_edge_find_seam(rec, k) || trig_edge_find_seam_lpc(rec, k);
 }
+
+int trig_edge_anchor(const volatile uint8_t *rec, int c, int rising)
+{
+    if (rec == 0 || c < 4 || c > 251)
+        return -1;
+    const int hyst = 3;
+    int best = -1;
+    int armed = 0;
+    for (int i = TRIG_POS - 64; i <= TRIG_POS + 48; i++) {
+        int s = (int)rec[i];
+        if (!armed) {
+            if (rising ? (s <= c - hyst) : (s >= c + hyst)) armed = 1;
+        } else if (rising ? (s >= c) : (s <= c)) {
+            if (i >= TRIG_POS - 48) {
+                int d = i - TRIG_POS; if (d < 0) d = -d;
+                int db = best - TRIG_POS; if (db < 0) db = -db;
+                if (best < 0 || d < db) best = i;
+            }
+            armed = 0;                            /* re-arm for the next one */
+        }
+    }
+    return best;
+}

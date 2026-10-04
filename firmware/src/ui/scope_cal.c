@@ -92,9 +92,24 @@ float scope_cal_mv_per_count(uint8_t ch, uint8_t range_idx)
     return mv_per_count[row][range_idx] * SCOPE_CAL_SOURCE_SCALE;
 }
 
+static scope_cal_probe_fn probe_src;
+
+void scope_cal_set_probe_source(scope_cal_probe_fn fn)
+{
+    probe_src = fn;
+}
+
+float scope_cal_probe_factor(uint8_t ch)
+{
+    if (probe_src == NULL || channel_row(ch) < 0)
+        return 1.0f;
+    const float f = probe_src(ch);
+    return (f > 0.0f) ? f : 1.0f;
+}
+
 float scope_cal_volts_per_count(uint8_t ch, uint8_t range_idx)
 {
-    return scope_cal_mv_per_count(ch, range_idx) / 1000.0f;
+    return scope_cal_mv_per_count(ch, range_idx) / 1000.0f * scope_cal_probe_factor(ch);
 }
 
 scope_cal_tier_t scope_cal_get_tier(uint8_t ch, uint8_t range_idx)
@@ -125,12 +140,11 @@ int scope_cal_true_scale_ok(uint8_t ch, uint8_t range_idx)
     return scope_cal_volts_per_count(ch, range_idx) > 0.0f;
 }
 
-void scope_cal_range_label(uint8_t ch, uint8_t range_idx, char *out, uint32_t n)
+static void format_range_label(uint8_t ch, uint8_t range_idx, float v,
+                               char *out, uint32_t n)
 {
     if (out == NULL || n == 0u)
         return;
-
-    const float v = scope_cal_volts_per_div(ch, range_idx);
 
     if (v <= 0.0f) {
         /* No cal. The grid has no volts meaning on this range, and saying so
@@ -152,4 +166,16 @@ void scope_cal_range_label(uint8_t ch, uint8_t range_idx, char *out, uint32_t n)
         const unsigned centivolts = (unsigned)(v * 100.0f + 0.5f);
         snprintf(out, n, "%s%u.%02uV", mark, centivolts / 100u, centivolts % 100u);
     }
+}
+
+void scope_cal_range_label(uint8_t ch, uint8_t range_idx, char *out, uint32_t n)
+{
+    format_range_label(ch, range_idx, scope_cal_volts_per_div(ch, range_idx), out, n);
+}
+
+void scope_cal_range_label_bnc(uint8_t ch, uint8_t range_idx, char *out, uint32_t n)
+{
+    format_range_label(ch, range_idx,
+                       scope_cal_mv_per_count(ch, range_idx) / 1000.0f * SCOPE_CAL_COUNTS_PER_DIV,
+                       out, n);
 }

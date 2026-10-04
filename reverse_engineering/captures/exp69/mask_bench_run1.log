@@ -1,0 +1,21 @@
+device Build: Oct  3 2026 15:44:28
+setup: range 5 CH1, level 0, NORMAL, timebase 0x10; JDS CH1 201.2 Hz 2.0 Vpp
+mask teach 8 ch1
+mask TEACHING  chans CH1  span 320 from anchor-160  tol v=8 cnt h=2 smp
+teach 0/8  rejected 0
+tested 0  pass 0  fail 0  skipped 0  missed 0  max-consec-fail 0
+last - gen 0
+stop-on-fail OFF
+heap free 11512 (min ever 11512)
+> 
+>
+  FAIL  A teach    state status spread 7 heap free 11512 (15.5 s)
+mask status
+mask READY  chans CH1  span 320 from anchor-160  tol v=8 cnt h=2 smp
+taught under: range 5/6 coupling 0/0 tb 0x10 trig code 128 rising src CH1  spread 7 cnt
+tested 44  pass 44  fail 0  skipped 0  missed 0  max-consec-fail 0
+last PASS gen 194
+stop-on-fail OFF
+heap free 11512 (min ever 11512)
+> 
+> 

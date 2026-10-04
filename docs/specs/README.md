@@ -46,7 +46,8 @@ concrete.
 | Cursors | S1 | *needed* | Units now derive from `scope_cal` / `scope_timebase` and refuse when the table has no entry (`scope_cursor.c`, host-tested with negative controls, 2026-09-12). **Not S2: unverified on the bench** — next is a cursor delta read against a known signal, and against the badges on the same capture |
 | Autofit vs. measured graticule | S1 | *needed* | Decision pending: the vertical graticule does not mean the volts/div the status bar prints |
 | Math channels | S0 | — | After auto-measurements S2 (same input plumbing) |
-| XY / roll / trend / mask | S0 | — | Unclaimed; each needs a spec before work starts |
+| Waveform pass/fail (mask) | **S3** (EXP-69 + bench regression, 2026-10-03) | [mask-pass-fail](scope/mask-pass-fail.md) | S4: refusal reasons legible on screen beyond the short form; masks persisted to W25Q and loadable by a module |
+| XY / roll / trend | S0 | — | Unclaimed; each needs a spec before work starts |
 | Protocol decoders | S0 | — | Needs a spec: capture-depth and sample-rate reality check first (132 host tests already exist) |
 | Bode plot | S0 | — | Blocked on siggen/scope coexistence (shared DAC1) |
 

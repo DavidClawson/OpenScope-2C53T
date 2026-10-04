@@ -25,6 +25,7 @@ extern void system_clock_config(void);
 #include "signal_gen.h"
 #include "watchdog.h"
 #include "scope_state.h"
+#include "scope_cal.h"
 #include "input_handler.h"
 #include "theme.h"
 #include "math_channel.h"
@@ -45,6 +46,7 @@ extern void system_clock_config(void);
 #include "rtt.h"
 #include "fault.h"
 #include "redraw_gate.h"
+#include "scope_mask.h"
 
 /* ═══════════════════════════════════════════════════════════════════
  * Global State (extern'd via ui.h for UI modules)
@@ -621,6 +623,23 @@ static void vDisplayTask(void *pvParameters)
         }
         if (current_mode == MODE_OSCILLOSCOPE) {
             const scope_state_t *ss_anim = scope_state_get();
+            /* Mask pass/fail readout (badge row 2, below the live band): its
+             * own epoch, like the info bar, so a counter never sits stale
+             * waiting for a full repaint. Time view only -- the slot belongs
+             * to the time-view badge layout. */
+            {
+                static uint32_t g_mask_slot_epoch;
+                uint32_t me = scope_mask_epoch();
+#ifdef FEATURE_FFT
+                const bool time_view = (scope_view == SCOPE_VIEW_TIME);
+#else
+                const bool time_view = true;
+#endif
+                if (me != g_mask_slot_epoch && time_view) {
+                    scope_ui_mask_slot_refresh();
+                    g_mask_slot_epoch = me;
+                }
+            }
             if (ss_anim->running) {
                 /* ── Scope heartbeat / acquisition re-arm ───────────
                  * Keep the existing warmup and cadence for now, but use the
@@ -758,6 +777,24 @@ static void vInputTask(void *pvParameters)
     }
 }
 
+/* Bench/test injection: post a press into the SAME queue the TMR3 key scan
+ * feeds, so everything downstream of the physical scan (the 15/15 matrix is
+ * hardware-confirmed) runs exactly as for a real press. Used by the shell's
+ * `btn` command; returns false if the queue is full or not yet created. */
+/* scope_cal's probe source: the channel's probe setting as a factor. */
+static float probe_factor_from_state(uint8_t ch)
+{
+    const scope_state_t *ss = scope_state_get();
+    const channel_state_t *c = (ch == 2u) ? &ss->ch2 : &ss->ch1;
+    return (c->probe == PROBE_10X) ? 10.0f : 1.0f;
+}
+
+bool input_inject_button(button_id_t b)
+{
+    if (xInputQueue == NULL) return false;
+    return xQueueSend(xInputQueue, &b, 0) == pdTRUE;
+}
+
 /*
  * Timer callback — runs every 1 second
  */
@@ -887,6 +924,9 @@ int main(void)
 
     /* Initialize oscilloscope state */
     scope_state_init(scope_state_get());
+    /* Probe 1X/10X scales every volts readout through scope_cal (one
+     * application point); scope_state stays its one home. */
+    scope_cal_set_probe_source(probe_factor_from_state);
 
     /* Initialize LCD — using proven hwtest approach */
     {

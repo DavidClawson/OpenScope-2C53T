@@ -12,6 +12,7 @@
  *   - Math channel, persistence, component tester (settings sub-menus)
  */
 
+#include "../ui/scope_mask.h"
 #include "input_handler.h"
 #include "ui.h"
 #include "lcd.h"
@@ -35,6 +36,7 @@
 #include "settings_store.h"
 #include "task.h"
 #include <stdio.h>
+#include <string.h>
 
 /* MENU is bit 9 in the raw button-scan state (button_scan.c). */
 #define BTN_SCAN_MENU_MASK  0x0200u
@@ -58,27 +60,30 @@ static uint32_t settings_now_ms(void)
  * Oscilloscope settings Left/Right handler
  * ═══════════════════════════════════════════════════════════════════ */
 
+static void channel_cycle_coupling(uint8_t ch, channel_state_t *c, const char *name,
+                                   char *pb, size_t n);
+
 static void osc_settings_adjust(int dir)
 {
     scope_state_t *ss = scope_state_get();
     switch (settings_sub_selected) {
-    case 0: /* CH1 Coupling */
-        ss->ch1.coupling = (coupling_t)((ss->ch1.coupling + COUPLING_COUNT + dir) % COUPLING_COUNT);
+    case 0: /* CH1 Coupling -- the relay, DC <-> AC; two states, so dir is moot */
+        { char t[24]; channel_cycle_coupling(0, &ss->ch1, "CH1", t, sizeof(t)); }
         break;
     case 1: /* CH1 Probe */
         ss->ch1.probe = (probe_t)((ss->ch1.probe + PROBE_COUNT + dir) % PROBE_COUNT);
         break;
-    case 2: /* CH1 20M Limit */
-        ss->ch1.bw_limit = !ss->ch1.bw_limit;
+    case 2: /* CH1 20M Limit -- no hardware path known; see the menu row */
+        ss->ch1.bw_limit = false;
         break;
-    case 3: /* CH2 Coupling */
-        ss->ch2.coupling = (coupling_t)((ss->ch2.coupling + COUPLING_COUNT + dir) % COUPLING_COUNT);
+    case 3: /* CH2 Coupling -- the relay, DC <-> AC; two states, so dir is moot */
+        { char t[24]; channel_cycle_coupling(1, &ss->ch2, "CH2", t, sizeof(t)); }
         break;
     case 4: /* CH2 Probe */
         ss->ch2.probe = (probe_t)((ss->ch2.probe + PROBE_COUNT + dir) % PROBE_COUNT);
         break;
-    case 5: /* CH2 20M Limit */
-        ss->ch2.bw_limit = !ss->ch2.bw_limit;
+    case 5: /* CH2 20M Limit -- no hardware path known; see the menu row */
+        ss->ch2.bw_limit = false;
         break;
     case 6: /* Trigger Mode */
         ss->trigger.mode = (trigger_mode_t)((ss->trigger.mode + TRIG_COUNT + dir) % TRIG_COUNT);
@@ -144,12 +149,17 @@ void input_handle_settings_ok(void)
     } else if (settings_depth == 1) {
         /* Oscilloscope settings sub-menu */
         switch (settings_sub_selected) {
-        case 0: scope_cycle_coupling(&ss->ch1); break;
+        /* Coupling through the relay, as on the CH1/CH2 buttons; the popup
+         * text is discarded here -- the menu redraw shows the label, which
+         * only changes when the relay did. */
+        case 0: { char t[24]; channel_cycle_coupling(0, &ss->ch1, "CH1", t, sizeof(t)); } break;
         case 1: scope_cycle_probe(&ss->ch1); break;
-        case 2: scope_toggle_bw_limit(&ss->ch1); break;
-        case 3: scope_cycle_coupling(&ss->ch2); break;
+        /* 20M limit: refused. Its only consumer was an unobeyed USART bit,
+         * so it was label-only in every build (EXP-70 audit). */
+        case 2: ss->ch1.bw_limit = false; break;
+        case 3: { char t[24]; channel_cycle_coupling(1, &ss->ch2, "CH2", t, sizeof(t)); } break;
         case 4: scope_cycle_probe(&ss->ch2); break;
-        case 5: scope_toggle_bw_limit(&ss->ch2); break;
+        case 5: ss->ch2.bw_limit = false; break;
         case 6: scope_cycle_trigger_mode(ss); break;
         case 7: scope_cycle_trigger_edge(ss); break;
         default: break;
@@ -210,6 +220,9 @@ static void send_cmd(QueueHandle_t q, uint8_t cmd)
 
 volatile bool scope_trig_level_focus = false;
 volatile bool scope_hpos_focus = false;
+/* MOVE's fourth stage, offered only while a mask exists: UP/DOWN = vertical
+ * tolerance, LEFT/RIGHT = horizontal, SELECT = stop-on-fail. */
+volatile bool scope_mask_focus = false;
 
 /* Helper: show popup and send redraw */
 static void popup_and_redraw(QueueHandle_t q, const char *text)
@@ -217,6 +230,96 @@ static void popup_and_redraw(QueueHandle_t q, const char *text)
     scope_show_popup(text);
     uint8_t cmd = DCMD_REDRAW_ALL;
     send_cmd(q, cmd);
+}
+
+/* CH1/CH2: DC <-> AC on the real relay. The label changes only if the relay
+ * did (fpga_apply_coupling verifies by readback), so the popup and the info
+ * bar can no longer say "AC" over a DC-coupled input -- which they did, on
+ * every build, until 2026-10-03. GND is out of the cycle: no hardware ground
+ * path is known, and a GND label over a live input would be the same lie. */
+static void channel_cycle_coupling(uint8_t ch, channel_state_t *c, const char *name,
+                                   char *pb, size_t n)
+{
+    coupling_t next = (c->coupling == COUPLING_DC) ? COUPLING_AC : COUPLING_DC;
+    if (fpga_apply_coupling(ch, (uint8_t)next)) {
+        c->coupling = next;
+        snprintf(pb, n, "%s %s", name, coupling_labels[next]);
+    } else {
+        snprintf(pb, n, "%s %s NOT SET", name, coupling_labels[next]);
+    }
+}
+
+/* ── Mask pass/fail from the buttons (docs/specs/scope/mask-pass-fail.md) ──
+ *
+ * Every change is a request the acquisition task applies (scope_mask.h). The
+ * popup reports what the mask says AFTER the acknowledgement -- the applied
+ * tolerance, not the one asked for -- and says NOT SET when no ack arrives
+ * (the inert-controls lesson: report the wire, not the setter's intent).
+ * The wait is bounded at ~100 ms; the acquisition loop services requests
+ * every poll (~30 ms). */
+static bool mask_req(scope_mask_req_t k, uint8_t a, uint8_t b, uint16_t n)
+{
+    uint32_t seq = scope_mask_post(k, a, b, n);
+    for (int i = 0; i < 20; i++) {
+        if (scope_mask_acked(seq)) return true;
+        vTaskDelay(pdMS_TO_TICKS(5));
+    }
+    return false;
+}
+
+static bool mask_focus_active(void)
+{
+    if (scope_mask_focus && scope_mask_state() == MASK_PF_EMPTY)
+        scope_mask_focus = false;          /* mask cleared under us */
+    return scope_mask_focus;
+}
+
+/* tol_v steps of 2 counts (1/16 division), tol_h steps of 1 sample. The
+ * popup shows the tolerance the mask reports after the ack. */
+static void mask_adjust_tol(int dv, int dh, char *pb, size_t n)
+{
+    scope_mask_summary_t m;
+    scope_mask_summary(&m);
+    int v = (int)m.tol_v + dv, h = (int)m.tol_h + dh;
+    if (v < 0) v = 0;
+    if (v > 64) v = 64;
+    if (h < 0) h = 0;
+    if (h > (int)MASK_PF_HMAX) h = (int)MASK_PF_HMAX;
+    if (!mask_req(SCOPE_MASK_REQ_TOL, (uint8_t)v, (uint8_t)h, 0)) {
+        snprintf(pb, n, "Mask tol NOT SET");
+        return;
+    }
+    scope_mask_summary(&m);
+    snprintf(pb, n, "Mask V%u H%u", (unsigned)m.tol_v, (unsigned)m.tol_h);
+}
+
+/* AUTO in the scope time view: teach when there is no mask, cancel a teach
+ * in progress, clear a finished mask. AUTO did nothing in the time view
+ * before 2026-10-03 (it only acts in the FFT views). */
+static void mask_auto_key(char *pb, size_t n)
+{
+    mask_pf_state_t st = scope_mask_state();
+    if (st == MASK_PF_EMPTY) {
+        if (!mask_req(SCOPE_MASK_REQ_TEACH, 0, 0, 0)) {
+            snprintf(pb, n, "MASK: NOT SET");
+        } else if (scope_mask_teach_refusal() != NULL) {
+            /* The refusals a user can cause, in words that fit 24 chars. */
+            const char *why = scope_mask_teach_refusal();
+            snprintf(pb, n, "%s", strstr(why, "CH2") ? "MASK: needs CH1 trig" :
+                                  strstr(why, "heap") ? "MASK: no memory" :
+                                  strstr(why, "channel") ? "MASK: no channel on" :
+                                  "MASK: refused");
+        } else {
+            scope_mask_summary_t m;
+            scope_mask_summary(&m);
+            snprintf(pb, n, "MASK: teach %u", (unsigned)m.teach_target);
+        }
+    } else {
+        bool ok = mask_req(SCOPE_MASK_REQ_CLEAR, 0, 0, 0);
+        scope_mask_focus = false;
+        snprintf(pb, n, "%s", !ok ? "MASK: NOT SET" :
+                              st == MASK_PF_TEACHING ? "MASK: cancelled" : "MASK: off");
+    }
 }
 
 /* ═══════════════════════════════════════════════════════════════════
@@ -267,9 +370,7 @@ uint8_t input_handle_button(button_id_t button, QueueHandle_t dq)
     case BTN_CH1:
         if (current_mode == MODE_OSCILLOSCOPE) {
             active_channel = 0;
-            scope_cycle_coupling(&ss->ch1);
-            snprintf(pb, sizeof(pb), "CH1 %s",
-                     coupling_labels[ss->ch1.coupling]);
+            channel_cycle_coupling(0, &ss->ch1, "CH1", pb, sizeof(pb));
             popup_and_redraw(dq, pb);
         } else {
             send_cmd(dq, cmd);
@@ -279,9 +380,7 @@ uint8_t input_handle_button(button_id_t button, QueueHandle_t dq)
     case BTN_CH2:
         if (current_mode == MODE_OSCILLOSCOPE) {
             active_channel = 1;
-            scope_cycle_coupling(&ss->ch2);
-            snprintf(pb, sizeof(pb), "CH2 %s",
-                     coupling_labels[ss->ch2.coupling]);
+            channel_cycle_coupling(1, &ss->ch2, "CH2", pb, sizeof(pb));
             popup_and_redraw(dq, pb);
         } else {
             send_cmd(dq, cmd);
@@ -324,14 +423,22 @@ uint8_t input_handle_button(button_id_t button, QueueHandle_t dq)
              * mode could not be aimed. MOVE used to cycle the edge; the edge
              * stays reachable in Settings -> Trigger Edge (it steers the
              * display's soft trigger; the FPGA fires on either edge, EXP-55). */
-            /* Cycle: V/div -> Trig level (UP/DN) -> Position (LT/RT). */
-            if (!scope_trig_level_focus && !scope_hpos_focus) {
+            /* Cycle: V/div -> Trig level (UP/DN) -> Position (LT/RT)
+             * -> Mask tolerance (only while a mask exists). */
+            if (mask_focus_active()) {
+                scope_mask_focus = false;
+                popup_and_redraw(dq, "UP/DN: V/div  LT/RT: Time");
+            } else if (!scope_trig_level_focus && !scope_hpos_focus) {
                 scope_trig_level_focus = true;
                 popup_and_redraw(dq, "UP/DN: Trig level");
             } else if (scope_trig_level_focus) {
                 scope_trig_level_focus = false;
                 scope_hpos_focus = true;
                 popup_and_redraw(dq, "LT/RT: Position");
+            } else if (scope_mask_state() != MASK_PF_EMPTY) {
+                scope_hpos_focus = false;
+                scope_mask_focus = true;
+                popup_and_redraw(dq, "UD/LR:Mask tol SEL:stop");
             } else {
                 scope_hpos_focus = false;
                 popup_and_redraw(dq, "UP/DN: V/div  LT/RT: Time");
@@ -344,8 +451,15 @@ uint8_t input_handle_button(button_id_t button, QueueHandle_t dq)
     /* -- Save (screenshot) ---------------------------------------- */
 
     case BTN_SAVE:
-#if defined(FPGA_WARM_HANDOFF_TEST) && FPGA_WARM_HANDOFF_TEST
-        /* Warm-handoff bench build: SAVE toggles the input-routing relay
+#if defined(FPGA_BENCH_SAVE_PC12) && FPGA_BENCH_SAVE_PC12
+        /* BENCH IMAGES ONLY (guest-warmtest*). Until 2026-10-03 this was gated
+         * on FPGA_WARM_HANDOFF_TEST, which the release image (guest-coldtrace)
+         * also defines -- so in v0.4.0 SAVE silently flipped CH1's input PATH
+         * relay (PC12: direct vs ~30x attenuated, set per range by the range
+         * table), leaving the volts/div calibration wrong until the next range
+         * change. It now needs its own flag.
+         *
+         * Warm-handoff bench build: SAVE toggles the input-routing relay
          * PC12 for a live A/B. Bench run 4 (2026-08-12) showed the input
          * path connected but AC-coupled — finger noise passes, DC blocked —
          * and PC12 (driven LOW by our approximate range table) is the
@@ -380,14 +494,13 @@ uint8_t input_handle_button(button_id_t button, QueueHandle_t dq)
             meter_toggle_debug_overlay();
             send_cmd(dq, cmd);
         } else {
-            /* TODO: On real hardware, capture shadow framebuffer to SPI flash.
-             * For now, show confirmation popup — the emulator's lcd_viewer
-             * independently saves screenshots on 'S' key via its own BMP writer. */
-            static uint16_t screenshot_num = 0;
-            screenshot_num++;
-            char sb[24];
-            snprintf(sb, sizeof(sb), "SAVED #%d", screenshot_num);
-            scope_show_popup(sb);
+            /* There is no on-device screenshot store: src/util/screenshot.c has
+             * no caller, and writing the stock FAT volume is not implemented.
+             * Until 2026-10-03 this printed "SAVED #n" and wrote nothing
+             * (audit P3, dev plan 2.6) -- a confirmation of something that
+             * never happened. Say so instead. Screenshots work over USB:
+             * scripts/screenshot.py (CRC-verified, needs a held screen). */
+            scope_show_popup("SAVE: not in this build");
             send_cmd(dq, cmd);
         }
         break;
@@ -433,9 +546,13 @@ uint8_t input_handle_button(button_id_t button, QueueHandle_t dq)
                     fft_auto_configure(sbuf, FFT_SIZE);
                 }
 #endif
+                send_cmd(dq, cmd);
+                break;
             }
 #endif
-            send_cmd(dq, cmd);
+            /* Time view: the mask key (teach / cancel / clear). */
+            mask_auto_key(pb, sizeof(pb));
+            popup_and_redraw(dq, pb);
         }
         break;
 
@@ -520,10 +637,22 @@ uint8_t input_handle_button(button_id_t button, QueueHandle_t dq)
             comp_test_cycle_type();
             cmd = DCMD_DRAW_SETTINGS;
             send_cmd(dq, cmd);
+        } else if (current_mode == MODE_OSCILLOSCOPE && mask_focus_active()) {
+            scope_mask_summary_t m;
+            scope_mask_summary(&m);
+            bool ok = mask_req(SCOPE_MASK_REQ_STOPFAIL, m.stop_on_fail ? 0u : 1u, 0, 0);
+            scope_mask_summary(&m);
+            snprintf(pb, sizeof(pb), ok ? "Mask stop-on-fail %s" : "Mask stop NOT SET",
+                     m.stop_on_fail ? "ON" : "OFF");
+            popup_and_redraw(dq, pb);
         } else if (current_mode == MODE_OSCILLOSCOPE) {
+            /* Probe 1X/10X: scales every volts readout (scope_cal applies
+             * it). Silent until 2026-10-03, when it also scaled nothing. */
             channel_state_t *ch = (active_channel == 0) ? &ss->ch1 : &ss->ch2;
             scope_cycle_probe(ch);
-            send_cmd(dq, cmd);
+            snprintf(pb, sizeof(pb), "CH%d probe %s", active_channel + 1,
+                     probe_labels[ch->probe]);
+            popup_and_redraw(dq, pb);
         }
         break;
 
@@ -557,6 +686,10 @@ uint8_t input_handle_button(button_id_t button, QueueHandle_t dq)
             send_cmd(dq, cmd);
         }
 #endif
+        else if (current_mode == MODE_OSCILLOSCOPE && mask_focus_active()) {
+            mask_adjust_tol(+2, 0, pb, sizeof(pb));
+            popup_and_redraw(dq, pb);
+        }
         else if (current_mode == MODE_OSCILLOSCOPE && scope_trig_level_focus) {
             scope_adjust_trigger_level(ss, 1);
             /* Through the ONE writer of reg 0x08, so the register, the
@@ -632,6 +765,10 @@ uint8_t input_handle_button(button_id_t button, QueueHandle_t dq)
             send_cmd(dq, cmd);
         }
 #endif
+        else if (current_mode == MODE_OSCILLOSCOPE && mask_focus_active()) {
+            mask_adjust_tol(-2, 0, pb, sizeof(pb));
+            popup_and_redraw(dq, pb);
+        }
         else if (current_mode == MODE_OSCILLOSCOPE && scope_trig_level_focus) {
             scope_adjust_trigger_level(ss, -1);
             /* Through the ONE writer of reg 0x08, so the register, the
@@ -731,6 +868,10 @@ uint8_t input_handle_button(button_id_t button, QueueHandle_t dq)
             cmd = DCMD_DRAW_SIGGEN;
             send_cmd(dq, cmd);
         }
+        else if (current_mode == MODE_OSCILLOSCOPE && mask_focus_active()) {
+            mask_adjust_tol(0, -1, pb, sizeof(pb));
+            popup_and_redraw(dq, pb);
+        }
         else if (current_mode == MODE_OSCILLOSCOPE && scope_hpos_focus) {
             /* Move the trigger point across the screen, 16 px per press.
              * The popup reports the column it was ASKED for; the marker at
@@ -810,6 +951,10 @@ uint8_t input_handle_button(button_id_t button, QueueHandle_t dq)
             cmd = DCMD_DRAW_SIGGEN;
             send_cmd(dq, cmd);
         }
+        else if (current_mode == MODE_OSCILLOSCOPE && mask_focus_active()) {
+            mask_adjust_tol(0, +1, pb, sizeof(pb));
+            popup_and_redraw(dq, pb);
+        }
         else if (current_mode == MODE_OSCILLOSCOPE && scope_hpos_focus) {
             /* Move the trigger point across the screen, 16 px per press.
              * The popup reports the column it was ASKED for; the marker at
@@ -854,8 +999,16 @@ uint8_t input_handle_button(button_id_t button, QueueHandle_t dq)
             meter_layout = (meter_layout + 1) % METER_LAYOUT_COUNT;
             send_cmd(dq, cmd);
         } else if (current_mode == MODE_OSCILLOSCOPE) {
-            scope_toggle_running(ss);
-            scope_show_popup(ss->running ? "RUN" : "STOP");
+            if (scope_mask_hold_active()) {
+                /* A mask failure is being held (stop-on-fail): OK resumes
+                 * testing rather than toggling RUN/STOP, which would leave
+                 * the acquisition frozen behind a STOP the user never set. */
+                (void)scope_mask_post(SCOPE_MASK_REQ_RELEASE, 0, 0, 0);
+                scope_show_popup("MASK: RESUME");
+            } else {
+                scope_toggle_running(ss);
+                scope_show_popup(ss->running ? "RUN" : "STOP");
+            }
             send_cmd(dq, cmd);
         }
         break;

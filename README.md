@@ -109,18 +109,20 @@ reviewable promotion-ladder spec per feature.
 | Settings persistence | **S2** | Commissioned on hardware 2026-08-20: first record ever written to the W25Q, then restored — and pushed into the FPGA — across three consecutive power cycles. Until that day every write was refused by a build-time interlock (`SETTINGS_PERSIST_WRITES=0`) no bench build had ever enabled, so this row previously said "real" while zero records existed — the matrix's first *over*statement. **Documented gap** (still true): a change carries only if a later button press or an orderly power-off follows it. |
 | Multimeter | **S1** | In `guest-coldtrace` (the release image) the meter runs its own auto mode and reads **DC volts** alongside the scope; other functions do nothing yet. The command-header fix and the display decoder (@Stlkv, #33/#35) drive all functions in `guest-coldtrace-meter`, tested on a second unit, not yet on ours. |
 | Signal generator | **S1** | Reachable; output has never been characterised against an instrument. |
-| Screenshot capture (BMP) | **S1** | Has a call site and writes to flash. |
+| Screenshot capture (BMP) | **S0** | **Corrected 2026-10-03 — this row said S1, "has a call site and writes to flash"; neither was true.** `src/util/screenshot.c` has no caller and nothing writes the stock FAT volume. SAVE printed `SAVED #n` and saved nothing; it now says `SAVE: not in this build`. Screenshots work over USB: `scripts/screenshot.py` (CRC-verified, needs a held screen). |
 | Rendering path | **S3** | Flicker-free column compositor with a redraw gate. Display stability is bench-measured through the real render path (EXP-22, 2026-09-03): both channels driven, amplitude/frequency/phase varied, 11/11 scenarios lock to ≤1 px, with an on-hardware negative control that correctly fails. The scope trace **autoscales** to fill the band, so the vertical graticule does not currently mean the volts/div the status bar prints — that is the remaining S4 item. |
 | FFT spectrum + waterfall | **S2** | Analyses the live capture (2026-09-22): peak bins exact at three measured timebases, header in Hz on measured codes and refused elsewhere, labels legible on the screen. Whole-record input is time-ordered since v0.4.0. |
 | Math channels | **S0** | Fed a hardcoded sine LUT and square wave. |
 | Bode plot | **S0** | A generated demo response of a first-order low-pass. |
 | Protocol decoders (UART/SPI/I2C/CAN/K-Line) | **S0** | No call sites. |
 | Auto-measurements engine (`measurement_compute`) | **S0** | Still has no caller — superseded by `scope_measure.c`, which drives the badges above. Its one unique quantity (rise/fall time) is unwired; the rest is scheduled for deletion (see the spec). |
-| XY / roll / trend / mask testing | **S0** | No call sites. |
+| Waveform pass/fail (mask) | **S3** | Taught from N captures, aligned on the hardware trigger, refuses records it cannot compare. On unit #1 (EXP-69, twice): 0 false fails in ~40 records; +30% amplitude and +5% frequency failed every record; a trigger-level change was refused rather than scored; stop-on-fail holds the failing capture with its failing columns in red. From the buttons: **AUTO** teaches / clears, **MOVE** → *Mask* sets tolerances and stop-on-fail, **OK** resumes after a held failure; bounds are drawn on the trace. Guarded by `scripts/bench_regression.py` ([spec](docs/specs/scope/mask-pass-fail.md)). |
+| XY / roll / trend | **S0** | No call sites. |
 | `modules/` | **S0** | 17 guided-procedure files across four trades, with a provisional schema ([`modules/README.md`](modules/README.md)) — but no loader: nothing in the firmware reads them. |
 
 ### Sharp edges — read before trusting the screen
 
+- **v0.4.0 and earlier: SAVE in scope mode silently changes CH1's input path, and the coupling buttons change only the label.** SAVE toggled the PC12 relay (direct vs ~30× attenuated, normally set by the range), leaving volts/div wrong until the next range change. CH1/CH2's DC/AC/GND cycled a label while the AC/DC relays stayed DC. Fixed after v0.4.0 (2026-10-03): SAVE does nothing and says so, and coupling drives the relays with readback (GND removed, since no ground path is known). If you are on v0.4.0, don't press SAVE in scope mode, and treat the coupling label as "always DC".
 - **By default the vertical graticule is not the volts/div label.** The renderer autoscales every frame from the buffer's own min/max, a deliberate choice from when we had no measured gains and no offset control. The volts/div in the status bar is now genuinely measured, so the two disagree. An opt-in true-scale path (`fpga scope graticule true`) draws at a fixed counts/division so one division means the printed volts/div on calibrated ranges — default off (it needs a centred baseline) and not yet eyeballed on the bench.
 - **Absolute vertical scale is uncalibrated.** All gains are relative to a bench source that has never been checked against a reference. Any error is uniform and recoverable with one constant.
 - **Only the bit-banged configuration path works.** Stock configures the same part over hardware SPI, so this is an unexplained gap, not a property of the peripheral.
@@ -325,7 +327,7 @@ firmware/               Custom replacement firmware (C + FreeRTOS + Make)
   src/ui/               Scope, meter, siggen, settings, themes
   src/dsp/              FFT, math channels, signal gen, Bode
   src/decode/           Protocol decoders (UART, SPI, I2C, CAN, K-Line)
-  src/tasks/            Measurement engine, component tester, mask test
+  src/tasks/            Measurement engine, component tester
   bootloader/           USB HID IAP bootloader (16KB)
 
 reverse_engineering/    Hardware analysis and protocol documentation

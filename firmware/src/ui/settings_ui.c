@@ -168,7 +168,7 @@ static void draw_settings_osc(void)
     draw_menu_item(1, 0, settings_sub_selected,
                    "CH1 Probe", probe_labels[ss->ch1.probe], th);
     draw_menu_item(2, 0, settings_sub_selected,
-                   "CH1 20M Limit", ss->ch1.bw_limit ? "ON" : "OFF", th);
+                   "CH1 20M Limit", "n/a", th);   /* no hardware path known (EXP-70) */
 
     /* CH2 section */
     draw_menu_item(3, 0, settings_sub_selected,
@@ -176,7 +176,7 @@ static void draw_settings_osc(void)
     draw_menu_item(4, 0, settings_sub_selected,
                    "CH2 Probe", probe_labels[ss->ch2.probe], th);
     draw_menu_item(5, 0, settings_sub_selected,
-                   "CH2 20M Limit", ss->ch2.bw_limit ? "ON" : "OFF", th);
+                   "CH2 20M Limit", "n/a", th);   /* no hardware path known (EXP-70) */
 
     /* Trigger section */
     draw_menu_item(6, 0, settings_sub_selected,

@@ -835,6 +835,15 @@ class JDS6600:
     to prevent (EXP-20 lost a whole sweep to it) -- so every setter here READS
     BACK and raises if the value did not take.
 
+    ⚠ CH2 DC OFFSET IS UNRELIABLE (2026-10-03, EXP-70): do not use the CH2
+    offset for DC-level work. Register 28 reads back correct, but the output
+    (a) ignored the first change after an output enable, (b) moved the
+    opposite way to the commanded step in the coupled runs, and (c) after a
+    cable swap ignored its own steps entirely while a CH1 offset write moved
+    it by ~1 V. Use CH1 for DC steps, swapping the cable to reach either scope
+    input. The CH1 offset behaved on every reading. Raw: reverse_engineering/
+    captures/exp70/{jds_first_step_*,cable_swap_sign_test}.log.
+
     Registers: 20 output enable (a,b); 21/22 waveform; 23/24 frequency
     (Hz x 100, unit field 0); 25/26 amplitude (mV, == Vpp); 27/28 offset
     (1000 = 0 V, observed 1 LSB = 10 mV -- verify per firmware); 29/30 duty

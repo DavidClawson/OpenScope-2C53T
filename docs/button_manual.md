@@ -43,12 +43,38 @@ V/div steps: 5mV, 10mV, 20mV, 50mV, 100mV, 200mV, 500mV, 1V, 2V, 5V
 
 Timebase steps: 5ns, 10ns, 20ns, 50ns, 100ns, 200ns, 500ns, 1us, 2us, 5us, 10us, 20us, 50us, 100us, 200us, 500us, 1ms, 2ms, 5ms, 10ms, 20ms
 
-### Trigger
+### Trigger and MOVE
+
+**MOVE** cycles what the arrow keys adjust (a popup names the stage):
+
+| Stage | UP/DOWN | LEFT/RIGHT | SELECT |
+|-------|---------|------------|--------|
+| V/div (default) | V/div of the active channel | Timebase | Probe 1X/10X |
+| Trig level | Trigger level (the dotted line) | Timebase | Probe 1X/10X |
+| Position | V/div | Trigger point across the screen | Probe 1X/10X |
+| Mask (only while a mask exists) | Mask vertical tolerance ±2 counts | Mask horizontal tolerance ±1 sample | Stop-on-fail on/off |
+
+The trigger edge (Rising/Falling) is in Settings -> Oscilloscope Settings.
+(Until 2026-09-22 this table said MOVE cycled the edge; it has not done so
+since the trigger-level control landed.)
 
 | Button | Action |
 |--------|--------|
-| **MOVE** | Cycle trigger edge (Rising -> Falling) |
-| **OK** | Toggle Run / Stop |
+| **OK** | Toggle Run / Stop (or, while a mask failure is held, resume testing) |
+
+### Mask pass/fail (time view)
+
+| Button | Action |
+|--------|--------|
+| **AUTO** | No mask: teach one from the next 8 good captures. Teaching: cancel. Mask ready: turn it off |
+| **MOVE** -> *Mask* | Adjust tolerances and stop-on-fail (table above) |
+| **OK** | Resume after a held failure |
+
+Every capture is then judged PASS / FAIL, or skipped with a reason (for example,
+a setting changed since teaching). Dotted lines show the mask. Columns that
+broke it turn red, and a strip along the bottom shows the verdict. The badge
+row shows `P<n> F<n>`, `MASK skip: <why>`, or `FAIL ... HOLD-OK` while a
+failure is held. Full design: `docs/specs/scope/mask-pass-fail.md`.
 
 ### Cursors
 
@@ -68,7 +94,7 @@ When cursors are active, UP/DOWN/LEFT/RIGHT control cursors instead of V/div and
 | **SELECT** | Cycle FFT window function (in FFT/Split/Waterfall views) |
 | **UP/DOWN** | Adjust reference level (+/- 5dB, in FFT views) |
 | **LEFT/RIGHT** | Zoom in/out frequency range (in FFT views) |
-| **AUTO** | Auto-configure FFT (generate test signal + optimize) |
+| **AUTO** | Auto-configure FFT (in FFT views; in the time view AUTO is the mask key) |
 
 Note: Entering an FFT view claims the shared memory pool (88KB). Returning to time view releases it.
 

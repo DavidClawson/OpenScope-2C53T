@@ -50,6 +50,7 @@
 #include "../ui/scope_freq.h"
 #include "../ui/scope_measure.h"
 #include "../ui/scope_timebase.h"
+#include "../ui/scope_mask.h"
 #include "../ui/meter_voltage_wave.h"
 
 #include "fpga_cal_table.h"
@@ -2474,6 +2475,29 @@ static void cmd_fpga_scope_edge(const char *args)
                      fpga_acq_edge_filter_get() ? "ON" : "OFF");
 }
 
+/* `fpga scope coupling` — READ-ONLY: each channel's coupling label beside the
+ * relay pin it is supposed to describe (PD12 CH1 / PD13 CH2, HIGH = DC) and
+ * the pin's GPIO mode. Change it with the buttons (`btn ch1` / `btn ch2`):
+ * that is the path under test, and a second writer here would be a second
+ * place for the label and the relay to disagree. */
+static void cmd_fpga_scope_coupling(const char *args)
+{
+    (void)args;
+    const scope_state_t *ss = scope_state_get();
+    for (int ch = 0; ch < 2; ch++) {
+        const channel_state_t *c = ch ? &ss->ch2 : &ss->ch1;
+        unsigned pin = ch ? 13u : 12u;
+        unsigned mode = (unsigned)((GPIOD->cfghr >> ((pin - 8u) * 4u)) & 0xFu);
+        unsigned odt = (unsigned)((GPIOD->odt >> pin) & 1u);
+        bool gpio_out = (mode >= 1u && mode <= 3u);
+        const char *relay = !gpio_out ? "not-gpio" : odt ? "DC" : "AC";
+        bool agree = gpio_out && ((c->coupling == COUPLING_DC) == (odt != 0u));
+        usb_debug_printf("CH%d label %s  PD%u mode 0x%X odt %u -> relay %s  %s\r\n",
+                         ch + 1, coupling_labels[c->coupling], pin, mode, odt, relay,
+                         agree ? "AGREE" : "DISAGREE");
+    }
+}
+
 /* `fpga edgefilter [on|off]` — the MCU-side trigger edge filter. */
 static void cmd_fpga_edgefilter(const char *args)
 {
@@ -3146,14 +3170,19 @@ static void cmd_fpga_scope_measure(const char *args)
     const float k1 = scope_cal_volts_per_count(1u, ss->ch1.vdiv_idx);
     const float k2 = scope_cal_volts_per_count(2u, ss->ch2.vdiv_idx);
 
+    /* k1/k2 are probe-TIP volts per count (scope_cal applies the probe
+     * factor); probeN says which factor, so a bench script can tell a 10x
+     * setting from a calibration change. Appended, so parsers keep working. */
     usb_debug_printf("badge sources: rng1=%u k1_uV=%lu  rng2=%u k2_uV=%lu  "
-                     "tb=0x%02X inforce=0x%02X fs=%lu\r\n",
+                     "tb=0x%02X inforce=0x%02X fs=%lu  probe1=x%u probe2=x%u\r\n",
                      (unsigned)ss->ch1.vdiv_idx,
                      (unsigned long)(k1 * 1e6f + 0.5f),
                      (unsigned)ss->ch2.vdiv_idx,
                      (unsigned long)(k2 * 1e6f + 0.5f),
                      (unsigned)ss->timebase_idx, (unsigned)in_force,
-                     (unsigned long)(fs + 0.5f));
+                     (unsigned long)(fs + 0.5f),
+                     (unsigned)(scope_cal_probe_factor(1u) + 0.5f),
+                     (unsigned)(scope_cal_probe_factor(2u) + 0.5f));
     if (in_force != ss->timebase_idx)
         usb_send_str("TB MISMATCH: frequency suppressed (see fpga scope freq)\r\n");
 
@@ -3233,8 +3262,8 @@ static void cmd_fpga_scope_cal(void)
 
     for (uint8_t r = 0; r < SCOPE_CAL_RANGE_COUNT; r++) {
         char l1[12], l2[12];
-        scope_cal_range_label(1u, r, l1, sizeof(l1));
-        scope_cal_range_label(2u, r, l2, sizeof(l2));
+        scope_cal_range_label_bnc(1u, r, l1, sizeof(l1));   /* BNC: this is the */
+        scope_cal_range_label_bnc(2u, r, l2, sizeof(l2));   /* cal table        */
 
         const scope_cal_tier_t t = scope_cal_get_tier(1u, r);
         const char *tn = (t == SCOPE_CAL_MEASURED)    ? "measured"
@@ -3252,6 +3281,10 @@ static void cmd_fpga_scope_cal(void)
                          tn);
     }
 
+    usb_debug_printf("table is at the BNC; on-screen volts are at the probe tip: "
+                     "probe CH1 x%u  CH2 x%u\r\n",
+                     (unsigned)(scope_cal_probe_factor(1u) + 0.5f),
+                     (unsigned)(scope_cal_probe_factor(2u) + 0.5f));
     usb_send_str("\r\ntimebase (reg 0x01) -> sample rate\r\n");
     usb_send_str("code    S/s    s/div   tier\r\n");
     for (uint8_t c = 0; c < SCOPE_TIMEBASE_CODE_COUNT; c++) {
@@ -7529,6 +7562,223 @@ static void cmd_fwapply(void)
     }
 }
 
+/* `btn <name> [n]` — inject a button press into the input queue, downstream
+ * of the TMR3 key scan, so a bench script can drive the UI exactly as the
+ * buttons do. POWER is refused: its handlers shut the device down or reset
+ * into the factory IAP bootloader. */
+static void cmd_btn(const char *args)
+{
+    static const struct { const char *name; button_id_t id; } names[] = {
+        {"ch1", BTN_CH1}, {"ch2", BTN_CH2}, {"move", BTN_MOVE}, {"select", BTN_SELECT},
+        {"trigger", BTN_TRIGGER}, {"prm", BTN_PRM}, {"auto", BTN_AUTO}, {"save", BTN_SAVE},
+        {"menu", BTN_MENU}, {"up", BTN_UP}, {"down", BTN_DOWN}, {"left", BTN_LEFT},
+        {"right", BTN_RIGHT}, {"ok", BTN_OK},
+    };
+    while (*args == ' ') args++;
+    size_t len = 0;
+    while (args[len] && args[len] != ' ') len++;
+    uint32_t n = 1;
+    if (args[len] == ' ') {
+        const char *p = args + len;
+        while (*p == ' ') p++;
+        if (*p && (parse_int(p, &n) != 0 || n == 0 || n > 50)) n = 0;
+    }
+    for (unsigned i = 0; i < sizeof(names) / sizeof(names[0]); i++) {
+        if (len == strlen(names[i].name) && strncmp(args, names[i].name, len) == 0 && n) {
+            unsigned sent = 0;
+            for (uint32_t k = 0; k < n; k++) {
+                if (input_inject_button(names[i].id)) sent++;
+                vTaskDelay(pdMS_TO_TICKS(150));   /* let each press be handled */
+            }
+            usb_debug_printf("btn %s: %u/%lu queued\r\n", names[i].name, sent, (unsigned long)n);
+            return;
+        }
+    }
+    usb_send_str("usage: btn ch1|ch2|move|select|trigger|prm|auto|save|menu|up|down|left|right|ok [1..50]\r\n"
+                 "(power is refused: it shuts down or enters IAP)\r\n");
+}
+
+/* ── `mask` — waveform pass/fail (docs/specs/scope/mask-pass-fail.md) ──────────
+ *
+ * Every mutation is a request applied by the acquisition task (scope_mask.h),
+ * so each command waits for the acknowledgement and SAYS when it did not
+ * arrive, instead of reporting the intent as the result. */
+static bool mask_post_wait(scope_mask_req_t k, uint8_t a, uint8_t b, uint16_t n)
+{
+    uint32_t seq = scope_mask_post(k, a, b, n);
+    for (int i = 0; i < 40; i++) {
+        if (scope_mask_acked(seq)) return true;
+        vTaskDelay(pdMS_TO_TICKS(10));
+    }
+    usb_send_str("NOT APPLIED: the acquisition loop did not pick the request up in 400 ms\r\n"
+                 "(not a live-scope build, scope not initialised, or acq parked).\r\n");
+    return false;
+}
+
+static const char *mask_state_str(mask_pf_state_t s)
+{
+    return s == MASK_PF_READY ? "READY" : s == MASK_PF_TEACHING ? "TEACHING" : "EMPTY";
+}
+
+static const char *mask_verdict_str(mask_pf_verdict_t v)
+{
+    return v == MASK_PF_V_PASS ? "PASS" : v == MASK_PF_V_FAIL ? "FAIL" :
+           v == MASK_PF_V_SKIP ? "SKIP" : "-";
+}
+
+static void mask_print_cond_diff(uint8_t d)
+{
+    if (d & MASK_PF_C_RANGE1)     usb_send_str(" CH1-range");
+    if (d & MASK_PF_C_RANGE2)     usb_send_str(" CH2-range");
+    if (d & MASK_PF_C_COUPLING)   usb_send_str(" coupling");
+    if (d & MASK_PF_C_TIMEBASE)   usb_send_str(" timebase");
+    if (d & MASK_PF_C_TRIG_LEVEL) usb_send_str(" trig-level");
+    if (d & MASK_PF_C_TRIG_EDGE)  usb_send_str(" trig-edge");
+    if (d & MASK_PF_C_TRIG_SRC)   usb_send_str(" trig-source");
+}
+
+static void mask_print_status(void)
+{
+    scope_mask_summary_t s;
+    scope_mask_summary(&s);
+    usb_debug_printf("mask %s  chans %s%s  span 320 from anchor-%d  tol v=%u cnt h=%u smp%s\r\n",
+                     mask_state_str(s.state), (s.chans & 1u) ? "CH1" : "",
+                     (s.chans & 2u) ? ((s.chans & 1u) ? "+CH2" : "CH2") : "",
+                     (int)s.pre, (unsigned)s.tol_v, (unsigned)s.tol_h,
+                     s.rail_limited ? "  RAIL-LIMITED" : "");
+    if (s.state == MASK_PF_TEACHING || s.teach_rejects) {
+        usb_debug_printf("teach %u/%u  rejected %lu", (unsigned)s.teach_got,
+                         (unsigned)s.teach_target, (unsigned long)s.teach_rejects);
+        if (s.teach_last_reject != MASK_PF_R_OK)
+            usb_debug_printf(" (last: %s)", mask_pf_reason_str(s.teach_last_reject));
+        usb_send_str("\r\n");
+    }
+    if (s.state == MASK_PF_READY) {
+        usb_debug_printf("taught under: range %u/%u coupling %u/%u tb 0x%02X trig code %u %s src CH%u  spread %u cnt\r\n",
+                         s.cond.range[0], s.cond.range[1], s.cond.coupling[0], s.cond.coupling[1],
+                         s.cond.timebase, s.cond.trig_code, s.cond.trig_edge ? "falling" : "rising",
+                         (unsigned)s.cond.trig_src + 1u, (unsigned)s.spread);
+    }
+    usb_debug_printf("tested %lu  pass %lu  fail %lu  skipped %lu  missed %lu  max-consec-fail %lu\r\n",
+                     (unsigned long)s.tested, (unsigned long)s.passed, (unsigned long)s.failed,
+                     (unsigned long)s.skipped, (unsigned long)s.missed,
+                     (unsigned long)s.max_consec_fail);
+    const mask_pf_t *m = scope_mask_raw();
+    if (s.skipped && m != NULL) {
+        usb_send_str("skips:");
+        for (unsigned r = 1; r < MASK_PF_R_COUNT; r++)
+            if (m->skipped[r]) usb_debug_printf(" %s=%lu", mask_pf_reason_str((mask_pf_reason_t)r),
+                                                (unsigned long)m->skipped[r]);
+        usb_send_str("\r\n");
+    }
+    usb_debug_printf("last %s gen %lu", mask_verdict_str(s.last.verdict), (unsigned long)s.last.gen);
+    if (s.last.verdict == MASK_PF_V_SKIP) {
+        usb_debug_printf(" (%s", mask_pf_reason_str(s.last.reason));
+        if (s.last.reason == MASK_PF_R_SETTINGS) mask_print_cond_diff(s.last.cond_diff);
+        usb_send_str(")");
+    }
+    usb_send_str("\r\n");
+    if (s.failed)
+        usb_debug_printf("last FAIL gen %lu: %u samples out, first CH%d col %d, worst %d cnt\r\n",
+                         (unsigned long)s.last_fail.gen, (unsigned)s.last_fail.violations,
+                         (int)s.last_fail.first_ch + 1, (int)s.last_fail.first_col,
+                         (int)s.last_fail.worst);
+    usb_debug_printf("stop-on-fail %s%s\r\n", s.stop_on_fail ? "ON" : "OFF",
+                     s.hold ? "  -- HOLDING a failed record (mask run / OK to resume)" : "");
+    usb_debug_printf("move-focus %s\r\n", scope_mask_focus ? "mask" : scope_hpos_focus ? "position" :
+                     scope_trig_level_focus ? "trig-level" : "vdiv");
+    usb_debug_printf("heap free %lu (min ever %lu)\r\n", (unsigned long)xPortGetFreeHeapSize(),
+                     (unsigned long)xPortGetMinimumEverFreeHeapSize());
+}
+
+static void cmd_mask(const char *args)
+{
+    while (*args == ' ') args++;
+    if (*args == 0 || strncmp(args, "status", 6) == 0) {
+        mask_print_status();
+        return;
+    }
+    if (strncmp(args, "teach", 5) == 0) {
+        const char *p = args + 5;
+        uint32_t n = 0;
+        uint8_t ch = 0;
+        while (*p) {
+            while (*p == ' ') p++;
+            if (!*p) break;
+            if (strncmp(p, "ch1", 3) == 0)       ch = 1;
+            else if (strncmp(p, "ch2", 3) == 0)  ch = 2;
+            else if (strncmp(p, "both", 4) == 0) ch = 3;
+            else if (parse_int(p, &n) != 0 || n == 0 || n > MASK_PF_TEACH_MAX) {
+                usb_debug_printf("usage: mask teach [1..%u] [ch1|ch2|both]\r\n", MASK_PF_TEACH_MAX);
+                return;
+            }
+            while (*p && *p != ' ') p++;
+        }
+        if (!mask_post_wait(SCOPE_MASK_REQ_TEACH, ch, 0, (uint16_t)n)) return;
+        const char *why = scope_mask_teach_refusal();
+        if (why) { usb_debug_printf("teach REFUSED: %s\r\n", why); return; }
+        mask_print_status();
+        return;
+    }
+    if (strncmp(args, "tol", 3) == 0) {
+        const char *p = args + 3;
+        while (*p == ' ') p++;
+        uint32_t v = 0, h = MASK_PF_TOL_H_DEFAULT;
+        if (parse_int(p, &v) != 0 || v > 255u) {
+            usb_debug_printf("usage: mask tol <v counts 0..255> [h samples 0..%u]\r\n", MASK_PF_HMAX);
+            return;
+        }
+        while (*p && *p != ' ') p++;
+        while (*p == ' ') p++;
+        if (*p && (parse_int(p, &h) != 0 || h > MASK_PF_HMAX)) {
+            usb_debug_printf("usage: mask tol <v counts 0..255> [h samples 0..%u]\r\n", MASK_PF_HMAX);
+            return;
+        }
+        if (mask_post_wait(SCOPE_MASK_REQ_TOL, (uint8_t)v, (uint8_t)h, 0)) mask_print_status();
+        return;
+    }
+    if (strncmp(args, "clear", 5) == 0) {
+        if (mask_post_wait(SCOPE_MASK_REQ_CLEAR, 0, 0, 0)) usb_send_str("mask cleared\r\n");
+        return;
+    }
+    if (strncmp(args, "reset", 5) == 0) {
+        if (mask_post_wait(SCOPE_MASK_REQ_RESET, 0, 0, 0)) mask_print_status();
+        return;
+    }
+    if (strncmp(args, "run", 3) == 0) {
+        if (mask_post_wait(SCOPE_MASK_REQ_RELEASE, 0, 0, 0)) usb_send_str("hold released\r\n");
+        return;
+    }
+    if (strncmp(args, "stop", 4) == 0) {
+        const char *p = args + 4;
+        while (*p == ' ') p++;
+        uint8_t on;
+        if (strncmp(p, "on", 2) == 0)       on = 1;
+        else if (strncmp(p, "off", 3) == 0) on = 0;
+        else { usb_send_str("usage: mask stop on|off\r\n"); return; }
+        if (mask_post_wait(SCOPE_MASK_REQ_STOPFAIL, on, 0, 0)) mask_print_status();
+        return;
+    }
+    if (strncmp(args, "dump", 4) == 0) {
+        /* One line per column: col lo hi [lo2 hi2] [*] -- * = outside in the
+         * last FAIL. Machine-readable for bench scripts. */
+        const mask_pf_t *m = scope_mask_raw();
+        if (m == NULL || m->state != MASK_PF_READY) { usb_send_str("no finished mask\r\n"); return; }
+        usb_debug_printf("mask dump pre %d chans %u\r\n", (int)m->pre, (unsigned)m->chans);
+        for (unsigned i = 0; i < MASK_PF_SPAN; i++) {
+            uint8_t l1 = 0, h1 = 0, l2 = 0, h2 = 0;
+            (void)mask_pf_bounds(m, 0, (uint16_t)i, &l1, &h1);   /* 0 0 = not in mask */
+            (void)mask_pf_bounds(m, 1, (uint16_t)i, &l2, &h2);
+            usb_debug_printf("%u %u %u %u %u%s%s\r\n", i, l1, h1, l2, h2,
+                             mask_pf_fail_col(m, 0, (uint16_t)i) ? " *1" : "",
+                             mask_pf_fail_col(m, 1, (uint16_t)i) ? " *2" : "");
+        }
+        usb_send_str("end\r\n");
+        return;
+    }
+    usb_send_str("usage: mask [status|teach [n] [ch1|ch2|both]|tol <v> [h]|clear|reset|run|stop on|off|dump]\r\n");
+}
+
 typedef struct {
     const char *name;                    /* full command word(s) */
     void (*fn_args)(const char *args);   /* exactly one of these two is set */
@@ -7688,8 +7938,19 @@ static const shell_cmd_t shell_cmds[] = {
           "fpga postedge [ms]              Poll start after a handover, ms (EXP-54; derived fill + 100)\r\n"),
     CMD_A("fpga scope hpos", cmd_fpga_scope_hpos, 0,
           "fpga scope hpos [8..312]        Screen column of the trigger point (default 160)\r\n"),
+    CMD_A("fpga scope coupling", cmd_fpga_scope_coupling, 0,
+          "fpga scope coupling             Coupling label vs PD12/PD13 relay pins (read-only)\r\n"),
     CMD_A("fpga scope edge", cmd_fpga_scope_edge, 0,
           "fpga scope edge [rising|falling] Trigger edge (display soft trigger + MCU edge filter)\r\n"),
+    CMD_A("btn", cmd_btn, SC_NEEDARGS,
+          "btn <name> [n]                  Inject a button press (not power) into the UI\r\n"),
+    CMD_A("mask", cmd_mask, 0,
+          "mask [status]                   Waveform pass/fail: state, counts, last verdict\r\n"
+          "mask teach [n] [ch1|ch2|both]   Teach from the next n good records (default 8)\r\n"
+          "mask tol <v> [h]                Tolerance: v ADC counts, h samples 0..16 (default 8 2)\r\n"
+          "mask clear|reset|run            Drop mask | zero counts | release a fail hold\r\n"
+          "mask stop on|off                Hold the acquisition on a failed record\r\n"
+          "mask dump                       Bounds per column (bench scripts)\r\n"),
     CMD_A("fpga edgefilter", cmd_fpga_edgefilter, 0,
           "fpga edgefilter [on|off]        MCU trigger edge filter: keep Rising/Falling records (default on)\r\n"),
     CMD_A("fpga pollgap", cmd_fpga_pollgap, 0,

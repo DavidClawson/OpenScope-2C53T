@@ -81,7 +81,8 @@ C_SOURCES += src/ui/meter_voltage_wave.c
 C_SOURCES += src/dsp/math_channel.c
 C_SOURCES += src/dsp/bode.c
 C_SOURCES += src/tasks/component_test.c
-C_SOURCES += src/tasks/mask_test.c
+C_SOURCES += src/dsp/mask_pf.c
+C_SOURCES += src/ui/scope_mask.c
 C_SOURCES += src/util/config.c
 C_SOURCES += src/util/cal_dump.c
 C_SOURCES += src/util/cal_backup_core.c
@@ -358,11 +359,11 @@ guest: clean all
 # meter+CH2 both work  -> our bit-bang configuration is deficient, ONE root cause
 # neither works        -> our runtime code, not the configuration
 # split                -> two independent faults
-guest-warmtest-usart: CFLAGS += -DGUEST_BUILD -DFPGA_WARM_HANDOFF_TEST=1 -DFPGA_USART_SILENT_SCOPE=0
+guest-warmtest-usart: CFLAGS += -DGUEST_BUILD -DFPGA_WARM_HANDOFF_TEST=1 -DFPGA_USART_SILENT_SCOPE=0 -DFPGA_BENCH_SAVE_PC12=1
 guest-warmtest-usart: LDSCRIPT = ld/at32f403a_guest.ld
 guest-warmtest-usart: clean all
 
-guest-warmtest: CFLAGS += -DGUEST_BUILD -DFPGA_WARM_HANDOFF_TEST=1 -DFPGA_USART_SILENT_SCOPE=1
+guest-warmtest: CFLAGS += -DGUEST_BUILD -DFPGA_WARM_HANDOFF_TEST=1 -DFPGA_USART_SILENT_SCOPE=1 -DFPGA_BENCH_SAVE_PC12=1
 guest-warmtest: LDSCRIPT = ld/at32f403a_guest.ld
 guest-warmtest: clean all
 
@@ -376,7 +377,7 @@ guest-warmtest: clean all
 # CH2 trace appearing the way CH1 did after the DAC1 fix. See scope_trigger.c.
 # [LIVE] Queued bench item (dev plan F3): CH2 trigger reference via TMR13.
 #        Decoded, NOT yet confirmed on hardware.
-guest-warmtest-ch2: CFLAGS += -DGUEST_BUILD -DFPGA_WARM_HANDOFF_TEST=1 -DFPGA_USART_SILENT_SCOPE=1 -DFPGA_CH2_TRIGGER=1
+guest-warmtest-ch2: CFLAGS += -DGUEST_BUILD -DFPGA_WARM_HANDOFF_TEST=1 -DFPGA_USART_SILENT_SCOPE=1 -DFPGA_CH2_TRIGGER=1 -DFPGA_BENCH_SAVE_PC12=1
 guest-warmtest-ch2: LDSCRIPT = ld/at32f403a_guest.ld
 guest-warmtest-ch2: clean all
 
@@ -654,7 +655,19 @@ $(BUILD_DIR)/test_trig_edge: tests/test_trig_edge.c src/dsp/trig_edge.c src/dsp/
 test-trig-edge: $(BUILD_DIR)/test_trig_edge
 	$<
 
-.PHONY: all clean disasm size renode soak-test soak-quick flash flash-dfu bootloader flash-bootloader flash-all guest guest-warmtest guest-usart-silent emu test-meter-data test-meter-auto test-meter-voltage-wave test-fpga-meter-plan test-stock-meter-literals test-meter test-scope-measure test-scope-cal test-scope-timebase test-scope-freq test-redraw-gate test-fft-live test-trig-edge test-config-persist guest-persist guest-caldump guest-coldtrace-slow guest-coldtrace-la guest-debugclk guest-configA-gap guest-configA-csdummy guest-configA-gapless guest-bringup guest-bringup-bb guest-bringup-bb-slow guest-coldtrace-hwspi guest-bringup-bb-faithful fpga-alt-header guest-coldtrace-meter
+# Waveform pass/fail masks (docs/specs/scope/mask-pass-fail.md): real records from
+# unit #1, aligned with the firmware's own trig_edge_anchor(); every acceptance
+# has a negative control that must come out the other way.
+$(BUILD_DIR)/test_mask_pf: tests/test_mask_pf.c src/dsp/mask_pf.c src/dsp/mask_pf.h \
+                           src/dsp/trig_edge.c src/dsp/trig_edge.h \
+                           tests/fixtures/mask_pf_records.h | $(BUILD_DIR)
+	$(HOST_CC) -std=gnu11 -O2 -Wall -Wextra -Werror -Isrc/dsp -Itests \
+		$< src/dsp/mask_pf.c src/dsp/trig_edge.c -lm -o $@
+
+test-mask-pf: $(BUILD_DIR)/test_mask_pf
+	$<
+
+.PHONY: all clean disasm size renode soak-test soak-quick flash flash-dfu bootloader flash-bootloader flash-all guest guest-warmtest guest-usart-silent emu test-meter-data test-meter-auto test-meter-voltage-wave test-fpga-meter-plan test-stock-meter-literals test-meter test-scope-measure test-scope-cal test-scope-timebase test-scope-freq test-redraw-gate test-fft-live test-trig-edge test-mask-pf test-config-persist guest-persist guest-caldump guest-coldtrace-slow guest-coldtrace-la guest-debugclk guest-configA-gap guest-configA-csdummy guest-configA-gapless guest-bringup guest-bringup-bb guest-bringup-bb-slow guest-coldtrace-hwspi guest-bringup-bb-faithful fpga-alt-header guest-coldtrace-meter
 
 # ═══════════════════════════════════════════════════════════════════════════
 # BENCH / EXPERIMENT IMAGE INDEX                          (index added 2026-08-13)

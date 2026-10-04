@@ -1,0 +1,35 @@
+device Build: Oct  3 2026 16:57:43
+setup: range 5 CH1, level 0, NORMAL, timebase 0x10; JDS CH1 201.2 Hz 2.0 Vpp
+mask teach 8 ch1
+mask TEACHING  chans CH1  span 320 from anchor-160  tol v=8 cnt h=2 smp
+teach 0/8  rejected 0
+tested 0  pass 0  fail 0  skipped 0  missed 0  max-consec-fail 0
+last - gen 0
+stop-on-fail OFF
+heap free 11504 (min ever 11504)
+> 
+>
+  PASS  A teach    state READY spread 8 heap free 11504 (2.8 s)
+  PASS  B base     tested 42 pass 42 fail 0 skip 0 []
+  PASS  C amp+30%  tested 23 fail 23
+  PASS  C recover  tested 23 pass 23
+  PASS  D freq+5%  tested 20 fail 20
+  PASS  E settings tested 0 skip 14 [settings changed=14]
+  PASS  E resume   tested 12 pass 12
+  PASS  F hold     held True; judged 2 -> 2 while held, 13 after release; still held False [stale (held across a stop)=1]
+  PASS  G health   missed commits 0 throughout
+
+mask status
+mask READY  chans CH1  span 320 from anchor-160  tol v=8 cnt h=2 smp
+teach 8/8  rejected 1 (last: not time-ordered)
+taught under: range 5/6 coupling 0/0 tb 0x10 trig code 128 rising src CH1  spread 8 cnt
+tested 12  pass 11  fail 1  skipped 1  missed 0  max-consec-fail 1
+skips: stale (held across a stop)=1
+last PASS gen 594
+last FAIL gen 572: 123 samples out, first CH1 col 9, worst 8 cnt
+stop-on-fail OFF
+heap free 11504 (min ever 11504)
+> 
+>
+
+9/9 criteria met
