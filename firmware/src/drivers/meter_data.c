@@ -1112,6 +1112,33 @@ static bool frame_has_ac_evidence(uint8_t submode,
  * Format value into display string
  * ═══════════════════════════════════════════════════════════════════ */
 
+/* Five-digit text: the leading digit (1 when bcd_value >= 10000, else 0) and
+ * the four frame digits, with `decimals` digits after the point (0..4). Sets
+ * display_str and value; the sign comes from r->negative. Integer-only
+ * formatting: newlib-nano has no %f. */
+static void format_5digit(meter_reading_t *r, uint8_t decimals)
+{
+    char *s = r->display_str;
+    char digits[5];
+    digits[0] = (char)('0' + (r->bcd_value >= 10000 ? 1 : 0));
+    for (int i = 0; i < 4; i++) digits[i + 1] = (char)('0' + r->digits[i]);
+    if (decimals > 4) decimals = 4;
+    int point = 5 - (int)decimals;          /* index the point precedes */
+    int first = 0;                          /* drop leading zeros before the point */
+    while (first < point - 1 && digits[first] == '0') first++;
+    int pos = 0;
+    if (r->negative) s[pos++] = '-';
+    for (int i = first; i < 5; i++) {
+        if (i == point && decimals > 0) s[pos++] = '.';
+        s[pos++] = digits[i];
+    }
+    s[pos] = '\0';
+    float div = 1.0f;
+    for (uint8_t i = 0; i < decimals; i++) div *= 10.0f;
+    r->value = (float)r->bcd_value / div;
+    if (r->negative) r->value = -r->value;
+}
+
 static void format_reading(meter_reading_t *r, uint8_t submode)
 {
     char *s = r->display_str;
@@ -1340,7 +1367,13 @@ void meter_data_process_frame(const volatile uint8_t *frame, uint8_t submode)
      *    not the blank/partial-blank special frames, which are blank all the
      *    way through.
      */
-    uint8_t dp_bits = (uint8_t)(((nib0 & 0x10U) ? 1U : 0U) | ((nib1 & 0x10U) ? 2U : 0U) |
+    /* nib0's bit 4 is NOT a point: it is frame[2] bit 4, the minus sign
+     * (stock's VNEG at 0x08037166; a point before the first digit would have
+     * nothing to separate). Counting it here made every negative reading
+     * outside DCV carry two "points" and lose its real one (2026-10-03,
+     * @saulvalenzuela23's #37 frames). */
+    (void)nib0;
+    uint8_t dp_bits = (uint8_t)(((nib1 & 0x10U) ? 2U : 0U) |
                                 ((nib2 & 0x10U) ? 4U : 0U) | ((nib3 & 0x10U) ? 8U : 0U));
     uint8_t frame_dp = (dp_bits == 2U) ? 1U : (dp_bits == 4U) ? 2U : (dp_bits == 8U) ? 3U : 0U;
     uint8_t text_codes[4] = { digit0, digit1, digit2, digit3 };
@@ -1368,7 +1401,14 @@ void meter_data_process_frame(const volatile uint8_t *frame, uint8_t submode)
     uint8_t status = frame[7];
     r->is_ac = (status & (1 << 2)) != 0;
     r->is_auto_range = (status & (1 << 3)) != 0;
-    r->negative = ((submode == 0 || submode == 2 || submode == 3) &&
+    /* The sign is frame[2] bit 4 in every function: stock negates on it
+     * (VNEG at 0x08037166, documented in meter_math_pipeline_annotated.c since
+     * 2026-04 but never implemented here). Bench, @saulvalenzuela23 #37:
+     * -2.0030 V arrives as frame[2] = 0xB6 with frame[7] = 0x00, so the old
+     * rule below alone showed +2.003 V. frame[7] bit 0 is kept for DCV/DC
+     * current, where @Stlkv measured it on a -00.03 mA frame (EXP-205 5c). */
+    r->negative = ((frame[2] & 0x10U) != 0U) ||
+                  ((submode == 0 || submode == 2 || submode == 3) &&
                    (status & (1 << 0)) != 0);
 
     /* Parse flags from byte [6] */
@@ -1536,12 +1576,13 @@ void meter_data_process_frame(const volatile uint8_t *frame, uint8_t submode)
     uint8_t d2 = digit2;
     uint8_t d3 = digit3;
 
-    if (submode != 0 && (frame[2] & 0x08U) != 0U) {
+    if (submode != 0 && submode != 6 && submode != 7 && (frame[2] & 0x08U) != 0U) {
         /*
-         * Stock only proves frame[2].3 as the raw +10000 extension in the DCV
-         * formatter/value path. Reusing that bit in other submodes creates a
-         * host-side mismatch where the 4-digit display keeps the old digits but
-         * the computed value silently jumps by +10000/divisor.
+         * frame[2].3 is the leading "1" of the 5-digit display (+10000 raw).
+         * Proven in DCV (stock formatter) and, since 2026-10-03, in resistance
+         * (@saulvalenzuela23 #37: 100.65 Ohm = 0xEC with digits "00.65"),
+         * where format_5digit() below shows it. Elsewhere it stays refused:
+         * a 4-digit display with a silent +10000 is the mismatch this guards.
          */
         r->reject_reason = METER_REJECT_UNSUPPORTED_EXTENSION;
         METER_REJECT_FRAME();
@@ -1619,6 +1660,22 @@ void meter_data_process_frame(const volatile uint8_t *frame, uint8_t submode)
             r->unit_suffix = "kOhm";
             r->decimal_pos = 0;
             format_4digit_unsigned(kohm, s);
+        } else if (r->bcd_value >= 10000) {
+            /* The 5-digit display: frame[2] bit 3 = a leading "1"
+             * ("100.65" Ohm, @saulvalenzuela23 #37 -- refused until
+             * 2026-10-03). The point is the frame's own.
+             *
+             * NOT done here: frame[8] bit 7 as "four decimals". It fits all
+             * of saul's captures (1 kOhm -> 9977 + bit 7 = "0.9977" kOhm;
+             * 10 kOhm -> 9857, bit clear) but CONTRADICTS two measured V1.4
+             * units, whose frames carry bit 7 with the readings shown
+             * WITHOUT the extra decade (unit #1 10 kOhm "9775" = 9.775 kOhm,
+             * EXP-27; unit #2 2.2 kOhm "2168" = 2.168 kOhm). Open question
+             * (manual vs auto range is the leading candidate) -- see
+             * test_saul_frames_37 in tests/test_meter_data.c. */
+            uint8_t decimals = frame_dp ? (uint8_t)(4U - frame_dp) : 0U;
+            format_5digit(r, decimals);
+            r->unit_suffix = kohm_regime ? "kOhm" : "Ohm";
         } else if (frame_dp) {
             r->unit_suffix = kohm_regime ? "kOhm" : "Ohm";
         } else if (kohm_regime) {

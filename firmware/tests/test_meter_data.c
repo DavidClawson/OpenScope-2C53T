@@ -2819,6 +2819,107 @@ static int test_live_capacitance_frames_self_describe(void)
     return 1;
 }
 
+/*
+ * @saulvalenzuela23's frames, issue #37 (2026-10-03): a DL16 on the isolated
+ * meter UART of his UNLABELLED (pre-V1.4) board, stock firmware 1.2.0, with
+ * his meter's own display reading beside each frame. The first real frames
+ * from a second board revision in this suite.
+ *
+ * They exposed two decoder defects, fixed the same day:
+ *   - the sign is frame[2] bit 4 (stock's VNEG, 0x08037166). -2.0030 V
+ *     arrived with frame[7] = 0x00, and the old rule (frame[7] bit 0 only)
+ *     showed +2.003 V;
+ *   - frame[2] bit 3, the leading "1" of the 5-digit display, was refused in
+ *     resistance, so 100.65 Ohm decoded as nothing.
+ * and one open question, deliberately NOT asserted: the 1 kOhm frame
+ * (digits 9977, frame[8] bit 7 set) read "0.9977 kOhm" on his meter, but two
+ * V1.4 units send the same bit with readings that carry no extra decade
+ * (9775 -> 9.775 kOhm, 2168 -> 2.168 kOhm, test_live_* above). See the
+ * comment at the 5-digit branch in meter_data.c.
+ */
+static int test_saul_frames_37(void)
+{
+    uint8_t frame[12];
+    meter_data_init();
+
+    /* DCV sweep and the polarity pair (submode 0) */
+    static const struct { const char *hex, *disp; float v; } dcv[] = {
+        { "5AA5C6E7CBA70D0082000144", "0.5052",  0.5052f },
+        { "5AA5EEEBEBA70D0082000149", "1.0062",  1.0062f },
+        { "5AA5EEEFCBC70F0082000150", "1.8059",  1.8059f },
+        { "5AA5A6BDED0B0A0002000153", "2.201",   2.201f  },
+        { "5AA5A6DDCFCF0F0002000155", "2.999",   2.999f  },
+        { "5AA5461ECAEF070002000157", "4.196",   4.196f  },
+        { "5AA5B6FDEB8B0F000200015D", "-2.003", -2.003f  },
+    };
+    meter_data_invalidate(0);
+    for (unsigned i = 0; i < sizeof(dcv) / sizeof(dcv[0]); i++) {
+        raw_frame(frame, dcv[i].hex);
+        process_frame(frame, 0);
+        ASSERT(expect_normal_reading(dcv[i].disp, "V", dcv[i].v, 0.0005f));
+    }
+    ASSERT(meter_reading.negative);
+
+    /* Negative control: the same -2.003 V frame with frame[2] bit 4 cleared
+     * reads POSITIVE -- the sign comes from that bit and nothing else here. */
+    raw_frame(frame, "5AA5B6FDEB8B0F000200015D");
+    frame[2] &= (uint8_t)~0x10U;
+    process_frame(frame, 0);
+    ASSERT(expect_normal_reading("2.003", "V", 2.003f, 0.0005f));
+    ASSERT(!meter_reading.negative);
+
+    /* Resistance (submode 6) */
+    meter_data_invalidate(6);
+    raw_frame(frame, "5AA5ECEBFBC7072000000152");
+    process_frame(frame, 6);
+    ASSERT(expect_normal_reading("100.65", "Ohm", 100.65f, 0.005f));   /* leading 1 */
+    raw_frame(frame, "5AA5C4FFCF874A200000014F");
+    process_frame(frame, 6);
+    ASSERT(expect_normal_reading("9.857", "kOhm", 9.857f, 0.0005f));   /* frame says 9857 */
+    raw_frame(frame, "5AA5C48F8ACF0F248000013E");
+    process_frame(frame, 6);
+    ASSERT(expect_normal_reading("973.9", "kOhm", 973.9f, 0.05f));     /* = 0.9739 MOhm */
+    raw_frame(frame, "5AA504F06B0100240000014C");
+    process_frame(frame, 6);
+    ASSERT(meter_reading.result_class == METER_RESULT_OVERLOAD);
+    /* the 1 kOhm frame: decodes, value deliberately not asserted (header) */
+    raw_frame(frame, "5AA5C4CF8F8A4A2080000151");
+    process_frame(frame, 6);
+    ASSERT(meter_reading.valid);
+
+    /* Negative control for the decimal point: unit #2's "9.924" kOhm frame
+     * (point on digit 1) with the sign bit set must keep its point. Before
+     * 2026-10-03 the sign bit counted as a second point and both were
+     * dropped, so this read "-9924". */
+    raw_frame(frame, "5AA5C4DFAF4D4E200000012F");
+    frame[2] |= 0x10U;
+    process_frame(frame, 6);
+    ASSERT(expect_normal_reading("-9.924", "kOhm", -9.924f, 0.0005f));
+
+    /* Capacitance (submode 9) */
+    static const struct { const char *hex, *disp, *unit; float v; } cap[] = {
+        { "5AA5E4FBEBEB2B1000000143", "0.000", "nF", 0.0f   },
+        { "5AA5040A0A5A2E1000000151", "111.4", "nF", 111.4f },
+        { "5AA5C4CF47BE2D1000000151", "954.2", "nF", 954.2f },
+        { "5AA5040AEA5B1E1000000151", "110.4", "uF", 110.4f },
+        { "5AA5C4CFA75D1E1000000151", "952.4", "uF", 952.4f },
+    };
+    meter_data_invalidate(9);
+    for (unsigned i = 0; i < sizeof(cap) / sizeof(cap[0]); i++) {
+        raw_frame(frame, cap[i].hex);
+        process_frame(frame, 9);
+        ASSERT(expect_normal_reading(cap[i].disp, cap[i].unit, cap[i].v, 0.05f));
+    }
+
+    /* Negative control for the extension gate: the leading "1" is proven in
+     * resistance only, so a capacitance frame carrying it is still refused. */
+    raw_frame(frame, "5AA5040A0A5A2E1000000151");
+    frame[2] |= 0x08U;
+    process_frame(frame, 9);
+    ASSERT(meter_reading.reject_reason == METER_REJECT_UNSUPPORTED_EXTENSION);
+    return 1;
+}
+
 static int test_live_ol_second_spelling_and_leading_blanks(void)
 {
     uint8_t frame[12];
@@ -2877,6 +2978,7 @@ int main(void)
     TEST(live_resistance_bands_unit2_and_unit1);
     TEST(live_capacitance_frames_self_describe);
     TEST(live_ol_second_spelling_and_leading_blanks);
+    TEST(saul_frames_37);
     TEST(invalidate_clears_stale_reading_before_mode_transition);
     TEST(invalidate_clears_stale_reading_for_every_submode);
     TEST(parser_stock_mode_tracks_transition_plan_for_every_submode);
