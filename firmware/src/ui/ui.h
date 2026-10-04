@@ -153,6 +153,10 @@ extern volatile bool scope_trig_level_focus;
 /* Scope time view: LEFT/RIGHT move the trigger point on screen instead of
  * changing the timebase. MOVE cycles V/div -> Trig level -> Position. */
 extern volatile bool scope_hpos_focus;
+/* MOVE's fourth stage (mask tolerance), only while a mask exists. */
+extern volatile bool scope_mask_focus;
+/* Post a button press into the input queue (shell `btn`). */
+bool input_inject_button(button_id_t b);
 
 /* Where the trigger point landed in the last drawn window (column, -1 = free
  * run) and how it was found (0 none, 1 soft midline, 2 hardware level

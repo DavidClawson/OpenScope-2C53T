@@ -90,4 +90,14 @@ typedef enum {
 } scope_mask_col_t;
 scope_mask_col_t scope_mask_column(uint8_t ch, int x, int trig_x, uint32_t gen);
 
+/* Display support for drawing the mask itself. Both are false unless the
+ * mask is READY and covers channel `ch`.
+ *  - extent: lowest lo / highest hi over the whole span, so the autofit can
+ *    keep the bounds on screen. Independent of the frame, so the scale does
+ *    not jump when a record is refused.
+ *  - bound_at: the bounds at screen column x when the trigger landed at
+ *    column trig_x (the hardware anchor). */
+bool scope_mask_extent(uint8_t ch, uint8_t *lo, uint8_t *hi);
+bool scope_mask_bound_at(uint8_t ch, int x, int trig_x, uint8_t *lo, uint8_t *hi);
+
 #endif /* SCOPE_MASK_H */

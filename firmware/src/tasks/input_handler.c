@@ -36,6 +36,7 @@
 #include "settings_store.h"
 #include "task.h"
 #include <stdio.h>
+#include <string.h>
 
 /* MENU is bit 9 in the raw button-scan state (button_scan.c). */
 #define BTN_SCAN_MENU_MASK  0x0200u
@@ -211,6 +212,9 @@ static void send_cmd(QueueHandle_t q, uint8_t cmd)
 
 volatile bool scope_trig_level_focus = false;
 volatile bool scope_hpos_focus = false;
+/* MOVE's fourth stage, offered only while a mask exists: UP/DOWN = vertical
+ * tolerance, LEFT/RIGHT = horizontal, SELECT = stop-on-fail. */
+volatile bool scope_mask_focus = false;
 
 /* Helper: show popup and send redraw */
 static void popup_and_redraw(QueueHandle_t q, const char *text)
@@ -218,6 +222,79 @@ static void popup_and_redraw(QueueHandle_t q, const char *text)
     scope_show_popup(text);
     uint8_t cmd = DCMD_REDRAW_ALL;
     send_cmd(q, cmd);
+}
+
+/* ── Mask pass/fail from the buttons (docs/specs/scope/mask-pass-fail.md) ──
+ *
+ * Every change is a request the acquisition task applies (scope_mask.h). The
+ * popup reports what the mask says AFTER the acknowledgement -- the applied
+ * tolerance, not the one asked for -- and says NOT SET when no ack arrives
+ * (the inert-controls lesson: report the wire, not the setter's intent).
+ * The wait is bounded at ~100 ms; the acquisition loop services requests
+ * every poll (~30 ms). */
+static bool mask_req(scope_mask_req_t k, uint8_t a, uint8_t b, uint16_t n)
+{
+    uint32_t seq = scope_mask_post(k, a, b, n);
+    for (int i = 0; i < 20; i++) {
+        if (scope_mask_acked(seq)) return true;
+        vTaskDelay(pdMS_TO_TICKS(5));
+    }
+    return false;
+}
+
+static bool mask_focus_active(void)
+{
+    if (scope_mask_focus && scope_mask_state() == MASK_PF_EMPTY)
+        scope_mask_focus = false;          /* mask cleared under us */
+    return scope_mask_focus;
+}
+
+/* tol_v steps of 2 counts (1/16 division), tol_h steps of 1 sample. The
+ * popup shows the tolerance the mask reports after the ack. */
+static void mask_adjust_tol(int dv, int dh, char *pb, size_t n)
+{
+    scope_mask_summary_t m;
+    scope_mask_summary(&m);
+    int v = (int)m.tol_v + dv, h = (int)m.tol_h + dh;
+    if (v < 0) v = 0;
+    if (v > 64) v = 64;
+    if (h < 0) h = 0;
+    if (h > (int)MASK_PF_HMAX) h = (int)MASK_PF_HMAX;
+    if (!mask_req(SCOPE_MASK_REQ_TOL, (uint8_t)v, (uint8_t)h, 0)) {
+        snprintf(pb, n, "Mask tol NOT SET");
+        return;
+    }
+    scope_mask_summary(&m);
+    snprintf(pb, n, "Mask V%u H%u", (unsigned)m.tol_v, (unsigned)m.tol_h);
+}
+
+/* AUTO in the scope time view: teach when there is no mask, cancel a teach
+ * in progress, clear a finished mask. AUTO did nothing in the time view
+ * before 2026-10-03 (it only acts in the FFT views). */
+static void mask_auto_key(char *pb, size_t n)
+{
+    mask_pf_state_t st = scope_mask_state();
+    if (st == MASK_PF_EMPTY) {
+        if (!mask_req(SCOPE_MASK_REQ_TEACH, 0, 0, 0)) {
+            snprintf(pb, n, "MASK: NOT SET");
+        } else if (scope_mask_teach_refusal() != NULL) {
+            /* The refusals a user can cause, in words that fit 24 chars. */
+            const char *why = scope_mask_teach_refusal();
+            snprintf(pb, n, "%s", strstr(why, "CH2") ? "MASK: needs CH1 trig" :
+                                  strstr(why, "heap") ? "MASK: no memory" :
+                                  strstr(why, "channel") ? "MASK: no channel on" :
+                                  "MASK: refused");
+        } else {
+            scope_mask_summary_t m;
+            scope_mask_summary(&m);
+            snprintf(pb, n, "MASK: teach %u", (unsigned)m.teach_target);
+        }
+    } else {
+        bool ok = mask_req(SCOPE_MASK_REQ_CLEAR, 0, 0, 0);
+        scope_mask_focus = false;
+        snprintf(pb, n, "%s", !ok ? "MASK: NOT SET" :
+                              st == MASK_PF_TEACHING ? "MASK: cancelled" : "MASK: off");
+    }
 }
 
 /* ═══════════════════════════════════════════════════════════════════
@@ -325,14 +402,22 @@ uint8_t input_handle_button(button_id_t button, QueueHandle_t dq)
              * mode could not be aimed. MOVE used to cycle the edge; the edge
              * stays reachable in Settings -> Trigger Edge (it steers the
              * display's soft trigger; the FPGA fires on either edge, EXP-55). */
-            /* Cycle: V/div -> Trig level (UP/DN) -> Position (LT/RT). */
-            if (!scope_trig_level_focus && !scope_hpos_focus) {
+            /* Cycle: V/div -> Trig level (UP/DN) -> Position (LT/RT)
+             * -> Mask tolerance (only while a mask exists). */
+            if (mask_focus_active()) {
+                scope_mask_focus = false;
+                popup_and_redraw(dq, "UP/DN: V/div  LT/RT: Time");
+            } else if (!scope_trig_level_focus && !scope_hpos_focus) {
                 scope_trig_level_focus = true;
                 popup_and_redraw(dq, "UP/DN: Trig level");
             } else if (scope_trig_level_focus) {
                 scope_trig_level_focus = false;
                 scope_hpos_focus = true;
                 popup_and_redraw(dq, "LT/RT: Position");
+            } else if (scope_mask_state() != MASK_PF_EMPTY) {
+                scope_hpos_focus = false;
+                scope_mask_focus = true;
+                popup_and_redraw(dq, "UD/LR:Mask tol SEL:stop");
             } else {
                 scope_hpos_focus = false;
                 popup_and_redraw(dq, "UP/DN: V/div  LT/RT: Time");
@@ -434,9 +519,13 @@ uint8_t input_handle_button(button_id_t button, QueueHandle_t dq)
                     fft_auto_configure(sbuf, FFT_SIZE);
                 }
 #endif
+                send_cmd(dq, cmd);
+                break;
             }
 #endif
-            send_cmd(dq, cmd);
+            /* Time view: the mask key (teach / cancel / clear). */
+            mask_auto_key(pb, sizeof(pb));
+            popup_and_redraw(dq, pb);
         }
         break;
 
@@ -521,6 +610,14 @@ uint8_t input_handle_button(button_id_t button, QueueHandle_t dq)
             comp_test_cycle_type();
             cmd = DCMD_DRAW_SETTINGS;
             send_cmd(dq, cmd);
+        } else if (current_mode == MODE_OSCILLOSCOPE && mask_focus_active()) {
+            scope_mask_summary_t m;
+            scope_mask_summary(&m);
+            bool ok = mask_req(SCOPE_MASK_REQ_STOPFAIL, m.stop_on_fail ? 0u : 1u, 0, 0);
+            scope_mask_summary(&m);
+            snprintf(pb, sizeof(pb), ok ? "Mask stop-on-fail %s" : "Mask stop NOT SET",
+                     m.stop_on_fail ? "ON" : "OFF");
+            popup_and_redraw(dq, pb);
         } else if (current_mode == MODE_OSCILLOSCOPE) {
             channel_state_t *ch = (active_channel == 0) ? &ss->ch1 : &ss->ch2;
             scope_cycle_probe(ch);
@@ -558,6 +655,10 @@ uint8_t input_handle_button(button_id_t button, QueueHandle_t dq)
             send_cmd(dq, cmd);
         }
 #endif
+        else if (current_mode == MODE_OSCILLOSCOPE && mask_focus_active()) {
+            mask_adjust_tol(+2, 0, pb, sizeof(pb));
+            popup_and_redraw(dq, pb);
+        }
         else if (current_mode == MODE_OSCILLOSCOPE && scope_trig_level_focus) {
             scope_adjust_trigger_level(ss, 1);
             /* Through the ONE writer of reg 0x08, so the register, the
@@ -633,6 +734,10 @@ uint8_t input_handle_button(button_id_t button, QueueHandle_t dq)
             send_cmd(dq, cmd);
         }
 #endif
+        else if (current_mode == MODE_OSCILLOSCOPE && mask_focus_active()) {
+            mask_adjust_tol(-2, 0, pb, sizeof(pb));
+            popup_and_redraw(dq, pb);
+        }
         else if (current_mode == MODE_OSCILLOSCOPE && scope_trig_level_focus) {
             scope_adjust_trigger_level(ss, -1);
             /* Through the ONE writer of reg 0x08, so the register, the
@@ -732,6 +837,10 @@ uint8_t input_handle_button(button_id_t button, QueueHandle_t dq)
             cmd = DCMD_DRAW_SIGGEN;
             send_cmd(dq, cmd);
         }
+        else if (current_mode == MODE_OSCILLOSCOPE && mask_focus_active()) {
+            mask_adjust_tol(0, -1, pb, sizeof(pb));
+            popup_and_redraw(dq, pb);
+        }
         else if (current_mode == MODE_OSCILLOSCOPE && scope_hpos_focus) {
             /* Move the trigger point across the screen, 16 px per press.
              * The popup reports the column it was ASKED for; the marker at
@@ -810,6 +919,10 @@ uint8_t input_handle_button(button_id_t button, QueueHandle_t dq)
             siggen_duty_cycle_up();
             cmd = DCMD_DRAW_SIGGEN;
             send_cmd(dq, cmd);
+        }
+        else if (current_mode == MODE_OSCILLOSCOPE && mask_focus_active()) {
+            mask_adjust_tol(0, +1, pb, sizeof(pb));
+            popup_and_redraw(dq, pb);
         }
         else if (current_mode == MODE_OSCILLOSCOPE && scope_hpos_focus) {
             /* Move the trigger point across the screen, 16 px per press.

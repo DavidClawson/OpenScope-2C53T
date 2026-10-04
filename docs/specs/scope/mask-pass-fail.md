@@ -2,9 +2,9 @@
 
 **Track:** scope
 **Stage now:** **S2** (EXP-59, 2026-10-03). On unit #1, `scripts/mask_bench.py`
-passed 9/9 pre-stated criteria twice. The first device run found and fixed a real defect
-(a stale record judged after a stop-on-fail release). Not S3: the bench script is not in
-the regression set yet. Not reachable from the buttons except OK (release).
+passed 9/9 twice (v2), then 10/10 with button control (v3). Two S4 items are done
+early: button control and drawn bounds. Not S3: the bench script is not in the
+regression set yet.
 **Champion:** David / Claude (2026-10-03)
 
 ## What it is
@@ -125,19 +125,16 @@ teach spread. Tighten with `mask tol`.
 | ~~S1~~ | ✓ EXP-59. The mask image runs on unit #1: `mask teach` reaches READY on a live signal, the strip and red tint appear, and `OK:` keeps climbing with a mask active. |
 | ~~S2~~ | ✓ EXP-59 (2 × 9/9). `scripts/mask_bench.py` passes A–G on unit #1 against the JDS6600 (baseline false-fail ≤ 1/30 with ≥ 80% of commits judged; +30% amplitude and +5% frequency ≥ 95% FAIL; level change → SKIP not scored; stop-on-fail freezes and releases; no missed commits), written up in `docs/experiments/`. |
 | S3 | `test_mask_pf` (held-out records + negative controls, in the build) **and** `mask_bench.py` in the regression set, with its negative controls (fault windows) passing. |
-| S4 | Reachable from the buttons alone (teach, tolerance, stop-on-fail, clear); bounds drawn on the trace; refusal reasons legible on screen; masks persisted to W25Q and reloadable by a module. |
+| S4 | ~~Reachable from the buttons alone (teach, tolerance, stop-on-fail, clear)~~ ✓ v3, EXP-59 §8 (AUTO = teach/cancel/clear; MOVE → Mask: UP/DN tol_v, LT/RT tol_h, SEL stop-on-fail; OK releases). ~~Bounds drawn on the trace~~ ✓ v3. Open: refusal reasons legible on screen beyond the slot's short form; masks persisted to W25Q and reloadable by a module. |
 
 ## Open questions
 
-1. **Button UI.** SAVE in scope mode currently shows `SAVED #n` and writes
-   nothing (audit P3, dev plan 2.6). Options: give SAVE to mask teach in scope
-   mode until screenshots are real, add a MOVE-cycle stage, or use a Settings
-   page. Proposal: a Settings → Mask page for teach/tolerance/stop, with OK as
-   the run/release key it already is.
-2. **Drawing the bounds.** The default autofit transform rescales to the
-   trace's own min/max, so bounds 8 counts outside the trace clamp to the band
-   edge. Drawing them needs autofit to include the mask extent, which is one
-   change to `autofit_prep()`, used by both renderers.
+1. ~~**Button UI.**~~ Decided 2026-10-03: AUTO, which did nothing in the time
+   view, is the mask key. MOVE gets a fourth stage while a mask exists. SAVE is
+   left alone for real screenshots. Revisit if an autoset feature wants AUTO.
+2. ~~**Drawing the bounds.**~~ Done: `autofit_prep()` takes the band's channel
+   and spans the mask extent, so trace, compositor and trigger marker share one
+   scale.
 3. **Soft-anchored records.** Fast signals where un-rotation fails are refused
    today. Could the display's soft anchor be trusted for masks? Only with a
    held-out test showing it is as stable as the hardware anchor.

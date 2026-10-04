@@ -809,8 +809,13 @@ typedef struct {
     uint8_t mn;
 } autofit_t;
 
+/* mask_ch: the channel this band draws (0/1), or -1. When a finished mask
+ * covers it, the fit also spans the mask's extent, so the bounds drawn over
+ * the trace stay on the glass instead of clamping to the band edge. Every
+ * caller passes the channel it draws -- trace, compositor, trigger marker --
+ * so all three keep agreeing on the scale. */
 static void autofit_prep(autofit_t *a, const volatile uint8_t *buf,
-                         int16_t y_top, int16_t y_bot)
+                         int16_t y_top, int16_t y_bot, int8_t mask_ch)
 {
     uint16_t n = (LCD_WIDTH < 512u) ? (uint16_t)LCD_WIDTH : 512u;
     uint8_t mn = 255, mx = 0;
@@ -818,6 +823,11 @@ static void autofit_prep(autofit_t *a, const volatile uint8_t *buf,
         uint8_t sv = buf[x];
         if (sv < mn) mn = sv;
         if (sv > mx) mx = sv;
+    }
+    uint8_t elo, ehi;
+    if (mask_ch >= 0 && scope_mask_extent((uint8_t)mask_ch, &elo, &ehi)) {
+        if (elo < mn) mn = elo;
+        if (ehi > mx) mx = ehi;
     }
     int span = (int)mx - (int)mn;
     if (span < 8) span = 8;                 /* don't zoom pure noise to full band */
@@ -937,9 +947,10 @@ static int16_t trigger_marker_y_full(const scope_state_t *ss)
     autofit_t a = { false, 0, 0, 0, 8, 0 };
     if (c1 && c2)
         autofit_prep(&a, src + toff, src2 ? (int16_t)(SCOPE_MID_Y + 1) : (int16_t)SCOPE_TOP,
-                                     src2 ? (int16_t)SCOPE_BOT : (int16_t)(SCOPE_MID_Y - 1));
+                                     src2 ? (int16_t)SCOPE_BOT : (int16_t)(SCOPE_MID_Y - 1),
+                     src2 ? 1 : 0);
     else if (src2 ? c2 : c1)
-        autofit_prep(&a, src + toff, SCOPE_TOP, SCOPE_BOT);
+        autofit_prep(&a, src + toff, SCOPE_TOP, SCOPE_BOT, src2 ? 1 : 0);
     return trigger_marker_y(ss, &a);
 }
 
@@ -962,14 +973,23 @@ static int16_t trigger_marker_y_full(const scope_state_t *ss)
 static uint8_t  g_trig_anchor = 0;        /* see scope_soft_trigger_offset() */
 static int16_t  g_trig_x_actual = -1;
 static bool     g_mask_ov_on;
+static bool     g_mask_bounds_on;
 static uint32_t g_mask_ov_gen;
 
 static void mask_overlay_begin(void)
 {
     g_mask_ov_on = (g_trig_anchor == 2u) && g_trig_x_actual >= 0 &&
                    scope_mask_state() != MASK_PF_EMPTY;
+    /* The bounds depend on the alignment, not on which record was judged,
+     * so they are not gated on the generation: gating them would blink them
+     * off for the frame between a commit and its verdict. */
+    g_mask_bounds_on = g_mask_ov_on && scope_mask_state() == MASK_PF_READY;
     g_mask_ov_gen = fpga_acq_frame_generation();
 }
+
+/* Mask bounds for screen column x of channel ch, as two y values through the
+ * band's own transform (yfn). Dotted: every other column. */
+#define MASK_BOUND_DOT(x) (((x) & 1u) == 0u)
 
 static inline bool mask_px_fail(int8_t ch, int x)
 {
@@ -1018,13 +1038,20 @@ static float draw_channel_autofit(const volatile uint8_t *buf, uint16_t color,
 {
     uint16_t n = (LCD_WIDTH < 512u) ? (uint16_t)LCD_WIDTH : 512u;
     autofit_t a;
-    autofit_prep(&a, buf, y_top, y_bot);
+    autofit_prep(&a, buf, y_top, y_bot, mask_ch);
 
     const uint16_t fail_c = theme_get()->warning;
+    const uint16_t bnd_c  = theme_get()->text_secondary;
     int16_t prev_y = -1;
     for (uint16_t x = 0; x < n; x++) {
         int16_t y = autofit_y(&a, buf[x]);
         uint16_t cc = mask_px_fail(mask_ch, x) ? fail_c : color;
+        uint8_t blo, bhi;
+        if (g_mask_bounds_on && mask_ch >= 0 && MASK_BOUND_DOT(x) &&
+            scope_mask_bound_at((uint8_t)mask_ch, x, g_trig_x_actual, &blo, &bhi)) {
+            lcd_set_pixel(x, (uint16_t)autofit_y(&a, blo), bnd_c);
+            lcd_set_pixel(x, (uint16_t)autofit_y(&a, bhi), bnd_c);
+        }
         if (prev_y >= 0) {                  /* connect prev..cur vertically */
             int16_t a = prev_y < y ? prev_y : y;
             int16_t b = prev_y < y ? y : prev_y;
@@ -1072,6 +1099,16 @@ static float draw_channel_fixed(const volatile uint8_t *buf, uint16_t color,
         if (yy >= y_bot)  yy = y_bot - 1;
         int16_t y = (int16_t)yy;
         uint16_t cc = mask_px_fail(mask_ch, x) ? fail_c : color;
+        uint8_t blo, bhi;
+        if (g_mask_bounds_on && mask_ch >= 0 && MASK_BOUND_DOT(x) &&
+            scope_mask_bound_at((uint8_t)mask_ch, x, g_trig_x_actual, &blo, &bhi)) {
+            for (int k = 0; k < 2; k++) {          /* same transform as the trace */
+                int by = (int)y_mid - ((int)(k ? bhi : blo) - (int)center) * SCOPE_H / 256;
+                if (by < y_top)  by = y_top;
+                if (by >= y_bot) by = y_bot - 1;
+                lcd_set_pixel(x, (uint16_t)by, theme_get()->text_secondary);
+            }
+        }
         if (prev_y >= 0) {
             int16_t a = prev_y < y ? prev_y : y;
             int16_t b = prev_y < y ? y : prev_y;
@@ -2318,12 +2355,12 @@ void draw_scope_live_frame(void)
     autofit_t a1 = { false, 0, 0, 0, 8, 0 };
     autofit_t a2 = { false, 0, 0, 0, 8, 0 };
     if (en1 && en2) {
-        autofit_prep(&a1, b1, SCOPE_TOP, SCOPE_MID_Y - 1);
-        autofit_prep(&a2, b2, SCOPE_MID_Y + 1, SCOPE_BOT);
+        autofit_prep(&a1, b1, SCOPE_TOP, SCOPE_MID_Y - 1, 0);
+        autofit_prep(&a2, b2, SCOPE_MID_Y + 1, SCOPE_BOT, 1);
     } else if (en1) {
-        autofit_prep(&a1, b1, SCOPE_TOP, SCOPE_BOT);
+        autofit_prep(&a1, b1, SCOPE_TOP, SCOPE_BOT, 0);
     } else if (en2) {
-        autofit_prep(&a2, b2, SCOPE_TOP, SCOPE_BOT);
+        autofit_prep(&a2, b2, SCOPE_TOP, SCOPE_BOT, 1);
     }
 
     /* Trigger dotted line, placed exactly as the full path places it: on the
@@ -2367,6 +2404,18 @@ void draw_scope_live_frame(void)
         uint16_t mstrip = mask_strip_color((int)x, th, &mdot);
         uint16_t tc1 = mask_px_fail(0, (int)x) ? th->warning : th->ch1;
         uint16_t tc2 = mask_px_fail(1, (int)x) ? th->warning : th->ch2;
+        /* Mask bounds (dotted, every other column), through each band's own
+         * autofit -- the one transform, as everywhere else. -1 = none. */
+        int16_t bl1 = -1, bh1 = -1, bl2 = -1, bh2 = -1;
+        if (g_mask_bounds_on && MASK_BOUND_DOT(x)) {
+            uint8_t lo, hi;
+            if (a1.on && scope_mask_bound_at(0, (int)x, g_trig_x_actual, &lo, &hi)) {
+                bl1 = autofit_y(&a1, lo); bh1 = autofit_y(&a1, hi);
+            }
+            if (a2.on && scope_mask_bound_at(1, (int)x, g_trig_x_actual, &lo, &hi)) {
+                bl2 = autofit_y(&a2, lo); bh2 = autofit_y(&a2, hi);
+            }
+        }
 
         /* The popup is a HOLE in the live band, not a layer: its glyphs are
          * the one thing this compositor cannot recompute per pixel, so the
@@ -2403,6 +2452,9 @@ void draw_scope_live_frame(void)
                 c = tc2;
             else if (a1.on && (int16_t)y >= lo1 && (int16_t)y <= hi1)
                 c = tc1;
+            else if ((int16_t)y == bl1 || (int16_t)y == bh1 ||
+                     (int16_t)y == bl2 || (int16_t)y == bh2)
+                c = th->text_secondary;
             else if ((int16_t)y == trig_y && (x & trig_step) == 0 && x < LCD_WIDTH - 6)
                 c = th->trigger;
             else if (y == SCOPE_MID_Y || x == LCD_WIDTH / 2)

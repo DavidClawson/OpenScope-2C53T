@@ -5,7 +5,9 @@
 - **Build:** `make guest-coldtrace`, working tree on `bench/2026-09-14` (uncommitted at
   run time). v1 Build Oct 3 2026 15:44:28 (runs 1–2); v2 Build Oct 3 2026 16:57:43 (runs 3–4)
 - **Status:** **CONFIRMED** on v2: 9/9 pre-stated criteria, twice. v1 failed one
-  criterion, a real defect, fixed in v2 (§5).
+  criterion, a real defect, fixed in v2 (§5). **Addendum (v3, Build Oct 3 2026
+  17:21:19):** 10/10 with the button criterion H added; bounds drawn; a two-channel
+  mask gave 0 false fails in 143 records (§8).
 
 ## 1. Problem
 Mask testing (`docs/specs/scope/mask-pass-fail.md`) was host-tested on real records
@@ -129,3 +131,42 @@ Logs: `reverse_engineering/captures/exp59/mask_bench_run{1..4}.log`.
   - bounds drawn on the trace (open question 2);
   - fold `mask_bench.py` into the regression set (S3);
   - a glitch source for the real use case.
+
+## 8. Addendum — v3: buttons, drawn bounds, two channels (same day)
+
+v3 adds:
+- **AUTO** in the scope time view: teach, cancel, or clear.
+- A fourth **MOVE** stage, "Mask" (only while a mask exists): UP/DOWN set tol_v in
+  2-count steps, LEFT/RIGHT set tol_h, SELECT toggles stop-on-fail.
+- The mask **bounds drawn** as dotted lines. The shared autofit now spans the mask's
+  extent, for every caller.
+- A `btn <name>` shell command that injects presses into the key-scan queue.
+
+**Criterion H** was added to `mask_bench.py` before the v3 run. Its control is the
+Position stage: there, RIGHT must move the trigger column and must not touch the mask.
+
+**Run 5: 10/10.** H read:
+
+    auto->READY; position: col 160->176 tol (8, 2); mask focus: tol (12, 3) col 160;
+    select->stop True; ok: held True released True; auto->EMPTY focus vdiv
+
+This shows:
+- the same RIGHT press goes to the position in one stage and to the mask in the next,
+  never to both;
+- popups report the tolerance the mask holds after the acknowledgement.
+
+**Two-channel mask.** AUTO teaches every enabled channel, and CH2 had no input (a noisy
+open baseline, `CH2pp 77mV`). Over 45 s at default tolerance: **143 tested, 143 pass, 0
+fail**, 7 not time-ordered. So an unconnected CH2 in the mask does not cause false fails
+on this unit.
+
+**Screens** (CRC-verified dumps):
+- `mask_pass_single.png`: a SINGLE-held PASS frame. Dotted bounds hug the sine, the
+  strip is solid green, the readout says `P11 F0`.
+- `mask_fail_bounds.png`: a held FAIL. The trace leaves the dotted bounds at the peaks
+  and troughs, exactly those stretches are red, and the strip is red under them. The
+  readout says `FAIL 1/17 HOLD-OK`.
+
+**Blind spots added:** the physical buttons were not pressed. `btn` enters below the key
+scan, whose 15/15 mapping is hardware-confirmed separately. And the two-channel result
+covers one CH2 state (open input) only.

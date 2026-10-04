@@ -263,3 +263,30 @@ scope_mask_col_t scope_mask_column(uint8_t ch, int x, int trig_x, uint32_t gen)
     default:             return SCOPE_MASK_COL_NONE;
     }
 }
+
+bool scope_mask_extent(uint8_t ch, uint8_t *lo, uint8_t *hi)
+{
+    const mask_pf_t *mk = g_m;
+    if (mk == NULL || mk->state != MASK_PF_READY || ch >= MASK_PF_NCH ||
+        !(mk->chans & (1u << ch)))
+        return false;
+    uint8_t mn = 255, mx = 0;
+    for (uint16_t i = 0; i < MASK_PF_SPAN; i++) {
+        uint8_t l, h;
+        if (!mask_pf_bounds(mk, ch, i, &l, &h)) return false;
+        if (l < mn) mn = l;
+        if (h > mx) mx = h;
+    }
+    *lo = mn;
+    *hi = mx;
+    return true;
+}
+
+bool scope_mask_bound_at(uint8_t ch, int x, int trig_x, uint8_t *lo, uint8_t *hi)
+{
+    const mask_pf_t *mk = g_m;
+    if (mk == NULL || trig_x < 0) return false;
+    int m = x - trig_x + (int)mk->pre;
+    if (m < 0 || m >= (int)MASK_PF_SPAN) return false;
+    return mask_pf_bounds(mk, ch, (uint16_t)m, lo, hi);
+}

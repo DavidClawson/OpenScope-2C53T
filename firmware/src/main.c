@@ -776,6 +776,16 @@ static void vInputTask(void *pvParameters)
     }
 }
 
+/* Bench/test injection: post a press into the SAME queue the TMR3 key scan
+ * feeds, so everything downstream of the physical scan (the 15/15 matrix is
+ * hardware-confirmed) runs exactly as for a real press. Used by the shell's
+ * `btn` command; returns false if the queue is full or not yet created. */
+bool input_inject_button(button_id_t b)
+{
+    if (xInputQueue == NULL) return false;
+    return xQueueSend(xInputQueue, &b, 0) == pdTRUE;
+}
+
 /*
  * Timer callback — runs every 1 second
  */

@@ -25,6 +25,12 @@ negative control that must come out the other way:
                 the FPGA's held fault-period capture and re-held; the firmware
                 now SKIPs it as "stale" -- the criterion is unchanged)
   G  health     `missed` stays 0 throughout (every commit judged once)
+  H  buttons    (shell `btn` injects into the key-scan queue) AUTO teaches to
+                READY; MOVE x2 reaches Position, where RIGHT moves the trigger
+                column and does NOT touch the mask (control); one more MOVE
+                reaches Mask, where UP x2 makes tol_v 12, RIGHT makes tol_h 3
+                and the trigger column does NOT move; SELECT toggles stop-on-
+                fail; a held fail is released by OK; AUTO clears to EMPTY
 
 Usage:  python3 scripts/mask_bench.py [--scope /dev/ttyACM0] [--jds /dev/ttyUSB0]
 Writes a log next to the other EXP captures when --log is given.
@@ -62,7 +68,17 @@ def status(sc):
     d["skips"] = m.group(1).strip() if m else ""
     m = re.search(r"heap free (\d+)", r)
     d["heap"] = int(m.group(1)) if m else None
+    m = re.search(r"tol v=(\d+) cnt h=(\d+)", r)
+    d["tol"] = tuple(map(int, m.groups())) if m else None
+    m = re.search(r"move-focus (\S+)", r)
+    d["focus"] = m.group(1) if m else None
+    d["stop"] = "stop-on-fail ON" in r
     return d
+
+
+def hpos(sc):
+    m = re.search(r"asked column (\d+)", sc.cmd("fpga scope hpos"))
+    return int(m.group(1)) if m else None
 
 
 def window(sc, n_tested, timeout):
@@ -191,6 +207,53 @@ def main():
                         % (held, n0, n1, n2, s3["hold"], s3["skips"])))
     sc.cmd("mask stop off")
     missed_ok &= s3["missed"] == 0
+
+    # H -- the same controls from the buttons
+    sc.cmd("mask clear"); sc.cmd("mask stop off"); sc.cmd("mask tol 8 2")
+    for _ in range(4):                               # normalise the MOVE stage
+        if status(sc)["focus"] == "vdiv":
+            break
+        sc.cmd("btn move")
+    sc.cmd("btn auto")
+    t0 = time.time()
+    s = status(sc)
+    while s["state"] != "READY" and time.time() - t0 < 15:
+        time.sleep(0.5)
+        s = status(sc)
+    h_ok = s["state"] == "READY"
+    msg = ["auto->%s" % s["state"]]
+    sc.cmd("btn move 2")                            # vdiv -> trig -> position
+    s = status(sc); x0 = hpos(sc)
+    sc.cmd("btn right")
+    s2 = status(sc); x1 = hpos(sc)
+    ctl = s["focus"] == "position" and x1 == (x0 or 0) + 16 and s2["tol"] == (8, 2)
+    msg.append("position: col %s->%s tol %s" % (x0, x1, s2["tol"]))
+    sc.cmd("btn left")                               # put the column back
+    sc.cmd("btn move")
+    s = status(sc)
+    sc.cmd("btn up 2"); sc.cmd("btn right")
+    s2 = status(sc); x2 = hpos(sc)
+    msk = s["focus"] == "mask" and s2["tol"] == (12, 3) and x2 == x0
+    msg.append("mask focus: tol %s col %s" % (s2["tol"], x2))
+    sc.cmd("btn select")
+    stop_on = status(sc)["stop"]
+    msg.append("select->stop %s" % stop_on)
+    sg.amp(AMP * 1.3, 1)
+    t0 = time.time()
+    while not status(sc)["hold"] and time.time() - t0 < 3.0:
+        time.sleep(0.2)
+    held = status(sc)["hold"]
+    sg.amp(AMP, 1); time.sleep(0.5)
+    sc.cmd("btn ok"); time.sleep(0.5)
+    released = not status(sc)["hold"]
+    msg.append("ok: held %s released %s" % (held, released))
+    sc.cmd("btn auto")
+    s = status(sc)
+    msg.append("auto->%s focus %s" % (s["state"], s["focus"]))
+    h_ok = h_ok and ctl and msk and stop_on and held and released and \
+        s["state"] == "EMPTY" and s["focus"] != "mask"
+    sc.cmd("mask stop off"); sc.cmd("mask tol 8 2")
+    results.append(line("H buttons", h_ok, "; ".join(msg)))
 
     results.append(line("G health", missed_ok, "missed commits 0 throughout" if missed_ok
                         else "a commit went unjudged"))

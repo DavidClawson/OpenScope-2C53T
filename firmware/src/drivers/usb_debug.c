@@ -7530,6 +7530,42 @@ static void cmd_fwapply(void)
     }
 }
 
+/* `btn <name> [n]` — inject a button press into the input queue, downstream
+ * of the TMR3 key scan, so a bench script can drive the UI exactly as the
+ * buttons do. POWER is refused: its handlers shut the device down or reset
+ * into the factory IAP bootloader. */
+static void cmd_btn(const char *args)
+{
+    static const struct { const char *name; button_id_t id; } names[] = {
+        {"ch1", BTN_CH1}, {"ch2", BTN_CH2}, {"move", BTN_MOVE}, {"select", BTN_SELECT},
+        {"trigger", BTN_TRIGGER}, {"prm", BTN_PRM}, {"auto", BTN_AUTO}, {"save", BTN_SAVE},
+        {"menu", BTN_MENU}, {"up", BTN_UP}, {"down", BTN_DOWN}, {"left", BTN_LEFT},
+        {"right", BTN_RIGHT}, {"ok", BTN_OK},
+    };
+    while (*args == ' ') args++;
+    size_t len = 0;
+    while (args[len] && args[len] != ' ') len++;
+    uint32_t n = 1;
+    if (args[len] == ' ') {
+        const char *p = args + len;
+        while (*p == ' ') p++;
+        if (*p && (parse_int(p, &n) != 0 || n == 0 || n > 50)) n = 0;
+    }
+    for (unsigned i = 0; i < sizeof(names) / sizeof(names[0]); i++) {
+        if (len == strlen(names[i].name) && strncmp(args, names[i].name, len) == 0 && n) {
+            unsigned sent = 0;
+            for (uint32_t k = 0; k < n; k++) {
+                if (input_inject_button(names[i].id)) sent++;
+                vTaskDelay(pdMS_TO_TICKS(150));   /* let each press be handled */
+            }
+            usb_debug_printf("btn %s: %u/%lu queued\r\n", names[i].name, sent, (unsigned long)n);
+            return;
+        }
+    }
+    usb_send_str("usage: btn ch1|ch2|move|select|trigger|prm|auto|save|menu|up|down|left|right|ok [1..50]\r\n"
+                 "(power is refused: it shuts down or enters IAP)\r\n");
+}
+
 /* ── `mask` — waveform pass/fail (docs/specs/scope/mask-pass-fail.md) ──────────
  *
  * Every mutation is a request applied by the acquisition task (scope_mask.h),
@@ -7617,6 +7653,8 @@ static void mask_print_status(void)
                          (int)s.last_fail.worst);
     usb_debug_printf("stop-on-fail %s%s\r\n", s.stop_on_fail ? "ON" : "OFF",
                      s.hold ? "  -- HOLDING a failed record (mask run / OK to resume)" : "");
+    usb_debug_printf("move-focus %s\r\n", scope_mask_focus ? "mask" : scope_hpos_focus ? "position" :
+                     scope_trig_level_focus ? "trig-level" : "vdiv");
     usb_debug_printf("heap free %lu (min ever %lu)\r\n", (unsigned long)xPortGetFreeHeapSize(),
                      (unsigned long)xPortGetMinimumEverFreeHeapSize());
 }
@@ -7870,6 +7908,8 @@ static const shell_cmd_t shell_cmds[] = {
           "fpga scope hpos [8..312]        Screen column of the trigger point (default 160)\r\n"),
     CMD_A("fpga scope edge", cmd_fpga_scope_edge, 0,
           "fpga scope edge [rising|falling] Trigger edge (display soft trigger + MCU edge filter)\r\n"),
+    CMD_A("btn", cmd_btn, SC_NEEDARGS,
+          "btn <name> [n]                  Inject a button press (not power) into the UI\r\n"),
     CMD_A("mask", cmd_mask, 0,
           "mask [status]                   Waveform pass/fail: state, counts, last verdict\r\n"
           "mask teach [n] [ch1|ch2|both]   Teach from the next n good records (default 8)\r\n"
