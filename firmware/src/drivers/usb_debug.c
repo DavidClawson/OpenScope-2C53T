@@ -2475,6 +2475,29 @@ static void cmd_fpga_scope_edge(const char *args)
                      fpga_acq_edge_filter_get() ? "ON" : "OFF");
 }
 
+/* `fpga scope coupling` — READ-ONLY: each channel's coupling label beside the
+ * relay pin it is supposed to describe (PD12 CH1 / PD13 CH2, HIGH = DC) and
+ * the pin's GPIO mode. Change it with the buttons (`btn ch1` / `btn ch2`):
+ * that is the path under test, and a second writer here would be a second
+ * place for the label and the relay to disagree. */
+static void cmd_fpga_scope_coupling(const char *args)
+{
+    (void)args;
+    const scope_state_t *ss = scope_state_get();
+    for (int ch = 0; ch < 2; ch++) {
+        const channel_state_t *c = ch ? &ss->ch2 : &ss->ch1;
+        unsigned pin = ch ? 13u : 12u;
+        unsigned mode = (unsigned)((GPIOD->cfghr >> ((pin - 8u) * 4u)) & 0xFu);
+        unsigned odt = (unsigned)((GPIOD->odt >> pin) & 1u);
+        bool gpio_out = (mode >= 1u && mode <= 3u);
+        const char *relay = !gpio_out ? "not-gpio" : odt ? "DC" : "AC";
+        bool agree = gpio_out && ((c->coupling == COUPLING_DC) == (odt != 0u));
+        usb_debug_printf("CH%d label %s  PD%u mode 0x%X odt %u -> relay %s  %s\r\n",
+                         ch + 1, coupling_labels[c->coupling], pin, mode, odt, relay,
+                         agree ? "AGREE" : "DISAGREE");
+    }
+}
+
 /* `fpga edgefilter [on|off]` — the MCU-side trigger edge filter. */
 static void cmd_fpga_edgefilter(const char *args)
 {
@@ -7906,6 +7929,8 @@ static const shell_cmd_t shell_cmds[] = {
           "fpga postedge [ms]              Poll start after a handover, ms (EXP-54; derived fill + 100)\r\n"),
     CMD_A("fpga scope hpos", cmd_fpga_scope_hpos, 0,
           "fpga scope hpos [8..312]        Screen column of the trigger point (default 160)\r\n"),
+    CMD_A("fpga scope coupling", cmd_fpga_scope_coupling, 0,
+          "fpga scope coupling             Coupling label vs PD12/PD13 relay pins (read-only)\r\n"),
     CMD_A("fpga scope edge", cmd_fpga_scope_edge, 0,
           "fpga scope edge [rising|falling] Trigger edge (display soft trigger + MCU edge filter)\r\n"),
     CMD_A("btn", cmd_btn, SC_NEEDARGS,

@@ -4748,7 +4748,44 @@ void fpga_reconcile_trigger_after_arm(void)
  * restored state closes the gap (EXP-19, 2026-08-20). */
 void fpga_reconcile_frontend_after_arm(void)
 {
-    fpga_set_scope_frontend_ranges(scope_state_get());
+    scope_state_t *ss = scope_state_get();
+    fpga_set_scope_frontend_ranges(ss);
+    /* Coupling too (2026-10-03): init drives PD12/PD13 HIGH (DC) regardless,
+     * so a restored AC would otherwise label a DC relay. A restored GND has
+     * no hardware path (see fpga_apply_coupling) and falls back to DC, so the
+     * label never claims a state the relay is not in. */
+    for (uint8_t ch = 0; ch < 2; ch++) {
+        channel_state_t *c = ch ? &ss->ch2 : &ss->ch1;
+        if (c->coupling == COUPLING_GND) c->coupling = COUPLING_DC;
+        (void)fpga_apply_coupling(ch, c->coupling);
+    }
+}
+
+/* AC/DC coupling relays: PD12 = CH1, PD13 = CH2, HIGH = DC (desk sweep
+ * 2026-08-15 from stock; CH1 bench-confirmed the same week -- PD12 LOW is the
+ * ~9 Hz high-pass we spent a morning characterising, PD12 HIGH passed a DC
+ * step). The one writer of those pins after init.
+ *
+ * Until 2026-10-03 nothing drove them after init: CH1/CH2 cycled a DC/AC/GND
+ * LABEL, the popup and info bar said "AC", and the relay stayed DC -- an
+ * inert control that looked correct (the timebase button's shape, EXP-17).
+ *
+ * Returns true only when the pin is a GPIO push-pull output AND reads back at
+ * the level asked for. In builds that leave PD12/PD13 to EXMC (alternate
+ * function, ODR ignored) that is false, and so is GND: no ground path for the
+ * input is known on this board, so it is refused rather than labelled. */
+bool fpga_apply_coupling(uint8_t ch, uint8_t coupling)
+{
+    const coupling_t c = (coupling_t)coupling;
+    if (ch > 1u || (c != COUPLING_DC && c != COUPLING_AC)) return false;
+    const uint32_t pin = ch ? 13u : 12u;
+    const uint32_t mode = (GPIOD->cfghr >> ((pin - 8u) * 4u)) & 0xFu;
+    if (mode != 0x1u && mode != 0x2u && mode != 0x3u)
+        return false;                       /* not a push-pull GPIO output */
+    if (c == COUPLING_DC) GPIOD->scr = (1u << pin);
+    else                  GPIOD->clr = (1u << pin);
+    const bool high = (GPIOD->odt >> pin) & 1u;
+    return high == (c == COUPLING_DC);
 }
 
 uint8_t fpga_spi3_config_sequence(const fpga_cfg_seq_opts_t *opt)

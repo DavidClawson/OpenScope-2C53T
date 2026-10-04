@@ -60,12 +60,15 @@ static uint32_t settings_now_ms(void)
  * Oscilloscope settings Left/Right handler
  * ═══════════════════════════════════════════════════════════════════ */
 
+static void channel_cycle_coupling(uint8_t ch, channel_state_t *c, const char *name,
+                                   char *pb, size_t n);
+
 static void osc_settings_adjust(int dir)
 {
     scope_state_t *ss = scope_state_get();
     switch (settings_sub_selected) {
-    case 0: /* CH1 Coupling */
-        ss->ch1.coupling = (coupling_t)((ss->ch1.coupling + COUPLING_COUNT + dir) % COUPLING_COUNT);
+    case 0: /* CH1 Coupling -- the relay, DC <-> AC; two states, so dir is moot */
+        { char t[24]; channel_cycle_coupling(0, &ss->ch1, "CH1", t, sizeof(t)); }
         break;
     case 1: /* CH1 Probe */
         ss->ch1.probe = (probe_t)((ss->ch1.probe + PROBE_COUNT + dir) % PROBE_COUNT);
@@ -73,8 +76,8 @@ static void osc_settings_adjust(int dir)
     case 2: /* CH1 20M Limit */
         ss->ch1.bw_limit = !ss->ch1.bw_limit;
         break;
-    case 3: /* CH2 Coupling */
-        ss->ch2.coupling = (coupling_t)((ss->ch2.coupling + COUPLING_COUNT + dir) % COUPLING_COUNT);
+    case 3: /* CH2 Coupling -- the relay, DC <-> AC; two states, so dir is moot */
+        { char t[24]; channel_cycle_coupling(1, &ss->ch2, "CH2", t, sizeof(t)); }
         break;
     case 4: /* CH2 Probe */
         ss->ch2.probe = (probe_t)((ss->ch2.probe + PROBE_COUNT + dir) % PROBE_COUNT);
@@ -146,10 +149,13 @@ void input_handle_settings_ok(void)
     } else if (settings_depth == 1) {
         /* Oscilloscope settings sub-menu */
         switch (settings_sub_selected) {
-        case 0: scope_cycle_coupling(&ss->ch1); break;
+        /* Coupling through the relay, as on the CH1/CH2 buttons; the popup
+         * text is discarded here -- the menu redraw shows the label, which
+         * only changes when the relay did. */
+        case 0: { char t[24]; channel_cycle_coupling(0, &ss->ch1, "CH1", t, sizeof(t)); } break;
         case 1: scope_cycle_probe(&ss->ch1); break;
         case 2: scope_toggle_bw_limit(&ss->ch1); break;
-        case 3: scope_cycle_coupling(&ss->ch2); break;
+        case 3: { char t[24]; channel_cycle_coupling(1, &ss->ch2, "CH2", t, sizeof(t)); } break;
         case 4: scope_cycle_probe(&ss->ch2); break;
         case 5: scope_toggle_bw_limit(&ss->ch2); break;
         case 6: scope_cycle_trigger_mode(ss); break;
@@ -222,6 +228,23 @@ static void popup_and_redraw(QueueHandle_t q, const char *text)
     scope_show_popup(text);
     uint8_t cmd = DCMD_REDRAW_ALL;
     send_cmd(q, cmd);
+}
+
+/* CH1/CH2: DC <-> AC on the real relay. The label changes only if the relay
+ * did (fpga_apply_coupling verifies by readback), so the popup and the info
+ * bar can no longer say "AC" over a DC-coupled input -- which they did, on
+ * every build, until 2026-10-03. GND is out of the cycle: no hardware ground
+ * path is known, and a GND label over a live input would be the same lie. */
+static void channel_cycle_coupling(uint8_t ch, channel_state_t *c, const char *name,
+                                   char *pb, size_t n)
+{
+    coupling_t next = (c->coupling == COUPLING_DC) ? COUPLING_AC : COUPLING_DC;
+    if (fpga_apply_coupling(ch, (uint8_t)next)) {
+        c->coupling = next;
+        snprintf(pb, n, "%s %s", name, coupling_labels[next]);
+    } else {
+        snprintf(pb, n, "%s %s NOT SET", name, coupling_labels[next]);
+    }
 }
 
 /* ── Mask pass/fail from the buttons (docs/specs/scope/mask-pass-fail.md) ──
@@ -345,9 +368,7 @@ uint8_t input_handle_button(button_id_t button, QueueHandle_t dq)
     case BTN_CH1:
         if (current_mode == MODE_OSCILLOSCOPE) {
             active_channel = 0;
-            scope_cycle_coupling(&ss->ch1);
-            snprintf(pb, sizeof(pb), "CH1 %s",
-                     coupling_labels[ss->ch1.coupling]);
+            channel_cycle_coupling(0, &ss->ch1, "CH1", pb, sizeof(pb));
             popup_and_redraw(dq, pb);
         } else {
             send_cmd(dq, cmd);
@@ -357,9 +378,7 @@ uint8_t input_handle_button(button_id_t button, QueueHandle_t dq)
     case BTN_CH2:
         if (current_mode == MODE_OSCILLOSCOPE) {
             active_channel = 1;
-            scope_cycle_coupling(&ss->ch2);
-            snprintf(pb, sizeof(pb), "CH2 %s",
-                     coupling_labels[ss->ch2.coupling]);
+            channel_cycle_coupling(1, &ss->ch2, "CH2", pb, sizeof(pb));
             popup_and_redraw(dq, pb);
         } else {
             send_cmd(dq, cmd);
@@ -430,8 +449,15 @@ uint8_t input_handle_button(button_id_t button, QueueHandle_t dq)
     /* -- Save (screenshot) ---------------------------------------- */
 
     case BTN_SAVE:
-#if defined(FPGA_WARM_HANDOFF_TEST) && FPGA_WARM_HANDOFF_TEST
-        /* Warm-handoff bench build: SAVE toggles the input-routing relay
+#if defined(FPGA_BENCH_SAVE_PC12) && FPGA_BENCH_SAVE_PC12
+        /* BENCH IMAGES ONLY (guest-warmtest*). Until 2026-10-03 this was gated
+         * on FPGA_WARM_HANDOFF_TEST, which the release image (guest-coldtrace)
+         * also defines -- so in v0.4.0 SAVE silently flipped CH1's input PATH
+         * relay (PC12: direct vs ~30x attenuated, set per range by the range
+         * table), leaving the volts/div calibration wrong until the next range
+         * change. It now needs its own flag.
+         *
+         * Warm-handoff bench build: SAVE toggles the input-routing relay
          * PC12 for a live A/B. Bench run 4 (2026-08-12) showed the input
          * path connected but AC-coupled — finger noise passes, DC blocked —
          * and PC12 (driven LOW by our approximate range table) is the
@@ -466,14 +492,13 @@ uint8_t input_handle_button(button_id_t button, QueueHandle_t dq)
             meter_toggle_debug_overlay();
             send_cmd(dq, cmd);
         } else {
-            /* TODO: On real hardware, capture shadow framebuffer to SPI flash.
-             * For now, show confirmation popup — the emulator's lcd_viewer
-             * independently saves screenshots on 'S' key via its own BMP writer. */
-            static uint16_t screenshot_num = 0;
-            screenshot_num++;
-            char sb[24];
-            snprintf(sb, sizeof(sb), "SAVED #%d", screenshot_num);
-            scope_show_popup(sb);
+            /* There is no on-device screenshot store: src/util/screenshot.c has
+             * no caller, and writing the stock FAT volume is not implemented.
+             * Until 2026-10-03 this printed "SAVED #n" and wrote nothing
+             * (audit P3, dev plan 2.6) -- a confirmation of something that
+             * never happened. Say so instead. Screenshots work over USB:
+             * scripts/screenshot.py (CRC-verified, needs a held screen). */
+            scope_show_popup("SAVE: not in this build");
             send_cmd(dq, cmd);
         }
         break;

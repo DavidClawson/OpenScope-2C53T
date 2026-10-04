@@ -359,11 +359,11 @@ guest: clean all
 # meter+CH2 both work  -> our bit-bang configuration is deficient, ONE root cause
 # neither works        -> our runtime code, not the configuration
 # split                -> two independent faults
-guest-warmtest-usart: CFLAGS += -DGUEST_BUILD -DFPGA_WARM_HANDOFF_TEST=1 -DFPGA_USART_SILENT_SCOPE=0
+guest-warmtest-usart: CFLAGS += -DGUEST_BUILD -DFPGA_WARM_HANDOFF_TEST=1 -DFPGA_USART_SILENT_SCOPE=0 -DFPGA_BENCH_SAVE_PC12=1
 guest-warmtest-usart: LDSCRIPT = ld/at32f403a_guest.ld
 guest-warmtest-usart: clean all
 
-guest-warmtest: CFLAGS += -DGUEST_BUILD -DFPGA_WARM_HANDOFF_TEST=1 -DFPGA_USART_SILENT_SCOPE=1
+guest-warmtest: CFLAGS += -DGUEST_BUILD -DFPGA_WARM_HANDOFF_TEST=1 -DFPGA_USART_SILENT_SCOPE=1 -DFPGA_BENCH_SAVE_PC12=1
 guest-warmtest: LDSCRIPT = ld/at32f403a_guest.ld
 guest-warmtest: clean all
 
@@ -377,7 +377,7 @@ guest-warmtest: clean all
 # CH2 trace appearing the way CH1 did after the DAC1 fix. See scope_trigger.c.
 # [LIVE] Queued bench item (dev plan F3): CH2 trigger reference via TMR13.
 #        Decoded, NOT yet confirmed on hardware.
-guest-warmtest-ch2: CFLAGS += -DGUEST_BUILD -DFPGA_WARM_HANDOFF_TEST=1 -DFPGA_USART_SILENT_SCOPE=1 -DFPGA_CH2_TRIGGER=1
+guest-warmtest-ch2: CFLAGS += -DGUEST_BUILD -DFPGA_WARM_HANDOFF_TEST=1 -DFPGA_USART_SILENT_SCOPE=1 -DFPGA_CH2_TRIGGER=1 -DFPGA_BENCH_SAVE_PC12=1
 guest-warmtest-ch2: LDSCRIPT = ld/at32f403a_guest.ld
 guest-warmtest-ch2: clean all
 

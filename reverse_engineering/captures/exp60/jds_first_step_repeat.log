@@ -1,0 +1,7 @@
+{1: {'label': 'DC', 'relay': 'DC', 'agree': True}, 2: {'label': 'DC', 'relay': 'DC', 'agree': True}}
+both DC, repeat 0: d1 +49.8 d2 +0.0
+both DC, repeat 1: d1 +49.8 d2 -50.2
+both DC, repeat 2: d1 +49.8 d2 -50.2
+after vdiv(2,6->5)+output cycle: d1 +49.9 d2 +0.1
+
+[exited with code 0]

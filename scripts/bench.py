@@ -835,6 +835,12 @@ class JDS6600:
     to prevent (EXP-20 lost a whole sweep to it) -- so every setter here READS
     BACK and raises if the value did not take.
 
+    ⚠ Quirk (2026-10-03, coupling_bench.py run 1): after the outputs are
+    (re)enabled with :meth:`output`, the FIRST offset change on CH2 does not
+    reach the output, though register 28 reads back correct. Every later
+    change does. Prime one offset step after enabling outputs before trusting
+    a CH2 DC level.
+
     Registers: 20 output enable (a,b); 21/22 waveform; 23/24 frequency
     (Hz x 100, unit field 0); 25/26 amplitude (mV, == Vpp); 27/28 offset
     (1000 = 0 V, observed 1 LSB = 10 mV -- verify per firmware); 29/30 duty

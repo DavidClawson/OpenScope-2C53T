@@ -1160,6 +1160,10 @@ uint8_t fpga_timebase_reconcile_action(void);
  * call. Pre-scheduler only: takes no lock. */
 void    fpga_reconcile_timebase_after_arm(void);
 void    fpga_reconcile_frontend_after_arm(void);
+/* Drive one channel's AC/DC coupling relay (PD12 CH1 / PD13 CH2, HIGH = DC)
+ * and verify it by readback. false = not applied (GND, or the pin is not a
+ * GPIO output in this build) -- the caller must not relabel. */
+bool    fpga_apply_coupling(uint8_t ch, uint8_t coupling);   /* a coupling_t */
 void    fpga_reconcile_trigger_after_arm(void);
 uint8_t fpga_trigger_reconcile_code(void);
 
