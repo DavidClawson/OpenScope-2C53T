@@ -125,11 +125,27 @@ static bool analyse(const uint8_t *s, uint16_t n, float *bin, float *sharp)
      * within +/-1 bin of each other. For h == 1 this is exactly the old
      * peak+/-1 fraction, so the sine and noise cases are unchanged.
      */
+    /* Parabolic interpolation on MAGNITUDES, which is where the standard
+     * three-point vertex formula is unbiased for a windowed sinusoid. Done
+     * BEFORE the harmonic sum: the harmonics of a tone at bin 32.76 sit at
+     * 32.76 * h, not at 33 * h. With integer multiples of the integer peak the
+     * windows drift off the comb by 0.24 bin per harmonic, and from h = 7 a
+     * square's harmonic power is counted as "not signal": a clean square then
+     * reads 0.90-0.91, on the gate, and refuses on quantisation noise alone
+     * (EXP-67, unit #3: r7 refused 5 of 6 clean records at 0.73-0.90; the
+     * same records read 0.93-0.97 with the windows on the comb). */
+    const float a = sqrtf(fft_re[peak - 1u]);
+    const float b = sqrtf(fft_re[peak]);
+    const float c = sqrtf(fft_re[peak + 1u]);
+    const float den = a - 2.0f * b + c;
+    const float frac = (den != 0.0f) ? (0.5f * (a - c) / den) : 0.0f;
+    const float fbin = (float)peak + frac;
+
     {
         float sig = 0.0f;
         uint16_t counted_to = 0u;           /* highest bin already summed */
         for (uint16_t h = 1u; ; h++) {
-            const uint32_t c = (uint32_t)peak * h;
+            const uint32_t c = (uint32_t)(fbin * (float)h + 0.5f);   /* on the comb */
             if (c + 1u >= half)
                 break;
             uint16_t lo = (c > 1u) ? (uint16_t)(c - 1u) : 1u;
@@ -143,15 +159,7 @@ static bool analyse(const uint8_t *s, uint16_t n, float *bin, float *sharp)
         *sharp = sig / total;
     }
 
-    /* Parabolic interpolation on MAGNITUDES, which is where the standard
-     * three-point vertex formula is unbiased for a windowed sinusoid. */
-    const float a = sqrtf(fft_re[peak - 1u]);
-    const float b = sqrtf(fft_re[peak]);
-    const float c = sqrtf(fft_re[peak + 1u]);
-    const float den = a - 2.0f * b + c;
-    const float frac = (den != 0.0f) ? (0.5f * (a - c) / den) : 0.0f;
-
-    *bin = (float)peak + frac;
+    *bin = fbin;
     return true;
 }
 
