@@ -111,7 +111,8 @@ press. CH1 Vpp held at 2.008–2.028 V, a one-count jitter.
   - its SAVE changed CH1's gain path;
   - both are in the README's Sharp edges.
 - **Excluded (§8):** CH2 sign inversion in the scope.
-- **NOT excluded:** an inert BW-limit control.
+- **Fixed (§9):** the probe setting now scales every volts readout; the BW-limit row says
+  `n/a`.
 - **Follow-up:**
   - audit the BW limit and the remaining Settings → Oscilloscope items the same way;
   - add `coupling_bench.py` next to `mask_bench.py` in the regression set.
@@ -149,3 +150,37 @@ scope channels DC, range 5. Predictions stated before the run:
 one sequence on the same channels.
 
 Log: `captures/exp60/cable_swap_sign_test.log`.
+
+## 9. Addendum — the probe setting and the 20M limit were label-only too
+
+The same audit (button → what it writes → readback) on Settings → Oscilloscope:
+
+- **Probe 1X/10X** reached nothing that shows volts. Its only consumer was a bit in the
+  same unobeyed USART command, so a user on a 10× probe read 10× too small.
+  - **Fix:** `scope_cal` takes a registered probe-factor source (the setting stays in
+    `scope_state`) and applies it in `scope_cal_volts_per_count()`. Badges, cursor, and
+    the status-bar and popup V/div labels all derive from that one point.
+  - `scope_cal_mv_per_count()` and the `fpga scope cal` table stay **BNC-referred**.
+    The dump now prints the probe factors on their own line.
+  - SELECT shows a popup (it changed the probe silently).
+  - Host test: a CH2-only ×10 source scales CH2's volts, volts/div and label, and leaves
+    the cal table, CH1 and the true-scale gate alone. Control: no source, or a nonsense
+    factor, means ×1.
+- **20M bandwidth limit**: its only consumer is that USART bit; no hardware path is
+  known. The menu now shows `n/a` and the toggles are refused.
+
+**Bench (v5, then v6):** `coupling_bench.py` gained three probe criteria.
+- **v5: 16/17.** Probe ×10.000 exact (CH1 Vpp 2.028 V → 20.284 V → 2.028 V), but the
+  byte-identical cal-dump criterion **failed**. The µV/count columns were identical; the
+  dump's **V/div column** had moved, because it reused the on-screen (probe-tip) label.
+  That is the confusion the BNC/tip split exists to prevent, so the firmware changed:
+  `scope_cal_range_label_bnc()` for the dump. The criterion now excludes only the new
+  probe-factor line, a change recorded in the script.
+- **v6: 17/17.**
+- `mask_bench.py` regression: 10/10 on v5.
+
+Not verified on screen: the `n/a` menu text. Reaching the menu cycles through
+signal-generator mode, which shares DAC1 with CH1's offset in this image.
+
+Logs: `captures/exp60/coupling_probe_bench_v5.log`, `coupling_probe_bench_v6.log`,
+`mask_bench_v5_regression.log`.

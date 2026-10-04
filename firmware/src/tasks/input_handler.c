@@ -73,8 +73,8 @@ static void osc_settings_adjust(int dir)
     case 1: /* CH1 Probe */
         ss->ch1.probe = (probe_t)((ss->ch1.probe + PROBE_COUNT + dir) % PROBE_COUNT);
         break;
-    case 2: /* CH1 20M Limit */
-        ss->ch1.bw_limit = !ss->ch1.bw_limit;
+    case 2: /* CH1 20M Limit -- no hardware path known; see the menu row */
+        ss->ch1.bw_limit = false;
         break;
     case 3: /* CH2 Coupling -- the relay, DC <-> AC; two states, so dir is moot */
         { char t[24]; channel_cycle_coupling(1, &ss->ch2, "CH2", t, sizeof(t)); }
@@ -82,8 +82,8 @@ static void osc_settings_adjust(int dir)
     case 4: /* CH2 Probe */
         ss->ch2.probe = (probe_t)((ss->ch2.probe + PROBE_COUNT + dir) % PROBE_COUNT);
         break;
-    case 5: /* CH2 20M Limit */
-        ss->ch2.bw_limit = !ss->ch2.bw_limit;
+    case 5: /* CH2 20M Limit -- no hardware path known; see the menu row */
+        ss->ch2.bw_limit = false;
         break;
     case 6: /* Trigger Mode */
         ss->trigger.mode = (trigger_mode_t)((ss->trigger.mode + TRIG_COUNT + dir) % TRIG_COUNT);
@@ -154,10 +154,12 @@ void input_handle_settings_ok(void)
          * only changes when the relay did. */
         case 0: { char t[24]; channel_cycle_coupling(0, &ss->ch1, "CH1", t, sizeof(t)); } break;
         case 1: scope_cycle_probe(&ss->ch1); break;
-        case 2: scope_toggle_bw_limit(&ss->ch1); break;
+        /* 20M limit: refused. Its only consumer was an unobeyed USART bit,
+         * so it was label-only in every build (EXP-60 audit). */
+        case 2: ss->ch1.bw_limit = false; break;
         case 3: { char t[24]; channel_cycle_coupling(1, &ss->ch2, "CH2", t, sizeof(t)); } break;
         case 4: scope_cycle_probe(&ss->ch2); break;
-        case 5: scope_toggle_bw_limit(&ss->ch2); break;
+        case 5: ss->ch2.bw_limit = false; break;
         case 6: scope_cycle_trigger_mode(ss); break;
         case 7: scope_cycle_trigger_edge(ss); break;
         default: break;
@@ -644,9 +646,13 @@ uint8_t input_handle_button(button_id_t button, QueueHandle_t dq)
                      m.stop_on_fail ? "ON" : "OFF");
             popup_and_redraw(dq, pb);
         } else if (current_mode == MODE_OSCILLOSCOPE) {
+            /* Probe 1X/10X: scales every volts readout (scope_cal applies
+             * it). Silent until 2026-10-03, when it also scaled nothing. */
             channel_state_t *ch = (active_channel == 0) ? &ss->ch1 : &ss->ch2;
             scope_cycle_probe(ch);
-            send_cmd(dq, cmd);
+            snprintf(pb, sizeof(pb), "CH%d probe %s", active_channel + 1,
+                     probe_labels[ch->probe]);
+            popup_and_redraw(dq, pb);
         }
         break;
 

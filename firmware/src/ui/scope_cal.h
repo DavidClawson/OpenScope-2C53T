@@ -157,8 +157,21 @@ typedef enum {
  */
 float scope_cal_mv_per_count(uint8_t ch, uint8_t range_idx);
 
-/* Volts per ADC count — the form the measurement badges want. 0.0f as above. */
+/* Volts per ADC count AT THE PROBE TIP — the form the badges, cursor and
+ * volts/div labels want. = mV/count x the channel's probe factor / 1000.
+ * 0.0f as above. scope_cal_mv_per_count() above stays BNC-referred: it is the
+ * calibration table (what `fpga scope cal` prints and the bench scripts
+ * verify), and a probe setting must never look like a calibration change. */
 float scope_cal_volts_per_count(uint8_t ch, uint8_t range_idx);
+
+/* Probe attenuation, read through a registered source so the probe setting
+ * has ONE home (scope_state) and ONE application point (here). Until
+ * 2026-10-03 the 1X/10X setting reached nothing but an unobeyed USART bit:
+ * a user on a 10x probe saw volts 10x too small. No source registered (host
+ * tests, early boot) or a factor <= 0 means 1.0. */
+typedef float (*scope_cal_probe_fn)(uint8_t ch);
+void  scope_cal_set_probe_source(scope_cal_probe_fn fn);
+float scope_cal_probe_factor(uint8_t ch);
 
 /* How much to trust the above. */
 scope_cal_tier_t scope_cal_get_tier(uint8_t ch, uint8_t range_idx);
@@ -196,6 +209,11 @@ float scope_cal_volts_per_div(uint8_t ch, uint8_t range_idx);
  * the same class of defect as an invented measurement.
  */
 void scope_cal_range_label(uint8_t ch, uint8_t range_idx, char *out, uint32_t n);
+
+/* The same label at the BNC, ignoring the probe factor: for the calibration
+ * dump (`fpga scope cal`), whose table must not change with a UI setting
+ * (EXP-60 addendum: the first probe build moved that column). */
+void scope_cal_range_label_bnc(uint8_t ch, uint8_t range_idx, char *out, uint32_t n);
 
 #ifdef __cplusplus
 }

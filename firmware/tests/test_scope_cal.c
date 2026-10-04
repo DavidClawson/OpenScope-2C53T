@@ -233,6 +233,43 @@ static void test_true_scale_gate_matches_calibration(void)
           "range past the end must not render true scale");
 }
 
+/* Probe factor (2026-10-03): the readout scales, the calibration table does
+ * not, and only the channel with the 10x probe moves. Control: with no
+ * source registered every number is exactly what it was. */
+static float probe_ch2_x10(uint8_t ch) { return ch == 2u ? 10.0f : 1.0f; }
+static float probe_bad(uint8_t ch)     { (void)ch; return -3.0f; }
+
+static void test_probe_factor(void)
+{
+    const uint8_t r = 6;                       /* a MEASURED range */
+    scope_cal_set_probe_source(NULL);
+    const float v1 = scope_cal_volts_per_count(1, r), v2 = scope_cal_volts_per_count(2, r);
+    const float m2 = scope_cal_mv_per_count(2, r), d2 = scope_cal_volts_per_div(2, r);
+    char l_before[12], l_after[12];
+    scope_cal_range_label(2, r, l_before, sizeof(l_before));
+    CHECK(v2 > 0.0f && scope_cal_probe_factor(2) == 1.0f, "no source: factor 1");
+
+    scope_cal_set_probe_source(probe_ch2_x10);
+    CHECK(scope_cal_volts_per_count(2, r) == v2 * 10.0f, "CH2 10x: volts/count x10");
+    CHECK(scope_cal_volts_per_div(2, r) == d2 * 10.0f, "CH2 10x: volts/div x10");
+    CHECK(scope_cal_mv_per_count(2, r) == m2, "CH2 10x: the cal table must not move");
+    CHECK(scope_cal_volts_per_count(1, r) == v1, "CH1 1x: unchanged");
+    scope_cal_range_label(2, r, l_after, sizeof(l_after));
+    CHECK(strcmp(l_before, l_after) != 0, "CH2 label must change (%s -> %s)", l_before, l_after);
+    {
+        char bnc[12];
+        scope_cal_range_label_bnc(2, r, bnc, sizeof(bnc));
+        CHECK(strcmp(bnc, l_before) == 0, "BNC label ignores the probe (%s vs %s)", bnc, l_before);
+    }
+    CHECK(scope_cal_volts_per_count(2, 0) == 0.0f, "an uncalibrated range stays 0 at 10x");
+    CHECK(scope_cal_true_scale_ok(2, r), "true-scale gate unaffected by the probe");
+
+    scope_cal_set_probe_source(probe_bad);
+    CHECK(scope_cal_volts_per_count(2, r) == v2, "a nonsense factor falls back to 1");
+    scope_cal_set_probe_source(NULL);
+    CHECK(scope_cal_volts_per_count(2, r) == v2, "unregistering restores 1x");
+}
+
 int main(void)
 {
     test_uncalibrated_ranges_return_zero();
@@ -243,6 +280,7 @@ int main(void)
     test_provisional_ranges_still_produce_a_number();
     test_volts_per_div_is_derived();
     test_labels();
+    test_probe_factor();
 
     if (failures == 0) {
         printf("test_scope_cal: all checks passed\n");

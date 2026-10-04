@@ -3170,14 +3170,19 @@ static void cmd_fpga_scope_measure(const char *args)
     const float k1 = scope_cal_volts_per_count(1u, ss->ch1.vdiv_idx);
     const float k2 = scope_cal_volts_per_count(2u, ss->ch2.vdiv_idx);
 
+    /* k1/k2 are probe-TIP volts per count (scope_cal applies the probe
+     * factor); probeN says which factor, so a bench script can tell a 10x
+     * setting from a calibration change. Appended, so parsers keep working. */
     usb_debug_printf("badge sources: rng1=%u k1_uV=%lu  rng2=%u k2_uV=%lu  "
-                     "tb=0x%02X inforce=0x%02X fs=%lu\r\n",
+                     "tb=0x%02X inforce=0x%02X fs=%lu  probe1=x%u probe2=x%u\r\n",
                      (unsigned)ss->ch1.vdiv_idx,
                      (unsigned long)(k1 * 1e6f + 0.5f),
                      (unsigned)ss->ch2.vdiv_idx,
                      (unsigned long)(k2 * 1e6f + 0.5f),
                      (unsigned)ss->timebase_idx, (unsigned)in_force,
-                     (unsigned long)(fs + 0.5f));
+                     (unsigned long)(fs + 0.5f),
+                     (unsigned)(scope_cal_probe_factor(1u) + 0.5f),
+                     (unsigned)(scope_cal_probe_factor(2u) + 0.5f));
     if (in_force != ss->timebase_idx)
         usb_send_str("TB MISMATCH: frequency suppressed (see fpga scope freq)\r\n");
 
@@ -3257,8 +3262,8 @@ static void cmd_fpga_scope_cal(void)
 
     for (uint8_t r = 0; r < SCOPE_CAL_RANGE_COUNT; r++) {
         char l1[12], l2[12];
-        scope_cal_range_label(1u, r, l1, sizeof(l1));
-        scope_cal_range_label(2u, r, l2, sizeof(l2));
+        scope_cal_range_label_bnc(1u, r, l1, sizeof(l1));   /* BNC: this is the */
+        scope_cal_range_label_bnc(2u, r, l2, sizeof(l2));   /* cal table        */
 
         const scope_cal_tier_t t = scope_cal_get_tier(1u, r);
         const char *tn = (t == SCOPE_CAL_MEASURED)    ? "measured"
@@ -3276,6 +3281,10 @@ static void cmd_fpga_scope_cal(void)
                          tn);
     }
 
+    usb_debug_printf("table is at the BNC; on-screen volts are at the probe tip: "
+                     "probe CH1 x%u  CH2 x%u\r\n",
+                     (unsigned)(scope_cal_probe_factor(1u) + 0.5f),
+                     (unsigned)(scope_cal_probe_factor(2u) + 0.5f));
     usb_send_str("\r\ntimebase (reg 0x01) -> sample rate\r\n");
     usb_send_str("code    S/s    s/div   tier\r\n");
     for (uint8_t c = 0; c < SCOPE_TIMEBASE_CODE_COUNT; c++) {

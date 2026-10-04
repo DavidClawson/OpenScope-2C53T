@@ -20,6 +20,11 @@ PASS CRITERIA, FIXED BEFORE THE RUN:
   isolation with CH1 in AC, CH2 (DC) still moves >= 30, and vice versa --
             each relay drives its own channel only
   label     the popup path never shows GND (GND left the cycle)
+  probe     SELECT on CH1 (scope time view): `probe1=x10` reported; CH1 Vpp
+            reads 10x (+/-2%: Vpp is quantised to 1 count in ~100, seen as
+            2.008 vs 2.028 V on consecutive frames) the 1X reading of the same input; the cal table
+            (`fpga scope cal`) is byte-identical; a second SELECT restores 1x
+            (until 2026-10-03 the 1X/10X setting scaled nothing)
 
 Sign: scope CH2 read -50 for the same +1 V command in runs 1-2. RESOLVED by a
 cable swap (EXP-60 addendum): JDS CH1 into scope CH2 reads +50.1 twice, so the
@@ -140,6 +145,39 @@ def main():
         check("ch%d restore DC" % ch, abs(d[ch - 1]) >= 30, "delta %+.1f counts" % d[ch - 1])
 
     check("no GND in cycle", "GND" not in labels_seen, "labels seen %s" % sorted(labels_seen))
+
+    # -- probe 1X/10X, CH1 (needs JDS CH1 cabled to scope CH1) ------------
+    import re
+
+    def vpp1(sc):
+        r = sc.cmd("fpga scope measure")
+        v = [int(x) for x in re.findall(r"Vpp1_uV=(\d+)", r)]
+        p = re.search(r"probe1=x(\d+)", r)
+        return (float(np.median(v)) if v else None), (int(p.group(1)) if p else None)
+
+    sg.offset(0.0, 1); sg.amp(2.0, 1); time.sleep(1.0)
+    for _ in range(2):                       # CH1 active, coupling back where it was
+        sc.cmd("btn ch1"); time.sleep(0.3)
+    cal0 = sc.cmd("fpga scope cal")
+    v_1x, p_1x = vpp1(sc)
+    sc.cmd("btn select"); time.sleep(0.5)
+    v_10x, p_10x = vpp1(sc)
+    cal1 = sc.cmd("fpga scope cal")
+    sc.cmd("btn select"); time.sleep(0.5)
+    v_back, p_back = vpp1(sc)
+    ratio = (v_10x / v_1x) if v_1x and v_10x else 0.0
+    check("probe x10", p_1x == 1 and p_10x == 10 and abs(ratio - 10.0) <= 0.2,
+          "Vpp1 %.3f V -> %.3f V (x%.3f), probe1 x%s -> x%s"
+          % ((v_1x or 0) / 1e6, (v_10x or 0) / 1e6, ratio, p_1x, p_10x))
+    # Every line of the dump except the one that REPORTS the probe factor.
+    # v5 run 1 failed the byte-identical form: the dump's V/div column used
+    # the on-screen (probe-tip) label. Fixed in firmware (BNC label); the
+    # probe line was added then and is the only line allowed to differ.
+    strip = lambda t: [l for l in t.splitlines() if "probe CH1" not in l]
+    check("probe cal unchanged", strip(cal0) == strip(cal1),
+          "fpga scope cal table identical at 10x (probe line excluded)")
+    check("probe restore", p_back == 1 and v_back and abs(v_back / v_1x - 1.0) <= 0.02,
+          "back to x%s, Vpp1 %.3f V" % (p_back, (v_back or 0) / 1e6))
     sg.output(False, False)
     print("\n%d/%d criteria met" % (sum(ok), len(ok)))
     return 0 if all(ok) else 1
