@@ -4,6 +4,7 @@
 - **Unit:** unit #3 (V1.4)
 - **Build:** `guest-coldtrace-crumbs` of PR #48's branch @ `f912890` (= #41 + evidence record + `cleared_at`), `Build: Oct  1 2026 14:36:14`
 - **Status:** **CONFIRMED (one natural occurrence; the triggering stall's snapshot was overwritten — see §6)**
+- **Note (2026-10-05, rebase onto 9170a50):** `FWL_INSTALL_CRUMBS`, `fwcrumb` and `make guest-coldtrace-crumbs` no longer exist on this branch; they were dropped in favour of main's c4e40bd (installer record in BPR DT1..5, read with `fwstat`), as agreed in #45. The "crumbs" build named here was guest-coldtrace with that installer trail on; the evidence record measured here does not depend on it. Commit ids in this file are the pre-rebase ones (see PR #48 for the current branch). The record is kept as it was measured.
 
 ## 1. Problem
 #39: the CDC shell goes silent while the UI stays alive, and only replug + reset brought it back. PR #41 added a watchdog (two consecutive stalls with the IN endpoint not VALID and `g_tx_completed` still 0 → USB soft disconnect/reconnect) that EXP-61 could not exercise: the wedge did not reproduce on demand (48 MB clean). Does the heal fire on a real wedge, and does the port come back without a human?
