@@ -45,6 +45,7 @@ SUITES = (
     "test_flash_regions.py",
     "test_cal_backup.py",
     "test_cal_page_decode.py",
+    "test_factory_iap_archive.py",
     "test_flash_switcher.py",
     "test_flash_preflight.py",
     "test_bootloader_updater.py",

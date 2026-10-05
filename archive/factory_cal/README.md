@@ -10,11 +10,11 @@ page, which also carries the per-device calibration. Decode and diff them with
 |---|---|---|
 | Unit | bench unit #1 | unit #3 (issue #28 numbering: #1 bench, #2 Stlkv, #3 this one; **not** the "third unit" of issue #18 further down) |
 | Board | 2C53T-V1.4 | 2C53T-V1.4_20250507, back silkscreen `S:2606.` |
-| Captured | 2026-06-12 (committed inside the bootloader archive); extracted to this file 2026-08-14 | 2026-10-01 |
+| Captured | 2026-06-12 (committed inside the 28 KB bootloader archive, `22730c0`); extracted to this file 2026-08-14 | 2026-10-01 |
 | **Pristine** | **no** — had run stock, OpenScope and our dev builds; its calibration region was later verified byte-intact against the live page (2026-08-14) | **yes** — never custom-flashed; stock V1.2.0 out of the box. The first non-stock image it ever ran was the read-only v0.4.0 `caldump` |
 | CRC32 | `59E91404` | `711FB4A9` (the CRC the device printed) |
 | sha256 | `6004374abb123b99aa8a2516f66b0f6465032e817ebd3fb463c2559accdf621f` | `464f921d61f1e32c10e20bf7a9304c6835a823ea0077b82beec638fa69e34038` |
-| How captured | `scripts/dump_factory_bootloader.py` (`mem read` over OpenScope's USB CDC shell), sliced out of `../factory_iap_bootloader_2C53T.bin` at `0x6000` | v0.4.0 `caldump` flashed through stock IAP (case closed, no DFU, no option-byte write); LCD summary and hex pages photographed, page rebuilt from the photos, CRC32 matches the device's. Re-read over the `mem read` shell under `coldtrace` before any button press (`settings` `writes ok: 0`): byte-identical |
+| How captured | `scripts/dump_factory_bootloader.py` (`mem read` over OpenScope's USB CDC shell), sliced at `0x6000` out of the original 28 KB `../factory_iap_bootloader_2C53T.bin` (`22730c0`; the archive now stops at `0x6000`, #38) | v0.4.0 `caldump` flashed through stock IAP (case closed, no DFU, no option-byte write); LCD summary and hex pages photographed, page rebuilt from the photos, CRC32 matches the device's. Re-read over the `mem read` shell under `coldtrace` before any button press (`settings` `writes ok: 0`): byte-identical |
 
 Neither file is regenerable. `*.bin` is git-ignored here, so a new page needs
 `git add -f`.
@@ -53,10 +53,17 @@ reproduces the numbers the device itself printed (134 of 4096 bytes differ):
 ## `unit1_mcu_settings_page_0x08006000.bin`
 
 4096 bytes. MCU internal flash `0x08006000–0x08006FFF` from **bench unit #1**, stock's
-saved-settings page. Extracted 2026-08-14 from `../factory_iap_bootloader_2C53T.bin`,
-which is `0x7000` bytes long and therefore spans `0x08000000–0x08007000` — the settings
-page is inside it. That file was committed 2026-06-12 under a name that says
-"bootloader", so nobody realised it also carried the settings page.
+saved-settings page. Extracted 2026-08-14 from `../factory_iap_bootloader_2C53T.bin` as
+committed 2026-06-12 (`22730c0`), which was `0x7000` bytes long and therefore spanned
+`0x08000000–0x08007000` — the settings page was inside it, under a name that says
+"bootloader", so nobody realised it also carried the settings page. Since #38 that archive
+stops at `0x6000` (below), so this file is the page's only copy in the working tree; git
+history keeps the original:
+
+```
+git show 22730c0:archive/factory_iap_bootloader_2C53T.bin | tail -c 4096 | shasum -a 256
+# 6004374abb123b99aa8a2516f66b0f6465032e817ebd3fb463c2559accdf621f  (this file)
+```
 
 ```
 sha256  6004374abb123b99aa8a2516f66b0f6465032e817ebd3fb463c2559accdf621f
@@ -102,10 +109,29 @@ exhaustive scan of the stock image found `master_init` to be the only writer of 
 region), so if a unit's physical page is ever erased there is nothing to restore it from
 except its copy here.
 
-Now that unit #1's page lives here under its own name, `../factory_iap_bootloader_2C53T.bin`
-no longer needs to carry it: trimming that archive to its 24 KB of code (0x6000 bytes) is
-the fix proposed in #38, because the full 28 KB file, written whole by the recovery recipe,
-puts unit #1's calibration on whatever unit is being recovered.
+With unit #1's page here under its own name, `../factory_iap_bootloader_2C53T.bin` no
+longer carries it: #38 trimmed that archive to its 24 KB of code, because the full 28 KB
+file, written whole by the recovery recipe, put unit #1's calibration on whatever unit was
+being recovered. Nothing was lost: the 4096 bytes cut off are this file, byte for byte.
+
+| `../factory_iap_bootloader_2C53T.bin` | bytes | sha256 |
+|---|---|---|
+| before #38 (`22730c0`) | 28,672 (`0x7000`) | `0c9ec7d642d233ea09c87274867ad3460e1dbec37c4332f7edb8f836175630c7` |
+| now | 24,576 (`0x6000`) | `7a6201ee16ce155675f1d235e468edfdce7a736318f2591d54a221d4ad06566b` |
+
+The trimmed file is the first `0x6000` bytes of the old one, and also byte-identical to
+`0x08000000–0x08005FFF` of never-flashed unit #3, so it is the shared IAP code, not
+anything of unit #1's. Unit #3's 28 KB dump (2026-09-30, `scripts/dump_factory_bootloader.py`
+when it still read `0x7000`) is not in the repo, but its sha256 can be rebuilt from files
+that are:
+
+```
+cat ../factory_iap_bootloader_2C53T.bin unit3_pristine_mcu_settings_page_0x08006000.bin | shasum -a 256
+# dc3d8b7daa1fe0224d140a4fc9191daaa27b7c1a2fff5f523f9047d7235f8dae  (unit #3's 0x08000000-0x08006FFF)
+```
+
+`scripts/test_factory_iap_archive.py` pins the size, the hashes and the docs that quote
+them.
 
 ## What is established, and what is not
 

@@ -172,7 +172,7 @@ To put your own page back later, enter ROM DFU (open case, BOOT0 + pinhole reset
 dfu-util -a 0 -d 2e3c:df11 -s 0x08006000 -D <your-caldump.bin>
 ```
 
-where `<your-caldump.bin>` is the 4096-byte file from step 3. The recovery recipe in the DFU guide needs this step: the archived factory bootloader carries unit #1's page and overwrites yours ([#38](https://github.com/DavidClawson/OpenScope-2C53T/issues/38)).
+where `<your-caldump.bin>` is the 4096-byte file from step 3. The archived factory bootloader used by the DFU guide's recovery recipe stops at `0x08005FFF` and no longer touches this page; until [#38](https://github.com/DavidClawson/OpenScope-2C53T/issues/38) it was 28,672 bytes and wrote unit #1's page over yours, so if you ran that recipe before, run this command.
 
 ### Prerequisites
 
@@ -295,7 +295,7 @@ It auto-detects the device and available images, verifies the stock firmware by 
 
 **Windows** users can skip the tool — drag-drop the `.bin` onto the `IAP` drive (the official FNIRSI method; Windows' FAT driver handles the volume cleanly).
 
-If the factory bootloader itself is gone (MENU + Power no longer mounts `IAP`), the way back is the [full factory restore](docs/dfu_mode_guide.md#full-factory-restore-recover-menupower-upgrade-mode). Read its calibration warning first ([#38](https://github.com/DavidClawson/OpenScope-2C53T/issues/38)).
+If the factory bootloader itself is gone (MENU + Power no longer mounts `IAP`), the way back is the [full factory restore](docs/dfu_mode_guide.md#full-factory-restore-recover-menupower-upgrade-mode). If you ran it before [#38](https://github.com/DavidClawson/OpenScope-2C53T/issues/38), when the archive was 28,672 bytes, it wrote unit #1's calibration over yours: put your own page back with its step 3.
 
 ### Build
 
