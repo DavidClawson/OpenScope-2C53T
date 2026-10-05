@@ -759,6 +759,13 @@ static void vDisplayTask(void *pvParameters)
  * the buttons use a bidirectional 4x3 matrix requiring active scanning.
  * See: reverse_engineering/analysis_v120/button_map_confirmed.md
  */
+#ifdef EMULATOR_BUILD
+/* Emulator key mailbox: Renode has no model of the 4x3 key matrix, so a host
+ * script writes a button id + 1 here (`sysbus WriteByte <&g_emu_key> n`) and
+ * the input task queues it like the `btn` shell command (input_inject_button). */
+volatile uint8_t g_emu_key __attribute__((used)) = 0;
+#endif
+
 static void vInputTask(void *pvParameters)
 {
     (void)pvParameters;
@@ -766,6 +773,13 @@ static void vInputTask(void *pvParameters)
 
     for (;;) {
         button_id_t pressed;
+#ifdef EMULATOR_BUILD
+        if (g_emu_key != 0u) {
+            const uint8_t k = (uint8_t)(g_emu_key - 1u);
+            g_emu_key = 0u;
+            (void)input_inject_button((button_id_t)k);
+        }
+#endif
 
         /* Block until TMR3 ISR confirms a debounced button press */
         if (xQueueReceive(xInputQueue, &pressed, pdMS_TO_TICKS(100)) == pdTRUE) {
@@ -1207,7 +1221,12 @@ unsigned int system_core_clock = 240000000;
 
 void SystemInit(void)
 {
-    /* Stub — do nothing in emulator mode. */
+    /* Stub for the emulator, except for the one thing every build needs: the
+     * FPU. The HAL's SystemInit grants CP10/CP11 full access (CPACR bits
+     * 20..23); without it the first VFP instruction takes a NOCP usage fault
+     * (CFSR 0x00080000), which is how Renode stopped right after the splash. */
+    *(volatile uint32_t *)0xE000ED88u |= (0xFu << 20);
+    __asm volatile ("dsb\n\tisb" ::: "memory");
 }
 
 void system_clock_config(void)
