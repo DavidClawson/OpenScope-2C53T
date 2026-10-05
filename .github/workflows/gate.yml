@@ -1,0 +1,297 @@
+# The gate, on every push and PR to main: `python3 scripts/run_tests.py --strict`.
+#
+# WHAT IT RUNS
+#   * every suite in scripts/run_tests.py, including test_firmware_build.py,
+#     which compiles app / guest / emu / hwtest / bootloader from clean and
+#     enforces the compiler-warning ratchet;
+#   * after building the two things test_bootloader_updater.py inspects
+#     (bootloader_updater.bin, high_layout_updater.bin), so that suite really
+#     checks a built binary instead of skipping.
+#
+# WHAT IT CANNOT RUN, AND SAYS SO
+#   Three suites need archive/2C53T Firmware V1.2.0/APP_2C53T_V1.2.0_251015.bin,
+#   the stock FNIRSI image. It is copyrighted and gitignored, so it can never be
+#   in CI: 8 tests skip (test_flash_switcher.py x5, test_stock_caplog.py x2,
+#   test_stock_hybrid_power_hold_patch.py x1). A bare --strict would therefore
+#   be red forever, and dropping --strict would bring back the quiet "(skipped=N)"
+#   that run_tests.py exists to prevent. Instead the step below names those three
+#   suites AND the reason (--allow-skip SUITE:REASON). A skip anywhere else, or
+#   the same suite skipping for a new reason (e.g. no compiler), still fails.
+#   Those 8 tests are real coverage that still has to be run on a dev machine.
+#   Also not run here, because run_tests.py does not run them: the test_*.py files
+#   outside its SUITES (test_stock_h2_table, test_stock_meter_literals,
+#   test_dmm_goal_validation, test_openscope_live_debug), the `make test-*` host
+#   C tests in firmware/Makefile, and of course anything that touches a device.
+#
+# WHY THE TOOLCHAIN IS PINNED TO ONE EXACT RELEASE
+#   Issue #42 was a toolchain-dependent codegen bug: the same source produced a
+#   different image depending on which arm-none-eabi-gcc built it. A gate that
+#   floats on "whatever apt/latest ships" would silently change what it is
+#   gating. So: one Arm GNU Toolchain release, fixed below, printed in the log,
+#   and asserted (the action also checks the download against a pinned digest).
+#   15.3.Rel1 is what the maintainer's bench machine builds with, so a green gate
+#   here means "green with the compiler that ships". Not apt's gcc-arm-none-eabi
+#   (Ubuntu 24.04 packages 13.2.Rel1 and the version moves with the distro).
+#   To bump: change ARM_GNU_RELEASE (needs a release the action knows, see
+#   github.com/carlosperate/arm-none-eabi-gcc-action#available-releases), run
+#   the gate, and if the warning ratchet or the images change, that is the
+#   toolchain talking: say so in the PR. (WARNING_BASELINE in
+#   test_firmware_build.py was measured with 13.2.1 and still holds on 15.3.1.)
+#
+# THE TWO VENDOR TREES ARE PINNED TO COMMITS, NOT BRANCHES
+#   firmware/at32f403a_lib and firmware/FreeRTOS are gitignored clones (README
+#   "Getting Started"). Cloning "main" would let an upstream push change the
+#   gate's verdict with no commit here. To bump:
+#       git ls-remote https://github.com/ArteryTek/AT32F403A_407_Firmware_Library.git HEAD
+#       git ls-remote https://github.com/FreeRTOS/FreeRTOS-Kernel.git HEAD
+#   paste the SHA below, open a PR: the gate on that PR is the compatibility check.
+#
+# ACTIONS ARE PINNED BY COMMIT SHA (the trailing comment is the tag it was
+# resolved from). Dependabot/Renovate can maintain these; so can a human.
+#
+# BUILDS ARE REPRODUCIBLE ON CI: usb_debug.c embeds __DATE__/__TIME__, so every
+# build used to hash differently. GCC honours SOURCE_DATE_EPOCH, so the commit
+# timestamp is exported, and re-running a commit on the same runner image gives
+# byte-identical images (checked on Linux x86_64 with 15.3.Rel1, across BUILD_DIR
+# names and source paths). SHA256SUMS is therefore something CI can re-check.
+# It does NOT make a local macOS build match: the object code is identical on
+# both hosts, but ld pulls the libc members in a different order, so the linked
+# bytes differ. Compare CI hashes with CI hashes.
+
+name: Gate
+
+on:
+  push:
+    branches: [main]
+    tags: ['v*']
+  pull_request:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+# A newer push to a PR supersedes the old run; main and tag runs always finish.
+concurrency:
+  group: gate-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+defaults:
+  run:
+    shell: bash  # = bash -eo pipefail: a failure inside a pipeline fails the step
+
+env:
+  # Everything that can change what the compiler emits lives in these three
+  # lines, shared by the gate and the release job so they cannot drift apart.
+  ARM_GNU_RELEASE: 15.3.Rel1
+  # ArteryTek/AT32F403A_407_Firmware_Library master, "update version to v2.2.2" (2025-11-27)
+  AT32_LIB_SHA: 29f8bfd95b190fa38070d2e0fbbb9f3871b0b3f5
+  # FreeRTOS/FreeRTOS-Kernel main, PR #1433 merge (2026-08-26); latest release tag is V11.3.1
+  FREERTOS_SHA: 8be86d4a24fd4091f8f4192018423ab590f408db
+
+jobs:
+  gate:
+    name: Gate (run_tests.py --strict)
+    runs-on: ubuntu-24.04
+    timeout-minutes: 25
+    steps:
+      - name: Check out OpenScope
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Install Arm GNU Toolchain ${{ env.ARM_GNU_RELEASE }}
+        uses: carlosperate/arm-none-eabi-gcc-action@98c40e51546516419841748d3210c290df0d2c6c # v1.13.0
+        with:
+          release: ${{ env.ARM_GNU_RELEASE }}
+
+      - name: Toolchain version (printed, and checked against the pin)
+        run: |
+          command -v arm-none-eabi-gcc
+          version="$(arm-none-eabi-gcc --version)"
+          printf '%s\n' "$version"
+          case "$version" in
+            *"Arm GNU Toolchain ${ARM_GNU_RELEASE} "*) ;;
+            *)
+              echo "::error::arm-none-eabi-gcc is not Arm GNU Toolchain ${ARM_GNU_RELEASE}"
+              exit 1
+              ;;
+          esac
+          echo "host cc (used by the host-C suites): $(gcc --version | sed -n 1p)"
+          echo "python: $(python3 --version)"
+
+      - name: Vendor tree - AT32F403A firmware library (pinned)
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          repository: ArteryTek/AT32F403A_407_Firmware_Library
+          ref: ${{ env.AT32_LIB_SHA }}
+          path: firmware/at32f403a_lib
+          persist-credentials: false
+
+      - name: Vendor tree - FreeRTOS-Kernel (pinned)
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          repository: FreeRTOS/FreeRTOS-Kernel
+          ref: ${{ env.FREERTOS_SHA }}
+          path: firmware/FreeRTOS
+          persist-credentials: false
+
+      # mtools and dfu-util are deliberately NOT installed: they are for
+      # flashing (iap_flash.py, `make flash`), and no suite in run_tests.py
+      # calls either one.
+
+      - name: Fix the build timestamp to the commit
+        run: echo "SOURCE_DATE_EPOCH=$(git log -1 --format=%ct)" >> "$GITHUB_ENV"
+
+      - name: Build the binaries the suites inspect
+        # test_bootloader_updater.py reads these two images (and skips if they
+        # are missing). high_layout_updater builds stage0 and the high
+        # bootloader itself; bootloader_updater needs bootloader/build/ first.
+        run: |
+          make -C firmware/bootloader
+          make -C firmware/bootloader_updater
+          make -C firmware/high_layout_updater
+
+      - name: Gate
+        env:
+          # test_firmware_build.py deletes its build-gate-* dirs when it is done
+          # unless this is set; the next step uploads the images from them.
+          KEEP_GATE_BUILDS: "1"
+        run: |
+          python3 scripts/run_tests.py --strict -v \
+            --allow-skip 'test_flash_switcher.py:stock archive' \
+            --allow-skip 'test_stock_hybrid_power_hold_patch.py:stock archive' \
+            --allow-skip 'test_stock_caplog.py:stock archive'
+
+      - name: Collect images and SHA256SUMS
+        if: ${{ !cancelled() }}
+        run: |
+          mkdir -p gate-artifacts
+          shopt -s nullglob
+          for image in firmware/build-gate-*/firmware.bin; do
+            name="${image#firmware/build-gate-}"      # app/firmware.bin
+            cp "$image" "gate-artifacts/firmware-${name%/firmware.bin}.bin"
+          done
+          if [ -f firmware/bootloader/build-gate/bootloader.bin ]; then
+            cp firmware/bootloader/build-gate/bootloader.bin gate-artifacts/bootloader.bin
+          fi
+          {
+            echo "commit            ${GITHUB_SHA}"
+            echo "toolchain         $(arm-none-eabi-gcc --version | sed -n 1p)"
+            echo "AT32F403A lib     ${AT32_LIB_SHA}"
+            echo "FreeRTOS-Kernel   ${FREERTOS_SHA}"
+            echo "SOURCE_DATE_EPOCH ${SOURCE_DATE_EPOCH}"
+          } > gate-artifacts/BUILD_INFO.txt
+          if compgen -G "gate-artifacts/*.bin" > /dev/null; then
+            (cd gate-artifacts && sha256sum -- *.bin > SHA256SUMS)
+          fi
+          {
+            echo '### Gate build info'
+            echo '```'
+            cat gate-artifacts/BUILD_INFO.txt
+            echo '```'
+            if [ -f gate-artifacts/SHA256SUMS ]; then
+              echo '### SHA256SUMS'
+              echo '```'
+              cat gate-artifacts/SHA256SUMS
+              echo '```'
+            fi
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Upload images
+        if: ${{ !cancelled() }}
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: gate-images
+          path: gate-artifacts/
+          if-no-files-found: warn
+          retention-days: 14
+
+  # On a v* tag: build the two images a release ships, from the tagged commit,
+  # with the same pinned toolchain and vendor trees, and attach them to a DRAFT
+  # release. Nothing is published; a human edits the notes and presses the
+  # button. Asset names follow the v0.3.0 / v0.4.0 convention.
+  release:
+    name: Draft release assets
+    if: ${{ startsWith(github.ref, 'refs/tags/v') }}
+    needs: gate
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    permissions:
+      contents: write  # create/update the draft release and upload its assets
+    steps:
+      - name: Check out the tagged commit
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Install Arm GNU Toolchain ${{ env.ARM_GNU_RELEASE }}
+        uses: carlosperate/arm-none-eabi-gcc-action@98c40e51546516419841748d3210c290df0d2c6c # v1.13.0
+        with:
+          release: ${{ env.ARM_GNU_RELEASE }}
+
+      - name: Toolchain version (printed, and checked against the pin)
+        run: |
+          command -v arm-none-eabi-gcc
+          version="$(arm-none-eabi-gcc --version)"
+          printf '%s\n' "$version"
+          case "$version" in
+            *"Arm GNU Toolchain ${ARM_GNU_RELEASE} "*) ;;
+            *)
+              echo "::error::arm-none-eabi-gcc is not Arm GNU Toolchain ${ARM_GNU_RELEASE}"
+              exit 1
+              ;;
+          esac
+
+      - name: Vendor tree - AT32F403A firmware library (pinned)
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          repository: ArteryTek/AT32F403A_407_Firmware_Library
+          ref: ${{ env.AT32_LIB_SHA }}
+          path: firmware/at32f403a_lib
+          persist-credentials: false
+
+      - name: Vendor tree - FreeRTOS-Kernel (pinned)
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          repository: FreeRTOS/FreeRTOS-Kernel
+          ref: ${{ env.FREERTOS_SHA }}
+          path: firmware/FreeRTOS
+          persist-credentials: false
+
+      - name: Build guest-coldtrace (the scope) and guest-caldump (calibration backup)
+        env:
+          TAG: ${{ github.ref_name }}
+        # Each into its own BUILD_DIR, as the gate does. Both targets are
+        # `clean all`, so they must run one after the other, never under -j.
+        run: |
+          SOURCE_DATE_EPOCH="$(git log -1 --format=%ct)"
+          export SOURCE_DATE_EPOCH
+          echo "building ${TAG} with SOURCE_DATE_EPOCH=${SOURCE_DATE_EPOCH}"
+          make -C firmware guest-coldtrace BUILD_DIR=build-release-coldtrace
+          make -C firmware guest-caldump BUILD_DIR=build-release-caldump
+          mkdir -p dist
+          cp firmware/build-release-coldtrace/firmware.bin "dist/openscope-2c53t-${TAG}-coldtrace.bin"
+          cp firmware/build-release-caldump/firmware.bin "dist/openscope-2c53t-${TAG}-caldump.bin"
+          test -s "dist/openscope-2c53t-${TAG}-coldtrace.bin"
+          test -s "dist/openscope-2c53t-${TAG}-caldump.bin"
+          (cd dist && sha256sum "openscope-2c53t-${TAG}-coldtrace.bin" "openscope-2c53t-${TAG}-caldump.bin" > SHA256SUMS)
+          (cd dist && sha256sum -c SHA256SUMS)
+          {
+            echo '### Release assets'
+            echo "Toolchain: $(arm-none-eabi-gcc --version | sed -n 1p)"
+            echo "SOURCE_DATE_EPOCH: ${SOURCE_DATE_EPOCH}"
+            echo '```'
+            cat dist/SHA256SUMS
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Attach to the draft release
+        uses: softprops/action-gh-release@efb35369e0ad2afab669f228072c1b0d510eae64 # v3.0.3
+        with:
+          draft: true
+          fail_on_unmatched_files: true
+          files: |
+            dist/openscope-2c53t-${{ github.ref_name }}-coldtrace.bin
+            dist/openscope-2c53t-${{ github.ref_name }}-caldump.bin
+            dist/SHA256SUMS
