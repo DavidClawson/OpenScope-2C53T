@@ -34,8 +34,9 @@
 /* Kept modest on purpose: __bss_end already sits ~3.5 KB below _estack on the
  * guest link, and the main stack has to live in that gap. Nothing is lost by
  * being small — when a host is attached, a full buffer makes the writer wait
- * for drain rather than drop. */
-#define RTT_UP_SIZE        2048u   /* target -> host */
+ * for drain rather than drop. 1024 since the remote protocol (#10) linked
+ * esp_comm into the guest images: guest-coldtrace had ~80 B of RAM left. */
+#define RTT_UP_SIZE        1024u   /* target -> host */
 #define RTT_DOWN_SIZE       128u   /* host -> target, one command line      */
 #define RTT_TX_TIMEOUT_MS    50u   /* max stall when an attached host lags  */
 
