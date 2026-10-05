@@ -5,6 +5,13 @@
 Supersedes [`docs/ideas/gaps_and_priorities.md`](ideas/gaps_and_priorities.md), which was written
 in March 2026 and is now substantially out of date.
 
+> **Update 2026-10-01.** This comparison describes the 2026-08-13 build and predates v0.4.0;
+> several rows have moved since (timebase, measurement badges, FFT input, trigger level,
+> settings persistence). Where each feature stands now is
+> [README § Feature maturity](../README.md#feature-maturity). The dated notes below mark the
+> timebase and absolute-accuracy claims that later measurements contradict; the full refresh
+> against the matrix is still owed (issue #12).
+
 This document exists because "what am I gaining and losing?" is a fair question that this project
 had never answered properly. The answer below is deliberately unflattering in places. A
 comparison that oversells costs the project credibility with exactly the people who read it.
@@ -21,7 +28,7 @@ working oscilloscope, not the end of one.
 | If you want to… | Use |
 |---|---|
 | Use the device as an instrument you depend on | **Stock** |
-| Measure a signal above about 15 Hz on the scope | **Stock** (see [Timebase](#timebase-the-big-one)) |
+| Measure a signal above about 15 Hz on the scope | **Stock** (see [Timebase](#timebase--the-big-one)) — *out of date since 2026-08-19, see the update there* |
 | Save a screenshot, browse files, use USB storage | **Stock** |
 | Trust absolute meter accuracy on your own unit | **Stock** |
 | Log or chart a multimeter reading over time | **OpenScope** |
@@ -48,8 +55,8 @@ Legend: ✅ works · ⚠️ partial / caveated · 🔬 code exists but is not re
 |---|---|---|---|
 | **Oscilloscope** | | | |
 | Live capture from cold boot | ✅ | ✅ | Ours needs the `guest-coldtrace` build; see [Which build](#which-build-actually-captures) |
-| Timebase / sample-rate control | ✅ | ❌ | **The single biggest gap.** See below |
-| Volts/div | ✅ | ⚠️ | 10 steps in the UI, wired to the frontend relays; calibration is placeholder |
+| Timebase / sample-rate control | ✅ | ~~❌~~ ⚠️ | ~~**The single biggest gap.**~~ *Update 2026-10-01:* wired since 2026-08-19 (EXP-17); 13 of 21 codes are now measured up to ~5 MS/s and 2 more fitted (PROVISIONAL), `0x0D`–`0x06` by [EXP-63](https://github.com/DavidClawson/OpenScope-2C53T/pull/51); the firmware table carries them once PR #51 lands (8 until then). See below |
+| Volts/div | ✅ | ⚠️ | 10 steps in the UI, wired to the frontend relays; ~~calibration is placeholder~~ *Update 2026-10-01:* per-range gain table since 2026-08-18 (ranges 5/6/7 measured); absolute scale still unverified on every unit ([EXP-64](https://github.com/DavidClawson/OpenScope-2C53T/pull/51)) |
 | Trigger mode / edge / source | ✅ | ⚠️ | In state and sent to the FPGA; **trigger level has no button binding** |
 | Coupling AC/DC/GND | ✅ | ⚠️ | Selectable; DC/AC relay behaviour bench-confirmed, per-range table still approximate |
 | Probe 1× / 10× | ✅ | ✅ | |
@@ -103,6 +110,23 @@ Legend: ✅ works · ⚠️ partial / caveated · 🔬 code exists but is not re
 ## The parts that need more than a table row
 
 ### Timebase — the big one
+
+> **Update 2026-10-01 — superseded; the section below is kept as written.** It describes the
+> 2026-08-13 build. The timebase is SPI3 register `0x01`, whose low nibble selects a 1-2-5 rate
+> ladder, and the UI control has reached it since 2026-08-19
+> ([EXP-17](experiments/2026-08-19-17-the-timebase-button-did-nothing.md)); the netlist reading
+> below ("no rate-control logic") was wrong ([README § Help Wanted, item 3](../README.md#help-wanted)).
+> [EXP-63](https://github.com/DavidClawson/OpenScope-2C53T/pull/51) ([#50](https://github.com/DavidClawson/OpenScope-2C53T/issues/50)) then measured codes `0x0D`–`0x08` on bench unit #3 with a
+> crystal-derived source through the acq path — 124,968 / 250,089 / 500,203 / 1,249,691 /
+> 2,500,893 / 4,990,070 S/s, R² 1.0000, fold-tested — and fitted `0x07`/`0x06` at 12,498,676 /
+> 24,849,896 S/s. At `0x08`/`0x09` the old INCOHERENT verdict was the instrument: with tones
+> placed for MS/s rates the acq path fits them cleanly (R² 1.0000, folds ≤ 3 bins) while
+> `spi3 opread` tears on the same code, tones and build.
+> [EXP-12](experiments/2026-08-18-12-code-08-incoherent.md)/[EXP-15](experiments/2026-08-19-15-codes-06-09-incoherent.md)'s
+> 40–420 Hz tones were also too low at these rates for either path. `0x07`/`0x06` fit on the acq
+> path but stay PROVISIONAL: no fold test, no opread contrast, and `0x06`'s two lowest tones sit
+> ~20% high, unexplained. Unit #3 reproduces unit #1's `0x0E`–`0x10` within 0.18%. Still
+> unmeasured: `0x00`–`0x05`.
 
 **The scope captures, but you cannot set the sweep speed.** Each hardware sweep is a
 ~microsecond, 1024-sample snapshot refreshed about 34 times a second, and the current build never
@@ -189,6 +213,12 @@ Consequences:
 
 - **Scope vertical accuracy is placeholder.** The baseline sits around 55 counts and the trace
   can clip against the top of the window. Do not read volts off the screen and believe them.
+  *Update 2026-10-01:* volts/div now comes from a per-range gain table (`scope_cal.c`,
+  2026-08-18; ranges 5/6/7 measured), but its absolute scale is unverified on every unit.
+  [EXP-64](https://github.com/DavidClawson/OpenScope-2C53T/pull/51) found bench unit #3's ranges 6/7 consistent with that table × one constant
+  at the pre-registered 5% bar, and the constant they imply is 0.895–0.916 against the compiled
+  0.92 (within ~3%) — measured against the unit's own meter path, which is a ratio check, not a
+  reference. The advice stands.
 - **Meter behaviour and ratios port fine; absolutes are per-unit.** The low-Ω scale factor
   (0.0304) is hardcoded to bench unit #1. Resistance and DCV up to ~9 V read within a few percent
   *on that unit*. Nobody has verified absolute accuracy on any other device.
@@ -303,7 +333,11 @@ opportunities, not accomplishments.
 - Use it **alongside a known-good meter**, which is what you would sensibly do with any
   unfamiliar instrument.
 - Absolute accuracy has never been verified on any unit but the bench unit.
+  *Update 2026-10-01:* for the scope, not on the bench units either — no unit has had its
+  absolute volts checked against a reference ([EXP-64](https://github.com/DavidClawson/OpenScope-2C53T/pull/51)).
 - Expect the scope to be useful only for very slow signals until timebase control lands.
+  *Update 2026-10-01:* it landed 2026-08-19 (EXP-17); see the [Timebase](#timebase--the-big-one)
+  update for the measured rates.
 - Going back to stock is supported: `python3 scripts/iap_flash.py`, or drag-and-drop on Windows.
   See [`docs/dfu_mode_guide.md`](dfu_mode_guide.md).
 - After PR #16 merges, a PC-driven dual-boot switcher lets you keep both.
