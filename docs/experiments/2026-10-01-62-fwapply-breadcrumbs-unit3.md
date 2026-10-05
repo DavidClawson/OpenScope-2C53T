@@ -4,6 +4,7 @@
 - **Unit:** unit #3
 - **Build running:** `make guest-coldtrace-crumbs` (FWL_INSTALL_CRUMBS=1), image crc32 `ECEAAF2B`
 - **Status:** CONTROL OK; this branch's installer installs the bank-crossing image 2/2 (instrumented and not); **the release v0.4.0 installer hung 1/1 on the same unit with the same payload in the same session** (§5)
+- **Note (2026-10-05, rebase onto 9170a50):** `FWL_INSTALL_CRUMBS`, `fwcrumb` and `make guest-coldtrace-crumbs` no longer exist on this branch. They were dropped in favour of main's c4e40bd (installer record in BPR DT1..5 in every build, printed by `fwstat`, exit code blinked on the backlight), as agreed in #45. The record below is kept as it was measured.
 
 ## 1. Problem
 EXP-57/59: the RAM installer hangs on genuine-Winbond units with bank-crossing images. Which exit fires, at which page, with what flash status?

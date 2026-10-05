@@ -11,7 +11,7 @@ inferred from the absence of an error.
 
 Steps
   info     PING + STATUS; protocol major; build string
-  crumbs   `fwcrumb` (install trail, EXP-57 follow-up) and `usbstat` baseline
+  crumbs   `fwstat` (installer record, main's c4e40bd) and `usbstat` baseline
   press    control: two screenshots with no press must match (else VOID);
            then BUTTON MENU, screenshot, BUTTON MENU, screenshot — images saved
   mode     acceptance criterion of remote_protocol.md §6: the operator changes
@@ -60,8 +60,8 @@ def step_info(dev, a, r, log):
 
 
 def step_crumbs(dev, a, r, log):
-    r["crumbs"] = {"fwcrumb": dev.shell("fwcrumb"), "usbstat": dev.shell("usbstat")}
-    log("  " + r["crumbs"]["fwcrumb"].replace("\n", "\n  "))
+    r["crumbs"] = {"fwstat": dev.shell("fwstat"), "usbstat": dev.shell("usbstat")}
+    log("  " + r["crumbs"]["fwstat"].replace("\n", "\n  "))
     log("  " + r["crumbs"]["usbstat"].replace("\n", "\n  "))
     return True
 

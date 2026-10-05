@@ -197,7 +197,7 @@ def build_server(session: ScopeSession):
                                           openWorldHint=False))
     def scope_shell(command: str) -> str:
         """Run one debug-shell command and return its text output. By default only
-        read-only commands are allowed: version, status, uptime, usbstat, fwstat, fwcrumb, help."""
+        read-only commands are allowed: version, status, uptime, usbstat, fwstat, help."""
         return expected(lambda: session.shell(command))()
 
     return mcp

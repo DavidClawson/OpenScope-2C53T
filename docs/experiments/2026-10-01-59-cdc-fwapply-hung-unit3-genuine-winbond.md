@@ -5,6 +5,7 @@
 - **Build running:** release `openscope-2c53t-v0.4.0-coldtrace.bin` (Sep 30 2026 00:04:02), flashed via factory IAP
 - **Payload:** `feat/remote-protocol` guest-coldtrace, 621 824 B, crc32 `E94E5986`
 - **Status:** REPRODUCED (symptom); cause OPEN
+- **Note (2026-10-05, rebase onto 9170a50):** `FWL_INSTALL_CRUMBS`, `fwcrumb` and `make guest-coldtrace-crumbs` no longer exist on this branch. They were dropped in favour of main's c4e40bd (installer record in BPR DT1..5 in every build, printed by `fwstat`, exit code blinked on the backlight), as agreed in #45. The record below is kept as it was measured.
 
 ## 1. Problem
 Is the EXP-57 `fwapply` hang specific to unit #1, or does this installer fail on bank-crossing images in general?

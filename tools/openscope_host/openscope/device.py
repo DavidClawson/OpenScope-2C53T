@@ -47,7 +47,7 @@ IDEMPOTENT = frozenset({proto.CMD_PING, proto.CMD_STATUS, proto.CMD_GET_METER})
 # device (fwapply, fwswap, reboot bootloader) or write flash, so a shell line
 # is re-sent after a replug only if it is on this list (the MCP server also
 # uses it as its default allowlist).
-READ_ONLY_SHELL = ("version", "status", "uptime", "usbstat", "fwstat", "fwcrumb", "help")
+READ_ONLY_SHELL = ("version", "status", "uptime", "usbstat", "fwstat", "help")
 
 
 SCREEN_HDR = re.compile(

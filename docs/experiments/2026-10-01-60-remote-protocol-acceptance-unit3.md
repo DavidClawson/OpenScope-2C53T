@@ -4,6 +4,7 @@
 - **Unit:** unit #3
 - **Build:** `make guest-coldtrace-crumbs` (v2, with the screenshot trailer CRC), image crc32 `A76CBABE`, Build Oct 1 2026 09:28:26
 - **Status:** CONFIRMED
+- **Note (2026-10-05, rebase onto 9170a50):** `FWL_INSTALL_CRUMBS`, `fwcrumb` and `make guest-coldtrace-crumbs` no longer exist on this branch. They were dropped in favour of main's c4e40bd (installer record in BPR DT1..5 in every build, printed by `fwstat`, exit code blinked on the backlight), as agreed in #45. The record below is kept as it was measured.
 - **CORRECTED 2026-10-01 (operator's confirmation):** the "external DMM" named below was the **unit under test itself in multimeter mode**, read on its LCD before the protocol run. Every "agrees with the external DMM" in this file is therefore *protocol reading = LCD reading of the same meter path*, which is what the §6 acceptance needs (GET_METER reports what the display reports) but is **not** an independent check of the meter's accuracy. The lines are kept as written, with this note; the 3.292 V figure is the device's own, uncorroborated. An external reference is still to be found (EXP-64 §6).
 
 ## 1. Problem
