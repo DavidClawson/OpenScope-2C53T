@@ -176,6 +176,7 @@ BENCH_LINES = (
     "fpga scope measure 3", "fpga scope freq", "spi3 read 1024", "spi3 opread 04 1026 dump",
     "spi3 opread 05", "spi3 opread 4 16", "spi3 opread 0x05 0x400 dump",
     "spi3 frame", "gpio read B11", "gpio scan", "meter trace", "cal status", "flash jedec",
+    "mask", "mask teach 8 both", "mask tol 8 2", "mask stop on", "mask dump", "fpga scope coupling",
 ) + tuple(n for n in devmod.BENCH_SHELL if n not in devmod.BENCH_ARG_RULES)
 # Bench names whose arguments fall outside BENCH_ARG_RULES: unsafe only.
 BENCH_ARG_REFUSED = (
@@ -187,11 +188,11 @@ UNSAFE_ONLY_LINES = (
     "spi3 seq 01 1A", "spi3 xfer 11 00 00 00", "fpga frame 0x05 0x14", "fpga cmd 05 14",
     "usart tx 05 14", "usbstat heal on", "mem read 0x40021000 4", "meter stream 10",
     "fpga stock commit", "meter mux-arms 01 02", "meter pc11-timing", "flash diag",
-    "screen dump", "?",
+    "screen dump", "?", "btn ok", "btn menu 3",
     "nosuchcommand", "version; fwapply",
 )
 NEVER_LINES = (
-    "fwload 1024 DEADBEEF a", "fwapply", "fwswap b", "fwcrumb clear", "cal backup",
+    "fwload 1024 DEADBEEF a", "fwapply", "fwswap b", "cal backup",
     "cal restore force CONFIRM", "flash wtest 0x1000 CONFIRM", "mem write 0x40010C10 0x800",
     "mode startup meter", "mode startup", "reboot bootloader", "gpio set B11 1",
     "gpio mode A6 out", "bench restore", "spi3 armtest pb11", "fpga dbgclk 10", "fpga dbgarm",
@@ -252,7 +253,7 @@ class TestShellLevels(unittest.TestCase):
             msg = self.assertRefused("readonly", line, "--level unsafe")
             self.assertNotIn("It is a bench command", msg, line)
         self.assertRefused("readonly", "versionx")
-        self.assertRefused("readonly", "fwcrumb now")
+        self.assertRefused("readonly", "fwstat now")
 
     def test_bench_adds_the_bench_commands(self):
         for line in devmod.READ_ONLY_SHELL + BENCH_LINES:
@@ -283,8 +284,8 @@ class TestShellLevels(unittest.TestCase):
                 self.assertRefused(lvl, line, "every --level")
 
     def test_whole_word_matching(self):
-        self.assertAccepted("readonly", "fwcrumb")              # read-only...
-        self.assertRefused("unsafe", "fwcrumb clear")           # ...its eraser never
+        self.assertAccepted("readonly", "usbstat")              # read-only...
+        self.assertRefused("bench", "usbstat heal off")         # ...its heal switch is not
         self.assertAccepted("bench", "trig2 raw 100")           # not shadowed by "trig"
         self.assertRefused("bench", "trigger 3 40")             # "trig" is a word
         self.assertAccepted("unsafe", "fwapplyx")               # not fwapply: firmware says Unknown command
@@ -353,9 +354,11 @@ class TestDenyListAgainstFirmwareTable(unittest.TestCase):
     # probes, fixed frontend pin patterns (meter mux-arms, meter pc11-timing),
     # streams that can outlast the 5 s shell timeout, reads with side effects
     # (mem read has no address guard; flash diag leaves the W25Q write-enable
-    # latch set), screen-capture plumbing.
+    # latch set), screen-capture plumbing. `btn` injects front-panel presses
+    # without scope_press's Settings guard, so it is no lower than unsafe,
+    # where scope_press filters nothing but POWER either (and btn refuses POWER).
     REVIEWED_UNSAFE_ONLY = {
-        "?", "usbstat heal", "usart raw", "usart tx", "bench snapshot", "buzzer test",
+        "?", "usbstat heal", "btn", "usart raw", "usart tx", "bench snapshot", "buzzer test",
         "mem read", "flash diag", "screen dump", "screen dumpbin", "screen shadow",
         "fpga cmd", "fpga frame", "fpga selftest", "fpga stock diag", "fpga stock clear",
         "fpga stock set",

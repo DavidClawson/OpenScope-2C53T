@@ -54,7 +54,7 @@ READ_ONLY_SHELL = ("version", "status", "uptime", "usbstat", "fwstat", "help")
 # Names are rows of the firmware's shell table (shell_cmds[] in
 # firmware/src/drivers/usb_debug.c). A name matches a line it is a
 # whole-word prefix of, as in the firmware's dispatcher, so "trig" never
-# matches "trig2 ..." and "fwcrumb clear" is not "fwcrumb".
+# matches "trig2 ..." and "usbstat heal" is not "usbstat".
 # tests/test_mcp_server.py checks every name below against that table and
 # fails when a row is added that nobody has classified.
 SHELL_LEVELS = ("readonly", "bench", "unsafe")
@@ -69,6 +69,8 @@ BENCH_SHELL = (
     "fpga scope timebase", "fpga scope range", "fpga scope center", "fpga scope vdiv",
     "fpga scope trigmode", "fpga scope level", "fpga scope edge", "fpga scope hpos",
     "fpga scope softtrig", "fpga scope graticule", "trig", "trig2", "mode",
+    # waveform pass/fail (EXP-69): teach/tol/clear/run/stop change RAM state only
+    "mask",
     # acquisition knobs of the seam/poll experiments (EXP-29..54)
     "fpga postedge", "fpga pollgap", "fpga autowait", "fpga rearmwait", "fpga rearm",
     "fpga acqgate", "fpga acqbr", "fpga pairgap", "fpga unrotate", "fpga edgefilter",
@@ -76,7 +78,7 @@ BENCH_SHELL = (
     # one FPGA read window, limited to the channel-read opcodes (BENCH_ARG_RULES)
     "spi3 opread",
     # measurements and reads
-    "fpga scope measure", "fpga scope freq", "fpga scope cal",
+    "fpga scope measure", "fpga scope freq", "fpga scope cal", "fpga scope coupling",
     "spi3 read", "spi3 frame", "gpio read", "gpio scan",
     "meter dump", "meter trace", "meter frontend", "meter adc-snapshot",
     "cal status", "settings", "ui dump", "flash jedec", "flash read", "flash dump",
@@ -111,7 +113,6 @@ NEVER_SHELL_ROWS = {
     "fwload": "stages a firmware image into the W25Q cache (erases and writes it)",
     "fwapply": "erases and reprograms the MCU application flash, then resets",
     "fwswap": "installs a cached image over the MCU application flash, then resets",
-    "fwcrumb clear": "erases the firmware-install trail (backup registers)",
     "cal backup": "erases and rewrites the factory-calibration backup in the W25Q",
     "cal restore": "rewrites the MCU factory-calibration page (0x08006000)",
     "flash wtest": "erases and writes a W25Q sector",
