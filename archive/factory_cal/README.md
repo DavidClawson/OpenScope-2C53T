@@ -244,3 +244,18 @@ block 1.
 Dendi's page carries a handful of out-of-range outliers (62808, 50862, 27857, 27887, 31944)
 scattered through otherwise well-formed entries; not yet explained, and worth keeping in mind
 before treating any single unit's page as a clean reference.
+
+## `unlabelled_rev_saulvalenzuela23_mcu_settings_page_0x08006000.bin` — 2026-10-05
+
+Contributed by @saulvalenzuela23 in [issue #28](https://github.com/DavidClawson/OpenScope-2C53T/issues/28#issuecomment-5949549179) for the early, unlabelled board revision (see `docs/board_revisions.md` and #37). Shipped with stock 1.0.6, updated to 1.2.0 through the stock IAP before `caldump`. Rebuilt from the `caldump` LCD pages; CRC32 `A9DFD19B` and 345 non-FF bytes are what the device printed. sha256 `8bb7237e1962254afc305c8ed73dac19288445a21f99a1654fe1199b4d65b124`.
+
+What `scripts/cal_page_decode.py` shows against the two V1.4 pages:
+
+| | Reading |
+|---|---|
+| Signature | `0x55`, valid-normal-restore |
+| Sentinel B[59] (`0x126`) | `3251`, valid |
+| Calibration `0x030–0x12F` | same layout; block A 1558..1661 and block B 3161..3251, close to the V1.4 ranges; the known ODD pair at `0x128`/`0x12C` is present |
+| Word `0x038` (first table-A word) | **`0xE61F` (58911)**, where both V1.4 pages hold ~1600 (`0x0645`, `0x0659`). The CRC matches the device, so it is the stored value, not a transcription error. Its meaning on this revision is open. |
+| Tail `0x130–0x1FF` | differs in 207/208 bytes from the V1.4 pages, which are byte-identical to each other there: the tail is not per-unit calibration, and it is not shared across board revisions/factory firmware either |
+| Rest `0x200–0xFFF` | erased except 4 bytes from `0x800`, as on V1.4 |

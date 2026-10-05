@@ -231,5 +231,42 @@ class TestNoDrift(unittest.TestCase):
             self.assertIn(crc, text)
 
 
+
+UNLABELLED = ROOT / "archive" / "factory_cal" / "unlabelled_rev_saulvalenzuela23_mcu_settings_page_0x08006000.bin"
+UNLABELLED_SHA256 = "8bb7237e1962254afc305c8ed73dac19288445a21f99a1654fe1199b4d65b124"
+
+
+class UnlabelledRevisionPageTest(unittest.TestCase):
+    """Third page (issue #28): the early unlabelled board revision."""
+
+    @classmethod
+    def setUpClass(cls):
+        if not UNLABELLED.exists():
+            raise AssertionError(f"{UNLABELLED.relative_to(ROOT)} is missing (tracked with git add -f)")
+        cls.raw = UNLABELLED.read_bytes()
+
+    def test_identity_matches_what_the_device_printed(self):
+        import hashlib, zlib
+        self.assertEqual(len(self.raw), 4096)
+        self.assertEqual(hashlib.sha256(self.raw).hexdigest(), UNLABELLED_SHA256)
+        self.assertEqual(zlib.crc32(self.raw), 0xA9DFD19B)
+        self.assertEqual(sum(b != 0xFF for b in self.raw), 345)
+
+    def test_signature_and_sentinel_valid(self):
+        self.assertEqual(self.raw[0], 0x55)
+        self.assertEqual(int.from_bytes(self.raw[0x126:0x128], "little"), 3251)
+
+    def test_first_table_word_is_off_pattern_only_here(self):
+        w = lambda d: int.from_bytes(d[0x38:0x3A], "little")
+        self.assertEqual(w(self.raw), 0xE61F)
+        for p in (UNIT1, UNIT3):
+            self.assertEqual(w(p.read_bytes()) >> 8, 0x06)
+
+    def test_tail_differs_from_v14_while_v14_pages_agree(self):
+        u1, u3 = UNIT1.read_bytes(), UNIT3.read_bytes()
+        self.assertEqual(u1[0x130:0x200], u3[0x130:0x200])
+        diff = sum(a != b for a, b in zip(self.raw[0x130:0x200], u3[0x130:0x200]))
+        self.assertEqual(diff, 207)
+
 if __name__ == "__main__":
     unittest.main()
