@@ -31,7 +31,7 @@ The FNIRSI 2C53T is a capable $75 handheld 3-in-1 instrument held back by buggy 
 
 ## Current Status
 
-**Custom firmware runs on real hardware, and it captures.** On 2026-08-13, bench unit #1 powered on into this firmware, configured the FPGA over SSPI (status `0x00039020` → `0x0003F460`, `DONE_FINAL` set), armed the capture engine, and drew live traces from real ADC data on both channels — reproducibly across power cycles. Both axes now carry measured numbers: per-range volts/div on both channels (2026-08-18) and eight measured sample rates on the timebase ladder (2026-08-19), each cross-checked against an independent rig. Active development has moved to **wiring the layer above acquisition**: as of v0.4.0 (2026-09-30) triggering is fully usable from the buttons, captures are time-ordered with the trigger mid-record, and the FFT analyses live data. The measurement badges and the FFT read from real captures; math channels and protocol decoders are still written, host-tested, and fed synthetic input.
+**Custom firmware runs on real hardware, and it captures.** On 2026-08-13, bench unit #1 powered on into this firmware, configured the FPGA over SSPI (status `0x00039020` → `0x0003F460`, `DONE_FINAL` set), armed the capture engine, and drew live traces from real ADC data on both channels — reproducibly across power cycles. Both axes now carry measured numbers: per-range volts/div on both channels (2026-08-18) and eight measured sample rates on the timebase ladder (2026-08-19), each cross-checked against an independent rig. Active development has moved to **wiring the layer above acquisition**: as of v0.4.0 (2026-09-30) triggering is fully usable from the buttons, captures are time-ordered with the trigger mid-record, and the FFT analyses live data; v0.4.1 (2026-10-05) adds waveform pass/fail masks, fixes four scope controls that only changed their label, and ships a meter image checked against reference meters. The measurement badges and the FFT read from real captures; math channels and protocol decoders are still written, host-tested, and fed synthetic input.
 
 ### What it looks like
 
@@ -68,6 +68,7 @@ The short version; see [Feature maturity](#feature-maturity) below for how far e
 - **Measured volts/div and time/div**, with uncalibrated ranges labelled `--` rather than guessed
 - **Triggering from the buttons**: AUTO/NORMAL/SINGLE, level, Rising/Falling, and horizontal position with pre-trigger capture (v0.4.0)
 - **FFT and waterfall on the live capture**
+- **Waveform pass/fail masks** — teach from good captures, judge every later one, stop on a failure (v0.4.1)
 - 4 navigable UI modes: oscilloscope, multimeter, signal generator, settings
 - 4 color themes, variable-width bitmap fonts at 4 sizes
 - FreeRTOS with display + input tasks; 15/15 button matrix at 500 Hz
@@ -122,7 +123,7 @@ reviewable promotion-ladder spec per feature.
 
 ### Sharp edges — read before trusting the screen
 
-- **v0.4.0 and earlier: SAVE in scope mode silently changes CH1's input path, and the coupling buttons change only the label.** SAVE toggled the PC12 relay (direct vs ~30× attenuated, normally set by the range), leaving volts/div wrong until the next range change. CH1/CH2's DC/AC/GND cycled a label while the AC/DC relays stayed DC. Fixed after v0.4.0 (2026-10-03): SAVE does nothing and says so, and coupling drives the relays with readback (GND removed, since no ground path is known). If you are on v0.4.0, don't press SAVE in scope mode, and treat the coupling label as "always DC".
+- **v0.4.0 and earlier: SAVE in scope mode silently changes CH1's input path, and the coupling buttons change only the label.** SAVE toggled the PC12 relay (direct vs ~30× attenuated, normally set by the range), leaving volts/div wrong until the next range change. CH1/CH2's DC/AC/GND cycled a label while the AC/DC relays stayed DC. Fixed in v0.4.1: SAVE does nothing and says so, coupling drives the relays with readback (GND removed, since no ground path is known), the probe setting scales the readouts and the 20M limit says `n/a` (EXP-70). If you are still on v0.4.0, don't press SAVE in scope mode, and treat the coupling label as "always DC".
 - **By default the vertical graticule is not the volts/div label.** The renderer autoscales every frame from the buffer's own min/max, a deliberate choice from when we had no measured gains and no offset control. The volts/div in the status bar is now genuinely measured, so the two disagree. An opt-in true-scale path (`fpga scope graticule true`) draws at a fixed counts/division so one division means the printed volts/div on calibrated ranges — default off (it needs a centred baseline) and not yet eyeballed on the bench.
 - **Absolute vertical scale is uncalibrated.** All gains are relative to a bench source that has never been checked against a reference. Any error is uniform and recoverable with one constant.
 - **Only the bit-banged configuration path works.** Stock configures the same part over hardware SPI, so this is an unexplained gap, not a property of the peripheral.
@@ -162,7 +163,7 @@ Two kinds of backup, and only one of them restores:
 Steps, before you flash anything else:
 
 1. Enter upgrade mode: **MENU + tap Power**. The unit mounts a drive named `IAP`.
-2. Flash the release asset `openscope-2c53t-v0.4.0-caldump.bin` (`python3 scripts/iap_flash.py flash <path>`, or drag it onto the `IAP` drive on Windows). It is read-only: it writes nothing, it only reports the page.
+2. Flash the release asset `openscope-2c53t-v0.4.1-caldump.bin` (or the v0.4.0 one; they read the page identically) (`python3 scripts/iap_flash.py flash <path>`, or drag it onto the `IAP` drive on Windows). It is read-only: it writes nothing, it only reports the page.
 3. The unit reboots into it. Photograph the screen and write down the CRC32. If you can run PR #41's `caldump` and `mem read 0x08006000 1024`, save the 4096 bytes too — that is the copy you can restore from.
 4. Re-enter upgrade mode and flash the scope image.
 
@@ -227,7 +228,7 @@ To check your unit, flash the guest image. If it comes up, the unit is in 224 KB
 
 ROM DFU is needed only for a unit that has never booted FNIRSI's firmware and still has the 96 KB default. If it still has the stock image, power it up into stock once and let it reach the scope screen. The disassembly says the stock app sets the byte on that boot; this has not been observed on a unit that was in 96 KB mode. If there is no stock image to boot, step 5 of Path B is the fix, with the warning that goes with it. Note that the `caldump` image is a guest image too and will not run on such a unit either, so the calibration backup above is not possible there and there is no verified way to take it. Ask in an issue before step 5.
 
-Use the `IAP` drive for the first flash, not the USB-staged `fwapply` installer: the v0.4.0 release build of that installer hangs ([#42](https://github.com/DavidClawson/OpenScope-2C53T/issues/42), EXP-57/EXP-59).
+Use the `IAP` drive for the first flash. The USB-staged `fwapply` installer is safe **from v0.4.1 on** (#45: it can no longer call into flash, and `scripts/test_ramfunc_isolated.py --check-bin` proves it per image; a staged install completed on unit #1 on 2026-10-05). The **v0.4.0** build of that installer hangs ([#42](https://github.com/DavidClawson/OpenScope-2C53T/issues/42), EXP-57/EXP-59): never `fwapply` *from* a unit running v0.4.0.
 
 #### Path B: OpenScope's HID bootloader through ROM DFU (case open)
 
