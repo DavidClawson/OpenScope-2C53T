@@ -90,8 +90,7 @@ in the log, not used.
 - **Not tested:** continuity, temperature, AC volts, currents, the frequency/duty functions.
   The 2 kΩ-range rule was seen in resistance only; continuity shares the branch, untested.
 - **One unit**, plus the frames from saul's board and unit #2.
-- **The fixes are host-tested here.** The re-check of the fixed image on the device is a
-  separate step (follow-up).
+- **The fixes were host-tested first**, then re-checked on the device (§8).
 
 ## 7. Conclusion
 - **Established:**
@@ -110,6 +109,18 @@ in the log, not used.
 
   It also checks unit #2's open-diode frame now reads OL.
 - **Follow-up:**
-  - re-capture 220 Ω, 1 kΩ, diode and LED on the fixed image;
   - tell @Stlkv about the 220 Ω;
   - continuity, temperature and AC volts against the DMC100.
+
+## 8. Re-check on the fixed image (same session)
+
+Build Oct 5 2026 13:29:42 (`e10ca88`), same parts, same references:
+
+| Part | Reference | Before | After |
+|---|---|---|---|
+| 220 Ω | 218.2 Ω | 2.204 kΩ | **0.2193 kΩ** |
+| 1 kΩ | 1.005 kΩ | 10103 kΩ | **1.0091 kΩ** |
+| 1N4007 | 0.635 V | rejected | **0.629 V** |
+| red LED | 1.817 V | rejected | **1.808 V** |
+
+4/4 PASS. Rows are in the same `.jsonl`, labelled `RECHECK`.
