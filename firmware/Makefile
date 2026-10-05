@@ -572,7 +572,8 @@ $(BUILD_DIR)/test_scope_timebase: tests/test_scope_timebase.c src/ui/scope_timeb
 # Horizontal calibration. Guards the same failure shape as the vertical table,
 # plus one specific to this axis: code 0x08 has had THREE published sample
 # rates and all three were fitted to an incoherent record, so the test fails
-# the build if any of them is re-entered.
+# the build if any of them is re-entered. (2026-10-01, EXP-63: 0x08 now carries
+# a measured 4,990,070 S/s through the acq path; the three artifacts stay out.)
 test-scope-timebase: $(BUILD_DIR)/test_scope_timebase
 	$<
 

@@ -5,18 +5,21 @@ own hex-dump regex, and hand-roll its own "is this array long enough" check.
 That is how the measurement bugs got in. This module is the one copy of all of
 it.
 
-It talks to two devices:
+It talks to the scope and to one of several stimulus sources:
 
 | device | port (typical) | what it is |
 |---|---|---|
-| `Scope` | `/dev/ttyACM0` | the 2C53T's USB CDC debug shell |
+| `Scope` | `/dev/ttyACM0`, or discovered by USB id `2e3c:5740` | the 2C53T's USB CDC debug shell |
 | `Siggen` | `/dev/ttyUSB0` | the ESP32 bench source, [`esp32_siggen/`](../esp32_siggen/) |
+| `KodeDotSource` | discovered by Espressif VID `0x303A` | a Kode Dot (ESP32-P4) running the sigsrc app: crystal-derived LEDC square, 1 Hz – 10 MHz, 0 V / 3V3 |
+| `ManualSource` | — (the keyboard) | any generator; the operator types what a counter / DMM reads |
 
 Dependencies: `python3`, `numpy`, `pyserial`. It imports cleanly with no device
 attached — nothing opens a port until you construct a device.
 
 ```bash
-python3 scripts/bench.py --selftest    # 48 checks, no hardware needed
+python3 scripts/bench.py --selftest    # 71 checks, no hardware needed
+python3 scripts/test_bench_source.py   # the source abstraction and both scripts' CLIs
 ```
 
 Run that after touching the module. It exercises the dump parser, the framing
@@ -87,6 +90,9 @@ are awkward**:
 ```python
 from bench import (
     Scope, Siggen,                                   # devices
+    SignalSource, Esp32Source, KodeDotSource, ManualSource,   # stimulus contract
+    add_source_args, open_bench, find_port, SimBench,         # --source / --dry-run
+    vpp_from_reading, expected_span_counts,                   # waveform-aware amplitude
     spectrum, peaks, band, band_peak, window_for, bin_of,
     paired_difference, paired_control, paired_experiment,
     Experiment, Result, Control, Verdict,
@@ -136,6 +142,72 @@ factor on both channels. Derive the real rate from the capture.
 Two different waveform **shapes** beat an anti-phase pair as a two-channel test:
 a display that inverts or rescales can make anti-phase look like one source
 drawn twice. `sg.tri(500, ch=1); sg.square(500, ch=2)`.
+
+### Signal sources — `--source esp32|kodedot|manual`
+
+The calibration scripts used to be welded to the ESP32 on `/dev/ttyUSB0`.
+`SignalSource` is the part of a stimulus a script uses, with the `Siggen`
+contract kept: **every value returned is what the source reports (or what the
+operator's instruments read), and a setter that cannot confirm raises.**
+
+| method | notes |
+|---|---|
+| `.tone(hz)` | set a tone; returns the ACTUAL Hz, which is what a fit must use (EXP-14: fitting the request made every rate 1.21x high) |
+| `.drive(mvpp, waveform, hz)` | set a drive level; returns the reference Vpp in mV (commanded for esp32, the DMM-measured rail for kodedot, the typed reading for manual) |
+| `.quiet()` / `.hold(0\|1)` | quiet output; `hold` only where `can_hold` (kodedot) |
+| `.freq_hz` | last REPORTED frequency |
+| `.prepare_frequency()` / `.end_check()` | esp32: measure and adopt the DDS loop rate, then the drift control; kodedot: clock status |
+| `.fixed_vpp_mv`, `.quiet_is_midpoint`, `.trusted_amplitude`, `.outputs` | what the scripts need to know to refuse what a source cannot do |
+
+- **`Esp32Source(Siggen(...))`** — an adapter; `Siggen` is untouched. `tone()` is
+  CH1 sine at 2 Vpp, `drive()` the historical pair (CH1 triangle 250 Hz, CH2
+  square 400 Hz). With `--source esp32` both scripts produce the historical run.
+- **`KodeDotSource`** — `f <hz>` (whole hertz; the reply carries the actual
+  frequency from the LEDC registers, crystal-accurate), `d <pct>`, `dc 0|1`,
+  `pwm`, `s`, `sweep [stop]`. Both reply shapes parse: the app's console framing
+  (`>|freq hz=999.984741 req_hz=1000 …` … `>ok` / `>err msg=…`) and the bare
+  `freq 999.98 Hz (req 1000, clk 80000000 res 13 div 9765.6)`. A reply without
+  `>ok`, a `req` that is not what was sent, or a mode echo that did not change
+  raises. The port is opened with DTR and RTS asserted (pyserial's default) and
+  closed RTS-first: on the P4's USB-Serial-JTAG, DTR=0 with RTS=1 is reset, which
+  drops the Dot out of the app back to kodeOS. Its amplitude is FIXED — the pin
+  swings 0 V to the 3V3 rail, which you measure with a DMM and pass as `--v3v3`.
+- **`ManualSource`** — prompts "set 1000 Hz, press Enter", then asks for what
+  the counter reads; for amplitudes it wants a unit (`2.000 Vpp`, `0.707 Vrms`,
+  `3.292 V` = a square's high level over 0 V). Garbage and implausible numbers
+  are asked for again, never guessed.
+
+Waveform matters for amplitude: a capture's span is peak-to-peak, so
+`vpp_from_reading()` converts a sine's Vrms with 2√2 but a 50 % square's with
+**2** (and a DC-measured high level is the square's Vpp). Expected span counts
+are `Vpp / (mV_per_count × SCOPE_CAL_SOURCE_SCALE)`.
+
+Scripts take `add_source_args(ap)`: `--source`, `--source-port` (alias
+`--siggen-port`), `--source-serial` (pick one of several Espressif devices),
+`--scope-port`, `--v3v3`, `--dry-run`. Ports are discovered by USB id, never by
+glob — on macOS the scope's CDC shell and a P4 are both `/dev/cu.usbmodem*`.
+`--dry-run` runs the whole flow against `SimBench`: a simulated shell and
+source that answer every command consistently. **Nothing a dry run prints is
+evidence about the hardware.**
+
+```bash
+python3 scripts/verify_scope_cal.py --source kodedot --v3v3 3.292 --timebase 0x10
+python3 scripts/measure_sample_rate.py --source kodedot --codes 0x0A 0x0B 0x0C
+python3 scripts/measure_sample_rate.py --source manual --codes 0x10   # any generator + counter
+```
+
+What a single fixed-amplitude square changes in `verify_scope_cal.py`: there is
+one amplitude, so the two-point estimator is replaced by a **static-level**
+one (mean of a `dc 1` capture minus a `dc 0` capture — no floor term, no edge
+overshoot). Centring wants a quiet input and the Dot's quiet is its low rail,
+so 0 V sits at code 128 and only the upper half of the ADC is usable: at
+3.292 V that covers ranges 6/7 (8/9 coarsely) and clips 4/5. The script prints
+that table, refuses amplitudes and ranges the source cannot serve, and
+`--center-mid` (centre once on each rail, offset DAC to the midpoint via
+`trig raw` / `trig2 raw`) should bring range 5 back — it assumes the offset DAC
+is linear and has the travel, has only run against `SimBench` so far, and the
+per-row CLIPPED flag is what tells you whether it worked. With one pin on both
+probes the two-SHAPES control is not available, and the report says so.
 
 ### Analysis
 

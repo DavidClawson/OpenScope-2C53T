@@ -3298,16 +3298,15 @@ static void cmd_fpga_scope_cal(void)
                          (unsigned)c, (unsigned long)(fs + 0.5f), lbl,
                          (t == SCOPE_TB_MEASURED) ? "measured" : "provisional");
     }
-    usb_send_str("codes not listed have no trustworthy rate, for three "
-                 "DIFFERENT reasons:\r\n"
-                 "  0x06-0x09  INCOHERENT — measured, and all four return the "
-                 "same ~1.2-1.6 kS/s\r\n"
-                 "             regardless of the code, with reads that do not "
-                 "reproduce (EXP-15).\r\n"
-                 "  0x0A-0x0C  need a faster source than ours — a statement "
-                 "about our bench,\r\n"
-                 "             not about the device.\r\n"
-                 "  the rest   never measured.\r\n"
+    usb_send_str("codes not listed have no trustworthy rate:\r\n"
+                 "  0x00-0x05  never measured (50 M - 250 M S/s by the ladder; "
+                 "needs a source\r\n"
+                 "             above 10 MHz).\r\n"
+                 "  0x06-0x0C  measured 2026-10-01 (EXP-63, acq path, unit #3); "
+                 "0x07/0x06 are\r\n"
+                 "             provisional (no fold test). EXP-15's INCOHERENT "
+                 "verdict was opread\r\n"
+                 "             tearing, not the device.\r\n"
                  "See scope_timebase.h\r\n");
 }
 
