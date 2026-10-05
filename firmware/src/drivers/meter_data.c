@@ -493,6 +493,19 @@ static uint8_t observed_frame_family(uint8_t expected_family,
     if (fpga_meter_frame_family_has_stock_marker(
             (uint8_t)FPGA_METER_FRAME_FAMILY_VOLTAGE) &&
         frame_has_voltage_payload_marker(frame)) {
+        /* A diode test IS a voltage measurement on this SoC: it carries the
+         * voltage marker, and frame[6]'s upper nibble -- an annunciator
+         * field, outside the digit nibbles -- says which function. 8 = diode
+         * on every diode frame we have (unit #1 1N4007 0x8B and red LED 0x8F
+         * against a DMC100, 2026-10-05; unit #2's open-diode frame 0x80,
+         * EXP-206), 0 on every DC-volts frame. Until 2026-10-05 all diode
+         * frames were classified VOLTAGE and rejected in diode mode, which
+         * EXP-206 had marked "the expected negative" with no diode on the
+         * leads. Classifying by the annunciator keeps the stale-frame guard
+         * both ways: a DCV frame in diode mode, or a diode frame in DCV mode,
+         * is still the wrong family. */
+        if ((frame[6] & 0xF0U) == 0x80U)
+            return (uint8_t)FPGA_METER_FRAME_FAMILY_DIODE;
         return (uint8_t)FPGA_METER_FRAME_FAMILY_VOLTAGE;
     }
     return expected_family;
@@ -1064,9 +1077,14 @@ static bool apply_stock_dcv_decimal_exponent(meter_reading_t *r,
 static bool frame_is_voltage_payload(uint8_t submode,
                                      const volatile uint8_t *frame)
 {
+    /* A voltage-marked frame outside the voltage functions is a stale DC/AC
+     * frame from before a mode change -- UNLESS frame[6]'s annunciator says
+     * it is a diode measurement (observed_frame_family above), in which case
+     * it belongs to diode mode and frame_family_mismatch() decides. */
     return fpga_meter_frame_family_for_submode(submode) !=
            FPGA_METER_FRAME_FAMILY_VOLTAGE &&
-           frame_has_voltage_payload_marker(frame);
+           frame_has_voltage_payload_marker(frame) &&
+           (frame[6] & 0xF0U) != 0x80U;
 }
 
 static bool frame_family_mismatch(const meter_reading_t *r)
@@ -1660,20 +1678,22 @@ void meter_data_process_frame(const volatile uint8_t *frame, uint8_t submode)
             r->unit_suffix = "kOhm";
             r->decimal_pos = 0;
             format_4digit_unsigned(kohm, s);
-        } else if (r->bcd_value >= 10000) {
-            /* The 5-digit display: frame[2] bit 3 = a leading "1"
-             * ("100.65" Ohm, @saulvalenzuela23 #37 -- refused until
-             * 2026-10-03). The point is the frame's own.
-             *
-             * NOT done here: frame[8] bit 7 as "four decimals". It fits all
-             * of saul's captures (1 kOhm -> 9977 + bit 7 = "0.9977" kOhm;
-             * 10 kOhm -> 9857, bit clear) but CONTRADICTS two measured V1.4
-             * units, whose frames carry bit 7 with the readings shown
-             * WITHOUT the extra decade (unit #1 10 kOhm "9775" = 9.775 kOhm,
-             * EXP-27; unit #2 2.2 kOhm "2168" = 2.168 kOhm). Open question
-             * (manual vs auto range is the leading candidate) -- see
-             * test_saul_frames_37 in tests/test_meter_data.c. */
-            uint8_t decimals = frame_dp ? (uint8_t)(4U - frame_dp) : 0U;
+        } else if (r->bcd_value >= 10000 || (!frame_dp && (frame[8] & 0x80U))) {
+            /* The 5-digit display, read the way the SoC formats it:
+             *   - an explicit point in the digits wins;
+             *   - otherwise frame[8] bit 7 = the 2 kOhm range, four decimals
+             *     ("x.xxxx" kOhm);
+             *   - frame[2] bit 3 = the leading digit is 1.
+             * Settled 2026-10-05 on unit #1 against two reference meters:
+             * 220 Ohm sent 2203 + bit 7 (DMM 218.2 -> 0.2203 kOhm), 1 kOhm sent
+             * leading 1 + 0103 + bit 7 (DMM 1.005 k -> 1.0103 kOhm), and 2.2 k /
+             * 10 k sent explicit points with bit 7 clear. The 220 Ohm frame was
+             * PREDICTED before it was measured, from unit #2's "2.2 kOhm" fixture
+             * (2168 + bit 7), which was therefore a 220 Ohm part (216.8 Ohm).
+             * @saulvalenzuela23's 1 kOhm (9977 + bit 7 -> his meter showed
+             * 0.9977 kOhm) fits too. Before this, both cases read 10x high. */
+            uint8_t decimals = frame_dp ? (uint8_t)(4U - frame_dp)
+                             : (frame[8] & 0x80U) ? 4U : 0U;
             format_5digit(r, decimals);
             r->unit_suffix = kohm_regime ? "kOhm" : "Ohm";
         } else if (frame_dp) {

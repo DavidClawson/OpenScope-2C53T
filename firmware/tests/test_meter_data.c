@@ -2717,10 +2717,16 @@ static int test_live_frames_carry_their_own_decimal_point(void)
     ASSERT(expect_normal_reading("9.924", "kOhm", 9.924f, 0.0005f));
     ASSERT(meter_reading.decimal_pos == 1);
 
-    /* 2.2 kOhm, unit #2: "2168", no point, frame[6] 0x4F -> 2.168 kOhm */
+    /* unit #2 (EXP-205), labelled "2.2 kOhm": "2168", no point, frame[8]
+     * bit 7. Asserted 2.168 kOhm until 2026-10-05. That label was a hand
+     * decode with no reference reading. On unit #1 a 2.2 kOhm sends an
+     * explicit point and bit 7 clear (2.175 k against a DMM's 2.175 k), and a
+     * 220 Ohm sends exactly this shape -- predicted before it was measured
+     * (2203 + bit 7, DMM 218.2 Ohm). So the part was a 220 Ohm, and the frame
+     * says 0.2168 kOhm = 216.8 Ohm. See test_kit_frames_with_reference. */
     raw_frame(frame, "5AA5A40DEAE74F208000012E");
     process_frame(frame, 6);
-    ASSERT(expect_normal_reading("2.168", "kOhm", 2.168f, 0.0005f));
+    ASSERT(expect_normal_reading("0.2168", "kOhm", 0.2168f, 0.00005f));
 
     /* ACV mains, upstream's own fixture: the point sits on digit 3 -> 226.6 V */
     raw_frame(frame, "5AA5A5ADEDF7070002000032");
@@ -2831,11 +2837,11 @@ static int test_live_capacitance_frames_self_describe(void)
  *     showed +2.003 V;
  *   - frame[2] bit 3, the leading "1" of the 5-digit display, was refused in
  *     resistance, so 100.65 Ohm decoded as nothing.
- * and one open question, deliberately NOT asserted: the 1 kOhm frame
- * (digits 9977, frame[8] bit 7 set) read "0.9977 kOhm" on his meter, but two
- * V1.4 units send the same bit with readings that carry no extra decade
- * (9775 -> 9.775 kOhm, 2168 -> 2.168 kOhm, test_live_* above). See the
- * comment at the 5-digit branch in meter_data.c.
+ * and a question settled two days later: his 1 kOhm frame (digits 9977,
+ * frame[8] bit 7 set) read "0.9977 kOhm" on his meter. The two V1.4 frames
+ * that seemed to contradict it did not: unit #1's 9775 carries an explicit
+ * point, and unit #2's "2.2 kOhm" 2168 was a 220 Ohm part (EXP-71). It is
+ * asserted below, with his meter's display as the reference.
  */
 static int test_saul_frames_37(void)
 {
@@ -2882,10 +2888,10 @@ static int test_saul_frames_37(void)
     raw_frame(frame, "5AA504F06B0100240000014C");
     process_frame(frame, 6);
     ASSERT(meter_reading.result_class == METER_RESULT_OVERLOAD);
-    /* the 1 kOhm frame: decodes, value deliberately not asserted (header) */
+    /* the 1 kOhm frame: 9977 + bit 7 = the 2 kOhm range (EXP-71) */
     raw_frame(frame, "5AA5C4CF8F8A4A2080000151");
     process_frame(frame, 6);
-    ASSERT(meter_reading.valid);
+    ASSERT(expect_normal_reading("0.9977", "kOhm", 0.9977f, 0.00005f));
 
     /* Negative control for the decimal point: unit #2's "9.924" kOhm frame
      * (point on digit 1) with the sign bit set must keep its point. Before
@@ -2917,6 +2923,85 @@ static int test_saul_frames_37(void)
     frame[2] |= 0x08U;
     process_frame(frame, 9);
     ASSERT(meter_reading.reject_reason == METER_REJECT_UNSUPPORTED_EXTENSION);
+    return 1;
+}
+
+/*
+ * Unit #1, 2026-10-05 (EXP-71): a component kit on the meter leads, every
+ * part ALSO measured on an independent meter -- a handheld DMM for
+ * resistance, a FNIRSI DMC100 for capacitance, diode and DC volts. The first
+ * meter fixtures in this suite with a reference reading.
+ *
+ * Each row asserts the exact text AND that the decoded value is within 2 % of
+ * the REFERENCE, not of our own output: if the decoder and the frame agree
+ * with each other but not with the part, this fails.
+ *
+ * Bugs these frames found (fixed the same day): 220 Ohm and 1 kOhm read 10x
+ * high (frame[8] bit 7, the 2 kOhm range, ignored); diode and LED frames were
+ * rejected (classified as DC volts). The 100 kOhm row is the second capture:
+ * the first had fingers across the leads (89-94 kOhm, drifting).
+ */
+static int test_kit_frames_with_reference(void)
+{
+    static const struct {
+        uint8_t sub; const char *hex, *disp, *unit; float value, reference;
+    } rows[] = {
+        { 6, "5AA5C4CF9F8A0A2000000126", "99.77",   "Ohm",   99.77f,   98.9f    },
+        { 6, "5AA5A4ADED4B4E208000013C", "0.2204",  "kOhm",  0.2204f,  0.2182f  },
+        { 6, "5AA5EC0BEA8B4F208000011B", "1.0103",  "kOhm",  1.0103f,  1.005f   },
+        { 6, "5AA5A41D8ACA47200000012A", "2.175",   "kOhm",  2.175f,   2.175f   },
+        { 6, "5AA5C4FF87EA472000000127", "9.676",   "kOhm",  9.676f,   9.68f    },
+        { 6, "5AA5EC0B1ACA472000000131", "101.15",  "kOhm",  101.15f,  99.7f    },
+        { 6, "5AA5C4CF4F8E0A2480000133", "994.7",   "kOhm",  994.7f,   994.0f   },
+        { 9, "5AA5E4E75BCE271000000137", "60.45",   "nF",    60.45f,   61.4f    },
+        { 9, "5AA5A4ADED9F1F100000013B", "228.3",   "uF",    228.3f,   227.5f   },
+        { 8, "5AA5E0FB87EF8B000200013C", "0.630",   "V",     0.630f,   0.635f   },
+        { 8, "5AA500FAEFEB8F000200013C", "1.808",   "V",     1.808f,   1.817f   },
+        { 0, "5AA5EE078A4F0E008200013F", "1.6134",  "V",     1.6134f,  1.615f   },
+        { 0, "5AA5FE07CA870F0082000144", "-1.6153", "V",    -1.6153f, -1.615f   },
+    };
+    uint8_t frame[12];
+    uint8_t last = 0xFF;
+
+    meter_data_init();
+    for (unsigned i = 0; i < sizeof(rows) / sizeof(rows[0]); i++) {
+        if (rows[i].disp == NULL) continue;
+        if (rows[i].sub != last) { meter_data_invalidate(rows[i].sub); last = rows[i].sub; }
+        raw_frame(frame, rows[i].hex);
+        process_frame(frame, rows[i].sub);
+        ASSERT(expect_normal_reading(rows[i].disp, rows[i].unit, rows[i].value, 0.0005f * (rows[i].value < 0 ? -rows[i].value : rows[i].value) + 0.0001f));
+        float ref = rows[i].reference, v = meter_reading.value;
+        ASSERT(close_to(v, ref, 0.02f * (ref < 0 ? -ref : ref)));   /* the physics */
+    }
+
+    /* Control: the 220 Ohm frame with frame[8] bit 7 CLEARED reads ten times
+     * higher -- bit 7 is the thing that decides the decade. */
+    raw_frame(frame, "5AA5A4ADED4B4E208000013C");
+    frame[8] &= (uint8_t)~0x80U;
+    meter_data_invalidate(6);
+    process_frame(frame, 6);
+    ASSERT(expect_normal_reading("2.204", "kOhm", 2.204f, 0.0005f));
+
+    /* Unit #2's open-diode frame (EXP-206, " 0L ", annunciator 0x80): was
+     * rejected as "the expected negative"; diode mode now reads it as OL. */
+    raw_frame(frame, "5AA500F06B01800002000139");
+    meter_data_invalidate(8);
+    process_frame(frame, 8);
+    ASSERT(meter_reading.valid);
+    ASSERT(meter_reading.result_class == METER_RESULT_OVERLOAD);
+
+    /* Control: the stale-frame guard still holds both ways. A diode frame in
+     * DC volts, and a DC-volts frame in diode mode, are the wrong family. */
+    raw_frame(frame, "5AA5E0FB87EF8B000200013C");
+    meter_data_invalidate(0);
+    process_frame(frame, 0);
+    ASSERT(!meter_reading.valid);
+    ASSERT(meter_reading.reject_reason == METER_REJECT_WRONG_FRAME_FAMILY);
+    raw_frame(frame, "5AA5EE078A4F0E008200013F");
+    meter_data_invalidate(8);
+    process_frame(frame, 8);
+    ASSERT(!meter_reading.valid);
+    ASSERT(meter_reading.reject_reason == METER_REJECT_WRONG_FRAME_FAMILY);
     return 1;
 }
 
@@ -2979,6 +3064,7 @@ int main(void)
     TEST(live_capacitance_frames_self_describe);
     TEST(live_ol_second_spelling_and_leading_blanks);
     TEST(saul_frames_37);
+    TEST(kit_frames_with_reference);
     TEST(invalidate_clears_stale_reading_before_mode_transition);
     TEST(invalidate_clears_stale_reading_for_every_submode);
     TEST(parser_stock_mode_tracks_transition_plan_for_every_submode);
