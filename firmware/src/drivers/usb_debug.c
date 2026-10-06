@@ -2447,6 +2447,34 @@ static void cmd_fpga_pollgap(const char *args)
                      (unsigned long)fpga.acq_polls_last, (unsigned long)fpga.acq_poll_reads);
 }
 
+/* `fpga autolive [on|off]` -- EXP-72: AUTO shows every roll read once no
+ * handover has come for a whole budget (default on; off = v0.4.1's one per
+ * budget). */
+static void cmd_fpga_autolive(const char *args)
+{
+    while (*args == ' ') args++;
+    if (strncmp(args, "on", 2) == 0) fpga_acq_auto_live_set(true);
+    else if (strncmp(args, "off", 3) == 0) fpga_acq_auto_live_set(false);
+    usb_debug_printf("acq AUTO live %s\r\n", fpga_acq_auto_live_get() ? "ON (every roll read once untriggered)" : "OFF (one roll read per budget)");
+}
+
+/* `fpga holdlog [on|off]` -- EXP-72: per-handover interval log, recorded by
+ * the acq task (no shell traffic in the window). No argument dumps it. */
+static void cmd_fpga_holdlog(const char *args)
+{
+    while (*args == ' ') args++;
+    if (strncmp(args, "on", 2) == 0) {
+        usb_send_str(fpga_holdlog_start() ? "holdlog on (cleared)\r\n" : "holdlog: no heap\r\n");
+        return;
+    }
+    if (strncmp(args, "off", 3) == 0) fpga_holdlog_stop();
+    uint16_t n = fpga_holdlog_count();
+    usb_debug_printf("holdlog %s n=%u (dt_ms polls edges)\r\n", fpga_holdlog_active() ? "on" : "off", (unsigned)n);
+    fpga_holdlog_ent_t e;
+    for (uint16_t k = 0; k < n && fpga_holdlog_get(k, &e); k++)
+        usb_debug_printf("hl %u %u %u\r\n", (unsigned)e.dt_ms, (unsigned)e.polls, (unsigned)e.edges);
+}
+
 /* `fpga scope hpos [8..312]` — the screen column for the trigger point (the
  * same field MOVE -> Position -> LEFT/RIGHT sets). */
 static void cmd_fpga_scope_hpos(const char *args)
@@ -7960,6 +7988,10 @@ static const shell_cmd_t shell_cmds[] = {
           "fpga edgefilter [on|off]        MCU trigger edge filter: keep Rising/Falling records (default on)\r\n"),
     CMD_A("fpga pollgap", cmd_fpga_pollgap, 0,
           "fpga pollgap [ms]               Poll cadence after the poll start (EXP-54; default 30)\r\n"),
+    CMD_A("fpga autolive", cmd_fpga_autolive, 0,
+          "fpga autolive [on|off]          AUTO: show every untriggered read (EXP-72)\r\n"),
+    CMD_A("fpga holdlog", cmd_fpga_holdlog, 0,
+          "fpga holdlog [on|off]           Per-handover interval log (EXP-72); no arg = dump\r\n"),
     CMD_A("fpga holdread", cmd_fpga_holdread, 0,
           "fpga holdread                   Retired (EXP-54)\r\n"),
     CMD_A("fpga unrotate", cmd_fpga_unrotate, 0,

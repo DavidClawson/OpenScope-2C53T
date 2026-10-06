@@ -1,0 +1,34 @@
+{"build": "Build: Oct  5 2026 15:13:06, gcc 14.2.1 20241119"}
+{"tag": "base", "code": 14, "window_s": 6.1, "edges": 22, "reads": 22, "handovers_per_s": 1.8, "interval_ms": 554.6, "fill_ms": 20.5, "interval_minus_fill": 534.1, "status03": "00 00 4A 85 85"}
+{"tag": "base", "code": 15, "window_s": 6.1, "edges": 25, "reads": 25, "handovers_per_s": 2.05, "interval_ms": 488.3, "fill_ms": 41.0, "interval_minus_fill": 447.3, "status03": "00 00 A2 85 85"}
+{"tag": "base", "code": 16, "window_s": 6.1, "edges": 22, "reads": 22, "handovers_per_s": 1.8, "interval_ms": 554.6, "fill_ms": 82.0, "interval_minus_fill": 472.6, "status03": "00 00 5E 85 85"}
+{"tag": "base", "code": 17, "window_s": 10.1, "edges": 17, "reads": 17, "handovers_per_s": 0.84, "interval_ms": 1188.3, "fill_ms": 205.2, "interval_minus_fill": 983.1, "status03": "00 00 9B 85 85"}
+{"tag": "base", "code": 18, "window_s": 10.1, "edges": 10, "reads": 9, "handovers_per_s": 0.5, "interval_ms": 2020.1, "fill_ms": 410.4, "interval_minus_fill": 1609.7, "status03": "00 00 5C 85 85"}
+{"tag": "base", "code": 14, "window_s": 6.1, "edges": 14, "reads": 14, "handovers_per_s": 1.15, "interval_ms": 871.5, "fill_ms": 20.5, "interval_minus_fill": 851.0, "status03": "00 00 8C 85 85"}
+{"tag": "pollgap29 (stock)", "code": 14, "window_s": 6.1, "edges": 26, "reads": 26, "handovers_per_s": 2.13, "interval_ms": 469.3, "fill_ms": 20.5, "interval_minus_fill": 448.8, "status03": "00 00 88 84 84"}
+{"tag": "acqbr /2 (stock)", "code": 14, "window_s": 6.1, "edges": 19, "reads": 19, "handovers_per_s": 1.56, "interval_ms": 642.2, "fill_ms": 20.5, "interval_minus_fill": 621.7, "status03": "00 00 4C 85 85"}
+{"tag": "acqbr /256", "code": 14, "window_s": 6.5, "edges": 6, "reads": 6, "handovers_per_s": 0.46, "interval_ms": 2167.5, "fill_ms": 20.5, "interval_minus_fill": 2147.0, "status03": "00 00 AA 85 85"}
+{"tag": "reg02=00", "code": 14, "window_s": 6.5, "edges": 6, "reads": 6, "handovers_per_s": 0.46, "interval_ms": 2167.3, "fill_ms": 20.5, "interval_minus_fill": 2146.8, "status03": "00 00 50 84 84"}
+{"tag": "reg02=01", "code": 14, "window_s": 6.5, "edges": 5, "reads": 5, "handovers_per_s": 0.38, "interval_ms": 2600.8, "fill_ms": 20.5, "interval_minus_fill": 2580.3, "status03": "00 00 91 85 85"}
+{"tag": "reg02=02", "code": 14, "window_s": 6.5, "edges": 6, "reads": 6, "handovers_per_s": 0.46, "interval_ms": 2167.4, "fill_ms": 20.5, "interval_minus_fill": 2146.9, "status03": "00 00 70 85 85"}
+{"tag": "reg02=03 restore", "code": 14, "window_s": 6.5, "edges": 5, "reads": 5, "handovers_per_s": 0.38, "interval_ms": 2600.8, "fill_ms": 20.5, "interval_minus_fill": 2580.3, "status03": "00 00 70 84 84"}
+{"tag": "reg06=01", "code": 14, "window_s": 6.51, "edges": 0, "reads": 0, "handovers_per_s": 0.0, "interval_ms": Infinity, "fill_ms": 20.5, "interval_minus_fill": Infinity, "status03": "00 00 95 85 85"}
+{"tag": "reg06=02", "code": 14, "window_s": 6.45, "edges": 6, "reads": 6, "handovers_per_s": 0.46, "interval_ms": 2150.6, "fill_ms": 20.5, "interval_minus_fill": 2130.1, "status03": "00 00 4D 85 85"}
+{"tag": "reg06=04", "code": 14, "window_s": 6.45, "edges": 5, "reads": 5, "handovers_per_s": 0.39, "interval_ms": 2580.8, "fill_ms": 20.5, "interval_minus_fill": 2560.3, "status03": "00 00 AA 86 86"}
+{"tag": "reg06=08", "code": 14, "window_s": 6.45, "edges": 6, "reads": 6, "handovers_per_s": 0.46, "interval_ms": 2151.6, "fill_ms": 20.5, "interval_minus_fill": 2131.0, "status03": "00 00 49 85 85"}
+{"tag": "reg06=10", "code": 14, "window_s": 6.55, "edges": 6, "reads": 6, "handovers_per_s": 0.46, "interval_ms": 2184.4, "fill_ms": 20.5, "interval_minus_fill": 2163.9, "status03": "00 00 9E 85 85"}
+{"tag": "reg06=20", "code": 14, "window_s": 6.5, "edges": 5, "reads": 5, "handovers_per_s": 0.38, "interval_ms": 2600.7, "fill_ms": 20.5, "interval_minus_fill": 2580.2, "status03": "00 00 66 86 86"}
+{"tag": "reg06=40", "code": 14, "window_s": 6.45, "edges": 6, "reads": 6, "handovers_per_s": 0.46, "interval_ms": 2150.6, "fill_ms": 20.5, "interval_minus_fill": 2130.1, "status03": "00 00 74 85 85"}
+{"tag": "reg06=80", "code": 14, "window_s": 6.5, "edges": 6, "reads": 6, "handovers_per_s": 0.46, "interval_ms": 2167.5, "fill_ms": 20.5, "interval_minus_fill": 2146.9, "status03": "00 00 8E 86 86"}
+{"tag": "reg06=FF", "code": 14, "window_s": 6.55, "edges": 0, "reads": 0, "handovers_per_s": 0.0, "interval_ms": Infinity, "fill_ms": 20.5, "interval_minus_fill": Infinity, "status03": "00 00 51 85 85"}
+{"tag": "reg06=00 restore", "code": 14, "window_s": 6.5, "edges": 5, "reads": 5, "handovers_per_s": 0.38, "interval_ms": 2600.9, "fill_ms": 20.5, "interval_minus_fill": 2580.4, "status03": "00 00 A8 84 84"}
+{"tag": "reg07=01", "code": 14, "window_s": 6.5, "edges": 6, "reads": 0, "handovers_per_s": 0.46, "interval_ms": 2167.2, "fill_ms": 20.5, "interval_minus_fill": 2146.7, "status03": "00 00 47 85 85"}
+{"tag": "reg07=02", "code": 14, "window_s": 6.5, "edges": 6, "reads": 6, "handovers_per_s": 0.46, "interval_ms": 2167.7, "fill_ms": 20.5, "interval_minus_fill": 2147.2, "status03": "00 00 A6 85 85"}
+{"tag": "reg07=04", "code": 14, "window_s": 6.55, "edges": 6, "reads": 6, "handovers_per_s": 0.46, "interval_ms": 2184.1, "fill_ms": 20.5, "interval_minus_fill": 2163.6, "status03": "00 00 59 85 85"}
+{"tag": "reg07=08", "code": 14, "window_s": 6.5, "edges": 6, "reads": 6, "handovers_per_s": 0.46, "interval_ms": 2167.4, "fill_ms": 20.5, "interval_minus_fill": 2146.9, "status03": "00 00 84 85 85"}
+{"tag": "reg07=10", "code": 14, "window_s": 6.55, "edges": 6, "reads": 6, "handovers_per_s": 0.46, "interval_ms": 2184.0, "fill_ms": 20.5, "interval_minus_fill": 2163.5, "status03": "00 00 84 85 85"}
+{"tag": "reg07=20", "code": 14, "window_s": 6.55, "edges": 6, "reads": 6, "handovers_per_s": 0.46, "interval_ms": 2184.2, "fill_ms": 20.5, "interval_minus_fill": 2163.7, "status03": "00 00 5E 85 85"}
+{"tag": "reg07=40", "code": 14, "window_s": 6.5, "edges": 5, "reads": 5, "handovers_per_s": 0.38, "interval_ms": 2600.5, "fill_ms": 20.5, "interval_minus_fill": 2580.0, "status03": "00 00 A3 85 85"}
+{"tag": "reg07=80", "code": 14, "window_s": 6.5, "edges": 6, "reads": 6, "handovers_per_s": 0.46, "interval_ms": 2167.4, "fill_ms": 20.5, "interval_minus_fill": 2146.9, "status03": "00 00 47 85 85"}
+{"tag": "reg07=FF", "code": 14, "window_s": 6.5, "edges": 6, "reads": 0, "handovers_per_s": 0.46, "interval_ms": 2167.4, "fill_ms": 20.5, "interval_minus_fill": 2146.9, "status03": "00 00 A9 84 84"}
+{"tag": "reg07=00 restore", "code": 14, "window_s": 6.5, "edges": 6, "reads": 6, "handovers_per_s": 0.46, "interval_ms": 2167.4, "fill_ms": 20.5, "interval_minus_fill": 2146.9, "status03": "00 00 4F 85 85"}

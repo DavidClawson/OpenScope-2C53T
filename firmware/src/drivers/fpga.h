@@ -1121,6 +1121,16 @@ bool     fpga_acq_post_edge_is_override(void);
  * derived fill + 30 ms; the arming read follows at fpga_acq_post_edge_get(). */
 void     fpga_acq_poll_gap_set(uint16_t ms);   /* EXP-54: poll cadence, ms (0 -> 30) */
 uint16_t fpga_acq_poll_gap_get(void);
+/* EXP-72 handover log (heap, 128 entries; see fpga.c). */
+#define FPGA_HOLDLOG_N 128u
+typedef struct { uint16_t dt_ms; uint8_t polls; uint8_t edges; } fpga_holdlog_ent_t;
+bool     fpga_holdlog_start(void);
+void     fpga_holdlog_stop(void);
+bool     fpga_holdlog_active(void);
+uint16_t fpga_holdlog_count(void);
+bool     fpga_holdlog_get(uint16_t i, fpga_holdlog_ent_t *out);
+void     fpga_acq_auto_live_set(bool on);
+bool     fpga_acq_auto_live_get(void);
 void     fpga_acq_edge_filter_set(bool on);    /* MCU-side trigger edge filter (EXP-55 follow-up) */
 bool     fpga_acq_edge_filter_get(void);
 /* true when the latest committed record was un-rotated at its seam, so the

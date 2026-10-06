@@ -1,0 +1,10 @@
+EXP-73 device: Build: Oct  5 2026 20:07:01, gcc 14.2.1 20241119
+level code 128 -> expected crossing in record scale 100
+['> ', '>']
+reg07=00 control  edges 1.30/s | distinct 10/10 | rise 4 fall 6 flat 0 | r[512] 100  98 100 100  99 100 100 100 101  98
+reg07=01 v01      edges 1.26/s | distinct 10/10 | rise 7 fall 3 flat 0 | r[512] 100 100 101  98 100 100 100  98 100  98
+reg07=02 v02      edges 1.23/s | distinct 10/10 | rise 6 fall 4 flat 0 | r[512] 100 100 101  99  99  99 101 100  98 100
+reg07=03 v03      edges 1.31/s | distinct 10/10 | rise 4 fall 6 flat 0 | r[512]  99 100 101  98 100  99 101 100  99  99
+reg07=ff vFF      edges 1.24/s | distinct 10/10 | rise 8 fall 2 flat 0 | r[512] 100 100 100 101  99 100  98  99  99  98
+reg07=00 recovery edges 1.28/s | distinct 10/10 | rise 4 fall 6 flat 0 | r[512]  97 100  98  98 100  99 100  97 100  99
+done

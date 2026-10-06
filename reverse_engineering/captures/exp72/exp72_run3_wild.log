@@ -1,0 +1,30 @@
+EXP-72 device: Build: Oct  5 2026 20:07:01, gcc 14.2.1 20241119
+>
+boot status03: 00 00 98 85 85
+-- P1 baseline: hold + fill across timebases
+base                   tb 0x0E  n  29  dt med    225 min   221 max   667  -fill   204.5  polls   44  edges/ho  1.0  st03 00 00 4C 85 85
+-- P3 register writes (0x0E); each block ends with the stock value + a timebase re-write
+reg09=01               tb 0x0E  n  26  dt med    222 min   220 max   446  -fill   201.5  polls   43  edges/ho  1.0  st03 00 00 A9 84 84
+reg09=FF               tb 0x0E  n  25  dt med    225 min   221 max   666  -fill   204.5  polls   44  edges/ho  1.0  st03 00 00 46 85 85
+reg09=00 restore       tb 0x0E  n  23  dt med    445 min   221 max   446  -fill   424.5  polls   88  edges/ho  1.0  st03 00 00 AA 86 86
+reg0A=01               tb 0x0E  n  28  dt med    225 min   221 max   666  -fill   204.5  polls   44  edges/ho  1.0  st03 00 00 47 85 85
+reg0A=FF               tb 0x0E  n  30  dt med    221 min   220 max   446  -fill   200.5  polls   43  edges/ho  1.0  st03 00 00 A6 85 85
+reg0A=00 restore       tb 0x0E  n  29  dt med    225 min   221 max   447  -fill   204.5  polls   44  edges/ho  1.0  st03 00 00 4E 85 85
+reg0B=01               tb 0x0E  n  28  dt med    222 min   221 max   666  -fill   201.5  polls   43  edges/ho  1.0  st03 00 00 9E 85 85
+reg0B=FF               tb 0x0E  n  22  dt med    445 min   222 max   666  -fill   424.5  polls   88  edges/ho  1.0  st03 00 00 55 85 85
+reg0B=00 restore       tb 0x0E  n  34  dt med    221 min   220 max   446  -fill   200.5  polls   43  edges/ho  1.0  st03 00 00 95 85 85
+reg0C=01               tb 0x0E  n  26  dt med    226 min   222 max   668  -fill   205.5  polls   44  edges/ho  1.0  st03 00 00 63 86 86
+reg0C=FF               tb 0x0E  n  25  dt med    222 min   220 max   446  -fill   201.5  polls   43  edges/ho  1.0  st03 00 00 8C 85 85
+reg0C=00 restore       tb 0x0E  n  24  dt med    445 min   221 max   666  -fill   424.5  polls   88  edges/ho  1.0  st03 00 00 8D 86 86
+reg0D=01               tb 0x0E  n  32  dt med    221 min   220 max   446  -fill   200.5  polls   43  edges/ho  1.0  st03 00 00 79 84 84
+reg0D=FF               tb 0x0E  n  28  dt med    226 min   220 max   447  -fill   205.5  polls   44  edges/ho  1.0  st03 00 00 7E 85 85
+reg0D=00 restore       tb 0x0E  n  26  dt med    222 min   220 max   667  -fill   201.5  polls   43  edges/ho  1.0  st03 00 00 66 84 84
+reg0E=01               tb 0x0E  n  26  dt med    225 min   222 max   447  -fill   204.5  polls   44  edges/ho  1.0  st03 00 00 90 85 85
+reg0E=FF               tb 0x0E  n  20  dt med    445 min   225 max   445  -fill   424.5  polls   88  edges/ho  1.0  st03 00 00 5E 85 85
+reg0E=00 restore       tb 0x0E  n  30  dt med    225 min   221 max   445  -fill   204.5  polls   44  edges/ho  1.0  st03 00 00 99 85 85
+reg0F=01               tb 0x0E  n  22  dt med    445 min   221 max   666  -fill   424.5  polls   88  edges/ho  1.0  st03 00 00 51 85 85
+reg0F=FF               tb 0x0E  n  26  dt med    225 min   220 max   666  -fill   204.5  polls   44  edges/ho  1.0  st03 00 00 A3 85 85
+reg0F=00 restore       tb 0x0E  n  32  dt med    224 min   220 max   446  -fill   203.5  polls   43  edges/ho  1.0  st03 00 00 48 85 85
+baseline dt - fill: 0x0E 204
+conditions under 60 ms: none
+log: /home/david/osc/reverse_engineering/captures/exp72/exp72_2026-10-06_085519.jsonl

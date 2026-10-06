@@ -1,0 +1,43 @@
+EXP-72 device: Build: Oct  5 2026 19:56:13, gcc 14.2.1 20241119
+>
+boot status03: 00 00 4B 85 85
+-- P1 baseline: hold + fill across timebases
+base                   tb 0x0E  n  30  dt med    223 min   220 max   666  -fill   202.5  polls   43  edges/ho  1.0  st03 00 00 AA 86 86
+base                   tb 0x0F  n  32  dt med    244 min   242 max   486  -fill   203.0  polls   47  edges/ho  1.0  st03 00 00 48 85 85
+base                   tb 0x10  n  28  dt med    284 min   283 max   566  -fill   202.0  polls   55  edges/ho  1.0  st03 00 00 A6 85 85
+base                   tb 0x11  n  15  dt med    408 min   405 max  6481  -fill   202.8  polls   80  edges/ho  1.0  st03 00 00 68 85 85
+base                   tb 0x12  n  14  dt med    613 min   610 max  1221  -fill   202.6  polls  121  edges/ho  1.0  st03 00 00 4C 84 84
+base                   tb 0x0E  n  23  dt med    445 min   221 max   446  -fill   424.5  polls   88  edges/ho  1.0  st03 00 00 73 85 85
+-- P2 polling cadence and read clock (0x0E)
+pollgap29 (stock)      tb 0x0E  n  34  dt med    232 min   232 max   233  -fill   211.5  polls    7  edges/ho  1.0  st03 00 00 87 85 85
+acqbr /2 (stock)       tb 0x0E  n  21  dt med    445 min   220 max   446  -fill   424.5  polls   88  edges/ho  1.0  st03 00 00 65 85 85
+acqbr /256             tb 0x0E  n   7  dt med   1107 min  1107 max  1107  -fill  1086.5  polls   26  edges/ho  1.0  st03 00 00 99 85 85
+postedge derived       tb 0x0E  n  27  dt med    222 min   220 max   446  -fill   201.5  polls   20  edges/ho  1.0  st03 00 00 5C 85 85
+-- P3 register writes (0x0E); each block ends with the stock value + a timebase re-write
+reg02=00               tb 0x0E  n  24  dt med    226 min   220 max   667  -fill   205.5  polls   44  edges/ho  1.0  st03 00 00 98 85 85
+reg02=01               tb 0x0E  n  24  dt med    226 min   220 max   666  -fill   205.5  polls   44  edges/ho  1.0  st03 00 00 51 85 85
+reg02=02               tb 0x0E  n  26  dt med    225 min   220 max   666  -fill   204.5  polls   44  edges/ho  1.0  st03 00 00 A5 85 85
+reg02=03 restore       tb 0x0E  n  26  dt med    225 min   221 max   446  -fill   204.5  polls   44  edges/ho  1.0  st03 00 00 4A 85 85
+reg06=01               tb 0x0E  n   0  dt med    inf min  None max  None  -fill     inf  polls None  edges/ho None  st03 00 00 A9 85 85
+reg06=02               tb 0x0E  n  27  dt med    226 min   220 max   446  -fill   205.5  polls   44  edges/ho  1.0  st03 00 00 46 85 85
+reg06=04               tb 0x0E  n  30  dt med    221 min   220 max   446  -fill   200.5  polls   43  edges/ho  1.0  st03 00 00 A8 85 85
+reg06=08               tb 0x0E  n  26  dt med    226 min   221 max   446  -fill   205.5  polls   44  edges/ho  1.0  st03 00 00 49 85 85
+reg06=10               tb 0x0E  n  33  dt med    221 min   220 max   446  -fill   200.5  polls   43  edges/ho  1.0  st03 00 00 A5 86 86
+reg06=20               tb 0x0E  n  32  dt med    225 min   223 max   668  -fill   204.5  polls   44  edges/ho  1.0  st03 00 00 51 85 85
+reg06=40               tb 0x0E  n  29  dt med    221 min   221 max   667  -fill   200.5  polls   43  edges/ho  1.0  st03 00 00 98 85 85
+reg06=80               tb 0x0E  n  25  dt med    226 min   222 max   447  -fill   205.5  polls   44  edges/ho  1.0  st03 00 00 5C 85 85
+reg06=FF               tb 0x0E  n   0  dt med    inf min  None max  None  -fill     inf  polls None  edges/ho None  st03 00 00 8B 84 84
+reg06=00 restore       tb 0x0E  n  26  dt med    226 min   221 max   666  -fill   205.5  polls   44  edges/ho  1.0  st03 00 00 6F 85 85
+reg07=01               tb 0x0E  n  31  dt med    225 min   220 max   446  -fill   204.5  polls   44  edges/ho  1.0  st03 00 00 75 85 85
+reg07=02               tb 0x0E  n  26  dt med    226 min   221 max   447  -fill   205.5  polls   44  edges/ho  1.0  st03 00 00 80 85 85
+reg07=04               tb 0x0E  n  28  dt med    222 min   220 max   668  -fill   201.5  polls   43  edges/ho  1.0  st03 00 00 68 85 85
+reg07=08               tb 0x0E  n  30  dt med    222 min   221 max   447  -fill   201.5  polls   43  edges/ho  1.0  st03 00 00 91 85 85
+reg07=10               tb 0x0E  n  25  dt med    225 min   220 max   666  -fill   204.5  polls   44  edges/ho  1.0  st03 00 00 5A 85 85
+reg07=20               tb 0x0E  n  29  dt med    225 min   221 max   445  -fill   204.5  polls   44  edges/ho  1.0  st03 00 00 99 85 85
+reg07=40               tb 0x0E  n  23  dt med    226 min   220 max   666  -fill   205.5  polls   44  edges/ho  1.0  st03 00 00 50 86 86
+reg07=80               tb 0x0E  n  32  dt med    225 min   220 max   667  -fill   204.5  polls   44  edges/ho  1.0  st03 00 00 A6 84 84
+reg07=FF               tb 0x0E  n  23  dt med    445 min   225 max   445  -fill   424.5  polls   88  edges/ho  1.0  st03 00 00 48 85 85
+reg07=00 restore       tb 0x0E  n  28  dt med    222 min   220 max   447  -fill   201.5  polls   43  edges/ho  1.0  st03 00 00 AB 85 85
+baseline dt - fill: 0x0E 202, 0x0F 203, 0x10 202, 0x11 203, 0x12 203, 0x0E 424
+conditions under 60 ms: none
+log: /home/david/osc/reverse_engineering/captures/exp72/exp72_2026-10-05_195930.jsonl

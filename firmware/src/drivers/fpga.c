@@ -3479,6 +3479,42 @@ static volatile uint16_t acq_poll_gap_ms = 30;   /* EXP-54: poll cadence after t
 static volatile bool     acq_unrotate = true;    /* 2026-09-22: seam-based (dev plan 2.3); `fpga unrotate off` for the raw record */
 static volatile int16_t  acq_unrotate_offset = 0;
 static volatile uint8_t  acq_read_br = 0xFF;
+/* EXP-72 (2026-10-05): handover log. One entry per PC0-strobed read: ms
+ * since the previous handover, roll reads polled in between, strobes on this
+ * pair. Heap block taken on the first `fpga holdlog on` (coldtrace static RAM
+ * is full); recorded in the task, so the measured window carries no shell
+ * traffic. */
+static fpga_holdlog_ent_t *acq_holdlog;
+static volatile uint16_t   acq_holdlog_n;
+static volatile bool       acq_holdlog_on;
+/* EXP-72: AUTO budget measured from the last HANDOVER instead of the last
+ * commit. ON (default since EXP-72): once no handover has come for a whole
+ * budget, every roll read is shown (33/s at 0x10) -- what stock does with a
+ * quiet input. OFF (v0.4.1 behaviour, `fpga autolive off`): AUTO commits one
+ * roll read per budget (2.1/s) and discards the rest. Either way a triggering
+ * input shows only handed-over records (3.4/s at 0x10, the FPGA's hold). */
+static volatile bool       acq_auto_live = true;
+void fpga_acq_auto_live_set(bool on) { acq_auto_live = on; }
+bool fpga_acq_auto_live_get(void)    { return acq_auto_live; }
+bool fpga_holdlog_start(void)
+{
+    if (!acq_holdlog)
+        acq_holdlog = (fpga_holdlog_ent_t *)pvPortMalloc(FPGA_HOLDLOG_N * sizeof(fpga_holdlog_ent_t));
+    if (!acq_holdlog) return false;
+    acq_holdlog_on = false;
+    acq_holdlog_n = 0;
+    acq_holdlog_on = true;
+    return true;
+}
+void fpga_holdlog_stop(void) { acq_holdlog_on = false; }
+bool fpga_holdlog_active(void) { return acq_holdlog_on; }
+uint16_t fpga_holdlog_count(void) { return acq_holdlog_n; }
+bool fpga_holdlog_get(uint16_t i, fpga_holdlog_ent_t *out)
+{
+    if (!acq_holdlog || i >= acq_holdlog_n) return false;
+    *out = acq_holdlog[i];
+    return true;
+}
 static volatile uint32_t acq_gate_skips = 0;   /* reads the gate prevented */
 /* Reg 0x01 value currently in force -- the ONE variable that mirrors the
  * hardware register. 0x08 is what the arm block writes at config time; the
@@ -3990,6 +4026,15 @@ static void fpga_warmtest_acq_task(void *pv)
         bool first_read = !capture_in_flight;
         capture_in_flight = true;
         if (triggered || first_read) {
+            if (triggered && !first_read && acq_holdlog_on && acq_holdlog_n < FPGA_HOLDLOG_N) {
+                uint32_t dt = last_read_tick - last_handover_tick;
+                uint32_t ne = fpga.pc0_edges - edges_before;
+                fpga_holdlog_ent_t *e = &acq_holdlog[acq_holdlog_n];
+                e->dt_ms = (uint16_t)(dt > 0xFFFFu ? 0xFFFFu : dt);
+                e->polls = (uint8_t)(polls_since_handover > 255u ? 255u : polls_since_handover);
+                e->edges = (uint8_t)(ne > 255u ? 255u : ne);
+                acq_holdlog_n++;
+            }
             last_handover_tick = last_read_tick;
             fpga.acq_polls_last = polls_since_handover;
             polls_since_handover = 0;
@@ -4002,7 +4047,9 @@ static void fpga_warmtest_acq_task(void *pv)
                 acq_gate_skips++;                /* GATE ON: never show the roll */
                 continue;
             }
-            bool budget_up = (int32_t)(last_read_tick - last_commit_tick) >= (int32_t)fpga_acq_auto_wait_get();
+            uint32_t since = acq_auto_live ? (last_read_tick - last_handover_tick)
+                                           : (last_read_tick - last_commit_tick);
+            bool budget_up = (int32_t)since >= (int32_t)fpga_acq_auto_wait_get();
             if (!(auto_mode && (budget_up || first_read))) {
                 /* NORMAL/SINGLE (or AUTO inside its budget): the rolling
                  * buffer is not a record. Hold the last trace, poll again. */
