@@ -84,6 +84,17 @@ runs come in.
 | F44 | S3 | Ground markers `1`/`2` both sit mid-screen and overlap; under autofit they don't mean 0 V | read | `scope_ui.c:202-237` |
 | F45 | S2 | REL (relative) is unreachable; AUTO does function pick instead | read | `meter_ui.c:1213` (no caller) |
 
+## G. From the first live run (2026-10-06, David, unit #1, Build Oct 6 10:04:11)
+
+User feedback, not code predictions. Each is a design change to agree, not a bug to confirm.
+
+| # | Kind | Observation | Proposal | Status |
+|---|---|---|---|---|
+| U01 | control | CH1/CH2 only toggle DC ↔ AC; a channel can't be switched off | Cycle **DC → AC → OFF** (maybe Invert). One channel off: the other gets full height and the trigger source follows (reg 0x06 = trigger source, EXP-72). A press on an unselected channel first selects it. | to design |
+| U02 | layout | `SPI3:OK n` debug counter shown on the release screen (so F17 doesn't hold for this label) | Remove from the default screen; keep it behind a debug switch | to do |
+| U03 | layout | CH2's trace runs under the two measurement rows | A dedicated strip at the bottom, one row per channel, channel-coloured `CH1`/`CH2` on the left, user-chosen measurements. Outside the trace area, so it can refresh every capture (fixes F18). | to design |
+| U04 | control | In Time view TRIGGER silently cycles **cursors**. It looked like "a trigger mode with an orange line" and made the stats refresh at ~2 Hz (cursors force full repaints). In FFT views the same button cycles the trigger mode, with a popup. | TRIGGER = trigger mode everywhere, with a popup. Cursors move (long-press TRIGGER suggested). Every mode change gets a popup. | to design |
+
 ## F. `button_manual.md` corrections
 
 - Button list omits POWER, TRIGGER and MENU+POWER.

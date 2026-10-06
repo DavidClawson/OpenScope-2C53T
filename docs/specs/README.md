@@ -72,6 +72,7 @@ concrete.
 | Feature | Stage | Spec | Next |
 |---|---|---|---|
 | Settings persistence | S2 (commissioned 2026-08-20) | [settings-persistence](platform/settings-persistence.md) | S3: the "bug" was an unthrown build interlock (`c57394c`); next is a power-cycle regression check in the bench script + surfacing `saves_failed` in the UI. Audit P0.4 (silent W25Q write failure) is the open honesty gap |
+| Softkey UI | S0 (agreed 2026-10-06) | [softkey-ui](platform/softkey-ui.md) | S1: softkey bar component + popups in every mode + the meter's big-reading default, shown on unit #1 |
 | Screenshot capture | S1 | — | S2: pull a BMP off the device and look at it (note audit P3: BTN_SAVE currently shows "SAVED #n" without writing anything) |
 | Structural hardening | plan exists | [audit 2026-08-20](../structural_audit_2026-08-20.md) | P0 ladder: SPI3 timeout-as-success, W25Q silent-success, bus ownership, torn capture buffers, pre-scheduler queue overflow |
 | Rendering path | S3 | — | Display stability guarded on hardware by EXP-22 (`scripts/exp22_stability.py`, 11/11, negative control); graticule question above is the S4 item |
