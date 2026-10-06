@@ -14,9 +14,21 @@ reaches S4 when its screen pass and its workflows pass on a release image.
 |---|---|
 | [inventory.md](inventory.md) | **Drafted 2026-10-05** from the code; not yet walked on a device |
 | [findings.md](findings.md) | 45 predicted defects from the code read, plus manual corrections. To be confirmed by the first runs. |
-| Screen passes | next: scope Time view, meter Full layout, Settings |
-| Workflows | next: stable trace, coupling/probe, trigger level/mode, battery and resistor on the meter |
-| Test report issue form | after the first pages have been run once |
+| **Screen passes** | [Scope Time view](screens/scope-time.md) · [Meter](screens/meter.md) · [Settings, tools, siggen](screens/settings.md). Drafted, not yet run. |
+| **Workflows** | [W01 stable trace](workflows/W01-stable-trace.md) · [W02 coupling & probe](workflows/W02-coupling-and-probe.md) · [W03 trigger](workflows/W03-trigger.md) · [W04 battery & resistors](workflows/W04-meter-battery-and-resistors.md). Drafted, not yet run. |
+| Still to write | Theme sweep (every screen × 4 themes), settings survive a power cycle, firmware update, power & battery, FFT, cursors & measurements, masks, meter's untested functions |
+| Test report issue form | After the first pages have been run once, so the form matches what testers actually report |
+
+## Running a page
+
+1. Note the image file name and the build line (Settings → About, or `version` over USB).
+2. Work top to bottom. For each row: **✓** as expected, **✗** wrong (say what you saw), or
+   **?** works but confusing (say why). A **?** is as valuable as a ✗: it's the UX signal.
+3. Rows naming an **F-number** are where the code read predicts a defect. Your result confirms
+   it or retires it. Don't skip them because they're "known".
+4. Photos beat descriptions for anything visual (screenshots quantise colour, so they're no
+   good for judging themes).
+5. Report every ✗ and ? by ID. Until the issue form exists, use a comment on the tracking issue.
 
 ## Equipment tiers
 
