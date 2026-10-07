@@ -147,6 +147,14 @@ extern meter_reading_t meter_reading;
  */
 bool meter_data_snapshot(meter_reading_t *out);
 
+/*
+ * The newest `max` (<= METER_FRAME_HISTORY_LEN) frames as DC-volts readings
+ * in mV, newest first, stopping at the first frame that is not a DC-volts
+ * number. Every frame counts, not just the ones the UI redrew for. Returns
+ * how many.
+ */
+uint8_t meter_data_recent_dc_mv(float *mv, uint8_t max);
+
 /* Continuity verdict with a firmware threshold (2026-10-06). The meter chip
  * flags continuity only in some frames; shorted leads usually arrive as a
  * plain resistance (0.14 Ohm on unit #1, which never beeped). Short = the

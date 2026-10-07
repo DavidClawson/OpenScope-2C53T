@@ -134,6 +134,64 @@ static void test_shapes(void)
     }
 }
 
+/* Bench series from unit #1, 2026-10-07 (DC V, mV). */
+static const float shorted[] = { -0.9f, -0.9f, -0.9f, -0.9f, -0.8f, -0.9f, -0.9f, -0.9f,
+                                 -0.9f, -0.9f, -0.9f, -0.9f, -0.9f, -0.9f, -0.8f, -0.9f };
+static const float open_leads[] = { -1.0f, -1.9f, -1.2f, -1.0f, -0.6f, -0.8f, -0.9f, -1.0f,
+                                    -0.9f, -0.3f, -0.6f, -0.8f, -0.8f, -1.0f, -1.0f, -0.3f,
+                                    -0.4f,  5.1f,  0.0f, -0.9f, -0.8f,  0.1f,  0.1f, -0.7f,
+                                    -0.8f, -1.0f, -2.8f, -2.2f, -1.1f,  1.0f, -0.7f, -1.7f,
+                                     0.3f,  0.3f, -1.0f, -2.4f, -0.7f, -1.0f, -2.7f, -1.0f };
+
+static void test_settling_and_cal(void)
+{
+    fuse_input_t s;
+    memset(&s, 0, sizeof s);
+    uint32_t r10 = fuse_lookup_resistance_uohm(FUSE_TYPE_ATO_ATC, 10);
+
+    /* Negative control: uncalibrated, shorted leads are a phantom draw. */
+    CHECK(fuse_current_ma(-0.9f, r10) > FUSE_DRAW_LIMIT_MA, "shorted -0.9 mV reads as a draw");
+
+    for (int k = 0; k < FUSE_STEADY_N - 1; k++) fuse_input_push(&s, shorted[k]);
+    CHECK(!fuse_input_steady(&s), "not steady before %d readings", FUSE_STEADY_N);
+    CHECK(fuse_input_calibrate(&s) == FUSE_CAL_UNSTEADY && !s.cal_set, "cal refused early");
+    fuse_input_push(&s, shorted[FUSE_STEADY_N - 1]);
+    CHECK(fuse_input_steady(&s), "shorted leads settle");
+    CHECK(fuse_input_calibrate(&s) == FUSE_CAL_OK && s.cal_set, "cal accepted");
+    CHECK(fabsf(s.cal_mv + 0.8875f) < 0.001f, "cal = mean -0.8875 (got %f)", (double)s.cal_mv);
+    for (size_t k = 0; k < sizeof shorted / sizeof *shorted; k++)
+        CHECK(fuse_current_ma(shorted[k] - s.cal_mv, r10) < FUSE_DRAW_LIMIT_MA,
+              "calibrated shorted reading %zu is no draw", k);
+    /* The worked example still holds on top of the offset. */
+    CHECK(fuse_current_ma(0.379f + s.cal_mv - s.cal_mv, r10) == 48, "cal is a pure offset");
+
+    /* Open leads: no full window of the bench series is steady. */
+    fuse_input_t o;
+    memset(&o, 0, sizeof o);
+    int steady_windows = 0, windows = 0;
+    for (size_t k = 0; k < sizeof open_leads / sizeof *open_leads; k++) {
+        fuse_input_push(&o, open_leads[k]);
+        if (o.n == FUSE_STEADY_N) { windows++; steady_windows += fuse_input_steady(&o); }
+    }
+    CHECK(windows > 20 && steady_windows == 0, "open leads never settle (%d/%d)",
+          steady_windows, windows);
+    o.cal_set = true; o.cal_mv = -0.5f;
+    CHECK(fuse_input_calibrate(&o) == FUSE_CAL_UNSTEADY && fabsf(o.cal_mv + 0.5f) < 1e-6f,
+          "unsteady cal leaves the old cal alone");
+
+    /* A loaded fuse wobbling ~4% still settles (5 A on a 15 A ATO, 24.5 mV). */
+    fuse_input_t l;
+    memset(&l, 0, sizeof l);
+    for (int k = 0; k < FUSE_STEADY_N; k++) fuse_input_push(&l, 24.5f + ((k & 1) ? 1.0f : -1.0f));
+    CHECK(fuse_input_steady(&l), "loaded fuse with 2 mV wobble is steady");
+    CHECK(fuse_input_calibrate(&l) == FUSE_CAL_TOO_LARGE && !l.cal_set,
+          "cal on a live fuse is refused");
+
+    /* Clearing drops the history but keeps the cal. */
+    fuse_input_clear(&s);
+    CHECK(!fuse_input_steady(&s) && s.cal_set, "clear keeps the cal");
+}
+
 int main(void)
 {
     test_current_worked_examples();
@@ -141,6 +199,7 @@ int main(void)
     test_labels_and_colours();
     test_scan_and_presets();
     test_shapes();
+    test_settling_and_cal();
     printf("test_fuse: %d/%d checks passed\n", checks - failures, checks);
     return failures ? 1 : 0;
 }

@@ -71,7 +71,8 @@ static struct {
     bool    valid;
     uint8_t view, type, rating, theme;
     uint8_t unit;           /* Detail: 0 mA, 1 A, 0xFF unknown */
-    uint8_t scan_state;     /* Scan: 0 no reading, 1 no draw, 2 draw, 3 not DC V */
+    uint8_t scan_state;     /* Scan: 0 no reading, 1 no draw, 2 draw, 3 not DC V,
+                             * 4 not settled */
 } fz;
 
 /* ═══════════════════════════════════════════════════════════════════
@@ -350,7 +351,7 @@ static void bar_span(int x0, int x1, int fill_end, uint16_t on, uint16_t off)
     rect(f, BAR_Y, x1 - f, BAR_H, off);
 }
 
-static void detail_dynamic(float mv, int8_t dec, const theme_t *th)
+static void detail_dynamic(float mv, int8_t dec, bool steady, const theme_t *th)
 {
     bool valid = dec >= 0;
     uint32_t ma = valid ? fuse_current_ma(mv, current_entry()->resistance_uohm) : 0;
@@ -366,14 +367,15 @@ static void detail_dynamic(float mv, int8_t dec, const theme_t *th)
     const char *us = unit ? "A" : "mA";
     uint16_t uw = font_string_width(us, &font_unit);
     uint16_t nw = (uint16_t)(RW - uw - 4);
-    font_draw_string_box(RX, NUM_Y, nw, num, th->text_primary, th->background,
-                         &font_huge, FONT_ALIGN_RIGHT);
+    font_draw_string_box(RX, NUM_Y, nw, num, steady ? th->text_primary : th->grid,
+                         th->background, &font_huge, FONT_ALIGN_RIGHT);
     font_draw_string_box((uint16_t)(RX + nw + 4), NUM_Y + 28, uw, us, th->ch1,
                          th->background, &font_unit, FONT_ALIGN_LEFT);
 
     uint32_t capped = ma > FUSE_BAR_FULL_MA ? FUSE_BAR_FULL_MA : ma;
     int fill = RX + (int)(capped * RW / FUSE_BAR_FULL_MA);
-    uint16_t on = ma > FUSE_DRAW_LIMIT_MA ? th->warning : th->success;
+    uint16_t on = !steady ? th->text_secondary
+                : (ma > FUSE_DRAW_LIMIT_MA ? th->warning : th->success);
     bar_span(RX, MARK_X, fill, on, th->grid);
     bar_span(MARK_X + 2, RX + RW, fill, on, th->grid);
 
@@ -387,6 +389,8 @@ static void detail_dynamic(float mv, int8_t dec, const theme_t *th)
         vc = th->warning;
     } else if (!valid) {
         snprintf(b, sizeof b, "no reading");
+    } else if (!steady) {
+        snprintf(b, sizeof b, "unsteady: probes on?");
     } else if (ma > FUSE_DRAW_LIMIT_MA) {
         snprintf(b, sizeof b, "over %u mA: a draw", (unsigned)FUSE_DRAW_LIMIT_MA);
         vc = th->warning;
@@ -457,7 +461,7 @@ static void table_static(const theme_t *th)
     }
 }
 
-static void table_dynamic(float mv, int8_t dec, const theme_t *th)
+static void table_dynamic(float mv, int8_t dec, bool steady, const theme_t *th)
 {
     const fuse_table_t *tbl = current_table();
     char b[24];
@@ -480,8 +484,8 @@ static void table_dynamic(float mv, int8_t dec, const theme_t *th)
             uint32_t ma = fuse_current_ma(mv, e->resistance_uohm);
             fmt_current_short(b, sizeof b, ma, false);
             bool draw = ma > FUSE_DRAW_LIMIT_MA;
-            v = draw ? "YES" : "no";
-            vc = draw ? th->warning : th->success;
+            v = !steady ? "?" : (draw ? "YES" : "no");
+            vc = !steady ? th->text_secondary : (draw ? th->warning : th->success);
         } else {
             snprintf(b, sizeof b, "--");
         }
@@ -524,18 +528,20 @@ static void scan_static(const theme_t *th)
                      &font_small);
 }
 
-static void scan_dynamic(float mv, int8_t dec, const theme_t *th)
+static void scan_dynamic(float mv, int8_t dec, bool steady, const theme_t *th)
 {
     float a = mv < 0 ? -mv : mv;
-    uint8_t st = dec == -2 ? 3 : (dec < 0 ? 0 : (a >= fuse_scan_threshold_mv ? 2 : 1));
+    uint8_t st = dec == -2 ? 3 : (dec < 0 ? 0 : (!steady ? 4
+               : (a >= fuse_scan_threshold_mv ? 2 : 1)));
     if (st != fz.scan_state) {
-        static const char *const word[4] = { "---", "NO DRAW", "DRAW", "DC V?" };
-        static const char *const sub[4]  = { "touch the probes to a fuse",
+        static const char *const word[5] = { "---", "NO DRAW", "DRAW", "DC V?", "WAIT" };
+        static const char *const sub[5]  = { "touch the probes to a fuse",
                                              "move to the next fuse",
                                              "current is flowing",
-                                             "set Function to DC V" };
+                                             "set Function to DC V",
+                                             "hold the probes on the fuse" };
         uint16_t bg = st == 2 ? th->warning : (st == 1 ? th->success : th->grid);
-        uint16_t fg = (st == 0 || st == 3) ? th->text_primary : th->background;
+        uint16_t fg = (st == 1 || st == 2) ? th->background : th->text_primary;
         rect(RX, FUSE_TOP + 4, RW, SCAN_BOX_H, bg);
         font_draw_string_center(RX + RW / 2, FUSE_TOP + 16, word[st], fg, bg, &font_large);
         font_draw_string_center(RX + RW / 2, FUSE_TOP + 48, sub[st], fg, bg, &font_small);
@@ -646,7 +652,7 @@ static void types_static(const theme_t *th)
  * Public API
  * ═══════════════════════════════════════════════════════════════════ */
 
-void draw_fuse_screen(float drop_mv, int8_t drop_decimals, bool repaint)
+void draw_fuse_screen(float drop_mv, int8_t drop_decimals, bool steady, bool repaint)
 {
     const theme_t *th = theme_get();
     uint8_t view = fuse_view < FUSE_VIEW_COUNT ? fuse_view : FUSE_VIEW_DETAIL;
@@ -671,10 +677,10 @@ void draw_fuse_screen(float drop_mv, int8_t drop_decimals, bool repaint)
     }
 
     switch (view) {
-    case FUSE_VIEW_MULTI: table_dynamic(drop_mv, drop_decimals, th);  break;
-    case FUSE_VIEW_SCAN:  scan_dynamic(drop_mv, drop_decimals, th);   break;
+    case FUSE_VIEW_MULTI: table_dynamic(drop_mv, drop_decimals, steady, th);  break;
+    case FUSE_VIEW_SCAN:  scan_dynamic(drop_mv, drop_decimals, steady, th);   break;
     case FUSE_VIEW_TYPES: break;
-    default:              detail_dynamic(drop_mv, drop_decimals, th); break;
+    default:              detail_dynamic(drop_mv, drop_decimals, steady, th); break;
     }
 }
 

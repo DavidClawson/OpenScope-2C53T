@@ -176,14 +176,16 @@ and the screen shows `---`.
 
 | Button | Does |
 |---|---|
-| MOVE (Fuse type) / LEFT / RIGHT | Fuse type: ATO/ATC, Mini, Micro2, Maxi, J-Case |
+| MOVE (Cal leads) | Tips together, press: the lead offset is taken off every drop (RAM only). On the Types page MOVE is Fuse type |
+| LEFT / RIGHT | Fuse type: ATO/ATC, Mini, Micro2, Maxi, J-Case |
 | SELECT (Rating) / UP / DOWN | Rating; in Scan the Draw-if threshold (UP = larger) |
 | TRIGGER (Show) | Detail → Table → Scan → Types |
 | PRM (View) | Next meter view |
 
 Redesigned 2026-10-07 (softkey spec): converts the reading's own unit, switches the
 meter to DC V on entry, draws in place. LIVE; seen on unit #1 by screenshot, current
-not yet measured against a known load. Open: F47 (open-lead offset), F48 (resolution).
+not yet measured against a known load. Cal leads bench-checked 2026-10-07 (F47 fixed:
+−1.00 mV offset removed, drop then −0.1 mV). Open: F48 (resolution).
 
 ## 4. Signal generator
 

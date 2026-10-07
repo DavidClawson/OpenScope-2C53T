@@ -54,6 +54,42 @@ uint8_t fuse_scan_ratings(fuse_type_t type, uint8_t out[4]);
 float fuse_scan_threshold_next_preset(float cur_mv);
 
 /*
+ * The drop as it arrives: the lead offset ("Cal leads") and whether the
+ * reading has settled. Shorted, unit #1's leads read a steady -0.9 mV
+ * (+/-0.1 over 40 readings) -- 114 mA on a 10 A ATO, a phantom DRAW. Open,
+ * they wander -2.8..+5.1 mV, and a verdict there is noise (F47).
+ *
+ * Steady = the last FUSE_STEADY_N readings span no more than
+ * FUSE_STEADY_SPAN_MV plus FUSE_STEADY_SPAN_PCT of the drop, so a loaded
+ * fuse whose current wobbles a little still counts.
+ */
+#define FUSE_STEADY_N           8       /* ~1 s of meter frames */
+#define FUSE_STEADY_SPAN_MV     0.5f
+#define FUSE_STEADY_SPAN_PCT    20u
+#define FUSE_CAL_MAX_MV         5.0f    /* larger is not two tips touching */
+
+typedef struct {
+    int16_t  hist[FUSE_STEADY_N];   /* raw drops, 0.1 mV units */
+    uint8_t  n, i;
+    float    cal_mv;                /* subtracted from every drop when set */
+    bool     cal_set;
+} fuse_input_t;
+
+void  fuse_input_push(fuse_input_t *s, float raw_mv);
+void  fuse_input_clear(fuse_input_t *s);          /* history only, not the cal */
+bool  fuse_input_steady(const fuse_input_t *s);
+float fuse_input_mean(const fuse_input_t *s);     /* of the history, mV */
+
+typedef enum {
+    FUSE_CAL_OK = 0,
+    FUSE_CAL_UNSTEADY,      /* not settled: tips not held together */
+    FUSE_CAL_TOO_LARGE,     /* settled but over FUSE_CAL_MAX_MV: on a live fuse? */
+} fuse_cal_result_t;
+
+/* Store the settled mean as the lead offset, or refuse and leave it as is. */
+fuse_cal_result_t fuse_input_calibrate(fuse_input_t *s);
+
+/*
  * Outline of each type at 4 px per mm, from the design canvas (FuseTypes).
  * Front view: body at (1,1) size w-2 x body_h, two blades mirrored about the
  * centre (none for a cartridge), a window, and for a cartridge two dark

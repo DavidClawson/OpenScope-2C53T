@@ -117,7 +117,7 @@ current value. Softkeys arrived with the softkey UI (2026-10-06; spec
 
 | Button | Big / Graph / Stats | Limits | Fuse |
 |--------|---------------------|--------|------|
-| **MOVE** | **Function**: next function | Function | **Fuse type**: ATO/ATC, Mini, Micro2, Maxi, J-Case |
+| **MOVE** | **Function**: next function | Function | **Cal leads**: hold the tips together and press, to take the lead offset off every reading. On the Types page: **Fuse type** |
 | **SELECT** | **Reset**: min/max/avg, chart, histogram | **Low**: arrows move it; press again = set to the reading | **Rating** (next, wrapping; arrows step). In Scan: **Draw if >** presets 0.1 / 0.2 / 0.5 / 1 / 2 mV |
 | **TRIGGER** | **Relative** on/off (zeros at the current reading). In Continuity: **Beep** threshold 10 / 30 / 50 / 100 Ohm | **High**, likewise | **Show**: Detail -> Table -> Scan -> Types |
 | **PRM** | **View**: Big -> Graph -> Stats -> Limits -> Fuse | View | View |
@@ -156,6 +156,11 @@ switches in the background (~1.5 s in the `-meter` image). In the plain
 - **Fuse** — fuse current tester: probe the two metal tips on top of a fuse
   left in place, and it estimates the current from the voltage drop and the
   fuse's typical resistance (about ±10 %). Entering it switches to DC V.
+  **Calibrate the leads first:** touch the probe tips together and press
+  **Cal leads**. The meter reads about −1 mV with nothing connected, which
+  would otherwise show as a ~120 mA draw on a 10 A fuse. The value is kept
+  until power-off. No verdict is shown until the reading has been steady for
+  about a second ("unsteady: probes on?", or WAIT in Scan).
   - **Detail**: a picture of the selected fuse, the current, a 0–150 mA bar
     with the 50 mA parasitic-draw mark, the drop and the fuse resistance.
   - **Table**: every rating of the type, largest at the top, with the current

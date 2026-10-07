@@ -845,6 +845,7 @@ typedef struct {
     bool        has_fail;
     uint8_t     verdict;        /* 0 none, 1 pass, 2 fail */
     uint32_t    counted_update; /* display_update_count already judged */
+    fuse_input_t fuse;          /* lead cal + settling history (Fuse view) */
 } meter_ext_t;
 
 static meter_ext_t *mx;
@@ -1383,6 +1384,54 @@ static void skv_fuse_thresh(char *b, uint8_t n)
 }
 static void skp_fuse_thresh(void) { fuse_threshold_press(); }
 
+/* The settling window, from the meter's own frame history: the view only
+ * redraws when the shown value changes (~1/s for a steady reading), so
+ * sampling at redraws never filled the window and Cal leads refused a
+ * rock-steady short. */
+static void fuse_input_refresh(fuse_input_t *f)
+{
+    float rec[FUSE_STEADY_N];
+    uint8_t n = meter_data_recent_dc_mv(rec, FUSE_STEADY_N);
+    fuse_input_clear(f);
+    while (n) fuse_input_push(f, rec[--n]);             /* oldest first */
+}
+
+/* Cal leads: the offset the shorted leads read, taken off every drop. Unit
+ * #1 reads -0.9 mV shorted -- a phantom 114 mA DRAW on a 10 A ATO (F47). */
+static void fmt_cal(char *b, uint8_t n, float mv)
+{
+    int v = (int)(mv * 100.0f + (mv < 0 ? -0.5f : 0.5f));
+    int a = v < 0 ? -v : v;
+    snprintf(b, n, "%s%d.%02d mV", v < 0 ? "-" : "", a / 100, a % 100);
+}
+static void skv_fuse_cal(char *b, uint8_t n)
+{
+    if (mx && mx->fuse.cal_set) fmt_cal(b, n, mx->fuse.cal_mv);
+    else snprintf(b, n, "not set");
+}
+static bool ska_fuse_cal(void) { return mx && mx->fuse.cal_set; }
+static void skp_fuse_cal(void)
+{
+    meter_ext_t *e = meter_ext();
+    char t[40], v[16];
+    if (!e) { scope_show_popup("Cal leads: no memory"); return; }
+    if (meter_submode != 0) { scope_show_popup("Cal leads: needs DC V"); return; }
+    fuse_input_refresh(&e->fuse);
+    switch (fuse_input_calibrate(&e->fuse)) {
+    case FUSE_CAL_OK:
+        fmt_cal(v, sizeof v, e->fuse.cal_mv);
+        snprintf(t, sizeof t, "Leads cal: %s", v);
+        break;
+    case FUSE_CAL_TOO_LARGE:
+        snprintf(t, sizeof t, "Too large: tips together?");
+        break;
+    default:
+        snprintf(t, sizeof t, "Hold the tips together");
+        break;
+    }
+    scope_show_popup(t);
+}
+
 static void skv_cont(char *b, uint8_t n) { snprintf(b, n, "< %d Ohm", (int)meter_continuity_threshold()); }
 static void skp_cont(void)
 {
@@ -1410,14 +1459,21 @@ static const softkey_bar_t meter_bar_limits = {{
     { "High",     skv_high,      skp_high,     ska_high },
     { "View",     skv_view,      skp_view,     NULL },
 }};
+/* Fuse type is also on LEFT/RIGHT; the Types page keeps it on a key. */
 static const softkey_bar_t meter_bar_fuse = {{
+    { "Cal leads", skv_fuse_cal,    skp_fuse_cal,    ska_fuse_cal },
+    { "Rating",    skv_fuse_rating, skp_fuse_rating, ska_arrows },
+    { "Show",      skv_fuse_show,   skp_fuse_show,   NULL },
+    { "View",      skv_view,        skp_view,        NULL },
+}};
+static const softkey_bar_t meter_bar_fuse_types = {{
     { "Fuse type", skv_fuse_type,   skp_fuse_type,   NULL },
     { "Rating",    skv_fuse_rating, skp_fuse_rating, ska_arrows },
     { "Show",      skv_fuse_show,   skp_fuse_show,   NULL },
     { "View",      skv_view,        skp_view,        NULL },
 }};
 static const softkey_bar_t meter_bar_fuse_scan = {{
-    { "Fuse type", skv_fuse_type,   skp_fuse_type,   NULL },
+    { "Cal leads", skv_fuse_cal,    skp_fuse_cal,    ska_fuse_cal },
     { "Draw if >", skv_fuse_thresh, skp_fuse_thresh, ska_arrows },
     { "Show",      skv_fuse_show,   skp_fuse_show,   NULL },
     { "View",      skv_view,        skp_view,        NULL },
@@ -1427,7 +1483,8 @@ const softkey_bar_t *meter_softkey_bar(uint8_t layout, uint8_t submode)
 {
     if (layout == METER_LAYOUT_LIMITS) return &meter_bar_limits;
     if (layout == METER_LAYOUT_FUSE)
-        return fuse_view == FUSE_VIEW_SCAN ? &meter_bar_fuse_scan : &meter_bar_fuse;
+        return fuse_view == FUSE_VIEW_SCAN  ? &meter_bar_fuse_scan
+             : fuse_view == FUSE_VIEW_TYPES ? &meter_bar_fuse_types : &meter_bar_fuse;
     if (submode == 7)                  return &meter_bar_cont;   /* continuity: Beep threshold */
     return &meter_bar_main;
 }
@@ -1648,9 +1705,13 @@ void draw_meter_screen(void)
         break;
     case METER_LAYOUT_FUSE: {
         /* The drop across the fuse, in mV, from a DC-volts reading (held
-         * while HOLD is on). Anything else is "no reading", never a guess. */
+         * while HOLD is on). Anything else is "no reading", never a guess.
+         * Live readings are judged on the meter's last frames; the lead
+         * cal comes off both. A held reading was steady enough to hold. */
         float mv = 0.0f;
         int8_t dec = (mode == 0) ? -1 : -2;            /* -2: on another function */
+        bool steady = true;
+        meter_ext_t *e = meter_ext();
         if (mode == 0) {
             if (meter_hold_is_on() && mx && mx->held[0]) {
                 if (fuse_drop_mv_from_reading(meter_hold_value, mx->held_unit, &mv))
@@ -1658,9 +1719,15 @@ void draw_meter_screen(void)
             } else if (has_live_reading &&
                        fuse_drop_mv_from_reading(reading.value, reading.unit_suffix, &mv)) {
                 dec = (int8_t)fuse_mv_decimals(reading.display_str, reading.unit_suffix);
+                if (e) {
+                    fuse_input_refresh(&e->fuse);
+                    steady = fuse_input_steady(&e->fuse);
+                }
             }
         }
-        draw_fuse_screen(mv, dec, full_clear);
+        if (dec < 0 && e) fuse_input_clear(&e->fuse);
+        if (dec >= 0 && e && e->fuse.cal_set) mv -= e->fuse.cal_mv;
+        draw_fuse_screen(mv, dec, steady, full_clear);
         break;
     }
     case METER_LAYOUT_LIMITS:

@@ -239,9 +239,11 @@ void meter_toggle_debug_overlay(void);
 
 /* fuse_ui.c */
 /* drop_decimals: -1 = no DC-volts reading yet, -2 = the meter is on another
- * function (settings can restore Fuse view with one); repaint = the meter
- * just cleared the screen. */
-void draw_fuse_screen(float drop_mv, int8_t drop_decimals, bool repaint);
+ * function (settings can restore Fuse view with one); steady = the reading
+ * has settled (no verdict until it has: open leads wander, F47); repaint =
+ * the meter just cleared the screen. drop_mv already has the lead cal taken
+ * off. */
+void draw_fuse_screen(float drop_mv, int8_t drop_decimals, bool steady, bool repaint);
 void fuse_rating_press(void);
 void fuse_threshold_press(void);
 void fuse_cycle_view(void);

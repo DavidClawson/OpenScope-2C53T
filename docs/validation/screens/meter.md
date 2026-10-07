@@ -52,10 +52,12 @@ predicted defects ([findings.md](../findings.md)).
 
 | ID | Do | Expect | Result | Note |
 |---|---|---|---|---|
-| MT-40 | View to Fuse; Fuse type; Rating; Show ×4 | Type, rating and view (Detail → Table → Scan → Types) change and are labelled; the meter switches to DC V with a popup | | |
+| MT-40 | View to Fuse; LEFT/RIGHT; Rating; Show ×4 | Type, rating and view (Detail → Table → Scan → Types) change and are labelled; the meter switches to DC V with a popup; the Types page has Fuse type on MOVE | | |
 | MT-41 | Detail view | Current shown once with one unit (**F11**, fixed 2026-10-07) | | |
 | MT-42 | Scan view | "NO DRAW" / "DRAW" readable as words (**F21**, fixed) | | |
 | MT-43 | Table view, ATO | Every rating reachable, including 1, 2, 40 A (**F40**, fixed); UP moves the highlight up | | |
-| MT-44 | Probes on a fuse carrying no current | Detail near 0 mA, Scan NO DRAW (**F47**: open leads read −1.0 mV) | | |
+| MT-44 | Tips together, Cal leads; then probes on a fuse carrying no current | Popup "Leads cal: about −1 mV"; the key shows the value; Detail near 0 mA, Scan NO DRAW (**F47**, fixed 2026-10-07) | | |
+| MT-47 | Cal leads with the tips apart and moving; then on a fuse carrying 5 mV or more | "Hold the tips together"; "Too large: tips together?"; the stored value is unchanged | | |
+| MT-48 | Wave the open leads around | "unsteady: probes on?" (Scan: WAIT), no DRAW verdict | | |
 | MT-45 | Types view, beside a real fuse box | You can tell which type you have; the colours match real fuses | | |
 | MT-46 | Leave the reading steady for 30 s | Nothing on screen blinks (fuse flicker, 2026-10-06) | | |

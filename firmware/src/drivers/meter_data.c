@@ -153,8 +153,8 @@ static uint16_t meter_aux_freq_i10(const meter_reading_t *r)
         strcmp(old_unit_suffix, r->unit_suffix ? r->unit_suffix : "") != 0) { \
         r->display_update_count++; \
     } \
+    meter_record_history();     /* inside the seqlock: see meter_data_recent_dc_mv */ \
     meter_reading_write_end(); \
-    meter_record_history(); \
     meter_writer_lock_release(); \
 } while (0)
 
@@ -182,8 +182,8 @@ static uint16_t meter_aux_freq_i10(const meter_reading_t *r)
         strcmp(old_unit_suffix, r->unit_suffix ? r->unit_suffix : "") != 0) { \
         r->display_update_count++; \
     } \
+    meter_record_history();     /* inside the seqlock: see meter_data_recent_dc_mv */ \
     meter_reading_write_end(); \
-    meter_record_history(); \
     meter_writer_lock_release(); \
 } while (0)
 
@@ -1246,6 +1246,64 @@ bool meter_data_snapshot(meter_reading_t *out)
     }
 
     return false;
+}
+
+/* "-0.0009" -> -0.0009. By hand: strtof costs 16 KB of flash. */
+static bool parse_decimal(const char *p, float *out)
+{
+    bool neg = false, digits = false;
+    int32_t v = 0, div = 1;
+    if (*p == '-' || *p == '+') neg = (*p++ == '-');
+    for (; *p >= '0' && *p <= '9'; p++) { v = v * 10 + (*p - '0'); digits = true; }
+    if (*p == '.')
+        for (p++; *p >= '0' && *p <= '9' && div < 100000000; p++) {
+            v = v * 10 + (*p - '0'); div *= 10; digits = true;
+        }
+    if (!digits) return false;
+    *out = (neg ? -(float)v : (float)v) / (float)div;
+    return true;
+}
+
+uint8_t meter_data_recent_dc_mv(float *mv, uint8_t max)
+{
+    char str[METER_FRAME_HISTORY_LEN][16];
+    const char *unit[METER_FRAME_HISTORY_LEN];
+    uint8_t n = 0;
+    if (max > METER_FRAME_HISTORY_LEN) max = METER_FRAME_HISTORY_LEN;
+
+    for (int attempt = 0; attempt < 8; attempt++) {
+        uint32_t before = meter_reading_seq;
+        meter_data_barrier();
+        if ((before & 1U) != 0U) continue;
+
+        uint8_t count = meter_frame_history_count;
+        if (count > max) count = max;
+        n = 0;
+        for (uint8_t k = 0; k < count; k++) {
+            const meter_frame_history_t *h = &meter_frame_history[
+                (meter_frame_history_head + METER_FRAME_HISTORY_LEN - 1U - k) % METER_FRAME_HISTORY_LEN];
+            if (h->submode != 0) break;
+            memcpy(str[n], h->display_str, sizeof str[n]);
+            str[n][sizeof str[n] - 1] = '\0';
+            unit[n] = h->unit_suffix;
+            n++;
+        }
+
+        meter_data_barrier();
+        uint32_t after = meter_reading_seq;
+        if (before == after && (after & 1U) == 0U) break;
+        n = 0;
+    }
+
+    uint8_t k;
+    for (k = 0; k < n; k++) {
+        float v;
+        if (!unit[k] || !parse_decimal(str[k], &v)) break;  /* "---", "OL" */
+        if (strcmp(unit[k], "V") == 0)       mv[k] = v * 1000.0f;
+        else if (strcmp(unit[k], "mV") == 0) mv[k] = v;
+        else break;
+    }
+    return k;
 }
 
 void meter_data_invalidate(uint8_t submode)

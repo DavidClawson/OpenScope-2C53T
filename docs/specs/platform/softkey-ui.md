@@ -85,14 +85,16 @@ None new. Constraints:
 
 **Fuse view (2026-10-07):** redesigned from the canvas boards FuseDetail / FuseScan / FuseTypes.
 - **Show** cycles Detail → Table → Scan → Types. Types is the "which fuse is this?" page: the five types to scale, front and top, and the rating colours of the selected type.
-- **Softkeys:** Fuse type / Rating (Draw-if threshold in Scan) / Show / View. Arrows adjust the second key; UP = larger.
+- **Softkeys:** Cal leads / Rating (Draw-if threshold in Scan) / Show / View. Arrows adjust the second key; UP = larger. LEFT/RIGHT change the fuse type; the Types page keeps **Fuse type** on MOVE in place of Cal leads.
+- **Cal leads** (F47): tips together, press; the settled mean of the last 8 meter frames becomes the lead offset, taken off every drop. Refused while unsettled or over 5 mV. RAM only.
+- **No verdict until settled:** the last 8 frames must agree within 0.5 mV + 20 % of the drop; until then Detail greys the number and says "unsteady: probes on?", Table shows "?", Scan shows WAIT.
 - **Drawing:** static parts once per structural change, values through opaque boxes. Measured on unit #1: 0 full clears and 0 partial clears across reading updates, ~6 ms per draw.
 - **Entering the view switches the meter to DC V,** with a popup.
-- **Logic** is in `src/ui/fuse_model.c`, host-tested by `make test-fuse` (122 checks).
+- **Logic** is in `src/ui/fuse_model.c`, host-tested by `make test-fuse` (150 checks, including unit #1's shorted and open-lead series).
 - **Bug found on the way:** the current was 1000× low (F46).
 
 **Open:**
-- **Fuse view:** open-lead offset (F47) and 0.1 mV resolution (F48). The screenshots are palette-quantised, so the fuse colours need a look on the real screen.
+- **Fuse view:** 0.1 mV resolution (F48); Cal leads is not saved across power-off. The screenshots are palette-quantised, so the fuse colours need a look on the real screen.
 - Graph and Stats keep their old layouts.
 - The `coldtrace` image offers functions it can't measure (only DC V works there); release decision pending.
 

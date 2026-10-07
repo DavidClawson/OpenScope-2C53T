@@ -15,6 +15,54 @@ uint32_t fuse_current_ma(float drop_mv, uint32_t resistance_uohm)
     return (uint32_t)(ma + 0.5f);
 }
 
+void fuse_input_push(fuse_input_t *s, float raw_mv)
+{
+    float t = raw_mv * 10.0f;
+    if (t >  32000.0f) t =  32000.0f;
+    if (t < -32000.0f) t = -32000.0f;
+    s->hist[s->i] = (int16_t)(t < 0 ? t - 0.5f : t + 0.5f);
+    s->i = (uint8_t)((s->i + 1) % FUSE_STEADY_N);
+    if (s->n < FUSE_STEADY_N) s->n++;
+}
+
+void fuse_input_clear(fuse_input_t *s)
+{
+    s->n = 0;
+    s->i = 0;
+}
+
+float fuse_input_mean(const fuse_input_t *s)
+{
+    if (s->n == 0) return 0.0f;
+    int32_t sum = 0;
+    for (uint8_t k = 0; k < s->n; k++) sum += s->hist[k];
+    return (float)sum / (10.0f * (float)s->n);
+}
+
+bool fuse_input_steady(const fuse_input_t *s)
+{
+    if (s->n < FUSE_STEADY_N) return false;
+    int16_t lo = s->hist[0], hi = s->hist[0];
+    for (uint8_t k = 1; k < s->n; k++) {
+        if (s->hist[k] < lo) lo = s->hist[k];
+        if (s->hist[k] > hi) hi = s->hist[k];
+    }
+    float m = fuse_input_mean(s);
+    if (m < 0) m = -m;
+    float limit = FUSE_STEADY_SPAN_MV + m * (float)FUSE_STEADY_SPAN_PCT / 100.0f;
+    return (float)(hi - lo) <= limit * 10.0f + 0.01f;
+}
+
+fuse_cal_result_t fuse_input_calibrate(fuse_input_t *s)
+{
+    if (!fuse_input_steady(s)) return FUSE_CAL_UNSTEADY;
+    float m = fuse_input_mean(s);
+    if (m > FUSE_CAL_MAX_MV || m < -FUSE_CAL_MAX_MV) return FUSE_CAL_TOO_LARGE;
+    s->cal_mv = m;
+    s->cal_set = true;
+    return FUSE_CAL_OK;
+}
+
 bool fuse_drop_mv_from_reading(float value, const char *unit, float *mv_out)
 {
     if (!unit) return false;
