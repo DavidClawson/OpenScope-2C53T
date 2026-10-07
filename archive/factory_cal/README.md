@@ -1,12 +1,69 @@
 # Factory calibration — recovered MCU settings page
 
+## Pages in this directory
+
+Both are 4096 bytes: MCU internal flash `0x08006000–0x08006FFF`, stock's saved-settings
+page, which also carries the per-device calibration. Decode and diff them with
+`python3 scripts/cal_page_decode.py` (tests: `scripts/test_cal_page_decode.py`).
+
+| | `unit1_mcu_settings_page_0x08006000.bin` | `unit3_pristine_mcu_settings_page_0x08006000.bin` |
+|---|---|---|
+| Unit | bench unit #1 | unit #3 (issue #28 numbering: #1 bench, #2 Stlkv, #3 this one; **not** the "third unit" of issue #18 further down) |
+| Board | 2C53T-V1.4 | 2C53T-V1.4_20250507, back silkscreen `S:2606.` |
+| Captured | 2026-06-12 (committed inside the 28 KB bootloader archive, `22730c0`); extracted to this file 2026-08-14 | 2026-10-01 |
+| **Pristine** | **no** — had run stock, OpenScope and our dev builds; its calibration region was later verified byte-intact against the live page (2026-08-14) | **yes** — never custom-flashed; stock V1.2.0 out of the box. The first non-stock image it ever ran was the read-only v0.4.0 `caldump` |
+| CRC32 | `59E91404` | `711FB4A9` (the CRC the device printed) |
+| sha256 | `6004374abb123b99aa8a2516f66b0f6465032e817ebd3fb463c2559accdf621f` | `464f921d61f1e32c10e20bf7a9304c6835a823ea0077b82beec638fa69e34038` |
+| How captured | `scripts/dump_factory_bootloader.py` (`mem read` over OpenScope's USB CDC shell), sliced at `0x6000` out of the original 28 KB `../factory_iap_bootloader_2C53T.bin` (`22730c0`; the archive now stops at `0x6000`, #38) | v0.4.0 `caldump` flashed through stock IAP (case closed, no DFU, no option-byte write); LCD summary and hex pages photographed, page rebuilt from the photos, CRC32 matches the device's. Re-read over the `mem read` shell under `coldtrace` before any button press (`settings` `writes ok: 0`): byte-identical |
+
+Neither file is regenerable. `*.bin` is git-ignored here, so a new page needs
+`git add -f`.
+
+### Unit #3 (pristine) against unit #1 — 2026-10-01
+
+`python3 scripts/cal_page_decode.py --diff archive/factory_cal/unit1_mcu_settings_page_0x08006000.bin archive/factory_cal/unit3_pristine_mcu_settings_page_0x08006000.bin`
+reproduces the numbers the device itself printed (134 of 4096 bytes differ):
+
+| Region | Offsets | Differs | Reading |
+|---|---|---|---|
+| header / settings | `0x000–0x02F` | 7 / 48 | different saved settings; offsets `0x03 0x04 0x05 0x06 0x0D 0x12 0x25` |
+| **CALIBRATION** | `0x030–0x12F` | **127 / 256** | per-device values (1 settings byte + 120 table bytes + 6 trailing, below) |
+| tail | `0x130–0x1FF` | **0 / 208** | **byte-identical**, RAM-pointer-looking words included |
+| rest | `0x200–0xFFF` | 0 / 3584 | erased; `8KTA` at `0x800` on both |
+
+- **Per-device calibration holds at a pristine unit.** 120 of the 240 table bytes
+  (`0x038–0x127`) differ; block A words run 1622–1675 here (unit #1: 1598–1716), block B
+  `0x0Cxx` words 3210–3271 (unit #1: 3195–3306). Same layout, different values.
+- **The tail is not per-write garbage.** The earlier wording below ("uninitialised stack...
+  differs on every write, means nothing") is wrong as a general statement: unit #1's
+  2026-06-12 page and a never-flashed unit's page carry the *same* 208 bytes. What stays
+  true: it is not calibration, and stock's own later saves do change it (unit #1 live
+  differed ~124/208 on 2026-08-14). Whether the shared content is a factory-programmed
+  image or the deterministic residue of a fixed save path is **not established**.
+- **`0x030` is a settings word, not calibration.** `0x030–0x031` is `saved_mode_word`
+  (`scripts/stock_settings.py`); unit #3 has `0x0100` there, so one of the 127 "CALIBRATION"
+  bytes is a settings byte. The device's region split starts the region at `0x030` and is
+  kept as is so the numbers match the screen; the table itself is `0x038–0x127`.
+- **Two odd trailing words.** `0x128` and `0x12C` do not follow the `xx 0C` high-byte
+  pattern of block B: unit #3 `0xFC04` / `0xB8B7`, unit #1 `0x04FB` / `0xB6B8` (their
+  neighbours `0x12A`/`0x12E` do, and equal the sentinel at `0x126` on each page). Possibly
+  a checksum or tag; unverified, and none of the simple 16-bit sums or xors of the table
+  match. The decoder flags them separately.
+
 ## `unit1_mcu_settings_page_0x08006000.bin`
 
 4096 bytes. MCU internal flash `0x08006000–0x08006FFF` from **bench unit #1**, stock's
-saved-settings page. Extracted 2026-08-14 from `../factory_iap_bootloader_2C53T.bin`,
-which is `0x7000` bytes long and therefore spans `0x08000000–0x08007000` — the settings
-page is inside it. That file was committed 2026-06-12 under a name that says
-"bootloader", so nobody realised it also carried the settings page.
+saved-settings page. Extracted 2026-08-14 from `../factory_iap_bootloader_2C53T.bin` as
+committed 2026-06-12 (`22730c0`), which was `0x7000` bytes long and therefore spanned
+`0x08000000–0x08007000` — the settings page was inside it, under a name that says
+"bootloader", so nobody realised it also carried the settings page. Since #38 that archive
+stops at `0x6000` (below), so this file is the page's only copy in the working tree; git
+history keeps the original:
+
+```
+git show 22730c0:archive/factory_iap_bootloader_2C53T.bin | tail -c 4096 | shasum -a 256
+# 6004374abb123b99aa8a2516f66b0f6465032e817ebd3fb463c2559accdf621f  (this file)
+```
 
 ```
 sha256  6004374abb123b99aa8a2516f66b0f6465032e817ebd3fb463c2559accdf621f
@@ -27,14 +84,14 @@ unit #1. Result, read off the device:
 |---|---|---|---|
 | header / settings | `0x000–0x02F` | ~15 / 48 | stock rewrote its settings — expected |
 | **CALIBRATION** | `0x030–0x12F` | **0 / 256** | **byte-identical to this file** |
-| tail (RAM garbage) | `0x130–0x1FF` | ~124 / 208 | uninitialised stack in stock's 512 B staging buffer; differs on every write, means nothing |
+| tail | `0x130–0x1FF` | ~124 / 208 | not calibration; changed when stock re-saved its settings. *(Originally written as "RAM garbage ... differs on every write, means nothing" — wrong, see the 2026-10-01 note above: the tail is identical on a pristine unit.)* |
 
 Whole-page diff was 139 bytes across `0x005–0x1FB`, which looked alarming until it
 was split by region. **The calibration did not move.** Unit #1 still holds its factory
 values, this file is a byte-exact copy of them, and stock never overwrote them with
 its compiled-in defaults during the July/August bench sessions.
 
-Note the method: the whole-page byte count conflated a meaningless garbage tail with
+Note the method: the whole-page byte count conflated the non-calibration tail with
 the data that matters and would have supported either conclusion. The per-region split
 is what made it a measurement rather than an argument.
 
@@ -46,11 +103,35 @@ bootloader archive to its nominal 24 KB would have destroyed it silently — the
 would still be a valid bootloader image, and nothing would have flagged the loss.
 Copying it out under a name that says what it is removes that failure mode.
 
-**Do not delete, truncate, or "clean up" either this file or
-`../factory_iap_bootloader_2C53T.bin`.** They are not regenerable: no firmware we hold
-computes these values from a measurement (an exhaustive scan of the stock image found
-`master_init` to be the only writer of that RAM region), so if the physical page is ever
-erased there is nothing to restore it from except this copy.
+**Do not delete, truncate, or "clean up" the page files in this directory.** They are
+not regenerable: no firmware we hold computes these values from a measurement (an
+exhaustive scan of the stock image found `master_init` to be the only writer of that RAM
+region), so if a unit's physical page is ever erased there is nothing to restore it from
+except its copy here.
+
+With unit #1's page here under its own name, `../factory_iap_bootloader_2C53T.bin` no
+longer carries it: #38 trimmed that archive to its 24 KB of code, because the full 28 KB
+file, written whole by the recovery recipe, put unit #1's calibration on whatever unit was
+being recovered. Nothing was lost: the 4096 bytes cut off are this file, byte for byte.
+
+| `../factory_iap_bootloader_2C53T.bin` | bytes | sha256 |
+|---|---|---|
+| before #38 (`22730c0`) | 28,672 (`0x7000`) | `0c9ec7d642d233ea09c87274867ad3460e1dbec37c4332f7edb8f836175630c7` |
+| now | 24,576 (`0x6000`) | `7a6201ee16ce155675f1d235e468edfdce7a736318f2591d54a221d4ad06566b` |
+
+The trimmed file is the first `0x6000` bytes of the old one, and also byte-identical to
+`0x08000000–0x08005FFF` of never-flashed unit #3, so it is the shared IAP code, not
+anything of unit #1's. Unit #3's 28 KB dump (2026-09-30, `scripts/dump_factory_bootloader.py`
+when it still read `0x7000`) is not in the repo, but its sha256 can be rebuilt from files
+that are:
+
+```
+cat ../factory_iap_bootloader_2C53T.bin unit3_pristine_mcu_settings_page_0x08006000.bin | shasum -a 256
+# dc3d8b7daa1fe0224d140a4fc9191daaa27b7c1a2fff5f523f9047d7235f8dae  (unit #3's 0x08000000-0x08006FFF)
+```
+
+`scripts/test_factory_iap_archive.py` pins the size, the hashes and the docs that quote
+them.
 
 ## What is established, and what is not
 
@@ -59,7 +140,7 @@ the stock image at `0x0802D1BE–0x0802D506`; stock falls back to those defaults
 page's sentinel is erased or zero; and nothing in any firmware we have reconstructs the
 recovered values.
 
-**NOT established — n = 1.** "Differs from the compiled-in defaults" is proven. "Differs
+**NOT established — n = 1.** *(Superseded: per-device calibration is established at n ≥ 3, see below. Kept as written.)* "Differs from the compiled-in defaults" is proven. "Differs
 *between units*" is not. These could be a per-unit trim written at manufacture, or one
 constant factory table flashed to every device. Only a second unit's page decides it, and
 that distinction is the whole question of whether this data is irreplaceable.
@@ -76,7 +157,9 @@ is usually smaller than the file count suggests.
 
 ## Layout
 
-Not yet decoded. Current reading: the stock RAM table it feeds
+Decoded in part by `scripts/cal_page_decode.py` (region map, tables, flagged words); see issue #28 for the
+bank/range/channel reading of the table, which comes from stock's code and is not bench-verified.
+Original note, kept: current reading: the stock RAM table it feeds
 (`0x20000358–0x2000044A`, 242 bytes) is **4 sub-tables of 30 `uint16`**, with the regime
 change at `0x20000394` — which is the address the documented meter DAC formula already
 used for "upper bounds". Decoding is required for a *re-calibration* feature; it is **not**
@@ -99,7 +182,7 @@ the live-hardware verification above established:**
 |---|---|---|---|
 | header / settings | `0x003–0x012` | 16 B | per-unit settings, expected |
 | **CALIBRATION** | `0x025–0x12E` | **266 B** | **per-device values — see below** |
-| garbage tail | `0x180–0x1FB` | 124 B | uninitialised staging buffer, means nothing |
+| tail | `0x180–0x1FB` | 124 B | not calibration; not "means nothing" either (see 2026-10-01 note: identical on a pristine unit) |
 | erased | `0x1FC–0xFFF` | **0 B** | 3580 bytes of `0xFF`, byte-identical |
 
 **The calibration region is structured, not random.** It is an array of 16-bit LE
@@ -161,3 +244,18 @@ block 1.
 Dendi's page carries a handful of out-of-range outliers (62808, 50862, 27857, 27887, 31944)
 scattered through otherwise well-formed entries; not yet explained, and worth keeping in mind
 before treating any single unit's page as a clean reference.
+
+## `unlabelled_rev_saulvalenzuela23_mcu_settings_page_0x08006000.bin` — 2026-10-05
+
+Contributed by @saulvalenzuela23 in [issue #28](https://github.com/DavidClawson/OpenScope-2C53T/issues/28#issuecomment-5949549179) for the early, unlabelled board revision (see `docs/board_revisions.md` and #37). Shipped with stock 1.0.6, updated to 1.2.0 through the stock IAP before `caldump`. Rebuilt from the `caldump` LCD pages; CRC32 `A9DFD19B` and 345 non-FF bytes are what the device printed. sha256 `8bb7237e1962254afc305c8ed73dac19288445a21f99a1654fe1199b4d65b124`.
+
+What `scripts/cal_page_decode.py` shows against the two V1.4 pages:
+
+| | Reading |
+|---|---|
+| Signature | `0x55`, valid-normal-restore |
+| Sentinel B[59] (`0x126`) | `3251`, valid |
+| Calibration `0x030–0x12F` | same layout; block A 1558..1661 and block B 3161..3251, close to the V1.4 ranges; the known ODD pair at `0x128`/`0x12C` is present |
+| Word `0x038` (first table-A word) | **`0xE61F` (58911)**, where both V1.4 pages hold ~1600 (`0x0645`, `0x0659`). The CRC matches the device, so it is the stored value, not a transcription error. Its meaning on this revision is open. |
+| Tail `0x130–0x1FF` | differs in 207/208 bytes from the V1.4 pages, which are byte-identical to each other there: the tail is not per-unit calibration, and it is not shared across board revisions/factory firmware either |
+| Rest `0x200–0xFFF` | erased except 4 bytes from `0x800`, as on V1.4 |

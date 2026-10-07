@@ -1,5 +1,13 @@
 #!/usr/bin/env python3
-"""Dump the factory IAP bootloader (0x08000000-0x08007000, 28KB) over the CDC shell.
+"""Dump the factory IAP bootloader (0x08000000-0x08006000, 24KB) over the CDC shell.
+
+Stops at 0x08006000 on purpose. 0x08006000-0x08006FFF is NOT bootloader code: it
+is stock's settings page, which carries the unit's own factory calibration. The
+archive this script writes by default is what the DFU guide's full factory
+restore flashes to 0x08000000 on *other* units, so a dump that included the page
+put this unit's calibration on every unit restored from it (issue #38). Back the
+page up on its own instead (README, "Back up your factory calibration first";
+`mem read 0x08006000 1024`), and keep it out of this archive.
 
 Reads internal flash from app context via the debug shell's `mem read` command
 (64 words / 256 bytes per call), so RDP never gets in the way. Run on a unit
@@ -19,7 +27,7 @@ import serial
 
 PORT_GLOBS = ["/dev/cu.usbmodem*", "/dev/tty.usbmodem*"]
 BASE = 0x08000000
-SIZE = 0x7000  # 28KB: factory IAP bootloader region (app slot starts 0x08007000)
+SIZE = 0x6000  # 24KB: IAP code only. 0x08006000 = per-unit settings/cal page (#38)
 CHUNK_WORDS = 64  # shell cap per `mem read`
 
 WORD_RE = re.compile(r"^0x([0-9A-Fa-f]{8}):((?:\s+[0-9A-Fa-f]{8})+)\s*$", re.M)
@@ -94,7 +102,7 @@ def main():
     # Sanity: Cortex-M vector table — initial SP in SRAM, reset vector in this region (thumb bit set)
     sp, rv = struct.unpack_from("<II", blob, 0)
     sp_ok = 0x20000000 <= sp <= 0x20038000
-    rv_ok = 0x08000000 <= (rv & ~1) < 0x08007000 and (rv & 1)
+    rv_ok = BASE <= (rv & ~1) < BASE + SIZE and (rv & 1)
     print(f"initial SP: 0x{sp:08X} {'OK' if sp_ok else 'SUSPECT'}")
     print(f"reset vec : 0x{rv:08X} {'OK (in-region thumb)' if rv_ok else 'SUSPECT'}")
     ff_tail = len(blob) - len(blob.rstrip(b"\xff"))
