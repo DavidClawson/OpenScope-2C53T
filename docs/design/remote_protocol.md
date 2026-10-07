@@ -1,6 +1,7 @@
 # OpenScope Remote Protocol — design spec
 
-**Status:** design, not implemented. Written 2026-08-13 in answer to
+**Status:** §6 first task implemented, plus `BUTTON` (M4) and `GET_METER` (M3 one-shot);
+see §9 for what changed from this design and why. Written 2026-08-13 in answer to
 [issue #10](https://github.com/DavidClawson/OpenScope-2C53T/issues/10) (PC remote view/control).
 
 **Audience:** anyone who wants to build the host-side tool or the firmware-side endpoint.
@@ -273,7 +274,7 @@ u8   unit_len
 u8[] unit                ASCII, e.g. "V", "kOhm"
 ```
 
-Fixed part is 18 bytes. Sending `raw_bcd` alongside `value` is deliberate: the per-device
+Fixed part is 16 bytes up to and including `unit_len` (the implementation, `esp_comm.h`, appends a length-prefixed display string). Sending `raw_bcd` alongside `value` is deliberate: the per-device
 calibration problem means a host log should record what the instrument saw, not only what it
 concluded.
 
@@ -451,3 +452,42 @@ good configuration.
 - [`docs/stock_vs_openscope.md`](../stock_vs_openscope.md) — feature comparison; remote control
   is one of the things stock cannot do at all
 - `scripts/serial_cmd.py` — the existing minimal host driver; start here
+
+---
+
+## 9. Implementation notes (2026-10-01)
+
+What exists now: `esp_comm` bound to CDC (`usb_debug.c`), host tool
+`tools/openscope_host/` (`openscope ports|info|press|meter|shell|screenshot`) and an MCP
+server over it. Gated by `scripts/test_remote_proto.py` (C suite + guard mutations) and
+`scripts/test_openscope_host.py` (host suites, including an end-to-end run against the real
+`esp_comm.c` compiled into a ctypes shim).
+
+Where the implementation departs from, or sharpens, the design above:
+
+| Topic | Design said | Implemented | Why |
+|---|---|---|---|
+| STATUS payload | `device_status_t` | explicit little-endian v1 layout, protocol version in byte 0 (`esp_comm.h`) | a struct dump's enum width and padding depend on the ABI |
+| Unimplemented commands | stubs ACK | `NAK(UNSUPPORTED)`; staging handlers compiled only with `ESP_COMM_TRANSFER_STUBS=1` | an ACK for dropped data is a false success report |
+| `BUTTON` | TODO stub | ACK only after `button_scan_inject()` queued it; `NAK(NOT_READY)` if the queue is full; id range checked | same |
+| Malformed frames | resync on next `0xAA` | bad checksum and oversize length answer NAK; an oversize frame's announced bytes are swallowed | §3.7 "never silence"; the bytes must not reach the shell |
+| Truncated frame | — | abandoned after `ESP_RX_GAP_MS` (50 ms) of silence, **silently** | no request ids: an unsolicited NAK would be taken as the reply to the host's *next* request (found by the e2e suite) |
+| Demux | in `vUsbDebugTask` | `esp_comm_route()` in `esp_comm.c` | host-testable |
+| Host decoder | — | lengths above 4 KB are noise | a stray `0xAA` announcing a huge length would stall decoding |
+| Host after an error | — | waits > 50 ms and drains before the next request | so nothing stale lands in, or answers, the next request |
+| `GET_METER` payload | §3.5 | §3.5 plus length-prefixed display text; `NOT_READY` before the first reading; `UNSUPPORTED_IN_MODE` outside meter mode | keeps "OL" etc.; never a zero reading, never the frozen last reading |
+| STATUS battery | — | flag bit3 = battery unknown (no sample yet, e.g. booted on USB) | 0 % / 0 mV is not a measurement |
+| Version | `"0.2.0-dev"` | the build string | the constant was stale |
+
+Transport health (issue #39): the Artery CDC class ignores `SET_CONTROL_LINE_STATE`, so a
+wrapped setup handler records DTR. After the host drops DTR (1 → 0: it closed the port) output
+is dropped instead of costing a 1 s stall per write; a host that never raises DTR is still
+answered. With DTR open, a stall whose IN endpoint is still VALID is a host that stopped reading
+(counted, left alone); two consecutive stalls with the endpoint NAK/disabled — packet taken,
+completion lost — trigger a soft disconnect/reconnect, which the host tool handles as a replug
+(re-sending only queries, never a BUTTON that may already have acted). `usbstat` shows the counters and the endpoint register
+captured at the last stall; `usbstat heal on|off` exists for A/B. **Hardware status (2026-10-01):**
+EXP-61 could not reproduce the wedge on demand (48 MB clean); EXP-66 (PR #48's branch) caught a natural
+one two hours into a session — two consecutive lost-completion stalls during an `opread` dump — and the
+heal fired once: the port re-enumerated by itself, no reset, no replug. One occurrence; the wedge's
+mechanism is still open, and PR #48 keeps the triggering stall's snapshot in its own fields.
