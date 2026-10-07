@@ -1,9 +1,9 @@
 /*
  * ESP32 Communication Protocol Tests
  *
- * Build:
- *   gcc -o tests/test_esp_comm tests/test_esp_comm.c src/drivers/esp_comm.c \
- *       -Isrc/drivers -O2
+ * Build (the module/firmware staging flow is still TODO on the flash side,
+ * so its handlers are only compiled in with ESP_COMM_TRANSFER_STUBS=1):
+ *   make test-esp-comm
  */
 
 #include <stdio.h>
@@ -168,11 +168,12 @@ static void test_status_response(void)
 
     ASSERT(ok, "Status response valid");
     ASSERT(cmd == ESP_RSP_STATUS, "Response type is STATUS");
-    ASSERT(len == sizeof(device_status_t), "Status size correct");
-
-    device_status_t *status = (device_status_t *)payload;
-    ASSERT(status->battery_pct == 100, "Battery shows 100%");
-    ASSERT(status->fw_state == FW_UPDATE_IDLE, "FW state is IDLE");
+    /* STATUS v1 is an explicit byte layout (esp_comm.h), not a struct dump;
+     * the full layout is covered by test_remote_proto.c. With no status
+     * provider bound every field is zero rather than an invented value. */
+    ASSERT(len >= ESP_STATUS_FIXED_LEN, "Status has the v1 fixed part");
+    ASSERT(payload[0] == ESP_PROTO_VERSION, "Status byte 0 is the protocol version");
+    ASSERT(payload[2] == 0, "Unbound battery reads 0, not a made-up 100%");
 }
 
 static void test_button_command(void)
@@ -189,8 +190,11 @@ static void test_button_command(void)
 
     uint8_t cmd;
     uint16_t len;
-    parse_response(&cmd, NULL, &len);
-    ASSERT(cmd == ESP_RSP_ACK, "Button press acknowledged");
+    uint8_t payload[8];
+    parse_response(&cmd, payload, &len);
+    /* No injector bound: the press cannot happen, so it must not be ACKed. */
+    ASSERT(cmd == ESP_RSP_NAK && payload[0] == ESP_ERR_UNSUPPORTED,
+           "Button press without an injector is NAKed (UNSUPPORTED)");
 }
 
 static void test_module_transfer(void)
