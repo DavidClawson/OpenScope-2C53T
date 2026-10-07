@@ -86,6 +86,11 @@ void status_bar_invalidate(void)
 void draw_info_bar(void)
 {
     const theme_t *th = theme_get();
+    /* The meter's bottom edge is its softkey bar (softkey UI P1). */
+    if (current_mode == MODE_MULTIMETER) {
+        meter_softkeys_draw();
+        return;
+    }
     lcd_fill_rect(0, LCD_HEIGHT - 16, LCD_WIDTH, 16, th->status_bar_bg);
 
     uint16_t ib = th->status_bar_bg;
@@ -162,14 +167,6 @@ void draw_info_bar(void)
                              ss->ch2.enabled ? th->ch2 : th->text_secondary,
                              ib, &font_small);
         }
-        break;
-    case MODE_MULTIMETER:
-        font_draw_string(4, LCD_HEIGHT - 14, meter_submode_name(meter_submode),
-                         th->ch1, ib, &font_small);
-        font_draw_string(140, LCD_HEIGHT - 14, "<L/R>",
-                         th->text_secondary, ib, &font_small);
-        font_draw_string(200, LCD_HEIGHT - 14, "Auto Range",
-                         th->success, ib, &font_small);
         break;
     case MODE_SIGNAL_GEN:
         font_draw_string(4, LCD_HEIGHT - 14, "Sine 1.000kHz",

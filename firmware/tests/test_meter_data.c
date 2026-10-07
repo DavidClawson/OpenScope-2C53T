@@ -3030,6 +3030,38 @@ static int test_live_ol_second_spelling_and_leading_blanks(void)
     return 1;
 }
 
+
+/* Continuity threshold (2026-10-06): unit #1 read 0.14 Ohm on shorted leads
+ * as a plain resistance frame and never beeped. */
+static int test_continuity_threshold_rule(void)
+{
+    meter_reading_t r;
+    memset(&r, 0, sizeof r);
+    r.valid = true;
+    r.result_class = METER_RESULT_NORMAL;
+    r.unit_suffix = "Ohm";
+    r.value = 0.14f;
+    ASSERT(meter_continuity_is_short(&r, 30.0f));       /* shorted leads */
+    r.value = 29.9f;
+    ASSERT(meter_continuity_is_short(&r, 30.0f));
+    r.value = 30.0f;
+    ASSERT(!meter_continuity_is_short(&r, 30.0f));      /* threshold is exclusive */
+    ASSERT(meter_continuity_is_short(&r, 50.0f));
+    r.unit_suffix = "kOhm";
+    r.value = 0.02f;                                    /* 20 Ohm, but in kOhm */
+    ASSERT(!meter_continuity_is_short(&r, 30.0f));
+    r.unit_suffix = "Ohm";
+    r.result_class = METER_RESULT_OVERLOAD;             /* OL = open */
+    ASSERT(!meter_continuity_is_short(&r, 30.0f));
+    r.result_class = METER_RESULT_CONTINUITY;           /* the chip's own flag */
+    ASSERT(meter_continuity_is_short(&r, 30.0f));
+    r.result_class = METER_RESULT_NORMAL;
+    r.value = 0.14f;
+    r.valid = false;                                    /* stale / no reading */
+    ASSERT(!meter_continuity_is_short(&r, 30.0f));
+    return 1;
+}
+
 int main(void)
 {
     printf("Meter data frame tests\n");
@@ -3108,6 +3140,7 @@ int main(void)
     TEST(current_submodes_do_not_expose_unproven_microamp_unit);
     TEST(snapshot_returns_coherent_latest_completed_reading);
     TEST(snapshot_rejects_concurrent_two_writer_window);
+    TEST(continuity_threshold_rule);
 
     printf("\n%d/%d tests passed\n", tests_passed, tests_run);
     return (tests_passed == tests_run) ? 0 : 1;

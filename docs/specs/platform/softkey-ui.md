@@ -1,7 +1,7 @@
 # Spec: Softkey UI
 
 **Track:** platform
-**Stage now:** S0 (agreed 2026-10-06, mockups below; nothing built)
+**Stage now:** **S1** (2026-10-06): P0 + P1 (meter) built and shown on unit #1. Scope (P2) not started.
 **Champion:** David (design), Claude (implementation)
 
 ## What it is
@@ -56,6 +56,37 @@ None new. Constraints:
 - **Static RAM:** the coldtrace image has ~110 B free, so softkey state goes on the heap (the `scope_mask` pattern).
 - **Font size:** the meter's main reading needs a ~88 px digit font. Today's largest is 39 px (`scripts/generate_font.py`). That's flash only, and there's ~370 KB free.
 - **Flicker:** redraws must draw over the old content instead of blanking first (the meter flash, 2026-10-06).
+
+## Where it stands (2026-10-06)
+
+**Built (P0 + P1):**
+- **Softkey bar component** (`src/ui/softkey.{h,c}`): table-driven, `softkey_bar_valid()` enforces the label-has-a-handler rule.
+- **Flicker-free text** (`font_draw_string_box`).
+- **Popups in every mode:** outside the scope they're a tick-timed overlay sized to the text. The scope's own popup is unchanged.
+- **Two fonts:** a 70 px tabular digit font and a 38 px unit font with Ω, µ and ° (`scripts/generate_font.py` gained `bignum`/`unit`, `--tabular`, `--spacing`).
+
+**Meter:**
+- **Big view** replaces "Full"; **Limits** (pass/fail) is new; Graph, Stats and Fuse stay, re-labelled.
+- **OK = instant Hold**; **Relative** is reachable (F45).
+- **Function changes run in the meter poll task:** a press is handled in 0.21 s, where it took 1.4–4.5 s (F35).
+- **Continuity:** short below a threshold (default 30 Ω, softkey 10/30/50/100), with one rule for screen and beep (F12), host-tested.
+
+**Measured on unit #1:**
+- Softkey changes persist across a reboot (the first image skipped the settings hook; caught and fixed).
+- Static RAM went *down* 936 B because the Full view's waveform panel was removed. New meter state is one heap block.
+
+**Bench, unit #1, image Build Oct 6 2026 20:58:34:**
+- **Final full regression: GREEN 3/3** (trigger PASS, mask 10/10, coupling 17/17).
+- **On the way there:**
+  - **Mask criterion H failed 2 of 3 runs.** Two quick tolerance presses landed one step short, because the acquisition task can sleep longer than the button's 100 ms ack wait. It now builds on the pending request: 3/3 mask runs plus the full run passed.
+  - **One coupling run saw a cal dump differ.** It didn't reproduce in 4 runs.
+  - **One full run stalled the shell for over 60 s,** during the trigger suite's centering, while the host was running five firmware builds. No reset (uptime confirms). It didn't reproduce on the clean rerun. **Unexplained**, so watch for it.
+- Logs: `captures/regression/2026-10-06_Oct_6_2026_20_19_45*`, `…_p1_masktol_fix_run*`, `…_20_58_34*`.
+
+**Open:**
+- The Fuse view still blanks its whole area on every update; its redraw is due with the fuse graphics redesign.
+- Graph and Stats keep their old layouts.
+- The `coldtrace` image offers functions it can't measure (only DC V works there); release decision pending.
 
 ## Stage ladder
 

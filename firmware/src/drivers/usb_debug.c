@@ -4058,10 +4058,11 @@ static void print_i100(const char *label, float value, const char *suffix)
 static const char *meter_layout_name(uint8_t layout)
 {
     switch (layout) {
-    case METER_LAYOUT_FULL:  return "full";
-    case METER_LAYOUT_CHART: return "chart";
-    case METER_LAYOUT_STATS: return "stats";
-    case METER_LAYOUT_FUSE:  return "fuse";
+    case METER_LAYOUT_BIG:    return "big";
+    case METER_LAYOUT_CHART:  return "graph";
+    case METER_LAYOUT_STATS:  return "stats";
+    case METER_LAYOUT_FUSE:   return "fuse";
+    case METER_LAYOUT_LIMITS: return "limits";
     default:                 return "?";
     }
 }

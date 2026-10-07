@@ -127,11 +127,16 @@ extern volatile bool          persist_enabled;
 #define SETTINGS_OSC_ITEM_COUNT 8
 #define SETTINGS_ABOUT_LINES    5
 #define METER_SUBMODE_COUNT     11
-#define METER_LAYOUT_COUNT      4
-#define METER_LAYOUT_FULL       0
-#define METER_LAYOUT_CHART      1
+/* Meter views (softkey UI, 2026-10-06), cycled by the View softkey (PRM):
+ * Big -> Graph -> Stats -> Limits -> Fuse. Numbering keeps saved settings
+ * meaningful: 0 was "Full", now the big reading that replaced it. */
+#define METER_LAYOUT_COUNT      5
+#define METER_LAYOUT_BIG        0
+#define METER_LAYOUT_FULL       METER_LAYOUT_BIG   /* old name */
+#define METER_LAYOUT_CHART      1   /* "Graph" */
 #define METER_LAYOUT_STATS      2
 #define METER_LAYOUT_FUSE       3
+#define METER_LAYOUT_LIMITS     4   /* pass/fail against Low/High */
 
 /* Fuse tester sub-views (cycled with SELECT in fuse layout) */
 #define FUSE_VIEW_DETAIL        0   /* Single fuse: current + V_drop + R + bar */
@@ -188,6 +193,11 @@ void draw_scope_live_frame(void);  /* flicker-free trace-band update; falls
                                       cursors (see main.c scope branch) */
 void scope_show_popup(const char *text);
 bool scope_popup_active(void);
+/* Popups raised outside the scope (softkey UI P0). The display task calls
+ * this every loop in non-scope modes: 0 = nothing to do, 1 = drew the box,
+ * 2 = it just expired -- repaint the screen underneath. */
+int  ui_popup_overlay_service(bool screen_repainted);
+void ui_popup_overlay_cancel(void);
 
 /* The renderer's software display trigger, exported for bench validation
  * (`spi3 frame`): index the drawn window starts at for the CURRENT scope
@@ -214,6 +224,16 @@ bool meter_screen_needs_periodic_redraw(void);
 void meter_reset_minmaxavg(void);
 void meter_toggle_relative(void);
 void meter_toggle_hold(void);
+/* Softkey UI (docs/specs/platform/softkey-ui.md) */
+void     meter_hold_toggle_now(void);     /* OK: freeze the shown reading / back to live */
+void     meter_hold_release(void);
+bool     meter_hold_is_on(void);
+void     meter_function_step(int8_t dir); /* next/previous function (MOVE, LEFT/RIGHT) */
+void     meter_limits_nudge(int8_t dir);  /* UP/DOWN in the Limits view */
+bool     meter_softkey_press(int8_t slot);
+void     meter_softkeys_draw(void);
+uint32_t meter_softkeys_epoch(void);
+float    meter_continuity_threshold(void);   /* continuity beeps below this (Ohm) */
 void meter_toggle_debug_overlay(void);
 
 /* fuse_ui.c */

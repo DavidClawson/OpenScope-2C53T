@@ -20,11 +20,12 @@
 #include "font.h"
 #include "theme.h"
 #include "fuse_table.h"
+#include "softkey.h"
 #include <string.h>
 
 /* Layout constants */
 #define FUSE_TOP        18          /* Below status bar */
-#define FUSE_BOTTOM     (LCD_HEIGHT - 18)
+#define FUSE_BOTTOM     SOFTKEY_BAR_Y   /* above the softkey bar */
 #define FUSE_CONTENT_H  (FUSE_BOTTOM - FUSE_TOP)
 
 /* ═══════════════════════════════════════════════════════════════════

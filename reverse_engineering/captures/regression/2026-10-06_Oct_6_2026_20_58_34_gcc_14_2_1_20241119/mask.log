@@ -1,0 +1,18 @@
+Traceback (most recent call last):
+  File "/home/david/osc/scripts/mask_bench.py", line 268, in <module>
+    sys.exit(main())
+             ~~~~^^
+  File "/home/david/osc/scripts/mask_bench.py", line 112, in main
+    build = next((l for l in sc.version().splitlines() if l.startswith("Build:")), "?")
+                             ~~~~~~~~~~^^
+  File "/home/david/osc/scripts/bench.py", line 537, in version
+    return self.cmd("version", timeout).strip()
+           ~~~~~~~~^^^^^^^^^^^^^^^^^^^^
+  File "/home/david/osc/scripts/bench.py", line 427, in cmd
+    return self._t.exchange(line, timeout)
+           ~~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^
+  File "/home/david/osc/scripts/bench.py", line 224, in exchange
+    raise PromptTimeout(
+    ...<2 lines>...
+        "array." % (self.prompt, timeout, line, len(buf)))
+bench.PromptTimeout: no prompt b'>' within 3.0s after 'version' (got 0 bytes). Partial replies are NOT returned: a truncated dump parses fine and yields a wrong array.

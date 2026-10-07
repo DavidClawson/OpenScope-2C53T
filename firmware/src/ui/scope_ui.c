@@ -25,6 +25,7 @@
 #include "persistence.h"
 #include "fpga.h"
 #include "FreeRTOS.h"   /* pvPortMalloc — the X-Y snapshot buffers */
+#include "task.h"       /* xTaskGetTickCount — the out-of-scope popup overlay */
 #include "scope_trigger.h"
 #include "trig_edge.h"
 #include "scope_mask.h"
@@ -101,6 +102,17 @@ static bool popup_painted = false;
 
 #define POPUP_DURATION 10  /* ~500ms at 20fps */
 
+/* Popups outside the scope (2026-10-06, softkey UI P0; findings F15, F20).
+ * The scope's popup is counted in scope frames, and only the scope renderer
+ * counted them -- so a popup raised in the meter, siggen or settings never
+ * appeared there, and turned up stale on the next scope visit. Outside the
+ * scope it is now a tick-timed overlay the display task services, sized to
+ * its text instead of a fixed 200 px box. */
+#define POPUP_OVERLAY_MS 1200u
+static bool     ov_pending;
+static bool     ov_drawn;
+static uint32_t ov_until;
+
 void scope_show_popup(const char *text)
 {
     int i = 0;
@@ -109,8 +121,58 @@ void scope_show_popup(const char *text)
         i++;
     }
     popup_text[i] = '\0';
-    popup_frames = POPUP_DURATION;
-    popup_painted = false;
+    if (current_mode == MODE_OSCILLOSCOPE) {
+        popup_frames = POPUP_DURATION;
+        popup_painted = false;
+    } else {
+        popup_frames = 0;
+        ov_pending = true;
+        ov_drawn = false;
+        ov_until = xTaskGetTickCount() + pdMS_TO_TICKS(POPUP_OVERLAY_MS);
+    }
+}
+
+static void draw_overlay_box(void)
+{
+    const theme_t *th = theme_get();
+    const font_t *f = &font_large;
+    uint16_t tw = font_string_width(popup_text, f);
+    if (tw > LCD_WIDTH - 28) { f = &font_medium; tw = font_string_width(popup_text, f); }
+    uint16_t w = tw + 24;
+    if (w > LCD_WIDTH - 4) w = LCD_WIDTH - 4;
+    uint16_t h = (uint16_t)(f->height + 12);
+    uint16_t x = (uint16_t)((LCD_WIDTH - w) / 2);
+    uint16_t y = (uint16_t)((LCD_HEIGHT - h) / 2);
+    lcd_fill_rect(x, y, w, 1, th->highlight);
+    lcd_fill_rect(x, y + h - 1, w, 1, th->highlight);
+    lcd_fill_rect(x, y + 1, 1, h - 2, th->highlight);
+    lcd_fill_rect(x + w - 1, y + 1, 1, h - 2, th->highlight);
+    lcd_fill_rect(x + 1, y + 1, w - 2, 5, th->background);
+    font_draw_string_box(x + 1, y + 6, w - 2, popup_text, th->text_primary,
+                         th->background, f, FONT_ALIGN_CENTER);
+    lcd_fill_rect(x + 1, y + 6 + f->height, w - 2, (uint16_t)(h - 7 - f->height), th->background);
+}
+
+int ui_popup_overlay_service(bool screen_repainted)
+{
+    if (!ov_pending) return 0;
+    if ((int32_t)(xTaskGetTickCount() - ov_until) >= 0) {
+        ov_pending = false;
+        ov_drawn = false;
+        return 2;                       /* expired: caller repaints the screen */
+    }
+    if (!ov_drawn || screen_repainted) {
+        draw_overlay_box();
+        ov_drawn = true;
+        return 1;
+    }
+    return 0;
+}
+
+void ui_popup_overlay_cancel(void)
+{
+    ov_pending = false;
+    ov_drawn = false;
 }
 
 bool scope_popup_active(void)

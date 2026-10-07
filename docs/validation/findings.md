@@ -84,6 +84,24 @@ runs come in.
 | F44 | S3 | Ground markers `1`/`2` both sit mid-screen and overlap; under autofit they don't mean 0 V | read | `scope_ui.c:202-237` |
 | F45 | S2 | REL (relative) is unreachable; AUTO does function pick instead | read | `meter_ui.c:1213` (no caller) |
 
+## Status after softkey UI P0 + P1 (2026-10-06)
+
+The meter half of the redesign changed or removed these. **Fixed in code** means
+"fixed in the code and seen working on unit #1"; the checklist re-run still
+counts.
+
+| # | Status |
+|---|---|
+| F10 | Big view has no fixed "Range:" label. Graph and Stats still use the table units. |
+| F12 | **Fixed in code:** short = below a threshold (default 30 Ohm, softkey-adjustable), the same rule for beep and screen; host test `continuity_threshold_rule`. |
+| F15 | **Fixed outside the scope:** popups render as an overlay in meter, siggen and settings. Inside the scope: unchanged (P2). |
+| F20 | **Fixed outside the scope:** the overlay is sized to its text. Inside the scope: unchanged (P2). |
+| F24 | **Gone:** the "N/10" index was in the removed Full view. |
+| F35 | **Fixed:** function changes run in the meter poll task; a press is handled in 0.21 s. |
+| F42 | **Fixed:** HOLD shows the text that was on screen; REL keeps the reading's decimals. |
+| F45 | **Fixed:** REL is the Relative softkey. |
+| MT-* | `screens/meter.md` describes the old buttons; rewrite it for softkeys (spec S2). |
+
 ## G. From the first live run (2026-10-06, David, unit #1, Build Oct 6 10:04:11)
 
 User feedback, not code predictions. Each is a design change to agree, not a bug to confirm.

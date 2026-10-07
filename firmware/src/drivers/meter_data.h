@@ -147,6 +147,12 @@ extern meter_reading_t meter_reading;
  */
 bool meter_data_snapshot(meter_reading_t *out);
 
+/* Continuity verdict with a firmware threshold (2026-10-06). The meter chip
+ * flags continuity only in some frames; shorted leads usually arrive as a
+ * plain resistance (0.14 Ohm on unit #1, which never beeped). Short = the
+ * chip says so, or a normal reading in plain ohms below threshold_ohm. */
+bool meter_continuity_is_short(const meter_reading_t *r, float threshold_ohm);
+
 #ifdef METER_DATA_HOST_TESTS
 typedef enum {
     METER_DATA_TEST_HOOK_PROCESS_AFTER_WRITE_BEGIN = 1,

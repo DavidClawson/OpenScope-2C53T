@@ -108,33 +108,52 @@ Note: Entering an FFT view claims the shared memory pool (88KB). Returning to ti
 
 ## Multimeter Mode
 
-### Sub-mode Navigation
+The four buttons directly under the screen are **softkeys**: the bar along the
+bottom edge of the screen says what each one does, right above it, and its
+current value. Softkeys arrived with the softkey UI (2026-10-06; spec
+`docs/specs/platform/softkey-ui.md`).
+
+### Softkeys
+
+| Button | Big / Graph / Stats | Limits | Fuse |
+|--------|---------------------|--------|------|
+| **MOVE** | **Function**: next function | Function | Fuse type |
+| **SELECT** | **Reset**: min/max/avg, chart, histogram | **Low**: arrows move it; press again = set to the reading | Show: Detail / Multi / Scan |
+| **TRIGGER** | **Relative** on/off (zeros at the current reading). In Continuity: **Beep** threshold 10 / 30 / 50 / 100 Ohm | **High**, likewise | — |
+| **PRM** | **View**: Big -> Graph -> Stats -> Limits -> Fuse | View | View |
+
+### Other buttons
 
 | Button | Action |
 |--------|--------|
-| **LEFT** | Previous meter sub-mode |
-| **RIGHT** | Next meter sub-mode |
-| **OK** | Cycle layout: Full -> Chart -> Stats -> Full |
-| **AUTO** | Toggle relative/delta mode (REL) — zeros at current reading, shows deviation |
-| **TRIGGER** | Toggle auto-hold (HOLD) — freezes display when reading stabilizes |
-| **SELECT** | Reset min/max/avg tracking (also resets chart and histogram) |
+| **OK** | **Hold**: freeze the reading on screen now (HOLD badge); OK again = live |
+| **LEFT / RIGHT** | Previous / next function (Fuse view: fuse type) |
+| **UP / DOWN** | Limits view: move the highlighted limit. Fuse view: rating / threshold |
+| **AUTO** | Automatic function select (DC V / AC V) |
+| **SAVE** | Raw-frame debug overlay |
 
-### 11 Sub-modes
+Changing function is instant: the reading shows dashes while the meter chip
+switches in the background (~1.5 s in the `-meter` image). In the plain
+`coldtrace` image only DC volts is measured; other functions show `---`.
+
+### 11 Functions
 
 ```
 0: DC Voltage       6: Resistance
-1: AC Voltage       7: Continuity
+1: AC Voltage       7: Continuity  (short = below the Beep threshold, default 30 Ohm)
 2: DC Current (mA)  8: Diode Test
 3: DC Current (A)   9: Capacitance
 4: AC Current (mA) 10: Temperature
 5: AC Current (A)
 ```
 
-### 3 Display Layouts
+### 5 Views
 
-- **Full** — Large digits, bar graph, min/max/avg, range info. Classic DMM.
-- **Chart** — Compact reading on top, scrolling strip chart below with auto-scaling Y axis. Shows measurement trend over time.
-- **Stats** — Compact reading, min/max/avg/peak-to-peak statistics, and histogram of reading distribution.
+- **Big** — the reading in 70 px digits, unit underneath, one line of min/max (or the relative reference, or SHORT/OPEN). Readable across the bench.
+- **Graph** — compact reading, scrolling strip chart with an auto-scaled Y axis.
+- **Stats** — min/max/avg/peak-to-peak and a histogram of the readings.
+- **Limits** — pass/fail: a big PASS / FAIL box, the reading's position on a Low–High bar, pass and fail counts, and the last failing value. Entering it with a live reading sets Low/High to the reading ±5 %.
+- **Fuse** — fuse current tester (voltage drop across a fuse, in DC V).
 
 ---
 
@@ -272,15 +291,15 @@ Shows device info, pool status, heap free, license. **MENU** or **OK** to go bac
 | CH2    | Coupling DC/AC   |        -         |        -         |        -         |
 | UP     | V/div up         |        -         | Amplitude up     | Selection up     |
 | DOWN   | V/div down       |        -         | Amplitude down   | Selection down   |
-| LEFT   | Timebase down    | Prev sub-mode    | Duty cycle down  |        -         |
-| RIGHT  | Timebase up      | Next sub-mode    | Duty cycle up    |        -         |
-| OK     | Run/Stop         | Cycle layout     | Output on/off    | Enter / Toggle   |
-| PRM    | Cycle FFT views  |        -         | Freq presets     |        -         |
-| SELECT | Probe 1X/10X     | Reset min/max    | Cycle waveform   | Cycle comp type  |
-| MOVE   | Trigger edge     |        -         |        -         |        -         |
-| TRIGGER| Cursor mode      | Toggle HOLD      |        -         |        -         |
-| AUTO   | FFT auto-config  | Toggle REL       |        -         |        -         |
-| SAVE   | Screenshot       | Screenshot       | Screenshot       | Screenshot       |
+| LEFT   | Timebase down    | Prev function    | Duty cycle down  |        -         |
+| RIGHT  | Timebase up      | Next function    | Duty cycle up    |        -         |
+| OK     | Run/Stop         | Hold             | Output on/off    | Enter / Toggle   |
+| PRM    | Cycle FFT views  | Softkey: View    | Freq presets     |        -         |
+| SELECT | Probe 1X/10X     | Softkey (Reset)  | Cycle waveform   | Cycle comp type  |
+| MOVE   | Trigger edge     | Softkey (Func.)  |        -         |        -         |
+| TRIGGER| Cursor mode      | Softkey (Rel.)   |        -         |        -         |
+| AUTO   | FFT auto-config  | Auto function    |        -         |        -         |
+| SAVE   | Screenshot       | Debug overlay    | Screenshot       | Screenshot       |
 +--------+------------------+------------------+------------------+------------------+
 
 Note: When cursors are active in Oscilloscope mode, UP/DOWN moves the cursor

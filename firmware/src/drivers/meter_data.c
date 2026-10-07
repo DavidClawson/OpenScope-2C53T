@@ -1758,3 +1758,13 @@ float meter_data_get_bar_fraction(void)
 {
     return meter_reading.bar_fraction;
 }
+
+bool meter_continuity_is_short(const meter_reading_t *r, float threshold_ohm)
+{
+    if (!r->valid) return false;
+    if (r->continuity_beep || r->result_class == METER_RESULT_CONTINUITY)
+        return true;
+    if (r->result_class != METER_RESULT_NORMAL) return false;
+    if (!r->unit_suffix || strcmp(r->unit_suffix, "Ohm") != 0) return false;
+    return r->value >= 0.0f && r->value < threshold_ohm;
+}

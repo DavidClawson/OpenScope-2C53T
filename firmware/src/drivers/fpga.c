@@ -2665,6 +2665,28 @@ static void fpga_send_meter_poll_sequence(uint8_t submode)
                                   (uint8_t)(plan.start_word & 0x00FFU));
 }
 
+/* Function changes run HERE, not in the button task (softkey UI, 2026-10-06).
+ * fpga_set_meter_mode() waits for the meter chip to restart: ~1.4 s, up to
+ * ~4.5 s (F35), and called from the input task it froze every button for that
+ * long. The UI now changes function at once and shows dashes; this task
+ * applies the newest request, so a run of presses costs one transition. */
+static TaskHandle_t       meter_poll_handle;
+static volatile int16_t   meter_mode_request = -1;
+
+void fpga_request_meter_mode(uint8_t submode)
+{
+#if FPGA_WARM_HANDOFF_TEST && !FPGA_METER_SUBMODES
+    (void)submode;
+    return;
+#endif
+    if (!meter_poll_handle) {            /* no poll task in this build */
+        fpga_set_meter_mode(submode);
+        return;
+    }
+    meter_mode_request = submode;
+    xTaskNotifyGive(meter_poll_handle);
+}
+
 static void fpga_meter_poll_task(void *pv)
 {
     (void)pv;
@@ -2672,7 +2694,20 @@ static void fpga_meter_poll_task(void *pv)
     extern volatile uint8_t meter_submode;
 
     for (;;) {
-        vTaskDelay(pdMS_TO_TICKS(250));  /* ~4 Hz */
+        (void)ulTaskNotifyTake(pdTRUE, pdMS_TO_TICKS(250));  /* ~4 Hz, or a request */
+        int16_t req = meter_mode_request;
+        if (req >= 0 && fpga.initialized) {
+            meter_mode_request = -1;
+            if (current_mode == MODE_MULTIMETER) {
+                fpga_set_meter_mode((uint8_t)req);
+                /* Left the meter while the chip was switching? The display
+                 * task already put the scope's front end back, and this
+                 * transition just re-postured it for the meter. */
+                if (current_mode != MODE_MULTIMETER)
+                    fpga_set_meter_mux(false);
+            }
+            continue;
+        }
         if (fpga.initialized && current_mode == MODE_MULTIMETER &&
             !meter_transition_busy) {
             if (fpga_meter_needs_activation) {
@@ -6196,7 +6231,8 @@ QueueHandle_t fpga_create_tasks(void)
      * DMM screen: nothing polls, nothing decodes. */
     xTaskCreate(fpga_usart_tx_task,    "dvom_TX",   64,  NULL, 2, &tx_task_handle);
     xTaskCreate(fpga_usart_rx_task,    "dvom_RX",   128, NULL, 3, &rx_task_handle);
-    xTaskCreate(fpga_meter_poll_task,  "meter_poll", 64, NULL, 2, NULL);
+    /* 192, not 64: function changes (fpga_set_meter_mode) now run here. */
+    xTaskCreate(fpga_meter_poll_task,  "meter_poll", 192, NULL, 2, &meter_poll_handle);
 #elif FPGA_USART_SILENT_SCOPE
     /* USART-silent scope test: create NO USART/meter tasks (dvom_TX/dvom_RX/
      * meter_poll) — they are the ongoing PA2/PA3 traffic we're eliminating — and
@@ -6208,7 +6244,7 @@ QueueHandle_t fpga_create_tasks(void)
     xTaskCreate(fpga_usart_tx_task,    "dvom_TX",   64,  NULL, 2, &tx_task_handle);
     xTaskCreate(fpga_usart_rx_task,    "dvom_RX",   128, NULL, 3, &rx_task_handle);
     xTaskCreate(fpga_acquisition_task, "fpga",      256, NULL, 3, &acq_task_handle);
-    xTaskCreate(fpga_meter_poll_task,  "meter_poll", 64, NULL, 2, NULL);
+    xTaskCreate(fpga_meter_poll_task,  "meter_poll", 192, NULL, 2, &meter_poll_handle);
     xTaskCreate(fpga_meter_adc_sampler_task, "mtr_wave", 64, NULL, 2, NULL);
 #endif
 

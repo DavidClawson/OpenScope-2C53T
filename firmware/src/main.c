@@ -282,6 +282,9 @@ static redraw_gate_t siggen_gate = { 0, 0, 0, false, false };
  * exactly what draw_info_bar() prints, and the display loop repaints the
  * bar whenever it changes, whoever changed it. */
 static uint32_t g_info_bar_epoch;
+/* Set whenever this loop iteration repainted the current non-scope screen,
+ * so the out-of-scope popup is re-drawn on top of it (softkey UI P0). */
+static bool g_screen_painted;
 
 static uint32_t info_bar_epoch(void)
 {
@@ -303,6 +306,7 @@ static uint32_t info_bar_epoch(void)
 #endif
     } else if (current_mode == MODE_MULTIMETER) {
         h = redraw_epoch_mix(h, (uint32_t)meter_submode);
+        h = redraw_epoch_mix(h, meter_softkeys_epoch());
     }
     return h;
 }
@@ -479,8 +483,10 @@ static void vDisplayTask(void *pvParameters)
              * measurement was taken with the far end switched off. Bench A/B/A
              * 2026-08-17: HIGH -> 276 bytes returned, LOW -> 0, HIGH -> 276. */
             fpga_set_meter_mux(current_mode == MODE_MULTIMETER);
-            if (current_mode == MODE_OSCILLOSCOPE)
+            if (current_mode == MODE_OSCILLOSCOPE) {
                 scope_entered_frame = frame;
+                ui_popup_overlay_cancel();    /* scope popups are the scope's own */
+            }
             redraw_gate_invalidate(&scope_gate);
             redraw_gate_invalidate(&siggen_gate);
             last_rendered_mode = current_mode;
@@ -531,6 +537,7 @@ static void vDisplayTask(void *pvParameters)
                 } else if (current_mode == MODE_SETTINGS) {
                     draw_settings_screen();
                 }
+                g_screen_painted = true;
                 break;
             case DCMD_DRAW_SCOPE:
                 /* Always honoured: the sender changed scope state or
@@ -544,7 +551,10 @@ static void vDisplayTask(void *pvParameters)
                 }
                 break;
             case DCMD_DRAW_METER:
-                if (current_mode == MODE_MULTIMETER) draw_meter_screen();
+                if (current_mode == MODE_MULTIMETER) {
+                    draw_meter_screen();
+                    g_screen_painted = true;
+                }
                 break;
             case DCMD_DRAW_SIGGEN:
                 if (current_mode == MODE_SIGNAL_GEN) {
@@ -557,10 +567,14 @@ static void vDisplayTask(void *pvParameters)
                     draw_siggen_screen(frame);
                     redraw_gate_mark(&siggen_gate, siggen_ui_epoch(),
                                      frame, REDRAW_FULL);
+                    g_screen_painted = true;
                 }
                 break;
             case DCMD_DRAW_SETTINGS:
-                if (current_mode == MODE_SETTINGS) draw_settings_screen();
+                if (current_mode == MODE_SETTINGS) {
+                    draw_settings_screen();
+                    g_screen_painted = true;
+                }
                 break;
             case DCMD_DRAW_STATUS_BAR:
                 draw_status_bar();
@@ -741,8 +755,30 @@ static void vDisplayTask(void *pvParameters)
                 last_meter_update = meter_screen_last_reading_display_update;
                 last_meter_frame  = frame;
                 last_meter_submode = meter_submode;
+                g_screen_painted = true;
             }
         }
+
+        /* Popups outside the scope (softkey UI P0, findings F15/F20): drawn
+         * over the screen, re-drawn after any repaint, and the screen
+         * repainted under them when they expire. */
+        if (current_mode != MODE_OSCILLOSCOPE) {
+            if (ui_popup_overlay_service(g_screen_painted) == 2) {
+                if (current_mode == MODE_MULTIMETER) {
+                    if (meter_layout != METER_LAYOUT_BIG &&
+                        meter_layout != METER_LAYOUT_LIMITS)
+                        meter_screen_invalidate();
+                    draw_meter_screen();
+                } else if (current_mode == MODE_SIGNAL_GEN) {
+                    draw_siggen_screen(frame);
+                    redraw_gate_mark(&siggen_gate, siggen_ui_epoch(),
+                                     frame, REDRAW_FULL);
+                } else if (current_mode == MODE_SETTINGS) {
+                    draw_settings_screen();
+                }
+            }
+        }
+        g_screen_painted = false;
 
         frame++;
     }

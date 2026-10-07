@@ -35,6 +35,7 @@ C_SOURCES += src/drivers/lcd.c
 C_SOURCES += src/ui/status_bar.c
 C_SOURCES += src/ui/scope_ui.c
 C_SOURCES += src/ui/meter_ui.c
+C_SOURCES += src/ui/softkey.c
 C_SOURCES += src/ui/siggen_ui.c
 C_SOURCES += src/ui/settings_ui.c
 C_SOURCES += src/ui/component_ui.c
@@ -102,6 +103,8 @@ C_SOURCES += src/fonts/font_small.c
 C_SOURCES += src/fonts/font_medium.c
 C_SOURCES += src/fonts/font_large.c
 C_SOURCES += src/fonts/font_xlarge.c
+C_SOURCES += src/fonts/font_huge.c
+C_SOURCES += src/fonts/font_unit.c
 
 # FFT / DSP module
 ifneq ($(findstring FFT,$(FEATURES)),)
