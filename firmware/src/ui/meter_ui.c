@@ -26,6 +26,7 @@
 #include "meter_autoselect.h"
 #include "softkey.h"
 #include "fuse_table.h"
+#include "fuse_model.h"
 #include "FreeRTOS.h"
 #include <stdio.h>
 #include "fpga.h"
@@ -954,16 +955,21 @@ void meter_hold_toggle_now(void)
     scope_show_popup("HOLD");
 }
 
-void meter_function_step(int8_t dir)
+static void meter_function_set(uint8_t m)
 {
-    uint8_t m = meter_submode < METER_SUBMODE_COUNT ? meter_submode : 0;
-    if (dir > 0) m = (uint8_t)((m + 1) % METER_SUBMODE_COUNT);
-    else         m = (m == 0) ? (uint8_t)(METER_SUBMODE_COUNT - 1) : (uint8_t)(m - 1);
     meter_submode = m;
     meter_reset_minmaxavg();
     meter_hold_release();
     if (meter_rel_enabled) meter_toggle_relative();     /* a reference in another function means nothing */
     fpga_request_meter_mode(meter_submode);             /* in the background: the UI shows dashes meanwhile */
+}
+
+void meter_function_step(int8_t dir)
+{
+    uint8_t m = meter_submode < METER_SUBMODE_COUNT ? meter_submode : 0;
+    if (dir > 0) m = (uint8_t)((m + 1) % METER_SUBMODE_COUNT);
+    else         m = (m == 0) ? (uint8_t)(METER_SUBMODE_COUNT - 1) : (uint8_t)(m - 1);
+    meter_function_set(m);
 }
 
 /* ── Limits (pass/fail) ───────────────────────────────────────────── */
@@ -1324,6 +1330,10 @@ static void skp_view(void)
     uint8_t i = 0;
     while (i < METER_LAYOUT_COUNT && meter_view_order[i] != meter_layout) i++;
     meter_layout = meter_view_order[(i + 1) % METER_LAYOUT_COUNT];
+    if (meter_layout == METER_LAYOUT_FUSE && meter_submode != 0) {
+        meter_function_set(0);                          /* the fuse tester reads a DC drop */
+        scope_show_popup("Fuse tester: DC V");
+    }
     if (meter_layout == METER_LAYOUT_LIMITS) {
         meter_ext_t *e = meter_ext();
         if (e && !limits_valid_now(e)) (void)limits_init_from_reading(e);
@@ -1352,10 +1362,26 @@ static void skv_fuse_type(char *b, uint8_t n)
 static void skp_fuse_type(void) { fuse_next_type(); }
 static void skv_fuse_show(char *b, uint8_t n)
 {
-    static const char *const v[FUSE_VIEW_COUNT] = { "Detail", "Multi", "Scan" };
+    static const char *const v[FUSE_VIEW_COUNT] = { "Detail", "Table", "Scan", "Types" };
     snprintf(b, n, "%s", v[fuse_view < FUSE_VIEW_COUNT ? fuse_view : 0]);
 }
 static void skp_fuse_show(void) { fuse_cycle_view(); }
+static void skv_fuse_rating(char *b, uint8_t n)
+{
+    const fuse_table_t *t = &fuse_tables[fuse_type < FUSE_TYPE_COUNT ? fuse_type : 0];
+    char l[8];
+    fuse_rating_label(t->entries[fuse_rating_idx < t->count ? fuse_rating_idx : 0].rating_amps,
+                      l, sizeof l);
+    snprintf(b, n, "%s A", l);
+}
+static bool ska_arrows(void) { return true; }          /* UP/DOWN adjust this key */
+static void skp_fuse_rating(void) { fuse_rating_press(); }
+static void skv_fuse_thresh(char *b, uint8_t n)
+{
+    int t = (int)(fuse_scan_threshold_mv * 10.0f + 0.5f);
+    snprintf(b, n, "%d.%d mV", t / 10, t % 10);
+}
+static void skp_fuse_thresh(void) { fuse_threshold_press(); }
 
 static void skv_cont(char *b, uint8_t n) { snprintf(b, n, "< %d Ohm", (int)meter_continuity_threshold()); }
 static void skp_cont(void)
@@ -1385,16 +1411,23 @@ static const softkey_bar_t meter_bar_limits = {{
     { "View",     skv_view,      skp_view,     NULL },
 }};
 static const softkey_bar_t meter_bar_fuse = {{
-    { "Fuse type", skv_fuse_type, skp_fuse_type, NULL },
-    { "Show",      skv_fuse_show, skp_fuse_show, NULL },
-    { NULL,        NULL,          NULL,          NULL },
-    { "View",      skv_view,      skp_view,      NULL },
+    { "Fuse type", skv_fuse_type,   skp_fuse_type,   NULL },
+    { "Rating",    skv_fuse_rating, skp_fuse_rating, ska_arrows },
+    { "Show",      skv_fuse_show,   skp_fuse_show,   NULL },
+    { "View",      skv_view,        skp_view,        NULL },
+}};
+static const softkey_bar_t meter_bar_fuse_scan = {{
+    { "Fuse type", skv_fuse_type,   skp_fuse_type,   NULL },
+    { "Draw if >", skv_fuse_thresh, skp_fuse_thresh, ska_arrows },
+    { "Show",      skv_fuse_show,   skp_fuse_show,   NULL },
+    { "View",      skv_view,        skp_view,        NULL },
 }};
 
 const softkey_bar_t *meter_softkey_bar(uint8_t layout, uint8_t submode)
 {
     if (layout == METER_LAYOUT_LIMITS) return &meter_bar_limits;
-    if (layout == METER_LAYOUT_FUSE)   return &meter_bar_fuse;
+    if (layout == METER_LAYOUT_FUSE)
+        return fuse_view == FUSE_VIEW_SCAN ? &meter_bar_fuse_scan : &meter_bar_fuse;
     if (submode == 7)                  return &meter_bar_cont;   /* continuity: Beep threshold */
     return &meter_bar_main;
 }
@@ -1546,7 +1579,8 @@ void draw_meter_screen(void)
      * the big visible blank only for structural changes; ordinary reading
      * updates retain the frame and erase just the dynamic regions. */
     uint16_t clear_bg = continuity_flash ? th->success : th->background;
-    bool in_place = (meter_layout == METER_LAYOUT_BIG || meter_layout == METER_LAYOUT_LIMITS);
+    bool in_place = (meter_layout == METER_LAYOUT_BIG || meter_layout == METER_LAYOUT_LIMITS ||
+                     meter_layout == METER_LAYOUT_FUSE);
     if (full_clear) {
         lcd_fill_rect(0, METER_TOP, LCD_WIDTH, METER_BOTTOM - METER_TOP, clear_bg);
         meter_screen_full_clear_count++;
@@ -1612,10 +1646,23 @@ void draw_meter_screen(void)
     case METER_LAYOUT_STATS:
         draw_meter_stats(m, mode, &reading, current_val, value_str);
         break;
-    case METER_LAYOUT_FUSE:
-        /* Fuse tester uses the mV reading as voltage drop. */
-        draw_fuse_screen(current_val);
+    case METER_LAYOUT_FUSE: {
+        /* The drop across the fuse, in mV, from a DC-volts reading (held
+         * while HOLD is on). Anything else is "no reading", never a guess. */
+        float mv = 0.0f;
+        int8_t dec = (mode == 0) ? -1 : -2;            /* -2: on another function */
+        if (mode == 0) {
+            if (meter_hold_is_on() && mx && mx->held[0]) {
+                if (fuse_drop_mv_from_reading(meter_hold_value, mx->held_unit, &mv))
+                    dec = (int8_t)fuse_mv_decimals(mx->held, mx->held_unit);
+            } else if (has_live_reading &&
+                       fuse_drop_mv_from_reading(reading.value, reading.unit_suffix, &mv)) {
+                dec = (int8_t)fuse_mv_decimals(reading.display_str, reading.unit_suffix);
+            }
+        }
+        draw_fuse_screen(mv, dec, full_clear);
         break;
+    }
     case METER_LAYOUT_LIMITS:
         draw_meter_limits(m, mode, &reading, has_live_reading, value_str);
         break;

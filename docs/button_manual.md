@@ -117,9 +117,9 @@ current value. Softkeys arrived with the softkey UI (2026-10-06; spec
 
 | Button | Big / Graph / Stats | Limits | Fuse |
 |--------|---------------------|--------|------|
-| **MOVE** | **Function**: next function | Function | Fuse type |
-| **SELECT** | **Reset**: min/max/avg, chart, histogram | **Low**: arrows move it; press again = set to the reading | Show: Detail / Multi / Scan |
-| **TRIGGER** | **Relative** on/off (zeros at the current reading). In Continuity: **Beep** threshold 10 / 30 / 50 / 100 Ohm | **High**, likewise | — |
+| **MOVE** | **Function**: next function | Function | **Fuse type**: ATO/ATC, Mini, Micro2, Maxi, J-Case |
+| **SELECT** | **Reset**: min/max/avg, chart, histogram | **Low**: arrows move it; press again = set to the reading | **Rating** (next, wrapping; arrows step). In Scan: **Draw if >** presets 0.1 / 0.2 / 0.5 / 1 / 2 mV |
+| **TRIGGER** | **Relative** on/off (zeros at the current reading). In Continuity: **Beep** threshold 10 / 30 / 50 / 100 Ohm | **High**, likewise | **Show**: Detail -> Table -> Scan -> Types |
 | **PRM** | **View**: Big -> Graph -> Stats -> Limits -> Fuse | View | View |
 
 ### Other buttons
@@ -128,7 +128,7 @@ current value. Softkeys arrived with the softkey UI (2026-10-06; spec
 |--------|--------|
 | **OK** | **Hold**: freeze the reading on screen now (HOLD badge); OK again = live |
 | **LEFT / RIGHT** | Previous / next function (Fuse view: fuse type) |
-| **UP / DOWN** | Limits view: move the highlighted limit. Fuse view: rating / threshold |
+| **UP / DOWN** | Limits view: move the highlighted limit. Fuse view: rating up/down (Scan: threshold ±0.1 mV) |
 | **AUTO** | Automatic function select (DC V / AC V) |
 | **SAVE** | Raw-frame debug overlay |
 
@@ -153,7 +153,19 @@ switches in the background (~1.5 s in the `-meter` image). In the plain
 - **Graph** — compact reading, scrolling strip chart with an auto-scaled Y axis.
 - **Stats** — min/max/avg/peak-to-peak and a histogram of the readings.
 - **Limits** — pass/fail: a big PASS / FAIL box, the reading's position on a Low–High bar, pass and fail counts, and the last failing value. Entering it with a live reading sets Low/High to the reading ±5 %.
-- **Fuse** — fuse current tester (voltage drop across a fuse, in DC V).
+- **Fuse** — fuse current tester: probe the two metal tips on top of a fuse
+  left in place, and it estimates the current from the voltage drop and the
+  fuse's typical resistance (about ±10 %). Entering it switches to DC V.
+  - **Detail**: a picture of the selected fuse, the current, a 0–150 mA bar
+    with the 50 mA parasitic-draw mark, the drop and the fuse resistance.
+  - **Table**: every rating of the type, largest at the top, with the current
+    each would mean.
+  - **Scan**: DRAW / NO DRAW against the threshold, for walking a fuse box
+    with the engine off, plus the current if the fuse is 10/15/20/30 A
+    (20/30/40/60 A for Maxi and J-Case).
+  - **Types**: "which fuse is this?" — the five types to scale, front and top,
+    and the common rating colours. The number on top of the fuse is what
+    counts; colours vary.
 
 ---
 

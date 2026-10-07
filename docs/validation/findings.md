@@ -102,6 +102,21 @@ counts.
 | F45 | **Fixed:** REL is the Relative softkey. |
 | MT-* | `screens/meter.md` describes the old buttons; rewrite it for softkeys (spec S2). |
 
+## Status after the fuse view redesign (2026-10-07)
+
+Seen on unit #1 (Build Oct 6 2026 23:56:46, `-meter` image) through the shell's
+screenshots, which are quantised to a 16-colour palette, so the fuse colours
+themselves are still unchecked.
+
+| # | Status |
+|---|---|
+| F11 | **Fixed:** the drop is converted from the reading's own unit (V or mV); any other function shows "needs DC V". One unit per number. |
+| F21 | **Fixed for the fuse view:** DRAW / NO DRAW use the 24 px font, which has every letter. Component Tester unchanged. |
+| F40 | **Fixed:** the Table lists every rating (largest at the top, scrolling with the selection) and UP raises the rating or the threshold. |
+| F46 | **New, fixed:** the current was mV × 10³ / µΩ, which is amps, printed as mA, so a 48 mA draw read 0 mA. `fuse_table.h`'s helper had the same slip. Host test `test_fuse` keeps the old formula as a negative control. |
+| F47 | **New, open (S2):** with the leads open, DC V reads −1.0 mV, so Detail shows ~127 mA and Scan shows DRAW with nothing connected. Needs a bench check with the probes on a fuse that carries no current; if the offset stays, the fuse view needs a Zero key. |
+| F48 | **New, open (S3):** DC V resolves 0.1 mV, which is 13 mA steps on a 10 A ATO (7.9 mΩ). Fine for finding a draw, coarse for measuring a small one. |
+
 ## G. From the first live run (2026-10-06, David, unit #1, Build Oct 6 10:04:11)
 
 User feedback, not code predictions. Each is a design change to agree, not a bug to confirm.

@@ -139,10 +139,11 @@ extern volatile bool          persist_enabled;
 #define METER_LAYOUT_LIMITS     4   /* pass/fail against Low/High */
 
 /* Fuse tester sub-views (cycled with SELECT in fuse layout) */
-#define FUSE_VIEW_DETAIL        0   /* Single fuse: current + V_drop + R + bar */
-#define FUSE_VIEW_MULTI         1   /* All ratings for selected type */
-#define FUSE_VIEW_SCAN          2   /* Pass/fail parasitic draw hunting */
-#define FUSE_VIEW_COUNT         3
+#define FUSE_VIEW_DETAIL        0   /* Single fuse: picture, current, bar, drop, R */
+#define FUSE_VIEW_MULTI         1   /* "Table": all ratings of the type */
+#define FUSE_VIEW_SCAN          2   /* DRAW / NO DRAW for walking a fuse box */
+#define FUSE_VIEW_TYPES         3   /* "Which fuse is this?" reference page */
+#define FUSE_VIEW_COUNT         4
 
 #ifdef FEATURE_FFT
 #include "fft.h"
@@ -237,7 +238,12 @@ float    meter_continuity_threshold(void);   /* continuity beeps below this (Ohm
 void meter_toggle_debug_overlay(void);
 
 /* fuse_ui.c */
-void draw_fuse_screen(float voltage_drop_mv);
+/* drop_decimals: -1 = no DC-volts reading yet, -2 = the meter is on another
+ * function (settings can restore Fuse view with one); repaint = the meter
+ * just cleared the screen. */
+void draw_fuse_screen(float drop_mv, int8_t drop_decimals, bool repaint);
+void fuse_rating_press(void);
+void fuse_threshold_press(void);
 void fuse_cycle_view(void);
 void fuse_next_rating(void);
 void fuse_prev_rating(void);

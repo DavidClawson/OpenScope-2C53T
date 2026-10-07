@@ -83,8 +83,16 @@ None new. Constraints:
   - **One full run stalled the shell for over 60 s,** during the trigger suite's centering, while the host was running five firmware builds. No reset (uptime confirms). It didn't reproduce on the clean rerun. **Unexplained**, so watch for it.
 - Logs: `captures/regression/2026-10-06_Oct_6_2026_20_19_45*`, `…_p1_masktol_fix_run*`, `…_20_58_34*`.
 
+**Fuse view (2026-10-07):** redesigned from the canvas boards FuseDetail / FuseScan / FuseTypes.
+- **Show** cycles Detail → Table → Scan → Types. Types is the "which fuse is this?" page: the five types to scale, front and top, and the rating colours of the selected type.
+- **Softkeys:** Fuse type / Rating (Draw-if threshold in Scan) / Show / View. Arrows adjust the second key; UP = larger.
+- **Drawing:** static parts once per structural change, values through opaque boxes. Measured on unit #1: 0 full clears and 0 partial clears across reading updates, ~6 ms per draw.
+- **Entering the view switches the meter to DC V,** with a popup.
+- **Logic** is in `src/ui/fuse_model.c`, host-tested by `make test-fuse` (122 checks).
+- **Bug found on the way:** the current was 1000× low (F46).
+
 **Open:**
-- The Fuse view still blanks its whole area on every update; its redraw is due with the fuse graphics redesign.
+- **Fuse view:** open-lead offset (F47) and 0.1 mV resolution (F48). The screenshots are palette-quantised, so the fuse colours need a look on the real screen.
 - Graph and Stats keep their old layouts.
 - The `coldtrace` image offers functions it can't measure (only DC V works there); release decision pending.
 

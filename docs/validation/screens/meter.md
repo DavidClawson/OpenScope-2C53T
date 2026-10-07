@@ -52,8 +52,10 @@ predicted defects ([findings.md](../findings.md)).
 
 | ID | Do | Expect | Result | Note |
 |---|---|---|---|---|
-| MT-40 | OK to Fuse; LEFT/RIGHT; UP/DOWN; SELECT ×3 | Type, rating and view (Detail → Multi → Scan) change and are labelled | | |
-| MT-41 | Detail view | Current shown once with one unit (**F11**: "mA mA" predicted) | | |
-| MT-42 | Scan view | "NO DRAW" / "DRAW!" readable as words (**F21**) | | |
-| MT-43 | Multi view, ATO | Every rating reachable, including 30/35/40 A (**F40**) | | |
-| MT-44 | Is it clear the fuse tester needs DC V on a mV range? | It says so | | |
+| MT-40 | View to Fuse; Fuse type; Rating; Show ×4 | Type, rating and view (Detail → Table → Scan → Types) change and are labelled; the meter switches to DC V with a popup | | |
+| MT-41 | Detail view | Current shown once with one unit (**F11**, fixed 2026-10-07) | | |
+| MT-42 | Scan view | "NO DRAW" / "DRAW" readable as words (**F21**, fixed) | | |
+| MT-43 | Table view, ATO | Every rating reachable, including 1, 2, 40 A (**F40**, fixed); UP moves the highlight up | | |
+| MT-44 | Probes on a fuse carrying no current | Detail near 0 mA, Scan NO DRAW (**F47**: open leads read −1.0 mV) | | |
+| MT-45 | Types view, beside a real fuse box | You can tell which type you have; the colours match real fuses | | |
+| MT-46 | Leave the reading steady for 30 s | Nothing on screen blinks (fuse flicker, 2026-10-06) | | |

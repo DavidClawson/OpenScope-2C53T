@@ -75,9 +75,9 @@ volatile float         meter_hold_value = 0.0f;
 
 /* Fuse tester state */
 volatile uint8_t       fuse_type = 0;               /* FUSE_TYPE_ATO_ATC */
-volatile uint8_t       fuse_rating_idx = 4;          /* Default to 10A (index 4 in ATO table) */
+volatile uint8_t       fuse_rating_idx = 6;          /* 10 A (index 6 in the ATO table) */
 volatile uint8_t       fuse_view = 0;                /* FUSE_VIEW_DETAIL */
-volatile float         fuse_scan_threshold_mv = 0.5f; /* Pass/fail threshold */
+volatile float         fuse_scan_threshold_mv = 0.1f; /* Scan: DRAW at or above this drop */
 
 /* Modal overlay lock. While true, the display task suppresses ALL rendering
  * (queue commands are drained and dropped, periodic repaints skipped) so an

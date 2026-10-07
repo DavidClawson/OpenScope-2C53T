@@ -754,7 +754,7 @@ uint8_t input_handle_button(button_id_t button, QueueHandle_t dq)
         }
         else if (current_mode == MODE_MULTIMETER &&
                  meter_layout == METER_LAYOUT_FUSE) {
-            fuse_prev_rating();
+            fuse_next_rating();   /* UP = larger */
             send_cmd(dq, cmd);
         }
         else if (current_mode == MODE_MULTIMETER &&
@@ -839,7 +839,7 @@ uint8_t input_handle_button(button_id_t button, QueueHandle_t dq)
         }
         else if (current_mode == MODE_MULTIMETER &&
                  meter_layout == METER_LAYOUT_FUSE) {
-            fuse_next_rating();
+            fuse_prev_rating();
             send_cmd(dq, cmd);
         }
         else if (current_mode == MODE_MULTIMETER &&

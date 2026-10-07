@@ -176,13 +176,14 @@ and the screen shows `---`.
 
 | Button | Does |
 |---|---|
-| LEFT / RIGHT | Fuse type: ATO/ATC, Mini, Micro, Maxi, JCase |
-| UP / DOWN | Rating down/up (Detail, Multi); threshold −/+0.1 mV (Scan) |
-| SELECT | View: Detail → Multi → Scan |
-| OK | Back to Full |
+| MOVE (Fuse type) / LEFT / RIGHT | Fuse type: ATO/ATC, Mini, Micro2, Maxi, J-Case |
+| SELECT (Rating) / UP / DOWN | Rating; in Scan the Draw-if threshold (UP = larger) |
+| TRIGGER (Show) | Detail → Table → Scan → Types |
+| PRM (View) | Next meter view |
 
-It treats the current reading as millivolts whatever the unit, so it's only meaningful on DC V.
-LIVE, never measured. Several display defects are listed in the findings.
+Redesigned 2026-10-07 (softkey spec): converts the reading's own unit, switches the
+meter to DC V on entry, draws in place. LIVE; seen on unit #1 by screenshot, current
+not yet measured against a known load. Open: F47 (open-lead offset), F48 (resolution).
 
 ## 4. Signal generator
 
