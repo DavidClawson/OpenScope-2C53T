@@ -75,9 +75,9 @@ volatile float         meter_hold_value = 0.0f;
 
 /* Fuse tester state */
 volatile uint8_t       fuse_type = 0;               /* FUSE_TYPE_ATO_ATC */
-volatile uint8_t       fuse_rating_idx = 4;          /* Default to 10A (index 4 in ATO table) */
+volatile uint8_t       fuse_rating_idx = 6;          /* 10 A (index 6 in the ATO table) */
 volatile uint8_t       fuse_view = 0;                /* FUSE_VIEW_DETAIL */
-volatile float         fuse_scan_threshold_mv = 0.5f; /* Pass/fail threshold */
+volatile float         fuse_scan_threshold_mv = 0.1f; /* Scan: DRAW at or above this drop */
 
 /* Modal overlay lock. While true, the display task suppresses ALL rendering
  * (queue commands are drained and dropped, periodic repaints skipped) so an
@@ -282,6 +282,9 @@ static redraw_gate_t siggen_gate = { 0, 0, 0, false, false };
  * exactly what draw_info_bar() prints, and the display loop repaints the
  * bar whenever it changes, whoever changed it. */
 static uint32_t g_info_bar_epoch;
+/* Set whenever this loop iteration repainted the current non-scope screen,
+ * so the out-of-scope popup is re-drawn on top of it (softkey UI P0). */
+static bool g_screen_painted;
 
 static uint32_t info_bar_epoch(void)
 {
@@ -303,6 +306,7 @@ static uint32_t info_bar_epoch(void)
 #endif
     } else if (current_mode == MODE_MULTIMETER) {
         h = redraw_epoch_mix(h, (uint32_t)meter_submode);
+        h = redraw_epoch_mix(h, meter_softkeys_epoch());
     }
     return h;
 }
@@ -479,8 +483,10 @@ static void vDisplayTask(void *pvParameters)
              * measurement was taken with the far end switched off. Bench A/B/A
              * 2026-08-17: HIGH -> 276 bytes returned, LOW -> 0, HIGH -> 276. */
             fpga_set_meter_mux(current_mode == MODE_MULTIMETER);
-            if (current_mode == MODE_OSCILLOSCOPE)
+            if (current_mode == MODE_OSCILLOSCOPE) {
                 scope_entered_frame = frame;
+                ui_popup_overlay_cancel();    /* scope popups are the scope's own */
+            }
             redraw_gate_invalidate(&scope_gate);
             redraw_gate_invalidate(&siggen_gate);
             last_rendered_mode = current_mode;
@@ -531,6 +537,7 @@ static void vDisplayTask(void *pvParameters)
                 } else if (current_mode == MODE_SETTINGS) {
                     draw_settings_screen();
                 }
+                g_screen_painted = true;
                 break;
             case DCMD_DRAW_SCOPE:
                 /* Always honoured: the sender changed scope state or
@@ -544,7 +551,10 @@ static void vDisplayTask(void *pvParameters)
                 }
                 break;
             case DCMD_DRAW_METER:
-                if (current_mode == MODE_MULTIMETER) draw_meter_screen();
+                if (current_mode == MODE_MULTIMETER) {
+                    draw_meter_screen();
+                    g_screen_painted = true;
+                }
                 break;
             case DCMD_DRAW_SIGGEN:
                 if (current_mode == MODE_SIGNAL_GEN) {
@@ -557,10 +567,14 @@ static void vDisplayTask(void *pvParameters)
                     draw_siggen_screen(frame);
                     redraw_gate_mark(&siggen_gate, siggen_ui_epoch(),
                                      frame, REDRAW_FULL);
+                    g_screen_painted = true;
                 }
                 break;
             case DCMD_DRAW_SETTINGS:
-                if (current_mode == MODE_SETTINGS) draw_settings_screen();
+                if (current_mode == MODE_SETTINGS) {
+                    draw_settings_screen();
+                    g_screen_painted = true;
+                }
                 break;
             case DCMD_DRAW_STATUS_BAR:
                 draw_status_bar();
@@ -741,8 +755,30 @@ static void vDisplayTask(void *pvParameters)
                 last_meter_update = meter_screen_last_reading_display_update;
                 last_meter_frame  = frame;
                 last_meter_submode = meter_submode;
+                g_screen_painted = true;
             }
         }
+
+        /* Popups outside the scope (softkey UI P0, findings F15/F20): drawn
+         * over the screen, re-drawn after any repaint, and the screen
+         * repainted under them when they expire. */
+        if (current_mode != MODE_OSCILLOSCOPE) {
+            if (ui_popup_overlay_service(g_screen_painted) == 2) {
+                if (current_mode == MODE_MULTIMETER) {
+                    if (meter_layout != METER_LAYOUT_BIG &&
+                        meter_layout != METER_LAYOUT_LIMITS)
+                        meter_screen_invalidate();
+                    draw_meter_screen();
+                } else if (current_mode == MODE_SIGNAL_GEN) {
+                    draw_siggen_screen(frame);
+                    redraw_gate_mark(&siggen_gate, siggen_ui_epoch(),
+                                     frame, REDRAW_FULL);
+                } else if (current_mode == MODE_SETTINGS) {
+                    draw_settings_screen();
+                }
+            }
+        }
+        g_screen_painted = false;
 
         frame++;
     }
@@ -759,6 +795,13 @@ static void vDisplayTask(void *pvParameters)
  * the buttons use a bidirectional 4x3 matrix requiring active scanning.
  * See: reverse_engineering/analysis_v120/button_map_confirmed.md
  */
+#ifdef EMULATOR_BUILD
+/* Emulator key mailbox: Renode has no model of the 4x3 key matrix, so a host
+ * script writes a button id + 1 here (`sysbus WriteByte <&g_emu_key> n`) and
+ * the input task queues it like the `btn` shell command (input_inject_button). */
+volatile uint8_t g_emu_key __attribute__((used)) = 0;
+#endif
+
 static void vInputTask(void *pvParameters)
 {
     (void)pvParameters;
@@ -766,6 +809,13 @@ static void vInputTask(void *pvParameters)
 
     for (;;) {
         button_id_t pressed;
+#ifdef EMULATOR_BUILD
+        if (g_emu_key != 0u) {
+            const uint8_t k = (uint8_t)(g_emu_key - 1u);
+            g_emu_key = 0u;
+            (void)input_inject_button((button_id_t)k);
+        }
+#endif
 
         /* Block until TMR3 ISR confirms a debounced button press */
         if (xQueueReceive(xInputQueue, &pressed, pdMS_TO_TICKS(100)) == pdTRUE) {
@@ -1207,7 +1257,12 @@ unsigned int system_core_clock = 240000000;
 
 void SystemInit(void)
 {
-    /* Stub — do nothing in emulator mode. */
+    /* Stub for the emulator, except for the one thing every build needs: the
+     * FPU. The HAL's SystemInit grants CP10/CP11 full access (CPACR bits
+     * 20..23); without it the first VFP instruction takes a NOCP usage fault
+     * (CFSR 0x00080000), which is how Renode stopped right after the splash. */
+    *(volatile uint32_t *)0xE000ED88u |= (0xFu << 20);
+    __asm volatile ("dsb\n\tisb" ::: "memory");
 }
 
 void system_clock_config(void)

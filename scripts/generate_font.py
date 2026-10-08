@@ -27,7 +27,18 @@ CHARSETS = {
     'ascii': [chr(c) for c in range(0x20, 0x7F)],
     'digits': list('0123456789.-+: VAkmMHzWFO'),  # O stands in for Ω on device
     'labels': list('ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789 .-+:/%()'),
+    # Softkey UI (2026-10-06): the meter's across-the-bench main reading.
+    'bignum': list('0123456789.-OL '),
+    # Units beside it. '@' renders as an Ohm sign, '`' as micro, '^' as degree
+    # (see GLYPH_SUBST): the device charmap is ASCII-only.
+    'unit': list(' ACDFHMVkmnz%@`^'),
 }
+
+SPACING = None    # --spacing: px between glyphs (None = pixel_size // 12)
+TABULAR = False   # --tabular: digits padded to equal width
+
+# Stored under an ASCII code, rendered as another character.
+GLYPH_SUBST = {'@': '\u03a9', '`': '\u00b5', '^': '\u00b0'}
 
 
 def render_glyph(font, char, size):
@@ -38,7 +49,7 @@ def render_glyph(font, char, size):
     canvas_h = size * 3
     img = Image.new('L', (canvas_w, canvas_h), 0)
     draw = ImageDraw.Draw(img)
-    draw.text((size, size), char, font=font, fill=255)
+    draw.text((size, size), GLYPH_SUBST.get(char, char), font=font, fill=255)
 
     # Find bounding box of non-zero pixels
     pixels = img.load()
@@ -98,7 +109,7 @@ def render_font(font_path, pixel_size, charset, font_index=0):
     baseline_draw = ImageDraw.Draw(baseline_img)
 
     # Find the common top and bottom by rendering a reference set
-    ref_chars = '0Ag|'
+    ref_chars = '0Ag|' + ''.join(c for c in charset if c in GLYPH_SUBST)
     global_top = canvas_h
     global_bottom = 0
     for rc in ref_chars:
@@ -106,7 +117,7 @@ def render_font(font_path, pixel_size, charset, font_index=0):
             continue
         baseline_img_t = Image.new('L', (canvas_w, canvas_h), 0)
         baseline_draw_t = ImageDraw.Draw(baseline_img_t)
-        baseline_draw_t.text((pixel_size, pixel_size // 2), rc, font=font, fill=255)
+        baseline_draw_t.text((pixel_size, pixel_size // 2), GLYPH_SUBST.get(rc, rc), font=font, fill=255)
         px = baseline_img_t.load()
         for y in range(canvas_h):
             for x in range(canvas_w):
@@ -127,7 +138,7 @@ def render_font(font_path, pixel_size, charset, font_index=0):
     for char in charset:
         img = Image.new('L', (canvas_w, canvas_h), 0)
         draw = ImageDraw.Draw(img)
-        draw.text((pixel_size, render_y), char, font=font, fill=255)
+        draw.text((pixel_size, render_y), GLYPH_SUBST.get(char, char), font=font, fill=255)
         px = img.load()
 
         # Find horizontal bounds
@@ -163,8 +174,8 @@ def render_font(font_path, pixel_size, charset, font_index=0):
                     row.append(0)
             bitmap_rows.append(row)
 
-        # Advance width = glyph width + 1px spacing
-        advance = glyph_w + max(1, pixel_size // 12)
+        # Advance width = glyph width + spacing (default pixel_size // 12)
+        advance = glyph_w + (SPACING if SPACING is not None else max(1, pixel_size // 12))
 
         glyphs.append({
             'char': char,
@@ -173,6 +184,18 @@ def render_font(font_path, pixel_size, charset, font_index=0):
             'rows': bitmap_rows,
         })
 
+    if TABULAR:
+        # Equal-width digits so a changing reading doesn't shift sideways:
+        # pad every digit's bitmap (ink centred) to the widest digit.
+        digits = [g for g in glyphs if g['char'].isdigit()]
+        if digits:
+            maxw = max(g['width'] for g in digits)
+            for g in digits:
+                pad = maxw - g['width']
+                left = pad // 2
+                g['rows'] = [[0] * left + r + [0] * (pad - left) for r in g['rows']]
+                g['advance'] += pad
+                g['width'] = maxw
     return glyphs, font_height
 
 
@@ -308,7 +331,13 @@ def main():
                         help='Font index within TTC collection')
     parser.add_argument('--output-dir', default=None,
                         help='Output directory (default: firmware/src/fonts/)')
+    parser.add_argument('--spacing', type=int, default=None,
+                        help='Pixels between glyphs (default pixel_size // 12)')
+    parser.add_argument('--tabular', action='store_true',
+                        help='Pad digits to equal width (readings that change in place)')
     args = parser.parse_args()
+    global SPACING, TABULAR
+    SPACING, TABULAR = args.spacing, args.tabular
 
     charset = CHARSETS[args.chars]
     print(f'Rendering {len(charset)} chars from {os.path.basename(args.font_path)} at {args.pixel_size}px...')

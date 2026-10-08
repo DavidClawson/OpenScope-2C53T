@@ -1,0 +1,6 @@
+device Build: Oct  6 2026 20:19:45, gcc 14.2.1 20241119
+end    Build: Oct  6 2026 20:19:45, gcc 14.2.1 20241119
+trigger   PASS  exit 0      553 s  OVERALL: PASS
+mask      FAIL  exit 1       94 s  9/10 criteria met
+coupling  FAIL  exit 1      221 s  16/17 criteria met
+REGRESSION RED (1/3 suites)

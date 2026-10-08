@@ -35,6 +35,8 @@ C_SOURCES += src/drivers/lcd.c
 C_SOURCES += src/ui/status_bar.c
 C_SOURCES += src/ui/scope_ui.c
 C_SOURCES += src/ui/meter_ui.c
+C_SOURCES += src/ui/softkey.c
+C_SOURCES += src/ui/fuse_model.c
 C_SOURCES += src/ui/siggen_ui.c
 C_SOURCES += src/ui/settings_ui.c
 C_SOURCES += src/ui/component_ui.c
@@ -102,6 +104,8 @@ C_SOURCES += src/fonts/font_small.c
 C_SOURCES += src/fonts/font_medium.c
 C_SOURCES += src/fonts/font_large.c
 C_SOURCES += src/fonts/font_xlarge.c
+C_SOURCES += src/fonts/font_huge.c
+C_SOURCES += src/fonts/font_unit.c
 
 # FFT / DSP module
 ifneq ($(findstring FFT,$(FEATURES)),)
@@ -645,6 +649,14 @@ $(BUILD_DIR)/test_fft_live: tests/test_fft_live.c src/dsp/fft_live.c src/dsp/fft
 test-fft-live: $(BUILD_DIR)/test_fft_live
 	$<
 
+$(BUILD_DIR)/test_fuse: tests/test_fuse.c src/ui/fuse_model.c src/ui/fuse_model.h src/ui/fuse_table.h | $(BUILD_DIR)
+	$(HOST_CC) -std=gnu11 -Wall -Wextra -Werror -Isrc/ui $< src/ui/fuse_model.c -lm -o $@
+
+# Fuse tester arithmetic, colours and shapes. Keeps the pre-2026-10-06 current
+# formula (amps printed as mA) as a negative control that must fail.
+test-fuse: $(BUILD_DIR)/test_fuse
+	$<
+
 # MCU-side trigger edge filter (trigger-modes S2 (c)): real EXP-55/56 records,
 # a level-off-the-signal negative control, and a synthetic period sweep.
 $(BUILD_DIR)/test_trig_edge: tests/test_trig_edge.c src/dsp/trig_edge.c src/dsp/trig_edge.h \
@@ -667,7 +679,7 @@ $(BUILD_DIR)/test_mask_pf: tests/test_mask_pf.c src/dsp/mask_pf.c src/dsp/mask_p
 test-mask-pf: $(BUILD_DIR)/test_mask_pf
 	$<
 
-.PHONY: all clean disasm size renode soak-test soak-quick flash flash-dfu bootloader flash-bootloader flash-all guest guest-warmtest guest-usart-silent emu test-meter-data test-meter-auto test-meter-voltage-wave test-fpga-meter-plan test-stock-meter-literals test-meter test-scope-measure test-scope-cal test-scope-timebase test-scope-freq test-redraw-gate test-fft-live test-trig-edge test-mask-pf test-config-persist guest-persist guest-caldump guest-coldtrace-slow guest-coldtrace-la guest-debugclk guest-configA-gap guest-configA-csdummy guest-configA-gapless guest-bringup guest-bringup-bb guest-bringup-bb-slow guest-coldtrace-hwspi guest-bringup-bb-faithful fpga-alt-header guest-coldtrace-meter
+.PHONY: all clean disasm size renode soak-test soak-quick flash flash-dfu bootloader flash-bootloader flash-all guest guest-warmtest guest-usart-silent emu test-meter-data test-meter-auto test-meter-voltage-wave test-fpga-meter-plan test-stock-meter-literals test-meter test-scope-measure test-scope-cal test-scope-timebase test-scope-freq test-redraw-gate test-fft-live test-trig-edge test-mask-pf test-fuse test-config-persist guest-persist guest-caldump guest-coldtrace-slow guest-coldtrace-la guest-debugclk guest-configA-gap guest-configA-csdummy guest-configA-gapless guest-bringup guest-bringup-bb guest-bringup-bb-slow guest-coldtrace-hwspi guest-bringup-bb-faithful fpga-alt-header guest-coldtrace-meter
 
 # ═══════════════════════════════════════════════════════════════════════════
 # BENCH / EXPERIMENT IMAGE INDEX                          (index added 2026-08-13)

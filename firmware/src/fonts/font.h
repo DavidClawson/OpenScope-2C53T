@@ -34,6 +34,8 @@ extern const font_t font_small;    /* ~12px - status bars, labels */
 extern const font_t font_medium;   /* ~16px - general UI text */
 extern const font_t font_large;    /* ~24px - channel labels, measurements */
 extern const font_t font_xlarge;   /* ~48px - DMM main reading */
+extern const font_t font_huge;     /* 70px tabular digits + '.-OL ' - across-the-bench reading */
+extern const font_t font_unit;     /* 38px units; '@' = Ohm, '`' = micro, '^' = degree */
 
 /* ========================================================================
  * Rendering functions
@@ -70,5 +72,24 @@ uint16_t font_draw_string_right(uint16_t x_right, uint16_t y, const char *str,
  */
 uint16_t font_draw_string_center(uint16_t x_center, uint16_t y, const char *str,
                                  uint16_t fg, uint16_t bg, const font_t *font);
+
+/*
+ * Draw a string inside a box, writing EVERY pixel of the box exactly once:
+ * glyphs opaque, inter-glyph gaps and the margins filled with bg. Nothing is
+ * blanked first, so text that changes in place does not flash (the meter's
+ * once-a-second blink, 2026-10-06). Text that does not fit is cut at the last
+ * whole glyph. align: FONT_ALIGN_LEFT / _CENTER / _RIGHT. The box height is
+ * the font height. Returns the text width actually drawn.
+ */
+/* True if every character of str has a glyph in font. */
+#include <stdbool.h>
+bool font_has_glyphs(const char *str, const font_t *font);
+
+#define FONT_ALIGN_LEFT   0
+#define FONT_ALIGN_CENTER 1
+#define FONT_ALIGN_RIGHT  2
+uint16_t font_draw_string_box(uint16_t x, uint16_t y, uint16_t w, const char *str,
+                              uint16_t fg, uint16_t bg, const font_t *font,
+                              uint8_t align);
 
 #endif /* FONT_H */

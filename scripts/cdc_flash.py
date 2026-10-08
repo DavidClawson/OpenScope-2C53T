@@ -1,9 +1,12 @@
 #!/usr/bin/env python3
 """
 !! 2026-09-22 (EXP-57): `fwapply` HUNG on bench unit #1 with a 619 KB image and
-!! left the app slot unbootable (recovered with MENU held + pinhole reset). Root
-!! cause not established. Do not run without --stage-only on unit #1 until the
-!! installer reports which exit it took.
+!! left the app slot unbootable (recovered with MENU held + pinhole reset).
+!! Root cause (issue #42): the installer that runs is the one in the image the
+!! unit is RUNNING, and some builds -- the v0.4.0 release among them -- call
+!! flash-resident memset from it after erasing the page memset lives in. Do not
+!! fwapply/fwswap FROM an image that `python3 scripts/test_ramfunc_isolated.py
+!! --check-bin <running image>.bin` calls unsafe; use --stage-only, or IAP.
 Flash a firmware image over the OpenScope CDC debug shell.
 
 Host half of firmware/src/drivers/fw_loader.c: sends `fwload <size> <crc32>`,
@@ -17,13 +20,17 @@ The image must be linked for the app slot the installer writes, 0x08007000 —
 for the HID bootloader: its vector table sits at 0x08004000, so `objcopy` emits a
 file based there, and installing it at 0x08007000 puts everything 0x3000 low. It
 passes every gate on the way (at offset 0 it holds a real vector table) and the
-device simply does not come back — recover with MENU+Power and the stock IAP.
+device simply does not come back — recover by holding MENU through a pinhole
+reset (factory IAP).
 
 Images stage into a 1 MB W25Q cache slot (a or b, default b), so this
 firmware's own ~600 KB image round-trips fine, and so does the 2C23T port's.
 A staged slot persists: `fwswap a|b` in the shell installs a cached image
-later with no transfer at all. Recovery from anything: MENU+Power stock IAP
-(nothing in this path can write below 0x08007000).
+later with no transfer at all. Recovery from anything: keep USB attached, hold
+MENU and press the pinhole reset, keep holding until the IAP drive appears
+(nothing in this path can write below 0x08007000). Not MENU+Power: after the
+EXP-57 and EXP-59 hangs it did nothing -- the running app is what turns that
+gesture into a reset, and a hung or half-written slot has none.
 
 Usage:
   python3 scripts/cdc_flash.py <image.bin> [--port /dev/cu.usbmodemXXX]

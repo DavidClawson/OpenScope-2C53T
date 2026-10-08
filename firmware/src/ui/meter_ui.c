@@ -23,6 +23,12 @@
 #include "font.h"
 #include "theme.h"
 #include "meter_data.h"
+#include "meter_autoselect.h"
+#include "softkey.h"
+#include "fuse_table.h"
+#include "fuse_model.h"
+#include "FreeRTOS.h"
+#include <stdio.h>
 #include "fpga.h"
 #include "meter_voltage_wave.h"
 #include "shared_mem.h"
@@ -31,7 +37,7 @@
 
 /* Layout constants */
 #define METER_TOP       18          /* Below status bar */
-#define METER_BOTTOM    (LCD_HEIGHT - 18)  /* Above info bar */
+#define METER_BOTTOM    SOFTKEY_BAR_Y      /* above the softkey bar */
 #define MAIN_READING_Y  30          /* Main digits vertical position */
 #define UNIT_X          248         /* Right side for units */
 #define BAR_Y           90          /* Bar graph vertical position */
@@ -44,7 +50,7 @@
 #define CHART_X         10
 #define CHART_Y         80
 #define CHART_W         300
-#define CHART_H         120
+#define CHART_H         108         /* labels below end at y=202, clear of the softkey bar (210) */
 #define CHART_SAMPLES   300         /* One sample per pixel column */
 
 /* ═══════════════════════════════════════════════════════════════════
@@ -332,282 +338,8 @@ static void fmt_float(char *buf, int buf_size, float val, int decimals)
  * Shared drawing helpers
  * ═══════════════════════════════════════════════════════════════════ */
 
-static void draw_bar_graph(uint16_t x, uint16_t y, uint16_t w, uint16_t h,
-                           float fraction, uint16_t fg_color)
-{
-    const theme_t *th = theme_get();
 
-    lcd_fill_rect(x, y, w, h, th->grid);
 
-    uint16_t fill_w = (uint16_t)(fraction * w);
-    if (fill_w > w) fill_w = w;
-    if (fill_w > 0) {
-        lcd_fill_rect(x, y, fill_w, h, fg_color);
-    }
-
-    for (int i = 1; i <= 3; i++) {
-        uint16_t tick_x = x + (w * i) / 4;
-        lcd_fill_rect(tick_x, y, 1, h, th->grid_center);
-    }
-}
-
-static void panel_set_pixel(uint16_t *panel, uint16_t w, uint16_t h,
-                            uint16_t x, uint16_t y, uint16_t color)
-{
-    if (x < w && y < h) {
-        panel[(uint32_t)y * w + x] = color;
-    }
-}
-
-static void panel_draw_meter_wave_line(uint16_t *panel, uint16_t w, uint16_t h,
-                                       uint16_t x0, uint16_t y0,
-                                       uint16_t x1, uint16_t y1,
-                                       uint16_t color)
-{
-    uint16_t y_min = y0 < y1 ? y0 : y1;
-    uint16_t y_max = y0 < y1 ? y1 : y0;
-
-    panel_set_pixel(panel, w, h, x1, y1, color);
-    for (uint16_t yy = y_min + 1; yy < y_max; yy++) {
-        panel_set_pixel(panel, w, h, x0, yy, color);
-    }
-}
-
-static void draw_meter_wave_line(uint16_t x0, uint16_t y0,
-                                 uint16_t x1, uint16_t y1,
-                                 uint16_t color)
-{
-    uint16_t y_min = y0 < y1 ? y0 : y1;
-    uint16_t y_max = y0 < y1 ? y1 : y0;
-
-    lcd_set_pixel(x1, y1, color);
-    for (uint16_t yy = y_min + 1; yy < y_max; yy++) {
-        lcd_set_pixel(x0, yy, color);
-    }
-}
-
-static uint32_t meter_wave_snapshot_hash(const meter_voltage_wave_snapshot_t *snap)
-{
-    uint32_t h = 2166136261u;
-    uint16_t count = snap->count;
-    if (count > METER_VOLTAGE_WAVE_RENDER_POINTS) {
-        count = METER_VOLTAGE_WAVE_RENDER_POINTS;
-    }
-
-    h ^= count; h *= 16777619u;
-    for (uint16_t i = 0; i < count; i++) {
-        h ^= snap->y[i]; h *= 16777619u;
-        h ^= snap->env_min[i]; h *= 16777619u;
-        h ^= snap->env_max[i]; h *= 16777619u;
-    }
-    return h;
-}
-
-static bool meter_wave_panel_retained;
-static uint8_t meter_wave_last_mode;
-static uint16_t meter_wave_last_w;
-static uint16_t meter_wave_last_h;
-static uint8_t meter_wave_last_raw_min;
-static uint8_t meter_wave_last_raw_max;
-static uint8_t meter_wave_last_raw_last;
-static uint16_t meter_wave_last_peak_to_peak;
-static int meter_wave_last_freq_i10;
-static int meter_wave_last_current_mv;
-static uint32_t meter_wave_last_hash;
-static bool meter_wave_last_synced;
-
-static void draw_voltage_wave_panel(uint16_t x, uint16_t y,
-                                    uint16_t w, uint16_t h,
-                                    uint8_t mode, float current_val,
-                                    const char *current_unit,
-                                    float aux_freq_hz,
-                                    const theme_t *th,
-                                    bool force_redraw)
-{
-    static meter_voltage_wave_snapshot_t snap;
-    char buf[16];
-    shmem_owner_t owner = shared_mem_owner();
-    uint16_t *panel = NULL;
-    uint32_t panel_pixels = (uint32_t)w * h;
-
-    meter_voltage_wave_snapshot(&snap, w, aux_freq_hz);
-
-    float current_volts = current_val;
-    if (current_unit != NULL && strcmp(current_unit, "mV") == 0) {
-        current_volts = current_val / 1000.0f;
-    }
-    meter_voltage_wave_scale_t scale =
-        meter_voltage_wave_scale_from_dmm_rms(&snap, current_volts);
-    int freq_i10 = (int)(snap.freq_hz * 10.0f + 0.5f);
-    int current_mv = (int)(current_volts * 1000.0f + (current_volts >= 0.0f ? 0.5f : -0.5f));
-    int scale_ref_mv = scale.valid ? current_mv : 0;
-    uint32_t wave_hash = meter_wave_snapshot_hash(&snap);
-    bool same_panel =
-        !force_redraw && meter_wave_panel_retained &&
-        meter_wave_last_mode == mode &&
-        meter_wave_last_w == w &&
-        meter_wave_last_h == h &&
-        meter_wave_last_raw_min == snap.raw_min &&
-        meter_wave_last_raw_max == snap.raw_max &&
-        meter_wave_last_raw_last == snap.raw_last &&
-        meter_wave_last_peak_to_peak == snap.peak_to_peak_raw &&
-        meter_wave_last_freq_i10 == freq_i10 &&
-        meter_wave_last_current_mv == scale_ref_mv &&
-        meter_wave_last_hash == wave_hash &&
-        meter_wave_last_synced == snap.synced;
-
-    if (same_panel) {
-        return;
-    }
-
-    lcd_fill_rect(x - 1, y - 1, w + 2, 1, th->grid_center);
-    lcd_fill_rect(x - 1, y + h, w + 2, 1, th->grid_center);
-    lcd_fill_rect(x - 1, y, 1, h, th->grid_center);
-    lcd_fill_rect(x + w, y, 1, h, th->grid_center);
-
-    if ((panel_pixels * sizeof(uint16_t)) <= shared_mem_size()) {
-        if (owner == SHMEM_OWNER_DISPLAY) {
-            panel = (uint16_t *)shared_mem_get(SHMEM_OWNER_DISPLAY);
-        } else if (owner == SHMEM_OWNER_NONE) {
-            panel = (uint16_t *)shared_mem_acquire(SHMEM_OWNER_DISPLAY);
-        }
-    }
-
-    if (panel != NULL) {
-        for (uint32_t i = 0; i < panel_pixels; i++) {
-            panel[i] = th->background;
-        }
-    } else {
-        lcd_fill_rect(x, y, w, h, th->background);
-    }
-
-    for (int g = 1; g < 4; g++) {
-        uint16_t gy = (uint16_t)((h * g) / 4);
-        for (uint16_t gx = 0; gx < w; gx += 4) {
-            if (panel != NULL) {
-                panel_set_pixel(panel, w, h, gx, gy, th->grid);
-            } else {
-                lcd_set_pixel(x + gx, y + gy, th->grid);
-            }
-        }
-    }
-    for (uint16_t gx = 0; gx < w; gx += 2) {
-        if (panel != NULL) {
-            panel_set_pixel(panel, w, h, gx, h / 2, th->grid_center);
-        } else {
-            lcd_set_pixel(x + gx, y + h / 2, th->grid_center);
-        }
-    }
-
-    lcd_fill_rect(x, y - 13, w, 13, th->background);
-    lcd_fill_rect(x, y + h + 2, 120, 13, th->background);
-    /* User-facing title. It read "SPI3 meter ADC probe" until 2026-09-30 --
-     * a developer label that the README screenshot then showed. */
-    const bool wave_src = fpga_meter_wave_available();
-    const char *panel_title = (snap.stuck_high || !wave_src) ? "DMM waveform unavailable"
-                                                             : "DMM waveform";
-    font_draw_string(x, y - 13, panel_title,
-                     snap.stuck_high ? th->warning : th->text_secondary,
-                     th->background, &font_small);
-
-    if (snap.count < 2 || !snap.has_signal) {
-        if (panel != NULL) {
-            lcd_blit_rect(x, y, w, h, panel);
-        }
-        /* In builds without the sampler task the panel can never fill, so
-         * "Waiting for DMM samples" promised data that was never coming
-         * (seen in the v0.4.0 screenshots). Say what is true. */
-        const char *msg = !wave_src ? "Not in this firmware build" :
-                          snap.stuck_high ? "SPI3 probe flat FF" :
-                          "Waiting for DMM samples";
-        font_draw_string(x + 56, y + h / 2 - 6, msg,
-                         (snap.stuck_high && wave_src) ? th->warning : th->text_secondary,
-                         th->background, &font_small);
-        meter_wave_panel_retained = true;
-        meter_wave_last_mode = mode;
-        meter_wave_last_w = w;
-        meter_wave_last_h = h;
-        meter_wave_last_raw_min = snap.raw_min;
-        meter_wave_last_raw_max = snap.raw_max;
-        meter_wave_last_raw_last = snap.raw_last;
-        meter_wave_last_peak_to_peak = snap.peak_to_peak_raw;
-        meter_wave_last_freq_i10 = freq_i10;
-        meter_wave_last_current_mv = scale_ref_mv;
-        meter_wave_last_hash = wave_hash;
-        meter_wave_last_synced = snap.synced;
-        return;
-    }
-
-    uint16_t prev_y = 0;
-    for (uint16_t i = 0; i < snap.count && i < w; i++) {
-        uint16_t py = h - 1 - (uint16_t)((uint32_t)snap.y[i] * (h - 2) / 255U);
-        uint16_t ey_min = h - 1 - (uint16_t)((uint32_t)snap.env_min[i] * (h - 2) / 255U);
-        uint16_t ey_max = h - 1 - (uint16_t)((uint32_t)snap.env_max[i] * (h - 2) / 255U);
-
-        if (panel != NULL) {
-            panel_draw_meter_wave_line(panel, w, h, i, ey_min, i, ey_max, th->grid_center);
-            if (i > 0) {
-                panel_draw_meter_wave_line(panel, w, h, i - 1, prev_y, i, py, th->ch1);
-            } else {
-                panel_set_pixel(panel, w, h, i, py, th->ch1);
-            }
-        } else {
-            draw_meter_wave_line(x + i, y + ey_min, x + i, y + ey_max, th->grid_center);
-            if (i > 0) {
-                draw_meter_wave_line(x + i - 1, y + prev_y, x + i, y + py, th->ch1);
-            } else {
-                lcd_set_pixel(x + i, y + py, th->ch1);
-            }
-        }
-        prev_y = py;
-    }
-
-    if (panel != NULL) {
-        lcd_blit_rect(x, y, w, h, panel);
-    }
-
-    if (snap.freq_hz >= 1.0f) {
-        fmt_float(buf, sizeof(buf), snap.freq_hz, 1);
-        font_draw_string_right(x + w - 16, y - 13, buf,
-                               snap.synced ? th->success : th->text_secondary,
-                               th->background, &font_small);
-        font_draw_string(x + w - 12, y - 13, "Hz",
-                         snap.synced ? th->success : th->text_secondary,
-                         th->background, &font_small);
-    }
-
-    if (mode == 1 && scale.valid) {
-        float est_pp = meter_voltage_wave_peak_to_peak_volts(&snap, scale);
-        const char *pp_unit = "V";
-        if (est_pp < 1.0f) {
-            est_pp *= 1000.0f;
-            pp_unit = "mV";
-        }
-        fmt_float(buf, sizeof(buf), est_pp, est_pp < 10.0f ? 2 : 1);
-        font_draw_string(x, y + h + 2, "P-P~",
-                         th->text_secondary, th->background, &font_small);
-        font_draw_string(x + 30, y + h + 2, buf,
-                         th->text_secondary, th->background, &font_small);
-        font_draw_string(x + 72, y + h + 2, pp_unit,
-                         th->text_secondary, th->background, &font_small);
-    } else {
-        font_draw_string(x, y + h + 2, mode == 0 ? "ripple shape" : "shape only",
-                         th->text_secondary, th->background, &font_small);
-    }
-
-    meter_wave_panel_retained = true;
-    meter_wave_last_mode = mode;
-    meter_wave_last_w = w;
-    meter_wave_last_h = h;
-    meter_wave_last_raw_min = snap.raw_min;
-    meter_wave_last_raw_max = snap.raw_max;
-    meter_wave_last_raw_last = snap.raw_last;
-    meter_wave_last_peak_to_peak = snap.peak_to_peak_raw;
-    meter_wave_last_freq_i10 = freq_i10;
-    meter_wave_last_current_mv = scale_ref_mv;
-    meter_wave_last_hash = wave_hash;
-    meter_wave_last_synced = snap.synced;
-}
 
 static bool live_reading_for_mode(const meter_reading_t *reading, uint8_t mode)
 {
@@ -724,18 +456,17 @@ static void draw_main_reading(const meter_mode_info_t *m, const theme_t *th,
     }
 }
 
-static void draw_buzzer_indicator(uint16_t x, uint16_t y, const theme_t *th,
-                                  int is_short)
+
+/* Continuity beeps below this many ohms (2026-10-06). Shorted leads read
+ * ~0.14 Ohm as a plain resistance, so the chip's own continuity flag alone
+ * never fired. Common DMM practice is 10-50 Ohm; the softkey cycles these. */
+static const float cont_thresholds[] = { 10.0f, 30.0f, 50.0f, 100.0f };
+#define CONT_THRESHOLD_N (sizeof cont_thresholds / sizeof cont_thresholds[0])
+static uint8_t cont_threshold_idx = 1;      /* 30 Ohm */
+
+float meter_continuity_threshold(void)
 {
-    if (is_short) {
-        /* Large prominent continuity badge with green background. */
-        uint16_t badge_w = 100;
-        uint16_t badge_h = 28;
-        lcd_fill_rect(x - 4, y - 2, badge_w, badge_h, th->success);
-        font_draw_string(x + 4, y, "SHORT", th->background, th->success, &font_large);
-    } else {
-        font_draw_string(x, y, "OPEN", th->text_secondary, th->background, &font_large);
-    }
+    return cont_thresholds[cont_threshold_idx < CONT_THRESHOLD_N ? cont_threshold_idx : 1];
 }
 
 static bool meter_continuity_short_active(const meter_reading_t *reading,
@@ -749,8 +480,7 @@ static bool meter_continuity_short_active(const meter_reading_t *reading,
         return false;
     }
 
-    if (reading->continuity_beep ||
-        reading->result_class == METER_RESULT_CONTINUITY) {
+    if (meter_continuity_is_short(reading, meter_continuity_threshold())) {
         continuity_latch_frames = 8;
         return true;
     }
@@ -776,10 +506,6 @@ static bool meter_continuity_short_active(const meter_reading_t *reading,
     return false;
 }
 
-static void draw_diode_indicator(uint16_t x, uint16_t y, const theme_t *th)
-{
-    font_draw_string(x, y, "|>|", th->ch1, th->background, &font_medium);
-}
 
 static void meter_clear_dynamic_areas(uint8_t layout, uint8_t mode,
                                       uint16_t clear_bg)
@@ -820,10 +546,6 @@ static void meter_clear_dynamic_areas(uint8_t layout, uint8_t mode,
     }
 }
 
-/* Layout name for info display */
-static const char *layout_names[METER_LAYOUT_COUNT] = {
-    "Full", "Chart", "Stats", "Fuse"
-};
 
 const char *meter_submode_name(uint8_t submode)
 {
@@ -834,7 +556,6 @@ const char *meter_submode_name(uint8_t submode)
 void meter_screen_invalidate(void)
 {
     meter_screen_retained_valid = false;
-    meter_wave_panel_retained = false;
 }
 
 bool meter_screen_needs_periodic_redraw(void)
@@ -845,115 +566,6 @@ bool meter_screen_needs_periodic_redraw(void)
 /* ═══════════════════════════════════════════════════════════════════
  * Layout 0: Full (classic DMM)
  * ═══════════════════════════════════════════════════════════════════ */
-
-static void draw_meter_full(const meter_mode_info_t *m, uint8_t mode,
-                            const meter_reading_t *reading,
-                            float current_val, const char *value_str,
-                            float bar_pct, bool has_live_reading,
-                            bool force_redraw)
-{
-    const theme_t *th = theme_get();
-    const char *unit_str = live_unit(m, reading, mode);
-
-    draw_main_reading(m, th, reading, mode, MAIN_READING_Y, false, value_str);
-
-    /* Special indicators for continuity and diode modes */
-    if (mode == 7) {
-        /* Continuity: parser-confirmed continuity/zero-short frames can carry
-         * an exact 0.0 value, so do not treat zero as open once the frame is
-         * live and classified. */
-        int is_short = meter_continuity_short_active(reading, has_live_reading,
-                                                     current_val);
-        draw_buzzer_indicator(170, SECONDARY_Y + 44, th, is_short);
-    } else if (mode == 8) {
-        draw_diode_indicator(170, SECONDARY_Y + 44, th);
-    }
-
-    /* Bar graph */
-    draw_bar_graph(BAR_X, BAR_Y, BAR_W, BAR_H, bar_pct, th->success);
-
-    font_draw_string(BAR_X, BAR_Y + BAR_H + 2, "0",
-                     th->text_secondary, th->background, &font_small);
-    font_draw_string_right(BAR_X + BAR_W, BAR_Y + BAR_H + 2, m->bar_max_label,
-                           th->text_secondary, th->background, &font_small);
-
-    if (mode == 0 || mode == 1) {
-        /* y 128 (was 118): the panel title sits at y - 13, and at 118 it
-         * overlapped the bar graph's "0" scale label (rows 102..114), which
-         * showed as "S0I3" in the v0.4.0 screenshot. Height trimmed so the
-         * bottom edge stays near where it was. */
-        draw_voltage_wave_panel(10, 128, 300, 70, mode, current_val,
-                                unit_str, reading->aux_freq_hz, th,
-                                force_redraw);
-        font_draw_string(200, SECONDARY_Y, live_range_label(m, reading, mode),
-                         th->ch1, th->background, &font_small);
-        return;
-    }
-
-    /* Secondary readings: Min / Max / Avg */
-    char val_buf[16];
-
-    font_draw_string(16, SECONDARY_Y, "MIN",
-                     th->text_secondary, th->background, &font_small);
-    if (meter_stats_valid) {
-        fmt_float(val_buf, sizeof(val_buf), meter_min_val, 2);
-    } else {
-        val_buf[0] = '-'; val_buf[1] = '-'; val_buf[2] = '-'; val_buf[3] = '\0';
-    }
-    font_draw_string_right(120, SECONDARY_Y, val_buf,
-                           th->text_primary, th->background, &font_medium);
-    font_draw_string(122, SECONDARY_Y, unit_str,
-                     th->text_secondary, th->background, &font_small);
-
-    font_draw_string(16, SECONDARY_Y + 22, "MAX",
-                     th->text_secondary, th->background, &font_small);
-    if (meter_stats_valid) {
-        fmt_float(val_buf, sizeof(val_buf), meter_max_val, 2);
-    } else {
-        val_buf[0] = '-'; val_buf[1] = '-'; val_buf[2] = '-'; val_buf[3] = '\0';
-    }
-    font_draw_string_right(120, SECONDARY_Y + 22, val_buf,
-                           th->text_primary, th->background, &font_medium);
-    font_draw_string(122, SECONDARY_Y + 22, unit_str,
-                     th->text_secondary, th->background, &font_small);
-
-    font_draw_string(16, SECONDARY_Y + 44, "AVG",
-                     th->text_secondary, th->background, &font_small);
-    if (meter_stats_valid && meter_avg_count > 0) {
-        float avg = meter_avg_accum / (float)meter_avg_count;
-        fmt_float(val_buf, sizeof(val_buf), avg, 2);
-    } else {
-        val_buf[0] = '-'; val_buf[1] = '-'; val_buf[2] = '-'; val_buf[3] = '\0';
-    }
-    font_draw_string_right(120, SECONDARY_Y + 44, val_buf,
-                           th->text_primary, th->background, &font_medium);
-    font_draw_string(122, SECONDARY_Y + 44, unit_str,
-                     th->text_secondary, th->background, &font_small);
-
-    /* Range info */
-    font_draw_string(200, SECONDARY_Y, "Range:",
-                     th->text_secondary, th->background, &font_small);
-    font_draw_string(200, SECONDARY_Y + 16, live_range_label(m, reading, mode),
-                     th->ch1, th->background, &font_medium);
-
-    /* Sub-mode index indicator */
-    {
-        char idx_buf[8];
-        int idx = 0;
-        if (mode >= 9) {
-            idx_buf[idx++] = '1';
-            idx_buf[idx++] = '0';
-        } else {
-            idx_buf[idx++] = '1' + mode;
-        }
-        idx_buf[idx++] = '/';
-        idx_buf[idx++] = '1';
-        idx_buf[idx++] = '0';
-        idx_buf[idx] = '\0';
-        font_draw_string(200, SECONDARY_Y + 36, idx_buf,
-                         th->text_secondary, th->background, &font_small);
-    }
-}
 
 /* ═══════════════════════════════════════════════════════════════════
  * Layout 1: Chart (reading + strip chart)
@@ -1206,6 +818,692 @@ static void draw_meter_stats(const meter_mode_info_t *m, uint8_t mode,
 }
 
 /* ═══════════════════════════════════════════════════════════════════
+ * Softkey UI: big reading, limits, instant hold
+ * (docs/specs/platform/softkey-ui.md, P1 -- 2026-10-06)
+ *
+ * Softkeys under the screen: MOVE = Function, SELECT = Min/Max reset (Low in
+ * Limits, Show in Fuse), TRIGGER = Relative (High in Limits), PRM = View.
+ * OK = Hold. The Big and Limits views paint every pixel of their area in
+ * place each draw -- fixed boxes, opaque text, gaps refilled with the same
+ * colour -- so a changing reading never blanks (the once-a-second blink).
+ *
+ * State the old meter never had (held text, limits, pass/fail counts) lives
+ * in one heap block taken on first use: coldtrace's static RAM is full.
+ * ═══════════════════════════════════════════════════════════════════ */
+
+typedef struct {
+    char        held[16];       /* reading text at the HOLD press */
+    const char *held_unit;
+    float       lo, hi;         /* limits, in the unit they were set in */
+    const char *lim_unit;
+    uint8_t     lim_mode;       /* function the limits belong to */
+    int8_t      lim_dec;        /* decimals of the reading they came from */
+    bool        lim_set;
+    uint8_t     lim_active;     /* 0 = Low, 1 = High: what the arrows move */
+    uint16_t    pass, fail;
+    float       last_fail;
+    bool        has_fail;
+    uint8_t     verdict;        /* 0 none, 1 pass, 2 fail */
+    uint32_t    counted_update; /* display_update_count already judged */
+    fuse_input_t fuse;          /* lead cal + settling history (Fuse view) */
+} meter_ext_t;
+
+static meter_ext_t *mx;
+
+static meter_ext_t *meter_ext(void)
+{
+    if (!mx) {
+        mx = (meter_ext_t *)pvPortMalloc(sizeof(*mx));
+        if (mx) memset(mx, 0, sizeof(*mx));
+    }
+    return mx;
+}
+
+static const char *const meter_short_names[METER_SUBMODE_COUNT] = {
+    "DC V", "AC V", "DC mA", "DC A", "AC mA", "AC A",
+    "Ohms", "Contin.", "Diode", "Cap.", "Temp",
+};
+
+static const char *const meter_view_names[METER_LAYOUT_COUNT] = {
+    "Big", "Graph", "Stats", "Fuse", "Limits",
+};
+static const uint8_t meter_view_order[METER_LAYOUT_COUNT] = {
+    METER_LAYOUT_BIG, METER_LAYOUT_CHART, METER_LAYOUT_STATS,
+    METER_LAYOUT_LIMITS, METER_LAYOUT_FUSE,
+};
+
+static int str_decimals(const char *s)
+{
+    const char *d = strchr(s, '.');
+    if (!d) return 0;
+    int n = 0;
+    for (d++; *d >= '0' && *d <= '9'; d++) n++;
+    return n;
+}
+
+static bool str_is_number(const char *s)
+{
+    bool digit = false;
+    for (; *s; s++) {
+        if (*s >= '0' && *s <= '9') digit = true;
+        else if (*s != '.' && *s != '-' && *s != ' ' && *s != '+') return false;
+    }
+    return digit;
+}
+
+static float pow10_neg(int dec)
+{
+    float f = 1.0f;
+    while (dec-- > 0) f *= 0.1f;
+    return f;
+}
+
+/* Unit text in font_unit's glyphs: "kOhm" -> "k@", "uF" -> "`F", "C" -> "^C".
+ * False if a character has no glyph (caller falls back to a text font). */
+static bool unit_to_glyphs(const char *u, char *out, size_t n)
+{
+    size_t j = 0;
+    if (strcmp(u, "C") == 0) u = "^C";
+    for (size_t i = 0; u[i] && j + 1 < n; ) {
+        if (strncmp(&u[i], "Ohm", 3) == 0) { out[j++] = '@'; i += 3; continue; }
+        out[j++] = (u[i] == 'u') ? '`' : u[i];
+        i++;
+    }
+    out[j] = '\0';
+    return font_has_glyphs(out, &font_unit);
+}
+
+/* ── Hold (OK) and function stepping ──────────────────────────────── */
+
+void meter_hold_release(void)
+{
+    meter_hold_enabled = false;
+    meter_hold_locked = false;
+    hold_stable_count = 0;
+    if (mx) mx->held[0] = '\0';
+}
+
+bool meter_hold_is_on(void)
+{
+    return meter_hold_enabled && meter_hold_locked;
+}
+
+/* OK: freeze the reading on screen now, or go back to live. (Until
+ * 2026-10-06 hold was an auto-hold on TRIGGER that waited for 5 stable
+ * readings and showed a grey "hold" meanwhile -- undiscoverable, and its
+ * held value was re-printed with 2 decimals, F42.) */
+void meter_hold_toggle_now(void)
+{
+    if (meter_hold_enabled) {
+        meter_hold_release();
+        scope_show_popup("Live");
+        return;
+    }
+    uint8_t mode = meter_submode < METER_SUBMODE_COUNT ? meter_submode : 0;
+    meter_ext_t *e = meter_ext();
+    meter_reading_t r;
+    if (!e) { scope_show_popup("HOLD: no memory"); return; }
+    if (!meter_data_snapshot(&r) || !live_reading_for_mode(&r, mode)) {
+        scope_show_popup("HOLD: no reading");
+        return;
+    }
+    strncpy(e->held, r.display_str, sizeof(e->held) - 1);
+    e->held[sizeof(e->held) - 1] = '\0';
+    e->held_unit = live_unit(&meter_modes[mode], &r, mode);
+    meter_hold_value = r.value;
+    meter_hold_enabled = true;
+    meter_hold_locked = true;
+    scope_show_popup("HOLD");
+}
+
+static void meter_function_set(uint8_t m)
+{
+    meter_submode = m;
+    meter_reset_minmaxavg();
+    meter_hold_release();
+    if (meter_rel_enabled) meter_toggle_relative();     /* a reference in another function means nothing */
+    fpga_request_meter_mode(meter_submode);             /* in the background: the UI shows dashes meanwhile */
+}
+
+void meter_function_step(int8_t dir)
+{
+    uint8_t m = meter_submode < METER_SUBMODE_COUNT ? meter_submode : 0;
+    if (dir > 0) m = (uint8_t)((m + 1) % METER_SUBMODE_COUNT);
+    else         m = (m == 0) ? (uint8_t)(METER_SUBMODE_COUNT - 1) : (uint8_t)(m - 1);
+    meter_function_set(m);
+}
+
+/* ── Limits (pass/fail) ───────────────────────────────────────────── */
+
+static bool limits_init_from_reading(meter_ext_t *e)
+{
+    uint8_t mode = meter_submode < METER_SUBMODE_COUNT ? meter_submode : 0;
+    meter_reading_t r;
+    if (!meter_data_snapshot(&r) || !live_reading_for_mode(&r, mode) ||
+        !str_is_number(r.display_str))
+        return false;
+    int dec = str_decimals(r.display_str);
+    float v = r.value;
+    float a = (v < 0 ? -v : v) * 0.05f;
+    float q = pow10_neg(dec);
+    if (a < 10.0f * q) a = 10.0f * q;
+    e->lo = v - a;
+    e->hi = v + a;
+    e->lim_unit = live_unit(&meter_modes[mode], &r, mode);
+    e->lim_mode = mode;
+    e->lim_dec = (int8_t)dec;
+    e->lim_set = true;
+    e->pass = e->fail = 0;
+    e->has_fail = false;
+    e->verdict = 0;
+    return true;
+}
+
+static bool limits_valid_now(const meter_ext_t *e)
+{
+    return e && e->lim_set && e->lim_mode == meter_submode;
+}
+
+/* UP/DOWN in the Limits view: move the active limit by one count of the
+ * digit before last of the reading it came from. */
+void meter_limits_nudge(int8_t dir)
+{
+    meter_ext_t *e = meter_ext();
+    if (!limits_valid_now(e)) {
+        if (!e || !limits_init_from_reading(e)) { scope_show_popup("Limits: no reading"); return; }
+    }
+    float step = pow10_neg(e->lim_dec) * 10.0f;
+    if (e->lim_active == 0) {
+        e->lo += dir * step;
+        if (e->lo > e->hi) e->lo = e->hi;
+    } else {
+        e->hi += dir * step;
+        if (e->hi < e->lo) e->hi = e->lo;
+    }
+    e->pass = e->fail = 0;
+    e->has_fail = false;
+    e->verdict = 0;
+}
+
+static void limit_press(uint8_t which)
+{
+    meter_ext_t *e = meter_ext();
+    char b[24], v[12];
+    if (!e) { scope_show_popup("Limits: no memory"); return; }
+    if (!limits_valid_now(e)) {
+        if (!limits_init_from_reading(e)) { scope_show_popup("Limits: no reading"); return; }
+        e->lim_active = which;
+        scope_show_popup("Limits set: reading +/-5%");
+        return;
+    }
+    if (e->lim_active != which) {
+        e->lim_active = which;
+        snprintf(b, sizeof b, "Arrows: %s", which ? "High" : "Low");
+        scope_show_popup(b);
+        return;
+    }
+    /* Second press on the active limit: snap it to the reading. */
+    uint8_t mode = meter_submode < METER_SUBMODE_COUNT ? meter_submode : 0;
+    meter_reading_t r;
+    if (!meter_data_snapshot(&r) || !live_reading_for_mode(&r, mode) ||
+        !str_is_number(r.display_str)) {
+        scope_show_popup("Limits: no reading");
+        return;
+    }
+    if (which) { e->hi = r.value; if (e->lo > e->hi) e->lo = e->hi; }
+    else       { e->lo = r.value; if (e->hi < e->lo) e->hi = e->lo; }
+    e->pass = e->fail = 0;
+    e->has_fail = false;
+    fmt_float(v, sizeof v, r.value, e->lim_dec);
+    snprintf(b, sizeof b, "%s = %s", which ? "High" : "Low", v);
+    scope_show_popup(b);
+}
+
+/* Judge each new reading once while the Limits view is up. */
+static void limits_judge(const meter_reading_t *r, bool live, const char *unit)
+{
+    meter_ext_t *e = mx;
+    if (!limits_valid_now(e)) return;
+    if (!live || meter_hold_is_on() || !str_is_number(r->display_str) ||
+        unit != e->lim_unit) {
+        e->verdict = 0;
+        return;
+    }
+    if (r->display_update_count == e->counted_update) return;
+    e->counted_update = r->display_update_count;
+    if (r->value >= e->lo && r->value <= e->hi) {
+        e->verdict = 1;
+        if (e->pass < 0xFFFF) e->pass++;
+    } else {
+        e->verdict = 2;
+        if (e->fail < 0xFFFF) e->fail++;
+        e->last_fail = r->value;
+        e->has_fail = true;
+    }
+}
+
+/* ── Drawing helpers ──────────────────────────────────────────────── */
+
+#define BIG_BADGE_Y   (METER_TOP + 3)
+#define BIG_READ_Y    (METER_TOP + 22)
+#define BIG_UNIT_Y    (BIG_READ_Y + 76)
+#define BIG_SUB_Y     (BIG_UNIT_Y + 48)
+#define BIG_RIGHT     308
+
+static uint16_t draw_badge(uint16_t x, uint16_t y, const char *t,
+                           uint16_t fg, uint16_t fill, uint16_t area_bg)
+{
+    uint16_t w = font_string_width(t, &font_small) + 8;
+    font_draw_string_box(x, y, w, t, fg, fill, &font_small, FONT_ALIGN_CENTER);
+    lcd_fill_rect(x + w, y, 4, font_small.height, area_bg);
+    return w + 4;
+}
+
+static void draw_badge_row(uint16_t y, uint16_t bg, const theme_t *th)
+{
+    uint16_t x = 4;
+    lcd_fill_rect(0, y, 4, font_small.height, bg);
+    if (meter_hold_is_on())
+        x += draw_badge(x, y, "HOLD", th->background, th->warning, bg);
+    if (meter_rel_enabled)
+        x += draw_badge(x, y, "REL", th->background, th->highlight, bg);
+    if (meter_autoselect_is_running())
+        x += draw_badge(x, y, "AUTO", th->background, th->highlight, bg);
+    if (x < LCD_WIDTH) lcd_fill_rect(x, y, LCD_WIDTH - x, font_small.height, bg);
+}
+
+/* Text in a band of height `band`, the font centred vertically in it;
+ * every pixel of the band written once. */
+static void draw_band_text(uint16_t x, uint16_t y, uint16_t w, uint16_t band,
+                           const char *t, uint16_t fg, uint16_t bg,
+                           const font_t *f, uint8_t align)
+{
+    uint16_t top = (band > f->height) ? (uint16_t)((band - f->height) / 2) : 0;
+    if (top) lcd_fill_rect(x, y, w, top, bg);
+    font_draw_string_box(x, y + top, w, t, fg, bg, f, align);
+    uint16_t used = top + f->height;
+    if (band > used) lcd_fill_rect(x, y + used, w, band - used, bg);
+}
+
+static void draw_unit_line(uint16_t x, uint16_t y, uint16_t w, const char *unit,
+                           const char *acdc, uint16_t fg, uint16_t bg,
+                           uint8_t align)
+{
+    char g[16], t[20];
+    if (unit_to_glyphs(unit, g, sizeof g)) {
+        snprintf(t, sizeof t, acdc[0] ? "%s %s" : "%s", g, acdc);
+        draw_band_text(x, y, w, font_unit.height, t, fg, bg, &font_unit, align);
+    } else {
+        snprintf(t, sizeof t, acdc[0] ? "%s %s" : "%s", unit, acdc);
+        draw_band_text(x, y, w, font_unit.height, t, fg, bg, &font_large, align);
+    }
+}
+
+/* ── Big view ─────────────────────────────────────────────────────── */
+
+static void draw_meter_big(const meter_mode_info_t *m, uint8_t mode,
+                           const meter_reading_t *r, bool live,
+                           const char *value_str, uint16_t bg)
+{
+    const theme_t *th = theme_get();
+    uint16_t fg = (bg == th->background) ? th->text_primary : th->background;
+    const char *unit = (meter_hold_is_on() && mx && mx->held_unit)
+                       ? mx->held_unit : live_unit(m, r, mode);
+    char sub[48];
+
+    lcd_fill_rect(0, METER_TOP, LCD_WIDTH, BIG_BADGE_Y - METER_TOP, bg);
+    draw_badge_row(BIG_BADGE_Y, bg, th);
+    lcd_fill_rect(0, BIG_BADGE_Y + font_small.height, LCD_WIDTH,
+                  BIG_READ_Y - (BIG_BADGE_Y + font_small.height), bg);
+
+    if (font_has_glyphs(value_str, &font_huge)) {
+        font_draw_string_box(0, BIG_READ_Y, BIG_RIGHT, value_str, fg, bg,
+                             &font_huge, FONT_ALIGN_RIGHT);
+        lcd_fill_rect(BIG_RIGHT, BIG_READ_Y, LCD_WIDTH - BIG_RIGHT, font_huge.height, bg);
+    } else {
+        draw_band_text(0, BIG_READ_Y, LCD_WIDTH, font_huge.height, value_str,
+                       fg, bg, &font_large, FONT_ALIGN_CENTER);
+    }
+    lcd_fill_rect(0, BIG_READ_Y + font_huge.height, LCD_WIDTH,
+                  BIG_UNIT_Y - (BIG_READ_Y + font_huge.height), bg);
+
+    lcd_fill_rect(0, BIG_UNIT_Y, 4, font_unit.height, bg);
+    draw_unit_line(4, BIG_UNIT_Y, BIG_RIGHT - 4, unit, live_ac_dc(m, r, mode),
+                   (bg == th->background) ? th->text_secondary : th->background,
+                   bg, FONT_ALIGN_RIGHT);
+    lcd_fill_rect(BIG_RIGHT, BIG_UNIT_Y, LCD_WIDTH - BIG_RIGHT, font_unit.height, bg);
+    lcd_fill_rect(0, BIG_UNIT_Y + font_unit.height, LCD_WIDTH,
+                  BIG_SUB_Y - (BIG_UNIT_Y + font_unit.height), bg);
+
+    /* One quiet line: relative reference, continuity verdict, or min/max. */
+    sub[0] = '\0';
+    int dec = str_decimals(live ? r->display_str : value_str);
+    if (meter_rel_enabled) {
+        char v[16];
+        fmt_float(v, sizeof v, meter_rel_reference, dec);
+        snprintf(sub, sizeof sub, "Relative to %s %s", v, unit);
+    } else if (mode == 7 && live) {
+        snprintf(sub, sizeof sub, "%s  (beeps below %d Ohm)",
+                 meter_continuity_short_active(r, live, r->value) ? "SHORT" : "OPEN",
+                 (int)meter_continuity_threshold());
+    } else if (meter_stats_valid) {
+        char a[16], b[16];
+        fmt_float(a, sizeof a, meter_min_val, dec);
+        fmt_float(b, sizeof b, meter_max_val, dec);
+        snprintf(sub, sizeof sub, "Min %s    Max %s", a, b);
+    }
+    font_draw_string_box(0, BIG_SUB_Y, LCD_WIDTH, sub,
+                         (bg == th->background) ? th->text_secondary : th->background,
+                         bg, &font_medium, FONT_ALIGN_CENTER);
+    lcd_fill_rect(0, BIG_SUB_Y + font_medium.height, LCD_WIDTH,
+                  METER_BOTTOM - (BIG_SUB_Y + font_medium.height), bg);
+}
+
+/* ── Limits view ──────────────────────────────────────────────────── */
+
+#define LIM_READ_Y   (METER_TOP + 20)
+#define LIM_BOX_X    216
+#define LIM_BOX_W    100
+#define LIM_BOX_H    46
+#define LIM_BAR_Y    (LIM_READ_Y + 58)
+#define LIM_BAR_H    14
+#define LIM_BAR_X    16
+#define LIM_BAR_W    288
+#define LIM_LBL_Y    (LIM_BAR_Y + LIM_BAR_H + 4)
+#define LIM_CNT_Y    (LIM_LBL_Y + 22)
+#define LIM_LAST_Y   (LIM_CNT_Y + 24)
+
+static void draw_meter_limits(const meter_mode_info_t *m, uint8_t mode,
+                              const meter_reading_t *r, bool live,
+                              const char *value_str)
+{
+    const theme_t *th = theme_get();
+    uint16_t bg = th->background;
+    const char *unit = live_unit(m, r, mode);
+    meter_ext_t *e = mx;
+    bool ok = limits_valid_now(e);
+    char t[40], a[16], b[16];
+
+    limits_judge(r, live, unit);
+
+    lcd_fill_rect(0, METER_TOP, LCD_WIDTH, BIG_BADGE_Y - METER_TOP, bg);
+    draw_badge_row(BIG_BADGE_Y, bg, th);
+    lcd_fill_rect(0, BIG_BADGE_Y + font_small.height, LCD_WIDTH,
+                  LIM_READ_Y - (BIG_BADGE_Y + font_small.height), bg);
+
+    /* Reading + unit, left of the verdict box */
+    const font_t *rf = font_has_glyphs(value_str, &font_xlarge) ? &font_xlarge : &font_large;
+    draw_band_text(0, LIM_READ_Y, 170, LIM_BOX_H, value_str, th->text_primary, bg, rf, FONT_ALIGN_RIGHT);
+    draw_band_text(170, LIM_READ_Y, 46, LIM_BOX_H, unit, th->text_secondary, bg, &font_medium, FONT_ALIGN_CENTER);
+
+    /* Verdict box */
+    uint8_t vd = ok ? e->verdict : 0;
+    uint16_t vbg = vd == 1 ? th->success : vd == 2 ? th->warning : th->grid_center;
+    const char *vt = vd == 1 ? "PASS" : vd == 2 ? "FAIL" : (ok ? "---" : "SET");
+    draw_band_text(LIM_BOX_X, LIM_READ_Y, LIM_BOX_W, LIM_BOX_H, vt, th->background, vbg, &font_large, FONT_ALIGN_CENTER);
+    lcd_fill_rect(LIM_BOX_X + LIM_BOX_W, LIM_READ_Y, LCD_WIDTH - (LIM_BOX_X + LIM_BOX_W), LIM_BOX_H, bg);
+    lcd_fill_rect(0, LIM_READ_Y + LIM_BOX_H, LCD_WIDTH, LIM_BAR_Y - (LIM_READ_Y + LIM_BOX_H), bg);
+
+    /* Bar: [lo - span/4, hi + span/4], pass zone between, a marker at the value */
+    lcd_fill_rect(0, LIM_BAR_Y, LIM_BAR_X, LIM_BAR_H, bg);
+    lcd_fill_rect(LIM_BAR_X + LIM_BAR_W, LIM_BAR_Y, LCD_WIDTH - (LIM_BAR_X + LIM_BAR_W), LIM_BAR_H, bg);
+    if (ok) {
+        float span = e->hi - e->lo;
+        if (span <= 0.0f) span = pow10_neg(e->lim_dec) * 10.0f;
+        float x0 = e->lo - span * 0.25f, x1 = e->hi + span * 0.25f;
+        int lo_x = (int)((e->lo - x0) / (x1 - x0) * LIM_BAR_W);
+        int hi_x = (int)((e->hi - x0) / (x1 - x0) * LIM_BAR_W);
+        int mk = -10;
+        if (live && str_is_number(r->display_str) && !meter_hold_is_on()) {
+            mk = (int)((r->value - x0) / (x1 - x0) * LIM_BAR_W);
+            if (mk < 0) mk = 0;
+            if (mk > LIM_BAR_W - 3) mk = LIM_BAR_W - 3;
+        }
+        for (int i = 0; i < LIM_BAR_W; i++) {
+            uint16_t c = (i >= mk && i < mk + 3) ? th->text_primary
+                       : (i >= lo_x && i <= hi_x) ? th->success : th->grid;
+            lcd_fill_rect((uint16_t)(LIM_BAR_X + i), LIM_BAR_Y, 1, LIM_BAR_H, c);
+        }
+    } else {
+        lcd_fill_rect(LIM_BAR_X, LIM_BAR_Y, LIM_BAR_W, LIM_BAR_H, th->grid);
+    }
+    lcd_fill_rect(0, LIM_BAR_Y + LIM_BAR_H, LCD_WIDTH, LIM_LBL_Y - (LIM_BAR_Y + LIM_BAR_H), bg);
+
+    /* Limit labels; the one the arrows move is highlighted */
+    if (ok) {
+        fmt_float(a, sizeof a, e->lo, e->lim_dec);
+        fmt_float(b, sizeof b, e->hi, e->lim_dec);
+    } else {
+        strcpy(a, "--"); strcpy(b, "--");
+    }
+    snprintf(t, sizeof t, "Low %s", a);
+    font_draw_string_box(0, LIM_LBL_Y, 160, t,
+                         (ok && e->lim_active == 0) ? th->highlight : th->text_secondary,
+                         bg, &font_medium, FONT_ALIGN_CENTER);
+    snprintf(t, sizeof t, "High %s", b);
+    font_draw_string_box(160, LIM_LBL_Y, 160, t,
+                         (ok && e->lim_active == 1) ? th->highlight : th->text_secondary,
+                         bg, &font_medium, FONT_ALIGN_CENTER);
+    lcd_fill_rect(0, LIM_LBL_Y + font_medium.height, LCD_WIDTH, LIM_CNT_Y - (LIM_LBL_Y + font_medium.height), bg);
+
+    if (ok) snprintf(t, sizeof t, "Pass %u     Fail %u", (unsigned)e->pass, (unsigned)e->fail);
+    else    snprintf(t, sizeof t, "Press Low or High to set limits");
+    font_draw_string_box(0, LIM_CNT_Y, LCD_WIDTH, t, th->text_primary, bg, &font_medium, FONT_ALIGN_CENTER);
+    lcd_fill_rect(0, LIM_CNT_Y + font_medium.height, LCD_WIDTH, LIM_LAST_Y - (LIM_CNT_Y + font_medium.height), bg);
+
+    t[0] = '\0';
+    if (ok && unit != e->lim_unit && live)
+        snprintf(t, sizeof t, "Range changed: limits are in %s", e->lim_unit);
+    else if (ok && e->has_fail) {
+        fmt_float(a, sizeof a, e->last_fail, e->lim_dec);
+        snprintf(t, sizeof t, "Last fail %s %s", a, e->lim_unit);
+    }
+    font_draw_string_box(0, LIM_LAST_Y, LCD_WIDTH, t, th->text_secondary, bg, &font_medium, FONT_ALIGN_CENTER);
+    lcd_fill_rect(0, LIM_LAST_Y + font_medium.height, LCD_WIDTH, METER_BOTTOM - (LIM_LAST_Y + font_medium.height), bg);
+}
+
+/* ── Softkey tables ───────────────────────────────────────────────── */
+
+static void skv_function(char *b, uint8_t n)
+{
+    uint8_t m = meter_submode < METER_SUBMODE_COUNT ? meter_submode : 0;
+    snprintf(b, n, "%s", meter_short_names[m]);
+}
+static void skp_function(void) { meter_function_step(+1); }
+
+static void skv_reset(char *b, uint8_t n) { snprintf(b, n, "Min/Max"); }
+static void skp_reset(void) { meter_reset_minmaxavg(); scope_show_popup("Min/Max reset"); }
+
+static void skv_rel(char *b, uint8_t n) { snprintf(b, n, "%s", meter_rel_enabled ? "On" : "Off"); }
+static bool ska_rel(void) { return meter_rel_enabled; }
+static void skp_rel(void)
+{
+    meter_toggle_relative();
+    scope_show_popup(meter_rel_enabled ? "Relative: On" : "Relative: Off");
+}
+
+static void skv_view(char *b, uint8_t n)
+{
+    snprintf(b, n, "%s", meter_view_names[meter_layout < METER_LAYOUT_COUNT ? meter_layout : 0]);
+}
+static void skp_view(void)
+{
+    uint8_t i = 0;
+    while (i < METER_LAYOUT_COUNT && meter_view_order[i] != meter_layout) i++;
+    meter_layout = meter_view_order[(i + 1) % METER_LAYOUT_COUNT];
+    if (meter_layout == METER_LAYOUT_FUSE && meter_submode != 0) {
+        meter_function_set(0);                          /* the fuse tester reads a DC drop */
+        scope_show_popup("Fuse tester: DC V");
+    }
+    if (meter_layout == METER_LAYOUT_LIMITS) {
+        meter_ext_t *e = meter_ext();
+        if (e && !limits_valid_now(e)) (void)limits_init_from_reading(e);
+    }
+}
+
+static void skv_low(char *b, uint8_t n)
+{
+    if (limits_valid_now(mx)) fmt_float(b, n, mx->lo, mx->lim_dec);
+    else snprintf(b, n, "--");
+}
+static void skv_high(char *b, uint8_t n)
+{
+    if (limits_valid_now(mx)) fmt_float(b, n, mx->hi, mx->lim_dec);
+    else snprintf(b, n, "--");
+}
+static bool ska_low(void)  { return limits_valid_now(mx) && mx->lim_active == 0; }
+static bool ska_high(void) { return limits_valid_now(mx) && mx->lim_active == 1; }
+static void skp_low(void)  { limit_press(0); }
+static void skp_high(void) { limit_press(1); }
+
+static void skv_fuse_type(char *b, uint8_t n)
+{
+    snprintf(b, n, "%s", fuse_type_names[fuse_type < FUSE_TYPE_COUNT ? fuse_type : 0]);
+}
+static void skp_fuse_type(void) { fuse_next_type(); }
+static void skv_fuse_show(char *b, uint8_t n)
+{
+    static const char *const v[FUSE_VIEW_COUNT] = { "Detail", "Table", "Scan", "Types" };
+    snprintf(b, n, "%s", v[fuse_view < FUSE_VIEW_COUNT ? fuse_view : 0]);
+}
+static void skp_fuse_show(void) { fuse_cycle_view(); }
+static void skv_fuse_rating(char *b, uint8_t n)
+{
+    const fuse_table_t *t = &fuse_tables[fuse_type < FUSE_TYPE_COUNT ? fuse_type : 0];
+    char l[8];
+    fuse_rating_label(t->entries[fuse_rating_idx < t->count ? fuse_rating_idx : 0].rating_amps,
+                      l, sizeof l);
+    snprintf(b, n, "%s A", l);
+}
+static bool ska_arrows(void) { return true; }          /* UP/DOWN adjust this key */
+static void skp_fuse_rating(void) { fuse_rating_press(); }
+static void skv_fuse_thresh(char *b, uint8_t n)
+{
+    int t = (int)(fuse_scan_threshold_mv * 10.0f + 0.5f);
+    snprintf(b, n, "%d.%d mV", t / 10, t % 10);
+}
+static void skp_fuse_thresh(void) { fuse_threshold_press(); }
+
+/* The settling window, from the meter's own frame history: the view only
+ * redraws when the shown value changes (~1/s for a steady reading), so
+ * sampling at redraws never filled the window and Cal leads refused a
+ * rock-steady short. */
+static void fuse_input_refresh(fuse_input_t *f)
+{
+    float rec[FUSE_STEADY_N];
+    uint8_t n = meter_data_recent_dc_mv(rec, FUSE_STEADY_N);
+    fuse_input_clear(f);
+    while (n) fuse_input_push(f, rec[--n]);             /* oldest first */
+}
+
+/* Cal leads: the offset the shorted leads read, taken off every drop. Unit
+ * #1 reads -0.9 mV shorted -- a phantom 114 mA DRAW on a 10 A ATO (F47). */
+static void fmt_cal(char *b, uint8_t n, float mv)
+{
+    int v = (int)(mv * 100.0f + (mv < 0 ? -0.5f : 0.5f));
+    int a = v < 0 ? -v : v;
+    snprintf(b, n, "%s%d.%02d mV", v < 0 ? "-" : "", a / 100, a % 100);
+}
+static void skv_fuse_cal(char *b, uint8_t n)
+{
+    if (mx && mx->fuse.cal_set) fmt_cal(b, n, mx->fuse.cal_mv);
+    else snprintf(b, n, "not set");
+}
+static bool ska_fuse_cal(void) { return mx && mx->fuse.cal_set; }
+static void skp_fuse_cal(void)
+{
+    meter_ext_t *e = meter_ext();
+    char t[40], v[16];
+    if (!e) { scope_show_popup("Cal leads: no memory"); return; }
+    if (meter_submode != 0) { scope_show_popup("Cal leads: needs DC V"); return; }
+    fuse_input_refresh(&e->fuse);
+    switch (fuse_input_calibrate(&e->fuse)) {
+    case FUSE_CAL_OK:
+        fmt_cal(v, sizeof v, e->fuse.cal_mv);
+        snprintf(t, sizeof t, "Leads cal: %s", v);
+        break;
+    case FUSE_CAL_TOO_LARGE:
+        snprintf(t, sizeof t, "Too large: tips together?");
+        break;
+    default:
+        snprintf(t, sizeof t, "Hold the tips together");
+        break;
+    }
+    scope_show_popup(t);
+}
+
+static void skv_cont(char *b, uint8_t n) { snprintf(b, n, "< %d Ohm", (int)meter_continuity_threshold()); }
+static void skp_cont(void)
+{
+    char t[24];
+    cont_threshold_idx = (uint8_t)((cont_threshold_idx + 1) % CONT_THRESHOLD_N);
+    snprintf(t, sizeof t, "Beep below %d Ohm", (int)meter_continuity_threshold());
+    scope_show_popup(t);
+}
+
+static const softkey_bar_t meter_bar_cont = {{
+    { "Function", skv_function,  skp_function, NULL },
+    { "Reset",    skv_reset,     skp_reset,    NULL },
+    { "Beep",     skv_cont,      skp_cont,     NULL },
+    { "View",     skv_view,      skp_view,     NULL },
+}};
+static const softkey_bar_t meter_bar_main = {{
+    { "Function", skv_function,  skp_function, NULL },
+    { "Reset",    skv_reset,     skp_reset,    NULL },
+    { "Relative", skv_rel,       skp_rel,      ska_rel },
+    { "View",     skv_view,      skp_view,     NULL },
+}};
+static const softkey_bar_t meter_bar_limits = {{
+    { "Function", skv_function,  skp_function, NULL },
+    { "Low",      skv_low,       skp_low,      ska_low },
+    { "High",     skv_high,      skp_high,     ska_high },
+    { "View",     skv_view,      skp_view,     NULL },
+}};
+/* Fuse type is also on LEFT/RIGHT; the Types page keeps it on a key. */
+static const softkey_bar_t meter_bar_fuse = {{
+    { "Cal leads", skv_fuse_cal,    skp_fuse_cal,    ska_fuse_cal },
+    { "Rating",    skv_fuse_rating, skp_fuse_rating, ska_arrows },
+    { "Show",      skv_fuse_show,   skp_fuse_show,   NULL },
+    { "View",      skv_view,        skp_view,        NULL },
+}};
+static const softkey_bar_t meter_bar_fuse_types = {{
+    { "Fuse type", skv_fuse_type,   skp_fuse_type,   NULL },
+    { "Rating",    skv_fuse_rating, skp_fuse_rating, ska_arrows },
+    { "Show",      skv_fuse_show,   skp_fuse_show,   NULL },
+    { "View",      skv_view,        skp_view,        NULL },
+}};
+static const softkey_bar_t meter_bar_fuse_scan = {{
+    { "Cal leads", skv_fuse_cal,    skp_fuse_cal,    ska_fuse_cal },
+    { "Draw if >", skv_fuse_thresh, skp_fuse_thresh, ska_arrows },
+    { "Show",      skv_fuse_show,   skp_fuse_show,   NULL },
+    { "View",      skv_view,        skp_view,        NULL },
+}};
+
+const softkey_bar_t *meter_softkey_bar(uint8_t layout, uint8_t submode)
+{
+    if (layout == METER_LAYOUT_LIMITS) return &meter_bar_limits;
+    if (layout == METER_LAYOUT_FUSE)
+        return fuse_view == FUSE_VIEW_SCAN  ? &meter_bar_fuse_scan
+             : fuse_view == FUSE_VIEW_TYPES ? &meter_bar_fuse_types : &meter_bar_fuse;
+    if (submode == 7)                  return &meter_bar_cont;   /* continuity: Beep threshold */
+    return &meter_bar_main;
+}
+
+static const softkey_bar_t *meter_bar(void)
+{
+    return meter_softkey_bar(meter_layout, meter_submode);
+}
+
+bool meter_softkey_press(int8_t slot)
+{
+    if (meter_autoselect_is_running()) meter_autoselect_cancel();
+    return softkey_bar_press(meter_bar(), slot);
+}
+
+void meter_softkeys_draw(void)        { softkey_bar_draw(meter_bar()); }
+uint32_t meter_softkeys_epoch(void)   { return softkey_bar_epoch(meter_bar()); }
+
+/* ═══════════════════════════════════════════════════════════════════
  * Main meter screen draw — dispatches by layout
  * ═══════════════════════════════════════════════════════════════════ */
 
@@ -1338,9 +1636,13 @@ void draw_meter_screen(void)
      * the big visible blank only for structural changes; ordinary reading
      * updates retain the frame and erase just the dynamic regions. */
     uint16_t clear_bg = continuity_flash ? th->success : th->background;
+    bool in_place = (meter_layout == METER_LAYOUT_BIG || meter_layout == METER_LAYOUT_LIMITS ||
+                     meter_layout == METER_LAYOUT_FUSE);
     if (full_clear) {
         lcd_fill_rect(0, METER_TOP, LCD_WIDTH, METER_BOTTOM - METER_TOP, clear_bg);
         meter_screen_full_clear_count++;
+    } else if (in_place) {
+        /* Big and Limits repaint every pixel of their area in place. */
     } else {
         meter_clear_dynamic_areas(meter_layout, mode, clear_bg);
         meter_screen_partial_clear_count++;
@@ -1359,13 +1661,9 @@ void draw_meter_screen(void)
     /* Mode indicators (top of content area) */
     uint16_t ind_x = 4;
 
-    /* Layout name */
-    font_draw_string_right(LCD_WIDTH - 4, METER_TOP + 2,
-                           layout_names[meter_layout],
-                           th->text_secondary, th->background, &font_small);
 
-    /* REL indicator */
-    if (meter_rel_enabled) {
+    /* REL indicator (Graph/Stats; Big and Limits draw their own badge row) */
+    if (meter_rel_enabled && !in_place) {
         lcd_fill_rect(ind_x, METER_TOP + 1, 28, 13, th->highlight);
         font_draw_string(ind_x + 2, METER_TOP + 2, "REL",
                          th->background, th->highlight, &font_small);
@@ -1373,7 +1671,7 @@ void draw_meter_screen(void)
     }
 
     /* HOLD indicator */
-    if (meter_hold_enabled) {
+    if (meter_hold_enabled && !in_place) {
         uint16_t hold_bg = meter_hold_locked ? th->warning : th->grid_center;
         lcd_fill_rect(ind_x, METER_TOP + 1, 36, 13, hold_bg);
         font_draw_string(ind_x + 2, METER_TOP + 2,
@@ -1382,11 +1680,14 @@ void draw_meter_screen(void)
         ind_x += 40;
     }
 
-    /* Use display_val for REL/HOLD-adjusted readings */
-    if (meter_rel_enabled || (meter_hold_enabled && meter_hold_locked)) {
-        /* Format the adjusted value for display */
+    /* HOLD shows the text that was on screen at the press; REL re-prints the
+     * difference with the reading's own decimals (it used 2, F42). */
+    if (meter_hold_is_on() && mx && mx->held[0] && !meter_rel_enabled) {
+        value_str = mx->held;
+    } else if (meter_rel_enabled || meter_hold_is_on()) {
         static char adjusted_str[16];
-        int decimals = 2;  /* Default decimal places for adjusted display */
+        int decimals = str_decimals(has_live_reading ? reading.display_str
+                                    : (mx && mx->held[0] ? mx->held : "0.00"));
         fmt_float(adjusted_str, sizeof(adjusted_str), display_val, decimals);
         value_str = adjusted_str;
         /* Update bar for adjusted value */
@@ -1402,13 +1703,38 @@ void draw_meter_screen(void)
     case METER_LAYOUT_STATS:
         draw_meter_stats(m, mode, &reading, current_val, value_str);
         break;
-    case METER_LAYOUT_FUSE:
-        /* Fuse tester uses the mV reading as voltage drop. */
-        draw_fuse_screen(current_val);
+    case METER_LAYOUT_FUSE: {
+        /* The drop across the fuse, in mV, from a DC-volts reading (held
+         * while HOLD is on). Anything else is "no reading", never a guess.
+         * Live readings are judged on the meter's last frames; the lead
+         * cal comes off both. A held reading was steady enough to hold. */
+        float mv = 0.0f;
+        int8_t dec = (mode == 0) ? -1 : -2;            /* -2: on another function */
+        bool steady = true;
+        meter_ext_t *e = meter_ext();
+        if (mode == 0) {
+            if (meter_hold_is_on() && mx && mx->held[0]) {
+                if (fuse_drop_mv_from_reading(meter_hold_value, mx->held_unit, &mv))
+                    dec = (int8_t)fuse_mv_decimals(mx->held, mx->held_unit);
+            } else if (has_live_reading &&
+                       fuse_drop_mv_from_reading(reading.value, reading.unit_suffix, &mv)) {
+                dec = (int8_t)fuse_mv_decimals(reading.display_str, reading.unit_suffix);
+                if (e) {
+                    fuse_input_refresh(&e->fuse);
+                    steady = fuse_input_steady(&e->fuse);
+                }
+            }
+        }
+        if (dec < 0 && e) fuse_input_clear(&e->fuse);
+        if (dec >= 0 && e && e->fuse.cal_set) mv -= e->fuse.cal_mv;
+        draw_fuse_screen(mv, dec, steady, full_clear);
+        break;
+    }
+    case METER_LAYOUT_LIMITS:
+        draw_meter_limits(m, mode, &reading, has_live_reading, value_str);
         break;
     default:
-        draw_meter_full(m, mode, &reading, current_val, value_str, bar_pct,
-                        has_live_reading, full_clear);
+        draw_meter_big(m, mode, &reading, has_live_reading, value_str, clear_bg);
         break;
     }
 

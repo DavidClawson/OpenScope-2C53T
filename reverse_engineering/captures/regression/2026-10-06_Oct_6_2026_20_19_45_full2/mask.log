@@ -1,0 +1,34 @@
+device Build: Oct  6 2026 20:19:45, gcc 14.2.1 20241119
+setup: range 5 CH1, level 0, NORMAL, timebase 0x10; JDS CH1 201.2 Hz 2.0 Vpp
+mask teach 8 ch1
+mask TEACHING  chans CH1  span 320 from anchor-160  tol v=8 cnt h=2 smp
+teach 0/8  rejected 0
+tested 0  pass 0  fail 0  skipped 0  missed 0  max-consec-fail 0
+last - gen 0
+stop-on-fail OFF
+move-focus vdiv
+heap free 11000 (min ever 11000)
+> 
+>
+  PASS  A teach    state READY spread 8 heap free 11000 (2.3 s)
+  PASS  B base     tested 41 pass 41 fail 0 skip 4 [not time-ordered=4]
+  PASS  C amp+30%  tested 20 fail 20
+  PASS  C recover  tested 21 pass 21
+  PASS  D freq+5%  tested 20 fail 20
+  PASS  E settings tested 0 skip 13 [settings changed=13]
+  PASS  E resume   tested 10 pass 10
+  PASS  F hold     held True; judged 2 -> 2 while held, 13 after release; still held False [stale (held across a stop)=1]
+  FAIL  H buttons  auto->READY; position: col 160->176 tol (8, 2); mask focus: tol (10, 3) col 160; select->stop True; ok: held True released True; auto->EMPTY focus vdiv
+  PASS  G health   missed commits 0 throughout
+
+mask status
+mask EMPTY  chans   span 320 from anchor-0  tol v=8 cnt h=2 smp
+tested 0  pass 0  fail 0  skipped 0  missed 0  max-consec-fail 0
+last - gen 0
+stop-on-fail OFF
+move-focus vdiv
+heap free 11000 (min ever 11000)
+> 
+>
+
+9/10 criteria met

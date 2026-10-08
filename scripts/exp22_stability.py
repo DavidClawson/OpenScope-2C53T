@@ -401,8 +401,13 @@ def trigger_scenarios():
           n=8, gap=1.0, settle=3.0, check_edge="rising", check_order="ordered"),
         s("EDGE falling", wave="triangle", f=2.0, amp=2.0, off=0.0, tb=0x12,
           n=8, gap=1.0, settle=3.0, edge="falling", check_edge="falling"),
+        # n=24, not 12: the capture cycle (~612 ms at 0x12) drifts slowly
+        # against the 500 ms triangle, so with the filter off the edge that
+        # fires comes in RUNS of 6-11 records (2026-10-06: rrrrrrffffff,
+        # ffffrrrrrrrr, fffffrffffff). 12 grabs could land inside one run and
+        # fail a correct build (it did once, 2026-10-06 regression).
         s("NEGCTL edge filter off", wave="triangle", f=2.0, amp=2.0, off=0.0, tb=0x12,
-          n=12, gap=1.0, settle=3.0, edgefilter=False, check_edge="mixed"),
+          n=24, gap=1.0, settle=3.0, edgefilter=False, check_edge="mixed"),
         # Un-rotation (dev plan 2.3): strobed records in time order, seam at
         # index 0, trigger at 512. Negative control: raw records keep the seam
         # wherever the FPGA's pointer stopped.

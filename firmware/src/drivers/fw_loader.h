@@ -42,8 +42,16 @@
  *     during the reset, and the cable carries the rail — which fwapply
  *     guarantees by construction.
  *   - Nothing here can write below 0x08007000: the factory IAP
- *     bootloader is untouchable by construction, and MENU+Power remains
- *     the recovery path after ANY outcome.
+ *     bootloader is untouchable by construction, and holding MENU through
+ *     a pinhole reset reaches it after ANY outcome. MENU+Power is NOT the
+ *     recovery: after the EXP-57 and EXP-59 hangs it did nothing — the
+ *     running app is what turns that gesture into a reset, and a hung or
+ *     half-written slot has none.
+ *   - The installer that runs is the one in the RUNNING image, so whether
+ *     an install can hang depends on the build doing the installing, not
+ *     on the payload (issue #42: the v0.4.0 release calls flash-resident
+ *     memset mid-install). scripts/test_ramfunc_isolated.py --check-bin
+ *     tells whether a .bin is safe to fwapply/fwswap from.
  */
 
 #ifndef FW_LOADER_H

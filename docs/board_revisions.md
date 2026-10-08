@@ -18,7 +18,7 @@ Where a statement was checked independently on another unit, the check is named.
 | OpenScope v0.4.0 | **runs** (units #1 and #3) | **runs** (@saulvalenzuela23, 2026-10-02: live capture, meter 3.299 V on a 3.300 V supply) |
 | Battery / boost | Silergy **SY7088DGC** boost, marked `VTxyz` (e.g. `VTHZA`, `VTHnA`) | **TC4056A** linear charger + **SB6284** boost (`B6284`), 4.7 µH, SS34 |
 | ADC | AD9288-compatible dual 8-bit (pinout traced by @maksidze) | **MXT2088**, dual 8-bit 100 MS/s (marking read under angled light) |
-| Multimeter | Confirmed **SDIC SD7502** on V1.4 (LQFP-64 marking) | **SDIC SD7501/SD7502** behind a **π122U31** digital isolator (sanded, identical wire behaviour) |
+| Multimeter | Confirmed **SDIC SD7502** on V1.4 (LQFP-64 marking) | **SDIC SD7501/SD7502** (sanded, identical wire behaviour). Stock firmware uses only the SD7501 feature set. Both run on a UART behind a **π122U31** digital isolator |
 | Rail test points | not documented | silkscreened `4.3V`, `3.3V`, `2.5V`, `-2V5`, `-3V3` |
 
 ## Parts common to both (as far as known)
@@ -37,9 +37,11 @@ Where a statement was checked independently on another unit, the check is named.
 
 ## The multimeter is a separate, isolated chip
 
-On the V1.4 board the multimeter SoC is visually confirmed as an **SDIC SD7502** (LQFP-64, clear top marking `SDIC SVRR SD7502`, 8.000 MHz crystal on pins 59/60). On the unlabelled board the markings are sanded, but it shares the identical LQFP-64 footprint, pinout, and wire protocol. The meter talks to the main MCU over a **9600 8N1 UART through a π122U31 digital isolator**.
+On the V1.4 board the multimeter SoC is visually confirmed as an **SDIC SD7502** (LQFP-64, clear top marking `SDIC SVRR SD7502`, 8.000 MHz crystal on pins 59/60). On the unlabelled board the markings are sanded, but it shares the identical LQFP-64 footprint, pinout, and wire protocol. 
 
-While the physical silicon on V1.4 is the SD7502, the stock firmware only drives the base 12-function set common to the SD7501 family; it contains no handlers, UI, or command branches for the SD7502's hardware peak-hold or inrush features.
+While the physical silicon on V1.4 is the SD7502, the stock firmware only drives the base 12-function set common to the SD7501 family. Firmware disassembly of the stock application binary (`APP_2C53T_V1.2.0_251015.bin`) at flash address `0x0804C46C` reveals a mode string table containing exactly 12 standard multimeter functions (matching our 12 captured command IDs), and the firmware contains no strings, mode branches or register handlers for the SD7502-only features (inrush/surge, peak hold).
+
+It talks to the main MCU over a **9600 8N1 UART through a π122U31 digital isolator**.
 
 The pads marked `RX`, `TX`, `GND`, `3V3` are on the **MCU side** of the isolator, so the meter traffic
 can be logged with an ordinary 3.3 V USB-serial adapter without touching the isolated side.
@@ -70,6 +72,16 @@ methods agree. OpenScope's transmit path builds exactly this frame (`meter_build
 ([#35](https://github.com/DavidClawson/OpenScope-2C53T/pull/35)). Open question: on the unlabelled
 board byte 8 read `0x82` at `0.000 V` and `0x02` at `3.299 V`, but on V1.4 unit #1 a live `1.6141 V`
 reading also carried `0x82`. So bit 7 of byte 8 is not a zero-scale flag. It is not simply auto-range either: the unlabelled-board captures were in manual DC-voltage mode (`AA 55 05 0C …`), and ours in the meter's auto mode. A range-boundary capture may settle it.
+
+**Update 2026-10-03** ([#37](https://github.com/DavidClawson/OpenScope-2C53T/issues/37), @saulvalenzuela23, DL16 on the unlabelled board):
+
+- **DC volts:** bit 7 flips at exactly **2.000 V**. It is set for 0.5052 V, 1.0062 V and 1.8059 V (`0x82`), and clear for 2.2010 V, 2.9990 V and 4.1960 V (`0x02`). That is the 1.9999 V range, the one shown with four decimals, and it fits unit #1's 1.6141 V.
+- **Resistance (settled 2026-10-05, [EXP-71](experiments/2026-10-05-71-meter-kit-against-reference-meters.md)):** the same meaning. With no explicit decimal point in the digits, bit 7 marks the 2 kΩ range, `x.xxxx kΩ`. On unit #1, against a reference DMM: 220 Ω → `2203` + bit 7 = 0.2203 kΩ (DMM 218.2 Ω), and 1 kΩ → leading 1 + `0103` + bit 7 = 1.0103 kΩ (DMM 1.005 kΩ). The apparent V1.4 contradictions dissolved: unit #1's `9775` carries an explicit point, and unit #2's "2.2 kΩ" `2168` was a 220 Ω part. The 220 Ω frame shape was predicted before it was measured.
+- **Diode:** a voltage frame (byte 8 = `0x02`) with **byte 6 upper nibble 8** as the diode annunciator. 1N4007 → 0.630 V (DMC100 0.635), red LED → 1.808 V (1.817).
+- **Sign** = byte 2 bit 4, in every function (stock's `VNEG`).
+- **Leading "1"** of the 5-digit display = byte 2 bit 3. Proven in Ω too: 100.65 Ω.
+
+The sign and leading-"1" handling were fixed in the decoder the same day, with his frames as test vectors (`test_saul_frames_37`).
 
 ## The 8-pin part near the charger (V1.4)
 
@@ -111,6 +123,6 @@ issue, especially around the FPGA, the ADC, the meter chip and the charger.
 ## Open questions
 
 1. ~~Does PC9 hold the power on the unlabelled board?~~ Yes: v0.4.0 runs there (2026-10-02).
-2. What does bit 7 of telemetry byte 8 mean?
+2. ~~What does bit 7 of telemetry byte 8 mean?~~ **Settled:** the lowest range, shown with four decimals. DC volts on 2026-10-03 (the 1.9999 V range); resistance on 2026-10-05 (the 2 kΩ range, unless the digits carry their own point), EXP-71.
 3. Is the V1.4 meter chip also an SD7501 behind an isolator? Its behaviour on the wire is identical.
 4. Are there more revisions? Purchase dates and stock firmware versions help place them.

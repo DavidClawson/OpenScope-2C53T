@@ -1,0 +1,16 @@
+device Build: Oct  6 2026 20:58:34, gcc 14.2.1 20241119
+setup: range 6 both channels, timebase 0x10, soft trigger on
+centering ch1... Traceback (most recent call last):
+  File "/home/david/osc/scripts/exp22_stability.py", line 1028, in <module>
+    main()
+    ~~~~^^
+  File "/home/david/osc/scripts/exp22_stability.py", line 919, in main
+    r = sc.cmd("fpga scope center ch%d 6" % ch, timeout=60.0)
+  File "/home/david/osc/scripts/bench.py", line 427, in cmd
+    return self._t.exchange(line, timeout)
+           ~~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^
+  File "/home/david/osc/scripts/bench.py", line 224, in exchange
+    raise PromptTimeout(
+    ...<2 lines>...
+        "array." % (self.prompt, timeout, line, len(buf)))
+bench.PromptTimeout: no prompt b'>' within 60.0s after 'fpga scope center ch1 6' (got 25 bytes). Partial replies are NOT returned: a truncated dump parses fine and yields a wrong array.

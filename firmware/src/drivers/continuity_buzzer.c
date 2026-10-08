@@ -23,10 +23,12 @@ static volatile bool buzzer_active_now;
 static volatile uint32_t buzzer_toggle_count;
 static volatile uint32_t buzzer_create_fail_count;
 
+/* Same rule as the screen (meter_data.c), so the beep and the green SHORT
+ * can never disagree. */
+extern float meter_continuity_threshold(void);
 static bool continuity_short_confirmed(const meter_reading_t *reading)
 {
-    return reading->continuity_beep ||
-           reading->result_class == METER_RESULT_CONTINUITY;
+    return meter_continuity_is_short(reading, meter_continuity_threshold());
 }
 
 static bool continuity_short_active(TickType_t now)

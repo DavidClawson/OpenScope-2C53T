@@ -2665,6 +2665,28 @@ static void fpga_send_meter_poll_sequence(uint8_t submode)
                                   (uint8_t)(plan.start_word & 0x00FFU));
 }
 
+/* Function changes run HERE, not in the button task (softkey UI, 2026-10-06).
+ * fpga_set_meter_mode() waits for the meter chip to restart: ~1.4 s, up to
+ * ~4.5 s (F35), and called from the input task it froze every button for that
+ * long. The UI now changes function at once and shows dashes; this task
+ * applies the newest request, so a run of presses costs one transition. */
+static TaskHandle_t       meter_poll_handle;
+static volatile int16_t   meter_mode_request = -1;
+
+void fpga_request_meter_mode(uint8_t submode)
+{
+#if FPGA_WARM_HANDOFF_TEST && !FPGA_METER_SUBMODES
+    (void)submode;
+    return;
+#endif
+    if (!meter_poll_handle) {            /* no poll task in this build */
+        fpga_set_meter_mode(submode);
+        return;
+    }
+    meter_mode_request = submode;
+    xTaskNotifyGive(meter_poll_handle);
+}
+
 static void fpga_meter_poll_task(void *pv)
 {
     (void)pv;
@@ -2672,7 +2694,20 @@ static void fpga_meter_poll_task(void *pv)
     extern volatile uint8_t meter_submode;
 
     for (;;) {
-        vTaskDelay(pdMS_TO_TICKS(250));  /* ~4 Hz */
+        (void)ulTaskNotifyTake(pdTRUE, pdMS_TO_TICKS(250));  /* ~4 Hz, or a request */
+        int16_t req = meter_mode_request;
+        if (req >= 0 && fpga.initialized) {
+            meter_mode_request = -1;
+            if (current_mode == MODE_MULTIMETER) {
+                fpga_set_meter_mode((uint8_t)req);
+                /* Left the meter while the chip was switching? The display
+                 * task already put the scope's front end back, and this
+                 * transition just re-postured it for the meter. */
+                if (current_mode != MODE_MULTIMETER)
+                    fpga_set_meter_mux(false);
+            }
+            continue;
+        }
         if (fpga.initialized && current_mode == MODE_MULTIMETER &&
             !meter_transition_busy) {
             if (fpga_meter_needs_activation) {
@@ -3479,6 +3514,42 @@ static volatile uint16_t acq_poll_gap_ms = 30;   /* EXP-54: poll cadence after t
 static volatile bool     acq_unrotate = true;    /* 2026-09-22: seam-based (dev plan 2.3); `fpga unrotate off` for the raw record */
 static volatile int16_t  acq_unrotate_offset = 0;
 static volatile uint8_t  acq_read_br = 0xFF;
+/* EXP-72 (2026-10-05): handover log. One entry per PC0-strobed read: ms
+ * since the previous handover, roll reads polled in between, strobes on this
+ * pair. Heap block taken on the first `fpga holdlog on` (coldtrace static RAM
+ * is full); recorded in the task, so the measured window carries no shell
+ * traffic. */
+static fpga_holdlog_ent_t *acq_holdlog;
+static volatile uint16_t   acq_holdlog_n;
+static volatile bool       acq_holdlog_on;
+/* EXP-72: AUTO budget measured from the last HANDOVER instead of the last
+ * commit. ON (default since EXP-72): once no handover has come for a whole
+ * budget, every roll read is shown (33/s at 0x10) -- what stock does with a
+ * quiet input. OFF (v0.4.1 behaviour, `fpga autolive off`): AUTO commits one
+ * roll read per budget (2.1/s) and discards the rest. Either way a triggering
+ * input shows only handed-over records (3.4/s at 0x10, the FPGA's hold). */
+static volatile bool       acq_auto_live = true;
+void fpga_acq_auto_live_set(bool on) { acq_auto_live = on; }
+bool fpga_acq_auto_live_get(void)    { return acq_auto_live; }
+bool fpga_holdlog_start(void)
+{
+    if (!acq_holdlog)
+        acq_holdlog = (fpga_holdlog_ent_t *)pvPortMalloc(FPGA_HOLDLOG_N * sizeof(fpga_holdlog_ent_t));
+    if (!acq_holdlog) return false;
+    acq_holdlog_on = false;
+    acq_holdlog_n = 0;
+    acq_holdlog_on = true;
+    return true;
+}
+void fpga_holdlog_stop(void) { acq_holdlog_on = false; }
+bool fpga_holdlog_active(void) { return acq_holdlog_on; }
+uint16_t fpga_holdlog_count(void) { return acq_holdlog_n; }
+bool fpga_holdlog_get(uint16_t i, fpga_holdlog_ent_t *out)
+{
+    if (!acq_holdlog || i >= acq_holdlog_n) return false;
+    *out = acq_holdlog[i];
+    return true;
+}
 static volatile uint32_t acq_gate_skips = 0;   /* reads the gate prevented */
 /* Reg 0x01 value currently in force -- the ONE variable that mirrors the
  * hardware register. 0x08 is what the arm block writes at config time; the
@@ -3990,6 +4061,15 @@ static void fpga_warmtest_acq_task(void *pv)
         bool first_read = !capture_in_flight;
         capture_in_flight = true;
         if (triggered || first_read) {
+            if (triggered && !first_read && acq_holdlog_on && acq_holdlog_n < FPGA_HOLDLOG_N) {
+                uint32_t dt = last_read_tick - last_handover_tick;
+                uint32_t ne = fpga.pc0_edges - edges_before;
+                fpga_holdlog_ent_t *e = &acq_holdlog[acq_holdlog_n];
+                e->dt_ms = (uint16_t)(dt > 0xFFFFu ? 0xFFFFu : dt);
+                e->polls = (uint8_t)(polls_since_handover > 255u ? 255u : polls_since_handover);
+                e->edges = (uint8_t)(ne > 255u ? 255u : ne);
+                acq_holdlog_n++;
+            }
             last_handover_tick = last_read_tick;
             fpga.acq_polls_last = polls_since_handover;
             polls_since_handover = 0;
@@ -4002,7 +4082,9 @@ static void fpga_warmtest_acq_task(void *pv)
                 acq_gate_skips++;                /* GATE ON: never show the roll */
                 continue;
             }
-            bool budget_up = (int32_t)(last_read_tick - last_commit_tick) >= (int32_t)fpga_acq_auto_wait_get();
+            uint32_t since = acq_auto_live ? (last_read_tick - last_handover_tick)
+                                           : (last_read_tick - last_commit_tick);
+            bool budget_up = (int32_t)since >= (int32_t)fpga_acq_auto_wait_get();
             if (!(auto_mode && (budget_up || first_read))) {
                 /* NORMAL/SINGLE (or AUTO inside its budget): the rolling
                  * buffer is not a record. Hold the last trace, poll again. */
@@ -6149,7 +6231,8 @@ QueueHandle_t fpga_create_tasks(void)
      * DMM screen: nothing polls, nothing decodes. */
     xTaskCreate(fpga_usart_tx_task,    "dvom_TX",   64,  NULL, 2, &tx_task_handle);
     xTaskCreate(fpga_usart_rx_task,    "dvom_RX",   128, NULL, 3, &rx_task_handle);
-    xTaskCreate(fpga_meter_poll_task,  "meter_poll", 64, NULL, 2, NULL);
+    /* 192, not 64: function changes (fpga_set_meter_mode) now run here. */
+    xTaskCreate(fpga_meter_poll_task,  "meter_poll", 192, NULL, 2, &meter_poll_handle);
 #elif FPGA_USART_SILENT_SCOPE
     /* USART-silent scope test: create NO USART/meter tasks (dvom_TX/dvom_RX/
      * meter_poll) — they are the ongoing PA2/PA3 traffic we're eliminating — and
@@ -6161,7 +6244,7 @@ QueueHandle_t fpga_create_tasks(void)
     xTaskCreate(fpga_usart_tx_task,    "dvom_TX",   64,  NULL, 2, &tx_task_handle);
     xTaskCreate(fpga_usart_rx_task,    "dvom_RX",   128, NULL, 3, &rx_task_handle);
     xTaskCreate(fpga_acquisition_task, "fpga",      256, NULL, 3, &acq_task_handle);
-    xTaskCreate(fpga_meter_poll_task,  "meter_poll", 64, NULL, 2, NULL);
+    xTaskCreate(fpga_meter_poll_task,  "meter_poll", 192, NULL, 2, &meter_poll_handle);
     xTaskCreate(fpga_meter_adc_sampler_task, "mtr_wave", 64, NULL, 2, NULL);
 #endif
 

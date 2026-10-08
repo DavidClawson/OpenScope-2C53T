@@ -1,0 +1,42 @@
+EXP-72 device: Build: Oct  5 2026 15:13:06, gcc 14.2.1 20241119
+>
+boot status03: 00 00 91 85 85
+-- P1 baseline: hold + fill across timebases
+base                   tb 0x0E  edges   22 reads    22   1.80 ho/s  interval   554.6 ms  -fill   534.1  st03 00 00 4A 85 85
+base                   tb 0x0F  edges   25 reads    25   2.05 ho/s  interval   488.3 ms  -fill   447.3  st03 00 00 A2 85 85
+base                   tb 0x10  edges   22 reads    22   1.80 ho/s  interval   554.6 ms  -fill   472.6  st03 00 00 5E 85 85
+base                   tb 0x11  edges   17 reads    17   0.84 ho/s  interval  1188.3 ms  -fill   983.1  st03 00 00 9B 85 85
+base                   tb 0x12  edges   10 reads     9   0.50 ho/s  interval  2020.1 ms  -fill  1609.7  st03 00 00 5C 85 85
+base                   tb 0x0E  edges   14 reads    14   1.15 ho/s  interval   871.5 ms  -fill   851.0  st03 00 00 8C 85 85
+-- P2 polling cadence and read clock (0x0E)
+pollgap29 (stock)      tb 0x0E  edges   26 reads    26   2.13 ho/s  interval   469.3 ms  -fill   448.8  st03 00 00 88 84 84
+acqbr /2 (stock)       tb 0x0E  edges   19 reads    19   1.56 ho/s  interval   642.2 ms  -fill   621.7  st03 00 00 4C 85 85
+acqbr /256             tb 0x0E  edges    6 reads     6   0.46 ho/s  interval  2167.5 ms  -fill  2147.0  st03 00 00 AA 85 85
+-- P3 register writes (0x0E); each block ends with the stock value + a timebase re-write
+reg02=00               tb 0x0E  edges    6 reads     6   0.46 ho/s  interval  2167.3 ms  -fill  2146.8  st03 00 00 50 84 84
+reg02=01               tb 0x0E  edges    5 reads     5   0.38 ho/s  interval  2600.8 ms  -fill  2580.3  st03 00 00 91 85 85
+reg02=02               tb 0x0E  edges    6 reads     6   0.46 ho/s  interval  2167.4 ms  -fill  2146.9  st03 00 00 70 85 85
+reg02=03 restore       tb 0x0E  edges    5 reads     5   0.38 ho/s  interval  2600.8 ms  -fill  2580.3  st03 00 00 70 84 84
+reg06=01               tb 0x0E  edges    0 reads     0   0.00 ho/s  interval     inf ms  -fill     inf  st03 00 00 95 85 85
+reg06=02               tb 0x0E  edges    6 reads     6   0.46 ho/s  interval  2150.6 ms  -fill  2130.1  st03 00 00 4D 85 85
+reg06=04               tb 0x0E  edges    5 reads     5   0.39 ho/s  interval  2580.8 ms  -fill  2560.3  st03 00 00 AA 86 86
+reg06=08               tb 0x0E  edges    6 reads     6   0.46 ho/s  interval  2151.6 ms  -fill  2131.0  st03 00 00 49 85 85
+reg06=10               tb 0x0E  edges    6 reads     6   0.46 ho/s  interval  2184.4 ms  -fill  2163.9  st03 00 00 9E 85 85
+reg06=20               tb 0x0E  edges    5 reads     5   0.38 ho/s  interval  2600.7 ms  -fill  2580.2  st03 00 00 66 86 86
+reg06=40               tb 0x0E  edges    6 reads     6   0.46 ho/s  interval  2150.6 ms  -fill  2130.1  st03 00 00 74 85 85
+reg06=80               tb 0x0E  edges    6 reads     6   0.46 ho/s  interval  2167.5 ms  -fill  2146.9  st03 00 00 8E 86 86
+reg06=FF               tb 0x0E  edges    0 reads     0   0.00 ho/s  interval     inf ms  -fill     inf  st03 00 00 51 85 85
+reg06=00 restore       tb 0x0E  edges    5 reads     5   0.38 ho/s  interval  2600.9 ms  -fill  2580.4  st03 00 00 A8 84 84
+reg07=01               tb 0x0E  edges    6 reads     0   0.46 ho/s  interval  2167.2 ms  -fill  2146.7  st03 00 00 47 85 85
+reg07=02               tb 0x0E  edges    6 reads     6   0.46 ho/s  interval  2167.7 ms  -fill  2147.2  st03 00 00 A6 85 85
+reg07=04               tb 0x0E  edges    6 reads     6   0.46 ho/s  interval  2184.1 ms  -fill  2163.6  st03 00 00 59 85 85
+reg07=08               tb 0x0E  edges    6 reads     6   0.46 ho/s  interval  2167.4 ms  -fill  2146.9  st03 00 00 84 85 85
+reg07=10               tb 0x0E  edges    6 reads     6   0.46 ho/s  interval  2184.0 ms  -fill  2163.5  st03 00 00 84 85 85
+reg07=20               tb 0x0E  edges    6 reads     6   0.46 ho/s  interval  2184.2 ms  -fill  2163.7  st03 00 00 5E 85 85
+reg07=40               tb 0x0E  edges    5 reads     5   0.38 ho/s  interval  2600.5 ms  -fill  2580.0  st03 00 00 A3 85 85
+reg07=80               tb 0x0E  edges    6 reads     6   0.46 ho/s  interval  2167.4 ms  -fill  2146.9  st03 00 00 47 85 85
+reg07=FF               tb 0x0E  edges    6 reads     0   0.46 ho/s  interval  2167.4 ms  -fill  2146.9  st03 00 00 A9 84 84
+reg07=00 restore       tb 0x0E  edges    6 reads     6   0.46 ho/s  interval  2167.4 ms  -fill  2146.9  st03 00 00 4F 85 85
+baseline interval - fill: 0x0E 534, 0x0F 447, 0x10 473, 0x11 983, 0x12 1610, 0x0E 851
+conditions under 60 ms: none
+log: /home/david/osc/reverse_engineering/captures/exp72/exp72_2026-10-05_194945.jsonl
