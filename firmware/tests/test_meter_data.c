@@ -2787,6 +2787,46 @@ static int test_live_resistance_bands_unit2_and_unit1(void)
     return 1;
 }
 
+/*
+ * frame[7] bit 2 is the x100 resistance range, and the same bit is the AC
+ * diagnostic for the voltage and current families (`meter_data.h`: "frame[7].2
+ * diagnostic only; not AC confidence"). Nothing downstream trusts it, but a
+ * flag line reading ac=1 beside 297.8 kOhm is a wrong number in plain sight,
+ * so it is gated off in submodes 6 and 7. Frames: unit #2, EXP-206.
+ */
+static int test_resistance_band_bit_is_not_ac(void)
+{
+    uint8_t frame[12];
+
+    meter_data_init();
+
+    /* 300 kOhm in the x100 band: frame[7] = 0x24, bit 2 set */
+    raw_frame(frame, "5AA5A4CD8FEA0F2480000132");
+    process_frame(frame, 6);
+    ASSERT(expect_normal_reading("297.8", "kOhm", 297.8f, 0.05f));
+    ASSERT(!meter_reading.is_ac);
+
+    /* open probes, same band: " 0L " */
+    raw_frame(frame, "5AA504F06B0100240000010B");
+    process_frame(frame, 6);
+    ASSERT(meter_reading.result_class == METER_RESULT_OVERLOAD);
+    ASSERT(!meter_reading.is_ac);
+
+    /* continuity, shorted probes: frame[7] = 0x28, bit 2 clear already */
+    raw_frame(frame, "5AA500E01B8A0A2800000132");
+    process_frame(frame, 7);
+    ASSERT(meter_reading.valid);
+    ASSERT(!meter_reading.is_ac);
+
+    /* Control: the AC families still report the bit, so this clears the flag
+     * in resistance only and not everywhere. */
+    build_segment_frame(frame, 2, 2, 8, 2, 0x00, 0x24, 0x02, 0x00, 0x0032);
+    process_frame(frame, 1);
+    ASSERT(meter_reading.is_ac);
+
+    return 1;
+}
+
 static int test_live_capacitance_frames_self_describe(void)
 {
     uint8_t frame[12];
@@ -3093,6 +3133,7 @@ int main(void)
     TEST(resistance_low_band_reads_the_soc_text_as_ohms);
     TEST(live_frames_carry_their_own_decimal_point);
     TEST(live_resistance_bands_unit2_and_unit1);
+    TEST(resistance_band_bit_is_not_ac);
     TEST(live_capacitance_frames_self_describe);
     TEST(live_ol_second_spelling_and_leading_blanks);
     TEST(saul_frames_37);
