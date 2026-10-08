@@ -70,6 +70,7 @@ typedef enum {
     FLASH_REGION_ERR_NOT_FOUND,     /* append log holds no valid record        */
     FLASH_REGION_ERR_IO,            /* backend reported failure                */
     FLASH_REGION_ERR_VERIFY,        /* readback did not match what we wrote    */
+    FLASH_REGION_ERR_LOG_DAMAGED,   /* append log ends at an unreadable record */
 } flash_region_status_t;
 
 const char *flash_region_strerror(flash_region_status_t st);
@@ -170,7 +171,10 @@ flash_region_status_t flash_region_write(flash_region_id_t id, uint32_t offset,
  * range must lie inside the region. Already-erased sectors are skipped. */
 flash_region_status_t flash_region_erase(flash_region_id_t id, uint32_t offset, uint32_t len);
 
-/* Erase an entire writable region. */
+/* Erase an entire writable region. An append region is erased from its top
+ * sector down, so a power cut part-way leaves old records only as an unbroken
+ * prefix of the log (issue #58); any other region bottom up, which keeps a
+ * header-at-offset-0 layout (cal_backup.c) invalidated first. */
 flash_region_status_t flash_region_reset(flash_region_id_t id);
 
 /* ── Absolute-address access ─────────────────────────────────────────
@@ -188,9 +192,13 @@ flash_region_status_t flash_regions_erase_abs(uint32_t addr, uint32_t len);
  * identical to the newest valid record is elided.
  *
  * When the region fills, append returns FLASH_REGION_ERR_FULL and changes
- * nothing; the caller decides when to flash_region_reset() and re-append the
- * live value. There is no automatic compaction, because automatic compaction
- * means an automatic erase. */
+ * nothing. When the log ends at a slot that is not blank but holds no record
+ * the scanner can read (a header torn by a power cut, a half-erased sector, or
+ * damage), nothing can ever be appended after it, and append returns
+ * FLASH_REGION_ERR_LOG_DAMAGED, also changing nothing (issue #57). Either way
+ * the log takes no more records: the caller decides when to flash_region_reset()
+ * and re-append the live value. There is no automatic compaction, because
+ * automatic compaction means an automatic erase. */
 #define FLASH_REGION_RECORD_MAX  1024u
 
 flash_region_status_t flash_region_append(flash_region_id_t id,

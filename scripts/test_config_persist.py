@@ -1,21 +1,20 @@
 #!/usr/bin/env python3
-"""Build and run the settings-persistence host tests in all three builds, then
+"""Build and run the settings-persistence host tests in both builds, then
 prove the new ones can fail.
 
 WHAT IT RUNS
 ------------
 firmware/tests/test_config_persist.c, against the real config.c,
-settings_store.c and flash_regions.c, built three ways (see its header):
+settings_store.c and flash_regions.c, built two ways (see its header):
 
   main           SETTINGS_PERSIST_WRITES=1               must pass
   nowrite        SETTINGS_PERSIST_WRITES=0               must pass: the S3
                  negative control — the change -> power cycle -> verify loop
                  persists nothing, and the positive loop test goes red
-  known_defects  CONFIG_PERSIST_KNOWN_DEFECTS=1          must FAIL, on exactly
-                 the listed tests. When one of them starts passing, the
-                 firmware was fixed: promote that test into the main build and
-                 drop it from KNOWN_DEFECTS below. This suite fails until then,
-                 so a fix cannot land without the promotion.
+
+A third, known-defects build (PR #59) held four tests that failed until #57
+and #58 were fixed. They run in the main build now, and two mutations below
+(the damaged-log compaction, the top-down erase) require each fix to matter.
 
 WHY THE MUTATIONS
 -----------------
@@ -62,23 +61,14 @@ CFLAGS = ["-std=c11", "-Wall", "-Wextra", "-Werror", "-O1"]
 BUILDS = {
     "main": ["-DSETTINGS_PERSIST_WRITES=1"],
     "nowrite": ["-DSETTINGS_PERSIST_WRITES=0"],
-    "known_defects": ["-DSETTINGS_PERSIST_WRITES=1", "-DCONFIG_PERSIST_KNOWN_DEFECTS=1"],
 }
-
-KNOWN_DEFECTS = (
-    "a save torn inside its magic or length does not stop later saves",          # 57
-    "a damaged header mid-log does not stop later saves",                        # 57
-    "a compaction cut inside the first sector's erase does not stop later saves",  # 57
-    "a compaction cut mid-erase never resurrects old settings",                  # 58
-)
 
 
 def build_and_run(build: str, workdir: Path,
                   replace: tuple[str, str] | None = None) -> subprocess.CompletedProcess:
     """Compile one build (optionally with one source file — or the test file
     itself — swapped for mutated text) and run it. Never raises on a non-zero
-    exit: red is the expected result for a mutation and for the known-defects
-    build."""
+    exit: red is the expected result for a mutation."""
     test_c = TEST_C
     if replace is not None and replace[0] == TEST_REL:
         test_c = workdir / TEST_C.name
@@ -196,12 +186,34 @@ MUTATIONS: tuple[Mutation, ...] = (
     Mutation(
         name="compaction of a full log in config_save()",
         file="src/util/config.c",
-        old="    if (st == FLASH_REGION_ERR_FULL) {\n",
-        new="    if (0) {  /* mutant */\n",
+        old="    if (st == FLASH_REGION_ERR_FULL || st == FLASH_REGION_ERR_LOG_DAMAGED) {\n",
+        new="    if (st == FLASH_REGION_ERR_LOG_DAMAGED) {  /* mutant */\n",
         expect_fail=(
             "changes survive power cycles across compaction",
             "a compaction cut before its erase keeps the old log",
         ),
+    ),
+    Mutation(
+        # #57: a log that ends at an unreadable record takes no more appends.
+        # Without compaction on it, every later save is refused, forever.
+        name="compaction of a damaged log in config_save()",
+        file="src/util/config.c",
+        old="    if (st == FLASH_REGION_ERR_FULL || st == FLASH_REGION_ERR_LOG_DAMAGED) {\n",
+        new="    if (st == FLASH_REGION_ERR_FULL) {  /* mutant */\n",
+        expect_fail=(
+            "a save torn inside its magic or length does not stop later saves",
+            "a damaged header mid-log does not stop later saves",
+            "a compaction cut inside the first sector's erase does not stop later saves",
+        ),
+    ),
+    Mutation(
+        # #58: bottom-up, a cut leaves old records on the new log's grid past
+        # sector 0, and they come back once new saves refill it.
+        name="top-down erase of an append region in flash_region_reset()",
+        file="src/drivers/flash_regions.c",
+        old="    return region_erase(id, 0u, r->length, r->kind == FLASH_REGION_KIND_APPEND);\n",
+        new="    return region_erase(id, 0u, r->length, false);  /* mutant */\n",
+        expect_fail=("a compaction cut mid-erase never resurrects old settings",),
     ),
     Mutation(
         name="meter_layout restore in settings_store_apply()",
@@ -262,7 +274,7 @@ class SettingsPersistHostTests(unittest.TestCase):
     def test_main_build_is_not_trivially_small(self) -> None:
         """Guard against the suite quietly shrinking."""
         count = int(self.main.stdout.rsplit("\n", 2)[-2].split()[0])
-        self.assertGreaterEqual(count, 31, f"only {count} settings persistence tests ran")
+        self.assertGreaterEqual(count, 35, f"only {count} settings persistence tests ran")
 
     def test_negative_control_passes(self) -> None:
         """Writes compiled out: nothing persists, and the positive loop goes red."""
@@ -270,22 +282,6 @@ class SettingsPersistHostTests(unittest.TestCase):
         self.assertEqual(proc.returncode, 0,
                          f"negative control failed:\n{proc.stdout}\n{proc.stderr}")
         self.assertIn("2 tests OK", proc.stdout)
-
-    def test_known_defects_are_still_red(self) -> None:
-        """Expected to fail until the firmware is fixed; promote on green."""
-        proc = run_build("known_defects")
-        self.assertIn("tests,", proc.stdout,
-                      f"known-defects build did not run:\n{proc.stdout}\n{proc.stderr}")
-        for label in KNOWN_DEFECTS:
-            self.assertTrue(
-                failed(label, proc.stdout),
-                f"known defect {label!r} now PASSES: the firmware was fixed. Move that "
-                f"test into the main build of test_config_persist.c and drop it from "
-                f"KNOWN_DEFECTS in this file.\n{proc.stdout}",
-            )
-        unexpected = [line for line in failing_lines(proc.stdout)
-                      if not any(line.startswith(label) for label in KNOWN_DEFECTS)]
-        self.assertEqual(unexpected, [], "unlisted failures in the known-defects build")
 
 
 class GuaranteeMutationTests(unittest.TestCase):

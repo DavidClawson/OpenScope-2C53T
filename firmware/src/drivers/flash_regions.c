@@ -125,6 +125,7 @@ const char *flash_region_strerror(flash_region_status_t st)
     case FLASH_REGION_ERR_NOT_FOUND:   return "no valid record";
     case FLASH_REGION_ERR_IO:          return "flash io error";
     case FLASH_REGION_ERR_VERIFY:      return "readback mismatch";
+    case FLASH_REGION_ERR_LOG_DAMAGED: return "append log ends at a damaged record";
     }
     return "unknown";
 }
@@ -447,13 +448,16 @@ flash_region_status_t flash_regions_write_abs(uint32_t addr, const void *data, u
     return write_checked(addr, (const uint8_t *)data, len);
 }
 
-/* Erase a validated, sector-aligned range. Sectors already at 0xFF are skipped:
- * a redundant erase is pure risk with no benefit. */
-static flash_region_status_t erase_checked(uint32_t addr, uint32_t len)
+/* Erase a validated, sector-aligned range, lowest sector first unless
+ * top_down. Sectors already at 0xFF are skipped: a redundant erase is pure risk
+ * with no benefit. */
+static flash_region_status_t erase_checked(uint32_t addr, uint32_t len, bool top_down)
 {
     uint8_t buf[IO_CHUNK];
+    const uint32_t n_sec = len / FLASH_REGION_SECTOR_SIZE;
 
-    for (uint32_t sec = addr; sec < addr + len; sec += FLASH_REGION_SECTOR_SIZE) {
+    for (uint32_t k = 0; k < n_sec; k++) {
+        const uint32_t sec = addr + (top_down ? n_sec - 1u - k : k) * FLASH_REGION_SECTOR_SIZE;
         bool blank = true;
         for (uint32_t off = 0; off < FLASH_REGION_SECTOR_SIZE && blank; off += IO_CHUNK) {
             flash_region_status_t st = backend_read(sec + off, buf, IO_CHUNK);
@@ -477,7 +481,8 @@ static flash_region_status_t erase_checked(uint32_t addr, uint32_t len)
     return FLASH_REGION_OK;
 }
 
-flash_region_status_t flash_region_erase(flash_region_id_t id, uint32_t offset, uint32_t len)
+static flash_region_status_t region_erase(flash_region_id_t id, uint32_t offset,
+                                          uint32_t len, bool top_down)
 {
     const flash_region_t *r = flash_region_get(id);
     if (!g_ready) return FLASH_REGION_ERR_NOT_INIT;
@@ -497,7 +502,12 @@ flash_region_status_t flash_region_erase(flash_region_id_t id, uint32_t offset, 
         g_stats.erases_refused++;
         return FLASH_REGION_ERR_BOUNDS;
     }
-    return erase_checked(r->start + offset, len);
+    return erase_checked(r->start + offset, len, top_down);
+}
+
+flash_region_status_t flash_region_erase(flash_region_id_t id, uint32_t offset, uint32_t len)
+{
+    return region_erase(id, offset, len, false);
 }
 
 flash_region_status_t flash_regions_erase_abs(uint32_t addr, uint32_t len)
@@ -514,7 +524,7 @@ flash_region_status_t flash_regions_erase_abs(uint32_t addr, uint32_t len)
         g_stats.erases_refused++;
         return st;
     }
-    return erase_checked(addr, len);
+    return erase_checked(addr, len, false);
 }
 
 flash_region_status_t flash_region_reset(flash_region_id_t id)
@@ -525,7 +535,14 @@ flash_region_status_t flash_region_reset(flash_region_id_t id)
         g_stats.erases_refused++;
         return FLASH_REGION_ERR_BAD_ARG;
     }
-    return flash_region_erase(id, 0u, r->length);
+    /* An append log is erased top down (issue #58). Bottom up, a power cut after
+     * sector 0 left sectors 1.. holding old CRC-valid records on the new log's
+     * 64-byte grid: new saves refilled sector 0, the scan walked on into sector
+     * 1, and the boot after the 64th save loaded settings from before the
+     * compaction. Top down, a cut leaves the old records as a prefix ending at
+     * the first erased sector; the device boots on one of them (an older
+     * setting, never a resurrected one) and appends after it. */
+    return region_erase(id, 0u, r->length, r->kind == FLASH_REGION_KIND_APPEND);
 }
 
 /* ═══════════════════════════════════════════════════════════════════
@@ -718,7 +735,8 @@ flash_region_status_t flash_region_append(flash_region_id_t id, const void *data
     uint32_t addr = r->start + scan.next_offset;
 
     /* The slot must be blank. If it is not, something already lives here and
-     * this layer does not overwrite by guessing — it refuses. */
+     * this layer does not overwrite by guessing — it refuses, and the caller
+     * decides whether to reset the region. */
     {
         uint8_t buf[IO_CHUNK];
         for (uint32_t done = 0; done < total; ) {
@@ -730,8 +748,14 @@ flash_region_status_t flash_region_append(flash_region_id_t id, const void *data
             }
             for (uint32_t i = 0; i < n; i++) {
                 if (buf[i] != 0xFFu) {
+                    /* The scan stopped here and the slot is not blank, so it
+                     * holds no record the scanner can read: a header torn by a
+                     * power cut, a half-erased sector, or damage. Nothing can
+                     * be appended after it, ever, so say so rather than
+                     * NEEDS_ERASE, which a caller rightly will not act on
+                     * (issue #57: every later save was refused, silently). */
                     g_stats.writes_refused++;
-                    return FLASH_REGION_ERR_NEEDS_ERASE;
+                    return FLASH_REGION_ERR_LOG_DAMAGED;
                 }
             }
             done += n;

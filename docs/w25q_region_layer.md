@@ -99,6 +99,17 @@ known length whose CRC fails — the scanner steps over it and the log keeps
 working. Appending a payload identical to the newest valid record is elided
 entirely, which is what keeps a frequently-saved value off the erase path.
 
+A cut **before** the magic and length have both landed, or inside a sector
+erase, leaves a slot that is not blank but holds no header the scanner can
+read. Nothing can be appended after it, so `flash_region_append()` returns
+`FLASH_REGION_ERR_LOG_DAMAGED` and writes nothing; the settings writer compacts
+on it exactly as on `FLASH_REGION_ERR_FULL` (issue #57; until 2026-10-07 this
+returned `NEEDS_ERASE` and every later save failed). `flash_region_reset()` erases
+an append region **top down**, so a cut part-way through a compaction leaves the
+old records as an unbroken prefix rather than a gap that new saves refill and
+then walk past into stale records (issue #58). Other regions erase bottom up.
+Both cases are tested in `firmware/tests/test_config_persist.c` §9.
+
 ## Verification
 
 `scripts/test_flash_regions.py` (in the `run_tests.py` gate) builds

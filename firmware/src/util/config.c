@@ -233,13 +233,18 @@ bool config_save(const device_config_t *cfg)
 
     flash_region_status_t st = flash_region_append(CONFIG_REGION, buf, sizeof(buf));
 
-    if (st == FLASH_REGION_ERR_FULL) {
-        /* The log filled. This is the ONE place this file erases anything, it
-         * is an explicit whole-region reset of our own append region (the
-         * layer bounds it), and it is the documented way out of a full log.
-         * A power cut between the reset and the re-append costs the settings
-         * and the device comes up on defaults — which is why compaction is
-         * driven by "actually full" and not by a heuristic. */
+    if (st == FLASH_REGION_ERR_FULL || st == FLASH_REGION_ERR_LOG_DAMAGED) {
+        /* The log filled, or it ends at a record the scanner cannot read (a
+         * header torn by a power cut, a half-erased sector), after which
+         * nothing can ever be appended (issue #57). This is the ONE place this
+         * file erases anything, it is an explicit whole-region reset of our
+         * own append region (the layer bounds it), and it is the documented
+         * way out of a log that takes no more records. A power cut between the
+         * reset and the re-append costs the settings — the device comes up on
+         * defaults, or on an older record if the erase was cut part-way — which
+         * is why compaction is driven by "takes no more" and not by a
+         * heuristic. buf is the newest setting, so nothing after the damage
+         * that the save would keep is lost. */
         flash_region_status_t rst = flash_region_reset(CONFIG_REGION);
         if (rst != FLASH_REGION_OK) {
             g_stats.saves_failed++;
@@ -252,11 +257,9 @@ bool config_save(const device_config_t *cfg)
 
     g_stats.last_save_status = (int32_t)st;
     if (st != FLASH_REGION_OK) {
-        /* Deliberately NOT retried with an erase. FLASH_REGION_ERR_NEEDS_ERASE
-         * here means the next slot in our region is not blank — i.e. reality
-         * disagrees with the flash map. Erasing on that basis is exactly the
-         * stray-erase behaviour the region layer exists to prevent; surface it
-         * instead (config_persist_stats()->last_save_status). */
+        /* Anything else is NOT retried with an erase: an I/O or verify
+         * failure says nothing about whether the region is ours to erase.
+         * Surface it instead (config_persist_stats()->last_save_status). */
         g_stats.saves_failed++;
         return false;
     }

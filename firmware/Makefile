@@ -613,12 +613,13 @@ test-scope-freq: $(BUILD_DIR)/test_scope_freq
 # verify loop across compaction, and — the one that matters — that the settings
 # writer cannot reach a read-only region. See tests/test_config_persist.c.
 #
-# The same file is built three ways:
+# The same file is built two ways:
 #   test_config_persist                SETTINGS_PERSIST_WRITES=1, must pass
 #   test_config_persist_nowrite        SETTINGS_PERSIST_WRITES=0, the negative
 #                                      control: the change/cycle/verify loop must
 #                                      FAIL to persist (spec settings-persistence S3)
-#   test_config_persist_known_defects  expected to fail; see the target below
+# (A third, known-defects build held the #57/#58 power-cut tests until those
+# were fixed; they run in test_config_persist now.)
 CONFIG_PERSIST_SRCS = src/util/config.c src/util/settings_store.c src/drivers/flash_regions.c \
                       src/ui/theme.c src/ui/scope_state.c src/ui/scope_cal.c src/ui/scope_timebase.c
 CONFIG_PERSIST_DEPS = tests/test_config_persist.c $(CONFIG_PERSIST_SRCS) \
@@ -632,27 +633,9 @@ $(BUILD_DIR)/test_config_persist: $(CONFIG_PERSIST_DEPS) | $(BUILD_DIR)
 $(BUILD_DIR)/test_config_persist_nowrite: $(CONFIG_PERSIST_DEPS) | $(BUILD_DIR)
 	$(CONFIG_PERSIST_CC) -DSETTINGS_PERSIST_WRITES=0 $< $(CONFIG_PERSIST_SRCS) -o $@
 
-$(BUILD_DIR)/test_config_persist_known_defects: $(CONFIG_PERSIST_DEPS) | $(BUILD_DIR)
-	$(CONFIG_PERSIST_CC) -DSETTINGS_PERSIST_WRITES=1 -DCONFIG_PERSIST_KNOWN_DEFECTS=1 \
-		$< $(CONFIG_PERSIST_SRCS) -o $@
-
 test-config-persist: $(BUILD_DIR)/test_config_persist $(BUILD_DIR)/test_config_persist_nowrite
 	$(BUILD_DIR)/test_config_persist
 	$(BUILD_DIR)/test_config_persist_nowrite
-
-# ⚠ THIS TARGET IS EXPECTED TO FAIL, and is deliberately NOT part of
-# test-config-persist or any other aggregate (same convention as
-# test-meter-word-map). Each test asserts the correct behaviour for a power-cut
-# case the append log gets wrong today: a header that does not parse — a cut
-# inside a record's magic/length, a damaged header, or a cut part-way through a
-# compaction's sector erase — stops every later save (#57), and a compaction
-# cut between its sector erases later resurrects pre-compaction settings (#58).
-# The firmware fix turning this green IS the verification; promote the tests
-# into the main build when it does.
-.PHONY: test-config-persist-known-defects
-test-config-persist-known-defects: $(BUILD_DIR)/test_config_persist_known_defects
-	@echo "note: this target is EXPECTED to fail until the append-log power-cut defects are fixed"
-	$<
 
 test-stock-meter-literals:
 	python3 ../scripts/test_stock_meter_literals.py
