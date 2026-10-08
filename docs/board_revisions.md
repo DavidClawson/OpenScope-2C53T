@@ -18,7 +18,7 @@ Where a statement was checked independently on another unit, the check is named.
 | OpenScope v0.4.0 | **runs** (units #1 and #3) | **runs** (@saulvalenzuela23, 2026-10-02: live capture, meter 3.299 V on a 3.300 V supply) |
 | Battery / boost | Silergy **SY7088DGC** boost, marked `VTxyz` (e.g. `VTHZA`, `VTHnA`) | **TC4056A** linear charger + **SB6284** boost (`B6284`), 4.7 µH, SS34 |
 | ADC | AD9288-compatible dual 8-bit (pinout traced by @maksidze) | **MXT2088**, dual 8-bit 100 MS/s (marking read under angled light) |
-| Multimeter | separate meter chip on a UART (behaviour) | **SDIC SD7501/SD7502** behind a **π122U31** digital isolator |
+| Multimeter | separate meter chip on a UART (behaviour) | **SDIC SD7501** (stock firmware uses only the SD7501 feature set; SD7502 not excluded on the silicon) behind a **π122U31** digital isolator |
 | Rail test points | not documented | silkscreened `4.3V`, `3.3V`, `2.5V`, `-2V5`, `-3V3` |
 
 ## Parts common to both (as far as known)
@@ -39,7 +39,13 @@ Where a statement was checked independently on another unit, the check is named.
 
 On the unlabelled board the meter is an **SDIC SD7501/SD7502** (LQFP-64, marking sanded, identified by
 tracing its pins against the datasheet: crystal on pins 59/60, UART on pins 35/36, buzzer output on pin
-28 through an EL3H7 optocoupler). It talks to the main MCU over a **9600 8N1 UART through a π122U31
+28 through an EL3H7 optocoupler). The identification is consistent with the **SD7501**: firmware
+disassembly of the stock application binary (`APP_2C53T_V1.2.0_251015.bin`) at flash address `0x0804C46C`
+reveals a mode string table containing exactly 12 standard multimeter functions (matching our 12 captured
+command IDs), and the firmware contains no strings, mode branches or register handlers for the SD7502-only
+features (inrush/surge, peak hold).
+
+It talks to the main MCU over a **9600 8N1 UART through a π122U31
 digital isolator**.
 
 The pads marked `RX`, `TX`, `GND`, `3V3` are on the **MCU side** of the isolator, so the meter traffic
