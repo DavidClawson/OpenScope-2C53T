@@ -1,0 +1,14 @@
+// GW1N-UV2 QN48 physical constraints for debugclk_hw_top.
+//
+// Pin numbers are the audited UG171 QN48 package table as built into the
+// apicula agent/gw1n2-qn48-chipdb-20260815 database (GW1N-UV2QN48XF), NOT the
+// GW1N-1P5C QFN48XF proxy numbers.  IOB locations are the netlist-traced
+// runtime-SPI and run nets from the stock design.  Only these six nets have
+// continuity-grade or netlist-grade evidence; no other board pin may be added
+// here without the same standard of proof.
+IO_LOC "dbg_clk" 30;
+IO_LOC "run_enable" 46;
+IO_LOC "spi_cs_n" 34;
+IO_LOC "spi_sclk" 29;
+IO_LOC "spi_mosi" 35;
+IO_LOC "spi_so" 28;
