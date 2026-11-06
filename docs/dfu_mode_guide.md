@@ -203,18 +203,16 @@ The stock device has **three** firmware layers, and which ones you have determin
 | Address | Layer | Notes |
 |---------|-------|-------|
 | (MCU silicon) | ROM DFU bootloader | Mask ROM, unerasable — BOOT0 + reset always reaches it |
-| `0x08000000` | **Factory IAP bootloader** (28 KB) | Implements the MENU+Power `IAP` upgrade disk. **Not part of any `.bin` you can download** — it only ships pre-installed |
+| `0x08000000` | **Factory IAP bootloader** (24 KB, then the 4 KB settings page) | Implements the MENU+Power `IAP` upgrade disk. **Not part of any `.bin` you can download** — it only ships pre-installed |
 | `0x08007000` | Stock application | The `APP_2C53T_V*.bin` you can download from FNIRSI |
 
-The 28 KB at `0x08000000` is two different things. `0x0000`–`0x5FFF` (24 KB) is the IAP code, identical on every unit checked. `0x6000`–`0x6FFF` (4 KB) is the stock settings and calibration page, which is **per unit**. The archive below spans both.
+The 28 KB at `0x08000000` is two different things. `0x0000`–`0x5FFF` (24 KB) is the IAP code, identical on every unit checked. `0x6000`–`0x6FFF` (4 KB) is the stock settings and calibration page, which is **per unit**. The archive below holds only the IAP code.
 
 If you flashed an alternative bootloader (e.g. an older OpenScope HID bootloader, or a community switcher branch) directly to `0x08000000`, you **overwrote the factory IAP bootloader** and MENU+Power no longer mounts the `IAP` disk. Flashing the stock app to both `0x08000000` and `0x08007000` will boot, but it does **not** restore the upgrade disk — those are app fragments, not the IAP bootloader.
 
-To fully restore factory state you need the factory IAP bootloader image. We've archived a dump from a V1.4 unit at [`archive/factory_iap_bootloader_2C53T.bin`](../archive/factory_iap_bootloader_2C53T.bin) (28,672 bytes, sha256 `0c9ec7d6…`).
+To fully restore factory state you need the factory IAP bootloader image. We've archived a dump from a V1.4 unit at [`archive/factory_iap_bootloader_2C53T.bin`](../archive/factory_iap_bootloader_2C53T.bin) (24,576 bytes = `0x6000`, `0x08000000`–`0x08005FFF`, sha256 `7a6201ee16ce155675f1d235e468edfdce7a736318f2591d54a221d4ad06566b`). It is byte-identical to the same range of a never-flashed V1.4 unit. It ends on a flash-page boundary (`0512*002Kg` in the `dfu-util -l` line above: 2 KB pages), and `dfu-util` erases only the pages the file covers, so step 1 cannot write the calibration page at `0x08006000`.
 
-> **Warning: that file carries unit #1's calibration page ([#38](https://github.com/DavidClawson/OpenScope-2C53T/issues/38)).** Its 28,672 bytes are `0x08000000`–`0x08006FFF`. Bytes `0x0000`–`0x5FFF` are the IAP code, byte-identical to a dump of a pristine V1.4 unit. Bytes `0x6000`–`0x6FFF` are bench unit #1's settings and calibration page, byte-identical to [`archive/factory_cal/unit1_mcu_settings_page_0x08006000.bin`](../archive/factory_cal/unit1_mcu_settings_page_0x08006000.bin). Step 1 below writes the whole file, so it **replaces your unit's calibration with unit #1's**. Nothing reports it; readings are just off by the difference between the two units (127 of 256 calibration bytes differ between a pristine V1.4 and unit #1, [#28](https://github.com/DavidClawson/OpenScope-2C53T/issues/28)). Restore your own page afterwards (step 3). If you never dumped it, there is no copy of yours: the unit keeps unit #1's values.
->
-> **Proposed fix (#38, option 1; not done yet):** keep the archive trimmed to `0x6000` bytes (24,576 B, with its own sha256), so step 1 cannot write a calibration page at all. Nothing is lost: the page already lives in the `archive/factory_cal/` file above. The note in `archive/factory_cal/README.md` against truncating the bootloader archive predates that extraction and has to be updated in the same change. Until the archive is trimmed, treat step 3 as part of the recipe.
+> **If you ran step 1 with the earlier 28,672-byte file** (sha256 `0c9ec7d6…`, trimmed in [#38](https://github.com/DavidClawson/OpenScope-2C53T/issues/38)): that file also covered `0x08006000`–`0x08006FFF` with bench unit #1's settings and calibration page, so it **replaced your unit's calibration with unit #1's**. Nothing reports it; readings are just off by the difference between the two units (127 of 256 calibration bytes differ between a pristine V1.4 and unit #1, [#28](https://github.com/DavidClawson/OpenScope-2C53T/issues/28)). Write your own page back with step 3. If you never dumped it, there is no copy of yours: the unit keeps unit #1's values. Unit #1's page is kept on its own at [`archive/factory_cal/unit1_mcu_settings_page_0x08006000.bin`](../archive/factory_cal/unit1_mcu_settings_page_0x08006000.bin).
 
 Restore over ROM DFU (open case, BOOT0 + pinhole reset — see top of this guide):
 
@@ -229,14 +227,17 @@ dfu-util -a 0 -d 2e3c:df11 -s 0x08000000 -D archive/factory_iap_bootloader_2C53T
 dfu-util -a 0 -d 2e3c:df11 -s 0x08007000 \
   -D "archive/2C53T Firmware V1.2.0/APP_2C53T_V1.2.0_251015.bin"
 
-# 3. YOUR calibration page → 0x08006000 (overwrites unit #1's page from step 1)
+# 3. YOUR calibration page → 0x08006000, if you have the dump. Steps 1 and 2 leave
+#    that page as it is: your own page if nothing wrote it, erased after a mass
+#    erase (stock then falls back to its compiled-in defaults), unit #1's if you
+#    ran the old 28,672-byte file. Writing your own dump back is right in every case.
 #    <your-caldump.bin> = the 4096-byte dump you took before your first flash
 dfu-util -a 0 -d 2e3c:df11 -s 0x08006000 -D <your-caldump.bin>
 
 # Remove BOOT0 jumper, pinhole reset → boots bone-stock; MENU+Power mounts IAP again.
 ```
 
-This was tested end-to-end on a unit whose factory bootloader had been erased months earlier: it boots stock V1.2.0, shows a live trace, and MENU+Power restores the `IAP` upgrade disk. If the device drops off DFU mid-write, **hold the POWER button during the flash** (PC9 isn't asserted in ROM DFU on some units) and retry.
+This was tested end-to-end on a unit whose factory bootloader had been erased months earlier: it boots stock V1.2.0, shows a live trace, and MENU+Power restores the `IAP` upgrade disk. That run used the earlier 28,672-byte file; the trimmed file writes the same first 24 KB and has not been re-run on hardware. If the device drops off DFU mid-write, **hold the POWER button during the flash** (PC9 isn't asserted in ROM DFU on some units) and retry.
 
 > The factory IAP bootloader is FNIRSI's proprietary code, archived here solely for device recovery. If FNIRSI requests removal, we'll comply.
 

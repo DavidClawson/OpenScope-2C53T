@@ -149,6 +149,11 @@ whole `3:` volume live on that chip, and we cannot regenerate any of it.
 > which had already been reflashed by us. That is not proof about a pristine
 > unit, and the June boundary analysis deliberately left cross-unit comparison
 > open.
+>
+> **Update (2026-10-01, issue #28).** Settled since: per-device factory calibration
+> exists, it lives in MCU flash `0x08006000` (three units differ, one of them
+> never-flashed), and the W25Q holds none (`9999.BIN` is 0 bytes on the pristine unit
+> too). See `archive/factory_cal/README.md` and `scripts/cal_page_decode.py`.
 
 The read-only enforcement below is unchanged and still correct — it protects
 stock's volumes by address, whatever they turn out to contain. And
