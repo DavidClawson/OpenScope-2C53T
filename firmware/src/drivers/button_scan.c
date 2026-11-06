@@ -270,6 +270,19 @@ void button_scan_init(QueueHandle_t button_queue) {
     nvic_irq_enable(TMR3_GLOBAL_IRQn, 5, 0);
 }
 
+/* Queue a press exactly as the matrix ISR would after debounce, for the
+ * remote protocol (issue #10). Never blocks: a full queue is reported, not
+ * waited on, so the caller can NAK instead of claiming the press happened.
+ * POWER here is a short press only; the long-press power-off countdown is
+ * polled from the GPIO by the input task and cannot be triggered remotely. */
+bool button_scan_inject(uint8_t id) {
+    button_id_t btn = (button_id_t)id;
+    if (s_button_queue == NULL) {
+        return false;
+    }
+    return xQueueSend(s_button_queue, &btn, 0) == pdTRUE;
+}
+
 void button_scan_start(void) {
     s_started = 1;
     TMR3->ists = 0;

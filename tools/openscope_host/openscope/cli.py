@@ -1,0 +1,164 @@
+"""`openscope` command line (remote_protocol.md §4.2).
+
+Every subcommand exits non-zero with one readable line when the device is
+absent or refuses — no tracebacks for expected failures (§4.2)."""
+from __future__ import annotations
+
+import argparse
+import sys
+from typing import List, Optional
+
+from . import proto
+from .device import Device, DeviceError, Nak, Timeout
+from .link import NoDevice, candidate_ports, looked_where
+
+EXIT_OK, EXIT_NO_DEVICE, EXIT_DEVICE_ERROR, EXIT_USAGE = 0, 1, 2, 64
+
+
+def _now() -> float:          # the meter staleness clock (tests replace it)
+    import time
+    return time.monotonic()
+
+
+def _info(dev: Device, _a) -> int:
+    version = dev.ping()
+    st = dev.status()
+    if st.battery_known:
+        batt = f"{st.battery_pct}% ({st.battery_mv} mV{', charging' if st.charging else ''}"
+        batt += ", CRITICAL)" if st.battery_critical else ")"
+    else:
+        batt = "unknown (no sample yet" + (", charging)" if st.charging else ")")
+    print(f"port      {dev.link.port}")
+    print(f"firmware  {version}")
+    print(f"protocol  v{st.proto_version}")
+    print(f"mode      {st.mode_name}")
+    print(f"battery   {batt}")
+    print(f"capture   {'real samples' if st.capture_ready else 'no capture data yet'}")
+    print(f"uptime    {st.uptime_ms / 1000:.1f} s")
+    print(f"usb       {st.usb_tx_stalls} TX stalls, {st.usb_heals} self-heals")
+    return EXIT_OK
+
+
+def _press(dev: Device, a) -> int:
+    for b in a.buttons:
+        dev.press(b)
+        print(f"pressed {b.upper()}")
+    return EXIT_OK
+
+
+def _meter(dev: Device, a) -> int:
+    import csv
+    import time as _t
+    f = open(a.log, "a", newline="") if a.log else None
+    writer = csv.writer(f) if f else None
+    if f and f.tell() == 0:
+        writer.writerow(["t_unix", "update_count", "value", "unit", "display", "raw_bcd",
+                         "decimal_pos", "result", "submode", "ac", "autorange", "hold"])
+    continuous = a.count == 0
+    last = None
+    n = 0
+    # A frozen update_count means the meter is not producing readings (wrong
+    # mode, meter chip silent). A finite --count must not poll forever.
+    stale_limit = max(3.0, 20 * a.interval)
+    last_new = _now()
+    try:
+        while True:
+            try:
+                m = dev.meter()
+            except (Nak, Timeout) as e:
+                # A long log must survive a range change (NOT_READY) or one
+                # lost reply; a one-shot read reports it.
+                if not continuous:
+                    raise
+                print(f"# {e}", file=sys.stderr, flush=True)
+                _t.sleep(max(a.interval, 0.5))
+                continue
+            if m.update_count == last and not continuous and _now() - last_new > stale_limit:
+                print(f"error: meter reading not updating for {stale_limit:.0f} s "
+                      f"(update_count stuck at {last})", file=sys.stderr)
+                return EXIT_DEVICE_ERROR
+            if m.update_count != last:          # only new readings, not re-reads
+                last = m.update_count
+                last_new = _now()
+                print(f"{m.display} {m.unit}   ({m.result}, raw {m.raw_bcd}, #{m.update_count})", flush=True)
+                if writer:
+                    writer.writerow([f"{_t.time():.3f}", m.update_count, m.value, m.unit, m.display,
+                                     m.raw_bcd, m.decimal_pos, m.result, m.submode,
+                                     int(m.ac), int(m.autorange), int(m.hold)])
+                    f.flush()                   # a killed logger keeps every row it printed
+                n += 1
+            if not continuous and n >= a.count:
+                return EXIT_OK
+            _t.sleep(a.interval)
+    except KeyboardInterrupt:
+        return EXIT_OK
+    finally:
+        if f:
+            f.close()
+
+
+def _shell(dev: Device, a) -> int:
+    print(dev.shell(" ".join(a.line), timeout=a.timeout))
+    return EXIT_OK
+
+
+def _screenshot(dev: Device, a) -> int:
+    from .screen import save_png
+    s = dev.screenshot()
+    save_png(a.out, s.w, s.h, s.indexed4, scale=a.scale)
+    note = "transport verified; the live screen changed during capture (torn)" if s.torn else "CRC verified"
+    print(f"saved {a.out} ({s.w}x{s.h}, {note})")
+    return EXIT_OK
+
+
+def build_parser() -> argparse.ArgumentParser:
+    ap = argparse.ArgumentParser(prog="openscope", description="Drive an OpenScope 2C53T over USB.")
+    ap.add_argument("--port", help="serial port (default: auto-detect by USB VID:PID)")
+    sub = ap.add_subparsers(dest="cmd", required=True)
+    sub.add_parser("ports", help="list candidate ports")
+    sub.add_parser("info", help="firmware version, mode, battery, USB health")
+    p = sub.add_parser("press", help="inject button presses, e.g. `press MENU OK`")
+    p.add_argument("buttons", nargs="+", metavar="BUTTON",
+                   help=" | ".join(proto.BUTTONS))
+    p = sub.add_parser("meter", help="print (and optionally log to CSV) multimeter readings")
+    p.add_argument("--count", type=int, default=1, help="readings to take (0 = until Ctrl-C)")
+    p.add_argument("--interval", type=float, default=0.25, help="poll period, s (meter updates ~4 Hz)")
+    p.add_argument("--log", metavar="CSV", help="append readings to this CSV (raw BCD kept, see #28)")
+    p = sub.add_parser("shell", help="run one ASCII debug-shell command")
+    p.add_argument("line", nargs="+")
+    p.add_argument("--timeout", type=float, default=3.0)
+    p = sub.add_parser("screenshot", help="save the device screen as PNG")
+    p.add_argument("out")
+    p.add_argument("--scale", type=int, default=2)
+    return ap
+
+
+def main(argv: Optional[List[str]] = None) -> int:
+    a = build_parser().parse_args(argv)
+    if a.cmd == "ports":
+        ports = candidate_ports()
+        if not ports:
+            print(f"no OpenScope found on {looked_where()}")
+            return EXIT_NO_DEVICE
+        for i, p in enumerate(ports):
+            print(p + ("   <- would use" if i == 0 else ""))
+        return EXIT_OK
+
+    handlers = {"info": _info, "press": _press, "meter": _meter, "shell": _shell,
+                "screenshot": _screenshot}
+    dev = None
+    try:
+        dev = Device.open(a.port)           # also checks the protocol major (§3.7)
+        return handlers[a.cmd](dev, a)
+    except NoDevice as e:                   # none found, busy, or did not come back
+        print(str(e), file=sys.stderr)
+        return EXIT_NO_DEVICE
+    except Nak as e:
+        print(str(e), file=sys.stderr)
+        return EXIT_DEVICE_ERROR
+    except (DeviceError, proto.ProtocolError, ValueError, OSError) as e:
+        print(f"error: {e}", file=sys.stderr)
+        return EXIT_DEVICE_ERROR
+    finally:
+        if dev is not None:
+            dev.close()

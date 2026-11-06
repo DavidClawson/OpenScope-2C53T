@@ -14,12 +14,10 @@
  * it: the record survives a reset and can be reported on the next boot. */
 volatile fault_record_t g_fault __attribute__((section(".noinit")));
 
+/* Captured before g_fault is overwritten, so the CURRENT boot can still report
+ * what the PREVIOUS one did. Only the summary outlives fault_init(). */
 static bool  prev_valid;
 static char  prev_summary[80];
-
-/* Captured before g_fault is overwritten, so the CURRENT boot can still report
- * what the PREVIOUS one did. */
-static fault_record_t prev;
 
 static const char *kind_name(uint32_t k)
 {
@@ -34,6 +32,11 @@ static const char *kind_name(uint32_t k)
 
 void fault_init(void)
 {
+    /* A local, not a static: nothing reads the copy after this function, and
+     * SRAM is a few dozen bytes from the link limit (96 B of .bss). It costs
+     * main()'s stack once, before the scheduler starts and resets the MSP. */
+    fault_record_t prev;
+
     prev_valid = (g_fault.magic == FAULT_MAGIC);
     if (prev_valid) {
         memcpy(&prev, (const void *)&g_fault, sizeof(prev));
