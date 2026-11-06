@@ -813,7 +813,10 @@ static void vInputTask(void *pvParameters)
         if (g_emu_key != 0u) {
             const uint8_t k = (uint8_t)(g_emu_key - 1u);
             g_emu_key = 0u;
-            (void)input_inject_button((button_id_t)k);
+            /* Only real buttons: 1 would queue BTN_NONE and anything past
+             * BTN_POWER an id no handler knows (review of #63). */
+            if (k > (uint8_t)BTN_NONE && k <= (uint8_t)BTN_POWER)
+                (void)input_inject_button((button_id_t)k);
         }
 #endif
 

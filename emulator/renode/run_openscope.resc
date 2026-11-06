@@ -41,8 +41,10 @@ set skip_default_irq
 from Antmicro.Renode.Peripherals.CPU import RegisterValue
 cpu.SetRegister(15, RegisterValue.Create(cpu.GetRegister(14).RawValue, 32))
 """
-# Address of Default_Handler (from firmware .map)
-cpu AddHook 0x0800a818 $skip_default_irq
+# Default_Handler's address comes from the ELF built next to the .bin, so it
+# follows every build (it used to be a hard-coded 0x0800a818).
+sysbus LoadSymbolsFrom @../../firmware/build/firmware.elf
+cpu AddHook `sysbus GetSymbolAddress "Default_Handler"` $skip_default_irq
 
 # --- Logging ---
 logLevel 3
