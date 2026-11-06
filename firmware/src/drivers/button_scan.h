@@ -18,6 +18,7 @@
 #ifndef BUTTON_SCAN_H
 #define BUTTON_SCAN_H
 
+#include <stdbool.h>
 #include "at32f403a_407.h"
 #include "FreeRTOS.h"
 #include "queue.h"
@@ -30,6 +31,10 @@
  */
 void button_scan_init(QueueHandle_t button_queue);
 void button_scan_start(void);
+
+/* Inject a debounced press (button_id_t 1..15) from task context.
+ * Returns false if the queue is missing or full (never blocks). */
+bool button_scan_inject(uint8_t id);
 
 /*
  * Get the raw 15-bit scan state (for debug display).

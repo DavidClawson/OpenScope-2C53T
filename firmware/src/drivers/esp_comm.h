@@ -20,7 +20,9 @@
 
 /* Packet framing */
 #define ESP_SYNC_BYTE       0xAA
-#define ESP_MAX_PAYLOAD     256
+#define ESP_MAX_PAYLOAD     256     /* RECEIVE cap only (host->device). Responses are not
+                                     * capped: a WAVEFORM_FRAME is 1048 B. Do not "fix" the
+                                     * asymmetry (remote_protocol.md §2.2, §3.5). */
 #define ESP_HEADER_SIZE     4       /* sync + cmd + len_hi + len_lo */
 #define ESP_CHECKSUM_SIZE   1
 
@@ -38,6 +40,8 @@
 #define ESP_CMD_SIGNAL_CONFIG   0x0B    /* Set signal injection config */
 #define ESP_CMD_MODULE_LIST     0x0C    /* List installed modules */
 #define ESP_CMD_MODULE_DELETE   0x0D    /* Delete a module by slot */
+#define ESP_CMD_GET_METER       0x21    /* remote_protocol.md §3.4: one meter reading */
+#define ESP_CMD_GET_WAVEFORM    0x22    /* §3.4: u8 channel_mask -> one WAVEFORM_FRAME per channel */
 
 /* Responses: GD32 → ESP32 */
 #define ESP_RSP_ACK             0x81    /* Command accepted */
@@ -46,6 +50,8 @@
 #define ESP_RSP_FRAMEBUFFER     0x84    /* Framebuffer data (multi-packet) */
 #define ESP_RSP_STATUS          0x85    /* Status response */
 #define ESP_RSP_MODULE_LIST     0x86    /* Module list response */
+#define ESP_RSP_METER_FRAME     0x90    /* §3.5 METER_FRAME */
+#define ESP_RSP_WAVEFORM_FRAME  0x91    /* §3.5 WAVEFORM_FRAME */
 
 /* NAK error codes */
 #define ESP_ERR_UNKNOWN_CMD     0x01
@@ -56,6 +62,211 @@
 #define ESP_ERR_INVALID_SLOT    0x06
 #define ESP_ERR_NOT_READY       0x07
 #define ESP_ERR_TRANSFER_ACTIVE 0x08
+#define ESP_ERR_UNSUPPORTED     0x09    /* command exists but is not implemented on this build */
+#define ESP_ERR_RESERVED_0A     0x0A    /* reserved: never sent (a gap timeout is silent, see esp_comm_rx_poll) */
+#define ESP_ERR_NO_CAPTURE_DATA 0x0B    /* remote_protocol.md §3.4 — never substitute the demo trace */
+#define ESP_ERR_UNSUPPORTED_IN_MODE 0x0C
+#define ESP_ERR_BAD_ARG         0x0D    /* argument out of range */
+
+/* ─── Remote protocol (issue #10, docs/design/remote_protocol.md) ───
+ *
+ * Wire-format version reported in STATUS byte 0. Bump the major on any
+ * incompatible change; the host refuses unknown majors (§3.7). */
+#define ESP_PROTO_VERSION       1
+
+/* A frame whose bytes stop arriving for this long is abandoned and the
+ * receiver resyncs. Without it a truncated packet leaves the parser in
+ * PAYLOAD and, on the shared CDC endpoint, it would swallow the operator's
+ * shell text (and any later 0xAA) as payload. USB delivers a host write in
+ * back-to-back 64-byte packets, so a real gap of this size means the host
+ * gave up, not that it is slow. */
+#define ESP_RX_GAP_MS           50
+
+/* STATUS payload v1 — explicit little-endian layout, NOT a C struct dump
+ * (a struct's padding and enum width depend on the compiler):
+ *   [0]    u8   proto_version   (ESP_PROTO_VERSION)
+ *   [1]    u8   current_mode    (device_mode_t: 0 scope 1 meter 2 siggen 3 settings)
+ *   [2]    u8   battery_pct     (0..100)
+ *   [3]    u8   flags           bit0 charging, bit1 capture data ready,
+ *                               bit2 battery critical, bit3 battery UNKNOWN
+ *                               (no sample yet: battery_pct/mv are 0 and
+ *                               must not be read as a measurement)
+ *   [4..5] u16  battery_mv
+ *   [6..9] u32  uptime_ms
+ *   [10..13] u32 usb_tx_stalls  (CDC IN waits that timed out, issue #39)
+ *   [14..15] u16 usb_heals      (transport self-heal reconnects, issue #39)
+ *   [16]   u8   fw_len
+ *   [17..] char fw_version[fw_len]  (no NUL)
+ */
+#define ESP_STATUS_FIXED_LEN    17
+#define ESP_FW_VERSION_MAX      48      /* bytes of fw_version sent; also sizes the STATUS buffer */
+#define ESP_STATUS_FLAG_CHARGING      0x01
+#define ESP_STATUS_FLAG_CAPTURE_READY 0x02
+#define ESP_STATUS_FLAG_BATT_CRITICAL 0x04
+#define ESP_STATUS_FLAG_BATT_UNKNOWN  0x08
+
+/* Snapshot the firmware fills in for STATUS/PING. esp_comm itself knows
+ * nothing about the device, so the host tests can inject any state. */
+typedef struct {
+    uint8_t     current_mode;
+    uint8_t     battery_pct;
+    uint8_t     flags;
+    uint16_t    battery_mv;
+    uint32_t    uptime_ms;
+    uint32_t    usb_tx_stalls;
+    uint16_t    usb_heals;
+    const char *fw_version;     /* NUL-terminated; truncated to ESP_FW_VERSION_MAX on the wire */
+} esp_status_snapshot_t;
+
+typedef void (*esp_status_fn)(esp_status_snapshot_t *out);
+
+/* METER_FRAME payload v1 (remote_protocol.md §3.5, plus the display text):
+ *   [0..3]   u32  update_count   monotonic: a host sees drops and stale reads
+ *   [4..7]   f32  value          as the firmware scaled it (IEEE-754 LE)
+ *   [8..9]   i16  raw_bcd        the instrument's own digits, uncalibrated —
+ *                                per-device cal (#28) means a log should keep
+ *                                what the meter saw, not only what we concluded
+ *   [10]     u8   decimal_pos
+ *   [11]     u8   result_class   meter_result_class_t (NORMAL, OL, …)
+ *   [12]     u8   flags          bit0 negative, bit1 ac, bit2 autorange, bit3 hold
+ *   [13]     u8   submode
+ *   [14]     u8   unit_variant
+ *   [15]     u8   unit_len, then unit[unit_len] (ASCII, e.g. "V", "kOhm")
+ *   [..]     u8   display_len, then display[display_len] (what the LCD shows)
+ */
+#define ESP_METER_FIXED_LEN     16
+#define ESP_METER_FLAG_NEGATIVE 0x01
+#define ESP_METER_FLAG_AC       0x02
+#define ESP_METER_FLAG_AUTO     0x04
+#define ESP_METER_FLAG_HOLD     0x08
+
+typedef struct {
+    uint32_t    update_count;
+    float       value;
+    int16_t     raw_bcd;
+    uint8_t     decimal_pos;
+    uint8_t     result_class;
+    uint8_t     flags;
+    uint8_t     submode;
+    uint8_t     unit_variant;
+    char        unit[16];       /* copied, NUL-terminated: the provider's own */
+    char        display[16];    /* snapshot is gone by the time we encode */
+} esp_meter_snapshot_t;
+
+/* Fill a coherent reading. Anything but ESP_METER_OK is answered with a NAK:
+ * a reading the instrument is not currently producing must never be sent as
+ * if it were live (§2.3). */
+typedef enum {
+    ESP_METER_OK = 0,
+    ESP_METER_NOT_READY,        /* in meter mode, no reading parsed yet */
+    ESP_METER_WRONG_MODE,       /* not in meter mode: the last reading is frozen */
+} esp_meter_result_t;
+typedef esp_meter_result_t (*esp_meter_fn)(esp_meter_snapshot_t *out);
+
+/* WAVEFORM_FRAME payload v1 (remote_protocol.md §3.5, header extended). One
+ * frame per requested channel, CH1 first; all frames of one request are ONE
+ * capture (same frame_id). Header, little-endian:
+ *   [0..3]   u32  frame_id        acquisition generation of the copied record
+ *                                 (fpga_acq_frame_generation(): even, +2 per
+ *                                 committed capture — the `gen=` that `spi3
+ *                                 frame` prints). Never 0: no record, no frame.
+ *   [4]      u8   channel         0 = CH1, 1 = CH2
+ *   [5]      u8   flags           ESP_WAVE_FLAG_* below — derived HERE from the
+ *                                 provider's facts, never copied from it
+ *   [6]      u8   timebase_idx    reg 0x01 code IN FORCE in the FPGA (what the
+ *                                 samples were taken at, not the display's) when
+ *                                 the frame was requested: a record HELD across a
+ *                                 timebase change (STOP, SINGLE, NORMAL with no
+ *                                 crossing) is labelled with the new code, as on
+ *                                 the LCD — the code is not yet published with
+ *                                 the record
+ *   [7]      u8   vdiv_idx        frontend range index of this channel
+ *   [8..9]   u16  sample_count    1024 today
+ *   [10..11] u16  header_len      offset of samples[0] (§3.5's "reserved"):
+ *                                 a host skips to it, so fields can be appended
+ *                                 without a major bump
+ *   [12..15] u32  sample_rate_hz  bench-measured rate of this code
+ *                                 (scope_timebase.c, bench unit #1), rounded;
+ *                                 0 = no trustworthy rate (never measured,
+ *                                 incoherent, or display != hardware)
+ *   [16..19] u32  uv_per_div      bench-measured volts/div of this channel and
+ *                                 range (scope_cal.c, bench unit #1), in uV, at
+ *                                 the BNC (no probe factor); 0 = the range has
+ *                                 no volts meaning. A GAIN only: the zero
+ *                                 point is uncalibrated, so counts->volts
+ *                                 gives Vpp, not absolute volts.
+ *   [20..21] u16  counts_per_div  ADC counts one division of uv_per_div spans
+ *   [22..23] u16  head_skip       samples [0, head_skip) are the known record-
+ *                                 head defect (scope_record.h): analyse from here
+ *   [24..]   u8   samples[sample_count]  unsigned ADC counts as committed by the
+ *                                 acquisition task (a coherent copy, not the
+ *                                 live buffer)
+ */
+#define ESP_WAVE_HDR_LEN        24
+#define ESP_WAVE_MAX_SAMPLES    1024    /* one FPGA record (FPGA_ADC_BUF_SIZE) */
+#define ESP_WAVE_MASK_CH1       0x01
+#define ESP_WAVE_MASK_CH2       0x02
+#define ESP_WAVE_MASK_ALL       (ESP_WAVE_MASK_CH1 | ESP_WAVE_MASK_CH2)
+
+#define ESP_WAVE_FLAG_CALIBRATED   0x01  /* per-unit calibration: always 0 until
+                                          * that work is bench-validated (§3.5) */
+#define ESP_WAVE_FLAG_TB_MEASURED  0x02  /* sample_rate_hz is tier MEASURED   */
+#define ESP_WAVE_FLAG_VDIV_MEASURED 0x04 /* uv_per_div is tier MEASURED       */
+#define ESP_WAVE_FLAG_SYNTHETIC    0x08  /* never set: a synthetic record is
+                                          * refused, not labelled (§2.3)      */
+#define ESP_WAVE_FLAG_TB_PROVISIONAL   0x10  /* rate is right order of magnitude
+                                              * only ('~' on the LCD)         */
+#define ESP_WAVE_FLAG_VDIV_PROVISIONAL 0x20  /* same for uv_per_div           */
+#define ESP_WAVE_FLAG_TIME_ORDERED 0x40  /* record un-rotated at its seam: the
+                                          * hardware trigger sits at index 512 */
+#define ESP_WAVE_FLAG_TB_DISAGREES 0x80  /* the display's timebase is not the
+                                          * one in force: rate withheld (0)   */
+
+/* Confidence of a measured number — numerically identical to scope_cal_tier_t
+ * and scope_tb_tier_t (usb_debug.c asserts it). */
+#define ESP_TIER_NONE           0
+#define ESP_TIER_PROVISIONAL    1
+#define ESP_TIER_MEASURED       2
+
+typedef struct {
+    const uint8_t *samples;     /* a coherent COPY of the record, or NULL */
+    uint16_t    count;          /* 1..ESP_WAVE_MAX_SAMPLES */
+    uint8_t     vdiv_idx;
+    uint8_t     vdiv_tier;      /* ESP_TIER_* of uv_per_div */
+    uint32_t    uv_per_div;     /* 0 = no volts meaning */
+} esp_wave_channel_t;
+
+typedef struct {
+    uint32_t    frame_id;       /* generation of the copy; 0 = none (refused) */
+    uint8_t     timebase_idx;   /* code in force */
+    uint8_t     timebase_tier;  /* ESP_TIER_* of sample_rate_hz */
+    bool        timebase_disagrees;
+    bool        time_ordered;
+    bool        synthetic;      /* anything but a real capture: the encoder refuses */
+    uint32_t    sample_rate_hz;
+    uint16_t    counts_per_div;
+    uint16_t    head_skip;
+    esp_wave_channel_t ch[2];   /* [0] CH1, [1] CH2; only requested ones are read */
+} esp_wave_snapshot_t;
+
+/* Fill a coherent snapshot of the channels in `channel_mask`. Anything but
+ * ESP_WAVE_OK is answered with a NAK — a record the instrument is not
+ * currently producing must never be sent as if it were (§2.3). */
+typedef enum {
+    ESP_WAVE_OK = 0,
+    ESP_WAVE_NO_DATA,           /* fpga_data_ready() false / no committed record */
+    ESP_WAVE_WRONG_MODE,        /* not in scope mode: the buffers are not live */
+    ESP_WAVE_BUSY,              /* no tear-free copy within the retry budget */
+} esp_wave_result_t;
+typedef esp_wave_result_t (*esp_wave_fn)(uint8_t channel_mask, esp_wave_snapshot_t *out);
+/* Inject a button press (id 1..15 = button_id_t). Return false if it could
+ * not be queued, so the host gets NAK instead of a false ACK. */
+typedef bool (*esp_button_fn)(uint8_t button_id);
+/* Block writer: the whole of `len` bytes, in order. Preferred over the
+ * byte writer — the USB CDC path sends 64-byte packets, not bytes. */
+typedef void (*esp_write_block_fn)(const uint8_t *data, uint16_t len);
+/* Where non-protocol bytes go when routing a shared stream (§3.2). */
+typedef void (*esp_passthrough_fn)(const uint8_t *data, uint16_t len, void *ctx);
 
 /* Module slots */
 #define ESP_MODULE_SLOT_COUNT   4
@@ -144,6 +355,44 @@ void esp_comm_send_nak(uint8_t error_code);
 
 /* Check if a module transfer or firmware update is in progress */
 bool esp_comm_transfer_active(void);
+
+/* ─── Remote protocol bindings ─── */
+
+void esp_comm_set_block_writer(esp_write_block_fn fn);
+void esp_comm_set_status_provider(esp_status_fn fn);
+void esp_comm_set_button_injector(esp_button_fn fn);
+void esp_comm_set_meter_provider(esp_meter_fn fn);
+void esp_comm_set_waveform_provider(esp_wave_fn fn);
+
+/* True while a frame is being received (sync seen, checksum not yet). */
+bool esp_comm_rx_in_frame(void);
+
+/* Abandon a frame whose bytes stopped arriving ESP_RX_GAP_MS ago.
+ * Returns true if a frame was abandoned. Nothing is sent: without request
+ * ids an unsolicited reply would be mistaken for the next request's answer. */
+bool esp_comm_rx_poll(uint32_t now_ms);
+
+/* Refresh the gap clock of a frame still open (no-op otherwise). Call after
+ * esp_comm_route() returns, with a fresh time: route() stamps a whole chunk
+ * with its entry time, and work inside the chunk may have taken a while. */
+void esp_comm_rx_touch(uint32_t now_ms);
+
+/* Route a chunk from a stream shared with the ASCII shell (§3.2):
+ * bytes belonging to a frame (starting at 0xAA) go to the parser and every
+ * completed frame is dispatched; all other bytes are handed, in order and
+ * in contiguous runs, to `passthrough`. Malformed frames are answered with
+ * NAK (bad checksum / bad length) rather than dropped silently. */
+void esp_comm_route(const uint8_t *data, uint16_t len, uint32_t now_ms,
+                    esp_passthrough_fn passthrough, void *ctx);
+
+/* Diagnostics for `usbstat`/tests. */
+typedef struct {
+    uint32_t frames_ok;
+    uint32_t bad_checksum;
+    uint32_t bad_length;
+    uint32_t gap_timeouts;
+} esp_rx_stats_t;
+void esp_comm_get_rx_stats(esp_rx_stats_t *out);
 
 /* Compute XOR checksum */
 uint8_t esp_comm_checksum(const uint8_t *data, uint16_t len);
