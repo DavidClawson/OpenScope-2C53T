@@ -134,11 +134,11 @@ static bool analyse(const uint8_t *s, uint16_t n, float *bin, float *sharp)
      * reads 0.90-0.91, on the gate, and refuses on quantisation noise alone
      * (EXP-67, unit #3: r7 refused 5 of 6 clean records at 0.73-0.90; the
      * same records read 0.93-0.97 with the windows on the comb). */
-    const float a = sqrtf(fft_re[peak - 1u]);
-    const float b = sqrtf(fft_re[peak]);
-    const float c = sqrtf(fft_re[peak + 1u]);
-    const float den = a - 2.0f * b + c;
-    const float frac = (den != 0.0f) ? (0.5f * (a - c) / den) : 0.0f;
+    const float m_lo = sqrtf(fft_re[peak - 1u]);
+    const float m_pk = sqrtf(fft_re[peak]);
+    const float m_hi = sqrtf(fft_re[peak + 1u]);
+    const float den = m_lo - 2.0f * m_pk + m_hi;
+    const float frac = (den != 0.0f) ? (0.5f * (m_lo - m_hi) / den) : 0.0f;
     const float fbin = (float)peak + frac;
 
     {
