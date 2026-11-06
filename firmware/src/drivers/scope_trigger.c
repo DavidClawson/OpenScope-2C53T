@@ -5,6 +5,7 @@
 
 #include "scope_trigger.h"
 #include "at32f403a_407.h"
+#include "mcu_cal.h"
 
 /* DAC peripheral registers (AT32F403A, base 0x40007400 — STM32F1-compatible).
  * Stock writes these exact addresses in FUN_080018a4. */
@@ -23,18 +24,34 @@
 #define SCOPE_TRIG_RANGES 10
 
 /*
- * PLACEHOLDER per-range cal table (factory cal unrecoverable — see header).
- * Full-scale linear: base=0, upper=4095 for every range, so
+ * Per-range cal tables. PRIMARY source: the factory page at 0x08006000
+ * (mcu_cal.h) — per-device, irreplaceable, decoded read-only at first
+ * use. FALLBACK: full-scale linear placeholders (base=0, upper=4095), so
  *   level -100 -> 0,  level 0 -> ~2047 (mid),  level +100 -> 4095.
- * This makes the formula trivially verifiable on a scope and is replaced once a
- * real per-range calibration is regenerated.
+ * The factory page exists on any unit that still carries its saved config;
+ * the placeholder keeps the path testable on erased/dev units. `trig src`
+ * (usb_debug.c) reports which one is live.
  */
-static const uint16_t cal_base[SCOPE_TRIG_RANGES] = {
-    0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
-};
-static const uint16_t cal_upper[SCOPE_TRIG_RANGES] = {
-    4095, 4095, 4095, 4095, 4095, 4095, 4095, 4095, 4095, 4095,
-};
+static uint16_t cal_base[SCOPE_TRIG_RANGES];
+static uint16_t cal_upper[SCOPE_TRIG_RANGES];
+static uint8_t  cal_from_factory = 0;
+
+static void cal_tables_load(void)
+{
+    if (cal_from_factory)
+        return;
+    cal_from_factory = 1;
+    uint16_t b, u;
+    for (int r = 0; r < SCOPE_TRIG_RANGES; r++) {
+        if (mcu_cal_trigger_pair(1u, (uint8_t)r, &b, &u)) {
+            cal_base[r]  = b;
+            cal_upper[r] = u;
+        } else {
+            cal_base[r]  = 0;
+            cal_upper[r] = 4095;
+        }
+    }
+}
 
 /* Stock divisor constant (float @0x08001a54 in APP_2C53T_V1.2.0 = 200.0f). */
 #define TRIG_DIVISOR 200.0f
@@ -77,6 +94,7 @@ uint16_t scope_trigger_dac_compute(int range, int level)
     if (level < -100) level = -100;
     if (level >  100) level =  100;
 
+    cal_tables_load();
     float upper = (float)cal_upper[range];
     float base  = (float)cal_base[range];
     /* Stock: ((upper - base) / 200.0) * (level + 100) + base */

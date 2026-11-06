@@ -87,6 +87,7 @@ C_SOURCES += src/dsp/mask_pf.c
 C_SOURCES += src/ui/scope_mask.c
 C_SOURCES += src/util/config.c
 C_SOURCES += src/util/cal_dump.c
+C_SOURCES += src/util/mcu_cal.c
 C_SOURCES += src/util/cal_backup_core.c
 C_SOURCES += src/util/cal_backup.c
 C_SOURCES += src/util/cal_reference.c

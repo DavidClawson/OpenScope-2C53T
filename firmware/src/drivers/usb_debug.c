@@ -38,6 +38,7 @@
 #define DEBUG_SHELL_RTT_ONLY 0
 #endif
 #include "scope_trigger.h"
+#include "mcu_cal.h"
 #include "fpga.h"
 #include "lcd.h"
 #include "meter_auto.h"
@@ -1873,7 +1874,21 @@ static void cmd_scope_trig(const char *args)
 
     scope_trigger_dac_init();
 
-    if (t1 != NULL && strcmp(t1, "raw") == 0 && t2 != NULL) {
+    if (t1 != NULL && strcmp(t1, "src") == 0) {
+        /* Which cal table is live: factory page (0x08006000) or placeholder. */
+        switch (mcu_cal_status()) {
+        case MCU_CAL_OK:
+            usb_send_str("trig cal source: FACTORY page 0x08006000 (per-device)\r\n");
+            break;
+        case MCU_CAL_NO_PAGE:
+            usb_send_str("trig cal source: PLACEHOLDER (page signature != 0x55)\r\n");
+            break;
+        case MCU_CAL_NO_TABLE:
+            usb_send_str("trig cal source: PLACEHOLDER (sentinel: stock rewrote defaults)\r\n");
+            break;
+        }
+        return;
+    } else if (t1 != NULL && strcmp(t1, "raw") == 0 && t2 != NULL) {
         uint32_t code = 0;
         if (parse_int(t2, &code) != 0) { usb_send_str("Usage: trig raw <0-4095>\r\n"); return; }
         if (code > 4095) code = 4095;
