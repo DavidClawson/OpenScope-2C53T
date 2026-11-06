@@ -35,6 +35,7 @@
 #include "at32f403a_407.h"
 #include "button_scan.h"
 #include "settings_store.h"
+#include "soundlight.h"
 #include "task.h"
 #include <stdio.h>
 #include <string.h>
@@ -107,6 +108,10 @@ void input_handle_settings_ok(void)
         switch (settings_selected) {
         case 0: /* Oscilloscope Settings -- enter sub-menu */
             settings_depth = 1;
+            settings_sub_selected = 0;
+            break;
+        case 1: /* Sound and Light -- enter sub-menu */
+            settings_depth = 7;
             settings_sub_selected = 0;
             break;
         case 3: /* Display Mode -- cycle theme */
@@ -207,6 +212,14 @@ void input_handle_settings_ok(void)
     } else if (settings_depth == 6) {
         /* Bode plot: OK = back to settings */
         settings_depth = 0;
+    } else if (settings_depth == 7) {
+        /* Sound and Light sub-menu */
+        if (settings_sub_selected == 2) {
+            /* Back */
+            settings_depth = 0;
+        } else {
+            soundlight_adjust(settings_sub_selected, +1);
+        }
     }
 }
 
@@ -696,6 +709,9 @@ uint8_t input_handle_button(button_id_t button, QueueHandle_t dq)
                 if (settings_selected > 0) settings_selected--;
             } else if (settings_depth == 3) {
                 if (settings_sub_selected > 0) settings_sub_selected--;
+            } else if (settings_depth == 7) {
+                /* Sound and Light sub-menu: 3 items (0,1,2) */
+                if (settings_sub_selected > 0) settings_sub_selected--;
             } else if (settings_depth == 1) {
                 if (settings_sub_selected > 0) settings_sub_selected--;
             }
@@ -779,6 +795,9 @@ uint8_t input_handle_button(button_id_t button, QueueHandle_t dq)
                     settings_selected++;
             } else if (settings_depth == 3) {
                 /* Math/persist sub-menu: 3 items (0,1,2) */
+                if (settings_sub_selected < 2) settings_sub_selected++;
+            } else if (settings_depth == 7) {
+                /* Sound and Light sub-menu: 3 items (0,1,2) */
                 if (settings_sub_selected < 2) settings_sub_selected++;
             } else if (settings_depth == 1) {
                 if (settings_sub_selected < SETTINGS_OSC_ITEM_COUNT - 1)
@@ -872,6 +891,11 @@ uint8_t input_handle_button(button_id_t button, QueueHandle_t dq)
             cmd = DCMD_DRAW_SETTINGS;
             send_cmd(dq, cmd);
         }
+        else if (current_mode == MODE_SETTINGS && settings_depth == 7) {
+            soundlight_adjust(settings_sub_selected, -1);
+            cmd = DCMD_DRAW_SETTINGS;
+            send_cmd(dq, cmd);
+        }
         else if (current_mode == MODE_SETTINGS && settings_depth == 5) {
             resistor_calc_move_band(-1);
             cmd = DCMD_DRAW_SETTINGS;
@@ -950,6 +974,11 @@ uint8_t input_handle_button(button_id_t button, QueueHandle_t dq)
         }
         else if (current_mode == MODE_SETTINGS && settings_depth == 1) {
             osc_settings_adjust(+1);
+            cmd = DCMD_DRAW_SETTINGS;
+            send_cmd(dq, cmd);
+        }
+        else if (current_mode == MODE_SETTINGS && settings_depth == 7) {
+            soundlight_adjust(settings_sub_selected, +1);
             cmd = DCMD_DRAW_SETTINGS;
             send_cmd(dq, cmd);
         }

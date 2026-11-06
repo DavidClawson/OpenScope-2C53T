@@ -7,6 +7,10 @@
 #include "meter_data.h"
 #include "ui.h"
 
+/* Sound switch (settings menu item 1). One gate for both the continuity
+ * beep and the forced preview beep, so the setting means one thing. */
+#include "soundlight.h"
+
 #include "FreeRTOS.h"
 #include "task.h"
 
@@ -88,7 +92,15 @@ static void buzzer_task(void *arg)
         if (!force_active && buzzer_force_until_tick != 0) {
             buzzer_force_until_tick = 0;
         }
-        buzzer_active_now = force_active || continuity_short_active(now);
+        /* Sound off: silence both the forced path and the continuity beep,
+         * so the setting means one thing. */
+        if (!soundlight_beep_ok()) {
+            force_active = false;
+            buzzer_force_until_tick = 0;
+            buzzer_active_now = false;
+        } else {
+            buzzer_active_now = force_active || continuity_short_active(now);
+        }
 
         if (buzzer_active_now) {
             if (level) {

@@ -38,6 +38,7 @@
 #define DEBUG_SHELL_RTT_ONLY 0
 #endif
 #include "scope_trigger.h"
+#include "soundlight.h"
 #include "fpga.h"
 #include "lcd.h"
 #include "meter_auto.h"
@@ -1445,6 +1446,38 @@ static void cmd_buzzer_test(const char *args)
                      active ? 1U : 0U,
                      toggles,
                      create_failures);
+}
+
+/* Sound and Light settings (menu item 1): report / set. Args:
+ *   (none)          report brightness + sound
+ *   b <0-100>       set brightness percent (drives PB8 TMR4_CH3 PWM)
+ *   s <0|1>         set sound on/off (gates the continuity buzzer) */
+static void cmd_soundlight(const char *args)
+{
+    if (args && *args) {
+        uint32_t v;
+        if (args[0] == 'b' && args[1] == ' ') {
+            if (parse_int(args + 2, &v) != 0) {
+                usb_send_str("Usage: soundlight [b <0-100> | s <0|1>]\r\n");
+                return;
+            }
+            if (v > 100U) v = 100U;
+            soundlight_set_brightness((uint8_t)v);
+        } else if (args[0] == 's' && args[1] == ' ') {
+            if (parse_int(args + 2, &v) != 0) {
+                usb_send_str("Usage: soundlight [b <0-100> | s <0|1>]\r\n");
+                return;
+            }
+            soundlight_set_sound(v != 0U);
+        } else {
+            usb_send_str("Usage: soundlight [b <0-100> | s <0|1>]\r\n");
+            return;
+        }
+    }
+
+    usb_debug_printf("soundlight brightness=%u sound=%u\r\n",
+                     (unsigned)soundlight_get_brightness(),
+                     soundlight_get_sound() ? 1U : 0U);
 }
 
 static void cmd_gpio_read(const char *args)
@@ -7864,6 +7897,8 @@ static const shell_cmd_t shell_cmds[] = {
           "gpio scan                       Scan FPGA-related pins\r\n"),
     CMD_A("buzzer test", cmd_buzzer_test, 0,
           "buzzer test [ms]                Force continuity buzzer briefly\r\n"),
+    CMD_A("soundlight", cmd_soundlight, 0,
+          "soundlight [b <0-100> | s <0|1>]  Sound and Light: report / set brightness+sound\r\n"),
     CMD_A("mem read", cmd_mem_read, SC_NEEDARGS,
           "mem read <addr> [count]         Read 32-bit words\r\n" "  e.g.: mem read 0x40021000 4\r\n"),
     CMD_A("mem write", cmd_mem_write, SC_NEEDARGS,

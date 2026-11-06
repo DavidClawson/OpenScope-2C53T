@@ -11,11 +11,12 @@
  */
 
 #include "settings_store.h"
-
+#include "config.h"
 #include "flash_regions.h"
 #include "theme.h"
 #include "scope_state.h"
 #include "math_channel.h"
+#include "soundlight.h"
 #include "ui.h"
 
 #include <string.h>
@@ -58,10 +59,11 @@ static void stamp(device_config_t *cfg)
  *
  * The two functions must stay symmetric: a field captured but not applied is a
  * setting that silently does not restore, which is the exact failure this
- * whole task was fixing. Fields NOT listed here (fft_*, siggen_*, brightness,
- * language, auto-shutdown, sound) are carried through untouched — they are
+ * whole task was fixing. Fields NOT listed here (fft_*, siggen_*,
+ * language, auto-shutdown) are carried through untouched — they are
  * stored and round-tripped but nothing in the firmware owns them yet, and
- * config.h says so.
+ * config.h says so. Brightness and sound are owned by soundlight.c and
+ * pass through its hooks below.
  * ═══════════════════════════════════════════════════════════════════ */
 
 void settings_store_capture(device_config_t *cfg)
@@ -94,6 +96,8 @@ void settings_store_capture(device_config_t *cfg)
 
     cfg->meter_submode = meter_submode;
     cfg->meter_layout  = meter_layout;
+
+    soundlight_capture(cfg);
 
     stamp(cfg);
 }
@@ -131,6 +135,9 @@ void settings_store_apply(const device_config_t *cfg)
 
     meter_submode = clamp_idx(cfg->meter_submode, METER_SUBMODE_COUNT, 0);
     meter_layout  = clamp_idx(cfg->meter_layout, METER_LAYOUT_COUNT, METER_LAYOUT_FULL);
+
+    /* Brightness / sound: owned by soundlight.c. */
+    soundlight_apply(cfg);
 
     /* Deliberately NOT restored: ss->running (a scope always boots running),
      * the cursor state, and channel position — session state, not settings.
