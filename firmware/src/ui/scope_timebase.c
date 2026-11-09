@@ -47,23 +47,60 @@
  * rate missed its own fold predictions by up to 227 bins. It is entered here
  * as 0.0f, and the reason is INCOHERENT rather than UNMEASURED.
  */
+/*
+ * REPLACED 2026-11-09 (EXP-74, docs/experiments/2026-11-09-74-stock-fast-timebase-path.md).
+ *
+ * Every code 0x00-0x14 is now fold-tested against a CRYSTAL-LOCKED source: a
+ * divider off the PlutoSky PS IO PLL (FCLK0 = 100 MHz) driven onto the JP5
+ * header, tones 50 MHz / k, so every drive frequency is known to the board
+ * crystal's ppm and nothing about it is commanded-but-unverified (the EXP-14
+ * failure mode). Per code: 3-10 tones from 0.1 fs to 2.6 fs, three records
+ * each, Hann + 16x zero-pad + parabolic peak, then fs fitted by minimising the
+ * ALIAS error over +-30 % of the candidate. Result on every code 0x04-0x14:
+ * fit equal to the round value within the grid step (1e-5 relative), worst
+ * per-tone miss 0.02 bins of 1024, read-to-read spread 0.00-0.02 bins.
+ *
+ * So the round ladder IS the measurement now. The earlier rule ("do not write
+ * the round numbers, they are expectations") was right for an uncalibrated
+ * ESP32 source; it is retired for these rows because the source is no longer
+ * the weak link. The superseded values (EXP-17/18: 49930.1, 24979.1, 12490.0,
+ * 123662.7, 4990.8, 2494.9, 1250.4, 500.2) were within 0.2 % except 0x0D (-1.07 %),
+ * which matches the quantisation limits stated for them.
+ *
+ * The fast codes were never INCOHERENT. Their records looked like it because
+ * they were read through `spi3 opread`, whose ~17.5 ms /256 burst laps a
+ * 205 us (0x08) record ~170 times (see the EXP-12 resolution note). Read
+ * through the acquisition task (the remote-protocol waveform), every fast code
+ * gives coherent, reproducible records. The ladder is the one in stock's own
+ * per-index table at 0x080465E0, times 0.4 (EXP-74 sec. 2.2).
+ *
+ * 0x00-0x03: stock treats these as 250 MS/s (single channel, the two ADC
+ * halves interleaved). On our configuration they measure 125 MS/s on CH1, the
+ * same as 0x04: the op-0x05 record carries CH2, not a second phase of CH1. The
+ * rate entered is what the hardware delivers to us, not stock's figure.
+ */
 static const float sample_rate[SCOPE_TIMEBASE_CODE_COUNT] = {
-    /* 0x00-0x05 */ 0.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f,
-    /* 0x06 */      0.0f,        /* INCOHERENT — see the block below      */
-    /* 0x07 */      0.0f,        /* INCOHERENT                            */
-    /* 0x08 */      0.0f,        /* INCOHERENT — measured, no rate exists */
-    /* 0x09 */      0.0f,        /* INCOHERENT                            */
-    /* 0x0A */      0.0f,        /* source too slow to measure (R2 -1.03)   */
-    /* 0x0B */      0.0f,        /* source too slow to measure (R2 -0.05)   */
-    /* 0x0C */      0.0f,        /* source too slow to measure (R2  0.60)   */
-    /* 0x0D */     123662.7f,   /* EXP-18 R2 0.9997 — provisional, bins 4-25 */
-    /* 0x0E */       49930.1f,   /* EXP-17 slope fit, n=37, SE 31 S/s       */
-    /* 0x0F */       24979.1f,   /* EXP-17 slope fit, n=29, SE 10 S/s       */
-    /* 0x10 */       12490.0f,   /* EXP-17 slope fit, n=49, SE  2 S/s       */
-    /* 0x11 */        4990.8f,   /* EXP-18 R2 1.0000                        */
-    /* 0x12 */        2494.9f,   /* EXP-18 R2 1.0000, fold-tested           */
-    /* 0x13 */        1250.4f,   /* EXP-18 R2 1.0000                        */
-    /* 0x14 */         500.2f,   /* EXP-18 R2 1.0000                        */
+    /* 0x00 */  125000000.0f,   /* EXP-74, same as 0x04 here (stock: 250M)    */
+    /* 0x01 */  125000000.0f,   /* EXP-74, ditto                              */
+    /* 0x02 */  125000000.0f,   /* EXP-74, ditto                              */
+    /* 0x03 */  125000000.0f,   /* EXP-74, ditto                              */
+    /* 0x04 */  125000000.0f,   /* EXP-74, in-band tones 12.5/25/50 MHz       */
+    /* 0x05 */   50000000.0f,   /* EXP-74 fold fit                            */
+    /* 0x06 */   25000000.0f,   /* EXP-74 fold fit                            */
+    /* 0x07 */   12500000.0f,   /* EXP-74 fold fit                            */
+    /* 0x08 */    5000000.0f,   /* EXP-74 fold fit (= Stlkv, EXP-12 note)     */
+    /* 0x09 */    2500000.0f,   /* EXP-74 fold fit                            */
+    /* 0x0A */    1250000.0f,   /* EXP-74 fold fit                            */
+    /* 0x0B */     500000.0f,   /* EXP-74 fold fit                            */
+    /* 0x0C */     250000.0f,   /* EXP-74 fold fit                            */
+    /* 0x0D */     125000.0f,   /* EXP-74 fold fit                            */
+    /* 0x0E */      50000.0f,   /* EXP-74 fold fit                            */
+    /* 0x0F */      25000.0f,   /* EXP-74 fold fit                            */
+    /* 0x10 */      12500.0f,   /* EXP-74 fold fit                            */
+    /* 0x11 */       5000.0f,   /* EXP-74 fold fit                            */
+    /* 0x12 */       2500.0f,   /* EXP-74 fold fit                            */
+    /* 0x13 */       1250.0f,   /* EXP-74 fold fit                            */
+    /* 0x14 */        500.0f,   /* EXP-74 fold fit                            */
 };
 
 /*
@@ -193,23 +230,15 @@ static const float sample_rate[SCOPE_TIMEBASE_CODE_COUNT] = {
  * a pin driven low as one thing, which cost this project weeks.
  */
 static const scope_tb_tier_t tier_by_code[SCOPE_TIMEBASE_CODE_COUNT] = {
-    SCOPE_TB_NONE, SCOPE_TB_NONE, SCOPE_TB_NONE, SCOPE_TB_NONE,
-    SCOPE_TB_NONE, SCOPE_TB_NONE,
-    SCOPE_TB_NONE,          /* 0x06 incoherent   */
-    SCOPE_TB_NONE,          /* 0x07 incoherent   */
-    SCOPE_TB_NONE,          /* 0x08 incoherent   */
-    SCOPE_TB_NONE,          /* 0x09 incoherent   */
-    SCOPE_TB_NONE,          /* 0x0A unmeasurable */
-    SCOPE_TB_NONE,          /* 0x0B unmeasurable */
-    SCOPE_TB_NONE,          /* 0x0C unmeasurable */
-    SCOPE_TB_PROVISIONAL,   /* 0x0D              */
-    SCOPE_TB_MEASURED,      /* 0x0E              */
-    SCOPE_TB_MEASURED,      /* 0x0F              */
-    SCOPE_TB_MEASURED,      /* 0x10              */
-    SCOPE_TB_MEASURED,      /* 0x11 EXP-18       */
-    SCOPE_TB_MEASURED,      /* 0x12 EXP-18       */
-    SCOPE_TB_MEASURED,      /* 0x13 EXP-18       */
-    SCOPE_TB_MEASURED,      /* 0x14 EXP-18       */
+    /* All MEASURED since EXP-74 (2026-11-09). The commentary above this table
+     * is history: what the tiers USED to be and why. EXP-74 superseded every
+     * NONE and PROVISIONAL in it. */
+    SCOPE_TB_MEASURED, SCOPE_TB_MEASURED, SCOPE_TB_MEASURED, SCOPE_TB_MEASURED,
+    SCOPE_TB_MEASURED, SCOPE_TB_MEASURED, SCOPE_TB_MEASURED, SCOPE_TB_MEASURED,
+    SCOPE_TB_MEASURED, SCOPE_TB_MEASURED, SCOPE_TB_MEASURED, SCOPE_TB_MEASURED,
+    SCOPE_TB_MEASURED, SCOPE_TB_MEASURED, SCOPE_TB_MEASURED, SCOPE_TB_MEASURED,
+    SCOPE_TB_MEASURED, SCOPE_TB_MEASURED, SCOPE_TB_MEASURED, SCOPE_TB_MEASURED,
+    SCOPE_TB_MEASURED,
 };
 
 float scope_timebase_sample_rate(uint8_t code)
@@ -274,7 +303,17 @@ void scope_timebase_label(uint8_t code, char *out, uint32_t n)
 
     /* Integer formatting throughout: the shell and the LCD both build against
      * nano.specs, which has no float printf. */
-    if (s < 1e-3f) {
+    /* Sub-microsecond and low-microsecond steps exist since EXP-74 (0x04 is
+     * 256 ns/div), so the microsecond range keeps significant digits. */
+    if (s < 1e-6f) {
+        snprintf(out, n, "%s%uns", mark, (unsigned)(s * 1e9f + 0.5f));
+    } else if (s < 1e-5f) {
+        const unsigned c = (unsigned)(s * 1e8f + 0.5f);
+        snprintf(out, n, "%s%u.%02uus", mark, c / 100u, c % 100u);
+    } else if (s < 1e-4f) {
+        const unsigned d = (unsigned)(s * 1e7f + 0.5f);
+        snprintf(out, n, "%s%u.%uus", mark, d / 10u, d % 10u);
+    } else if (s < 1e-3f) {
         snprintf(out, n, "%s%uus", mark, (unsigned)(s * 1e6f + 0.5f));
     } else if (s < 1.0f) {
         const unsigned hundredths_ms = (unsigned)(s * 1e5f + 0.5f);
