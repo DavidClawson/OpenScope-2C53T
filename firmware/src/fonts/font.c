@@ -57,6 +57,13 @@ uint8_t font_draw_char(uint16_t x, uint16_t y, char c,
                 }
             }
         }
+        /* Opaque also owns the inter-glyph gap (advance > glyph width).
+         * Without this, pixels of whatever was drawn there before survive
+         * between the glyphs: a changing FFT peak readout showed "500'5kHz"
+         * on the bench (EXP-74, 2026-11-09). */
+        if (advance > glyph_w && x + advance <= LCD_WIDTH)
+            lcd_fill_rect(x + glyph_w, y, (uint16_t)(advance - glyph_w),
+                          font->height, bg);
     }
 
     return advance;
