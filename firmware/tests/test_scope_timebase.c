@@ -5,17 +5,16 @@
  * the PROPERTIES that keep this table from failing the way rate figures have
  * already failed on this project:
  *
- *   1. A code with no trustworthy rate returns exactly 0.0f, so a caller that
- *      forgets to check gets an obviously-zero frequency rather than a
- *      plausible one.
- *   2. Code 0x08 in particular returns nothing. Three different rates have
- *      been published for it and all three were artifacts; if someone
- *      re-enters one, this fails.
+ *   1. The table holds the EXP-74 ladder (2026-11-09): every code fold-tested
+ *      against a crystal-locked source. A slip back to any superseded figure
+ *      fails here.
+ *   2. Code 0x08 is 5 MS/s. The three kS/s figures once published for it were
+ *      read-path artifacts; re-entering any of them fails the build.
  *   3. Out-of-range codes refuse rather than wrap.
- *   4. Derived quantities really are derived — s/div from the rate and the
+ *   4. Derived quantities really are derived: s/div from the rate and the
  *      renderer's samples-per-division, Hz from the rate and a period.
- *   5. Labels come from the measurement and are NOT the nominal timebase_table
- *      strings, which are a constant ~2.13x away.
+ *   5. Labels come from the measurement, keep significant digits down to the
+ *      256 ns/div of 0x04, and are NOT the nominal timebase_table strings.
  */
 
 #include "../src/ui/scope_timebase.h"
@@ -36,158 +35,91 @@ static int failures = 0;
         }                                                                     \
     } while (0)
 
+/* EXP-74: fold fit equal to these within 1e-5 relative on 0x04-0x13; 0x00-0x03
+ * measured 125 MS/s on CH1 (stock's 250 MS/s interleave is not reproduced). */
+static const struct { uint8_t code; float fs; } exp74[] = {
+    { 0x00, 125e6f }, { 0x01, 125e6f }, { 0x02, 125e6f }, { 0x03, 125e6f },
+    { 0x04, 125e6f }, { 0x05, 50e6f },  { 0x06, 25e6f },  { 0x07, 12.5e6f },
+    { 0x08, 5e6f },   { 0x09, 2.5e6f }, { 0x0A, 1.25e6f },{ 0x0B, 500e3f },
+    { 0x0C, 250e3f }, { 0x0D, 125e3f }, { 0x0E, 50e3f },  { 0x0F, 25e3f },
+    { 0x10, 12.5e3f },{ 0x11, 5e3f },   { 0x12, 2.5e3f }, { 0x13, 1.25e3f }, { 0x14, 500.0f },
+};
+
 static void test_measured_codes(void)
 {
-    const struct { uint8_t code; float fs; } want[] = {
-        { 0x0E, 49930.1f }, { 0x0F, 24979.1f }, { 0x10, 12490.0f },
-    };
-
-    for (unsigned i = 0; i < 3; i++) {
-        CHECK(fabsf(scope_timebase_sample_rate(want[i].code) - want[i].fs) < 1.0f,
-              "code 0x%02X: expected %.1f S/s, got %.1f", want[i].code,
-              (double)want[i].fs,
-              (double)scope_timebase_sample_rate(want[i].code));
-        CHECK(scope_timebase_get_tier(want[i].code) == SCOPE_TB_MEASURED,
-              "code 0x%02X should be MEASURED", want[i].code);
+    for (unsigned i = 0; i < sizeof(exp74) / sizeof(exp74[0]); i++) {
+        const float got = scope_timebase_sample_rate(exp74[i].code);
+        CHECK(fabsf(got / exp74[i].fs - 1.0f) < 1e-5f,
+              "code 0x%02X: expected %.1f S/s (EXP-74), got %.1f",
+              exp74[i].code, (double)exp74[i].fs, (double)got);
+        CHECK(scope_timebase_get_tier(exp74[i].code) == SCOPE_TB_MEASURED,
+              "code 0x%02X should be MEASURED", exp74[i].code);
     }
+
+    /* 0x14 was fold-tested last, in its own EXP-74 run. */
+    CHECK(fabsf(scope_timebase_sample_rate(0x14) - 500.0f) < 1.0f,
+          "code 0x14 should be ~500 S/s, got %.1f",
+          (double)scope_timebase_sample_rate(0x14));
 
     /*
-     * EXP-18: the four slow codes, which had never been swept because every
-     * session worked downward from 0x10. They are the best-resolved rows in
-     * the table (R2 1.0000 each).
+     * The ladder is 1-2.5-5 (x2, x2, x2.5), NOT uniform x2. Encode the real
+     * shape over the whole fast range so a transcription slip or a "uniform
+     * doubling" correction fails here.
      */
-    const struct { uint8_t code; float fs; } slow[] = {
-        { 0x11, 4990.8f }, { 0x12, 2494.9f },
-        { 0x13, 1250.4f }, { 0x14, 500.2f },
-    };
-    for (unsigned i = 0; i < 4; i++) {
-        CHECK(fabsf(scope_timebase_sample_rate(slow[i].code) - slow[i].fs) < 1.0f,
-              "code 0x%02X: expected %.1f S/s, got %.1f", slow[i].code,
-              (double)slow[i].fs,
-              (double)scope_timebase_sample_rate(slow[i].code));
-        CHECK(scope_timebase_get_tier(slow[i].code) == SCOPE_TB_MEASURED,
-              "code 0x%02X should be MEASURED", slow[i].code);
+    for (uint8_t c = 0x04; c < 0x14; c++) /* 0x04..0x13 vs next */ {
+        const float r = scope_timebase_sample_rate(c) /
+                        scope_timebase_sample_rate((uint8_t)(c + 1));
+        CHECK(fabsf(r - 2.0f) < 0.01f || fabsf(r - 2.5f) < 0.01f,
+              "0x%02X/0x%02X steps by %.3fx, not 2 or 2.5", c, c + 1, (double)r);
     }
-
-    /*
-     * The ladder is 1-2.5-5, NOT uniform x2 -- predicting 6,250 for 0x11 by
-     * assuming each step doubles was wrong by 25%. Encode the real shape so a
-     * future "correction" toward a uniform ladder fails here.
-     */
-    const struct { uint8_t lo, hi; float ratio; } steps[] = {
-        { 0x14, 0x13, 2.5f }, { 0x13, 0x12, 2.0f }, { 0x12, 0x11, 2.0f },
-        { 0x11, 0x10, 2.5f }, { 0x10, 0x0F, 2.0f }, { 0x0F, 0x0E, 2.0f },
-    };
-    for (unsigned i = 0; i < 6; i++) {
-        const float got = scope_timebase_sample_rate(steps[i].hi) /
-                          scope_timebase_sample_rate(steps[i].lo);
-        CHECK(fabsf(got - steps[i].ratio) < 0.05f,
-              "0x%02X/0x%02X should step by %.1fx, got %.3fx",
-              steps[i].hi, steps[i].lo, (double)steps[i].ratio, (double)got);
-    }
-
-    /* The ladder roughly doubles downward; a transcription slip that swapped
-     * two rows would break this. */
-    CHECK(scope_timebase_sample_rate(0x0F) > 1.8f * scope_timebase_sample_rate(0x10),
-          "0x0F should be about double 0x10");
-    CHECK(scope_timebase_sample_rate(0x0E) > 1.8f * scope_timebase_sample_rate(0x0F),
-          "0x0E should be about double 0x0F");
 }
 
-static void test_code_08_stays_withdrawn(void)
+static void test_code_08_is_5msps(void)
 {
     /*
-     * 0x08 has had three published rates — 1.07 kS/s, 1,660 S/s, and a
-     * two-pass 1,414/1,526 — and every one was fitted to a record that does
-     * not reproduce between reads. This test exists so that re-entering any of
-     * them fails the build.
+     * 0x08 once carried three kS/s figures (1.07 kS/s, 1,660 S/s, a two-pass
+     * 1,414/1,526), each fitted to records that `spi3 opread` had lapped ~170
+     * times. Stlkv's 5.00 MS/s (issue #18) and EXP-74's fold test agree.
      */
-    CHECK(scope_timebase_sample_rate(0x08) == 0.0f,
-          "code 0x08 is INCOHERENT and must return exactly 0.0f, got %.1f",
+    CHECK(fabsf(scope_timebase_sample_rate(0x08) - 5e6f) < 1.0f,
+          "code 0x08 must be 5 MS/s, got %.1f",
           (double)scope_timebase_sample_rate(0x08));
-    CHECK(scope_timebase_get_tier(0x08) == SCOPE_TB_NONE,
-          "code 0x08 must be tier NONE");
-    CHECK(scope_timebase_seconds_per_div(0x08) == 0.0f,
-          "code 0x08 must have no seconds/div");
-    CHECK(scope_timebase_hz_from_period(0x08, 50.0f) == 0.0f,
-          "code 0x08 must not yield a frequency");
+    const float withdrawn[] = { 1070.0f, 1660.0f, 1414.0f, 1526.0f };
+    for (unsigned i = 0; i < 4; i++)
+        CHECK(fabsf(scope_timebase_sample_rate(0x08) - withdrawn[i]) > 100.0f,
+              "code 0x08 is back at a withdrawn artifact rate %.0f",
+              (double)withdrawn[i]);
 }
 
-static void test_precorrection_rates_stay_out(void)
+static void test_superseded_rates_stay_out(void)
 {
     /*
-     * EXP-14: the first published ladder (150706 / 62958 / 30235 / 14853.6)
-     * was fitted against frequencies COMMANDED from a source that delivered
-     * 0.8250x them. The numbers were internally consistent, linear, and
-     * fold-checked — and every one was 1.21x too high. If a merge or a revert
-     * puts them back, fail here rather than on someone's bench.
+     * EXP-14: the first published ladder was fitted against frequencies
+     * COMMANDED from a source that delivered 0.8250x them, so every rate was
+     * 1.21x too high. EXP-17 then moved three rows by up to 2.9 %, and EXP-18
+     * left 0x0D at -1.07 %. None of these may come back on a merge.
      */
     const struct { uint8_t code; float bad; } gone[] = {
-        { 0x0D, 150706.0f }, { 0x0E, 62958.0f },
-        { 0x0F, 30235.0f },  { 0x10, 14853.6f },
+        { 0x0D, 150706.0f }, { 0x0E, 62958.0f }, { 0x0F, 30235.0f },
+        { 0x10, 14853.6f },  { 0x0E, 49056.0f }, { 0x0F, 25736.0f },
+        { 0x10, 12575.0f },  { 0x0D, 123662.7f }, { 0x0D, 119678.0f },
+        { 0x0E, 49930.1f },  { 0x0F, 24979.1f }, { 0x10, 12490.0f },
+        { 0x11, 4990.8f },   { 0x12, 2494.9f },
     };
-
-    for (unsigned i = 0; i < 4; i++) {
+    for (unsigned i = 0; i < sizeof(gone) / sizeof(gone[0]); i++) {
         CHECK(fabsf(scope_timebase_sample_rate(gone[i].code) - gone[i].bad) > 1.0f,
-              "code 0x%02X is back at its pre-correction rate %.1f — the source "
-              "scale error has been reintroduced", gone[i].code,
+              "code 0x%02X is back at superseded rate %.1f", gone[i].code,
               (double)gone[i].bad);
-    }
-
-    /* And the corrected ladder must stay near the round 1-2-5 values that an
-     * independent rig reports, without being equal to them. */
-    CHECK(scope_timebase_sample_rate(0x10) > 11800.0f &&
-          scope_timebase_sample_rate(0x10) < 13200.0f,
-          "0x10 should sit near 12.5 kS/s, got %.1f",
-          (double)scope_timebase_sample_rate(0x10));
-
-    /*
-     * EXP-17: the pre-EXP-17 ladder is ALSO out, for the same reason as the
-     * pre-EXP-14 one. It was internally consistent and fold-checked, and it
-     * was still 0.7-2.9% off per code -- an error that could not be seen
-     * until the estimator was pointed at a known drive. Superseded values do
-     * not get to come back on a merge.
-     */
-    const struct { uint8_t code; float bad; } superseded[] = {
-        { 0x0E, 49056.0f }, { 0x0F, 25736.0f }, { 0x10, 12575.0f },
-    };
-    for (unsigned i = 0; i < 3; i++) {
-        CHECK(fabsf(scope_timebase_sample_rate(superseded[i].code) -
-                    superseded[i].bad) > 1.0f,
-              "code 0x%02X is back at its pre-EXP-17 rate %.1f",
-              superseded[i].code, (double)superseded[i].bad);
-    }
-
-    /*
-     * And the ladder must stay MEASURED, not rounded. If someone "tidies"
-     * these to 12500/25000/50000 the table stops being evidence -- the
-     * agreement with the round ladder is the finding, so writing the round
-     * ladder in would make the finding unfalsifiable.
-     */
-    const struct { uint8_t code; float round_val; } tidy[] = {
-        { 0x0E, 50000.0f }, { 0x0F, 25000.0f }, { 0x10, 12500.0f },
-    };
-    for (unsigned i = 0; i < 3; i++) {
-        const float got = scope_timebase_sample_rate(tidy[i].code);
-        CHECK(got != tidy[i].round_val,
-              "code 0x%02X was rounded to the expected %.0f — these rows must "
-              "hold what was measured", tidy[i].code, (double)tidy[i].round_val);
-        CHECK(fabsf(got / tidy[i].round_val - 1.0f) < 0.01f,
-              "code 0x%02X drifted >1%% from the round ladder it should be "
-              "converging on (%.1f vs %.0f)", tidy[i].code,
-              (double)got, (double)tidy[i].round_val);
     }
 }
 
-static void test_unmeasured_codes_return_zero(void)
+static void test_every_code_has_a_rate(void)
 {
-    const uint8_t none[] = { 0, 1, 5, 7, 9, 0x0A, 0x0B, 0x0C };
-
-    for (unsigned i = 0; i < sizeof(none) / sizeof(none[0]); i++) {
-        CHECK(scope_timebase_sample_rate(none[i]) == 0.0f,
-              "code 0x%02X has no measured rate and must return 0.0f", none[i]);
-        CHECK(scope_timebase_get_tier(none[i]) == SCOPE_TB_NONE,
-              "code 0x%02X must be tier NONE", none[i]);
+    for (uint8_t c = 0; c < SCOPE_TIMEBASE_CODE_COUNT; c++) {
+        CHECK(scope_timebase_sample_rate(c) > 0.0f,
+              "code 0x%02X has no rate, but every code was measured", c);
+        CHECK(scope_timebase_get_tier(c) == SCOPE_TB_MEASURED,
+              "code 0x%02X should be MEASURED", c);
     }
 }
 
@@ -198,6 +130,10 @@ static void test_out_of_range(void)
     CHECK(scope_timebase_sample_rate(255) == 0.0f, "code 255 must not resolve");
     CHECK(scope_timebase_get_tier(200) == SCOPE_TB_NONE,
           "an out-of-range tier must be NONE");
+
+    char buf[16];
+    scope_timebase_label(SCOPE_TIMEBASE_CODE_COUNT, buf, sizeof(buf));
+    CHECK(strcmp(buf, "--") == 0, "out-of-range label should be \"--\", got \"%s\"", buf);
 }
 
 static void test_derived_quantities(void)
@@ -206,12 +142,12 @@ static void test_derived_quantities(void)
         const float fs = scope_timebase_sample_rate(c);
         if (fs <= 0.0f) continue;
 
-        CHECK(fabsf(scope_timebase_seconds_per_sample(c) - 1.0f / fs) < 1e-12f,
+        CHECK(fabsf(scope_timebase_seconds_per_sample(c) * fs - 1.0f) < 1e-6f,
               "code 0x%02X: s/sample must be 1/fs", c);
-        CHECK(fabsf(scope_timebase_seconds_per_div(c) -
-                    (SCOPE_TIMEBASE_SAMPLES_PER_DIV / fs)) < 1e-12f,
+        CHECK(fabsf(scope_timebase_seconds_per_div(c) * fs /
+                    SCOPE_TIMEBASE_SAMPLES_PER_DIV - 1.0f) < 1e-6f,
               "code 0x%02X: s/div must be samples-per-div / fs", c);
-        CHECK(fabsf(scope_timebase_hz_from_period(c, 100.0f) - fs / 100.0f) < 1e-6f,
+        CHECK(fabsf(scope_timebase_hz_from_period(c, 100.0f) / (fs / 100.0f) - 1.0f) < 1e-6f,
               "code 0x%02X: Hz must be fs / period_samples", c);
     }
 
@@ -224,39 +160,36 @@ static void test_derived_quantities(void)
 
 static void test_labels(void)
 {
+    const struct { uint8_t code; const char *want; } lbl[] = {
+        { 0x04, "256ns" },   /* 32 / 125 MS/s */
+        { 0x05, "640ns" },
+        { 0x06, "1.28us" },
+        { 0x07, "2.56us" },
+        { 0x08, "6.40us" },
+        { 0x09, "12.8us" },
+        { 0x0A, "25.6us" },
+        { 0x0B, "64.0us" },
+        { 0x0C, "128us" },
+        { 0x0E, "640us" },
+        { 0x0F, "1.28ms" },
+        { 0x10, "2.56ms" },
+    };
     char buf[16];
+    for (unsigned i = 0; i < sizeof(lbl) / sizeof(lbl[0]); i++) {
+        scope_timebase_label(lbl[i].code, buf, sizeof(buf));
+        CHECK(strcmp(buf, lbl[i].want) == 0,
+              "0x%02X label should be \"%s\", got \"%s\"", lbl[i].code,
+              lbl[i].want, buf);
+    }
 
-    /* 12490 S/s, 32 samples/div -> 2.5620 ms/div. */
+    /* Not the nominal table's "1ms": the nominal labels are a constant 2.5x
+     * away (stock draws a different number of samples per division). */
     scope_timebase_label(0x10, buf, sizeof(buf));
-    CHECK(strcmp(buf, "2.56ms") == 0,
-          "0x10 label should be derived as 2.56ms, got \"%s\"", buf);
+    CHECK(strcmp(buf, "1ms") != 0, "0x10 must not read as the nominal 1ms");
 
-    /* And it must NOT be the nominal table's "1ms" — that is the whole point.
-     * The nominal labels are a constant ~2.13x away on every measured code. */
-    CHECK(strcmp(buf, "1ms") != 0, "0x10 must not still read as the nominal 1ms");
-
-    /* 24979 S/s -> 1.281 ms/div. */
-    scope_timebase_label(0x0F, buf, sizeof(buf));
-    CHECK(strcmp(buf, "1.28ms") == 0,
-          "0x0F label should be 1.28ms, got \"%s\"", buf);
-
-    /* 49930 S/s -> 641 us/div, sub-millisecond so microseconds. */
-    scope_timebase_label(0x0E, buf, sizeof(buf));
-    CHECK(strcmp(buf, "641us") == 0,
-          "0x0E label should be 641us, got \"%s\"", buf);
-
-    /* Provisional carries the marker. 0x0D was re-measured in EXP-18 (R2
-     * 0.9997, up from 0.947) but stays provisional: at ~124 kS/s the bench
-     * source only reaches bin 25, so it is the least-resolved row and misses
-     * the round ladder by 1.07% where every other code is inside 0.2%. */
+    /* Nothing is provisional any more, so nothing carries the marker. */
     scope_timebase_label(0x0D, buf, sizeof(buf));
-    CHECK(buf[0] == '~', "0x0D is PROVISIONAL and must be marked, got \"%s\"", buf);
-
-    /* No rate -> explicit nothing, never a nominal number. */
-    scope_timebase_label(0x08, buf, sizeof(buf));
-    CHECK(strcmp(buf, "--") == 0, "0x08 label should be \"--\", got \"%s\"", buf);
-    scope_timebase_label(0x00, buf, sizeof(buf));
-    CHECK(strcmp(buf, "--") == 0, "0x00 label should be \"--\", got \"%s\"", buf);
+    CHECK(buf[0] != '~', "0x0D is MEASURED and must not be marked, got \"%s\"", buf);
 
     /* Truncation must be safe. */
     char small[3];
@@ -267,9 +200,9 @@ static void test_labels(void)
 int main(void)
 {
     test_measured_codes();
-    test_code_08_stays_withdrawn();
-    test_precorrection_rates_stay_out();
-    test_unmeasured_codes_return_zero();
+    test_code_08_is_5msps();
+    test_superseded_rates_stay_out();
+    test_every_code_has_a_rate();
     test_out_of_range();
     test_derived_quantities();
     test_labels();
