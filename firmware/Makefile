@@ -650,6 +650,19 @@ $(BUILD_DIR)/test_redraw_gate: tests/test_redraw_gate.c src/ui/redraw_gate.h | $
 test-redraw-gate: $(BUILD_DIR)/test_redraw_gate
 	$<
 
+# Font drawing against counting LCD stubs: right-aligned edge labels keep
+# their last glyph, opaque strings own the gaps between glyphs. Each with a
+# negative control. See tests/test_font.c.
+$(BUILD_DIR)/test_font: tests/test_font.c src/fonts/font.c src/fonts/font.h \
+                        src/fonts/font_small.c src/fonts/font_medium.c \
+                        src/fonts/font_large.c src/fonts/font_xlarge.c | $(BUILD_DIR)
+	$(HOST_CC) -std=gnu11 -Wall -Wextra -Werror -Isrc/fonts -Isrc/drivers $< src/fonts/font.c \
+		src/fonts/font_small.c src/fonts/font_medium.c src/fonts/font_large.c \
+		src/fonts/font_xlarge.c -o $@
+
+test-font: $(BUILD_DIR)/test_font
+	$<
+
 # FFT on the live acquisition record (spec fft-live, S1/S3 host half):
 # head skip, bin -> Hz only from a known rate, refusal at rate 0, a tone in
 # the predicted bin, the window spanning the record — each with a negative
@@ -693,7 +706,7 @@ $(BUILD_DIR)/test_mask_pf: tests/test_mask_pf.c src/dsp/mask_pf.c src/dsp/mask_p
 test-mask-pf: $(BUILD_DIR)/test_mask_pf
 	$<
 
-.PHONY: all clean disasm size renode soak-test soak-quick flash flash-dfu bootloader flash-bootloader flash-all guest guest-warmtest guest-usart-silent emu test-meter-data test-meter-auto test-meter-voltage-wave test-fpga-meter-plan test-stock-meter-literals test-meter test-scope-measure test-scope-cal test-scope-timebase test-scope-freq test-redraw-gate test-fft-live test-trig-edge test-mask-pf test-fuse test-config-persist guest-persist guest-caldump guest-coldtrace-slow guest-coldtrace-la guest-debugclk guest-configA-gap guest-configA-csdummy guest-configA-gapless guest-bringup guest-bringup-bb guest-bringup-bb-slow guest-coldtrace-hwspi guest-bringup-bb-faithful fpga-alt-header guest-coldtrace-meter
+.PHONY: all clean disasm size renode soak-test soak-quick flash flash-dfu bootloader flash-bootloader flash-all guest guest-warmtest guest-usart-silent emu test-meter-data test-meter-auto test-meter-voltage-wave test-fpga-meter-plan test-stock-meter-literals test-meter test-scope-measure test-scope-cal test-scope-timebase test-scope-freq test-redraw-gate test-font test-fft-live test-trig-edge test-mask-pf test-fuse test-config-persist guest-persist guest-caldump guest-coldtrace-slow guest-coldtrace-la guest-debugclk guest-configA-gap guest-configA-csdummy guest-configA-gapless guest-bringup guest-bringup-bb guest-bringup-bb-slow guest-coldtrace-hwspi guest-bringup-bb-faithful fpga-alt-header guest-coldtrace-meter
 
 # ═══════════════════════════════════════════════════════════════════════════
 # BENCH / EXPERIMENT IMAGE INDEX                          (index added 2026-08-13)
