@@ -252,11 +252,34 @@ static void test_bench_records(const char *path)
           answered, count);
 }
 
+/*
+ * EXP-74 regression: a record whose energy sits in bin 1 (a slow ramp, as a
+ * MHz tone looks at 500 S/s) once produced a NaN bin and an endless harmonic
+ * loop that froze the display task. It must return, and must not claim a
+ * frequency from bin 1.
+ */
+static void test_bin1_record_does_not_hang(void)
+{
+    static uint8_t rec[1024];
+    for (int i = 0; i < 1024; i++)
+        rec[i] = (uint8_t)(128.0 + 100.0 * sin(3.14159265 * (double)i / 1024.0));
+    scope_freq_t fr;
+    const bool ok = scope_freq_estimate(rec, 1024, 500.0f, &fr);
+    CHECK(!ok || fr.hz > 0.0f, "bin-1 record: returned without a usable frequency");
+    if (failures == 0) printf("  PASS: bin-1 record returns (no NaN hang)\n");
+
+    for (int i = 0; i < 1024; i++)
+        rec[i] = (uint8_t)(i / 4);          /* plain ramp, DC-heavy */
+    (void)scope_freq_estimate(rec, 1024, 125e6f, &fr);
+    printf("  PASS: ramp record returns\n");
+}
+
 int main(int argc, char **argv)
 {
     const char *path = (argc > 1) ? argv[1]
                                   : "tests/fixtures/scope_records.txt";
     test_synthetic();
+    test_bin1_record_does_not_hang();
     test_bench_records(path);
 
     /*

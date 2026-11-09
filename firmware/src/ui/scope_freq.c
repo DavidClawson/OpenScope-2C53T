@@ -107,7 +107,16 @@ static bool analyse(const uint8_t *s, uint16_t n, float *bin, float *sharp)
         if (p > peak_p) { peak_p = p; peak = k; }
     }
 
-    if (total <= 0.0f || peak == 0u || peak >= (uint16_t)(half - 1u))
+    /* Bin 0 must be a power too: the interpolation below reads
+     * fft_re[peak - 1], and a raw DC real part can be negative. sqrtf() of
+     * it was NaN, the NaN bin made the harmonic loop's bound unreachable, and
+     * the display task spun forever (EXP-74, 2026-11-09: 500 S/s record of a
+     * MHz tone, peak in bin 1, display frozen from the first frame). */
+    fft_re[0] = fft_re[0] * fft_re[0] + fft_im[0] * fft_im[0];
+
+    /* A peak in bin 1 has no lower neighbour inside the signal band; it is
+     * below every caller's minimum-bin rule anyway. */
+    if (total <= 0.0f || peak < 2u || peak >= (uint16_t)(half - 1u))
         return false;
 
     /*
@@ -140,11 +149,13 @@ static bool analyse(const uint8_t *s, uint16_t n, float *bin, float *sharp)
     const float den = m_lo - 2.0f * m_pk + m_hi;
     const float frac = (den != 0.0f) ? (0.5f * (m_lo - m_hi) / den) : 0.0f;
     const float fbin = (float)peak + frac;
+    if (!(fbin >= 1.0f && fbin < (float)half))     /* also rejects NaN */
+        return false;
 
     {
         float sig = 0.0f;
         uint16_t counted_to = 0u;           /* highest bin already summed */
-        for (uint16_t h = 1u; ; h++) {
+        for (uint16_t h = 1u; h < half; h++) {   /* bounded even if fbin misbehaves */
             const uint32_t c = (uint32_t)(fbin * (float)h + 0.5f);   /* on the comb */
             if (c + 1u >= half)
                 break;
