@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import argparse
 import hashlib
+import re
 import shutil
 import struct
 import subprocess
@@ -370,6 +371,24 @@ def validate_stock_boot_chain(data: bytes) -> list[str]:
     return errors
 
 
+_IOREG_ID = re.compile(r'"(idVendor|idProduct)" = (\d+)')
+
+
+def parse_ioreg_usb(text: str) -> list[tuple[str, str]]:
+    """(vid, pid) pairs as 4-digit lowercase hex from `ioreg -p IOUSB -l` output.
+
+    macOS has no sysfs or lsusb. ioreg prints one "+-o" entry per USB device,
+    followed by its properties; idVendor/idProduct are decimal and their order
+    varies, so each entry is collected separately.
+    """
+    found: list[tuple[str, str]] = []
+    for entry in text.split("+-o ")[1:]:
+        ids = dict(_IOREG_ID.findall(entry))
+        if "idVendor" in ids and "idProduct" in ids:
+            found.append((f"{int(ids['idVendor']):04x}", f"{int(ids['idProduct']):04x}"))
+    return found
+
+
 def detect_usb_modes() -> list[tuple[str, str]]:
     modes: list[tuple[str, str]] = []
     sysfs = Path("/sys/bus/usb/devices")
@@ -380,6 +399,17 @@ def detect_usb_modes() -> list[tuple[str, str]]:
                 pid = (dev / "idProduct").read_text(encoding="ascii").strip().lower()
             except OSError:
                 continue
+            if vid == VID and pid in USB_MODES:
+                modes.append((pid, USB_MODES[pid]))
+
+    if not modes and sys.platform == "darwin":
+        try:
+            out = subprocess.check_output(
+                ["ioreg", "-p", "IOUSB", "-l", "-w0"], text=True, stderr=subprocess.DEVNULL, timeout=5
+            )
+        except (OSError, subprocess.SubprocessError):
+            out = ""
+        for vid, pid in parse_ioreg_usb(out):
             if vid == VID and pid in USB_MODES:
                 modes.append((pid, USB_MODES[pid]))
 
