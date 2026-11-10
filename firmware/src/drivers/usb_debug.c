@@ -68,6 +68,10 @@
 
 static usbd_core_type usb_core_dev;
 
+/* Lost CDC OUT completions the shell task recovered (usb_rx_recover_lost_completion).
+ * Stays 0 while the flag-clear fix in usb_conf.h holds; printed by `status`. */
+static uint32_t usb_rx_lost_completions;
+
 /* ═══════════════════════════════════════════════════════════════════
  * USB Delay Helpers (required by USB middleware via usb_conf.h)
  * ═══════════════════════════════════════════════════════════════════ */
@@ -870,6 +874,10 @@ static void cmd_status(void)
             usb_debug_printf(" %02X", fpga.rx_frame[i]);
         usb_send_str("\r\n");
     }
+
+    usb_debug_printf("\r\n=== USB ===\r\n"
+                     "Lost OUT completions recovered: %lu\r\n",
+                     (unsigned long)usb_rx_lost_completions);
 }
 
 /* Can a byte actually leave PA2 right now?
@@ -8231,6 +8239,66 @@ volatile uint32_t dbg_shell_entered;
 volatile uint32_t dbg_shell_loops;
 volatile uint32_t dbg_shell_rtt_bytes;
 
+#ifndef EMULATOR_BUILD
+/* Safety net for the receive-side hang (usb_ept_flags.h): the OUT endpoint is
+ * re-armed only by usb_vcp_get_rxdata() on this task, after the ISR sets
+ * g_rx_completed. If the hardware took a packet (RX status NAK) but its
+ * completion flag was lost, nothing ever sets g_rx_completed and the endpoint
+ * NAKs until a reset: the port takes no more bytes. That state cannot arise
+ * otherwise: this task re-arms in the same call that consumes, and the ISR sets
+ * the flag before the task can run again. Seen on two polls
+ * USB_RX_LOST_CONFIRM_MS apart, finish what the ISR would have done (the packet
+ * is still in packet memory and the host already had its ACK, so nothing is
+ * lost) and count it. */
+#define USB_RX_LOST_CONFIRM_MS  10
+
+static bool usb_rx_completion_is_lost(const cdc_struct_type *pcdc, uint32_t endpoint_register)
+{
+    bool is_rx_nak = (endpoint_register & USB_RXSTS) == USB_RX_NAK;
+    bool has_pending_completion = (endpoint_register & USB_RXTC) != 0;
+    bool is_waiting_for_task = pcdc->g_rx_completed != 0;
+    return is_rx_nak && !has_pending_completion && !is_waiting_for_task;
+}
+
+static void usb_rx_recover_lost_completion(void)
+{
+    static bool is_suspect;
+    static uint32_t suspect_tick;
+    uint8_t endpoint_number = USBD_CDC_BULK_OUT_EPT & 0x0F;
+    cdc_struct_type *pcdc = (cdc_struct_type *)usb_core_dev.class_handler->pdata;
+    uint32_t now_tick = xTaskGetTickCount();
+
+    if (!usb_rx_completion_is_lost(pcdc, USB->ept[endpoint_number])) {
+        is_suspect = false;
+        return;
+    }
+
+    if (!is_suspect) {
+        is_suspect = true;
+        suspect_tick = now_tick;
+        return;
+    }
+
+    if (now_tick - suspect_tick < pdMS_TO_TICKS(USB_RX_LOST_CONFIRM_MS)) {
+        return;
+    }
+
+    nvic_irq_disable(USBFS_L_CAN1_RX0_IRQn);
+
+    if (usb_rx_completion_is_lost(pcdc, USB->ept[endpoint_number])) {
+        usb_ept_info *ept_info = &usb_core_dev.ept_out[endpoint_number];
+        uint16_t length = USB_GET_RX_LEN(endpoint_number);
+        usb_read_packet(ept_info->trans_buf, ept_info->rx_addr, length);
+        ept_info->trans_len += length;
+        ept_info->trans_buf += length;
+        usbd_core_out_handler(&usb_core_dev, endpoint_number);
+        usb_rx_lost_completions++;
+    }
+    is_suspect = false;
+    nvic_irq_enable(USBFS_L_CAN1_RX0_IRQn, 6, 0);
+}
+#endif
+
 static void vUsbDebugTask(void *pvParameters)
 {
     (void)pvParameters;
@@ -8317,6 +8385,9 @@ static void vUsbDebugTask(void *pvParameters)
                     usb_banner_sent = true;
                 }
             } else {
+#ifndef EMULATOR_BUILD
+                usb_rx_recover_lost_completion();
+#endif
                 uint16_t rx_len = usb_vcp_get_rxdata(&usb_core_dev, rx_buf);
                 if (rx_len > 0) {
                     if (fw_loader_active()) {
