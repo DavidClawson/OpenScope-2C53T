@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import argparse
+import errno
 import struct
 import sys
 import time
@@ -29,8 +30,33 @@ STATE_DFU_DNLOAD_IDLE = 5
 STATE_DFU_ERROR = 10
 
 
+# Where Homebrew puts libusb (Apple Silicon, then Intel). pyusb only searches the
+# system library paths, which on macOS do not include these.
+LIBUSB_FALLBACKS = (
+    "/opt/homebrew/lib/libusb-1.0.dylib",
+    "/usr/local/lib/libusb-1.0.dylib",
+)
+
+
+def libusb_backend():
+    import usb.backend.libusb1 as libusb1
+
+    backend = libusb1.get_backend()
+    for path in LIBUSB_FALLBACKS:
+        if backend is not None:
+            break
+        if Path(path).exists():
+            backend = libusb1.get_backend(find_library=lambda _name, path=path: path)
+    if backend is None:
+        raise SystemExit(
+            "libusb not found: install it (macOS: brew install libusb; "
+            "Debian/Ubuntu: apt install libusb-1.0-0)"
+        )
+    return backend
+
+
 def open_dev():
-    dev = usb.core.find(idVendor=VID, idProduct=PID)
+    dev = usb.core.find(idVendor=VID, idProduct=PID, backend=libusb_backend())
     if dev is None:
         raise SystemExit("AT32 ROM DFU device 2e3c:df11 not found")
     try:
@@ -70,9 +96,26 @@ def clear_to_idle(dev):
         raise RuntimeError(f"DFU did not return to idle: status={status} state={state} poll={poll_ms}")
 
 
+# A busy device may STALL a GETSTATUS: some ST/Artery ROM bootloaders report a
+# poll timeout shorter than the flash operation really takes. dfu-util treats up
+# to 3 such stalls as "still busy" and waits the last poll timeout again
+# (dfuse.c, dfuse_special_command); seen as "[Errno 32] Pipe error" on macOS.
+MAX_BUSY_STALLS = 3
+
+
 def wait_idleish(dev, label):
+    poll_ms = 0
+    stalls = 0
     for _ in range(80):
-        status, poll_ms, state = get_status(dev)
+        try:
+            status, poll_ms, state = get_status(dev)
+        except usb.core.USBError as exc:
+            if exc.errno == errno.EPIPE and stalls < MAX_BUSY_STALLS:
+                stalls += 1
+                print(f"{label}: device stalled GETSTATUS while busy, retrying ({stalls})", flush=True)
+                time.sleep(max(poll_ms, 20) / 1000.0)
+                continue
+            raise RuntimeError(f"{label}: GETSTATUS failed: {exc}") from exc
         if state in (STATE_DFU_IDLE, STATE_DFU_DNLOAD_IDLE):
             return
         if state == STATE_DFU_ERROR:
@@ -82,8 +125,15 @@ def wait_idleish(dev, label):
     raise RuntimeError(f"{label}: timeout status={status} state={state} poll={poll_ms}")
 
 
+def dnload(dev, block: int, payload: bytes, label: str):
+    try:
+        dev.ctrl_transfer(0x21, DFU_DNLOAD, block, INTF, payload, timeout=5000)
+    except usb.core.USBError as exc:
+        raise RuntimeError(f"{label}: DNLOAD failed: {exc}") from exc
+
+
 def special(dev, payload: bytes, label: str):
-    dev.ctrl_transfer(0x21, DFU_DNLOAD, 0, INTF, payload, timeout=5000)
+    dnload(dev, 0, payload, label)
     wait_idleish(dev, label)
     # AT32 ROM DFU can report ready a little early after flash commands.
     time.sleep(0.08)
@@ -98,7 +148,7 @@ def set_address(dev, address: int):
 
 
 def write_block(dev, data: bytes):
-    dev.ctrl_transfer(0x21, DFU_DNLOAD, 2, INTF, data, timeout=5000)
+    dnload(dev, 2, data, "write")
     wait_idleish(dev, "write")
     time.sleep(0.08)
 
