@@ -49,4 +49,13 @@
 void usb_delay_ms(uint32_t ms);
 void usb_delay_us(uint32_t us);
 
+/* Replace the vendor flag-clear macros (drivers/usb_ept_flags.h says why).
+ * This must follow the full at32f403a_407_usb.h, or its definitions win;
+ * usbd_core.h includes this file, so usbd_int.c sees these. */
+#include "drivers/usb_ept_flags.h"
+#undef USB_CLEAR_TXTC
+#undef USB_CLEAR_RXTC
+#define USB_CLEAR_TXTC(eptn)    (USB->ept[eptn] = USB_EPT_VALUE_CLEARING_TXTC(USB->ept[eptn]))
+#define USB_CLEAR_RXTC(eptn)    (USB->ept[eptn] = USB_EPT_VALUE_CLEARING_RXTC(USB->ept[eptn]))
+
 #endif /* __USB_CONF_H */
