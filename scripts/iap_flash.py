@@ -212,11 +212,19 @@ def detect_usb_mode_macos():
     return None
 
 def find_iap_disk_macos():
-    """Return /dev/diskN backing the IAP volume, or None."""
+    """Return /dev/diskN backing the IAP volume, or None.
+
+    Candidates are RANKED, not first-match: in upgrade mode macOS can also list a
+    small phantom volume from the same device ("microcontroller", label
+    UNDEFINED, 37-426 KB), often under a lower disk number than the real 8 MB
+    "IAP" volume. First-match picked the phantom and the flash failed with
+    "staging file (mcopy): Disk full" (2026-11-09/10). The label wins; the size
+    heuristic is a last resort and ignores volumes under 1 MB."""
     try:
         plist = plistlib.loads(_run(["diskutil", "list", "-plist"]).stdout.encode())
     except Exception:
         return None
+    best, best_score = None, 0
     for name in plist.get("AllDisks", []):
         try:
             info_pl = plistlib.loads(
@@ -227,14 +235,17 @@ def find_iap_disk_macos():
         media = (info_pl.get("MediaName") or "") + (info_pl.get("IORegistryEntryName") or "")
         bus   = info_pl.get("BusProtocol") or ""
         size  = info_pl.get("TotalSize") or info_pl.get("Size") or 0
-        looks_iap = (
-            vol.upper() == IAP_VOLUME_LABEL
-            or "msc" in media.lower() or "at32" in media.lower()
-            or (bus == "USB" and 0 < size < 32 * 1024 * 1024)
-        )
-        if looks_iap:
-            return f"/dev/{name}"
-    return None
+        if vol.upper() == IAP_VOLUME_LABEL:
+            score = 3
+        elif "msc iap" in media.lower():
+            score = 2
+        elif ("at32" in media.lower() or bus == "USB") and 1024 * 1024 <= size < 32 * 1024 * 1024:
+            score = 1
+        else:
+            score = 0
+        if score > best_score:
+            best, best_score = f"/dev/{name}", score
+    return best
 
 def find_iap_disk_linux():
     """Return /dev/sdX backing the IAP volume, or None (via lsblk JSON)."""

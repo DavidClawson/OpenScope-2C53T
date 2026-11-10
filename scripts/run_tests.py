@@ -42,6 +42,7 @@ SCRIPTS = Path(__file__).resolve().parent
 # not build. See its module docstring.
 SUITES = (
     "test_iap_erase_guard.py",
+    "test_iap_disk_pick.py",
     "test_flash_regions.py",
     "test_config_persist.py",
     "test_cal_backup.py",
