@@ -12,6 +12,16 @@ import flash_preflight
 
 CONFIRM_PHRASE = "UPDATE BOOTLOADER"
 
+# The updater is linked as an app at 0x08004000 and so spans the page at
+# 0x08006000 (left blank by the app linker script). Without these flags the HID
+# flasher erases that page, which holds the unit's saved settings and, on units
+# installed from stock, the factory calibration. Same flags as `make flash`.
+HID_PRESERVE_ARGS = [
+    "--preserve-blank-blocks",
+    "--preserve-blank-blocks-range",
+    "0x08006000:0x08007000",
+]
+
 
 def wait_for_hid_iap(timeout: float) -> bool:
     deadline = time.monotonic() + timeout
@@ -75,7 +85,7 @@ def main() -> int:
             return 1
 
     hid_flash = Path(__file__).resolve().parent / "hid_flash.py"
-    rc = subprocess.call(["uv", "run", str(hid_flash), str(args.updater_image)])
+    rc = subprocess.call(["uv", "run", str(hid_flash), str(args.updater_image), *HID_PRESERVE_ARGS])
     if rc != 0:
         return rc
 
