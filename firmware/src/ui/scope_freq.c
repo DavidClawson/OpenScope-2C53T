@@ -13,22 +13,17 @@
 #include <math.h>
 #include <string.h>
 
-/* Scratch. ~12 KB of .bss against 224 KB of SRAM. Not reentrant: one caller,
- * the display task. */
+/* Scratch. ~8 KB of .bss against 224 KB of SRAM. Not reentrant.
+ *
+ * There used to be a third 4 KB array here, a cached Hann table rebuilt
+ * whenever n changed. On clean records (no half-record retry) the cache held
+ * and cost nothing; the window is now computed inline with the identical
+ * expression (bit-identical samples, same test results). The price is ~n
+ * software cosf per pass, roughly 1 ms per 1024-sample estimate on the M4F
+ * (estimated, not timed), a few times a second: accepted for 4 KB of RAM
+ * (RAM diet, 2026-11-11). */
 static float fft_re[SCOPE_FREQ_MAX_N];
 static float fft_im[SCOPE_FREQ_MAX_N];
-static float hann[SCOPE_FREQ_MAX_N];
-static uint16_t hann_n;                     /* length `hann` was built for */
-
-static void build_hann(uint16_t n)
-{
-    if (hann_n == n)
-        return;
-    for (uint16_t i = 0; i < n; i++)
-        hann[i] = 0.5f - 0.5f * cosf(2.0f * (float)M_PI * (float)i /
-                                     (float)(n - 1u));
-    hann_n = n;
-}
 
 /* In-place radix-2 decimation-in-time FFT. n must be a power of two. */
 static void fft(uint16_t n)
@@ -86,9 +81,10 @@ static bool analyse(const uint8_t *s, uint16_t n, float *bin, float *sharp)
         sum += (float)s[i];
     const float mean = sum / (float)n;
 
-    build_hann(n);
     for (uint16_t i = 0; i < n; i++) {
-        fft_re[i] = ((float)s[i] - mean) * hann[i];
+        const float hann = 0.5f - 0.5f * cosf(2.0f * (float)M_PI * (float)i /
+                                              (float)(n - 1u));
+        fft_re[i] = ((float)s[i] - mean) * hann;
         fft_im[i] = 0.0f;
     }
 
