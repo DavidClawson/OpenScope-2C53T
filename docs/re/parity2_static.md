@@ -17,13 +17,13 @@ agree with every field decoded below (ms[0x14] = 3 for two channels and 1 for CH
 | Item | Finding | OpenScope action |
 |---|---|---|
 | C13 20M limit | The row exists in stock's string table and OK handler (ms[8]/ms[9] toggle) but is **unreachable**: the channel menu draws 4 rows and the down-key limit is row 3. The toggle writes no GPIO/FPGA word and no consumer was found. | Do not implement. Remove the "20M" row from the OpenScope channel menu (or label it "not in stock"). Keep the config byte. Close C13 as "dead in V1.2.0". One optional SWD test settles it for good. |
-| C14 zoom paused | Stock keeps per-channel 1024-byte raw records and a captured-state tuple; on STOP any timebase/range/position change only **re-renders** (no re-arm). Horizontal factor = 1000 x display ns per px / record ns per sample (0x08030A70). Vertical is a closed formula. Interpolation kernel 0x0803D5D4 is fully decoded: a Q15 16-tap polyphase FIR. | Build a pure `paused_view` module (spec in section 2) and freeze the capture metadata at STOP. Horizontal zoom-out decimation details are [L]. |
-| C15 brightness | PB8 = TMR10 CH1 PWM, ARR 99, 1 MHz count (10 kHz), duty = ms[0xF61] percent, 25..100 step 5, factory 100. | Implement exactly (section 3.2). |
-| C15 sound | **TMR11 CH1 on PB9** (not TMR4). ARR 24, 50 kHz count (2 kHz tone). Key click writes C1DT = volume (0..10, factory 1). | Implement TMR11 PWM; resolves the TMR4/TMR11 dispute (section 3.3). |
+| C14 zoom paused | Stock keeps per-channel 1024-byte raw records and a captured-state tuple; on STOP any timebase/range/position change only **re-renders** (no re-arm). Horizontal factor = 1000 x display ns per px / record ns per sample (0x08030A70). Vertical is a closed formula. Interpolation kernel 0x0803D5D4 is fully decoded: a Q15 16-tap polyphase FIR. | Build a pure `paused_view` module (spec in section 3) and freeze the capture metadata at STOP. Horizontal zoom-out decimation details are [L]. |
+| C15 brightness | PB8 = TMR10 CH1 PWM, ARR 99, 1 MHz count (10 kHz), duty = ms[0xF61] percent, 25..100 step 5, factory 100. | Implement exactly (section 4.2). |
+| C15 sound | **TMR11 CH1 on PB9** (not TMR4). ARR 24, 50 kHz count (2 kHz tone). Key click writes C1DT = volume (0..10, factory 1). | Implement TMR11 PWM; resolves the TMR4/TMR11 dispute (section 4.3). |
 | C15 auto-off | ms[0xF65] = 0/1/2/3 = off/15/30/60 min; idle counter ms[0xF6C] reset by every handled key; thresholds 900/1800/3600 ticks at 0x08040710..0x08040724; action = settings save (sig 0x55) then PC9 low. | Idle timer module; tick period [L] (assumed 1 Hz). |
-| C15 channel enable | ms[0x14] bitmask; toggle at 0x0800BF7E..; GPIO effect PC1/PC2 per mask (matches `fpga_set_channel_mask`). | UI toggle in channel menu (section 3.1). Fixes the ch2.enabled persistence trap. |
-| USB Sharing | State ms[0xF68] = 4 set at 0x0800BF08 (USB core power-down/re-enumerate [H]; bring-up not traced); MSC device on the USB FS block (0x40005C00); shares FatFs volume "2:" (14 MB FAT12 at W25Q 0x200000..) [H]. | L-size, see section 3.5; **never expose a writable view of 0xD00000+**. |
-| Boot logo | Boot opens `2:/LOGO/LOGO2C53T.jpg`; if it opens it is decoded at (0,0) with the backlight at 0, then the backlight is set to the stored brightness; otherwise an embedded image is drawn. | Read-only FAT12 + small JPEG decoder at boot (section 3.6). |
+| C15 channel enable | ms[0x14] bitmask; toggle at 0x0800BF7E..; GPIO effect PC1/PC2 per mask (matches `fpga_set_channel_mask`). | UI toggle in channel menu (section 4.1). Fixes the ch2.enabled persistence trap. |
+| USB Sharing | State ms[0xF68] = 4 set at 0x0800BF08 (USB core power-down/re-enumerate [H]; bring-up not traced); MSC device on the USB FS block (0x40005C00); shares FatFs volume "2:" (14 MB FAT12 at W25Q 0x200000..) [H]. | L-size, see section 4.5; **never expose a writable view of 0xD00000+**. |
+| Boot logo | Boot opens `2:/LOGO/LOGO2C53T.jpg`; if it opens it is decoded at (0,0) with the backlight at 0, then the backlight is set to the stored brightness; otherwise an embedded image is drawn. | Read-only FAT12 + small JPEG decoder at boot (section 4.6). |
 
 ## 1. Shared facts decoded this pass (new or corrected)
 
@@ -55,13 +55,13 @@ ms fields, all [V] unless noted:
 | ms+0x5B0 / ms+0x9B0 | raw 1024-byte records CH1 / CH2 (u8); with ms[0x14]!=3 and tb<4 the two halves interleave into one 2048-byte record (parity picks half, ms[0x350/0x351] trims) | 0x08021E2C..0x08021EC8 |
 | ms+0x356 + ch*301 | 301-byte per-channel display array (u8 y, 28..228) | 0x0802203x, 0x080212B6 |
 | ms[0xF60] | language (1 = Chinese, 2 = English) | OK at 0x0800BEDC stores row+1 |
-| ms[0xF61] | brightness percent | section 3.2 |
-| ms[0xF62] | sound volume 0..10 | section 3.3 |
+| ms[0xF61] | brightness percent | section 4.2 |
+| ms[0xF62] | sound volume 0..10 | section 4.3 |
 | ms[0xF64] | startup mode (row index: off, scope, siggen, meter) | OK 0x0800C558 |
 | ms[0xF65] | auto-off mode 0..3 | OK 0x0800C564 |
 | ms[0xF68] | main state: 2 = scope, 4 = **USB sharing**, 1 = meter | 0x0800BF0A, acquisition gate 0x08020EAC |
 | ms[0xF69/0xF6A/0xF6B] | menu level, menu type (low nibble: 3 = CH1, 4 = CH2, 1 = "Sound and light" sub-page), selected row | painter 0x08013346 |
-| ms[0xF6C] | u16 idle counter | section 3.4 |
+| ms[0xF6C] | u16 idle counter | section 4.4 |
 
 Persisted record (restore 0x0802CE2C..0x0802CF40, writer 0x080293BC into flash page 0x08006000): record+0x2C = {lang, brightness, sound, ?},
 +0x30 = {startup, auto-off, ms[8], ms[9]}, +0x34 = {ms[10], ms[11]}. Factory defaults (0x080294A0..0x0802957x): ms[0xF60..63] = 01 64 01 00
@@ -111,8 +111,8 @@ What stock does with the record [V].
 4. Horizontal ratio, exact (0x08030A70..0x08030B6C): `ratio_x1000 = 1000 * (display_ns_per_px) / (record_ns_per_sample)`, stored as u64 at ms[0xE08].
    - display: M[tb%3] x 10^(3 + tb/3) with M = {1,2,5} (table 0x080466C8) is div_ns x 100; 25 px per div, so ns/px = div_ns/25;
    - record: period table u64 at 0x080465E0 in 0.4 ns units (10,10,10,10,20,50,...), x2 when captured tb < 4 and captured mask == 3 (0x08030AE8..0x08030B14);
-   - check against the dumps: tb 5, mask 3: 500 ns/div = 20 ns/px, record 20 ns, ratio 1000 (dump: ms[0xE08] = 1000); tb 3 one channel: 100 ns/div = 4 ns/px, record 4 ns, 1000. tb 0: 10 ns/div = 0.4 ns/px against a 4 ns record gives 100, so the interpolation factor is 1000/100 = 10.
-   - While running, `ms[0xE04] = 1000 / ratio` (interpolation factor; 10, 5, 2 for tb 0, 1, 2) is stored if ratio/8 <= 124 (0x08030B4E..0x08030B6C). While stopped it is left alone.
+   - check against the dumps: tb 5, mask 3: 500 ns/div = 20 ns/px, record 20 ns, ratio 1000 (dump: ms[0xE08] = 1000); tb 3 one channel: 100 ns/div = 4 ns/px, record 4 ns, 1000; tb 4, mask 3: 1000 (dump). Computed, no dump: tb 0 one channel: 10 ns/div = 0.4 ns/px against a 4 ns record gives 100 (factor 10); tb 0 with both channels the record is 8 ns (the x2 above), so 50 (factor 20); tb 3 with both channels 500 (factor 2).
+   - While running, `ms[0xE04] = 1000 / ratio` (interpolation factor: 10, 5, 2 for tb 0, 1, 2 with one channel; 20, 10, 4, 2 for tb 0..3 with both channels) is stored if (ratio >> 3) <= 124, i.e. ratio <= 999 (0x08030B4E..0x08030B6C); otherwise the old value stays (the cal3 dump shows a stale 2 at tb 5). While stopped it is left alone.
 5. Stopped re-render (0x08021178..0x08021348, per column `r6` = 0..300, per channel):
    - source sample: direct path `idx = (T & 0x7FFF) + col - ms[0xDC8] - 150`, wrapped at 1024 (or 2048 merged) plus `ch << 10` (0x08021232..0x08021282); with an interpolated copy (ms[0xDFC+4ch] != 0)
      the byte is read from that copy instead (0x08021224..0x0802122E);
@@ -135,9 +135,9 @@ OpenScope spec (new pure module `src/dsp/paused_view.c/.h`, host-tested; the UI 
 - `paused_ratio_x1000(tb_now, tb_cap, mask_cap)` = `1000 * (div_ns[tb_now]/25) / (period_ns[tb_cap] * ((tb_cap<4 && mask_cap==3) ? 2 : 1))`, using OpenScope's measured rate table (stock's 0.4 ns table gives the same values; for the 0x05 / 0x0B / 0x0C entries the stock table is the reference).
 - `paused_y(raw, range_cap, range_now, pos_cap, pos_now)` follows the closed form above, clamped to 28..228. The 128 is **stock's** raw baseline; OpenScope's 0 V is record 100 + pos with the calibration page (HEAD 113ce11), so the centre constant must come from OpenScope's own record/cal baseline and must not be copied. Use scope_cal for volts; this is only the stored-trace display mapping.
 - Horizontal: for display ratio R < 1000 (zoomed in beyond the record) use the 16-tap polyphase interpolator. Generate the taps in code (windowed sinc, 16 taps, Q15; compare
-  to the half-sample set above in a unit test, tolerance a few LSB); do not need to copy stock's table. Factors needed: 10, 5, 2 (plus 4 for 0.25 steps). For R >= 1000 (zoomed out)
+  to the half-sample set above in a unit test, tolerance a few LSB); do not need to copy stock's table. Factors needed: 10, 5, 2 with one channel and 20, 10, 4, 2 with both (all in stock's set), plus any ratio a paused zoom-in reaches. For R >= 1000 (zoomed out)
   [H] pick or max/min by position; stock's exact zoom-out sampling is [L] (the loop at 0x08021178 is a per-column time to index map; no peak detect exists in stock). Clip to the record and leave the rest of the trace blank like stock (`301 - ms[0xDE0]` limit).
-- Tests: ratio table against the dump values (1000 at tb 5/mask 3, tb 3/mask 1, tb 4/mask 3 and 100 at tb 0); y-map identities (same range and position gives identity, 2x range ratio doubles the offset from centre, clamp at 28/228); kernel: DC gain, phase-0 identity, symmetry of the half-sample set, impulse response vs the stock half-sample taps. Mutation target: the k = V[cap]/V[now] orientation.
+- Tests: ratio table against the dump values (1000 at tb 5/mask 3, tb 3/mask 1, tb 4/mask 3) and the computed ones (100 at tb 0/mask 1, 50 at tb 0/mask 3, 500 at tb 3/mask 3); y-map identities (same range and position gives identity, 2x range ratio doubles the offset from centre, clamp at 28/228); kernel: DC gain, phase-0 identity, symmetry of the half-sample set, impulse response vs the stock half-sample taps. Mutation target: the k = V[cap]/V[now] orientation.
 - Size: M (as in PLAN); the display plumbing is the larger half.
 
 Only live SWD can settle: after STOP, step the timebase +-1..+4 and read ms[0xDC0], ms[0xE08], ms[0xE04], ms[0xDE0], ms[0xDC8], ms[0xDFC..0xE03] and the display arrays ms+0x356..+0x5B0 (the horizontal zoom-out sampling rule and the
@@ -154,7 +154,7 @@ OpenScope: add a "Channel: ON/OFF" row (per channel) to the channel menu that se
 persist; on boot re-apply the mask (fixes the persistence trap). Keep 250 MS/s interleave gated by `mask != 3 && tb < 4` as is.
 
 ### 4.2 Brightness (PB8)  [V]
-- Timer: TMR10 (base 0x40015000). Init in the mode-setup block at 0x0802B0CE..0x0802B2F0: PSC = clock/1e6 - 1 (0x0802B1F4..0x0802B210, 240 MHz timer clock gives 239, i.e. 1 MHz count), ARR = 99
+- Timer: TMR10 (base 0x40015000). Init in the mode-setup block at 0x0802B0CE..0x0802B2F0: PSC = clock/1e6 - 1 (0x0802B1F4..0x0802B210; `clock` is the AHB field of the clock struct filled by 0x08031430, sp+0x44 = offset 4, not the APB2 timer clock; with AHB 240 MHz and APB2 /2 the timer clock is also 240 MHz, so 239, i.e. 1 MHz count), ARR = 99
   (`str 0x63` at 0x0802B20C), CCMR1 OC1M = 0b111 (PWM mode 2), CCER = CC1E | CC1P (inverted polarity, so the pin is high while CNT < CCR; duty = CCR %), CR2.OIS1 set, EGR UG,
   BDT.MOE (0x40015044 bit 15), CEN; initial C1DT = 100 (0x0802B272). PB8 and PB9 are configured by the same struct (pins 0x100 then 0x200, AF push-pull, 0x0802B0F2..0x0802B1DE);
   APB2 clocks for TMR10/TMR11 are bits 20 and 21 of the APB2 enable register (0x0802B194, 0x0802B1AC).
@@ -168,14 +168,14 @@ Open [L]: PB8 is TMR10_CH1 only if the default pin mux applies (stock sets no re
 
 ### 4.3 Sound (buzzer): TMR11 CH1 on PB9, **not TMR4_CH4**  [V]
 - The buzzer compare register is 0x40015434 = TMR11 + 0x34 = C1DT (siggen/meter notes and the meter checker agree). TMR11 init at 0x0802B27x..0x0802B2E4 (`r6 = 0x40015404`): ARR 24 (`str 24, [r6,#0x28]` at 0x0802B29E),
-  PSC = timer clock / 50 000 - 1 (0x0802B1F6..0x0802B298: `clk/16 * 0x0A7C5AC5 >> 32 >> 7 = clk/50000`, so 4799 at 240 MHz), PWM mode 2, CC1E|CC1P, MOE, CEN, C1DT = 0. So a **2 kHz** tone (50 kHz count / 25) with duty = C1DT/25 (0..40 %).
+  PSC = AHB clock / 50 000 - 1 (0x0802B1F6..0x0802B298: `clk/16 * 0x0A7C5AC5 >> 32 >> 7 = clk/50000`, so 4799 at 240 MHz), PWM mode 2, CC1E|CC1P, MOE, CEN, C1DT = 0. So a **2 kHz** tone (50 kHz count / 25) with duty = C1DT/25 (0..40 %).
   PB9 comes from the same AF-PP struct as PB8.
 - No code in the image touches TMR4 (zero movw/movt hits in 0x40000800..0x40000860). PB9 is also TIM4_CH4 under the default mux, which is why the DOOM port works with TMR4; stock uses TMR11. The siggen note "PB9 / TMR4_CH4 [C]" and the HARDWARE_PINOUT line are therefore not what stock does (both are electrically possible).
 - Volume: `ms[0xF62]` 0..10 (right: `ms <= 9 -> +1` 0x0800BADC; left: down to 0), factory 1. It is used directly as C1DT, so volume 10 = 40 % duty.
 - Triggers [V]: (a) every key event handled by the key task (0x08040038): `if ms[0xF62] != 0: C1DT = ms[0xF62]` and the idle counter ms[0xF6C] = 0; (b) the meter SoC's buzzer line via EXTI3 (0x08009C10..0x08009C64): writes the constant **10** to C1DT (not scaled by the volume,
   ignores volume 0), only in Auto and Continuity (meter-parity checker); (c) a mode-change/boot block at 0x0802E370..0x0802E3E4 sets C1DT = volume (if non-zero), runs a SysTick delay and clears C1DT (length depends on 0x20002B20, [L]).
-- Length: the counter 0x20002D67 is incremented in the key-scan function (0x08040508..0x08040532, same function as the 70/72-count debounce at 0x08040444/0x08040490) and C1DT is cleared when it reaches 11 (0x08040526..0x0804052C, duplicate at 0x08029D20..0x08029D28).
-  A 70-tick debounce points to a ~1 ms scan tick, so the pulse is probably **~11 ms** rather than the 110 ms the continuity file assumes ([H]; `BUZZER_SOC_TICK_MS_DEFAULT 10` in `continuity_buzzer.c` looks too long; measure on the bench).
+- Length: the counter 0x20002D67 is incremented once per call of the key-scan function 0x080400B8 (0x08040508..0x08040532, reached on every call; same function as the 70/72-count key counters at 0x08040490/0x080404A8) and C1DT is cleared when it reaches 11 (0x08040526..0x0804052C, duplicate at 0x08029D20..0x08029D28). The EXTI3 beep also zeroes it (0x08009C66), so both beeps last 11 scan ticks.
+  The scan period is not proven, but the same function points to **10 ms** [H]: every 51 calls (counter ms[0x45], 0x080405C2..0x08040658) it zeroes TMR2/TMR5 CNT (0x40000024/0x40000C24), and 50 calls later, while RUN, stores `ms[0x50] = 2 * TMR2.CNT`, `ms[0x54] = 1e9 / ms[0x50]` (same for TMR5 into ms[0x80]/ms[0x84]). A period in ns from `1e9 / x` means x is in Hz, so the 50-call gate is 0.5 s and one call is 10 ms (20 ms if the counters run with an ETR /2 prescaler; 1 ms would need /10, which the ETR does not offer). At 10 ms the key counters read naturally: 70 ticks = 0.7 s long press, release at 2..69 ticks = short press. So the click is probably **~110 ms**, which agrees with `BUZZER_SOC_TICK_MS_DEFAULT 10` in `continuity_buzzer.c` (11 x 10 ms). Note that OpenScope's `key_model.h` reads stock's 70 as a 140 ms press confirm at 2 ms per tick; if 10 ms holds, stock's 70 is the long-press threshold (0.7 s). Measure PB9 on the bench before changing either.
 OpenScope: `sound_pwm` driver (TMR11 CH1, PSC 4799, ARR 24, PWM A, normal polarity), `sound_click()` called from the input task for each key event when volume > 0, `sound_set_volume(0..10)`, continuity beep through the same driver at constant duty 10; replace the GPIO square wave in `continuity_buzzer.c` once the bench confirms. Persist volume, factory 1.
 
 ### 4.4 Auto-shutdown  [V except the tick]
@@ -212,5 +212,5 @@ OpenScope proposal (size M after the read-only FAT12 reader exists): at boot, af
 ## 6. Notes the checker should know
 - `ms[0x16]` is the trigger channel, not a RUN flag: the PLAN/scope notes' "ms[0x2E] != 0 = Await Trigger" is consistent with ms[0x2E] being RUN.
 - Stock's continuity/Auto beep ignores the Sound setting (constant 10); key clicks scale with it.
-- Buzzer facts for `continuity_buzzer.c`: TMR11 CH1 (PSC 4799, ARR 24 at 240 MHz), pulse = 11 key-scan ticks (probably ~11 ms, [H]).
+- Buzzer facts for `continuity_buzzer.c`: TMR11 CH1 (PSC 4799, ARR 24 at 240 MHz), pulse = 11 key-scan ticks (probably ~110 ms at a 10 ms scan, [H], see section 4.3).
 - All four reference dumps were taken with ms[0xF68] = 2 (scope); no dump of the paused or settings states exists, so all zoom-paused statements about ms[0xE08..] while stopped come from code, not data.
