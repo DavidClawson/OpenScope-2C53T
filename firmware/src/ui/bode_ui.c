@@ -50,7 +50,7 @@ static void bode_generate_demo(void)
     bode_cfg.amplitude_vpp = 1.0f;
     bode_cfg.log_sweep = true;
 
-    bode_init(&bode_cfg);
+    bode_init(&bode_cfg, &bode_res);
 
     /* Simulate a 1st-order RC low-pass filter: fc = 1kHz */
     float fc = 1000.0f;

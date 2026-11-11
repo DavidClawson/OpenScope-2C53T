@@ -693,7 +693,18 @@ $(BUILD_DIR)/test_mask_pf: tests/test_mask_pf.c src/dsp/mask_pf.c src/dsp/mask_p
 test-mask-pf: $(BUILD_DIR)/test_mask_pf
 	$<
 
-.PHONY: all clean disasm size renode soak-test soak-quick flash flash-dfu bootloader flash-bootloader flash-all guest guest-warmtest guest-usart-silent emu test-meter-data test-meter-auto test-meter-voltage-wave test-fpga-meter-plan test-stock-meter-literals test-meter test-scope-measure test-scope-cal test-scope-timebase test-scope-freq test-redraw-gate test-fft-live test-trig-edge test-mask-pf test-fuse test-config-persist guest-persist guest-caldump guest-coldtrace-slow guest-coldtrace-la guest-debugclk guest-configA-gap guest-configA-csdummy guest-configA-gapless guest-bringup guest-bringup-bb guest-bringup-bb-slow guest-coldtrace-hwspi guest-bringup-bb-faithful fpga-alt-header guest-coldtrace-meter
+.PHONY: all clean disasm size renode soak-test soak-quick flash flash-dfu bootloader flash-bootloader flash-all guest guest-warmtest guest-usart-silent emu test-meter-data test-meter-auto test-meter-voltage-wave test-fpga-meter-plan test-stock-meter-literals test-meter test-scope-measure test-scope-cal test-scope-timebase test-scope-freq test-redraw-gate test-fft-live test-trig-edge test-mask-pf test-fuse test-config-persist guest-persist guest-caldump guest-coldtrace-slow guest-coldtrace-la guest-debugclk guest-configA-gap guest-configA-csdummy guest-configA-gapless guest-bringup guest-bringup-bb guest-bringup-bb-slow guest-coldtrace-hwspi guest-bringup-bb-faithful fpga-alt-header guest-coldtrace-meter test-bode
+
+# Bode sweep maths (step frequency, gain/phase, -3 dB bandwidth) and
+# bode_init(), which since the 2026-11-11 RAM diet fills a caller-owned result
+# instead of a dead 2.4 KB module copy.
+$(BUILD_DIR)/test_bode: tests/test_bode_mask.c src/dsp/bode.c src/dsp/bode.h | $(BUILD_DIR)
+	$(HOST_CC) -std=gnu11 -O1 -Wall -Wextra -Werror -DTEST_BUILD -Isrc/dsp $< src/dsp/bode.c -lm -o $@
+
+.PHONY: test-bode
+test-bode: $(BUILD_DIR)/test_bode
+	$<
+
 
 # ═══════════════════════════════════════════════════════════════════════════
 # BENCH / EXPERIMENT IMAGE INDEX                          (index added 2026-08-13)
