@@ -8,7 +8,7 @@ Tags: **[V]** read from code or data (address given), **[H]** hypothesis, **[L]*
 movw/movt, `ldr =`, `adr`/`addw pc` references (stock builds most tables with `addw rX, pc, #imm`, which a plain
 `ldr`-literal search misses; that is why the language table at 0x08014198 looked unreferenced).
 
-Live cross-check: the four `*_ms.bin` dumps of the owner's stock unit (research/parity/runs/2026-11-11, 4104 bytes from 0x200000F8)
+Live cross-check: four SWD dumps of the stock state struct on unit #2 running stock V1.2.0 (2026-11-11, 4104 bytes from 0x200000F8 each)
 agree with every field decoded below (ms[0x14] = 3 for two channels and 1 for CH1-only, ms[0x15] = 2 / 1, ms[0xF60..0xF65] =
 2,100,1,0,0 = English, brightness 100, sound 1, startup off, auto-off off; ms[8..11] = 0).
 
