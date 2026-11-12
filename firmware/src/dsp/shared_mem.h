@@ -44,9 +44,17 @@ typedef enum {
 
 /* Size of the shared pool. Keep this above the largest enabled consumer.
  * The old RGB565 screenshot utility needs 150KB and must fail closed unless
- * this pool is deliberately restored to that size. */
+ * this pool is deliberately restored to that size.
+ *
+ * Since the 2026-11-11 RAM diet the default is DERIVED: exactly the FFT
+ * owner's footprint (SHMEM_NEED_FFT_TOTAL, below), which is the largest
+ * consumer that actually claims the pool (FFT 100 KB under CMSIS, persistence
+ * 64.4 KB; screenshot fails closed). It used to be a flat 118784, the radix-2
+ * footprint, which under USE_CMSIS_DSP (every build) left 16 KB that nothing
+ * could use. Static asserts at the end of this block keep every claimant
+ * inside it. */
 #ifndef SHMEM_POOL_SIZE
-#define SHMEM_POOL_SIZE  118784
+#define SHMEM_POOL_SIZE  SHMEM_NEED_FFT_TOTAL
 #endif
 
 /* RAM sizes each feature actually needs (for diagnostics/budgeting) */
@@ -85,21 +93,17 @@ typedef enum {
  * Instead its history buffer is a sub-tenant of the FFT region, placed above
  * everything fft_setup_pointers() lays down.
  *
- * ⚠ The offset is deliberately a FIXED 98304, not SHMEM_NEED_FFT, even though
- * SHMEM_NEED_FFT is now correct for both layouts. Two reasons:
- *
- *   1. It must clear the LARGER of the two layouts (radix-2, 98304), because
- *      the waterfall address must not change with the DSP backend — the pool
- *      is zeroed on an owner change, not on a rebuild, and a build-dependent
- *      offset is exactly the kind of thing that reads correct and is not.
- *   2. Under USE_CMSIS_DSP (every build today) the FFT layout ends at 81920,
- *      so this leaves 16 KB unused. That slack is bought deliberately.
- *
- * Historical note: this constant used to be described as working around
- * SHMEM_NEED_FFT being wrong. The constant is fixed now (see above); the fixed
- * offset stays for reason 1. fft.c still carries the _Static_assert tying its
- * real layout end to this offset, so raising FFT_SIZE breaks the build instead
- * of silently overlapping the twiddle/sample buffers with the waterfall.
+ * The offset is SHMEM_NEED_FFT: the waterfall starts where the FFT layout
+ * ends (81920 under USE_CMSIS_DSP, 98304 radix-2). It used to be a FIXED 98304
+ * so the address "would not change with the DSP backend", which bought 16 KB
+ * of permanently unused slack in every CMSIS build. That reason does not hold:
+ * the backend is a compile-time choice, every translation unit sees the same
+ * USE_CMSIS_DSP (Makefile C_DEFS), and the pool is .bss that is zeroed on
+ * every owner change and never outlives a reflash, so no stored history can
+ * ever be read back at a different offset. fft.c's _Static_asserts tie the
+ * real layout end to this offset (FFT_POOL_LAYOUT_END == SHMEM_NEED_FFT and
+ * <= the offset), so raising FFT_SIZE still breaks the build instead of
+ * overlapping the sample buffer with the waterfall (RAM diet, 2026-11-11).
  *
  * Lifetime rules for a sub-tenant:
  *   - only valid while shared_mem_owner() == SHMEM_OWNER_FFT;
@@ -107,21 +111,31 @@ typedef enum {
  *     is wiped automatically after an eviction — callers must notice via
  *     shared_mem_transition_count() and reset their own indices.
  */
-#define SHMEM_FFT_WATERFALL_OFFSET  98304
+#define SHMEM_FFT_WATERFALL_OFFSET  SHMEM_NEED_FFT
 #define SHMEM_FFT_WATERFALL_ROWS    64
 #define SHMEM_FFT_WATERFALL_COLS    320
 #define SHMEM_FFT_WATERFALL_SIZE    (SHMEM_FFT_WATERFALL_ROWS * SHMEM_FFT_WATERFALL_COLS)
 
-/* Total pool FOOTPRINT of the FFT owner, including the waterfall sub-tenant.
- * This is the figure the About/health screens report — it is the footprint,
- * not the sum of the live buffers: under CMSIS the 16 KB of slack between
- * SHMEM_NEED_FFT (81920) and the fixed waterfall offset (98304) is reserved
- * and unusable by anyone else, so counting it is the honest number. */
+/* Total pool FOOTPRINT of the FFT owner, including the waterfall sub-tenant:
+ * 102400 under CMSIS, 118784 radix-2. This is the figure the About/health
+ * screens report. */
 #define SHMEM_NEED_FFT_TOTAL \
     (SHMEM_FFT_WATERFALL_OFFSET + SHMEM_FFT_WATERFALL_SIZE)
 
 _Static_assert(SHMEM_NEED_FFT_TOTAL <= SHMEM_POOL_SIZE,
                "FFT region + waterfall sub-tenant overflows the shared pool");
+_Static_assert((SHMEM_FFT_WATERFALL_OFFSET % 4) == 0,
+               "waterfall sub-tenant must stay word-aligned in the pool");
+/* The other claimants must fit too, now that the pool is no bigger than FFT
+ * needs. Screenshot (153600) is NOT asserted: it checks shared_mem_size() and
+ * fails closed, by design (see above). */
+_Static_assert(SHMEM_NEED_PERSISTENCE <= SHMEM_POOL_SIZE,
+               "persistence buffer no longer fits the shared pool");
+_Static_assert(SHMEM_NEED_DISPLAY <= SHMEM_POOL_SIZE &&
+               SHMEM_NEED_DECODE <= SHMEM_POOL_SIZE &&
+               SHMEM_NEED_COMPONENT <= SHMEM_POOL_SIZE &&
+               SHMEM_NEED_BODE <= SHMEM_POOL_SIZE,
+               "a declared pool claimant no longer fits the shared pool");
 
 /* ═══════════════════════════════════════════════════════════════════
  * Core API
