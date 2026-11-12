@@ -4,10 +4,7 @@
  * (The mask half was removed 2026-10-03 with src/tasks/mask_test.c; masks are
  * now src/dsp/mask_pf.c, tested on real records by tests/test_mask_pf.c.)
  *
- * Build:
- *   gcc -o tests/test_bode_mask tests/test_bode_mask.c \
- *       src/dsp/bode.c \
- *       -lm -Isrc/dsp -Isrc/tasks -DTEST_BUILD
+ * Build + run: make test-bode
  */
 
 #include <stdio.h>
@@ -73,7 +70,10 @@ static void test_bode_log_sweep(void)
         .log_sweep     = true
     };
 
-    bode_init(&cfg);
+    static bode_result_t res;
+    bode_init(&cfg, &res);
+    ASSERT(res.num_points == cfg.num_points && !res.sweep_done,
+           "bode_init fills the caller's result");
 
     float f0 = bode_step_frequency(&cfg, 0);
     float f_mid = bode_step_frequency(&cfg, 25);
@@ -110,7 +110,10 @@ static void test_bode_linear_sweep(void)
         .log_sweep     = false
     };
 
-    bode_init(&cfg);
+    static bode_result_t res;
+    bode_init(&cfg, &res);
+    ASSERT(res.num_points == cfg.num_points && !res.sweep_done,
+           "bode_init fills the caller's result");
 
     float f0 = bode_step_frequency(&cfg, 0);
     float f1 = bode_step_frequency(&cfg, 1);
@@ -235,6 +238,24 @@ static void test_bode_bandwidth(void)
 /* ========================================================================
  * Main
  * ======================================================================== */
+/* bode_init writes the CALLER's result (there is no module copy any more) and
+ * clamps an oversized sweep to the storage it actually has. */
+static void test_bode_init_clamps(void)
+{
+    printf("\n--- Bode: init clamps to BODE_MAX_POINTS ---\n");
+    bode_config_t cfg = { .start_freq_hz = 10.0f, .stop_freq_hz = 1000.0f,
+                          .num_points = BODE_MAX_POINTS + 50u,
+                          .amplitude_vpp = 1.0f, .log_sweep = true };
+    static bode_result_t res;
+    memset(&res, 0xA5, sizeof(res));
+    bode_init(&cfg, &res);
+    ASSERT(res.num_points == BODE_MAX_POINTS, "num_points clamped");
+    ASSERT(res.points[0].gain_db == 0.0f && res.points[BODE_MAX_POINTS - 1].phase_deg == 0.0f,
+           "points zeroed");
+    ASSERT(res.peak_gain_db == -999.0f && res.current_step == 0 && !res.sweep_done,
+           "summary reset");
+}
+
 int main(void)
 {
     printf("=== Bode Plot Unit Tests ===\n");
@@ -246,6 +267,7 @@ int main(void)
     test_bode_6db_attenuation();
     test_bode_phase();
     test_bode_bandwidth();
+    test_bode_init_clamps();
 
 
     printf("\n=== Results: %d/%d passed ===\n", tests_passed, tests_run);
