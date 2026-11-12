@@ -22,7 +22,7 @@ agree with every field decoded below (ms[0x14] = 3 for two channels and 1 for CH
 | C15 sound | **TMR11 CH1 on PB9** (not TMR4). ARR 24, 50 kHz count (2 kHz tone). Key click writes C1DT = volume (0..10, factory 1). | Implement TMR11 PWM; resolves the TMR4/TMR11 dispute (section 4.3). |
 | C15 auto-off | ms[0xF65] = 0/1/2/3 = off/15/30/60 min; idle counter ms[0xF6C] reset by every handled key; thresholds 900/1800/3600 ticks at 0x08040710..0x08040724; action = settings save (sig 0x55) then PC9 low. | Idle timer module; tick period [L] (assumed 1 Hz). |
 | C15 channel enable | ms[0x14] bitmask; toggle at 0x0800BF7E..; GPIO effect PC1/PC2 per mask (matches `fpga_set_channel_mask`). | UI toggle in channel menu (section 4.1). Fixes the ch2.enabled persistence trap. |
-| USB Sharing | State ms[0xF68] = 4 set at 0x0800BF08 (USB core power-down/re-enumerate [H]; bring-up not traced); MSC device on the USB FS block (0x40005C00); shares FatFs volume "2:" (14 MB FAT12 at W25Q 0x200000..) [H]. | L-size, see section 4.5; **never expose a writable view of 0xD00000+**. |
+| USB Sharing | Entered from the Settings page (ms[0xF68] = 4 is Settings itself, see the correction in section 4.5); the OK arm at 0x0800BF08 powers the USB core down/re-enumerates [H]; bring-up not traced; MSC device on the USB FS block (0x40005C00); shares FatFs volume "2:" (14 MB FAT12 at W25Q 0x200000..) [H]. | L-size, see section 4.5; **never expose a writable view of 0xD00000+**. |
 | Boot logo | Boot opens `2:/LOGO/LOGO2C53T.jpg`; if it opens it is decoded at (0,0) with the backlight at 0, then the backlight is set to the stored brightness; otherwise an embedded image is drawn. | Read-only FAT12 + small JPEG decoder at boot (section 4.6). |
 
 ## 1. Shared facts decoded this pass (new or corrected)
@@ -59,7 +59,7 @@ ms fields, all [V] unless noted:
 | ms[0xF62] | sound volume 0..10 | section 4.3 |
 | ms[0xF64] | startup mode (row index: off, scope, siggen, meter) | OK 0x0800C558 |
 | ms[0xF65] | auto-off mode 0..3 | OK 0x0800C564 |
-| ms[0xF68] | main state: 2 = scope, 4 = **USB sharing**, 1 = meter | 0x0800BF0A, acquisition gate 0x08020EAC |
+| ms[0xF68] | main state: 0 = home (mode selection), 1 = meter, 2 = scope, 3 = signal generator, 4 = **Settings**, 9 = Oscilloscope Settings page (corrected: an earlier version of this note read 4 as USB sharing) | home OK handler 0x0800BD90 (F68 = selection + 1), long BACK 0x0800D834, acquisition gate 0x08020EAC |
 | ms[0xF69/0xF6A/0xF6B] | menu level, menu type (low nibble: 3 = CH1, 4 = CH2, 1 = "Sound and light" sub-page), selected row | painter 0x08013346 |
 | ms[0xF6C] | u16 idle counter | section 4.4 |
 
@@ -187,7 +187,8 @@ OpenScope: `sound_pwm` driver (TMR11 CH1, PSC 4799, ARR 24, PWM A, normal polari
 OpenScope: `autooff` pure module (`autooff_tick(st, dt_s, key_event)`, `autooff_due()`), settings field, row in Settings (Off/15/30/60 min), on due: flush settings, backlight off, drop PC9 (stock's own sequence). Test: reset on key, thresholds, off = never, saturation of the u16. Add a warning popup before power-off (beyond stock, optional).
 
 ### 4.5 USB Sharing (mass storage)  [V for mechanism, H for the shared volume]
-- Entry: settings item "USB Sharing", OK handler 0x0800BF08: `ms[0xF68] = 4`, then `0x40005C40 |= 2` and `0x40005C60 |= 2` (AT32F403A USB FS block at 0x40005C00; 0x40005C40 is CNTR in the F1-style map and bit 1 is PDWN, so this step probably powers the USB core **down** to force re-enumeration [H]), redraw message. The MSC bring-up itself happens elsewhere from state 4 (not traced; the device core sits at 0x08030500..0x08031300). State 4 is polled by the key handlers (0x0800C58E). The device exposes a mass-storage interface: descriptor bytes
+- Correction: ms[0xF68] = 4 is the Settings page, not a USB Sharing state. The home page's OK sets F68 = selection + 1 and Settings is item 3; long BACK from 4 highlights "Settings"; the settings OK/BACK handlers act on F68 = 4. 0x0800BF08 sits inside the OK handler's settings arm, so USB Sharing is a row of Settings [V for 4 = Settings, H for where USB Sharing lives].
+- Entry: settings item "USB Sharing", in the OK handler's settings arm (0x0800BF08, where `ms[0xF68] = 4` is the Settings state already), then `0x40005C40 |= 2` and `0x40005C60 |= 2` (AT32F403A USB FS block at 0x40005C00; 0x40005C40 is CNTR in the F1-style map and bit 1 is PDWN, so this step probably powers the USB core **down** to force re-enumeration [H]), redraw message. The MSC bring-up itself happens elsewhere (not traced; the device core sits at 0x08030500..0x08031300). State 4 (Settings) is polled by the key handlers (0x0800C58E). The device exposes a mass-storage interface: descriptor bytes
   `09 02 .. 01 01 04 C0 32 | 09 04 00 00 02 08 06 50` (class 8, SCSI transparent, bulk-only) and two bulk endpoints (0x81, 0x01) are visible in the compressed .data at 0x080BE4F0 (partly packed, [H] for the rest). SCSI handler not traced.
 - What it shares: stock's FatFs mounts "2:" and "3:" at boot (0x080357BC..0x080358EA: `f_mount`, `f_mkfs` if the result is 13 = FR_NO_FILESYSTEM, then `f_mkdir` for `2:/LOGO` (0x080BBC58), `2:/Screenshot file` (0x080BC1B4), `2:/Screenshot simple file` (0x080BC18B), `3:/System file` (0x080BC1A5),
   and a probe for `3:/System file/9999.bin` that sets ms[0xF6E]). `flash_regions.c` already documents the two FAT12 volumes: "3:" = W25Q 0x000000..0x1FFFFF (UI JPEGs), "2:" = 0x200000..0xFFFFFF. The manual's logo recipe (copy `LOGO2C53T.jpg` into the drive's `LOGO` folder) shows the host sees "2:". [H] that "3:" is hidden.
