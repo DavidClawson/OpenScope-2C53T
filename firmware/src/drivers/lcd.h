@@ -37,6 +37,19 @@
 #define EXMC_SNTCFG0    (*(volatile uint32_t *)0xA0000004)  /* Bank 0 read timing */
 #define EXMC_SNWTCFG0   (*(volatile uint32_t *)0xA0000104)  /* Bank 0 write timing */
 
+/* Write timing for the ST7789V at HCLK = 240 MHz (4.17 ns per HCLK; AHB is
+ * not divided). The ST7789V(W) datasheet's 8080 write cycle is tWC >= 66 ns,
+ * with WRX low >= 15 ns and high >= 15 ns. Stock V1.2.0 and our bootloader
+ * write 0x00000202 (ADDSET 2 + DATAST 2 = 4 HCLK = 17 ns), about 4x faster.
+ * 0x00000A06 = ADDSET 6 (WRX high, 25 ns) + DATAST 10 (WRX low, 42 ns)
+ * = 16 HCLK = 67 ns per write. */
+#define LCD_EXMC_WRITE_TIMING  0x00000A06u
+
+/* ST7789V RESX (active low) is on PD6. Stock drives it high-low-high at boot
+ * and then holds it as a push-pull output, high. */
+#define LCD_RESX_PIN    6u
+#define GPIOD_SCR       (*(volatile uint32_t *)0x40011410)  /* set/clear (BSRR) */
+
 /* ========================================================================
  * GD32F307 peripheral registers used for LCD GPIO init
  * ======================================================================== */
@@ -173,6 +186,7 @@ uint16_t lcd_read_data(void);
 /* LCD controller initialization */
 void lcd_init(void);            /* Full init: GPIO + FSMC + ST7789 sequence */
 void lcd_reset(void);           /* Hardware reset via GPIO (if RST pin wired) */
+void lcd_resx_hold_high(void);  /* PD6 (RESX) push-pull high, as stock holds it */
 
 /* Drawing window control */
 void lcd_set_window(uint16_t x, uint16_t y, uint16_t w, uint16_t h);

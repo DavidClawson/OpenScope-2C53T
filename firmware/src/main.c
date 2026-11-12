@@ -983,6 +983,10 @@ int main(void)
 
     /* Initialize LCD — using proven hwtest approach */
     {
+        /* PD6 is the panel's RESX: hold it high (stock does). Left floating,
+         * a stray low pulse resets the panel under the running app. */
+        lcd_resx_hold_high();
+
         /* GPIO config for EXMC pins (same as hwtest) */
         #define _GPIO_CFG(base, pin, mode, cnf) do { \
             volatile uint32_t *r = (pin < 8) ? \
@@ -1003,10 +1007,11 @@ int main(void)
         for (int i = 7; i <= 15; i++)
             _GPIO_CFG(0x40011800, i, 3, 2);
 
-        /* EXMC config — proven working values */
+        /* EXMC config. Write timing: stock's 0x202 is a 17 ns write at
+         * HCLK 240 MHz, the ST7789V needs >= 66 ns (LCD_EXMC_WRITE_TIMING). */
         *(volatile uint32_t *)0xA0000000 = 0x00005010;
         *(volatile uint32_t *)0xA0000004 = 0x02020424;
-        *(volatile uint32_t *)0xA0000104 = 0x00000202;
+        *(volatile uint32_t *)0xA0000104 = LCD_EXMC_WRITE_TIMING;
         *(volatile uint32_t *)0xA0000000 |= 0x0001;
         delay_ms(50);
 

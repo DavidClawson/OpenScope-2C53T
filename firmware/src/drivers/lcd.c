@@ -8,7 +8,7 @@
  * GPIO configuration extracted from address 0x08023B00 area.
  *
  * Hardware interface:
- *   MCU: GD32F307 (ARM Cortex-M4 @ 120MHz)
+ *   MCU: AT32F403A (ARM Cortex-M4F @ 240MHz, HCLK undivided)
  *   LCD: ST7789V, 2.8" 320x240, 16-bit parallel bus
  *   EXMC Bank 0 (NE1): base address 0x60000000
  *   Command register: 0x6001FFFE (RS/DCX = A17 = low)
@@ -356,7 +356,8 @@ void lcd_gpio_init(void)
  *   SNTCFG0 = 0x02020424 (read timing: ADDSET=4, ADDHLD=2, DATAST=4)
  *   SNWTCFG0 = 0x00000202 (write timing: ADDSET=2, DATAST=2)
  *
- * Then SNCTL0 bit 0 (NRBKEN) is set to enable the bank.
+ * Then SNCTL0 bit 0 (NRBKEN) is set to enable the bank. The write timing
+ * here is LCD_EXMC_WRITE_TIMING instead of stock's 0x202 (see lcd.h).
  * ======================================================================== */
 void lcd_fsmc_init(void)
 {
@@ -377,19 +378,19 @@ void lcd_fsmc_init(void)
      *   BUSTURN = 2  (bus turnaround phase = 2 HCLK cycles)
      *   CLKDIV  = 2
      *
-     * At 120 MHz HCLK, each cycle = ~8.3ns
-     * Read cycle time: (4 + 2 + 4) * 8.3ns = ~83ns
+     * HCLK is 240 MHz (AHB undivided), so each cycle = ~4.17ns and the
+     * read cycle is (4 + 2 + 4) * 4.17ns = ~42ns with a 17ns RDX strobe.
+     * That is below the ST7789V's register-read minimum (RDX low >= 45ns,
+     * cycle >= 160ns); nothing in the app reads the panel today.
      */
     EXMC_SNTCFG0 = 0x02020424;
 
     /*
-     * Write timing register (SNWTCFG0, used when EXTMOD=1):
-     *   ADDSET = 2 (address setup = 2 HCLK cycles = ~17ns)
-     *   DATAST = 2 (data phase = 2 HCLK cycles = ~17ns)
-     *
-     * Write is faster than read, matching ST7789V timing specs.
+     * Write timing register (SNWTCFG0, used when EXTMOD=1). Stock writes
+     * 0x00000202 (ADDSET 2 + DATAST 2 = 17ns at 240 MHz), below the
+     * ST7789V's 66ns write cycle; see LCD_EXMC_WRITE_TIMING in lcd.h.
      */
-    EXMC_SNWTCFG0 = 0x00000202;
+    EXMC_SNWTCFG0 = LCD_EXMC_WRITE_TIMING;
 
     /* Enable EXMC Bank 0 */
     EXMC_SNCTL0 |= 0x0001;
@@ -730,7 +731,27 @@ void lcd_reset(void)
      *   gpio_set_pin(LCD_RST_PORT, LCD_RST_PIN, 1);  // RST high
      *   delay_ms(120);
      *
-     * TODO: Identify RST pin from hardware teardown.
+     * Stock V1.2.0 uses PD6 for this (its gpio init configures PD6 as an
+     * output on its own; high-low-high at 0x0802AC5A / 0x0802ACB2 /
+     * 0x0802AD0A, then left high). Not continuity-checked to the FPC yet.
+     * The app resets the panel with SWRESET instead; see lcd_resx_hold_high().
      */
     delay_ms(120);
+}
+
+/*
+ * Hold the ST7789V's RESX (PD6) high as a push-pull output.
+ *
+ * Stock pulses PD6 at boot and then keeps it driven high. OpenScope never
+ * configured PD6, so the panel's active-low reset input was left floating;
+ * a low pulse longer than ~9 us resets the panel (ST7789V datasheet, reset
+ * timing) and leaves it in its power-on state: sleep in, display off, a
+ * white screen while the MCU keeps running. Output data is set high before
+ * the pin becomes an output, so the line never glitches low.
+ */
+void lcd_resx_hold_high(void)
+{
+    GPIOD_SCR = 1u << LCD_RESX_PIN;                                /* ODR high first */
+    GPIOD_CRL = (GPIOD_CRL & ~(0xFu << (LCD_RESX_PIN * 4u)))
+              | (0x3u << (LCD_RESX_PIN * 4u));                     /* push-pull, 50 MHz */
 }
