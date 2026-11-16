@@ -45,6 +45,7 @@ SUITES = (
     "test_flash_regions.py",
     "test_config_persist.py",
     "test_cal_backup.py",
+    "test_usb_evidence.py",
     "test_flash_switcher.py",
     "test_flash_preflight.py",
     "test_bootloader_updater.py",
@@ -57,6 +58,8 @@ SUITES = (
     "test_stock_caplog.py",
     "test_ramfunc_isolated.py",
     "test_firmware_build.py",
+    "test_remote_proto.py",
+    "test_openscope_host.py",
 )
 
 RAN_RE = re.compile(r"^Ran (\d+) test", re.MULTILINE)
