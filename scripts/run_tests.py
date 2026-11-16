@@ -47,6 +47,7 @@ SUITES = (
     "test_cal_backup.py",
     "test_flash_switcher.py",
     "test_flash_preflight.py",
+    "test_at32_dfuse_write.py",
     "test_bootloader_updater.py",
     "test_bootloader_power_entry.py",
     "test_stock_dispatcher_power_handoff.py",
