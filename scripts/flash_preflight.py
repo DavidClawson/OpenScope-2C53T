@@ -152,6 +152,7 @@ def validate_bootloader_updater_image(data: bytes) -> list[str]:
         errors.append("padded updater image would overlap the app settings sector")
     if BOOTLOADER_UPDATER_MARKER not in data:
         errors.append("updater image is missing the OpenScope bootloader updater marker")
+    errors.extend(validate_stock_saved_config_hole(data, APP_ADDRESS))
     return errors
 
 
@@ -575,7 +576,8 @@ def preflight_hid_bootloader_updater(args: argparse.Namespace) -> int:
 
     return finish(
         errors,
-        "uv run ../scripts/hid_flash.py firmware/bootloader_updater/build/bootloader_updater.bin",
+        "uv run ../scripts/hid_flash.py firmware/bootloader_updater/build/bootloader_updater.bin "
+        "--preserve-blank-blocks --preserve-blank-blocks-range 0x08006000:0x08007000",
     )
 
 

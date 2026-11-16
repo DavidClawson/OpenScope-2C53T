@@ -2,8 +2,12 @@
 from __future__ import annotations
 
 import importlib.util
+import io
+import sys
 import tempfile
 import unittest
+from contextlib import redirect_stdout
+from unittest import mock
 from pathlib import Path
 
 
@@ -89,6 +93,41 @@ class BootloaderUpdaterPreflightTests(unittest.TestCase):
         updater = image(0x20037FE0, flash_preflight.APP_ADDRESS + 0x100, 4096)
         errors = flash_preflight.validate_bootloader_updater_image(updater)
         self.assertTrue(any("marker" in err for err in errors))
+
+    def test_updater_image_must_leave_settings_page_blank(self) -> None:
+        # The updater spans 0x08004000..; byte 0x2000 of the image is 0x08006000.
+        updater = bytearray(image(
+            0x20037FE0,
+            flash_preflight.APP_ADDRESS + 0x100,
+            0x4000,
+            flash_preflight.BOOTLOADER_UPDATER_MARKER,
+        ))
+        self.assertEqual(flash_preflight.validate_bootloader_updater_image(bytes(updater)), [])
+        updater[0x2000] = 0x00
+        errors = flash_preflight.validate_bootloader_updater_image(bytes(updater))
+        self.assertTrue(any("0x08006000" in err for err in errors))
+
+    def test_hid_bootloader_update_preserves_settings_page(self) -> None:
+        spec = importlib.util.spec_from_file_location(
+            "update_bootloader_via_hid", MODULE_PATH.parent / "update_bootloader_via_hid.py"
+        )
+        assert spec is not None and spec.loader is not None
+        sys.path.insert(0, str(MODULE_PATH.parent))
+        try:
+            updater_script = importlib.util.module_from_spec(spec)
+            spec.loader.exec_module(updater_script)
+        finally:
+            sys.path.remove(str(MODULE_PATH.parent))
+        argv = ["update_bootloader_via_hid.py", "--yes", "--timeout", "0"]
+        with mock.patch.object(sys, "argv", argv), \
+             mock.patch.object(updater_script, "run_preflight", return_value=0), \
+             mock.patch.object(updater_script, "wait_for_hid_iap", return_value=True), \
+             mock.patch.object(updater_script.subprocess, "call", return_value=0) as call, \
+             redirect_stdout(io.StringIO()):
+            self.assertEqual(updater_script.main(), 0)
+        cmd = call.call_args.args[0]
+        self.assertIn("--preserve-blank-blocks", cmd)
+        self.assertEqual(cmd[cmd.index("--preserve-blank-blocks-range") + 1], "0x08006000:0x08007000")
 
     def test_valid_stage0_payload(self) -> None:
         errors = flash_preflight.validate_stage0_payload(
