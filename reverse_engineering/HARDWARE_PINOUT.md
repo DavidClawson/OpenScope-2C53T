@@ -55,7 +55,7 @@
 | PB4 | SPI3 MISO | Input | Floating | -- | `spi3_init_and_setup`; GPIO test confirmed physical FPGA connection | JTAG pin (JNTRST), freed by AFIO remap |
 | PB5 | SPI3 MOSI | AF | AF push-pull | 50 MHz | `spi3_init_and_setup` | |
 | PB6 | SPI3 CS (FPGA) | Output | Push-pull (GPIO) | 50 MHz | `spi3_init_and_setup`; 3 refs to GPIOB BOP/BCR in FPGA task | Active LOW; software-controlled |
-| PB7 | Button (PRM) | Input | Pull-up | -- | `peripheral_map.md` | Direct GPIO, active-low |
+| PB7 | Button (PRM) | Input | **Pull-down** | -- | `peripheral_map.md`; bench-confirmed on unit #1 2026-04-06 (`button_scan.c`) and on a V1.4 unit 2026-11-10 (#80) | Direct GPIO, **active-HIGH**. Was listed pull-up/active-low; the bootloader copied that and misread PRM until #80 |
 | PB8 | LCD backlight | Output | Push-pull | 50 MHz | `main.c` line 299; `FPGA_BOOT_SEQUENCE.md` | HIGH = backlight on |
 | PB9 | Buzzer / audio output (TMR4_CH4 PWM) | AF | AF push-pull | -- | Hardware probed under stock (issue #25, maksidze: waveform present exactly while the device beeps) + validated in custom firmware (`maksidze/DOOM-2C53T` `firmware/src/drivers/pwm_audio.c`, TMR4 CH4 PWM mode A) | Onboard piezo. NOT an analog-frontend or FPGA-config pin (retires the Exp E "PB9 AF-PP in stock" candidate) |
 | PB10 | **CH2 attenuator select S1** | Output | Push-pull | 50 MHz | `gpio_mux_porta_portb` at 0x08001A58; **bench-confirmed 2026-08-17** (see PB11) | 74HC4051 select line; USART3 TX probed dead |
