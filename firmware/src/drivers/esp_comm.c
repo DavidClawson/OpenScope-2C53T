@@ -8,6 +8,10 @@
 #include "esp_comm.h"
 #include <string.h>
 
+#ifndef ESP_COMM_TRANSFER_STUBS
+#define ESP_COMM_TRANSFER_STUBS 0
+#endif
+
 /* ─── Receiver state machine ─── */
 
 typedef enum {
@@ -24,6 +28,21 @@ static esp_packet_t rx_packet;
 static uint16_t rx_payload_idx = 0;
 static uint8_t rx_checksum_acc = 0;
 
+/* Oversize frame: swallow the bytes it announced (plus checksum) instead of
+ * letting them fall through to whatever shares the stream. Bounded by the
+ * inter-byte gap timeout, so a lying length cannot deafen the shell. */
+static uint32_t rx_discard = 0;
+static uint32_t rx_last_ms = 0;
+static esp_rx_stats_t rx_stats;
+
+typedef enum {
+    RX_NONE = 0,        /* byte consumed, nothing complete */
+    RX_PACKET,          /* complete frame, checksum good */
+    RX_BAD_CHECKSUM,    /* complete frame, checksum bad */
+    RX_BAD_LENGTH,      /* header announced > ESP_MAX_PAYLOAD */
+} rx_result_t;
+
+#if ESP_COMM_TRANSFER_STUBS
 /* ─── Transfer state ─── */
 
 typedef struct {
@@ -39,12 +58,19 @@ static transfer_state_t transfer = {0};
 
 /* Module slot metadata */
 static module_slot_info_t modules[ESP_MODULE_SLOT_COUNT];
+#endif /* ESP_COMM_TRANSFER_STUBS */
 
 /* UART write function (set by caller) */
 static esp_write_fn uart_write = 0;
+static esp_write_block_fn block_write = 0;
+static esp_status_fn status_provider = 0;
+static esp_button_fn button_injector = 0;
+static esp_meter_fn meter_provider = 0;
+static esp_wave_fn wave_provider = 0;
 
-/* Firmware version */
-static const char fw_version[] = "0.2.0-dev";
+/* Reported only when no status provider is bound (host tests, bare ESP32
+ * bring-up). The firmware binds the real build string. */
+static const char fw_version[] = "0.0.0-unbound";
 
 /* ─── Checksum ─── */
 
@@ -52,6 +78,7 @@ uint8_t esp_comm_checksum(const uint8_t *data, uint16_t len)
 {
     uint8_t chk = 0;
     uint16_t i;
+    if (!data) return 0;
     for (i = 0; i < len; i++)
         chk ^= data[i];
     return chk;
@@ -62,9 +89,13 @@ uint8_t esp_comm_checksum(const uint8_t *data, uint16_t len)
 void esp_comm_init(void)
 {
     rx_state = RX_WAIT_SYNC;
+    rx_discard = 0;
+    memset(&rx_stats, 0, sizeof(rx_stats));
     memset(&rx_packet, 0, sizeof(rx_packet));
+#if ESP_COMM_TRANSFER_STUBS
     memset(&transfer, 0, sizeof(transfer));
     memset(modules, 0, sizeof(modules));
+#endif
 }
 
 void esp_comm_set_writer(esp_write_fn fn)
@@ -72,29 +103,64 @@ void esp_comm_set_writer(esp_write_fn fn)
     uart_write = fn;
 }
 
+void esp_comm_set_block_writer(esp_write_block_fn fn)
+{
+    block_write = fn;
+}
+
+void esp_comm_set_status_provider(esp_status_fn fn)
+{
+    status_provider = fn;
+}
+
+void esp_comm_set_button_injector(esp_button_fn fn)
+{
+    button_injector = fn;
+}
+
+void esp_comm_set_meter_provider(esp_meter_fn fn)
+{
+    meter_provider = fn;
+}
+
+void esp_comm_set_waveform_provider(esp_wave_fn fn)
+{
+    wave_provider = fn;
+}
+
+void esp_comm_get_rx_stats(esp_rx_stats_t *out)
+{
+    *out = rx_stats;
+}
+
 /* ─── Packet receiver (byte-at-a-time state machine) ─── */
 
-bool esp_comm_receive_byte(uint8_t byte)
+static rx_result_t rx_step(uint8_t byte)
 {
+    if (rx_discard > 0) {
+        rx_discard--;
+        return RX_NONE;
+    }
+
     switch (rx_state) {
     case RX_WAIT_SYNC:
         if (byte == ESP_SYNC_BYTE) {
             rx_state = RX_WAIT_CMD;
             rx_checksum_acc = 0;
         }
-        return false;
+        return RX_NONE;
 
     case RX_WAIT_CMD:
         rx_packet.cmd = byte;
         rx_checksum_acc ^= byte;
         rx_state = RX_WAIT_LEN_HI;
-        return false;
+        return RX_NONE;
 
     case RX_WAIT_LEN_HI:
         rx_packet.payload_len = (uint16_t)(byte << 8);
         rx_checksum_acc ^= byte;
         rx_state = RX_WAIT_LEN_LO;
-        return false;
+        return RX_NONE;
 
     case RX_WAIT_LEN_LO:
         rx_packet.payload_len |= byte;
@@ -102,36 +168,100 @@ bool esp_comm_receive_byte(uint8_t byte)
         rx_payload_idx = 0;
 
         if (rx_packet.payload_len > ESP_MAX_PAYLOAD) {
-            /* Payload too large — reset */
+            /* Receive-only cap (§2.2/§3.5): responses may be larger. Eat
+             * the rest of this frame so it cannot leak into the shell. */
+            rx_discard = (uint32_t)rx_packet.payload_len + ESP_CHECKSUM_SIZE;
             rx_state = RX_WAIT_SYNC;
-            return false;
+            rx_stats.bad_length++;
+            return RX_BAD_LENGTH;
         }
-        if (rx_packet.payload_len == 0) {
-            rx_state = RX_WAIT_CHECKSUM;
-        } else {
-            rx_state = RX_WAIT_PAYLOAD;
-        }
-        return false;
+        rx_state = (rx_packet.payload_len == 0) ? RX_WAIT_CHECKSUM
+                                                : RX_WAIT_PAYLOAD;
+        return RX_NONE;
 
     case RX_WAIT_PAYLOAD:
         rx_packet.payload[rx_payload_idx++] = byte;
         rx_checksum_acc ^= byte;
         if (rx_payload_idx >= rx_packet.payload_len)
             rx_state = RX_WAIT_CHECKSUM;
-        return false;
+        return RX_NONE;
 
     case RX_WAIT_CHECKSUM:
         rx_state = RX_WAIT_SYNC;
-        if (byte == rx_checksum_acc) {
-            rx_packet.valid = true;
-            return true;  /* Complete valid packet! */
+        rx_packet.valid = (byte == rx_checksum_acc);
+        if (rx_packet.valid) {
+            rx_stats.frames_ok++;
+            return RX_PACKET;
         }
-        rx_packet.valid = false;
-        return false;
+        rx_stats.bad_checksum++;
+        return RX_BAD_CHECKSUM;
     }
 
     rx_state = RX_WAIT_SYNC;
-    return false;
+    return RX_NONE;
+}
+
+bool esp_comm_receive_byte(uint8_t byte)
+{
+    return rx_step(byte) == RX_PACKET;
+}
+
+bool esp_comm_rx_in_frame(void)
+{
+    return rx_state != RX_WAIT_SYNC || rx_discard > 0;
+}
+
+void esp_comm_rx_touch(uint32_t now_ms)
+{
+    if (esp_comm_rx_in_frame())
+        rx_last_ms = now_ms;
+}
+
+bool esp_comm_rx_poll(uint32_t now_ms)
+{
+    if (!esp_comm_rx_in_frame())
+        return false;
+    if ((uint32_t)(now_ms - rx_last_ms) < ESP_RX_GAP_MS)
+        return false;
+    rx_state = RX_WAIT_SYNC;
+    rx_discard = 0;
+    rx_stats.gap_timeouts++;
+    /* Deliberately silent. The protocol has no request ids, so a reply
+     * nobody is waiting for would be taken by the host as the answer to its
+     * NEXT request. The host that abandoned this frame has already timed
+     * out; the counter (usbstat) is the record. */
+    return true;
+}
+
+void esp_comm_route(const uint8_t *data, uint16_t len, uint32_t now_ms,
+                    esp_passthrough_fn passthrough, void *ctx)
+{
+    uint16_t run_start = 0;
+    uint16_t i;
+
+    (void)esp_comm_rx_poll(now_ms);
+
+    for (i = 0; i < len; i++) {
+        uint8_t b = data[i];
+
+        if (!esp_comm_rx_in_frame() && b != ESP_SYNC_BYTE)
+            continue;                       /* belongs to the passthrough run */
+
+        /* Flush the text that preceded this frame byte, in order. */
+        if (i > run_start && passthrough)
+            passthrough(data + run_start, (uint16_t)(i - run_start), ctx);
+        run_start = (uint16_t)(i + 1);
+
+        rx_last_ms = now_ms;
+        switch (rx_step(b)) {
+        case RX_PACKET:       esp_comm_process(&rx_packet); break;
+        case RX_BAD_CHECKSUM: esp_comm_send_nak(ESP_ERR_BAD_CHECKSUM); break;
+        case RX_BAD_LENGTH:   esp_comm_send_nak(ESP_ERR_BAD_LENGTH); break;
+        case RX_NONE:         break;
+        }
+    }
+    if (len > run_start && passthrough)
+        passthrough(data + run_start, (uint16_t)(len - run_start), ctx);
 }
 
 const esp_packet_t *esp_comm_get_packet(void)
@@ -141,30 +271,45 @@ const esp_packet_t *esp_comm_get_packet(void)
 
 /* ─── Packet sender ─── */
 
-void esp_comm_send_response(uint8_t cmd, const uint8_t *payload, uint16_t len)
+/* One frame whose payload is two parts sent back to back (a header built on
+ * the stack and samples that live elsewhere), so a 1 KB record is never
+ * copied a second time just to sit behind its header. RAM is ~1.5 KB from
+ * full: there is no room for a contiguous 1048-byte response buffer. */
+static void send_frame2(uint8_t cmd, const uint8_t *a, uint16_t alen,
+                        const uint8_t *b, uint16_t blen)
 {
+    uint16_t len = (uint16_t)(alen + blen);
+    uint8_t hdr[ESP_HEADER_SIZE] = {
+        ESP_SYNC_BYTE, cmd, (uint8_t)(len >> 8), (uint8_t)(len & 0xFF)
+    };
+    uint8_t chk = (uint8_t)(cmd ^ hdr[2] ^ hdr[3]) ^ esp_comm_checksum(a, alen)
+                                                  ^ esp_comm_checksum(b, blen);
+
+    if (block_write) {
+        /* One task writes the whole frame: nothing else can interleave. */
+        block_write(hdr, ESP_HEADER_SIZE);
+        if (alen)
+            block_write(a, alen);
+        if (blen)
+            block_write(b, blen);
+        block_write(&chk, ESP_CHECKSUM_SIZE);
+        return;
+    }
     if (!uart_write) return;
 
-    uint8_t chk = 0;
-
-    uart_write(ESP_SYNC_BYTE);
-
-    uart_write(cmd);
-    chk ^= cmd;
-
-    uart_write((uint8_t)(len >> 8));
-    chk ^= (uint8_t)(len >> 8);
-
-    uart_write((uint8_t)(len & 0xFF));
-    chk ^= (uint8_t)(len & 0xFF);
-
     uint16_t i;
-    for (i = 0; i < len; i++) {
-        uart_write(payload[i]);
-        chk ^= payload[i];
-    }
-
+    for (i = 0; i < ESP_HEADER_SIZE; i++)
+        uart_write(hdr[i]);
+    for (i = 0; i < alen; i++)
+        uart_write(a[i]);
+    for (i = 0; i < blen; i++)
+        uart_write(b[i]);
     uart_write(chk);
+}
+
+void esp_comm_send_response(uint8_t cmd, const uint8_t *payload, uint16_t len)
+{
+    send_frame2(cmd, payload, len, 0, 0);
 }
 
 void esp_comm_send_ack(void)
@@ -179,50 +324,249 @@ void esp_comm_send_nak(uint8_t error_code)
 
 bool esp_comm_transfer_active(void)
 {
+#if ESP_COMM_TRANSFER_STUBS
     return transfer.active;
+#else
+    return false;   /* staging is not compiled in: RAM is ~1.5 KB from full */
+#endif
 }
 
 /* ─── Command handlers ─── */
 
-static void handle_ping(const esp_packet_t *pkt)
+static void snapshot(esp_status_snapshot_t *st)
 {
-    (void)pkt;
-    esp_comm_send_response(ESP_RSP_DATA,
-                           (const uint8_t *)fw_version,
-                           (uint16_t)strlen(fw_version));
+    memset(st, 0, sizeof(*st));
+    st->fw_version = fw_version;
+    if (status_provider)
+        status_provider(st);
+    if (!st->fw_version)
+        st->fw_version = fw_version;
 }
 
+static uint8_t fw_version_len(const char *v)
+{
+    size_t n = strlen(v);
+    return (uint8_t)(n > ESP_FW_VERSION_MAX ? ESP_FW_VERSION_MAX : n);
+}
+
+static void put_u16(uint8_t *p, uint16_t v) { p[0] = (uint8_t)v; p[1] = (uint8_t)(v >> 8); }
+static void put_u32(uint8_t *p, uint32_t v)
+{
+    p[0] = (uint8_t)v; p[1] = (uint8_t)(v >> 8);
+    p[2] = (uint8_t)(v >> 16); p[3] = (uint8_t)(v >> 24);
+}
+
+static void handle_ping(const esp_packet_t *pkt)
+{
+    esp_status_snapshot_t st;
+    (void)pkt;
+    snapshot(&st);
+    esp_comm_send_response(ESP_RSP_DATA, (const uint8_t *)st.fw_version,
+                           fw_version_len(st.fw_version));
+}
+
+/* STATUS v1 — layout documented in esp_comm.h (ESP_STATUS_FIXED_LEN). */
 static void handle_status(const esp_packet_t *pkt)
 {
+    esp_status_snapshot_t st;
+    uint8_t out[ESP_STATUS_FIXED_LEN + ESP_FW_VERSION_MAX];
+    uint8_t n;
     (void)pkt;
-    device_status_t status;
-    memset(&status, 0, sizeof(status));
-    strncpy(status.fw_version, fw_version, sizeof(status.fw_version) - 1);
-    status.current_mode = 0;  /* TODO: get from device state */
-    status.battery_pct = 100; /* TODO: read ADC */
-    status.fw_state = FW_UPDATE_IDLE;
 
-    uint8_t i;
-    for (i = 0; i < ESP_MODULE_SLOT_COUNT; i++) {
-        if (modules[i].installed)
-            status.num_modules++;
-    }
-
-    esp_comm_send_response(ESP_RSP_STATUS,
-                           (const uint8_t *)&status, sizeof(status));
+    snapshot(&st);
+    n = fw_version_len(st.fw_version);
+    out[0] = ESP_PROTO_VERSION;
+    out[1] = st.current_mode;
+    out[2] = st.battery_pct;
+    out[3] = st.flags;
+    put_u16(&out[4], st.battery_mv);
+    put_u32(&out[6], st.uptime_ms);
+    put_u32(&out[10], st.usb_tx_stalls);
+    put_u16(&out[14], st.usb_heals);
+    out[16] = n;
+    memcpy(&out[ESP_STATUS_FIXED_LEN], st.fw_version, n);
+    esp_comm_send_response(ESP_RSP_STATUS, out, (uint16_t)(ESP_STATUS_FIXED_LEN + n));
 }
 
 static void handle_button(const esp_packet_t *pkt)
 {
-    if (pkt->payload_len < 1) {
+    if (pkt->payload_len != 1) {
         esp_comm_send_nak(ESP_ERR_BAD_LENGTH);
         return;
     }
-    /* uint8_t button_id = pkt->payload[0]; */
-    /* TODO: inject into button queue via xQueueSend(xInputQueue, ...) */
+    if (pkt->payload[0] < ESP_BTN_CH1 || pkt->payload[0] > ESP_BTN_POWER) {
+        esp_comm_send_nak(ESP_ERR_BAD_ARG);
+        return;
+    }
+    if (!button_injector) {
+        esp_comm_send_nak(ESP_ERR_UNSUPPORTED);
+        return;
+    }
+    /* ACK only once the press is really queued (§3.7: never report an
+     * action that did not happen). */
+    if (!button_injector(pkt->payload[0])) {
+        esp_comm_send_nak(ESP_ERR_NOT_READY);
+        return;
+    }
     esp_comm_send_ack();
 }
 
+static uint8_t put_str(uint8_t *p, const char *str)
+{
+    size_t n = str ? strlen(str) : 0;
+    if (n > 15) n = 15;
+    p[0] = (uint8_t)n;
+    if (n) memcpy(p + 1, str, n);
+    return (uint8_t)(n + 1);
+}
+
+/* METER_FRAME v1 — layout in esp_comm.h (ESP_METER_FIXED_LEN). */
+static void handle_get_meter(const esp_packet_t *pkt)
+{
+    esp_meter_snapshot_t m;
+    uint8_t out[ESP_METER_FIXED_LEN + 32];
+    uint16_t n = ESP_METER_FIXED_LEN - 1;   /* index of unit_len */
+    uint32_t vbits;
+
+    if (pkt->payload_len != 0) {
+        esp_comm_send_nak(ESP_ERR_BAD_LENGTH);
+        return;
+    }
+    if (!meter_provider) {
+        esp_comm_send_nak(ESP_ERR_UNSUPPORTED);
+        return;
+    }
+    memset(&m, 0, sizeof(m));
+    switch (meter_provider(&m)) {
+    case ESP_METER_OK:
+        break;
+    case ESP_METER_WRONG_MODE:
+        esp_comm_send_nak(ESP_ERR_UNSUPPORTED_IN_MODE);   /* frozen, not live */
+        return;
+    default:
+        esp_comm_send_nak(ESP_ERR_NOT_READY);             /* no reading yet: say so */
+        return;
+    }
+    memcpy(&vbits, &m.value, sizeof(vbits));
+    put_u32(&out[0], m.update_count);
+    put_u32(&out[4], vbits);
+    put_u16(&out[8], (uint16_t)m.raw_bcd);
+    out[10] = m.decimal_pos;
+    out[11] = m.result_class;
+    out[12] = m.flags;
+    out[13] = m.submode;
+    out[14] = m.unit_variant;
+    n = (uint16_t)(n + put_str(&out[n], m.unit));
+    n = (uint16_t)(n + put_str(&out[n], m.display));
+    esp_comm_send_response(ESP_RSP_METER_FRAME, out, n);
+}
+
+/* A measured number goes on the wire only with the confidence that makes it
+ * one: MEASURED or PROVISIONAL, and non-zero. A value the tier disowns (NONE)
+ * is zeroed rather than sent bare — derive the guard, do not trust the
+ * provider to keep the number and its tier in agreement (scope_cal.c). */
+static uint8_t tier_flag(uint8_t tier, uint32_t value, uint8_t measured, uint8_t provisional)
+{
+    if (value == 0)
+        return 0;
+    if (tier == ESP_TIER_MEASURED)
+        return measured;
+    if (tier == ESP_TIER_PROVISIONAL)
+        return provisional;
+    return 0;
+}
+
+static bool wave_channel_ok(const esp_wave_channel_t *ch)
+{
+    return ch->samples != 0 && ch->count != 0 && ch->count <= ESP_WAVE_MAX_SAMPLES;
+}
+
+static void send_wave_channel(const esp_wave_snapshot_t *w, uint8_t c)
+{
+    const esp_wave_channel_t *ch = &w->ch[c];
+    uint8_t hdr[ESP_WAVE_HDR_LEN];
+    uint8_t f = 0;      /* bit0 calibrated stays clear: no per-unit cal exists (§3.5) */
+    uint8_t tb, vd;
+
+    tb = w->timebase_disagrees ? 0      /* the rate belongs to a code not in force */
+                               : tier_flag(w->timebase_tier, w->sample_rate_hz,
+                                           ESP_WAVE_FLAG_TB_MEASURED,
+                                           ESP_WAVE_FLAG_TB_PROVISIONAL);
+    vd = tier_flag(ch->vdiv_tier, ch->uv_per_div,
+                   ESP_WAVE_FLAG_VDIV_MEASURED, ESP_WAVE_FLAG_VDIV_PROVISIONAL);
+    f |= tb | vd;
+    if (w->time_ordered)       f |= ESP_WAVE_FLAG_TIME_ORDERED;
+    if (w->timebase_disagrees) f |= ESP_WAVE_FLAG_TB_DISAGREES;
+
+    put_u32(&hdr[0], w->frame_id);
+    hdr[4] = c;
+    hdr[5] = f;
+    hdr[6] = w->timebase_idx;
+    hdr[7] = ch->vdiv_idx;
+    put_u16(&hdr[8], ch->count);
+    put_u16(&hdr[10], ESP_WAVE_HDR_LEN);
+    put_u32(&hdr[12], tb ? w->sample_rate_hz : 0);
+    put_u32(&hdr[16], vd ? ch->uv_per_div : 0);
+    put_u16(&hdr[20], w->counts_per_div);
+    put_u16(&hdr[22], w->head_skip);
+    send_frame2(ESP_RSP_WAVEFORM_FRAME, hdr, ESP_WAVE_HDR_LEN, ch->samples, ch->count);
+}
+
+/* WAVEFORM_FRAME v1 — layout in esp_comm.h (ESP_WAVE_HDR_LEN). */
+static void handle_get_waveform(const esp_packet_t *pkt)
+{
+    esp_wave_snapshot_t w;
+    uint8_t mask, c;
+
+    if (pkt->payload_len != 1) {
+        esp_comm_send_nak(ESP_ERR_BAD_LENGTH);
+        return;
+    }
+    mask = pkt->payload[0];
+    if (mask == 0 || (mask & (uint8_t)~ESP_WAVE_MASK_ALL) != 0) {
+        esp_comm_send_nak(ESP_ERR_BAD_ARG);
+        return;
+    }
+    if (!wave_provider) {
+        esp_comm_send_nak(ESP_ERR_UNSUPPORTED);
+        return;
+    }
+    memset(&w, 0, sizeof(w));
+    switch (wave_provider(mask, &w)) {
+    case ESP_WAVE_OK:
+        break;
+    case ESP_WAVE_WRONG_MODE:
+        esp_comm_send_nak(ESP_ERR_UNSUPPORTED_IN_MODE);   /* buffers not live outside scope mode */
+        return;
+    case ESP_WAVE_BUSY:
+        esp_comm_send_nak(ESP_ERR_NOT_READY);             /* no tear-free copy: retry */
+        return;
+    default:
+        esp_comm_send_nak(ESP_ERR_NO_CAPTURE_DATA);       /* no capture yet: never the demo trace */
+        return;
+    }
+    /* §2.3: the demo trace (or anything else that is not a capture) is
+     * refused, not sent with a flag the host might ignore. A provider that
+     * says OK and hands over a synthetic record is caught here. */
+    if (w.synthetic || w.frame_id == 0) {
+        esp_comm_send_nak(ESP_ERR_NO_CAPTURE_DATA);       /* refused whole: not a real record */
+        return;
+    }
+    /* All or nothing: check every requested channel before the first byte
+     * goes out, so a host never receives CH1 followed by a refusal. */
+    for (c = 0; c < 2; c++) {
+        if ((mask & (1u << c)) && !wave_channel_ok(&w.ch[c])) {
+            esp_comm_send_nak(ESP_ERR_NO_CAPTURE_DATA);   /* a channel without a record */
+            return;
+        }
+    }
+    for (c = 0; c < 2; c++) {
+        if (mask & (1u << c))
+            send_wave_channel(&w, c);
+    }
+}
+
+#if ESP_COMM_TRANSFER_STUBS
 static void handle_module_start(const esp_packet_t *pkt)
 {
     if (transfer.active) {
@@ -401,6 +745,8 @@ static void handle_fw_update_commit(const esp_packet_t *pkt)
     /* TODO: NVIC_SystemReset() to reboot into bootloader */
 }
 
+#endif /* ESP_COMM_TRANSFER_STUBS */
+
 /* ─── Command dispatcher ─── */
 
 void esp_comm_process(const esp_packet_t *pkt)
@@ -414,6 +760,11 @@ void esp_comm_process(const esp_packet_t *pkt)
     case ESP_CMD_PING:              handle_ping(pkt); break;
     case ESP_CMD_STATUS:            handle_status(pkt); break;
     case ESP_CMD_BUTTON:            handle_button(pkt); break;
+    case ESP_CMD_GET_METER:         handle_get_meter(pkt); break;
+    case ESP_CMD_GET_WAVEFORM:      handle_get_waveform(pkt); break;
+#if ESP_COMM_TRANSFER_STUBS
+    /* ESP32 co-processor staging. The flash writes are still TODO, so these
+     * are compiled only where that is understood (the legacy flow tests). */
     case ESP_CMD_MODULE_START:      handle_module_start(pkt); break;
     case ESP_CMD_MODULE_DATA:       handle_module_data(pkt); break;
     case ESP_CMD_MODULE_END:        handle_module_end(pkt); break;
@@ -422,15 +773,23 @@ void esp_comm_process(const esp_packet_t *pkt)
     case ESP_CMD_FW_UPDATE_START:   handle_fw_update_start(pkt); break;
     case ESP_CMD_FW_UPDATE_DATA:    handle_fw_update_data(pkt); break;
     case ESP_CMD_FW_UPDATE_COMMIT:  handle_fw_update_commit(pkt); break;
-
+#else
+    /* Known commands whose handlers would have ACKed data they then dropped
+     * (flash writes are TODO). A success report for an action that never
+     * happened is the failure mode this project keeps paying for, so they
+     * answer UNSUPPORTED until they are real. */
+    case ESP_CMD_MODULE_START:
+    case ESP_CMD_MODULE_DATA:
+    case ESP_CMD_MODULE_END:
+    case ESP_CMD_MODULE_LIST:
+    case ESP_CMD_MODULE_DELETE:
+    case ESP_CMD_FW_UPDATE_START:
+    case ESP_CMD_FW_UPDATE_DATA:
+    case ESP_CMD_FW_UPDATE_COMMIT:
+#endif
     case ESP_CMD_FRAMEBUFFER:
-        /* TODO: send current framebuffer as multi-packet response */
-        esp_comm_send_ack();
-        break;
-
     case ESP_CMD_SIGNAL_CONFIG:
-        /* TODO: parse signal injection config, apply to signal injector */
-        esp_comm_send_ack();
+        esp_comm_send_nak(ESP_ERR_UNSUPPORTED);
         break;
 
     default:
