@@ -19,7 +19,13 @@
 /* Boot validation counter — must match bootloader's definition */
 #define BOOT_COUNTER_ADDR    ((volatile uint32_t *)0x20037FDC)
 
-/* Hand the chip to the bootloader at 0x08000000 WITHOUT a reset.
+#ifndef GUEST_BUILD
+/* Not in GUEST_BUILD: there 0x08000000 holds FNIRSI's factory IAP, not
+ * OpenScope's HID bootloader. Its vectors pass the sanity check below
+ * (SP 0x20001A08, PC 0x08000265), but it has never been started from a
+ * running, clocked chip, so guest images keep the plain reset.
+ *
+ * Hand the chip to the bootloader at 0x08000000 WITHOUT a reset.
  *
  * On the 2C53T the supply is latched by PC9 (power hold), which the bootloader
  * drives high first thing. A system reset returns PC9 to an input, the latch
@@ -70,10 +76,17 @@ static void dfu_jump_to_bootloader(void)
     for (;;) { }
 }
 
+#endif /* !GUEST_BUILD */
+
 void dfu_request_reboot(void) {
     *DFU_MAGIC_ADDR = DFU_MAGIC_VALUE;
     __DSB();
+#ifdef GUEST_BUILD
+    NVIC_SystemReset();
+    while (1);
+#else
     dfu_jump_to_bootloader();
+#endif
 }
 
 void dfu_check_magic(void) {
