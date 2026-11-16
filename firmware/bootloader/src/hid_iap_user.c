@@ -37,6 +37,7 @@ iap_result_type iap_address(uint8_t *pdata, uint32_t len);
 void iap_finish(void);
 iap_result_type iap_data_write(uint8_t *pdata, uint32_t len);
 void iap_jump(void);
+void boot_target_now(void);   /* main.c */
 void iap_dfu(void);
 void iap_low_flash(uint8_t *pdata, uint32_t len);
 void iap_run_addr(uint8_t *pdata, uint32_t len);
@@ -570,9 +571,14 @@ void iap_loop(void)
   if (iap_info.state == IAP_STS_JMP)
   {
     usb_delay_ms(100);
-    lcd_draw_iap_status("Rebooting...");
+    lcd_draw_iap_status("Booting...");
     usb_delay_ms(200);
-    /* Clean reset — bootloader will find upgrade flag and jump to app */
+    /* Jump straight to the app instead of resetting: a reset releases PC9
+     * (power hold) and the 2C53T switches off (bench, 2026-11-10). Only if
+     * the upgrade flag is set; otherwise, or if the jump is refused, fall
+     * back to the reset. */
+    if (iap_get_upgrade_flag() == IAP_SUCCESS)
+      boot_target_now();
     NVIC_SystemReset();
   }
 

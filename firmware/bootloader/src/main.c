@@ -337,22 +337,27 @@ static void power_button_init(void)
     GPIOC->scr = (1U << 8); /* Pull-up */
 }
 
-/* Check PRM button (PB7) — active LOW, passive */
+/* Check PRM button (PB7) — active HIGH, passive.
+ * The PRM key drives PB7 high when pressed; the app reads it the same way
+ * (button_scan.c: "PB7 passive (active HIGH, pull-down)"). This used to read
+ * it active-LOW with a pull-up, so a released PRM looked pressed: with POWER
+ * held at power-on, every normal boot landed in HID recovery, and pressing
+ * PRM booted the app instead (bench unit, 2026-11-10). */
 static int prm_button_pressed(void)
 {
-    return !(GPIOB->idt & (1U << 7));
+    return (GPIOB->idt & (1U << 7)) != 0;
 }
 
 static void prm_button_init(void)
 {
-    /* PB7 input with pull-up.
+    /* PB7 input with pull-down.
      * PB7 is in GPIOB CRL (pins 0-7), bits [31:28] for pin 7. */
     crm_periph_clock_enable(CRM_GPIOB_PERIPH_CLOCK, TRUE);
     uint32_t cfglr = GPIOB->cfglr;
     cfglr &= ~(0xFU << 28);
     cfglr |= (0x8U << 28);   /* CNF=10 (input pull-up/down), MODE=00 */
     GPIOB->cfglr = cfglr;
-    GPIOB->scr = (1U << 7);  /* Pull-up */
+    GPIOB->clr = (1U << 7);  /* ODR bit 0 = pull-down */
 }
 
 /* ═══════════════════════════════════════════════════════════════════
@@ -390,7 +395,9 @@ static uint32_t boot_target_address(void)
     return FLASH_APP_ADDRESS;
 }
 
-static void boot_target_now(void)
+/* Also called from iap_loop() after a flash: a direct jump keeps PC9 (power
+ * hold) driven, where NVIC_SystemReset() switched the 2C53T off. */
+void boot_target_now(void)
 {
     uint32_t target = boot_target_address();
 
