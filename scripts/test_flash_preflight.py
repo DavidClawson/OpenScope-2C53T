@@ -28,6 +28,29 @@ hid_flash = importlib.util.module_from_spec(HID_SPEC)
 HID_SPEC.loader.exec_module(hid_flash)
 
 
+# Trimmed `ioreg -p IOUSB -l -w0` from a Mac with the scope in HID IAP mode
+# behind a hub. IDs are decimal (11836 = 0x2e3c, 44801 = 0xaf01) and the order
+# of idVendor/idProduct differs between entries.
+IOREG_HID_IAP_BEHIND_HUB = """\
++-o Root  <class IORegistryEntry, id 0x100000100, retain 37>
+  +-o AppleT6000USBXHCI@02000000  <class AppleT6000USBXHCI, id 0x1000004d6>
+  | +-o USB2.0 Hub@02100000  <class IOUSBHostDevice, id 0x10005f9e5>
+  | | {
+  | |   "idVendor" = 8457
+  | |   "idProduct" = 10263
+  | | }
+  | | +-o HID IAP@02110000  <class IOUSBHostDevice, id 0x10005fa19>
+  | |     {
+  | |       "idProduct" = 44801
+  | |       "USB Product Name" = "HID IAP"
+  | |       "idVendor" = 11836
+  | |     }
+  | | +-o STM32 STLink@02140000  <class IOUSBHostDevice, id 0x10005fa3d>
+  | |       "idProduct" = 14152
+  | |       "idVendor" = 1155
+"""
+
+
 def image(sp: int = 0x20037FE0, rv: int = 0x08004040, marker: bytes = b"OpenScope") -> bytes:
     return struct.pack("<II", sp, rv) + marker + b"\x00" * 64
 
@@ -511,6 +534,22 @@ class FlashPreflightTests(unittest.TestCase):
 
         commands = [struct.unpack(">H", write[1:3])[0] for write in dev.writes]
         self.assertEqual(commands, [hid_flash.CMD_CRC, hid_flash.CMD_CRC])
+
+    def test_parse_ioreg_usb_reads_decimal_ids_per_device(self) -> None:
+        self.assertEqual(
+            flash_preflight.parse_ioreg_usb(IOREG_HID_IAP_BEHIND_HUB),
+            [("2109", "2817"), ("2e3c", "af01"), ("0483", "3748")],
+        )
+
+    def test_detect_usb_modes_uses_ioreg_on_macos(self) -> None:
+        with mock.patch.object(flash_preflight.sys, "platform", "darwin"), \
+             mock.patch.object(flash_preflight, "Path", return_value=Path("/nonexistent/sysfs")), \
+             mock.patch.object(flash_preflight.shutil, "which", return_value=None), \
+             mock.patch.object(flash_preflight.subprocess, "check_output",
+                               return_value=IOREG_HID_IAP_BEHIND_HUB) as run:
+            modes = flash_preflight.detect_usb_modes()
+        self.assertEqual(modes, [("af01", "HID_IAP")])
+        self.assertEqual(run.call_args.args[0][:2], ["ioreg", "-p"])
 
 
 if __name__ == "__main__":
