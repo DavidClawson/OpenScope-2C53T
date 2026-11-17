@@ -40,6 +40,17 @@ uint8_t meter_frame_history_head;
 static volatile uint32_t meter_reading_seq;
 static volatile uint8_t meter_writer_lock;
 
+/* The SoC echoed the function word we commanded (fpga.c sets it before each
+ * frame). Then a frame in an AC function IS an AC reading: the 45-65 Hz
+ * "line frequency" evidence below dates from when the SoC sat in its power-on
+ * auto mode and an ACV frame could be a DC one. */
+static volatile bool meter_fn_confirmed;
+
+void meter_data_set_function_confirmed(bool confirmed)
+{
+    meter_fn_confirmed = confirmed;
+}
+
 #ifdef METER_DATA_HOST_TESTS
 static meter_data_test_hook_fn meter_data_test_hook;
 #endif
@@ -970,7 +981,12 @@ static bool apply_stock_dcv_voltage_range_hint(meter_reading_t *r,
 {
     const dcv_stock_class_t *stock_class;
 
-    if (submode != 0) {
+    /* ACV (submode 1) is the same voltage frame family with the same range
+     * bits: unit #2, 2026-11-11, a 60 Hz square read "16320" + frame[8].7 ->
+     * 1.6320 V, as DCV reads 1.6384 V on the same signal. Only with
+     * frame[8].7: the other ranges' per-digit point bits rotate between
+     * frames in ACV (230 V fixtures), so they keep the frame's own point. */
+    if (submode != 0 && !(submode == 1 && (frame[8] & 0x80U))) {
         return false;
     }
 
@@ -1035,7 +1051,12 @@ static bool apply_stock_dcv_decimal_exponent(meter_reading_t *r,
 {
     const dcv_stock_class_t *stock_class;
 
-    if (submode != 0) {
+    /* ACV (submode 1) is the same voltage frame family with the same range
+     * bits: unit #2, 2026-11-11, a 60 Hz square read "16320" + frame[8].7 ->
+     * 1.6320 V, as DCV reads 1.6384 V on the same signal. Only with
+     * frame[8].7: the other ranges' per-digit point bits rotate between
+     * frames in ACV (230 V fixtures), so they keep the frame's own point. */
+    if (submode != 0 && !(submode == 1 && (frame[8] & 0x80U))) {
         return false;
     }
 
@@ -1214,6 +1235,7 @@ static void format_reading(meter_reading_t *r, uint8_t submode)
 
 void meter_data_init(void)
 {
+    meter_fn_confirmed = false;
     meter_reading_seq = 0;
     meter_writer_lock = 0;
     memset(&meter_reading, 0, sizeof(meter_reading));
@@ -1560,7 +1582,7 @@ void meter_data_process_frame(const volatile uint8_t *frame, uint8_t submode)
         return;
     }
 
-    if (submode_requires_ac_evidence(submode) &&
+    if (submode_requires_ac_evidence(submode) && !meter_fn_confirmed &&
         !frame_has_ac_evidence(submode, status, extra)) {
         r->reject_reason = METER_REJECT_MISSING_AC_EVIDENCE;
         METER_REJECT_FRAME();
@@ -1655,12 +1677,16 @@ void meter_data_process_frame(const volatile uint8_t *frame, uint8_t submode)
     uint8_t d2 = digit2;
     uint8_t d3 = digit3;
 
-    if (submode != 0 && submode != 6 && submode != 7 && (frame[2] & 0x08U) != 0U) {
+    if (submode != 0 && submode != 1 &&
+        submode != 6 && submode != 7 && (frame[2] & 0x08U) != 0U) {
         /*
          * frame[2].3 is the leading "1" of the 5-digit display (+10000 raw).
          * Proven in DCV (stock formatter) and, since 2026-10-03, in resistance
          * (@saulvalenzuela23 #37: 100.65 Ohm = 0xEC with digits "00.65"),
-         * where format_5digit() below shows it. Elsewhere it stays refused:
+         * where format_5digit() below shows it, and (2026-11-11, unit #2)
+         * in ACV: 1.6320 V on a 60 Hz 0-3.3 V square (2 V range), and
+         * mains "20.97" + leading 1 = 120.97 V (Fluke 121.3 V).
+         * Elsewhere it stays refused:
          * a 4-digit display with a silent +10000 is the mismatch this guards.
          */
         r->reject_reason = METER_REJECT_UNSUPPORTED_EXTENSION;
@@ -1696,13 +1722,23 @@ void meter_data_process_frame(const volatile uint8_t *frame, uint8_t submode)
          submode_requires_ac_evidence(submode)) &&
         frame_extra_is_empirical_line_frequency_hint(extra)) {
         r->aux_freq_hz = (float)extra;
+    } else if (submode == 1 && meter_fn_confirmed && extra != 0U) {
+        /* rx[10..11] is the SoC's frequency in Hz in ACV (60 Hz -> 0x003C,
+         * 1 kHz -> 0x03E9 on unit #2), as stock prints it in Auto. */
+        r->aux_freq_hz = (float)extra;
     }
 
     /* Format the display string and compute float value */
     r->result_class = METER_RESULT_NORMAL;
     r->continuity_beep = false;
     format_reading(r, submode);
-    (void)apply_stock_dcv_decimal_exponent(r, submode, frame);
+    if (!apply_stock_dcv_decimal_exponent(r, submode, frame) &&
+        submode == 1 && r->bcd_value >= 10000 &&
+        r->decimal_pos >= 1 && r->decimal_pos <= 3) {
+        /* ACV above the 2 V range: the leading 1 goes in front of the
+         * frame's own point ("20.97" + 1 -> 120.97 V on mains, unit #2). */
+        format_5digit(r, (uint8_t)(4u - r->decimal_pos));
+    }
     if (submode != 0 && r->decimal_pos == 0) {
         /* format_reading()'s divisor treats position 0 as four decimals and
          * leaves DCV to the class path above; outside DCV, no point means the
