@@ -77,7 +77,7 @@
 | PC5 | Button matrix row | Input | Pull-up | -- | `peripheral_map.md`; `input_and_housekeeping` | Down button row pin |
 | PC6 | FPGA SPI enable | Output | Push-pull | 50 MHz | `FPGA_BOOT_SEQUENCE.md` step 19; set via GPIOC_BOP = (1<<6) | Must be HIGH for SPI3 to communicate with FPGA |
 | PC7 | Probe detect | Input | Pull-up | -- | `FPGA_TASK_ANALYSIS.md` USART cmd 0x07 | HIGH = probe detected |
-| PC8 | Unknown | -- | -- | -- | | |
+| PC8 | Power key sense | Input | -- | -- | Factory IAP bootloader `main` at 0x08002938 (static, `analysis_v120/factory_iap_bootloader_usb_update_path_2026-11-20.md`) | Reads LOW while Power is pressed. Bootloader view only: it waits for HIGH before starting USB and clears PC9 when it sees LOW again. The V1.2.0 app also tests this bit (e.g. 0x0802B3BA), purpose not analysed |
 | PC9 | Power hold | Output | Push-pull | 50 MHz | `main.c` line 281; `FPGA_BOOT_SEQUENCE.md` step 2 | **Must be HIGH immediately at boot or device shuts off** |
 | PC10 | Button matrix row | Input | Pull-up | -- | `peripheral_map.md`; `input_and_housekeeping` | Auto button row; also GPIOC IDR bit 10 scanned for Group 3 buttons |
 | PC11 | Unknown | -- | -- | -- | | |
@@ -632,7 +632,7 @@ The following MCU pins have no identified function from decompilation or hardwar
 
 **GPIOA:** PA0, PA1, PA4, PA5, PA6 (PA4/PA5 may be DAC outputs)
 **GPIOB:** PB1, PB2
-**GPIOC:** PC1, PC2, PC3, PC4, PC8, PC11, PC13, PC14, PC15
+**GPIOC:** PC1, PC2, PC3, PC4, PC11, PC13, PC14, PC15
 **GPIOD:** PD2, PD3, PD6
 **GPIOE:** PE0, PE1
 
