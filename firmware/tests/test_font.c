@@ -14,10 +14,17 @@
 static unsigned long px_writes = 0;
 static unsigned short px_max_x = 0;
 static unsigned short win_x = 0, win_w = 0;
+/* Columns an opaque draw owns: the glyph window plus any lcd_fill_rect().
+ * Fills are not counted in px_writes, so the pixel-count comparisons below
+ * keep measuring glyph pixels only. */
+static unsigned char col_owned[LCD_WIDTH];
+static void cols_mark(unsigned short x, unsigned short w) { for (unsigned i = x; i < (unsigned)x + w && i < LCD_WIDTH; i++) col_owned[i] = 1; }
+static void cols_reset(void) { memset(col_owned, 0, sizeof(col_owned)); }
 void lcd_set_pixel(unsigned short x, unsigned short y, unsigned short c) { (void)y; (void)c; px_writes++; if (x > px_max_x) px_max_x = x; }
-void lcd_set_window(unsigned short x, unsigned short y, unsigned short w, unsigned short h) { (void)y; (void)h; win_x = x; win_w = w; if (w && x + w - 1 > px_max_x) px_max_x = x + w - 1; }
+void lcd_set_window(unsigned short x, unsigned short y, unsigned short w, unsigned short h) { (void)y; (void)h; win_x = x; win_w = w; cols_mark(x, w); if (w && x + w - 1 > px_max_x) px_max_x = x + w - 1; }
 void lcd_write_data(unsigned short d) { (void)d; px_writes++; }
 static void px_reset(void) { px_writes = 0; px_max_x = 0; win_x = win_w = 0; }
+void lcd_fill_rect(unsigned short x, unsigned short y, unsigned short w, unsigned short h, unsigned short c) { (void)y; (void)h; (void)c; cols_mark(x, w); }
 
 #include "font.h"
 
@@ -129,6 +136,42 @@ static void test_right_aligned_edge_label(void)
     ASSERT(dropped >= 1, "old rule would not have reproduced the bench defect");
 }
 
+/* An opaque string owns every column from its start to start + width.
+ *
+ * Bench, 2026-11-09: the FFT peak readout, redrawn in place each frame with a
+ * changing value, read "500'5kHz": opaque glyphs wrote only glyph_w columns
+ * but advanced by `advance`, so the gap columns kept the previous string's
+ * pixels. The negative control counts the columns the glyph windows alone
+ * cover and shows they leave holes for this very string. */
+static void test_opaque_owns_gaps(void)
+{
+    const char *lbl = "500.5kHz";
+    const uint16_t x0 = 40;
+
+    cols_reset();
+    uint16_t w = font_draw_string(x0, 0, lbl, 0xFFFF, 0x0000, &font_small);
+    int holes = 0;
+    for (uint16_t x = x0; x < x0 + w; x++) if (!col_owned[x]) holes++;
+    TEST("opaque string paints every column it spans");
+    ASSERT(holes == 0 && w > 0, "gap columns between glyphs left unwritten");
+
+    cols_reset();
+    font_draw_string(x0, 0, lbl, 0xFFFF, 0xFFFF, &font_small);
+    int touched = 0;
+    for (uint16_t x = 0; x < LCD_WIDTH; x++) touched += col_owned[x];
+    TEST("transparent string writes no background");
+    ASSERT(touched == 0, "transparent draw filled background");
+
+    /* Negative control: glyph windows alone (the old behaviour). */
+    int old_holes = 0;
+    for (const char *c = lbl; *c; c++) {
+        uint8_t i = font_small.charmap[*c - font_small.first_char];
+        old_holes += font_small.advances[i] - font_small.widths[i];
+    }
+    TEST("negative control: glyph windows alone leave gaps");
+    ASSERT(old_holes > 0, "old rule would not have reproduced the bench defect");
+}
+
 int main(void)
 {
     printf("=== Font System Tests ===\n\n");
@@ -147,6 +190,9 @@ int main(void)
 
     printf("\n[Edge clipping]\n");
     test_right_aligned_edge_label();
+
+    printf("\n[Opaque background]\n");
+    test_opaque_owns_gaps();
 
     printf("\n=== Results: %d/%d passed ===\n", tests_passed, tests_run);
     return (tests_passed == tests_run) ? 0 : 1;

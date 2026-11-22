@@ -2727,10 +2727,55 @@ static float fft_display_ref(const fft_config_t *cfg, const float *data,
     return fft_ref_tracked + cfg->ref_level_db;
 }
 
+/*
+ * Flicker-free repaint (2026-11-09). There is no frame buffer: every pixel
+ * the LCD shows was last written directly. The old version blanked the whole
+ * region and then drew bars, grid, labels and tags on top, so every element
+ * spent most of a frame erased -- the flicker seen on the bench. Now:
+ *   - each column is painted in ONE pass (black above the bar, the bar below),
+ *     and its grid dots are set in the same pass;
+ *   - the header strip is never touched by the column pass; its text is drawn
+ *     OPAQUE on black, so re-drawing it writes the same pixels;
+ *   - every overlay (dB labels, peak markers and tags, axis labels) is drawn
+ *     as soon as the columns under it have been repainted, so it is erased
+ *     for the time of a few column writes, not for a frame.
+ * Writing a pixel with the value it already has is invisible; that is the
+ * whole trick.
+ */
+#define FFT_OVL_MAX 14
+typedef struct {
+    uint16_t x_end;          /* draw once column x_end has been repainted */
+    uint8_t  kind;           /* 0 dB label, 1 peak marker, 2 peak tag, 3 axis label */
+    uint16_t x, y;
+    char     text[12];
+} fft_overlay_t;
+
+static void fft_draw_overlay(const fft_overlay_t *o)
+{
+    switch (o->kind) {
+    case 0:
+        font_draw_string(o->x, o->y, o->text, COLOR_GRAY, COLOR_BLACK, &font_small);
+        break;
+    case 1:
+        lcd_set_pixel(o->x, o->y - 3, COLOR_RED);
+        lcd_set_pixel(o->x - 1, o->y - 2, COLOR_RED);
+        lcd_set_pixel(o->x, o->y - 2, COLOR_RED);
+        lcd_set_pixel(o->x + 1, o->y - 2, COLOR_RED);
+        break;
+    case 2:
+        font_draw_string(o->x, o->y, o->text, COLOR_ORANGE, COLOR_ORANGE, &font_small);
+        break;
+    default:   /* axis label: opaque, see draw_fft_axis_labels() */
+        font_draw_string(o->x, o->y, o->text, COLOR_WHITE, COLOR_BLACK, &font_small);
+        break;
+    }
+}
+
 static void draw_fft_region(uint16_t y_top, uint16_t height)
 {
     const fft_config_t *cfg = fft_get_config();
     uint16_t y_bot = y_top + height;
+    const uint16_t hdr_bot = (uint16_t)(y_top + 2 + font_small.height + 1);
 
     int16_t *sbuf = fft_get_sample_buf();
     if (!sbuf) return;  /* FFT not initialized */
@@ -2738,6 +2783,7 @@ static void draw_fft_region(uint16_t y_top, uint16_t height)
     float fs = 0.0f;
     fft_src_t src = fft_prepare_input(sbuf, &nsamp, &fs);
     if (src == FFT_SRC_NONE || nsamp == 0) {
+        lcd_fill_rect(0, y_top, LCD_WIDTH, height, COLOR_BLACK);
         font_draw_string(4, y_top + 2, "FFT: waiting for capture",
                          COLOR_GRAY, COLOR_GRAY, &font_small);
         return;
@@ -2759,102 +2805,7 @@ static void draw_fft_region(uint16_t y_top, uint16_t height)
     float ref_db = fft_display_ref(cfg, draw_data, zoom_start, zoom_end);
     float range_db = cfg->db_range;
 
-    for (x = 0; x < LCD_WIDTH; x++) {
-        uint16_t bin = zoom_start + (uint16_t)((uint32_t)x * zoom_span / LCD_WIDTH);
-        if (bin >= FFT_BINS) bin = FFT_BINS - 1;
-
-        float db = draw_data[bin];
-        float normalized = (ref_db - db) / range_db;
-        if (normalized < 0.0f) normalized = 0.0f;
-        if (normalized > 1.0f) normalized = 1.0f;
-
-        uint16_t bar_top = y_top + (uint16_t)(normalized * (float)height);
-        if (bar_top < y_bot) {
-            uint16_t color;
-            if (normalized < 0.25f) color = COLOR_CH1;
-            else if (normalized < 0.5f) color = COLOR_GREEN;
-            else if (normalized < 0.75f) color = COLOR_CYAN;
-            else color = COLOR_GRID;
-            lcd_fill_rect(x, bar_top, 1, y_bot - bar_top, color);
-        }
-
-        if (fft_result.max_hold_db != NULL) {
-            float mh_norm = (ref_db - fft_result.max_hold_db[bin]) / range_db;
-            if (mh_norm >= 0.0f && mh_norm <= 1.0f) {
-                uint16_t mh_y = y_top + (uint16_t)(mh_norm * (float)height);
-                if (mh_y >= y_top && mh_y < y_bot && (x & 1) == 0)
-                    lcd_set_pixel(x, mh_y, COLOR_RED);
-            }
-        }
-    }
-
-    /* Horizontal grid lines (every 10dB) */
-    float db;
-    for (db = ref_db; db > ref_db - range_db; db -= 10.0f) {
-        float normalized = (ref_db - db) / range_db;
-        uint16_t y = y_top + (uint16_t)(normalized * (float)height);
-        if (y > y_top && y < y_bot)
-            for (x = 0; x < LCD_WIDTH; x += 4)
-                lcd_set_pixel(x, y, COLOR_GRID);
-    }
-
-    if (height > 80) {
-        for (db = ref_db; db > ref_db - range_db; db -= 20.0f) {
-            float normalized = (ref_db - db) / range_db;
-            uint16_t y = y_top + (uint16_t)(normalized * (float)height);
-            if (y > y_top + 8 && y < y_bot - 8) {
-                int db_int = (int)db;
-                char label[8];
-                int pos = 0;
-                if (db_int < 0) { label[pos++] = '-'; db_int = -db_int; }
-                if (db_int >= 100) label[pos++] = (char)('0' + db_int / 100);
-                if (db_int >= 10)  label[pos++] = (char)('0' + (db_int / 10) % 10);
-                label[pos++] = (char)('0' + db_int % 10);
-                label[pos] = '\0';
-                font_draw_string(2, y - 5, label, COLOR_GRAY, COLOR_BLACK, &font_small);  /* opaque: see draw_fft_axis_labels */
-            }
-        }
-    }
-
-    uint8_t p;
-    for (p = 0; p < fft_result.num_peaks && p < 3; p++) {
-        uint16_t peak_bin = fft_result.peaks[p].bin;
-        if (peak_bin < zoom_start || peak_bin > zoom_end) continue;
-
-        uint16_t peak_x = (uint16_t)((uint32_t)(peak_bin - zoom_start)
-                          * LCD_WIDTH / zoom_span);
-        float norm = (ref_db - fft_result.peaks[p].level_db) / range_db;
-        if (norm < 0.0f) norm = 0.0f;
-        uint16_t peak_y = y_top + (uint16_t)(norm * (float)height);
-
-        if (peak_y >= y_top + 4 && peak_x > 2 && peak_x < LCD_WIDTH - 2) {
-            lcd_set_pixel(peak_x, peak_y - 3, COLOR_RED);
-            lcd_set_pixel(peak_x - 1, peak_y - 2, COLOR_RED);
-            lcd_set_pixel(peak_x, peak_y - 2, COLOR_RED);
-            lcd_set_pixel(peak_x + 1, peak_y - 2, COLOR_RED);
-        }
-
-        /* The per-peak harmonic tags ("Fund", "H2", ...) are RATIOS between
-         * bins, so they stay true whatever the sample rate turns out to be —
-         * unlike an absolute Hz figure, which is why one is drawn here and
-         * the other is not. */
-        if (fft_result.peaks[p].label[0] != '\0' && peak_x > 8 && peak_x < LCD_WIDTH - 30) {
-            /* Keep the tag below the source/peak header, which occupies
-             * y_top + 2 .. y_top + 2 + font height. The tallest peak reaches
-             * the headroom line just under the header, so its tag sat on top
-             * of "LIVE CH1 pk ..." on the bench (2026-09-22). */
-            int16_t tag_y = (int16_t)peak_y - 12;
-            int16_t tag_min = (int16_t)y_top + 2 + (int16_t)font_small.height + 1;
-            if (tag_y < tag_min) tag_y = tag_min;
-            font_draw_string(peak_x - 8, (uint16_t)tag_y,
-                             fft_result.peaks[p].label, COLOR_ORANGE, COLOR_ORANGE, &font_small);
-        }
-    }
-
-    /* Source + peak header. The peak is quoted in Hz only when the sample
-     * rate is known — the demo signal's by construction, the live record's
-     * when the timebase code in force is a measured one (fft_live_axis_known).
-     * Otherwise it is quoted as a bin index, which needs no rate to be true. */
+    /* ── Header strip: opaque text on black, never touched below ── */
     {
         char hdr[40];
         char freq_str[16];
@@ -2870,39 +2821,172 @@ static void draw_fft_region(uint16_t y_top, uint16_t height)
             snprintf(hdr, sizeof(hdr), "%s  pk bin %u  --", tag,
                      (unsigned)fft_result.peaks[0].bin);
         }
-        font_draw_string(4, y_top + 2, hdr, color, color, &font_small);
+        const char *win_names[] = { "Rect", "Hann", "Hamm", "BHar", "Flat" };
+        const char *win_name = (cfg->window < FFT_WINDOW_COUNT)
+                               ? win_names[cfg->window] : "?";
+        const uint16_t hw = font_string_width(hdr, &font_small);
+        const uint16_t ww = font_string_width(win_name, &font_small);
+        const uint16_t wx = (uint16_t)(LCD_WIDTH - 4 - ww);
+
+        lcd_fill_rect(0, y_top, LCD_WIDTH, 2, COLOR_BLACK);
+        lcd_fill_rect(0, y_top + 2, 4, font_small.height, COLOR_BLACK);
+        font_draw_string(4, y_top + 2, hdr, color, COLOR_BLACK, &font_small);
+        if (4 + hw < wx)
+            lcd_fill_rect(4 + hw, y_top + 2, wx - 4 - hw, font_small.height, COLOR_BLACK);
+        font_draw_string(wx, y_top + 2, win_name, COLOR_GRAY, COLOR_BLACK, &font_small);
+        lcd_fill_rect(wx + ww, y_top + 2, LCD_WIDTH - wx - ww, font_small.height, COLOR_BLACK);
+        lcd_fill_rect(0, y_top + 2 + font_small.height, LCD_WIDTH, 1, COLOR_BLACK);
     }
 
-    if (height > 80)
-        draw_fft_axis_labels(y_bot, fs, zoom_start, zoom_end);
+    /* ── Grid rows (every 10 dB), and the overlays, laid out up front ── */
+    uint16_t grid_y[16];
+    uint8_t n_grid = 0;
+    fft_overlay_t ovl[FFT_OVL_MAX];
+    uint8_t n_ovl = 0;
+    float db;
+    for (db = ref_db; db > ref_db - range_db && n_grid < 16; db -= 10.0f) {
+        float normalized = (ref_db - db) / range_db;
+        uint16_t y = y_top + (uint16_t)(normalized * (float)height);
+        if (y >= hdr_bot && y < y_bot)
+            grid_y[n_grid++] = y;
+    }
 
-    const char *win_names[] = { "Rect", "Hann", "Hamm", "BHar", "Flat" };
-    const char *win_name = (cfg->window < FFT_WINDOW_COUNT)
-                           ? win_names[cfg->window] : "?";
-    font_draw_string_right(LCD_WIDTH - 4, y_top + 2, win_name,
-                           COLOR_GRAY, COLOR_GRAY, &font_small);
+    if (height > 80) {
+        for (db = ref_db; db > ref_db - range_db; db -= 20.0f) {
+            float normalized = (ref_db - db) / range_db;
+            uint16_t y = y_top + (uint16_t)(normalized * (float)height);
+            if (y > hdr_bot + 5 && y < y_bot - 8 && n_ovl < FFT_OVL_MAX) {
+                fft_overlay_t *o = &ovl[n_ovl++];
+                int db_int = (int)db;
+                int pos = 0;
+                if (db_int < 0) { o->text[pos++] = '-'; db_int = -db_int; }
+                if (db_int >= 100) o->text[pos++] = (char)('0' + db_int / 100);
+                if (db_int >= 10)  o->text[pos++] = (char)('0' + (db_int / 10) % 10);
+                o->text[pos++] = (char)('0' + db_int % 10);
+                o->text[pos] = '\0';
+                o->kind = 0; o->x = 2; o->y = (uint16_t)(y - 5);
+                o->x_end = (uint16_t)(2 + font_string_width(o->text, &font_small));
+            }
+        }
+    }
+
+    uint8_t p;
+    for (p = 0; p < fft_result.num_peaks && p < 3; p++) {
+        uint16_t peak_bin = fft_result.peaks[p].bin;
+        if (peak_bin < zoom_start || peak_bin > zoom_end) continue;
+
+        uint16_t peak_x = (uint16_t)((uint32_t)(peak_bin - zoom_start)
+                          * LCD_WIDTH / zoom_span);
+        float norm = (ref_db - fft_result.peaks[p].level_db) / range_db;
+        if (norm < 0.0f) norm = 0.0f;
+        uint16_t peak_y = y_top + (uint16_t)(norm * (float)height);
+
+        if (peak_y >= hdr_bot + 3 && peak_x > 2 && peak_x < LCD_WIDTH - 2 &&
+            n_ovl < FFT_OVL_MAX) {
+            fft_overlay_t *o = &ovl[n_ovl++];
+            o->kind = 1; o->x = peak_x; o->y = peak_y;
+            o->x_end = (uint16_t)(peak_x + 1);
+            o->text[0] = '\0';
+        }
+
+        /* The per-peak harmonic tags ("Fund", "H2", ...) are RATIOS between
+         * bins, so they stay true whatever the sample rate turns out to be --
+         * unlike an absolute Hz figure, which is why one is drawn here and
+         * the other is not. Kept below the header strip. */
+        if (fft_result.peaks[p].label[0] != '\0' && peak_x > 8 &&
+            peak_x < LCD_WIDTH - 30 && n_ovl < FFT_OVL_MAX) {
+            int16_t tag_y = (int16_t)peak_y - 12;
+            if (tag_y < (int16_t)hdr_bot) tag_y = (int16_t)hdr_bot;
+            fft_overlay_t *o = &ovl[n_ovl++];
+            o->kind = 2; o->x = (uint16_t)(peak_x - 8); o->y = (uint16_t)tag_y;
+            strncpy(o->text, fft_result.peaks[p].label, sizeof(o->text) - 1);
+            o->text[sizeof(o->text) - 1] = '\0';
+            uint16_t w = font_string_width(o->text, &font_small);
+            o->x_end = (uint16_t)(o->x + w);
+            if (o->x_end >= LCD_WIDTH) o->x_end = LCD_WIDTH - 1;
+        }
+    }
+
+    if (height > 80) {
+        /* Frequency-axis end labels (same text as draw_fft_axis_labels). */
+        for (uint8_t side = 0; side < 2 && n_ovl < FFT_OVL_MAX; side++) {
+            fft_overlay_t *o = &ovl[n_ovl++];
+            fft_live_axis_label(fs, FFT_SIZE, side ? zoom_end : zoom_start,
+                                o->text, sizeof(o->text));
+            uint16_t w = font_string_width(o->text, &font_small);
+            o->kind = 3;
+            o->y = (uint16_t)(y_bot - 10);
+            o->x = side ? (uint16_t)(LCD_WIDTH - 2 - w) : 2u;
+            o->x_end = side ? (uint16_t)(LCD_WIDTH - 1) : (uint16_t)(2 + w);
+        }
+    }
+
+    /* ── One pass over the columns ── */
+    const uint16_t col_top = hdr_bot;
+    for (x = 0; x < LCD_WIDTH; x++) {
+        uint16_t bin = zoom_start + (uint16_t)((uint32_t)x * zoom_span / LCD_WIDTH);
+        if (bin >= FFT_BINS) bin = FFT_BINS - 1;
+
+        float dbv = draw_data[bin];
+        float normalized = (ref_db - dbv) / range_db;
+        if (normalized < 0.0f) normalized = 0.0f;
+        if (normalized > 1.0f) normalized = 1.0f;
+
+        uint16_t bar_top = y_top + (uint16_t)(normalized * (float)height);
+        if (bar_top < col_top) bar_top = col_top;
+        if (bar_top > col_top)
+            lcd_fill_rect(x, col_top, 1, (uint16_t)(bar_top - col_top), COLOR_BLACK);
+        if (bar_top < y_bot) {
+            uint16_t color;
+            if (normalized < 0.25f) color = COLOR_CH1;
+            else if (normalized < 0.5f) color = COLOR_GREEN;
+            else if (normalized < 0.75f) color = COLOR_CYAN;
+            else color = COLOR_GRID;
+            lcd_fill_rect(x, bar_top, 1, y_bot - bar_top, color);
+        }
+
+        if ((x & 3u) == 0u)
+            for (uint8_t g = 0; g < n_grid; g++)
+                lcd_set_pixel(x, grid_y[g], COLOR_GRID);
+
+        if (fft_result.max_hold_db != NULL) {
+            float mh_norm = (ref_db - fft_result.max_hold_db[bin]) / range_db;
+            if (mh_norm >= 0.0f && mh_norm <= 1.0f) {
+                uint16_t mh_y = y_top + (uint16_t)(mh_norm * (float)height);
+                if (mh_y >= col_top && mh_y < y_bot && (x & 1) == 0)
+                    lcd_set_pixel(x, mh_y, COLOR_RED);
+            }
+        }
+
+        for (uint8_t i = 0; i < n_ovl; i++)
+            if (ovl[i].x_end == x)
+                fft_draw_overlay(&ovl[i]);
+    }
 }
 
 void draw_fft_screen(void)
 {
-    lcd_fill_rect(0, SCOPE_TOP, LCD_WIDTH, SCOPE_H, COLOR_BLACK);
+    /* Only the 2-px margins are blanked here; draw_fft_region() repaints
+     * every column of its own area in one pass (no full-area clear, which
+     * flickered at the redraw rate). */
+    lcd_fill_rect(0, SCOPE_TOP, LCD_WIDTH, 2, COLOR_BLACK);
+    lcd_fill_rect(0, SCOPE_TOP + SCOPE_H - 2, LCD_WIDTH, 2, COLOR_BLACK);
     draw_fft_region(SCOPE_TOP + 2, SCOPE_H - 4);
 }
 
 void draw_split_screen(uint32_t frame)
 {
-    lcd_fill_rect(0, SCOPE_TOP, LCD_WIDTH, SCOPE_H, COLOR_BLACK);
-
+    /* Flicker-free like draw_fft_region(): nothing is blanked ahead of time.
+     * Each column of the top band is painted in one pass -- black, its grid
+     * dots, the centre line, the trace pixel -- so no column is ever shown
+     * empty for longer than its own few writes. The old version cleared the
+     * whole split area every frame and flickered hard on the bench
+     * (2026-11-09). */
     uint16_t scope_top = SCOPE_TOP;
     uint16_t scope_bot = SCOPE_TOP + SCOPE_H / 2 - 1;
     uint16_t scope_mid = (scope_top + scope_bot) / 2;
+    uint16_t band_h = (uint16_t)(scope_bot - scope_top);
     uint16_t x;
-
-    for (x = 0; x < LCD_WIDTH; x += 32)
-        for (uint16_t y = scope_top; y < scope_bot; y += 2)
-            lcd_set_pixel(x, y, COLOR_GRID);
-    for (x = 0; x < LCD_WIDTH; x++)
-        lcd_set_pixel(x, scope_mid, COLOR_GRID_CENTER);
 
     /* Top half: the real CH1 record when there is one. Half-height, so the
      * same y-transform as the full trace with SCOPE_H replaced by the band
@@ -2910,28 +2994,36 @@ void draw_split_screen(uint32_t frame)
     const volatile uint8_t *b1 = fpga_get_ch1_buf();
     bool trace_live = fpga_data_ready() && b1 != NULL;
 
-    if (trace_live) {
-        uint16_t band_h = (uint16_t)(scope_bot - scope_top);
-        /* Start past the invalid head (scope_record.h), like the trace. */
-        for (x = 0; x < LCD_WIDTH && x + SCOPE_RECORD_HEAD_SKIP < FPGA_ADC_BUF_SIZE; x++) {
-            int16_t wy = (int16_t)scope_mid -
-                         (int16_t)(((int16_t)b1[x + SCOPE_RECORD_HEAD_SKIP] - 128) * band_h / 256);
-            if (wy >= (int16_t)scope_top && wy < (int16_t)scope_bot)
-                lcd_set_pixel(x, (uint16_t)wy, COLOR_CH1);
-        }
-    } else {
-        static const int8_t sin_lut[64] = {
-             0, 10, 19, 29, 38, 47, 56, 63, 71, 77, 83, 88, 92, 96, 98, 99,
-            100, 99, 98, 96, 92, 88, 83, 77, 71, 63, 56, 47, 38, 29, 19, 10,
-             0,-10,-19,-29,-38,-47,-56,-63,-71,-77,-83,-88,-92,-96,-98,-99,
-           -100,-99,-98,-96,-92,-88,-83,-77,-71,-63,-56,-47,-38,-29,-19,-10,
-        };
-        for (x = 0; x < LCD_WIDTH; x++) {
+    static const int8_t sin_lut[64] = {
+         0, 10, 19, 29, 38, 47, 56, 63, 71, 77, 83, 88, 92, 96, 98, 99,
+        100, 99, 98, 96, 92, 88, 83, 77, 71, 63, 56, 47, 38, 29, 19, 10,
+         0,-10,-19,-29,-38,-47,-56,-63,-71,-77,-83,-88,-92,-96,-98,-99,
+       -100,-99,-98,-96,-92,-88,-83,-77,-71,-63,-56,-47,-38,-29,-19,-10,
+    };
+
+    for (x = 0; x < LCD_WIDTH; x++) {
+        /* rows scope_top .. scope_bot inclusive; divider_y is drawn below */
+        lcd_fill_rect(x, scope_top, 1, (uint16_t)(band_h + 1), COLOR_BLACK);
+        if ((x & 31u) == 0u)
+            for (uint16_t y = scope_top; y < scope_bot; y += 2)
+                lcd_set_pixel(x, y, COLOR_GRID);
+        lcd_set_pixel(x, scope_mid, COLOR_GRID_CENTER);
+
+        int16_t wy;
+        if (trace_live) {
+            /* Start past the invalid head (scope_record.h), like the trace. */
+            if (x + SCOPE_RECORD_HEAD_SKIP >= FPGA_ADC_BUF_SIZE)
+                continue;
+            wy = (int16_t)scope_mid -
+                 (int16_t)(((int16_t)b1[x + SCOPE_RECORD_HEAD_SKIP] - 128) * band_h / 256);
+        } else {
             uint8_t idx = (uint8_t)((x * 4 + frame) & 0x3F);
-            int16_t wy = scope_mid - (sin_lut[idx] * 25 / 100);
-            if (wy >= (int16_t)scope_top && wy < (int16_t)scope_bot)
-                lcd_set_pixel(x, (uint16_t)wy, COLOR_CH1);
+            wy = (int16_t)(scope_mid - (sin_lut[idx] * 25 / 100));
         }
+        if (wy >= (int16_t)scope_top && wy < (int16_t)scope_bot)
+            lcd_set_pixel(x, (uint16_t)wy, COLOR_CH1);
+    }
+    if (!trace_live) {
         /* An animated sine that no probe produced. Say so. */
         font_draw_string(4, scope_top + 2, "DEMO TRACE",
                          COLOR_ORANGE, COLOR_ORANGE, &font_small);
@@ -2941,7 +3033,14 @@ void draw_split_screen(uint32_t frame)
     for (x = 0; x < LCD_WIDTH; x++)
         lcd_set_pixel(x, divider_y, COLOR_GRID_CENTER);
 
-    draw_fft_region(divider_y + 1, SCOPE_H / 2 - 2);
+    /* draw_fft_region() repaints its own rows; blank only what lies below
+     * it (the old full clear covered these too). */
+    const uint16_t fft_top = (uint16_t)(divider_y + 1);
+    const uint16_t fft_h = (uint16_t)(SCOPE_H / 2 - 2);
+    draw_fft_region(fft_top, fft_h);
+    if (fft_top + fft_h < SCOPE_TOP + SCOPE_H)
+        lcd_fill_rect(0, (uint16_t)(fft_top + fft_h), LCD_WIDTH,
+                      (uint16_t)(SCOPE_TOP + SCOPE_H - fft_top - fft_h), COLOR_BLACK);
 }
 
 /* Waterfall
