@@ -13,27 +13,27 @@
 #define M_PI 3.14159265358979323846f
 #endif
 
-/* Static state for active Bode measurement */
-static bode_config_t s_config;
-static bode_result_t s_result;
+/* No module-level state. This file used to keep its own s_config and a
+ * 2420-byte s_result that bode_init() filled and nothing ever read: the only
+ * caller (bode_ui.c) keeps its own bode_result_t and wrote every point into
+ * THAT, so the module copy was a second, dead 2.4 KB of .bss (RAM diet,
+ * 2026-11-11). The result now lives with its owner and is passed in. */
 
 /* ========================================================================
- * bode_init — Initialize Bode measurement state
+ * bode_init — Initialize a Bode result for the given sweep
  * ======================================================================== */
-void bode_init(const bode_config_t *cfg)
+void bode_init(const bode_config_t *cfg, bode_result_t *res)
 {
-    s_config = *cfg;
-
-    memset(&s_result, 0, sizeof(s_result));
-    s_result.num_points = cfg->num_points;
-    if (s_result.num_points > BODE_MAX_POINTS) {
-        s_result.num_points = BODE_MAX_POINTS;
+    memset(res, 0, sizeof(*res));
+    res->num_points = cfg->num_points;
+    if (res->num_points > BODE_MAX_POINTS) {
+        res->num_points = BODE_MAX_POINTS;
     }
-    s_result.current_step = 0;
-    s_result.sweep_done = false;
-    s_result.bandwidth_hz = 0.0f;
-    s_result.peak_gain_db = -999.0f;
-    s_result.peak_freq_hz = 0.0f;
+    res->current_step = 0;
+    res->sweep_done = false;
+    res->bandwidth_hz = 0.0f;
+    res->peak_gain_db = -999.0f;
+    res->peak_freq_hz = 0.0f;
 }
 
 /* ========================================================================

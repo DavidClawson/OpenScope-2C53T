@@ -39,8 +39,9 @@ typedef struct {
     float        peak_freq_hz;
 } bode_result_t;
 
-/* Initialize Bode measurement */
-void bode_init(const bode_config_t *cfg);
+/* Initialize `res` for a sweep described by `cfg` (num_points clamped to
+ * BODE_MAX_POINTS). The caller owns the result storage. */
+void bode_init(const bode_config_t *cfg, bode_result_t *res);
 
 /* Calculate the frequency for a given sweep step */
 float bode_step_frequency(const bode_config_t *cfg, uint16_t step);
