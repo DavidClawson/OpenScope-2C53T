@@ -132,8 +132,11 @@ Notes:
   its (compressed) initialised data. The archived unit-1 dump and this unit
   agree on everything that could be compared from the host.
 - The application's drive reports **4096-byte** logical sectors on this
-  unit. `stock_iap_bootloader.md` section 4 lists the READ CAPACITY block
-  size as 512. Not investigated further.
+  unit, and 14,680,064 / 4096 = 3584 blocks. That is what the V1.2.0
+  READ CAPACITY handler returns for LUN 0 (`0x080303D2`): block size
+  4096, and 3584 blocks when `DAT_20001066` is 0 or 512 blocks otherwise.
+  The 512 that `stock_iap_bootloader.md` listed as the block size is that
+  second block count. Corrected there in this PR.
 - The application's drive exists only while the full-screen "USB Sharing"
   image is shown. With USB Sharing off, the host sees no device at all.
 - On this unit, "MENU + tap Power" with the cable attached did not reach

@@ -216,7 +216,7 @@ CSW (Command Status Wrapper, 13 bytes, device→host):
 | 0x1B | START/STOP UNIT | No data | Load/eject; no physical effect |
 | 0x1E | PREVENT/ALLOW MEDIUM REMOVAL | No data | Sets locked flag in state |
 | 0x23 | READ FORMAT CAPACITIES | 12-byte capacity list | Returns geometry (sectors, block size) |
-| 0x25 | READ CAPACITY(10) | 8 bytes | Returns last LBA + block size (512) |
+| 0x25 | READ CAPACITY(10) | 8 bytes | Returns last LBA + block size (4096). LUN 0 has 3584 blocks (14 MiB) when `DAT_20001066` is 0, 512 blocks (2 MiB) otherwise: the 512 is a block count, not the block size. Host reading on one V1.2.0 unit: 14,680,064 B, 4096-byte sectors (#98) |
 | 0x28 | READ(10) | Up to 4096 bytes/iteration | Reads from SPI flash; `FUN_0802f048(buf, addr, len)` |
 | 0x2A | WRITE(10) | Host sends data | Writes to SPI flash; `FUN_0802f16c(buf, addr, len)` |
 | 0x2F | VERIFY(10) | No data stage | Verifies; implementation may be stub |
@@ -917,7 +917,9 @@ undefined4 scsi_dispatch(int usb_handle) {
         return 0;
 
     case 0x25:  // READ CAPACITY(10)
-        // Returns last LBA (big-endian) + block size (512 = 0x200)
+        // Returns last LBA (big-endian) + block size (4096 = 0x1000)
+        // LUN 0: the handler first writes the geometry into the LUN state itself:
+        //   total_sectors = 0xE00 if DAT_20001066 == 0, else 0x200; block size = 0x1000
         // Last LBA = (total_sectors - 1)
         // Gets sector count from LUN state at msc_state + lun*4 + 8
         ...
@@ -1073,7 +1075,7 @@ void fmc_write_eopb0(void) {
 
 4. **SCSI INQUIRY data.** The data at `0x08029838` and `0x0804BCE8` (standard INQUIRY response for LUN 0 and other LUNs) was not extracted. These contain the USB drive's "vendor/product/revision" strings visible when the device is mounted.
 
-5. **LUN geometry.** The total sector count and block size for the SPI flash virtual drive depend on the LUN state table at `msc_state + lun*4 + 8`. This is likely initialized from SPI flash filesystem metadata at startup but was not traced.
+5. **LUN geometry.** Resolved for LUN 0 (2026-11-22, static, handler at `0x080303D2` with the image at its real base `0x08007000`). The READ CAPACITY and READ FORMAT CAPACITIES handlers do not read the geometry from the SPI flash: for LUN 0 they write it into the LUN state table at `msc_state + lun*4 + 8` themselves. The block size is always 4096. The block count is 3584 (`0xE00`, 14 MiB) when `DAT_20001066` is 0 and 512 (`0x200`, 2 MiB) otherwise, the same byte that selects the `+0x200000` SPI flash offset (section 4). A host reading on one V1.2.0 unit agrees with the first case: 14,680,064 B in 4096-byte sectors (#98). What sets `DAT_20001066` was not traced.
 
 6. **`FUN_08028b80` identity.** This function (listed as "USB class request handler" in the task description) is actually an FFT algorithm (radix-8 butterfly operations with floating-point coefficients from `DAT_0806e0d0`). It is called from the scope FFT pipeline, not from USB code. The mislabeling in the task description is an error — there is no function at `0x08028b80` that handles USB class requests.
 
