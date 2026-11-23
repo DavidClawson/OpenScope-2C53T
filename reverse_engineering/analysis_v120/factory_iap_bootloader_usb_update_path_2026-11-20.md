@@ -10,6 +10,8 @@ never opened, connected to a Windows host.
 and has **not** been exercised on hardware. Section 4 is observed, read-only:
 nothing was written to the device. No flash, option-byte or protection
 register was touched at any point.
+**Follow-up (2026-11-23):** the same unit was then updated through this path
+three times. Section 8 lists what that confirmed and what it did not.
 **Why this matters:** the docs describe this path as "MENU + tap Power, a
 FAT12 drive named `IAP` appears, drag the `.bin`". That is what the user
 sees, but not what the bootloader does, and the gap explains three things
@@ -113,13 +115,13 @@ relies on the application to raise it, which is what
 
 ---
 
-## 4. What a host sees (observed, one V1.2.0 unit, Windows)
+## 4. What a host sees (observed, one V1.2.0 unit; Windows, upgrade-mode USB identity from macOS)
 
 | | Upgrade mode (bootloader) | USB Sharing (application) |
 |---|---|---|
 | Disk name | `AT32 Msc iap` | `AT32 Disk0` |
-| Bus-reported name | not captured | `AT32 Mass Storage` |
-| USB ID | not captured | `VID_2E3C&PID_5720`, `REV_0200` |
+| Bus-reported name | `AT32 Mass Storage`, manufacturer `Artery` | `AT32 Mass Storage` |
+| USB ID | `2e3c:5720`, version 2.00: the same as USB Sharing | `VID_2E3C&PID_5720`, `REV_0200` |
 | Disk size | 8,386,560 B | 14,680,064 B |
 | Logical sector size | 2048 B | 4096 B |
 | Volume | FAT, label `IAP`, 8,347,648 B, 8,339,456 B free | FAT, no label, 14,643,200 B |
@@ -290,3 +292,32 @@ The status file is renamed to report progress. The name table is at
 - The comparison in section 4 cannot tell whether the bootloader on a
   V1.2.0 retail unit is byte-identical to the archived unit-1 dump. Flash
   access protection prevents reading it out, and no attempt was made.
+
+---
+
+## 8. Follow-up on hardware (2026-11-23)
+
+Same retail unit (stock V1.2.0, case never opened). Host: macOS 13.7.8 on an
+Intel MacBook Pro, `scripts/iap_flash.py` at commit `7480998`. Three updates
+through the factory IAP drive, one after the other:
+
+1. the unmodified stock image `APP_2C53T_V1.2.0_251015.bin`;
+2. and 3. two images derived from it: stock with 10 bytes changed and about
+   2.4 KB appended (753,776 B), built by
+   [stock-link](https://github.com/Metalaria/fnirsi-2c53t-link). That patch
+   adds a vendor HID interface to the running stock application with a
+   read-only memory request, which is what made the read-backs below possible
+   without touching the access protection.
+
+All three updates completed and the unit booted each time.
+
+| Claim in this note | What the unit showed | Status |
+|---|---|---|
+| Section 3: hold MENU, hold Power until the text, release, then USB appears | Used four times (once read-only, three updates), cable plugged in after releasing Power. It entered upgrade mode every time. | Works on this unit. The short tap was not retried, so which difference mattered is still not isolated. |
+| Section 4: upgrade-mode identity | `2e3c:5720`, version 2.00, product `AT32 Mass Storage`, manufacturer `Artery`, medium `Msc iap`, 8,386,560 B | Captured (was missing). Same VID:PID as the application's USB Sharing drive. |
+| Section 5: data-area writes are programmed in arrival order | `iap_flash.py` on macOS writes the changed 2048-byte sectors in ascending order, one sector per write: the FAT, the directory, then the file's data. After updates 2 and 3 the application area read back **byte-identical** to the image file (753,776 B each). | Consistent with the model. Not a proof of it: a writer that sends sectors in order cannot tell arrival order from disk offset. |
+| Section 5.5: `0x41544B38` is programmed at `0x08006800` on success | The page reads `38 4B 54 41` followed by `FF` | Confirmed. |
+| Summary item 6: an update does not touch `0x08006000-0x080067FF` | After the three updates the page is not erased: 345 bytes of the 4 KB at `0x08006000` are not `FF`, and the first byte is `0x55` as in the archived dump. | Consistent. There is no copy from before the first update (stock gives no way to read it), so this is not a before/after comparison. |
+
+Still open, unchanged: PC9 timing during a MENU + Power start, the `JUMP`
+file, the name-addressed target and the vector-table fallback.
