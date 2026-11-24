@@ -1,0 +1,28 @@
+   0.023  meter stream 200 20
+   0.023  stream count=200 delay_ms=20
+   0.023  0 upd=1031 sub=7 cls=5 family=3/3 reject=0 raw=0 dp=0 unit= disp=OL f6=00 f7=28 f8=00 f9=00 extra=0122 aux_freq_i10=0 wave=0 beep=0
+   0.185  8 upd=1032 sub=7 cls=5 family=3/3 reject=0 raw=0 dp=0 unit= disp=OL f6=00 f7=28 f8=00 f9=00 extra=0122 aux_freq_i10=0 wave=0 beep=0
+   0.347  16 upd=1033 sub=7 cls=5 family=3/3 reject=0 raw=0 dp=0 unit= disp=OL f6=00 f7=28 f8=00 f9=00 extra=0122 aux_freq_i10=0 wave=0 beep=0
+   0.511  24 upd=1034 sub=7 cls=5 family=3/3 reject=0 raw=0 dp=0 unit= disp=OL f6=00 f7=28 f8=00 f9=00 extra=0122 aux_freq_i10=0 wave=0 beep=0
+   0.692  33 upd=1035 sub=7 cls=5 family=3/3 reject=0 raw=0 dp=0 unit= disp=OL f6=00 f7=28 f8=00 f9=00 extra=0122 aux_freq_i10=0 wave=0 beep=0
+   0.854  41 upd=1036 sub=7 cls=5 family=3/3 reject=0 raw=0 dp=0 unit= disp=OL f6=00 f7=28 f8=00 f9=00 extra=0122 aux_freq_i10=0 wave=0 beep=0
+   1.016  49 upd=1037 sub=7 cls=5 family=3/3 reject=0 raw=0 dp=0 unit= disp=OL f6=00 f7=28 f8=00 f9=00 extra=0122 aux_freq_i10=0 wave=0 beep=0
+   1.178  57 upd=1038 sub=7 cls=5 family=3/3 reject=0 raw=0 dp=0 unit= disp=OL f6=00 f7=28 f8=00 f9=00 extra=0122 aux_freq_i10=0 wave=0 beep=0
+   1.340  65 upd=1039 sub=7 cls=5 family=3/3 reject=0 raw=0 dp=0 unit= disp=OL f6=00 f7=28 f8=00 f9=00 extra=0122 aux_freq_i10=0 wave=0 beep=0
+   1.504  73 upd=1040 sub=7 cls=5 family=3/3 reject=0 raw=0 dp=0 unit= disp=OL f6=00 f7=28 f8=00 f9=00 extra=0122 aux_freq_i10=0 wave=0 beep=0
+   1.670  81 upd=1041 sub=7 cls=5 family=3/3 reject=0 raw=0 dp=0 unit= disp=OL f6=00 f7=28 f8=00 f9=00 extra=0122 aux_freq_i10=0 wave=0 beep=0
+   1.832  89 upd=1042 sub=7 cls=5 family=3/3 reject=0 raw=0 dp=0 unit= disp=OL f6=00 f7=28 f8=00 f9=00 extra=0122 aux_freq_i10=0 wave=0 beep=0
+   1.989  97 upd=1043 sub=7 cls=5 family=3/3 reject=0 raw=0 dp=0 unit= disp=OL f6=00 f7=28 f8=00 f9=00 extra=0122 aux_freq_i10=0 wave=0 beep=0
+   2.151  105 upd=1044 sub=7 cls=5 family=3/3 reject=0 raw=0 dp=0 unit= disp=OL f6=00 f7=28 f8=00 f9=00 extra=0122 aux_freq_i10=0 wave=0 beep=0
+   2.313  113 upd=1045 sub=7 cls=5 family=3/3 reject=0 raw=0 dp=0 unit= disp=OL f6=00 f7=28 f8=00 f9=00 extra=0122 aux_freq_i10=0 wave=0 beep=0
+   2.495  122 upd=1046 sub=7 cls=5 family=3/3 reject=0 raw=0 dp=0 unit= disp=OL f6=00 f7=28 f8=00 f9=00 extra=0122 aux_freq_i10=0 wave=0 beep=0
+   2.638  129 upd=1047 sub=7 cls=5 family=3/3 reject=0 raw=0 dp=0 unit= disp=OL f6=00 f7=28 f8=00 f9=00 extra=0122 aux_freq_i10=0 wave=0 beep=0
+   2.800  137 upd=1048 sub=7 cls=5 family=3/3 reject=0 raw=0 dp=0 unit= disp=OL f6=00 f7=28 f8=00 f9=00 extra=0122 aux_freq_i10=0 wave=0 beep=0
+   2.985  146 upd=1049 sub=7 cls=5 family=3/3 reject=0 raw=0 dp=0 unit= disp=OL f6=00 f7=28 f8=00 f9=00 extra=0122 aux_freq_i10=0 wave=0 beep=0
+   3.144  154 upd=1050 sub=7 cls=5 family=3/3 reject=0 raw=0 dp=0 unit= disp=OL f6=00 f7=28 f8=00 f9=00 extra=0122 aux_freq_i10=0 wave=0 beep=0
+   3.307  162 upd=1051 sub=7 cls=5 family=3/3 reject=0 raw=0 dp=0 unit= disp=OL f6=00 f7=28 f8=00 f9=00 extra=0122 aux_freq_i10=0 wave=0 beep=0
+   3.505  170 upd=1052 sub=7 cls=5 family=3/3 reject=0 raw=0 dp=0 unit= disp=OL f6=00 f7=28 f8=00 f9=00 extra=0122 aux_freq_i10=0 wave=0 beep=0
+   3.634  178 upd=1053 sub=7 cls=5 family=3/3 reject=0 raw=0 dp=0 unit= disp=OL f6=00 f7=28 f8=00 f9=00 extra=0122 aux_freq_i10=0 wave=0 beep=0
+   3.792  186 upd=1054 sub=7 cls=5 family=3/3 reject=0 raw=0 dp=0 unit= disp=OL f6=00 f7=28 f8=00 f9=00 extra=0122 aux_freq_i10=0 wave=0 beep=0
+   3.954  194 upd=1055 sub=7 cls=5 family=3/3 reject=0 raw=0 dp=0 unit= disp=OL f6=00 f7=28 f8=00 f9=00 extra=0122 aux_freq_i10=0 wave=0 beep=0
+   4.074  > 

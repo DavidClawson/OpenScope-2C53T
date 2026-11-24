@@ -180,7 +180,7 @@ make renode-test                 # 5-second smoke test
 - Calibration tables in RAM: 120-byte scope gain/offset cal at 0x20000358 (6 entries × 20 bytes, loaded from SPI flash at boot). Used by scope_main_fsm (indexed by voltage range) and FUN_080018A4 (`gpio_mux_portc_porte`) to compute the scope trigger comparator DAC1 value. Not a meter cal source.
 - Filesystem paths in firmware: `2:/Screenshot file/`, `3:/System file/`
 - Firmware versions analyzed: V1.0.3 → V1.0.7 → V1.1.2 → V1.2.0
-- **IOMUX remap:** `(reg & ~0xF000) | 0x2000` at AFIO+0x08 — disables JTAG-DP, keeps SW-DP, frees PB3/PB4/PB5 for SPI3
+- **IOMUX remap:** ⚠ **CORRECTED 2026-11-24 (EXP-74):** the stock write `(reg & ~0xF000) | 0x2000` at AFIO+0x08 is **EXTICR1, not a JTAG remap**. It maps EXTI line 3 to port C, i.e. **PC3**, which carries the meter SoC's buzzer (BUZ) tone through an optocoupler, a ~2.2 kHz pulse train while the leads are shorted (#94, `docs/re/system_map_corrections.md` §6) (stock master_init `0x0802C75A`; the EXTI3 ISR at `0x08009C10` beeps from it). Disabling JTAG-DP while keeping SW-DP, which frees PB3/PB4/PB5 for SPI3, is SWJ_CFG at AFIO+0x04 bits [26:24] plus AT32's GMUX field in remap7; that is what `fpga.c` writes. How stock itself frees those pins is not decoded.
 - **Battery ADC:** PB1 / ADC1 Channel 9, 239.5-cycle sample, right-aligned, software-triggered
 - **TMR8:** Actually IS configured (ARR=99, generates periodic interrupt for FatFs). Not unused as previously thought.
 - **DMA:** Ch1 = LCD framebuffer (16-bit mem-to-mem → EXMC). SPI3 = polled. USART2 = interrupt-driven.
