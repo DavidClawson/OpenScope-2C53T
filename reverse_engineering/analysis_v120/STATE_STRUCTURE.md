@@ -49,9 +49,10 @@ the comments on #102 for the meter rows.
 
 | Offset | Abs Address | Live reading | Checked |
 |--------|-------------|--------------|---------|
+| +0x00 | 200000F8 | Coupling of CH1: 1 DC, 0 AC. Switching it changed this byte and no other of `+0x00..+0x37`, and the trace dropped to straddle zero. It stayed 1 with CH1 off and CH2 alone on, so it is not `ch1_enable`; the channels' on flags are `+0x14`. `+0x01` read 0 throughout and CH2's coupling was not switched | keys |
 | +0x02, +0x03 | 200000FA, 200000FB | Volts per division of CH1, CH2 as shown on the screen, as an index: 0 = 10 mV, then 1-2-5 steps up to 9 = 10 V (probe X1). Up/down change +0x02 when the arrow keys are in mode 0 (see +0x354) | screen, at 0, 2 and 5; keys |
 | +0x04, +0x05 | 200000FC, 200000FD | Vertical position of CH1, CH2 as set by the user, signed: zero volts is drawn at sample value 128 + position. It is what the paused-view formula of `docs/re/parity2_static.md` uses as the position | screen, CH1 in three sessions; CH2 assumed |
-| +0x06, +0x07 | 200000FE, 200000FF | Probe setting of CH1, CH2: 0 = X1, 1 = X10 | screen, CH1 both ways; CH2 assumed |
+| +0x06, +0x07 | 200000FE, 200000FF | Probe setting of CH1, CH2: 0 = X1, 1 = X10. The measurement blocks at `+0x50`.. carry the factor: 334 mV at X1 and 3.35 V at X10 on the same wave | keys, both channels both ways |
 | +0x14 | 2000010C | Channels on: bit 0 CH1, bit 1 CH2. Read 1 with CH1 alone, 2 with CH2 alone and 3 with both. It stayed 1 in all the snapshots of 2026-11-25 while +0x02 went through 1, 2 and 3, so it is **not** the voltage range | screen |
 | +0x15 | 2000010D | `0x01` with CH1 alone, `0x12` with CH2 alone. The high nibble agrees with the active channel of the row below; the low nibble is 1 and 2 with one channel on each time, so it is not the number of enabled channels (the trigger source?) | screen, two values |
 | +0x16 | 2000010E | 0 with CH1 alone, 1 with CH2 alone, as `active_channel` below says | screen, two values |
@@ -94,7 +95,7 @@ each, against photographs of the generator screen.
 | Offset | Abs Address | Live reading |
 |--------|-------------|--------------|
 | +0xE58 | 20000F50 | 0 or 1; changes while the generator screen is operated. Not established |
-| +0xE59 | 20000F51 | Waveform as its position in the menu, read entry by entry with the label on the screen: 1 Square Wave, 2 Sawtooth wave, 3 Half-wave, 4 Full Wave, 5 Step Wave, 6 Reverse Step Wave, 7 Index Up, 8 Index Decrease, 9 Direct Current, 10 Multi-audio, 11 Sink Pulse, 12 Lorentz waves. The entry before Square Wave (0) was not captured |
+| +0xE59 | 20000F51 | Waveform as its position in the menu, read entry by entry with the label on the screen: 1 Square Wave, 2 Sawtooth wave, 3 Half-wave, 4 Full Wave, 5 Step Wave, 6 Reverse Step Wave, 7 Index Up, 8 Index Decrease, 9 Direct Current, 10 Multi-audio, 11 Sink Pulse, 12 Lorentz waves. 0 is one step before Square Wave in the menu; the builder at `0x08029E14` (a 13-way switch on this byte) fills its samples from a 100-point table at `0x0804D848` that is a sine to within half a count. Its label was not noted |
 | +0xE5C | 20000F54 | Frequency in Hz, 32 bits (1000, 2000, 15000, 35000, 50000 seen) |
 | +0xE60 | 20000F58 | Duty cycle in % |
 | +0xE61 | 20000F59 | Amplitude in tenths of a volt (30 for 3.0 V, 20 for 2.0 V) |
