@@ -52,7 +52,9 @@ the comments on #102 for the meter rows.
 | +0x02, +0x03 | 200000FA, 200000FB | Volts per division of CH1, CH2 as shown on the screen, as an index: 0 = 10 mV, then 1-2-5 steps up to 9 = 10 V (probe X1). Up/down change +0x02 when the arrow keys are in mode 0 (see +0x354) | screen, at 0, 2 and 5; keys |
 | +0x04, +0x05 | 200000FC, 200000FD | Vertical position of CH1, CH2 as set by the user, signed: zero volts is drawn at sample value 128 + position. It is what the paused-view formula of `docs/re/parity2_static.md` uses as the position | screen, CH1 in three sessions; CH2 assumed |
 | +0x06, +0x07 | 200000FE, 200000FF | Probe setting of CH1, CH2: 0 = X1, 1 = X10 | screen, CH1 both ways; CH2 assumed |
-| +0x14 | 2000010C | Channels on: bit 0 CH1, bit 1 CH2. Read 1 with CH1 alone and 3 with both. It stayed 1 in all the snapshots of 2026-11-25 while +0x02 went through 1, 2 and 3, so it is **not** the voltage range | screen |
+| +0x14 | 2000010C | Channels on: bit 0 CH1, bit 1 CH2. Read 1 with CH1 alone, 2 with CH2 alone and 3 with both. It stayed 1 in all the snapshots of 2026-11-25 while +0x02 went through 1, 2 and 3, so it is **not** the voltage range | screen |
+| +0x15 | 2000010D | `0x01` with CH1 alone, `0x12` with CH2 alone. The high nibble agrees with the active channel of the row below; the low nibble is 1 and 2 with one channel on each time, so it is not the number of enabled channels (the trigger source?) | screen, two values |
+| +0x16 | 2000010E | 0 with CH1 alone, 1 with CH2 alone, as `active_channel` below says | screen, two values |
 | +0x1A | 20000112 | Horizontal position in screen columns, signed. Left/right change it by one a press when the arrow keys are in mode 2. While stopped it is rescaled when the time base is changed (-2 became -4, -8, -20, -40 zooming in, and 0 zooming out) | keys |
 | +0x1C | 20000114 | Changed by 2 a press of up/down with the arrow keys in mode 2, which fits the trigger level | keys; meaning inferred |
 | +0x2D | 20000125 | Time per division as an index: 0 = 10 ns, then 1-2-5 steps. RIGHT is one step faster (index - 1), in arrow mode 0 only | screen, at 8 (5 us) and 13 (200 us); keys |
@@ -60,7 +62,7 @@ the comments on #102 for the meter rows.
 | +0x45 | 2000013D | Counter of the key scan: 0 to 50, then 0 again. 498 steps in 4.980 s, 10.00 ms a step | timed |
 | +0x50 | 20000148 | Measurements of the last acquisition: twelve 32-bit words for CH1, then twelve for CH2 | screen |
 | +0xB0 | 200001A8 | The same 24 words as a running average | screen |
-| +0x110 | 20000208 | The same 24 words as shown on the screen: the averaged block while running, the last acquisition once stopped. All zero outside the oscilloscope | screen, two stopped screens |
+| +0x110 | 20000208 | The same 24 words as shown on the screen: the averaged block while running, the last acquisition once stopped. All zero outside the oscilloscope. CH2's twelve were read with a 50 kHz square wave on CH2 alone: 50 kHz, 20 us, 345 mV peak to peak at 100 mV/div, where the CH2 record itself gives 344 mV | screen, two stopped screens; CH2 against its record |
 | +0x354 | 2000044C | Low nibble: what the arrow keys do. 0 = time base and range, 2 = move (+0x1A and +0x1C), 3 = cursors (code only), 1 not looked at. SELECT steps it (handler `0x0800D2F8`, nibble advanced at `0x0800D38C`); one press took it from 2 to 0 on the unit | keys, code |
 | +0x356, +0x483 | 2000044E, 2000057B | The 301 points drawn for CH1, CH2 in normal (not roll) operation. While stopped, +0x356 is a slice of the record at the captured time base, the record through the 16-tap interpolator when zoomed in, and is left alone when zoomed out (#103) | 56 stopped snapshots |
 | +0x5B0 | 200006A8 | CH1 record, 1024 bytes. Byte-identical in every stopped snapshot of a session | 56 stopped snapshots |
@@ -92,7 +94,7 @@ each, against photographs of the generator screen.
 | Offset | Abs Address | Live reading |
 |--------|-------------|--------------|
 | +0xE58 | 20000F50 | 0 or 1; changes while the generator screen is operated. Not established |
-| +0xE59 | 20000F51 | Waveform as its position in the menu (1 Square, 2 Sawtooth, 4 Full Wave seen) |
+| +0xE59 | 20000F51 | Waveform as its position in the menu, read entry by entry with the label on the screen: 1 Square Wave, 2 Sawtooth wave, 3 Half-wave, 4 Full Wave, 5 Step Wave, 6 Reverse Step Wave, 7 Index Up, 8 Index Decrease, 9 Direct Current, 10 Multi-audio, 11 Sink Pulse, 12 Lorentz waves. The entry before Square Wave (0) was not captured |
 | +0xE5C | 20000F54 | Frequency in Hz, 32 bits (1000, 2000, 15000, 35000, 50000 seen) |
 | +0xE60 | 20000F58 | Duty cycle in % |
 | +0xE61 | 20000F59 | Amplitude in tenths of a volt (30 for 3.0 V, 20 for 2.0 V) |
@@ -132,7 +134,8 @@ Read in each of the twelve functions of stock's meter menu (2026-11-25):
 | +0xF3C | 20001034 | 1 while HOLD is on, 0 otherwise | keys |
 | +0xF48, +0xF4C, +0xF50 | 20001040, 20001044, 20001048 | The MAX, MEAN and MIN boxes as floats; `0x7FC00000` (NaN) while a box is empty | screen |
 | +0xF54..+0xF56 | 2000104C..2000104E | Decimals of the three boxes | screen |
-| +0xF57..+0xF59 | 2000104F..20001051 | Unit codes of the three boxes | not decoded |
+| +0xF57..+0xF59 | 2000104F..20001051 | 1 for a box shown in volts, 0 for every other unit seen. Not the unit, and not established | screen |
+| +0xF5A..+0xF5C | 20001052..20001054 | Unit codes of the three boxes: 0 mV, 1 V, 5 nF, 9 degC, 10 uA. In Small DC current the screen shows the boxes in uA while the reading is in mA (`+0xF38` = 11) | screen |
 
 Stock's EXTI3 handler (`0x08009C10`), which passes the meter SoC's buzzer tone on PC3 to the
 buzzer, writes the buzzer duty only when +0xF68 is 1 and either +0xF2D is 0 or both +0xF2D
@@ -429,7 +432,7 @@ Update 2026-04-08:
 | +0xF64 | 2000105C | `saved_mode_restore` | uint16 | **2 RAM-map refs + boot/config slices** | Saved mode-init state. Config word 12 writes the low halfword here at `0x08025E50`; boot reads the low byte at `0x08026F50` and can copy it into `DAT_20001060` / `+0xF68`. It also has UI renderer comparison refs in `FUN_08015f50`, so it is not a plain bitmap height field. See `dmm_saved_mode_f64_boundary_2026_06_06.md`. |
 | +0xF66–0xF84 | ... | `draw_palette[]` | uint16[] | 3-6 ea. | RGB565 color palette entries for bitmap rendering (16 entries) |
 
-> ⚠ **LIVE 2026-11:** the first four rows of this table do not add up: `0x200000F8 + 0xF59` is `0x20001051`, not `0x20000F51`. The absolute addresses given (`20000F51`, `20000F58`, `20000F59`, `20000F5A`) are offsets `+0xE59`, `+0xE60`, `+0xE61` and `+0xE62`, and on a running unit they hold the signal generator's waveform, duty, amplitude and the start of its sample table. The offsets given, read as offsets, land on `+0xF59` (unit code of the meter's MIN box), `+0xF61` (brightness) and `+0xF62` (volume). Which of the two the code references meant was not re-checked. See "Live Readings" above.
+> ⚠ **LIVE 2026-11:** the first four rows of this table do not add up: `0x200000F8 + 0xF59` is `0x20001051`, not `0x20000F51`. The absolute addresses given (`20000F51`, `20000F58`, `20000F59`, `20000F5A`) are offsets `+0xE59`, `+0xE60`, `+0xE61` and `+0xE62`, and on a running unit they hold the signal generator's waveform, duty, amplitude and the start of its sample table. The offsets given, read as offsets, land on `+0xF59` (a byte that goes with the meter's MIN box), `+0xF61` (brightness) and `+0xF62` (volume). Which of the two the code references meant was not re-checked. See "Live Readings" above.
 
 ---
 
