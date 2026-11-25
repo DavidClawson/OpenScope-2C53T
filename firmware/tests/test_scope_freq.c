@@ -21,10 +21,12 @@
 
 #include "../src/ui/scope_freq.h"
 
+#include <signal.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 #include <math.h>
+#include <unistd.h>
 
 #define MAXN 1024
 
@@ -129,6 +131,75 @@ static void test_synthetic(void)
     CHECK(!scope_freq_estimate(s, 32, 12575.0f, &r),   "too-short refused");
     CHECK(!scope_freq_estimate(NULL, MAXN, 12575.0f, &r), "NULL refused");
     CHECK(!scope_freq_estimate(s, MAXN, 12575.0f, NULL), "NULL out refused");
+}
+
+/* ── EXP-76: the estimator must terminate ─────────────────────────────── */
+
+/* The estimator runs on the display task. A record that sends it round a
+ * loop forever freezes the screen (EXP-76), so a regression here must FAIL,
+ * not hang the test: every call below runs under an alarm. */
+static const char *volatile hang_what = "";
+
+static void on_alarm(int sig)
+{
+    (void)sig;
+    printf("FAIL: scope_freq_estimate did not return within 5 s (%s): the "
+           "display-task hang of EXP-76 is back\n", hang_what);
+    fflush(stdout);
+    _exit(1);
+}
+
+static void test_flat_inputs_terminate(void)
+{
+    uint8_t s[MAXN];
+    scope_freq_t r;
+
+    signal(SIGALRM, on_alarm);
+
+    /* Synthetic: one cycle of +/-2 counts around a flat level. The power
+     * peak sits at bin 1 and the windowed, mean-removed DC term is negative
+     * (-531), which the pre-fix code took the square root of. */
+    for (int i = 0; i < MAXN; i++)
+        s[i] = (uint8_t)(46 + lround(2.0 * cos(2.0 * M_PI * i / MAXN)));
+    hang_what = "synthetic bin-1 record";
+    alarm(5);
+    CHECK(!scope_freq_estimate(s, MAXN, 49930.1f, &r),
+          "a bin-1 record answered %.1f Hz; there is no tone in it", (double)r.hz);
+    alarm(0);
+
+    /* Real: 40 consecutive records with nothing connected (13 hung the
+     * pre-fix estimator). None carries a tone, so every one must be refused. */
+    FILE *fh = fopen("tests/fixtures/scope_records_flat.txt", "r");
+    if (fh == NULL) {
+        printf("FAIL: cannot open tests/fixtures/scope_records_flat.txt\n");
+        failures++;
+        return;
+    }
+    int c;
+    while ((c = fgetc(fh)) == '#')
+        while ((c = fgetc(fh)) != '\n' && c != EOF) { }
+    ungetc(c, fh);
+    int count = 0, refused = 0;
+    CHECK(fscanf(fh, "%d", &count) == 1 && count == 40, "flat fixture count %d", count);
+    for (int rec = 0; rec < count; rec++) {
+        for (int i = 0; i < MAXN; i++) {
+            int v = 0;
+            if (fscanf(fh, "%d", &v) != 1) v = 0;
+            s[i] = (uint8_t)v;
+        }
+        static char what[48];
+        snprintf(what, sizeof what, "flat record %d", rec);
+        hang_what = what;
+        alarm(5);
+        if (!scope_freq_estimate(s, MAXN, 49930.1f, &r))
+            refused++;
+        else
+            CHECK(0, "flat record %d answered %.1f Hz; nothing was connected",
+                  rec, (double)r.hz);
+        alarm(0);
+    }
+    fclose(fh);
+    printf("  flat records: %d of %d refused, none hung\n", refused, count);
 }
 
 /* ── the real records ─────────────────────────────────────────────────── */
@@ -257,6 +328,7 @@ int main(int argc, char **argv)
     const char *path = (argc > 1) ? argv[1]
                                   : "tests/fixtures/scope_records.txt";
     test_synthetic();
+    test_flat_inputs_terminate();
     test_bench_records(path);
 
     /*

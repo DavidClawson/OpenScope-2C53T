@@ -91,8 +91,18 @@ static bool analyse(const uint8_t *s, uint16_t n, float *bin, float *sharp)
     fft(n);
 
     /* Power spectrum, DC discarded: DC is not a signal and including it would
-     * let a pedestal dominate the sharpness figure. */
+     * let a pedestal dominate the sharpness figure.
+     *
+     * Bin 0 is still converted to power, though it stays out of the total and
+     * the peak search: it is the left neighbour of a bin-1 peak in the
+     * interpolation below. EXP-76 (2026-11-25): it used to be left as the raw
+     * real part, which after the mean removal and the window is often
+     * NEGATIVE; sqrtf() of it gave NaN, NaN became bin 0 in the harmonic loop,
+     * the loop never reached `half`, and the display task spun there forever.
+     * A flat, unconnected input puts the peak at bin 1 in most records, so
+     * the scope screen froze within seconds at any timebase with a rate. */
     const uint16_t half = (uint16_t)(n >> 1);
+    fft_re[0] = fft_re[0] * fft_re[0] + fft_im[0] * fft_im[0];
     float total = 0.0f;
     uint16_t peak = 0;
     float peak_p = 0.0f;
@@ -137,10 +147,20 @@ static bool analyse(const uint8_t *s, uint16_t n, float *bin, float *sharp)
     const float frac = (den != 0.0f) ? (0.5f * (m_lo - m_hi) / den) : 0.0f;
     const float fbin = (float)peak + frac;
 
+    /* The vertex of three points around a local maximum lies within half a
+     * bin of it. Anything else (bin 0 outweighing a bin-1 peak, or a NaN from
+     * any source) is not a usable peak, and below it would also stall the
+     * harmonic walk: refuse it here. Written so a NaN fails the test. */
+    if (!(fbin >= 0.5f && fbin < (float)half))
+        return false;
+
     {
         float sig = 0.0f;
         uint16_t counted_to = 0u;           /* highest bin already summed */
-        for (uint16_t h = 1u; ; h++) {
+        /* Bounded as well as guarded: with fbin >= 0.5 the comb reaches
+         * `half` by h = 2 * half, so this bound never cuts a real walk short;
+         * it only guarantees the display task gets out of here. */
+        for (uint16_t h = 1u; h <= (uint16_t)(2u * half); h++) {
             const uint32_t c = (uint32_t)(fbin * (float)h + 0.5f);   /* on the comb */
             if (c + 1u >= half)
                 break;
