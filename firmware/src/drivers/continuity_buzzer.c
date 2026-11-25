@@ -33,7 +33,10 @@
 #define CONT_DETECT_GPIO      GPIOC
 #define CONT_DETECT_PIN       GPIO_PINS_3
 #define CONT_DETECT_MIN_EDGES 2U    /* new edges in one sample to start */
-#define CONT_DETECT_HOLD_MS   25U   /* no edges this long: probes released */
+/* No edges this long: probes released. Stock's beep ends 100-110 ms after the
+ * last edge (an 11-tick countdown on a 10 ms tick, 0x20002D67; Metalaria, PR
+ * #102), and a tail that long also bridges scratchy contact. */
+#define CONT_DETECT_HOLD_MS   105U
 
 static volatile uint32_t pc3_edges;  /* EXINT3 rising edges since boot */
 

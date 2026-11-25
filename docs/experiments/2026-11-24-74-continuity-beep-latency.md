@@ -140,11 +140,26 @@ now measured.
 
   That is **rising edge only**. The `gpio_init` just before it configures pins
   `0x0008` (pin 3) as an input.
-- **The ISR** (`0x08009C10`): it clears EXTI pending bit 3. If `ms[0xF68] == 1`
-  (meter-state gate), and unless `ms[0xF2D] == 2 && ms[0xF36] == 2`, it writes
-  **`10` to `0x40015434`** (TMR11 `C1DT`, the buzzer PWM duty, so the buzzer is on)
-  and writes `0` to `0x20002D67`. That second write looks like resetting an off
-  countdown that something periodic advances. The countdown side is not traced.
+- **The ISR** (`0x08009C10`): it clears EXTI pending bit 3 and returns unless
+  `ms[0xF68] == 1`. It then writes **`10` to `0x40015434`** (TMR11 `C1DT`, the buzzer
+  PWM duty, so the buzzer is on) only when `ms[0xF2D] == 0`, or when
+  `ms[0xF2D] == 2 && ms[0xF36] == 2`. The `clz` / `lsrs #5` at `0x08009C52` gives 1
+  only when both bytes are 2, and the `beq` skips the duty write when it gives 0. It
+  writes `0` to `0x20002D67` in every case that gets past the `ms[0xF68]` check.
+  *Corrected 2026-11-25 (Metalaria, PR #102): the first version of this bullet said
+  the duty is written "unless `ms[0xF2D] == 2 && ms[0xF36] == 2`", which reads the
+  gate the wrong way round. Metalaria confirmed it by running the handler in Unicorn
+  and read the bytes on a running stock unit: `ms[0xF2D]` / `ms[0xF36]` is 0 / 0 in
+  Automatic and 2 / 2 in Continuity, the only two functions that pass. Diode is
+  2 / 1, so stock does not pass the tone there.*
+- **The countdown** (Metalaria, PR #102; code re-checked here): `0x08029D0C` and
+  `0x08040508` run the same code. If `C1DT != 0`, increment `0x20002D67` and at 11
+  clear both `C1DT` and the counter; otherwise clear the counter. It is the key
+  click's timer, stepping every 10 ms on a running stock unit. Every PC3 edge restarts
+  it, so stock's beep lasts 11 ticks past the last edge: 100.0 and 101.0 ms from the
+  first step to 0 in two releases, which is 100–110 ms after the last edge depending
+  on where it falls in the tick. Part E stopped 25 ms after the last edge; it now
+  stops after 105 ms to match.
 
 So stock's beep is driven by **rising edges on PC3**, which something outside the
 MCU produces. The most likely source is the meter chip's own buzzer output. It does
@@ -235,7 +250,12 @@ discrepancy.
   edge, NVIC priority 6. `EXINT3_IRQHandler` only counts edges (`pc3_edges`).
 - **Start:** at least 2 new edges in one buzzer-task sample (1 ms while beeping,
   5 ms idle; at ~2.2 kHz a 5 ms sample holds ~11 edges).
-- **Stop:** no edge for 25 ms.
+- **Stop:** no edge for 25 ms. *Changed 2026-11-25 to 105 ms, the middle of stock's
+  100–110 ms (Part C, countdown), after Metalaria's review on PR #102. Everything else
+  in this part was measured on the 25 ms build; the change touches only when the beep
+  ends. Image `openscope-2c53t-pc3edge-hold105-coldtrace-meter.bin`, sha256
+  `efb9c3a1198c63f8…`; by ear on unit #4 the operator reports "all working fine" (weak
+  evidence; the tail itself was not timed).*
 - **Unchanged from Part D:** the threshold veto, the fallback to the decoded reading
   until a tone has been seen in the session, and the gate.
 
@@ -331,9 +351,12 @@ a short, which agrees with Part D's "hardware threshold above 47 Ω".
   display task.
 - **Established (Part B):** the real touch-to-beep delay is ~676 ms median
   (475–1012) on OpenScope against 33 ms (24–39) on stock, on the same unit and probes.
-- **Established (Part C, static):** stock beeps from rising edges on **PC3** via
-  EXTI3, gated on meter state, by setting the TMR11 buzzer duty directly. It does not
-  use the decoded frame.
+- **Established (Part C, static, with Metalaria's live read on PR #102):** stock
+  beeps from rising edges on **PC3** via EXTI3 by setting the TMR11 buzzer duty
+  directly, only in the Automatic and Continuity functions, and stops 100–110 ms after
+  the last edge. It does not use the decoded frame. OpenScope beeps in continuity only
+  (it has no Automatic function), stays silent in Diode as stock does, and now stops
+  105 ms after the last edge (25 ms in the build Part E measured).
 - **Established (Part E):** PC3 carries the meter SoC's buzzer tone, as #94 found on
   unit #2: 2287–2291 rising edges/s in each of five holds on unit #4 under OpenScope
   with stock's pull-up, and 0 with the probes open. The buzzer now counts those edges
