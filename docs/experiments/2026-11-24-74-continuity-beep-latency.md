@@ -158,7 +158,8 @@ is right; an earlier draft of this paragraph blamed it by mistake.) And CLAUDE.m
 "IOMUX remap: `(reg & ~0xF000) | 0x2000` at AFIO+0x08 — disables JTAG-DP" is this
 EXTICR1 write. It maps EXTI3 to PC3 and has nothing to do with JTAG. `fpga.c:5327`
 already doubted that note. Corrected 2026-11-24 in `FPGA_TASK_ANALYSIS.md` §8,
-`CLAUDE.md` and `AGENTS.md`.
+`CLAUDE.md` and `AGENTS.md`, then in the four copies above and the two `fpga.c`
+comments that cited the remap note; `HARDWARE_PINOUT.md` now also names PC3.
 
 ### Part D: PC3 on OpenScope (same build, continuity mode)
 
@@ -344,5 +345,5 @@ a short, which agrees with Part D's "hardware threshold above 47 Ω".
   the beep now).
 - **Follow-up:** (1) ~~sample PC3 on OpenScope~~ done (Parts D, E). (2) ~~drive the
   buzzer from PC3 edges~~ done (Part E). (3) Re-run the Part B audio test on this build
-  for a number. (4) Measure the SoC's threshold with a resistor ladder. (5) Correct
-  the four other copies of the old EXTI3 note listed in Part C.
+  for a number. (4) Measure the SoC's threshold with a resistor ladder. (5) ~~Correct
+  the four other copies of the old EXTI3 note listed in Part C~~ done.

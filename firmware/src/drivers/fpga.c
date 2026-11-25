@@ -5303,8 +5303,8 @@ void fpga_init(void)
     /* ---------------------------------------------------------------
      * Step 1: AFIO remap — disable JTAG-DP, keep SW-DP
      * This frees PB3/PB4/PB5 for SPI3 use.
-     * Stock firmware: AFIO_PCF0 = (AFIO_PCF0 & ~0xF000) | 0x2000
-     * AT32 equivalent: IOMUX_REMAP6 SWJ_JTAG remap
+     * Stock's (reg & ~0xF000) | 0x2000 at AFIO+0x08 is EXTICR1, not this.
+     * Here: SWJ_CFG in IOMUX->remap plus the remap7 GMUX field (below).
      * --------------------------------------------------------------- */
     /* Enable IOMUX clock (should already be enabled from main.c) */
     crm_periph_clock_enable(CRM_IOMUX_PERIPH_CLOCK, TRUE);
@@ -5324,8 +5324,8 @@ void fpga_init(void)
     /* Read-modify-write the compatible remap register:
      * - Set bits [26:24] = 010 (JTAG off, SWD on)
      * - Clear bit [28] = 0 (SPI3 on PB3/PB4/PB5)
-     * Stock firmware: (reg & ~0xF000) | 0x2000 at AFIO+0x08 per CLAUDE.md,
-     * but the actual SWJ_CFG is at bits [26:24] of offset 0x04. */
+     * Stock's (reg & ~0xF000) | 0x2000 at AFIO+0x08 is EXTICR1 (EXTI3 to
+     * PC3, the continuity buzzer line; EXP-74), not SWJ_CFG. */
     /* AT32F403A pin remapping: keep legacy SWJ_CFG and SWJTAG_GMUX aligned.
      *
      * The legacy SWJ_CFG in IOMUX->remap (offset 0x04) defaults to 000
