@@ -10,6 +10,7 @@
 #include "scope_cal.h"
 #include "scope_timebase.h"
 #include "battery.h"
+#include "power.h"
 #include "at32f403a_407.h"
 #include <stdio.h>
 
@@ -70,8 +71,7 @@ void draw_status_bar(void)
                                     th->text_secondary, 0x0000, &font_medium);
             /* Brief delay so user can see the message */
             for (volatile uint32_t d = 0; d < 100000000; d++);
-            GPIOC->clr = (1U << 9);  /* PC9 LOW = power off */
-            while (1);
+            power_off();             /* PC9 LOW, then reset (power.h) */
         }
     }
 }

@@ -20,7 +20,7 @@ Reverse engineering and clean-room rewrite of the firmware for the **FNIRSI 2C53
 ### Confirmed Pin Assignments
 | Function | Pin | Notes |
 |----------|-----|-------|
-| Power hold | PC9 | Must be HIGH immediately at boot or device shuts off |
+| Power hold | PC9 | Latches the battery path: must go HIGH before POWER is released, or a battery boot dies. USB powers the board regardless of PC9, so a PC9 LOW on USB powers nothing off. See the charge-screen note under Key Conventions |
 | LCD backlight | PB8 | HIGH to enable |
 | FPGA SPI3 data | PB3 (SCK), PB4 (MISO), PB5 (MOSI) | Bulk ADC data from FPGA (JTAG pins, remapped) |
 | FPGA SPI3 CS | PB6 (GPIO) | Software chip select for FPGA SPI3 |
@@ -140,7 +140,7 @@ make renode-test                 # 5-second smoke test
 
 - Target is Artery AT32F403A (STM32F1-compatible registers for GPIO/EXMC, but uses AT32 HAL for clock/peripheral init)
 - IOMUX (AFIO) clock MUST be enabled for EXMC alternate function pins to work
-- Power hold (PC9 HIGH) must be the very first operation in main()
+- Power hold: `power_boot_decide()` (`src/drivers/power.c`) must be the very first operation in main(). It latches PC9 HIGH at once when POWER is held or the boot is not a plain power-on (pinhole, IAP post-flash jump, SW/WDT reset), and leaves it LOW for the charge screen when USB powered the unit up or after our own power-off on USB, as stock does (`reverse_engineering/analysis_v120/stock_charge_screen_2026-11-24.md`). Power-off is `power_off()`: PC9 LOW, then a system reset, never PC9 LOW alone
 - Hardware interaction code must carry academic-style explanatory comments near
   the code that touches the device: state the hardware source of truth,
   protocol/register/frame semantics, why the sequence or exponent/range rule is
@@ -193,7 +193,7 @@ make renode-test                 # 5-second smoke test
 - 4 themed UI modes: oscilloscope (with FFT/waterfall), multimeter (large digits), signal generator, navigable settings
 - Theme switching (4 themes) wired through all screens
 - FreeRTOS scheduler running with display + input tasks
-- Power management: PC9 hold, PB8 backlight, POWER button 3-2-1 countdown shutdown, low-battery auto-off at 3.3V
+- Power management: PC9 hold, PB8 backlight, POWER button 3-2-1 countdown shutdown, low-battery auto-off at 3.3V, stock-style charge screen when USB powers the unit up or it is switched off on USB (EXP-75, bench-confirmed 2026-11-25)
 - **USB HID bootloader** — closed-case firmware updates via `make flash`, LCD status screen, POWER button exit, auto-reboot after flash
 - Battery monitor: PB1 ADC with 16-sample averaging, percentage display, USB charge detection ("CHG"), LiPo protection shutdown
 - SDL3 native LCD viewer with interactive button input for emulator

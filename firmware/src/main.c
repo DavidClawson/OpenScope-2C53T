@@ -45,6 +45,8 @@ extern void system_clock_config(void);
 #include "usb_debug.h"
 #include "rtt.h"
 #include "fault.h"
+#include "power.h"
+#include "charge_screen.h"
 #include "redraw_gate.h"
 #include "scope_mask.h"
 
@@ -887,10 +889,12 @@ int main(void)
     *(volatile uint32_t *)0x40021018 = 0x0000FFFD;
     *(volatile uint32_t *)0x4002101C = 0x3FFFFFFF;
 #else
-    /* Power hold — PC9 HIGH to keep device on (MUST be first!) */
-    crm_periph_clock_enable(CRM_GPIOC_PERIPH_CLOCK, TRUE);
-    GPIOC->cfghr = (GPIOC->cfghr & ~(0xF << 4)) | (0x3 << 4); /* PC9 push-pull 50MHz */
-    GPIOC->scr = (1 << 9);  /* PC9 HIGH */
+    /* Power hold (MUST be first!). POWER held, or any reset that is not a
+     * plain power-on: PC9 HIGH right away, as before. A power-on with POWER
+     * up means USB switched us on, and our own power-off asks for the same:
+     * PC9 stays LOW and the charge screen runs once the LCD is up. See
+     * drivers/power.h. */
+    power_boot_t boot_mode = power_boot_decide();
 
     /* Set VTOR. Normal build runs at 0x08004000 under our HID bootloader;
      * GUEST_BUILD runs at 0x08007000 under the FNIRSI stock bootloader (unit #2). */
@@ -1030,6 +1034,17 @@ int main(void)
     }
 
     wdt_counter_reload();
+
+#ifndef EMULATOR_BUILD
+    /* Switched on by USB, or switched off while on USB: sit on the charge
+     * screen with the battery path released until POWER is held, then latch
+     * and boot as if POWER had started us. Nothing below has run yet (no
+     * FPGA, no USB, no scheduler), which is what an "off" unit should be. */
+    if (boot_mode == POWER_BOOT_CHARGE) {
+        charge_screen_run(power_boot_after_poweroff());
+        power_latch_on();
+    }
+#endif
 
     /* First frame, then light the backlight. Painting before PB8 goes HIGH is
      * what eliminates the boot static (uninitialized GRAM was visible from

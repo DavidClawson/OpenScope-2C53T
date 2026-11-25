@@ -72,6 +72,8 @@ C_SOURCES += src/drivers/usb_debug.c
 C_SOURCES += src/drivers/fw_loader.c
 C_SOURCES += src/drivers/rtt.c
 C_SOURCES += src/drivers/fault.c
+C_SOURCES += src/drivers/power.c
+C_SOURCES += src/ui/charge_screen.c
 C_SOURCES += src/dsp/signal_gen.c
 C_SOURCES += src/dsp/shared_mem.c
 C_SOURCES += src/ui/persistence.c
@@ -648,6 +650,15 @@ $(BUILD_DIR)/test_redraw_gate: tests/test_redraw_gate.c src/ui/redraw_gate.h | $
 	$(HOST_CC) -std=gnu11 -Wall -Wextra -Isrc/ui $< -o $@
 
 test-redraw-gate: $(BUILD_DIR)/test_redraw_gate
+	$<
+
+# Boot classification for the charge screen (drivers/power.c): which resets
+# land on the charge screen and which boot, with four wrong classifiers as
+# negative controls. See tests/test_power_boot.c.
+$(BUILD_DIR)/test_power_boot: tests/test_power_boot.c src/drivers/power.c src/drivers/power.h | $(BUILD_DIR)
+	$(HOST_CC) -std=gnu11 -Wall -Wextra -Werror -DPOWER_HOST_TEST -Isrc/drivers $< src/drivers/power.c -o $@
+
+test-power-boot: $(BUILD_DIR)/test_power_boot
 	$<
 
 # FFT on the live acquisition record (spec fft-live, S1/S3 host half):

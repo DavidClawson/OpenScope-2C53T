@@ -35,6 +35,7 @@
 #include "at32f403a_407.h"
 #include "button_scan.h"
 #include "settings_store.h"
+#include "power.h"
 #include "task.h"
 #include <stdio.h>
 #include <string.h>
@@ -1118,11 +1119,10 @@ uint8_t input_handle_button(button_id_t button, QueueHandle_t dq)
              * user, and before the rail drops. */
             (void)settings_store_flush(settings_now_ms());
 
-            /* Drop PC9 LOW — device powers off */
-            GPIOC->clr = (1U << 9);
-
-            /* Should never reach here */
-            while (1);
+            /* PC9 LOW, then reset (stock does the same). On battery the
+             * rail drops; on USB, where dropping PC9 alone used to hang on
+             * this frame, the reset lands on the charge screen. */
+            power_off();
         }
         power_done:
         break;
