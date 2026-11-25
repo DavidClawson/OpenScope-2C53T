@@ -21,6 +21,22 @@
 - `FNIRSI_1013D_Firmware/`
 - `FNIRSI_1014D_Firmware/`
 
+### fnirsi-2c53t-link (stock V1.2.0 observed over USB)
+- **Repo:** https://github.com/Metalaria/fnirsi-2c53t-link
+  - A builder that adds a HID interface to FNIRSI's own V1.2.0 image. The user supplies
+    the image and no firmware is distributed. The patched unit keeps stock's behaviour
+    and its calibration, and a host tool reads any block of flash or RAM while stock runs
+  - Read-only: it does not write to the instrument's memory and cannot read peripheral
+    registers. It needs neither SWD nor an opened case
+  - `fnlink.py snapshot` saves a labelled set of RAM blocks after each step of a
+    procedure; `fnlink.py watch` reads one small block every 2 ms and logs each change
+    with the host's clock
+  - Notes on stock taken that way: `docs/stock_v120_notes.md`, `docs/formats.md`
+    (meter frames, scope records, stock's own measurement blocks) and the dated
+    `docs/hardware_results_*.md`
+  - Captures made for this project's open questions: `sessions/2026-11-25_openscope_parity/`
+    (#103: paused zoom, key-scan tick, key click, auto-off tick)
+
 ### Key Files in Reference Repos
 
 | File | What it contains |
