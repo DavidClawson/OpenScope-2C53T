@@ -414,6 +414,9 @@ static void scope_render(uint32_t frame, redraw_action_t action)
     (void)action;
 
 #ifdef FEATURE_FFT
+    /* X-Y borrows the offset references; this restores them when it is
+     * left (scope_ui.c, 2026-11-27). */
+    scope_xy_note_view(scope_view == SCOPE_VIEW_XY);
     if (scope_view == SCOPE_VIEW_FFT)       { ui_scope_full_draws++;
                                               draw_fft_screen();        return; }
     if (scope_view == SCOPE_VIEW_SPLIT)     { ui_scope_full_draws++;

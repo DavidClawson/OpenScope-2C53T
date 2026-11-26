@@ -2092,6 +2092,33 @@ static void xy_line_persist(int x0, int y0, int x1, int y1)
     }
 }
 
+/* The X-Y view borrows the two vertical-offset references for its centring
+ * servo below. Until 2026-11-27 it set both to 2048 on its first visit and
+ * left them wherever its servo got them on the way out: on s00500's unit
+ * DAC1 2048 -> 2723 and TMR13 2114 -> 2623 after one visit (that build armed
+ * TMR13 at 2114; main arms 2544), moving each channel's 0 V by 60-80 counts
+ * in the time view until a reboot. Now the display task notes
+ * every scope frame's view (scope_xy_note_view, from main.c's scope_render):
+ * entering X-Y saves the codes in force and starts the servo from them,
+ * leaving restores them. The servo runs in the same task, so nothing races
+ * the restore. A code of 0 (never armed: the emulator) is not restored. */
+static bool     xy_on;          /* the last scope frame was X-Y */
+static bool     xy_reseed;      /* entered: start the servo from the saved codes */
+static uint16_t xy_saved1, xy_saved2;
+
+void scope_xy_note_view(bool xy)
+{
+    if (xy && !xy_on) {
+        xy_saved1 = scope_trigger_dac_last();
+        xy_saved2 = scope_trigger_ch2_last();
+        xy_reseed = true;
+    } else if (!xy && xy_on) {
+        if (xy_saved1 != 0u) scope_trigger_dac_raw(xy_saved1);
+        if (xy_saved2 != 0u) scope_trigger_ch2_raw(xy_saved2);
+    }
+    xy_on = xy;
+}
+
 void draw_xy_screen(void)
 {
     const theme_t *th = theme_get();
@@ -2101,12 +2128,17 @@ void draw_xy_screen(void)
     const uint16_t cx   = x0 + side / 2;
     const uint16_t cy   = y0 + side / 2;
 
-    /* One-time bring-up: offset DACs (CH1 DAC1 + CH2 TMR13/PA6) and the shared
-     * persistence buffer, borrowed here for the phosphor trail (X-Y and the
-     * time-domain persistence overlay never run at once). */
-    static bool xy_init = false;
+    /* On each entry: the offset DACs (CH1 DAC1 + CH2 TMR13/PA6) start from
+     * the codes the time view had (saved by scope_xy_note_view, restored on
+     * the way out), and the shared persistence buffer, borrowed here for the
+     * phosphor trail (X-Y and the time-domain persistence overlay never run
+     * at once), starts clean. */
     static int  xy_dac1 = 2048, xy_dac2 = 2048;
-    if (!xy_init) {
+    static bool xy_seeded = false;               /* the auto-scale below */
+    if (xy_reseed) {
+        xy_reseed = false;
+        xy_dac1 = xy_saved1 ? (int)xy_saved1 : 2048;
+        xy_dac2 = xy_saved2 ? (int)xy_saved2 : 2048;
         scope_trigger_dac_init();
         scope_trigger_ch2_init();
         scope_trigger_dac_raw((uint16_t)xy_dac1);
@@ -2114,7 +2146,7 @@ void draw_xy_screen(void)
         if (!persist_is_initialized()) persist_init();
         persist_set_mode(PERSIST_LOW);             /* short phosphor tail */
         persist_clear();
-        xy_init = true;
+        xy_seeded = false;
     }
 
     /* Margins + title: background repaint of the strips either side of the
@@ -2172,8 +2204,7 @@ void draw_xy_screen(void)
 
         /* Smoothed auto-scale: rounded EMA (alpha 1/8) of centre and span. */
         static int xmid = 128, ymid = 128, rng = 64;
-        static bool seeded = false;
-        if (!seeded) { xmid = xmid_raw; ymid = ymid_raw; rng = rng_raw; seeded = true; }
+        if (!xy_seeded) { xmid = xmid_raw; ymid = ymid_raw; rng = rng_raw; xy_seeded = true; }
         else {
             xmid += ((xmid_raw - xmid) + (xmid_raw >= xmid ? 4 : -4)) / 8;
             ymid += ((ymid_raw - ymid) + (ymid_raw >= ymid ? 4 : -4)) / 8;
