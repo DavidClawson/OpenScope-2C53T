@@ -22,6 +22,7 @@
  */
 
 #include "fpga.h"
+#include "acq_gate.h"
 #include "fpga_cal_table.h"
 #include "fpga_meter_plan.h"
 #include "meter_data.h"
@@ -4117,15 +4118,16 @@ static void fpga_warmtest_acq_task(void *pv)
          * after the -28 offset is a plausible flat 227, and one spurious
          * PC0 glitch would otherwise latch the scope UI's demo-kill flag on
          * garbage (the same unanchored-measurement trap as the /2 reads).
-         * Accept if either window carried the 0x80 data-ready marker, or the
-         * CH1 buffer is non-constant (the marker appears only in the FIRST
-         * window after data-ready per Stlkv, so a marker-only gate could
-         * false-negative; varying data is accepted on its own merits). */
-        bool marker = (s1 == 0x80) || (s2 == 0x80);
-        bool varies = false;
-        for (int i = 1; i < 1024; i++) {
-            if (w1[i] != w1[0]) { varies = true; break; }
-        }
+         * Accepted until 2026-11-26: the 0x80 data-ready marker in either
+         * window, or a non-constant CH1 buffer (the marker appears only in
+         * the FIRST window after data-ready per Stlkv, so a marker-only gate
+         * could false-negative; varying data is accepted on its own merits).
+         * Now acq_gate.h (EXP-82): the marker, either channel varying, or both
+         * opcode-phase status bytes driven (not the pull-up's 0xFF). The last
+         * term is what lets a RAILED input through: its samples are a flat
+         * 227 exactly like a dead bus, and until 2026-11-26 such a frame was
+         * never committed, so a clipped input froze the last trace. */
+        bool live = acq_frame_live(s1, s2, w1, w2, 1024);
         /* The old third gate term tested acq_hdr_ch1[2]==0x01 as a stock
          * "buffer-valid" flag. Refuted 2026-08-15 by stock's own dispatch:
          * stock discards only two bytes, so that byte is sample[0], and on
@@ -4136,7 +4138,7 @@ static void fpga_warmtest_acq_task(void *pv)
          * read yields a frame that is half real data, half fabricated 0xFF —
          * which "varies" and would pass. If spi3_hw_timeouts moved during the
          * two reads, at least one byte is fabricated: reject. */
-        if ((marker || varies) && fpga.spi3_hw_timeouts == hw_to_before) {
+        if (live && fpga.spi3_hw_timeouts == hw_to_before) {
             fpga.acq_last_rot = fpga_acq_unrotate_staging(triggered);   /* dev plan 2.3: seam-based */
             acq_stage_ordered = acq_unrotate && fpga.acq_last_rot >= 0;
             fpga_acq_frames_commit();
