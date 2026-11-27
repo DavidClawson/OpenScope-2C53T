@@ -384,6 +384,7 @@ typedef struct {
     volatile uint32_t acq_edge_kept;       /* edge filter: strobed records of the chosen edge */
     volatile uint32_t acq_edge_dropped;    /* edge filter: strobed records of the other edge */
     volatile uint32_t acq_edge_unknown;    /* edge filter: not classifiable -> committed unfiltered */
+    volatile uint32_t acq_edge_starved;    /* edge filter: other edge, shown anyway (AUTO, nothing for a budget) */
     volatile uint32_t pc0_edges;           /* PC0 (data-ready) falling edges via EXINT0.
                                             * One per fresh ready event — the instrument
                                             * for engine cycle rate per trigger regime,

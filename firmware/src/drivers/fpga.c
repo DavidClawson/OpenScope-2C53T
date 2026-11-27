@@ -4094,9 +4094,11 @@ static void fpga_warmtest_acq_task(void *pv)
              * free-running buffer so a quiet or off-level input still moves. */
         }
         /* Edge filter (2026-09-22). A strobed record whose trigger crossing
-         * runs the wrong way is handled exactly like a read that found the
-         * roll: NORMAL/SINGLE keep holding (SINGLE is not consumed), AUTO
-         * keeps its fallback budget. Classified on CH1, where reg 0x08's
+         * runs the wrong way is handled like a read that found the roll:
+         * NORMAL/SINGLE keep holding (SINGLE is not consumed). AUTO shows it
+         * once nothing has been committed for a whole budget
+         * (trig_edge_show_wrong_edge, 2026-11-27: AUTO froze when every
+         * record was the other edge). Classified on CH1, where reg 0x08's
          * level was measured. UNKNOWN (seam not recoverable -- typically a
          * fast periodic signal, whose display the soft trigger already
          * aligns to the chosen edge) is committed unfiltered and counted. */
@@ -4107,7 +4109,11 @@ static void fpga_warmtest_acq_task(void *pv)
                 fpga.acq_edge_unknown++;
             } else if ((ec == TRIG_EDGE_CLASS_RISING) != want_rising) {
                 fpga.acq_edge_dropped++;
-                continue;
+                if (!trig_edge_show_wrong_edge(auto_mode,
+                                               (int32_t)(last_read_tick - last_commit_tick),
+                                               fpga_acq_auto_wait_get()))
+                    continue;
+                fpga.acq_edge_starved++;
             } else {
                 fpga.acq_edge_kept++;
             }
