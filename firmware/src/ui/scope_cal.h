@@ -10,66 +10,58 @@
  *
  * WHERE THE NUMBERS COME FROM
  * ---------------------------
- * docs/experiments/2026-08-17-08-per-range-gain-ladders.md, bench unit #1.
- * Slope method: span measured at five drive amplitudes per range, mVpp
- * regressed against counts, so the constant noise-floor term lands in the
- * intercept instead of inflating the gain. n = 5 on every entry below.
+ * Two units since 2026-11-27, combined by the rule in
+ * docs/calibration/scope_gain.md (which lists every unit's numbers):
+ *   - s00500's unit: ranges 0-9, both channels, 4-9-level slope fits against
+ *     the 2C53T's own generator, whose scale was set by a Rigol DS1104Z after
+ *     Self-Cal (absolute to about +/-1-2 %).
+ *   - sparsematrix's unit (#95): ranges 4-9, both channels, one level per
+ *     point against a 4-digit DMM on the same node (about +/-0.5 %).
+ * Ranges 4-7 are the mean of the two (they agree within 2.6 %), ranges 0-3
+ * are s00500's, ranges 8-9 sparsematrix's (s00500's fits there span too few
+ * counts to use). Both channels agree within 1.8 % on every range, and every
+ * step is within 2 % of the 1-2-5 attenuator ladder (x2, x2.5, x2, ...).
+ *
+ * Until 2026-11-27 the table was bench unit #1's (2026-08-17, EXP-08, slope
+ * method at five amplitudes), scaled by 0.92 against a JDS6600; withdrawn in
+ * scope_cal.c, with how far each row was off.
  *
  * WHY THERE ARE TIERS
  * -------------------
- * The measurement is not equally good everywhere, and the previous version of
- * this table (two hardcoded constants in scope_ui.c) is the reason the
- * distinction is now structural rather than a comment. Those two constants
- * claimed 2.882 mV/count on range 2 and 6.494 mV/count on range 8. Range 2
- * rails on both channels and produces no usable span at all, and range 8
- * measures 279 mV/count — a factor of 43 out. They were plausible, stable,
- * and wrong, and they had been on the instrument face for days.
+ * The measurement is not equally good everywhere, and the version of this
+ * table before unit #1's (two hardcoded constants in scope_ui.c) is the reason
+ * the distinction is structural rather than a comment. Those two constants
+ * claimed 2.882 mV/count on range 2 and 6.494 mV/count on range 8. Range 8
+ * measures about 195 mV/count, a factor of 30 out. They were plausible,
+ * stable, and wrong, and they had been on the instrument face for days.
  *
- *   MEASURED     ranges 5/6/7. The two channels agree within 6%, the ladder
- *                is a clean 1-2-4 doubling, and the numbers reproduce BOTH an
- *                independent mux-code sweep on this unit (EXP-06: 21.23 /
- *                42.04 / 91.41) and Stlkv's measurements on a DIFFERENT unit
- *                with a different rig (20 / 40 / 80). Three methods, two
- *                units, one answer.
- *   PROVISIONAL  ranges 4/8/9. Measured the same way, but the two channels
- *                disagree by 25-48%, which is the signature of one fixed
- *                amplitude set under-serving both ends of the sweep: too
- *                small to move range 9, big enough to clip range 4. The
- *                number is the right order of magnitude and nothing more.
- *   NONE         ranges 0-3. Both channels rail. EXP-11 split this into two
- *                different faults: 0/1/2 sit at 255 even with NO input and
- *                after centring, so they are pinned rather than overdriven;
- *                range 3 is a genuine sensitive row (~5.6 mV/count) that
- *                clips because its offset cannot be centred — the injector
- *                runs out of travel. Range 3 is therefore a firmware problem,
- *                not a dead tap, and is the one worth chasing.
+ *   MEASURED     ranges 0-7. Ranges 4-7: two units within 2.6 %. Ranges 0-3:
+ *                one unit, 7-9-level fits with residuals under one count,
+ *                both channels within 1.3 %.
+ *   PROVISIONAL  ranges 8-9. One unit at usable resolution. The label carries
+ *                a leading '~'.
+ *   NONE         no range at present. Kept for out-of-domain arguments and
+ *                for any future range without a number.
  *
- * A PROVISIONAL entry still returns a number, because "roughly 280 mV per
+ * A PROVISIONAL entry still returns a number, because "roughly 195 mV per
  * count" beats a raw count for a user trying to read a trace. A NONE entry
  * returns 0.0f and the caller MUST fall back to honest ADC counts. That
  * contract is the whole point: a confident wrong number is worse than a raw
  * count, and callers are not allowed to invent one.
  *
- * THE ABSOLUTE SCALE IS ONE MULTIPLY AWAY FROM CORRECT
- * ----------------------------------------------------
- * Every number here traces back to an amplitude *commanded* from the ESP32
- * signal generator, which has never been checked against a calibrated source.
- * Its frequency readback is already known to be off by ~0.82x, so assuming
- * its amplitude is exact would be optimistic. If it turns out to be off by a
- * scale factor, every entry in this table is off by that same factor —
- * uniformly, because they were all taken through the same source on the same
- * evening.
- *
- * That is why SCOPE_CAL_SOURCE_SCALE exists and is applied to every entry at
- * lookup time rather than baked into the table. When a trusted source arrives
- * on the bench, measuring ONE range recovers the factor and correcting it
- * here rescales the whole instrument. Do not "fix" individual rows by hand
- * to make them agree with a reference; that would break the one property
- * that makes this recoverable.
+ * ONE SCALE FOR EVERY ENTRY
+ * -------------------------
+ * SCOPE_CAL_SOURCE_SCALE multiplies every entry at lookup time. Unit #1's
+ * table needed 0.92 (its generator over-read by about 8 %); the current
+ * table comes from absolute references and needs 1.0. The knob stays so that
+ * a correction common to the whole table remains one constant. Do not "fix"
+ * individual rows by hand to make them agree with a reference: add the
+ * reference's unit to docs/calibration/scope_gain.md and re-derive.
  *
  * WHAT THIS TABLE IS NOT
  * ----------------------
- * - Not per-unit. These are bench unit #1's numbers compiled into the image.
+ * - Not per-unit. These are numbers shared by every image, from the units in
+ *   docs/calibration/scope_gain.md.
  *   Factory per-device cal exists in MCU flash at 0x08006000 (see
  *   docs/experiments and the factory-cal memory note) and our app overwrites
  *   it. Wiring that up is a separate job.
@@ -115,38 +107,28 @@ extern "C" {
 #define SCOPE_CAL_COUNTS_PER_DIV   32.0f
 
 /*
- * Correction for the calibration source's true-vs-commanded amplitude.
+ * Correction for the calibration source's true-vs-commanded amplitude,
+ * applied to every entry.
  *
- * 0.92f, measured against a JDS6600 (crystal-referenced, ~1-2% amplitude
- * accuracy) — the raw table above was taken through the ESP32 siggen, which
- * over-reads gain ~8%, so every reported voltage at 1.0f was ~8% high.
+ * 1.0f since 2026-11-27: the table comes from two absolutely referenced
+ * units (a self-calibrated Rigol behind one, a DMM behind the other; see
+ * docs/calibration/scope_gain.md), so there is nothing to correct.
  *
- * Provenance (two sessions, one-source-into-both, timebase 0x10, centered,
- * slope fit of span vs commanded Vpp):
- *   - EXP-20 (2026-08-21): CH1 r6 0.919, r7 0.884, DC r7 0.874.
- *   - EXP-21 (2026-08-28): JDS *CH1* driven into BOTH scope inputs in turn.
- *       raw slopes r6: CH1 25.2, CH2 25.3 cts/Vpp — identical to 0.4%, so the
- *       two frontends respond the same and ONE shared scale is correct; the
- *       earlier apparent ~5% CH1/CH2 gap was the generator's own channel
- *       mismatch, not the device. Per-channel SCALE r6 0.924 / 0.948,
- *       r5 0.943 / 0.966.
- * CH1 r6 reproduced across the two sessions to 0.5% (0.919 vs 0.924). The
- * grand center across ranges is ~0.92; the ~0.874-0.966 spread is within the
- * source's amplitude accuracy plus a mild range trend, and a single constant
- * cannot fully reconcile the stored table's own CH1-vs-CH2 row inconsistency
- * (42.95 vs 41.71 at r6, ~3%). Correcting a measured, reproduced ~8% error
- * with a constant good to ~2% is strictly better than leaving it uncorrected.
- *
- * Absolute scale is still limited by the JDS's amplitude accuracy; a
- * lab-grade source would refine (not overturn) this. See the header comment
- * above before changing, and change ONLY this rather than individual rows.
+ * WITHDRAWN 2026-11-27: 0.92f, which corrected bench unit #1's table. That
+ * table was taken through the ESP32 siggen at commanded amplitudes, which
+ * over-read gain about 8 %. Measured against a JDS6600 (~1-2 % amplitude
+ * accuracy): EXP-20 (2026-08-21) CH1 r6 0.919, r7 0.884, DC r7 0.874;
+ * EXP-21 (2026-08-28) one JDS channel into both inputs, raw r6 slopes CH1
+ * 25.2 / CH2 25.3 counts per Vpp, per-channel scale r6 0.924 / 0.948,
+ * r5 0.943 / 0.966. Against the two units now in the table, unit #1's rows
+ * times 0.92 were within 3.6 % on ranges 5-7: the correction was right.
  */
-#define SCOPE_CAL_SOURCE_SCALE     0.92f
+#define SCOPE_CAL_SOURCE_SCALE     1.0f
 
 typedef enum {
     SCOPE_CAL_NONE = 0,     /* unusable range — caller must show ADC counts */
-    SCOPE_CAL_PROVISIONAL,  /* right order of magnitude, channels disagree   */
-    SCOPE_CAL_MEASURED,     /* cross-validated three ways on two units       */
+    SCOPE_CAL_PROVISIONAL,  /* one unit at usable resolution: read with '~' */
+    SCOPE_CAL_MEASURED,     /* two units agree, or one unit's multi-level fit */
 } scope_cal_tier_t;
 
 /*

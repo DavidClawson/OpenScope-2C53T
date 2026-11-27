@@ -5,18 +5,17 @@
  * unit test can second-guess them. What is tested is the set of PROPERTIES
  * that stop this table failing the way its predecessor failed:
  *
- *   1. An uncalibrated range returns exactly 0.0f, so a caller that forgets
- *      to check gets an obviously-zero volt reading rather than a plausible
- *      small one.
+ *   1. "No calibration" returns exactly 0.0f, so a caller that forgets to
+ *      check gets an obviously-zero volt reading rather than a plausible
+ *      small one. Since 2026-11-27 every range has a gain, so this is
+ *      exercised through out-of-domain arguments.
  *   2. Out-of-domain channel/range arguments return "no calibration" instead
  *      of clamping into a neighbour.
- *   3. The source-scale factor reaches every entry uniformly, which is the
- *      property that makes one calibrated measurement able to rescale the
- *      whole instrument later.
- *   4. The MEASURED ranges really do agree between channels and really do
- *      form the doubling ladder claimed in the header, so if someone edits a
- *      row to "fix" a reading, the claim in the comment stops being true and
- *      the build says so.
+ *   3. Every row is the rule in docs/calibration/scope_gain.md applied to
+ *      the per-unit numbers stated here, times the one source scale. A row
+ *      edited on its own to "fix" a reading fails.
+ *   4. The claims the tiers rest on hold: the units agree, the channels
+ *      agree, and the ranges form the 1-2-5 ladder the header states.
  *   5. Labels are derived from the gain rather than hardcoded, and mark
  *      provisional entries.
  */
@@ -39,19 +38,41 @@ static int failures = 0;
         }                                                                     \
     } while (0)
 
-static void test_uncalibrated_ranges_return_zero(void)
+/*
+ * The per-unit numbers (mV per count at the BNC), stated independently of
+ * the table: docs/calibration/scope_gain.md. 0 = not measured, or not at
+ * usable resolution (s00500's ranges 8-9; see the doc).
+ */
+static const float unit_s00500[2][SCOPE_CAL_RANGE_COUNT] = {
+    { 0.4028f, 0.7981f, 1.9872f, 3.927f, 7.866f, 20.01f, 39.79f, 78.90f, 0.0f, 0.0f },
+    { 0.3978f, 0.7928f, 1.9732f, 3.906f, 7.783f, 19.86f, 39.39f, 77.11f, 0.0f, 0.0f },
+};
+static const float unit_sparsematrix[2][SCOPE_CAL_RANGE_COUNT] = {   /* #95 */
+    { 0.0f, 0.0f, 0.0f, 0.0f, 7.77f, 19.83f, 39.46f, 78.19f, 193.5f, 384.2f },
+    { 0.0f, 0.0f, 0.0f, 0.0f, 7.93f, 19.98f, 39.95f, 79.18f, 196.0f, 391.1f },
+};
+
+/* The rule: the mean of the units that measured an entry. */
+static float rule(uint8_t row, uint8_t r)
+{
+    const float a = unit_s00500[row][r], b = unit_sparsematrix[row][r];
+    if (a > 0.0f && b > 0.0f) return (a + b) * 0.5f;
+    return (a > 0.0f) ? a : b;
+}
+
+static void test_every_range_has_a_gain(void)
 {
     for (uint8_t ch = 1; ch <= 2; ch++) {
-        for (uint8_t r = 0; r <= 3; r++) {
-            CHECK(scope_cal_mv_per_count(ch, r) == 0.0f,
-                  "ch%u r%u: railed range must return exactly 0.0f, got %f",
-                  ch, r, (double)scope_cal_mv_per_count(ch, r));
-            CHECK(scope_cal_get_tier(ch, r) == SCOPE_CAL_NONE,
-                  "ch%u r%u: railed range must be tier NONE", ch, r);
-            CHECK(scope_cal_volts_per_div(ch, r) == 0.0f,
-                  "ch%u r%u: railed range must have no volts/div", ch, r);
+        for (uint8_t r = 0; r < SCOPE_CAL_RANGE_COUNT; r++) {
+            CHECK(scope_cal_mv_per_count(ch, r) > 0.0f,
+                  "ch%u r%u: every range has a measured gain since 2026-11-27", ch, r);
+            CHECK(scope_cal_get_tier(ch, r) != SCOPE_CAL_NONE,
+                  "ch%u r%u: a range with a gain is not tier NONE", ch, r);
         }
     }
+    /* "No calibration" still reads exactly 0.0f where it applies. */
+    CHECK(scope_cal_volts_per_div(1, SCOPE_CAL_RANGE_COUNT) == 0.0f,
+          "a range past the end must have no volts/div");
 }
 
 static void test_out_of_domain_arguments(void)
@@ -68,66 +89,77 @@ static void test_out_of_domain_arguments(void)
     CHECK(scope_cal_get_tier(0, 6) == SCOPE_CAL_NONE, "ch0 tier must be NONE");
 }
 
-static void test_source_scale_is_uniform(void)
+static void test_rows_follow_the_rule(void)
 {
     /*
-     * Every calibrated entry must be the raw bench number times exactly one
-     * shared factor. The test states the raw numbers independently of the
-     * table, so if someone hand-edits a single row to match a reference
-     * instrument, this fails — which is the intent. The recovery path when a
-     * trusted source arrives is to change SCOPE_CAL_SOURCE_SCALE, and that
-     * only works if no row has been individually nudged.
+     * Every entry must be the rule applied to the per-unit numbers above,
+     * times exactly one shared factor. A row hand-edited to match one
+     * reference fails here, which is the intent: the way to add a reference
+     * is to add its unit to the doc and to the arrays above, and re-derive.
+     * The table is rounded to the units' precision, hence the tolerance.
      */
-    static const float raw_ch1[] = { 14.08f, 21.83f, 42.95f, 88.42f, 279.05f, 352.17f };
-    static const float raw_ch2[] = {  9.49f, 20.96f, 41.71f, 83.79f, 223.71f, 425.00f };
+    CHECK(SCOPE_CAL_SOURCE_SCALE == 1.0f,
+          "both units are absolutely referenced: the source scale must be 1.0");
 
-    for (uint8_t i = 0; i < 6; i++) {
-        const uint8_t r = (uint8_t)(i + 4u);
+    for (uint8_t ch = 1; ch <= 2; ch++) {
+        for (uint8_t r = 0; r < SCOPE_CAL_RANGE_COUNT; r++) {
+            const float want = rule((uint8_t)(ch - 1u), r) * SCOPE_CAL_SOURCE_SCALE;
+            const float got  = scope_cal_mv_per_count(ch, r);
+            CHECK(want > 0.0f, "ch%u r%u: no unit measured this entry", ch, r);
+            CHECK(fabsf(got - want) <= 0.006f + want * 1e-4f,
+                  "ch%u r%u: table %f, the rule gives %f", ch, r,
+                  (double)got, (double)want);
+        }
+    }
+}
 
-        const float got1 = scope_cal_mv_per_count(1, r);
-        const float got2 = scope_cal_mv_per_count(2, r);
-        const float want1 = raw_ch1[i] * SCOPE_CAL_SOURCE_SCALE;
-        const float want2 = raw_ch2[i] * SCOPE_CAL_SOURCE_SCALE;
-
-        CHECK(fabsf(got1 - want1) < 0.01f,
-              "ch1 r%u: expected %f (raw * source scale), got %f",
-              r, (double)want1, (double)got1);
-        CHECK(fabsf(got2 - want2) < 0.01f,
-              "ch2 r%u: expected %f (raw * source scale), got %f",
-              r, (double)want2, (double)got2);
+static void test_the_units_agree(void)
+{
+    /* Ranges 4-7 are MEASURED because the two units agree; the doc says
+     * within 2.6 %, the tier needs within 3 %. */
+    for (uint8_t row = 0; row < 2; row++) {
+        for (uint8_t r = 4; r <= 7; r++) {
+            const float a = unit_s00500[row][r], b = unit_sparsematrix[row][r];
+            const float d = fabsf(a - b) / ((a + b) * 0.5f);
+            CHECK(d < 0.03f, "CH%u r%u: the units disagree by %.1f%%",
+                  row + 1u, r, (double)(d * 100.0f));
+        }
     }
 }
 
 static void test_measured_tier_claims_hold(void)
 {
     /*
-     * The header claims ranges 5/6/7 agree between channels within 6% and
-     * form a doubling ladder. Those are the grounds for calling them
-     * MEASURED, so they are asserted rather than asserted-in-a-comment.
+     * The header claims ranges 0-7 are MEASURED, that the channels agree
+     * within 2 % on every range, and that the ranges form the 1-2-5 ladder
+     * of the attenuator. Those are asserted rather than asserted-in-a-comment.
      */
-    for (uint8_t r = 5; r <= 7; r++) {
+    for (uint8_t r = 0; r <= 7; r++) {
         CHECK(scope_cal_get_tier(1, r) == SCOPE_CAL_MEASURED,
               "r%u should be MEASURED on ch1", r);
         CHECK(scope_cal_get_tier(2, r) == SCOPE_CAL_MEASURED,
               "r%u should be MEASURED on ch2", r);
+    }
 
+    for (uint8_t r = 0; r < SCOPE_CAL_RANGE_COUNT; r++) {
         const float a = scope_cal_mv_per_count(1, r);
         const float b = scope_cal_mv_per_count(2, r);
         const float disagreement = fabsf(a - b) / ((a + b) * 0.5f);
 
-        CHECK(disagreement < 0.06f,
-              "r%u: channels disagree by %.1f%%, too much for tier MEASURED",
-              r, (double)(disagreement * 100.0f));
+        CHECK(disagreement < 0.02f,
+              "r%u: channels disagree by %.1f%%", r, (double)(disagreement * 100.0f));
     }
 
-    /* Doubling ladder: each step up should roughly double the mV/count. */
+    /* 1-2-5 ladder from range 0: x2, x2.5, x2, x2, x2.5, x2, x2, x2.5, x2. */
+    static const float step[SCOPE_CAL_RANGE_COUNT - 1u] = {
+        2.0f, 2.5f, 2.0f, 2.0f, 2.5f, 2.0f, 2.0f, 2.5f, 2.0f };
     for (uint8_t ch = 1; ch <= 2; ch++) {
-        for (uint8_t r = 5; r <= 6; r++) {
+        for (uint8_t r = 0; r + 1u < SCOPE_CAL_RANGE_COUNT; r++) {
             const float ratio = scope_cal_mv_per_count(ch, (uint8_t)(r + 1u)) /
                                 scope_cal_mv_per_count(ch, r);
-            CHECK(ratio > 1.8f && ratio < 2.2f,
-                  "ch%u r%u->r%u: ratio %.2f is not the claimed doubling",
-                  ch, r, r + 1, (double)ratio);
+            CHECK(fabsf(ratio / step[r] - 1.0f) < 0.03f,
+                  "ch%u r%u->r%u: ratio %.3f is not the ladder's x%.1f",
+                  ch, r, r + 1, (double)ratio, (double)step[r]);
         }
     }
 }
@@ -137,9 +169,9 @@ static void test_provisional_ranges_still_produce_a_number(void)
     /* Provisional is not "unusable": a rough volt figure beats a raw count,
      * and the tier plus the label marker is how the user is told which is
      * which. */
-    const uint8_t provisional[] = { 4, 8, 9 };
+    const uint8_t provisional[] = { 8, 9 };
 
-    for (uint8_t i = 0; i < 3; i++) {
+    for (uint8_t i = 0; i < 2; i++) {
         const uint8_t r = provisional[i];
         for (uint8_t ch = 1; ch <= 2; ch++) {
             CHECK(scope_cal_mv_per_count(ch, r) > 0.0f,
@@ -166,27 +198,33 @@ static void test_labels(void)
 {
     char buf[16];
 
-    /* Uncalibrated -> an explicit nothing, never a nominal number. */
-    scope_cal_range_label(1, 2, buf, sizeof(buf));
-    CHECK(strcmp(buf, "--") == 0, "r2 label should be \"--\", got \"%s\"", buf);
+    /* Uncalibrated -> an explicit nothing, never a nominal number. No range
+     * is uncalibrated since 2026-11-27, so this goes through one past the end. */
+    scope_cal_range_label(1, SCOPE_CAL_RANGE_COUNT, buf, sizeof(buf));
+    CHECK(strcmp(buf, "--") == 0, "no-cal label should be \"--\", got \"%s\"", buf);
 
     /* Measured -> a plain number, no marker. */
     scope_cal_range_label(1, 6, buf, sizeof(buf));
     CHECK(buf[0] != '~', "r6 is MEASURED and must not be marked, got \"%s\"", buf);
     CHECK(strchr(buf, 'V') != NULL, "r6 label should carry units, got \"%s\"", buf);
 
-    /* 42.95 mV/count * 0.92 source-scale * 32 counts/div = 1.2645 V/div. */
-    CHECK(strcmp(buf, "1.26V") == 0,
-          "r6 label should be derived as 1.26V, got \"%s\"", buf);
+    /* 39.63 mV/count * 1.0 source scale * 32 counts/div = 1.268 V/div. */
+    CHECK(strcmp(buf, "1.27V") == 0,
+          "r6 label should be derived as 1.27V, got \"%s\"", buf);
 
     /* Provisional -> same number, marked. */
     scope_cal_range_label(1, 9, buf, sizeof(buf));
     CHECK(buf[0] == '~', "r9 is PROVISIONAL and must be marked, got \"%s\"", buf);
 
-    /* Sub-volt divisions read in mV. 21.83 * 0.92 * 32 = 642.7 mV. */
+    /* Sub-volt divisions read in mV. 19.92 * 32 = 637.4 mV. */
     scope_cal_range_label(1, 5, buf, sizeof(buf));
-    CHECK(strcmp(buf, "643mV") == 0,
-          "r5 label should be derived as 643mV, got \"%s\"", buf);
+    CHECK(strcmp(buf, "637mV") == 0,
+          "r5 label should be derived as 637mV, got \"%s\"", buf);
+
+    /* The most sensitive range. 0.4028 * 32 = 12.9 mV. */
+    scope_cal_range_label(1, 0, buf, sizeof(buf));
+    CHECK(strcmp(buf, "13mV") == 0,
+          "r0 label should be derived as 13mV, got \"%s\"", buf);
 
     /*
      * And the point of the whole exercise: the derived label must NOT equal
@@ -219,13 +257,10 @@ static void test_true_scale_gate_matches_calibration(void)
                   "ch%u r%u: true_scale_ok(%d) must match has-cal(%d)",
                   ch, r, ok, cal);
         }
-        /* Ranges 0-3 rail -> must autofit; 5/6/7 are MEASURED -> true scale. */
-        for (uint8_t r = 0; r <= 3; r++)
-            CHECK(!scope_cal_true_scale_ok(ch, r),
-                  "ch%u r%u: railed range must NOT render true scale", ch, r);
-        for (uint8_t r = 5; r <= 7; r++)
+        /* Every range has a gain since 2026-11-27 -> true scale everywhere. */
+        for (uint8_t r = 0; r < SCOPE_CAL_RANGE_COUNT; r++)
             CHECK(scope_cal_true_scale_ok(ch, r),
-                  "ch%u r%u: measured range must render true scale", ch, r);
+                  "ch%u r%u: a calibrated range must render true scale", ch, r);
     }
     /* Out-of-domain is a refusal, same as everywhere else in this module. */
     CHECK(!scope_cal_true_scale_ok(0, 6), "ch0 must not render true scale");
@@ -261,7 +296,8 @@ static void test_probe_factor(void)
         scope_cal_range_label_bnc(2, r, bnc, sizeof(bnc));
         CHECK(strcmp(bnc, l_before) == 0, "BNC label ignores the probe (%s vs %s)", bnc, l_before);
     }
-    CHECK(scope_cal_volts_per_count(2, 0) == 0.0f, "an uncalibrated range stays 0 at 10x");
+    CHECK(scope_cal_volts_per_count(2, SCOPE_CAL_RANGE_COUNT) == 0.0f,
+          "no calibration stays 0 at 10x");
     CHECK(scope_cal_true_scale_ok(2, r), "true-scale gate unaffected by the probe");
 
     scope_cal_set_probe_source(probe_bad);
@@ -272,10 +308,11 @@ static void test_probe_factor(void)
 
 int main(void)
 {
-    test_uncalibrated_ranges_return_zero();
+    test_every_range_has_a_gain();
     test_out_of_domain_arguments();
     test_true_scale_gate_matches_calibration();
-    test_source_scale_is_uniform();
+    test_rows_follow_the_rule();
+    test_the_units_agree();
     test_measured_tier_claims_hold();
     test_provisional_ranges_still_produce_a_number();
     test_volts_per_div_is_derived();

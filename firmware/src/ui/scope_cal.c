@@ -11,13 +11,35 @@
 #include <stdio.h>
 
 /*
- * mV per ADC count, bench unit #1, 2026-08-17.
- * Source: docs/experiments/2026-08-17-08-per-range-gain-ladders.md
+ * mV per ADC count at the BNC: the shared table, derived from two units.
+ * docs/calibration/scope_gain.md has every unit's numbers and the rule;
+ * tests/test_scope_cal.c holds the same per-unit numbers and checks each row
+ * against the rule, so a row edited on its own fails the build.
  *
- * 0.0f means "this range produced no usable span at any drive amplitude" —
- * it is not a missing measurement, it is a measured refusal.
+ *   r0-r3  s00500's unit (2026-11-26): 7-9-level slope fits against the
+ *          2C53T's generator, its scale set by a Rigol DS1104Z after
+ *          Self-Cal (0.7937 mV per DAC code). Nobody else has these ranges.
+ *   r4-r7  the mean of s00500's unit and sparsematrix's (#95, DMM on the
+ *          same node). They agree within 2.6 % on every entry.
+ *   r8-r9  sparsematrix's unit only. s00500's fits there span 7-15 counts
+ *          and put the generator's 0 V at -55 / -71 mV, against +7..+10 mV
+ *          on every other range; they are a cross-check, not data.
  *
- * WITHDRAWN 2026-08-18: the two values this table replaces, which lived as
+ * Both references are absolute, so SCOPE_CAL_SOURCE_SCALE is 1.0.
+ *
+ * WITHDRAWN 2026-11-27: bench unit #1's table (2026-08-17, EXP-08), read
+ * through the 0.92 source scale it needed:
+ *     CH1 { 0, 0, 0, 0, 14.08, 21.83, 42.95, 88.42, 279.05, 352.17 }
+ *     CH2 { 0, 0, 0, 0,  9.49, 20.96, 41.71, 83.79, 223.71, 425.00 }
+ * Against the two units above its MEASURED ranges 5-7 held within 3.6 %. Its
+ * PROVISIONAL ranges were the ones off: range 4 by +66 % (CH1) / +11 % (CH2),
+ * range 8, the power-on default, by +33 % on CH1, range 9 by -16 % on CH1.
+ * Ranges 0-3 were 0.0f because in August they sat at 255 with a quiet input
+ * (EXP-11). With the offset references armed as main does now (DAC1 2048,
+ * TMR13 2544) a shorted input sits at 44-49 counts on CH1 and 101-106 on CH2
+ * on every range (s00500's EXP-89), and the four ranges measure cleanly.
+ *
+ * WITHDRAWN 2026-08-18: the two values that table replaced, which lived as
  * bare constants in scope_ui.c's scope_cal_volts_per_count():
  *     range 2 -> 2.882 mV/count ("20mV/div", 347 codes per volt)
  *     range 8 -> 6.494 mV/count ("2V/div",   154 codes per volt)
@@ -28,42 +50,28 @@
  * wrong — is one this project has now hit four separate times.
  */
 static const float mv_per_count[2][SCOPE_CAL_RANGE_COUNT] = {
-    /*        r0     r1     r2     r3      r4      r5      r6      r7       r8       r9 */
-    /* CH1 */ { 0.0f, 0.0f, 0.0f, 0.0f,  14.08f, 21.83f, 42.95f, 88.42f, 279.05f, 352.17f },
-    /* CH2 */ { 0.0f, 0.0f, 0.0f, 0.0f,   9.49f, 20.96f, 41.71f, 83.79f, 223.71f, 425.00f },
+    /*        r0       r1       r2       r3      r4     r5      r6      r7      r8      r9 */
+    /* CH1 */ { 0.4028f, 0.7981f, 1.9872f, 3.927f, 7.82f, 19.92f, 39.63f, 78.55f, 193.5f, 384.2f },
+    /* CH2 */ { 0.3978f, 0.7928f, 1.9732f, 3.906f, 7.86f, 19.92f, 39.67f, 78.15f, 196.0f, 391.1f },
 };
 
 /*
- * Confidence per range. Identical for both channels by construction: the
- * tier is a statement about how well the two channels AGREE, so it cannot
- * differ between them.
+ * Confidence per range, the same for both channels (they agree within 1.8 %
+ * on every range).
  *
- *   r0-r3  NONE         railed on both channels at every amplitude.
- *                       EXP-11 (2026-08-18) says more: 0/1/2 sit at 255 with
- *                       the input QUIET and after a centring pass, so they are
- *                       not sensitive rows being overdriven. Range 3 IS a
- *                       sensitive row (~5.6 mV/count, order of magnitude only)
- *                       and its defect is OFFSET, not gain — the injector hits
- *                       the bottom of its travel (DAC1 code 7, TMR13 code 3)
- *                       and still cannot pull the mean off 235-250, so the
- *                       waveform clips. Potentially fixable in firmware.
- *   r4     PROVISIONAL  channels differ by 48% (14.08 vs 9.49)
- *   r5     MEASURED     channels differ by 4.1%
- *   r6     MEASURED     channels differ by 2.9%
- *   r7     MEASURED     channels differ by 5.5%
- *   r8     PROVISIONAL  channels differ by 25%
- *   r9     PROVISIONAL  channels differ by 21%, and in the opposite direction
- *                       to r8 — CH2 reads HIGHER here and lower there, which
- *                       is not a fixed per-channel gain error and is the
- *                       clearest sign the sweep amplitudes were wrong for
- *                       these rows rather than the hardware being odd.
+ *   r0-r3  MEASURED     one unit, 7-9-level fits, channels within 1.3 %
+ *   r4-r7  MEASURED     two units within 2.6 %
+ *   r8-r9  PROVISIONAL  one unit at usable resolution; the label carries '~'
+ *
+ * Until 2026-11-27: r0-r3 NONE (railed, EXP-11), r4/r8/r9 PROVISIONAL
+ * (bench unit #1's channels 21-48 % apart there), r5-r7 MEASURED.
  */
 static const scope_cal_tier_t tier_by_range[SCOPE_CAL_RANGE_COUNT] = {
-    SCOPE_CAL_NONE,         /* 0 */
-    SCOPE_CAL_NONE,         /* 1 */
-    SCOPE_CAL_NONE,         /* 2 */
-    SCOPE_CAL_NONE,         /* 3 */
-    SCOPE_CAL_PROVISIONAL,  /* 4 */
+    SCOPE_CAL_MEASURED,     /* 0 */
+    SCOPE_CAL_MEASURED,     /* 1 */
+    SCOPE_CAL_MEASURED,     /* 2 */
+    SCOPE_CAL_MEASURED,     /* 3 */
+    SCOPE_CAL_MEASURED,     /* 4 */
     SCOPE_CAL_MEASURED,     /* 5 */
     SCOPE_CAL_MEASURED,     /* 6 */
     SCOPE_CAL_MEASURED,     /* 7 */
