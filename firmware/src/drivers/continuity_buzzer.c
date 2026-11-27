@@ -3,6 +3,7 @@
  */
 
 #include "continuity_buzzer.h"
+#include "continuity_veto.h"
 #include "at32f403a_407.h"
 #include "fpga.h"
 #include "meter_data.h"
@@ -81,10 +82,10 @@ void EXINT3_IRQHandler(void)
 static struct {
     bool       seen;          /* PC3 tone seen at least once this session */
     bool       is_short;
-    bool       vetoed;        /* reading says above threshold: stay quiet */
     uint32_t   last_edges;    /* pc3_edges at the previous sample */
     TickType_t last_edge_tick;
-    uint32_t   upd_at_onset;  /* reading update_count when the tone started */
+    TickType_t onset_tick;    /* when the tone started */
+    cont_veto_t veto;         /* the reading's mute, continuity_veto.h */
 } hw;
 
 static void hw_detect_reset(void)
@@ -107,12 +108,11 @@ static void hw_detect_sample(TickType_t now)
         meter_reading_t r;
         hw.is_short = true;
         hw.seen = true;
-        hw.vetoed = false;
-        hw.upd_at_onset = meter_data_snapshot(&r) ? r.update_count : 0;
+        hw.onset_tick = now;
+        cont_veto_start(&hw.veto, meter_data_snapshot(&r) ? r.update_count : 0);
     } else if (hw.is_short &&
                (now - hw.last_edge_tick) >= pdMS_TO_TICKS(CONT_DETECT_HOLD_MS)) {
         hw.is_short = false;
-        hw.vetoed = false;
     }
 }
 
@@ -130,22 +130,24 @@ static bool continuity_short_active(TickType_t now)
 
     /* Fast path. Once the PC3 tone has been seen in this session it is the
      * only on/off source, so the beep also stops as soon as the probes
-     * separate instead of waiting out the reading's lag. The reading can only
-     * mute it: a fresh resistance at or above the threshold (a part between
-     * the user's threshold and the hardware one) silences the beep until the
-     * tone stops. OL frames never veto, because the first frames after contact
-     * still say OL. The hardware threshold is above 47 Ohm on my unit and not
-     * measured further, so a setting above it cannot make PC3 fire earlier. */
+     * separate instead of waiting out the reading's lag. The other side of
+     * that: a part between the SoC's threshold and a higher user setting does
+     * not beep, though the screen says SHORT. The SoC's threshold is above
+     * 47 Ohm on my unit and not measured further. The reading can only mute
+     * the tone, for a part between the user's threshold and the SoC's, and
+     * only with frames new enough to show the probes as they are now
+     * (continuity_veto.h). */
     hw_detect_sample(now);
     if (hw.seen) {
         short_latch_until_tick = 0;
         if (!hw.is_short)
             return false;
-        if (!hw.vetoed && meter_data_snapshot(&reading) &&
-            reading.update_count != hw.upd_at_onset &&
-            reading_above_threshold(&reading))
-            hw.vetoed = true;
-        return !hw.vetoed;
+        if (meter_data_snapshot(&reading))
+            cont_veto_step(&hw.veto,
+                           (uint32_t)((now - hw.onset_tick) * portTICK_PERIOD_MS),
+                           reading.update_count,
+                           reading_above_threshold(&reading));
+        return !hw.veto.muted;
     }
 
     /* Fallback: no PC3 tone yet in this session (or PC3 is not wired on this

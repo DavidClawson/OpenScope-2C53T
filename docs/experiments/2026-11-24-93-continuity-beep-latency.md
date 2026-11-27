@@ -3,7 +3,7 @@
 - **Date:** 2026-11-24
 - **Unit:** my unit (new 2C53T, stock V1.2.0 as shipped, factory cal archived as `archive/factory_cal/unit4_mcu_settings_page_0x08006000.bin`)
 - **Build:** `make guest-coldtrace-meter`, gcc 15.3.1, flashed through the factory IAP. Parts A–D on commit `7480998` (main); Part E on the edge-counter change in the commit that adds this file
-- **Status:** CONFIRMED (fix works by ear; no audio number for the fixed build yet). H1 REFUTED; stock is 20x faster because it beeps from the meter SoC's buzzer tone on PC3 (EXTI3, already documented in #94), and our buzzer now counts the same edges. Part D's "active-low level" reading is WITHDRAWN (Part E)
+- **Status:** CONFIRMED (fix works by ear; no audio number for the fixed build yet). H1 REFUTED; stock is 20x faster because it beeps from the meter SoC's buzzer tone on PC3 (EXTI3, already documented in #94), and our buzzer now counts the same edges. Part D's "active-low level" reading is WITHDRAWN (Part E). The Part D/E veto is SUPERSEDED (addendum 2026-11-27)
 - **Number:** EXP-74 until 2026-11-27, then renumbered EXP-93, because #75 had claimed 74 first. Commits before the renumbering say EXP-74
 
 ## 1. Problem
@@ -208,7 +208,9 @@ narrow high pulses riding on the low level.
 - **Stop:** PC3 high for 10 ms.
 - **Veto:** a fresh resistance reading at or above the threshold mutes the beep
   until release, so the threshold softkey still means something below the hardware
-  threshold. `OL` frames never veto.
+  threshold. `OL` frames never veto. *SUPERSEDED 2026-11-27: a stale frame could
+  mute a real short, and the mute never cleared while the tone went on. See the
+  addendum.*
 - **Fallback:** until PC3 has gone low once in the session, the old decoded-reading
   path runs.
 - **Gate:** meter mode, continuity submode, and no function change in progress.
@@ -257,8 +259,9 @@ discrepancy.
   ends. Image `openscope-2c53t-pc3edge-hold105-coldtrace-meter.bin`, sha256
   `efb9c3a1198c63f8…`; by ear on my unit the operator reports "all working fine" (weak
   evidence; the tail itself was not timed).*
-- **Unchanged from Part D:** the threshold veto, the fallback to the decoded reading
-  until a tone has been seen in the session, and the gate.
+- **Unchanged from Part D:** the threshold veto (*superseded 2026-11-27, see the
+  addendum*), the fallback to the decoded reading until a tone has been seen in the
+  session, and the gate.
 
 Image `openscope-2c53t-pc3edge-coldtrace-meter.bin`, sha256 `16a8fa23f0915310…`.
 Vector 25 → `EXINT3_IRQHandler` at `0x08015A41`, `pc3_edges` at `0x2000D544`
@@ -371,3 +374,60 @@ a short, which agrees with Part D's "hardware threshold above 47 Ω".
   buzzer from PC3 edges~~ done (Part E). (3) Re-run the Part B audio test on this build
   for a number. (4) Measure the SoC's threshold with a resistor ladder. (5) ~~Correct
   the four other copies of the old EXTI3 note listed in Part C~~ done.
+
+## Addendum 2026-11-27: review of #102, the veto
+
+**The problem** (DavidClawson on #102). The Part D/E veto latched on the first new
+frame after the tone's onset that read at or above the threshold, and held until the
+tone stopped. But a frame shows the probes as they were up to a second before it
+arrived (Part B: 475–1012 ms). Sliding the probes off a 1 kΩ part onto a short could
+mute the whole short on a frame that still showed 1 kΩ. And since the veto never
+cleared while the tone went on, a 47 Ω part slid onto a short stayed quiet.
+
+**The fix** (`firmware/src/drivers/continuity_veto.h`, used by
+`continuity_buzzer.c`). A frame carries no measurement time, only its arrival, so:
+- frames that arrive within **1200 ms** of the tone's onset are ignored (marked as
+  seen, never counted). That is the longest lag measured, 1012 ms, plus about one
+  frame interval (p95 204 ms);
+- after that, each new frame decides: at or above the threshold mutes, anything else
+  (below it, `OL`, no resistance) unmutes. The veto follows the latest frame and no
+  longer latches.
+
+**Cost.** A part between the user's threshold and the SoC's beeps for up to 1.2 s
+plus one frame (about 1.4 s) before it goes quiet. The Part D/E build went quiet at
+the first frame that showed it, 0.5 to 1.2 s. A part that reads right at the
+threshold beeps or not frame by frame, as the screen's SHORT does.
+
+**Unchanged, now stated.** Once the tone has been seen in a session, PC3 is the only
+source that starts a beep. A part between the SoC's threshold (above 47 Ω, not
+measured further) and a higher user setting (50 or 100 Ω) does not beep, though the
+screen says SHORT.
+
+**Host test** (`make test-continuity-veto`, `firmware/tests/test_continuity_veto.c`).
+A millisecond simulation of the probes, the SoC's tone (below an assumed 60 Ω, with
+the 105 ms hold) and one frame per 163 ms that shows the probes `lag` ms before it
+arrived. Seven scenarios, each at five lags (300, 475, 676, 850, 1012 ms) and four
+frame phases. The gate as first posted and two half-fixes are negative controls:
+
+| gate | runs as expected | the runs it gets wrong |
+|---|---|---|
+| `cont_veto_step` | 140/140 | none |
+| control: as first posted (`9d1d135`) | 82/140 | 1 kΩ slid onto a short (20/20); 1 kΩ lifted, then a short tapped (18/20); 47 Ω slid onto a short (20/20) |
+| control: no ignore window | 102/140 | the two 1 kΩ scenarios (20/20, 18/20) |
+| control: window, but latching | 120/140 | 47 Ω slid onto a short (20/20) |
+
+So each half of the fix is needed. The 2 runs of "1 kΩ lifted, then a short tapped"
+that the controls get right are at lag 300 ms, where two of the four phases put no
+frame into the 100 ms that still shows the 1 kΩ part.
+
+**Blind spots.**
+- **Not on hardware yet.** The firmware builds (`make`), the host test passes; no unit
+  has run this change. The acceptance test is by ear: short, 47 Ω, 1 kΩ slid onto a
+  short, 47 Ω slid onto a short.
+- **The 1200 ms rests on six taps** (Part B). A lag longer than 1200 ms would let a
+  stale frame mute a short for the difference.
+- **The lag was measured on shorts only.** Whether a 47 Ω or 1 kΩ reading lags the
+  same way is not measured.
+- **The simulation is regular:** frames arrive exactly every 163 ms and show the
+  probes' state, with no readings in between (Part A saw none, on shorts). The SoC's
+  threshold is an assumption that only decides which parts make a tone.
