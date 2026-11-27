@@ -49,7 +49,8 @@ static int failures = 0;
 /* The codes and ranges the tables call MEASURED, stated here independently of
  * the tables so that retiering a row without revisiting these tests shows up
  * as a failure rather than as a silently weaker test. */
-static const uint8_t measured_codes[]  = { 0x0Eu, 0x0Fu, 0x10u };
+static const uint8_t measured_codes[]  = { 0x04u, 0x06u, 0x08u, 0x0Au, 0x0Du,
+                                           0x0Eu, 0x0Fu, 0x10u };
 static const uint8_t measured_ranges[] = { 5u, 6u, 7u };
 static const uint8_t provisional_ranges[] = { 4u, 8u, 9u };
 
@@ -156,19 +157,23 @@ static void test_one_over_dt(void)
     r = scope_cursor_one_over_dt(code, 0);
     CHECK(r.unit == SCOPE_CURSOR_UNIT_NONE, "dx=0 must refuse");
 
-    /* No rate => no Hz either; 1/samples has no unit to fall back to. */
-    r = scope_cursor_one_over_dt(0x08u, 100);
+    /* No rate => no Hz either; 1/samples has no unit to fall back to. Since
+     * EXP-74 every real code has a rate, so the refusal is exercised with a
+     * code past the end of the table. */
+    r = scope_cursor_one_over_dt((uint8_t)SCOPE_TIMEBASE_CODE_COUNT, 100);
     CHECK(r.unit == SCOPE_CURSOR_UNIT_NONE,
-          "an INCOHERENT code must not produce a frequency");
+          "a code without a rate must not produce a frequency");
 }
 
 /* ── 2. refusal where there is no calibration ────────────────────────── */
 
 static void test_unmeasured_timebase_falls_back_to_samples(void)
 {
-    /* 0x08 is the power-on default and is INCOHERENT — measured, and the
-     * records do not reproduce. It is the code most likely to be on screen. */
-    static const uint8_t none_codes[] = { 0x00u, 0x06u, 0x08u, 0x0Au, 0x0Cu };
+    /* Since EXP-74 (2026-11-09) every code 0x00-0x14 has a measured rate, so
+     * the fallback is exercised with codes past the end of the table. The
+     * path itself must keep working: a future unmeasured code lands here. */
+    static const uint8_t none_codes[] = { (uint8_t)SCOPE_TIMEBASE_CODE_COUNT,
+                                          0x20u, 0xFFu };
 
     for (unsigned i = 0; i < sizeof(none_codes); i++) {
         const uint8_t code = none_codes[i];
@@ -270,17 +275,24 @@ static void test_provisional_ranges_are_marked(void)
 
 static void test_provisional_timebase_is_marked(void)
 {
-    /* 0x0D: R^2 0.9997 but only bins 4-25 of resolution, and never
-     * fold-tested at the corrected rate. */
-    CHECK(scope_timebase_get_tier(0x0Du) == SCOPE_TB_PROVISIONAL,
-          "0x0D tier changed — update this test with the evidence");
+    /* EXP-74 measured every code, so no timebase is PROVISIONAL any more and
+     * none may carry the tilde. (The tilde path itself stays covered by the
+     * provisional voltage ranges above.) 0x0D was the last provisional code. */
+    for (uint8_t c = 0; c < SCOPE_TIMEBASE_CODE_COUNT; c++)
+        CHECK(scope_timebase_get_tier(c) == SCOPE_TB_MEASURED,
+              "0x%02X tier changed; update this test with the evidence", c);
 
     const scope_cursor_reading_t r = scope_cursor_delta_t(0x0Du, 100);
-    CHECK(r.confidence == SCOPE_CURSOR_PROVISIONAL, "0x0D must be provisional");
+    CHECK(r.confidence == SCOPE_CURSOR_MEASURED, "0x0D must be measured");
 
     char s[16];
     scope_cursor_format(&r, s, sizeof(s));
-    CHECK(s[0] == '~', "0x0D must carry the tilde, got %s", s);
+    CHECK(s[0] != '~', "0x0D must not carry the tilde, got %s", s);
+
+    /* A 125 MS/s interval is written in ns, not rounded to 0us. */
+    const scope_cursor_reading_t f = scope_cursor_delta_t(0x04u, 10);
+    scope_cursor_format(&f, s, sizeof(s));
+    CHECK(strstr(s, "80ns") != NULL, "10 samples at 125 MS/s are 80ns, got %s", s);
 }
 
 /* ── 4. formatting ──────────────────────────────────────────────────── */
@@ -301,10 +313,10 @@ static void test_formatting(void)
     scope_cursor_format(&r, s, sizeof(s));
     CHECK(s[0] == '-', "negative dt must print a sign, got %s", s);
 
-    /* 100 samples at 12,490 S/s = 8.0064 ms. */
+    /* 100 samples at 12,500 S/s (EXP-74) = 8.00 ms. */
     r = scope_cursor_delta_t(0x10u, 100);
     scope_cursor_format(&r, s, sizeof(s));
-    CHECK(strcmp(s, "8.01ms") == 0, "expected 8.01ms, got %s", s);
+    CHECK(strcmp(s, "8.00ms") == 0, "expected 8.00ms, got %s", s);
 
     /* A tiny buffer must truncate, not overflow. */
     char tiny[4];

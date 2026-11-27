@@ -3329,16 +3329,9 @@ static void cmd_fpga_scope_cal(void)
                          (unsigned)c, (unsigned long)(fs + 0.5f), lbl,
                          (t == SCOPE_TB_MEASURED) ? "measured" : "provisional");
     }
-    usb_send_str("codes not listed have no trustworthy rate, for three "
-                 "DIFFERENT reasons:\r\n"
-                 "  0x06-0x09  INCOHERENT — measured, and all four return the "
-                 "same ~1.2-1.6 kS/s\r\n"
-                 "             regardless of the code, with reads that do not "
-                 "reproduce (EXP-15).\r\n"
-                 "  0x0A-0x0C  need a faster source than ours — a statement "
-                 "about our bench,\r\n"
-                 "             not about the device.\r\n"
-                 "  the rest   never measured.\r\n"
+    usb_send_str("all codes fold-tested against a crystal-locked source (EXP-74);\r\n"
+                 "  0x00-0x03 deliver 125 MS/s here, like 0x04 (stock: 250 MS/s "
+                 "interleaved, not reproduced).\r\n"
                  "See scope_timebase.h\r\n");
 }
 

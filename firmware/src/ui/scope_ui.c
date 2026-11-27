@@ -434,12 +434,20 @@ static void fmt_hz(char *b, size_t n, float hz)
 }
 
 /*
- * A duration in seconds, ranged us/ms/s. Integer math, as above.
+ * A duration in seconds, ranged ns/us/ms/s. Integer math, as above.
  */
 static void fmt_seconds(char *b, size_t n, float s)
 {
     if (s < 0.0f) s = 0.0f;
-    if (s < 1e-3f) {
+    if (s < 1e-6f) {
+        snprintf(b, n, "%uns", (unsigned)(s * 1e9f + 0.5f));
+    } else if (s < 1e-5f) {
+        const unsigned c = (unsigned)(s * 1e8f + 0.5f);
+        snprintf(b, n, "%u.%02uus", c / 100u, c % 100u);
+    } else if (s < 1e-4f) {
+        const unsigned d = (unsigned)(s * 1e7f + 0.5f);
+        snprintf(b, n, "%u.%uus", d / 10u, d % 10u);
+    } else if (s < 1e-3f) {
         snprintf(b, n, "%uus", (unsigned)(s * 1e6f + 0.5f));
     } else if (s < 1.0f) {
         const unsigned hundredths_ms = (unsigned)(s * 1e5f + 0.5f);

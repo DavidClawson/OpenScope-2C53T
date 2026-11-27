@@ -62,29 +62,17 @@
  *
  * THE TIERS
  * ---------
- *   MEASURED     0x0E / 0x0F / 0x10. In-band R^2 of 0.99 or better against a
- *                source whose own rate was measured in the same channel
- *                configuration the sweep ran in, and confirmed stable to
- *                0.01% across the run. 0x10 additionally passes the fold test
- *                (worst miss 5.3 bins over five above-Nyquist tones, against
- *                142 bins for the pre-correction rate) and agrees with an
- *                independent rig to 1.1%.
+ *   MEASURED     every code since EXP-74 (2026-11-09): fold-tested against a
+ *                crystal-locked divider on the PlutoSky JP5 header (tones
+ *                50 MHz / k), worst miss 0.02 bins of 1024 on 0x04-0x14.
+ *                0x00-0x03 deliver 125 MS/s on our configuration, like 0x04.
+ *   PROVISIONAL  none at present.
+ *   NONE         none at present; out-of-range codes only.
  *
- *                Run-to-run spread is 0.02% at 0x10 but 3.5-4.8% at 0x0D-0x0F,
- *                where our source's 4.5 kHz ceiling puts the tones in low bins
- *                and quantisation dominates. Treat those three as +/-5%.
- *   PROVISIONAL  0x0D. R^2 0.947, and the two lowest tones land in bins 1 and
- *                3, which is not a measurement so much as a direction.
- *   NONE         everything else, for two DIFFERENT reasons that must not be
- *                conflated:
- *                  - 0x0A / 0x0B / 0x0C: not measurable with our current
- *                    source. It tops out near 4.5 kHz, which at 300 kS/s is
- *                    bin 15 and at 600 kS/s is bin 7, so the fit measures
- *                    quantisation. The device is probably fine here; our
- *                    instrument is not. A faster generator settles it.
- *                  - 0x08: measured and found INCOHERENT. Reads do not
- *                    reproduce. This is a statement about the device.
- *                  - all other codes: never measured at all.
+ * Before EXP-74 the fast codes were NONE: 0x06-0x09 were called INCOHERENT
+ * and 0x0A-0x0C unmeasurable. Both were statements about our read path
+ * (`spi3 opread` laps a fast record) and our source (an ESP32 topping out
+ * near 4.5 kHz), not about the device. History in scope_timebase.c.
  *
  * A NONE entry returns 0.0f and callers MUST fall back to samples — the same
  * contract scope_cal.h imposes for counts. Printing a frequency derived from
