@@ -4011,6 +4011,21 @@ static void fpga_warmtest_acq_task(void *pv)
             vTaskDelay(pdMS_TO_TICKS(10));     /* hold the one record */
             continue;
         }
+        /* STOP holds the published record (closes trigger-modes.md D7). This
+         * task never tested `running`: AUTO kept committing free-run reads
+         * and NORMAL every handover, so with STOP on the LCD a repaint (a
+         * Position or range key) drew a newer record, and the frame
+         * generation moved on (`spi3 frame` gen=, the remote protocol's
+         * capture.gen; my unit: +20 in 2 s, stopped). Read
+         * nothing, like the SINGLE hold above; stock does the same (ms[0x2E]
+         * = 0 at 0x0800BE5E, docs/re/parity2_static.md section 3). The same
+         * hold as deOliveira-R's 0d57241 (parity C14 review). Autoset sets
+         * `running` before it waits for records; `fpga scope center`
+         * refuses while stopped. */
+        if (ss_acq != NULL && !ss_acq->running) {
+            vTaskDelay(pdMS_TO_TICKS(10));
+            continue;
+        }
         /* EXP-53/54 (2026-09-20..22) — PC0 is a HANDOVER strobe, not a
          * completion flag: it pulses 6–9 µs after an opcode-0x04 read that
          * finds a completed record (50 cycles at 0x10/0x12, never more). The
