@@ -3385,6 +3385,15 @@ static void cmd_fpga_scope_center(const char *args)
      * touches only the DAC and reads RAM, never SPI3, so there is no bus
      * contention with the acq task's reads and no need to pause it. */
 
+    /* STOP holds the acq task (trigger-modes.md D7): no commits, so every
+     * step would wait out its timeout and steer on the held record. Refuse
+     * rather than steer blind; the shell does not write `running` itself
+     * (the input task is its one writer). */
+    if (!scope_state_get()->running) {
+        usb_send_str("fpga scope center: the scope is stopped and centering needs live records; press RUN\r\n");
+        return;
+    }
+
     /* BUGFIX 2026-08-14: the search's scope_trigger_dac_raw() writes were inert
      * without this init (bench: reported means clustered 120-170 regardless of
      * DAC1, never spanning 0-255, so the binary search flailed around a fixed
