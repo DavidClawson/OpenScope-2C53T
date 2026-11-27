@@ -91,6 +91,7 @@ C_SOURCES += src/util/cal_backup_core.c
 C_SOURCES += src/util/cal_backup.c
 C_SOURCES += src/util/cal_reference.c
 C_SOURCES += src/util/settings_store.c
+C_SOURCES += src/util/soundlight.c
 C_SOURCES += src/util/screenshot.c
 C_SOURCES += src/decode/decode_uart.c
 C_SOURCES += src/decode/decode_i2c.c
@@ -620,12 +621,13 @@ test-scope-freq: $(BUILD_DIR)/test_scope_freq
 #                                      FAIL to persist (spec settings-persistence S3)
 # (A third, known-defects build held the #57/#58 power-cut tests until those
 # were fixed; they run in test_config_persist now.)
-CONFIG_PERSIST_SRCS = src/util/config.c src/util/settings_store.c src/drivers/flash_regions.c \
+CONFIG_PERSIST_SRCS = src/util/config.c src/util/settings_store.c src/util/soundlight.c src/drivers/flash_regions.c \
                       src/ui/theme.c src/ui/scope_state.c src/ui/scope_cal.c src/ui/scope_timebase.c
 CONFIG_PERSIST_DEPS = tests/test_config_persist.c $(CONFIG_PERSIST_SRCS) \
-                      src/util/config.h src/util/settings_store.h src/drivers/flash_regions.h
+                      src/util/config.h src/util/settings_store.h src/util/soundlight.h src/drivers/flash_regions.h
 CONFIG_PERSIST_CC   = $(HOST_CC) -std=c11 -Wall -Wextra -Werror -O1 \
-                      -Isrc/util -Isrc/drivers -Isrc/ui -Isrc/dsp
+                      -Isrc/util -Isrc/drivers -Isrc/ui -Isrc/dsp \
+                      -DSOUNDLIGHT_HOST_TESTS
 
 $(BUILD_DIR)/test_config_persist: $(CONFIG_PERSIST_DEPS) | $(BUILD_DIR)
 	$(CONFIG_PERSIST_CC) -DSETTINGS_PERSIST_WRITES=1 $< $(CONFIG_PERSIST_SRCS) -o $@

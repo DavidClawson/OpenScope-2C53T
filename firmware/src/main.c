@@ -1130,6 +1130,11 @@ int main(void)
      * consumes the restored meter submode, and before the display task exists. */
     settings_store_init();
 
+    /* Sound and Light: the restored brightness/sound record fields now have
+     * an owner (soundlight.c). settings_store_apply() already routed them
+     * through it, so nothing further here — this comment marks the fact
+     * that the backlight PWM comes up as part of that restore. */
+
 #if defined(CAL_BACKUP_AUTO_RESTORE) && CAL_BACKUP_AUTO_RESTORE
     /* OFF by default. Manual `cal restore` is the primary path. Even when built
      * in, this only acts when the live MCU cal page reads blank/zeroed AND a

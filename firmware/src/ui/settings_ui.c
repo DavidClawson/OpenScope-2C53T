@@ -16,6 +16,7 @@
 #include "math_channel.h"
 #include "component_test.h"
 #include "shared_mem.h"
+#include "soundlight.h"
 #include <stdio.h>
 
 /* Top-level menu items */
@@ -39,6 +40,14 @@ static const char *settings_items[SETTINGS_ITEM_COUNT] = {
 static const char *math_sub_labels[MATH_SUB_ITEMS] = {
     "Math Channel",
     "Persistence",
+    "Back",
+};
+
+/* Sound and Light sub-menu items (depth 7) */
+#define SOUNDLIGHT_SUB_ITEMS  3
+static const char *soundlight_sub_labels[SOUNDLIGHT_SUB_ITEMS] = {
+    "Brightness",
+    "Sound",
     "Back",
 };
 
@@ -117,6 +126,31 @@ static void draw_settings_math(void)
     }
 }
 
+/* ═══════════════════════════════════════════════════════════════════
+ * Sound and Light sub-menu (depth 7)
+ * ═══════════════════════════════════════════════════════════════════ */
+
+static void draw_settings_soundlight(void)
+{
+    const theme_t *th = theme_get();
+
+    lcd_fill_rect(0, 16, LCD_WIDTH, LCD_HEIGHT - 32, th->background);
+
+    font_draw_string_center(LCD_WIDTH / 2, 20, "Sound and Light",
+                            th->text_primary, th->background, &font_large);
+
+    char bbuf[8];
+    snprintf(bbuf, sizeof(bbuf), "%u%%", (unsigned)soundlight_get_brightness());
+
+    draw_menu_item(0, 0, settings_sub_selected,
+                   soundlight_sub_labels[0], bbuf, th);
+    draw_menu_item(1, 0, settings_sub_selected,
+                   soundlight_sub_labels[1],
+                   soundlight_get_sound() ? "On" : "Off", th);
+    draw_menu_item(2, 0, settings_sub_selected,
+                   soundlight_sub_labels[2], NULL, th);
+}
+
 static void draw_settings_top(void)
 {
     const theme_t *th = theme_get();
@@ -136,6 +170,7 @@ static void draw_settings_top(void)
 
         /* Dynamic values for certain items */
         if (i == 0) value = ">";        /* Has sub-menu */
+        if (i == 1) value = ">";        /* Sound and Light: sub-menu */
         if (i == 3) value = th->name;   /* Display Mode: theme name */
         if (i == 4) value = ">";        /* Math/Persist: sub-menu */
         if (i == 5) value = ">";        /* Component Tester */
@@ -249,6 +284,7 @@ void draw_settings_screen(void)
     case 4:  draw_component_test_screen();     break;
     case 5:  draw_resistor_calc_screen();      break;
     case 6:  draw_bode_screen();              break;
+    case 7:  draw_settings_soundlight();        break;
     default: draw_settings_top();              break;
     }
 }
