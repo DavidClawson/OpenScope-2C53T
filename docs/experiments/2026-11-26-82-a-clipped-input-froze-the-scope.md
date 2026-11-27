@@ -151,3 +151,10 @@ not recorded. The failed-config case itself was not produced on hardware; it
 needs a config-off image and a true FPGA power cycle. Host side:
 `test_acq_gate` 13 scenarios, the first EXP-82 gate fails the two open-port
 cases, the pre-EXP-82 gate the four railed ones.
+
+**Follow-up, same day:** `status` now prints whether the term is trusted
+(7138d85). On my unit, after a CDC flash (warm FPGA, `Nov 27 2026 10:55:23`):
+`acq opcode-phase term: trusted (IDCODE silent after our upload: port closed)`,
+PB4 still `CRL 8 = pull-up in`. So the trust decision is confirmed true on a
+warm boot by readback; that it is false on an open port remains host-tested
+only.
