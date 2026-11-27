@@ -56,16 +56,23 @@ static bool continuity_short_confirmed(const meter_reading_t *reading)
     return meter_continuity_is_short(reading, meter_continuity_threshold());
 }
 
-/* A resistance reading at or above the user's beep threshold. kOhm readings are
- * always above it (the softkey tops out at 100 Ohm). */
-static bool reading_above_threshold(const meter_reading_t *r)
+/* What a reading says against the user's beep threshold, for the veto.
+ * kOhm and MOhm are always above it (the softkey tops out at 100 Ohm). The
+ * chip's own continuity flag counts as below, as it does for the screen. */
+static cont_frame_t reading_vs_threshold(const meter_reading_t *r)
 {
-    if (!r->valid || r->result_class != METER_RESULT_NORMAL || !r->unit_suffix)
-        return false;
-    if (strcmp(r->unit_suffix, "kOhm") == 0)
-        return true;
-    return strcmp(r->unit_suffix, "Ohm") == 0 &&
-           r->value >= meter_continuity_threshold();
+    if (!r->valid)
+        return CONT_FRAME_NONE;
+    if (r->continuity_beep || r->result_class == METER_RESULT_CONTINUITY)
+        return CONT_FRAME_BELOW;
+    if (r->result_class != METER_RESULT_NORMAL || !r->unit_suffix)
+        return CONT_FRAME_NONE;
+    if (strcmp(r->unit_suffix, "kOhm") == 0 || strcmp(r->unit_suffix, "MOhm") == 0)
+        return CONT_FRAME_ABOVE;
+    if (strcmp(r->unit_suffix, "Ohm") != 0 || r->value < 0.0f)
+        return CONT_FRAME_NONE;
+    return r->value >= meter_continuity_threshold() ? CONT_FRAME_ABOVE
+                                                    : CONT_FRAME_BELOW;
 }
 
 #ifndef EMULATOR_BUILD
@@ -146,7 +153,7 @@ static bool continuity_short_active(TickType_t now)
             cont_veto_step(&hw.veto,
                            (uint32_t)((now - hw.onset_tick) * portTICK_PERIOD_MS),
                            reading.update_count,
-                           reading_above_threshold(&reading));
+                           reading_vs_threshold(&reading));
         return !hw.veto.muted;
     }
 
