@@ -4126,8 +4126,13 @@ static void fpga_warmtest_acq_task(void *pv)
          * opcode-phase status bytes driven (not the pull-up's 0xFF). The last
          * term is what lets a RAILED input through: its samples are a flat
          * 227 exactly like a dead bus, and until 2026-11-26 such a frame was
-         * never committed, so a clipped input froze the last trace. */
-        bool live = acq_frame_live(s1, s2, w1, w2, 1024);
+         * never committed, so a clipped input froze the last trace. It is
+         * trusted only when this boot's config left the port closed (the
+         * IDCODE after the upload did not answer): a failed config drives
+         * MISO too (EXP-31), see acq_gate.h. */
+        bool live = acq_frame_live(s1, s2, w1, w2, 1024,
+                                   acq_opphase_trusted(fpga.probe_close_read,
+                                                       fpga.probe_id_bit_close));
         /* The old third gate term tested acq_hdr_ch1[2]==0x01 as a stock
          * "buffer-valid" flag. Refuted 2026-08-15 by stock's own dispatch:
          * stock discards only two bytes, so that byte is sample[0], and on
@@ -4596,6 +4601,7 @@ uint8_t fpga_bitbang_config_sequence(void)
 
     fpga.probe_id_bit       = -1;
     fpga.probe_id_bit_close = -1;
+    fpga.probe_close_read   = false;
     fpga.diag_spi_ctrl1     = 0xBBBBu;   /* S1 marker: this was the bit-bang build */
 
     int sched_running = (xTaskGetSchedulerState() == taskSCHEDULER_RUNNING);
@@ -4670,6 +4676,7 @@ uint8_t fpga_bitbang_config_sequence(void)
     if (fpga.probe_idcode_close[0] == 0x01 && fpga.probe_idcode_close[1] == 0x20 &&
         fpga.probe_idcode_close[2] == 0x68 && fpga.probe_idcode_close[3] == 0x1B)
         fpga.probe_id_bit_close = 0;
+    fpga.probe_close_read = true;   /* acq_opphase_trusted(): the read ran */
 
     bb_cmd16(0x3A, 0x00);   /* CONFIG_DISABLE */
     fpga_scope_delay_ms(100);
@@ -4682,10 +4689,16 @@ uint8_t fpga_bitbang_config_sequence(void)
     gpio_cfg.gpio_out_type = GPIO_OUTPUT_PUSH_PULL;
     gpio_cfg.gpio_drive_strength = GPIO_DRIVE_STRENGTH_STRONGER;
     gpio_init(GPIOB, &gpio_cfg);
+    /* MISO: input PULL-UP, stock's idle level (Exp E), the same as
+     * fpga_init() sets before this sequence. Until 2026-11-27 this left it
+     * floating (CRL nibble 4, read back on my unit), so an undriven MISO had no
+     * defined level for the rest of the boot and the acquisition gate's
+     * "a dead bus reads 0xFF" (dsp/acq_gate.h) did not hold. */
     gpio_cfg.gpio_pins = BB_MISO;
     gpio_cfg.gpio_mode = GPIO_MODE_INPUT;
-    gpio_cfg.gpio_pull = GPIO_PULL_NONE;
+    gpio_cfg.gpio_pull = GPIO_PULL_UP;
     gpio_init(GPIOB, &gpio_cfg);
+    gpio_cfg.gpio_pull = GPIO_PULL_NONE;   /* restore shared struct default */
     SPI3_CS_DEASSERT();
 
 #if FPGA_CONFIG_B_ARM
@@ -4883,6 +4896,7 @@ uint8_t fpga_spi3_config_sequence(const fpga_cfg_seq_opts_t *opt)
     fpga.probe_id_bit       = -1;
     fpga.probe_id_bit_post  = -1;
     fpga.probe_id_bit_close = -1;
+    fpga.probe_close_read   = false;
     for (unsigned i = 0; i < FPGA_CFG_TRACE_N; i++) {
         fpga.cfg_trace[i]        = 0xFFFFFFFFu;  /* "not measured", same as anchor-fail */
         fpga.cfg_trace_anchor[i] = -1;
@@ -5253,6 +5267,7 @@ uint8_t fpga_spi3_config_sequence(const fpga_cfg_seq_opts_t *opt)
      * definitively not configured. */
     spi3_read_reg8(0x11, fpga.probe_idcode_close);
     fpga.probe_id_bit_close = spi3_find_idcode(fpga.probe_idcode_close);
+    fpga.probe_close_read = true;   /* acq_opphase_trusted(): the read ran */
 
     spi3_xfer(0x00);                          /* bare clock, CS HIGH (frame) */
     SPI3_CS_ASSERT();

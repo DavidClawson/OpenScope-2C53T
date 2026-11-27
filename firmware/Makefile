@@ -682,7 +682,8 @@ test-trig-edge: $(BUILD_DIR)/test_trig_edge
 	$<
 
 # Acquisition frame gate (EXP-82): a railed input is live data, a dead bus
-# (MISO pulled up, 0xFF in every byte) is not.
+# (MISO pulled up, 0xFF in every byte) is not, and neither is the open config
+# port of a part whose configuration failed. Two older gates as controls.
 $(BUILD_DIR)/test_acq_gate: tests/test_acq_gate.c src/dsp/acq_gate.h | $(BUILD_DIR)
 	$(HOST_CC) -std=gnu11 -O2 -Wall -Wextra -Werror -Isrc/dsp $< -o $@
 
