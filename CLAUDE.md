@@ -230,7 +230,7 @@ Addresses below have been converted to the flash convention where they were veri
 - 4 themed UI modes: oscilloscope (with FFT/waterfall), multimeter (large digits), signal generator, navigable settings
 - Theme switching (4 themes) wired through all screens
 - FreeRTOS scheduler running with display + input tasks
-- Power management: PC9 hold, PB8 backlight, POWER button 3-2-1 countdown shutdown, low-battery auto-off at 3.3V, stock-style charge screen when USB powers the unit up or it is switched off on USB (EXP-75, bench-confirmed 2026-11-25)
+- Power management: PC9 hold, PB8 backlight, POWER button 3-2-1 countdown shutdown, low-battery auto-off at 3.3V, stock-style charge screen when USB powers the unit up or it is switched off on USB (EXP-75, bench-reported 2026-11-25)
 - **USB HID bootloader** — closed-case firmware updates via `make flash`, LCD status screen, POWER button exit, auto-reboot after flash
 - Battery monitor: PB1 ADC with 16-sample averaging, percentage display, USB charge detection ("CHG"), LiPo protection shutdown
 - SDL3 native LCD viewer with interactive button input for emulator

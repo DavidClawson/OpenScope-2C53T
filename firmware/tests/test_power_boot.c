@@ -60,6 +60,14 @@ static const scenario_t scenarios[] = {
     { "watchdog reset on USB",                  NRST | WDT,        false, false, false, RUN    },
     { "watchdog reset straight after power-on", POR | NRST | WDT,  false, false, false, RUN    },
     { "no flags at all (cleared, jumped into)", 0,                 false, false, false, RUN    },
+    /* HID-bootloader builds: latched is always false there (power.c), since
+     * that bootloader latches PC9 on every boot. Its post-flash handoff is a
+     * direct jump, so the flags are those of the entry. From the running app
+     * there is no POR and it boots; a cold POWER+PRM entry cannot be told
+     * from USB into an off unit and lands on the charge screen (known, not
+     * unsafe: POWER hold boots it). */
+    { "HID flash, Settings > Firmware Update",  NRST | SW,         false, false, false, RUN    },
+    { "HID flash, cold POWER+PRM entry",        POR | NRST,        false, false, false, CHARGE },
     /* Power-off on battery, pressed again so soon that SRAM kept the request
      * through the outage. POR says the rail went down: the request is stale. */
     { "battery re-press, SRAM kept request",    POR | NRST,        true,  true,  false, RUN    },

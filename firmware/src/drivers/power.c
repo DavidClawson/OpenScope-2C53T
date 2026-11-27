@@ -84,7 +84,16 @@ power_boot_t power_boot_decide(void)
     bool latched = ((GPIOC->cfghr >> 4) & 0x3u) != 0 &&
                    (GPIOC->odt & (1u << 9)) != 0;
 #else
-    bool latched = false;   /* our HID bootloader latches PC9 every boot */
+    /* Our HID bootloader latches PC9 on every boot, so here a HIGH PC9 says
+     * nothing about a flash and cannot be used. Known consequence: a cold
+     * POWER+PRM entry into the HID bootloader, a flash, and its direct jump
+     * to the app (it does not reset, hid_iap_user.c) arrive with POR set and
+     * POWER up, which is exactly "USB plugged into an off unit": the new
+     * image starts on the charge screen and boots on a POWER hold. Not
+     * unsafe, since flashing needs USB, which holds the rail up. An entry
+     * from the running app (Settings > Firmware Update) carries no POR and
+     * boots straight in. Both cases are rows in tests/test_power_boot.c. */
+    bool latched = false;
 #endif
 
     /* PC8 input with pull-up: CNF=10, MODE=00, ODT bit = pull-up. The
