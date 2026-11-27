@@ -1,7 +1,8 @@
 /*
  * cal_reference.c — GENERATED. Byte-exact copy of bench unit #1's MCU settings
  * page (0x08006000..0x08006FFF) as recovered from archive/factory_iap_bootloader_2C53T.bin
- * (committed 2026-06-12, extracted 2026-08-14).
+ * as committed 2026-06-12 in 22730c0 (extracted 2026-08-14; that archive has since been
+ * trimmed to its 0x6000 bytes of code, issue #38, and no longer holds the page).
  *
  * sha256 6004374abb123b99aa8a2516f66b0f6465032e817ebd3fb463c2559accdf621f
  * crc32  59E91404      non-FF 513/4096

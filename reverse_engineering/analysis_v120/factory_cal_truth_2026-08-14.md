@@ -21,6 +21,11 @@ already in the repo. Items needing the device are marked **ready for bench valid
    **includes the settings page**. Its `0x6000` page is populated, signature `0x55`,
    sentinel valid, with a full calibration table. **It is git-tracked**, so the data is
    already safe in version control.
+   > **Update (2026-10-05, issue #38):** the archive is now trimmed to `0x6000` bytes and no
+   > longer contains the page. The page is
+   > `archive/factory_cal/unit1_mcu_settings_page_0x08006000.bin`
+   > (sha256 `6004374a…`, byte-identical), and the 28 KB original stays in git history at
+   > `22730c0`.
 
 3. **That table is not any firmware's defaults.** Stock ships a compiled-in default table
    (§5). V1.0.7, V1.1.2 and V1.2.0 all carry the **identical** default value multiset;
@@ -335,9 +340,11 @@ or (b) values that were already in the page.**
 ### 6.2 A real unit's page contains neither the defaults nor anything the firmware could make
 
 `archive/factory_iap_bootloader_2C53T.bin` (28,672 B = `0x7000`, git-tracked, committed
-2026-06-12 in `22730c0`) spans `0x08000000`–`0x08007000` and therefore **contains the
-settings page** at its `0x6000` offset. Captured by `scripts/dump_factory_bootloader.py`
-via `mem read` over our own USB CDC shell — so from a unit running OpenScope, with the
+2026-06-12 in `22730c0`; trimmed to `0x6000` on 2026-10-05, issue #38, so read it from
+`22730c0` or use `archive/factory_cal/unit1_mcu_settings_page_0x08006000.bin`)
+spans `0x08000000`–`0x08007000` and therefore **contains the settings page** at its
+`0x6000` offset. Captured by `scripts/dump_factory_bootloader.py` via `mem read`
+over our own USB CDC shell — so from a unit running OpenScope, with the
 factory IAP bootloader intact.
 
 The page is populated, and every structural prediction of §4–§5 holds:
@@ -350,6 +357,13 @@ The page is populated, and every structural prediction of §4–§5 holds:
   defaults on this unit
 - `[0x130]`–`[0x1FF]` = RAM garbage (stack addresses `0x2002DF7C`, `0x080374F1`…), exactly
   as predicted by "the writer programs 512 bytes but the struct is only 304"
+  > **Correction (2026-10-01, issue #28):** "garbage" overstated it. The never-flashed
+  > unit #3's tail is **byte-identical** to this unit's (0/208 bytes differ, pointers
+  > included), so it is not random per-unit or per-write noise. It is still not
+  > calibration, and stock's own later saves have changed it on a used unit (live unit #1
+  > differed ~124/208 on 2026-08-14), so a tail diff still means "stock re-saved", never
+  > "calibration moved". Whether the shared content is a factory-written image or the
+  > deterministic residue of one save path is open. See `archive/factory_cal/README.md`.
 - `[0x200]`–`[0x7FF]` = **all `0xFF`**, exactly as predicted by "erase 2 KB, program 512 B"
 
 Five independent structural predictions confirmed on data the model was not derived from.
@@ -495,6 +509,10 @@ happen anyway, and sooner, for a better reason.
 - **One unit's factory calibration** — already in git, in
   `archive/factory_iap_bootloader_2C53T.bin`. Safe, but **only by accident**, and
   undocumented until now.
+  > **Update (2026-10-05, issue #38):** gap 1 below was closed by extracting the page to
+  > `archive/factory_cal/unit1_mcu_settings_page_0x08006000.bin` (2026-08-14); the
+  > bootloader archive was then trimmed to its 24 KB of code so the recovery recipe stops
+  > writing unit #1's page onto other units.
 
 **Gaps, in priority order:**
 
@@ -567,6 +585,12 @@ Every table in §5, §6 and §8 is reproducible from `archive/` contents alone. 
 most important input is `archive/factory_iap_bootloader_2C53T.bin` at offset `0x6000`,
 length `0x800`; parent sha256
 `0c9ec7d642d233ea09c87274867ad3460e1dbec37c4332f7edb8f836175630c7`.
+
+> **Update (2026-10-05, issue #38):** that parent is the 28 KB file as committed in
+> `22730c0`. The working-tree archive is now trimmed to `0x6000` bytes (sha256
+> `7a6201ee16ce155675f1d235e468edfdce7a736318f2591d54a221d4ad06566b`) and has no offset
+> `0x6000`. Use `archive/factory_cal/unit1_mcu_settings_page_0x08006000.bin` from
+> offset `0`; it is the same 4096 bytes.
 
 ---
 
