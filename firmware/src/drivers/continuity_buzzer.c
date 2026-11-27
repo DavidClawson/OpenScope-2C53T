@@ -24,11 +24,11 @@
  * docs/re/system_map_corrections.md section 6, unit #2). Stock maps EXTI3 to
  * PC3, rising edge (master_init 0x0802C75A), and its EXTI3 ISR sets the buzzer
  * duty on every edge, which is why it beeps 24-39 ms after contact. The
- * decoded reading lags contact by 475-1012 ms (EXP-74, unit #4).
+ * decoded reading lags contact by 475-1012 ms (EXP-93, my unit).
  *
  * So the beep follows PC3 EDGES, counted by EXINT3, and the reading only gets
  * a veto (see continuity_short_active). Edges, not the level: the pulse shape
- * at the pin depends on the optocoupler (on unit #4 a ~38 Hz level poll read
+ * at the pin depends on the optocoupler (on my unit a ~38 Hz level poll read
  * it as solid LOW), and an edge count does not care about duty or idle level. */
 #define CONT_DETECT_GPIO      GPIOC
 #define CONT_DETECT_PIN       GPIO_PINS_3
@@ -134,7 +134,7 @@ static bool continuity_short_active(TickType_t now)
      * mute it: a fresh resistance at or above the threshold (a part between
      * the user's threshold and the hardware one) silences the beep until the
      * tone stops. OL frames never veto, because the first frames after contact
-     * still say OL. The hardware threshold is above 47 Ohm on unit #4 and not
+     * still say OL. The hardware threshold is above 47 Ohm on my unit and not
      * measured further, so a setting above it cannot make PC3 fire earlier. */
     hw_detect_sample(now);
     if (hw.seen) {
@@ -149,7 +149,7 @@ static bool continuity_short_active(TickType_t now)
     }
 
     /* Fallback: no PC3 tone yet in this session (or PC3 is not wired on this
-     * board). Beep from the decoded reading, as before EXP-74. */
+     * board). Beep from the decoded reading, as before EXP-93. */
     if (!meter_data_snapshot(&reading) || !reading.valid ||
         reading.submode != 7) {
         short_latch_until_tick = 0;
@@ -191,7 +191,7 @@ void continuity_buzzer_init(void)
     /* PC3 continuity detect: input with PULL-UP, as stock configures it
      * (gpio_init struct before 0x0802C74A: pins 0x0008, pull 0x18, mode 0x00).
      * The optocoupler can only pull the line low; without the pull-up it most
-     * likely does not swing back (EXP-74 read it floating as solid LOW).
+     * likely does not swing back (EXP-93 read it floating as solid LOW).
      * Rising edges are counted on EXINT3, as stock does. Same shape as
      * fpga.c's PC0 counter on EXINT0. */
     crm_periph_clock_enable(CRM_GPIOC_PERIPH_CLOCK, TRUE);

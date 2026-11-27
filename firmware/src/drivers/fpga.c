@@ -5325,7 +5325,7 @@ void fpga_init(void)
      * - Set bits [26:24] = 010 (JTAG off, SWD on)
      * - Clear bit [28] = 0 (SPI3 on PB3/PB4/PB5)
      * Stock's (reg & ~0xF000) | 0x2000 at AFIO+0x08 is EXTICR1 (EXTI3 to
-     * PC3, the continuity buzzer line; EXP-74), not SWJ_CFG. */
+     * PC3, the continuity buzzer line; EXP-93), not SWJ_CFG. */
     /* AT32F403A pin remapping: keep legacy SWJ_CFG and SWJTAG_GMUX aligned.
      *
      * The legacy SWJ_CFG in IOMUX->remap (offset 0x04) defaults to 000

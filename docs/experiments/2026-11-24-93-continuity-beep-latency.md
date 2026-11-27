@@ -1,9 +1,10 @@
-# EXP-74 — Continuity beep latency: where the delay comes from
+# EXP-93 — Continuity beep latency: where the delay comes from
 
 - **Date:** 2026-11-24
-- **Unit:** unit #4 (new 2C53T, stock V1.2.0 as shipped, factory cal archived as `archive/factory_cal/unit4_mcu_settings_page_0x08006000.bin`)
+- **Unit:** my unit (new 2C53T, stock V1.2.0 as shipped, factory cal archived as `archive/factory_cal/unit4_mcu_settings_page_0x08006000.bin`)
 - **Build:** `make guest-coldtrace-meter`, gcc 15.3.1, flashed through the factory IAP. Parts A–D on commit `7480998` (main); Part E on the edge-counter change in the commit that adds this file
 - **Status:** CONFIRMED (fix works by ear; no audio number for the fixed build yet). H1 REFUTED; stock is 20x faster because it beeps from the meter SoC's buzzer tone on PC3 (EXTI3, already documented in #94), and our buzzer now counts the same edges. Part D's "active-low level" reading is WITHDRAWN (Part E)
+- **Number:** EXP-74 until 2026-11-27, then renumbered EXP-93, because #75 had claimed 74 first. Commits before the renumbering say EXP-74
 
 ## 1. Problem
 Continuity mode beeps on shorted probes since the 2026-10-06 threshold change, but the
@@ -33,7 +34,7 @@ the display task (priority 1, ~87 ms per redraw per `ui dump`), and
 `meter_continuity_is_short()` has no multi-frame confirmation.
 
 ## 3. Procedure
-Host tool `reverse_engineering/captures/exp74/stream_loop.py` runs the shell's `meter stream 200 20`
+Host tool `reverse_engineering/captures/exp93/stream_loop.py` runs the shell's `meter stream 200 20`
 back to back and stamps every line with one host monotonic clock. The device prints a
 line only when `update_count` changes, polling every 20 ms, so arrival resolution is
 ~20 ms plus CDC latency.
@@ -68,7 +69,7 @@ and not void.
 `update_count` advancing by exactly 1 each time. An 8 s dry run gave median 163 ms,
 max 203 ms. The cadence is regular and does not sit at 250 ms.
 
-**Step 2, transition capture** (`reverse_engineering/captures/exp74/run1_touches.txt`, 21:59:36–22:02:07, 150 s): 891
+**Step 2, transition capture** (`reverse_engineering/captures/exp93/run1_touches.txt`, 21:59:36–22:02:07, 150 s): 891
 unique frames, `upd` 1577→2467 with **0 missing**. Interval median 163 ms, p5 138,
 p95 204, max 492 (the max is a stream-restart gap on the host side).
 
@@ -106,7 +107,7 @@ Recorded on an iPhone (Voice Memos) about 10 cm from the scope: first OpenScope 
 `7480998`, then stock V1.2.0 (`a17c5c35…`, flashed through the factory IAP), with the
 same tap pattern. The two recordings (13 s and 17 s) are not in the repo, because
 they are ambient room audio. The analysis scripts `latency.py` / `events.py` are in
-`reverse_engineering/captures/exp74/`, and the per-tap numbers below are their
+`reverse_engineering/captures/exp93/`, and the per-tap numbers below are their
 output. Method: the beep tone gets its own
 band envelope (OpenScope 2.8–3.7 kHz, stock 1.7–2.1 kHz; the two buzzers sound
 different), and the tip click is the strongest 10–16 kHz transient before each beep
@@ -178,7 +179,7 @@ comments that cited the remap note; `HARDWARE_PINOUT.md` now also names PC3.
 
 ### Part D: PC3 on OpenScope (same build, continuity mode)
 
-Instrument: `reverse_engineering/captures/exp74/pc3_sample.py`, which sends the
+Instrument: `reverse_engineering/captures/exp93/pc3_sample.py`, which sends the
 shell's `mem read 40011008 1` (GPIOC IDR) back to back at ~36–40 samples/s.
 Read-only.
 
@@ -254,7 +255,7 @@ discrepancy.
   100–110 ms (Part C, countdown), after Metalaria's review on PR #102. Everything else
   in this part was measured on the 25 ms build; the change touches only when the beep
   ends. Image `openscope-2c53t-pc3edge-hold105-coldtrace-meter.bin`, sha256
-  `efb9c3a1198c63f8…`; by ear on unit #4 the operator reports "all working fine" (weak
+  `efb9c3a1198c63f8…`; by ear on my unit the operator reports "all working fine" (weak
   evidence; the tail itself was not timed).*
 - **Unchanged from Part D:** the threshold veto, the fallback to the decoded reading
   until a tone has been seen in the session, and the gate.
@@ -263,7 +264,7 @@ Image `openscope-2c53t-pc3edge-coldtrace-meter.bin`, sha256 `16a8fa23f0915310…
 Vector 25 → `EXINT3_IRQHandler` at `0x08015A41`, `pc3_edges` at `0x2000D544`
 (from the ELF).
 
-**Preconditions verified by readback** (`reverse_engineering/captures/exp74/pc3_readback.py`,
+**Preconditions verified by readback** (`reverse_engineering/captures/exp93/pc3_readback.py`,
 probes open, after flashing):
 | what | expected | measured |
 |---|---|---|
@@ -275,7 +276,7 @@ probes open, after flashing):
 | NVIC ISER0 bit 9 (EXTI3) | 1 | `0x20100240` → 1 |
 | NVIC priority, IRQ 9 | 6 | IPR8 `0x00006000` → `0x60` → 6 |
 
-**Instrument:** `reverse_engineering/captures/exp74/pc3_edge_rate.py` reads
+**Instrument:** `reverse_engineering/captures/exp93/pc3_edge_rate.py` reads
 `pc3_edges` over the shell and logs edges/s between reads (303 reads in 60 s).
 Read-only.
 
@@ -294,7 +295,7 @@ open stretches before, between and after the holds.
 | 4 | 24.4–26.2 | 3674 | 2288/s |
 | 5 | 28.1–33.6 | 11911 | 2288/s |
 
-So PC3 carries a **2.29 kHz tone** (rising edges/s) on unit #4 while the probes are
+So PC3 carries a **2.29 kHz tone** (rising edges/s) on my unit while the probes are
 held, and nothing while they are open. That is #94's 2.24 kHz on unit #2 within 2.2%.
 Bursts 1–4 are shorts and burst 5 is the 47 Ω, as the operator confirmed afterwards.
 The log alone cannot tell them apart. So the SoC sounds the same tone for 47 Ω as for
@@ -342,7 +343,7 @@ a short, which agrees with Part D's "hardware threshold above 47 Ω".
 
 ## 7. Conclusion
 - **Established:** in continuity mode the meter chip reports at a regular ~163 ms
-  (6.1 frames/s) on unit #4. The short appears in the first frame after `OL`, with no
+  (6.1 frames/s) on my unit. The short appears in the first frame after `OL`, with no
   settling frames. Our side adds at most ~5 ms (buzzer poll). So once the chip
   reports, the beep onset is bounded by the frame cadence: about 80 ms on average and
   ~200 ms worst case.
@@ -358,7 +359,7 @@ a short, which agrees with Part D's "hardware threshold above 47 Ω".
   (it has no Automatic function), stays silent in Diode as stock does, and now stops
   105 ms after the last edge (25 ms in the build Part E measured).
 - **Established (Part E):** PC3 carries the meter SoC's buzzer tone, as #94 found on
-  unit #2: 2287–2291 rising edges/s in each of five holds on unit #4 under OpenScope
+  unit #2: 2287–2291 rising edges/s in each of five holds on my unit under OpenScope
   with stock's pull-up, and 0 with the probes open. The buzzer now counts those edges
   on EXTI3, as stock does, and by ear beeps at once and stops on release.
 - **Withdrawn (Part D):** "PC3 is an active-low short-detect level". That was the

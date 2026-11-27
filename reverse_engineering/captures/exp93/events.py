@@ -1,8 +1,8 @@
-"""EXP-74 audio analysis: every click and beep edge, to check the click/beep pairing.
+"""EXP-93 audio analysis: every click and beep edge, to check the click/beep pairing.
 
 Usage: python events.py OpenScope Original
 Expects OpenScope.wav / Original.wav (mono, 48 kHz) in the current directory. The
-EXP-74 recordings are not in the repo; to redo it, record your own and convert, e.g.
+EXP-93 recordings are not in the repo; to redo it, record your own and convert, e.g.
   ffmpeg -i <openscope recording>.m4a -ac 1 -ar 48000 OpenScope.wav
   ffmpeg -i <stock recording>.m4a     -ac 1 -ar 48000 Original.wav
 Beep bands: OpenScope 2.8-3.7 kHz, stock 1.7-2.1 kHz; clicks: 10-16 kHz transients.
