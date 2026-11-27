@@ -199,3 +199,8 @@ int trig_edge_anchor(const volatile uint8_t *rec, int c, int rising)
     }
     return best;
 }
+
+int trig_edge_show_wrong_edge(int auto_mode, int32_t since_commit_ms, uint32_t budget_ms)
+{
+    return auto_mode && since_commit_ms >= 0 && (uint32_t)since_commit_ms >= budget_ms;
+}

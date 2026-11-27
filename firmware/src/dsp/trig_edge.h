@@ -61,6 +61,23 @@ int trig_edge_find_seam_lpc(const volatile uint8_t *rec, uint32_t *k);
 /* Value step first (never off in any test), else linear prediction. */
 int trig_edge_find_seam_any(const volatile uint8_t *rec, uint32_t *k);
 
+/* What the acquisition loop does with a strobed record of the OTHER edge
+ * (2026-11-27). NORMAL and SINGLE drop it and keep holding, as before. AUTO
+ * drops it too, unless nothing has been committed for a whole fallback
+ * budget: then it shows it, unfiltered.
+ *
+ * Without this AUTO froze whenever the FPGA fired on the wrong edge every
+ * time. AUTO's free-run fallback counts from the last HANDOVER, and a dropped
+ * record is a handover, so the budget never ran out and nothing was shown.
+ * It happens with the scope's own generator at a round frequency, whose
+ * phase locks to the re-arm: at 1 kHz on reg 0x01 = 0x08 every record was
+ * falling, while 997 and 1013 Hz gave both edges.
+ *
+ * since_commit_ms: ticks since the last committed record, as a signed
+ * difference (a wrapped tick counter still compares right).
+ * Returns 1 to show the record, 0 to drop it. */
+int trig_edge_show_wrong_edge(int auto_mode, int32_t since_commit_ms, uint32_t budget_ms);
+
 /* The hardware trigger point of a TIME-ORDERED record: the crossing of
  * `crossing` (record units, = reg 0x08 code - 28, EXP-55/56) in the chosen
  * direction nearest index 512, within +/-48 (EXP-53: 501..520). Schmitt-armed

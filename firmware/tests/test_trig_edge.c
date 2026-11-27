@@ -8,6 +8,9 @@
  * [3] synthetic sweep, sines and squares from 0.2 to 31 periods per record,
  *     both edges, random rotation: never wrong; integer periods (seam
  *     invisible by construction) must be refused, not guessed.
+ * [7] what happens to a record of the other edge (trig_edge_show_wrong_edge):
+ *     the rule, and a simulated AUTO loop in which every record is the other
+ *     edge, with the old rule (always drop) as the negative control.
  */
 #include <math.h>
 #include <stdio.h>
@@ -167,6 +170,39 @@ int main(void)
         if (d == 0) s_exact++; else s_bad++;
     }
     CHECK(s_bad == 0 && s_found >= 300, "with a stray sample 0: %d found, %d exact, %d wrong", s_found, s_exact, s_bad);
+
+    printf("[7] a record of the other edge\n");
+    CHECK(!trig_edge_show_wrong_edge(0, 5000, 250), "NORMAL/SINGLE: dropped, however long nothing came");
+    CHECK(!trig_edge_show_wrong_edge(1, 249, 250), "AUTO inside its budget: dropped");
+    CHECK(trig_edge_show_wrong_edge(1, 250, 250), "AUTO with nothing committed for a budget: shown");
+    CHECK(!trig_edge_show_wrong_edge(1, -5, 250), "a negative interval (commit after the read) is not starvation");
+    {
+        /* Ticks wrap: last commit just before the wrap, read just after. */
+        uint32_t commit = 0xFFFFFF00u, read = 0x00000100u;
+        CHECK(trig_edge_show_wrong_edge(1, (int32_t)(read - commit), 250),
+              "a wrapped tick counter: 512 ms since the commit is starvation");
+    }
+    {
+        /* AUTO, every strobed record the other edge, one every 190 ms (the
+         * FPGA's hold), budget 280 ms, 5 s. The old rule (drop, and the
+         * free-run fallback counts from the last handover, which each drop
+         * resets) commits nothing; the new one shows about one record per
+         * budget. */
+        const uint32_t budget = 280u, period = 190u;
+        int commits_old = 0, commits_new = 0;
+        uint32_t last_commit = 0u, last_handover = 0u;
+        for (uint32_t t = period; t <= 5000u; t += period) {
+            last_handover = t;                            /* a strobed record arrived */
+            if (trig_edge_show_wrong_edge(1, (int32_t)(t - last_commit), budget)) {
+                commits_new++;
+                last_commit = t;
+            }
+            /* old rule: dropped; the fallback looks at t - last_handover = 0 */
+            if ((int32_t)(t - last_handover) >= (int32_t)budget) commits_old++;
+        }
+        CHECK(commits_old == 0, "negative control, the old rule: %d commits in 5 s (AUTO frozen)", commits_old);
+        CHECK(commits_new >= 10, "the new rule: %d commits in 5 s", commits_new);
+    }
 
     printf("\n%s\n", fails ? "FAILED" : "all passed");
     return fails ? 1 : 0;
