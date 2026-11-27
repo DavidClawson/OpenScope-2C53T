@@ -1,11 +1,11 @@
 /*
- * OpenScope 2C53T - experimental continuity buzzer drive.
+ * OpenScope 2C53T - continuity buzzer drive.
  *
- * The stock firmware audibly beeps in continuity mode, but this clean-room
- * tree does not yet have a confirmed buzzer pin/timer map. PB9 is stock
- * AF-push-pull and is one of the unresolved auxiliary pins, so this driver
- * tries it as a bounded bench probe: output toggles only in continuity mode
- * while the parser reports an actual short.
+ * The buzzer is on PB9, bit-banged here (stock drives it from TMR11_CH1, #94).
+ * The beep follows the meter SoC's BUZ tone on PC3, counted by EXINT3 as stock
+ * does, so it starts within a few ms of contact; the decoded reading can mute
+ * it above the user's threshold (continuity_veto.h) and is the fallback when
+ * no tone has been seen. See continuity_buzzer.c and EXP-93.
  */
 #ifndef CONTINUITY_BUZZER_H
 #define CONTINUITY_BUZZER_H

@@ -449,6 +449,16 @@ The IWDG is fed every 11 calls to `input_and_housekeeping`. Given the typical ca
 
 The meter data processor detects continuity via specific BCD digit patterns (`digit1=0x12, digit2=0x0A, digit3=5`) and sets a buzzer state variable at `ms+0xF5D` (values `0xB0`/`0xB1`). The EXTI3 interrupt handler at `0x08009C10` reads this to drive the piezo buzzer.
 
+> ⚠ **CORRECTED 2026-11-24 (EXP-93):** the EXTI3 handler does **not** read `ms+0xF5D`. Disassembled at `0x08009C10`–`0x08009C72`, it does the following:
+> - clears EXTI pending bit 3;
+> - returns unless `ms[0xF68] == 1`;
+> - writes `10` to TMR11 `C1DT` (`0x40015434`, the buzzer PWM duty) only when `ms[0xF2D] == 0` or `ms[0xF2D] == 2 && ms[0xF36] == 2`, which on a running stock unit are the Automatic and Continuity functions (Diode is 2 / 1 and does not pass);
+> - writes `0` to `0x20002D67` in either case. That byte is the buzzer's off countdown: a 10 ms tick (`0x08029D0C`, `0x08040508`) increments it while `C1DT != 0` and clears `C1DT` at 11, so the beep ends 100–110 ms after the last edge.
+>
+> *Corrected 2026-11-25 (Metalaria, PR #102): the first version of this note said the handler "skips the beep when `ms[0xF2D] == 2 && ms[0xF36] == 2`", which reads the gate the wrong way round. The function names, the 10 ms tick and the 100–110 ms tail are Metalaria's measurements on a stock unit.*
+>
+> EXTI line 3 is mapped to **PC3**, rising edge only (master_init `0x0802C75A`–`0x0802C7D0`). PC3 carries the meter SoC's buzzer (BUZ) tone through an optocoupler: a 2.24 kHz pulse train with the leads shorted, none open (#94, `docs/re/system_map_corrections.md` §6, unit #2; ~2290 rising edges/s on unit #4, EXP-93 Part E). An earlier reading of it as an active-low level was an artifact of sampling it as a floating input. That fast path is why stock beeps 24–39 ms after contact, against 475–1012 ms for a beep driven by the decoded frame. Whether the BCD pattern above sets `ms+0xF5D` was not re-checked. See `docs/experiments/2026-11-24-93-continuity-beep-latency.md`.
+
 ---
 
 ## What This Means For Our Firmware

@@ -72,7 +72,7 @@
 | PC0 | Probe continuity | Input | Pull-up | -- | `peripheral_map.md` | |
 | PC1 | Unknown | -- | -- | -- | | |
 | PC2 | Unknown | -- | -- | -- | | |
-| PC3 | Unknown | -- | -- | -- | | |
+| PC3 | Meter SoC buzzer tone (BUZ, pin 28, via EL3H7 optocoupler) | Input | Pull-up | -- | #94, `docs/re/system_map_corrections.md` §6; stock gpio_init before `0x0802C74A`; EXP-93 | EXTI3, rising edge. ~2.2 kHz pulse train while the leads are shorted, none open. Stock's EXTI3 ISR beeps from it; so does ours (`continuity_buzzer.c`) |
 | PC4 | Unknown | -- | -- | -- | | |
 | PC5 | Button matrix row | Input | Pull-up | -- | `peripheral_map.md`; `input_and_housekeeping` | Down button row pin |
 | PC6 | FPGA SPI enable | Output | Push-pull | 50 MHz | `FPGA_BOOT_SEQUENCE.md` step 19; set via GPIOC_BOP = (1<<6) | Must be HIGH for SPI3 to communicate with FPGA |
@@ -602,7 +602,7 @@ Li-ion battery powers the device. Battery voltage ADC channel has not yet been i
 | Vector | IRQ # | Handler Address | Purpose |
 |--------|-------|-----------------|---------|
 | 15 | SysTick | 0x0802A995 | FreeRTOS system tick (1000 Hz) |
-| 25 | EXTI3 | 0x08009C11 | Continuity buzzer detection (reads `ms+0xF5D` for state 0xB0/0xB1) |
+| 25 | EXTI3 | 0x08009C11 | Continuity buzzer detection (~~reads `ms+0xF5D` for state 0xB0/0xB1~~ ⚠ CORRECTED 2026-11-24, EXP-93: it does not read `ms+0xF5D`. It fires on PC3 rising edges, the meter SoC's buzzer tone, and sets TMR11 `C1DT` = 10) |
 | 28 | DMA0_Ch1 | 0x08009671 | DMA transfer complete: LCD framebuffer blast (0x2000835C to 0x60020000) |
 | 36 | USB_LP_CAN_RX0 | 0x0802E8E5 | USB device interrupt |
 | 45 | TIM3 | 0x0802771D | Periodic timer: drives USART2 exchange + button scan trigger |
@@ -632,7 +632,7 @@ The following MCU pins have no identified function from decompilation or hardwar
 
 **GPIOA:** PA0, PA1, PA4, PA5, PA6 (PA4/PA5 may be DAC outputs)
 **GPIOB:** PB1, PB2
-**GPIOC:** PC1, PC2, PC3, PC4, PC8, PC11, PC13, PC14, PC15
+**GPIOC:** PC1, PC2, PC4, PC8, PC11, PC13, PC14, PC15
 **GPIOD:** PD2, PD3, PD6
 **GPIOE:** PE0, PE1
 

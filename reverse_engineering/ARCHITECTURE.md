@@ -527,6 +527,8 @@ Meter UI rendering uses large-digit fonts (`meter_ui_draw_value`, 530 bytes) wit
 
 The EXTI3 ISR (0x08009C10) reads the buzzer state variable at `ms+0xF5D` (values 0xB0/0xB1) to drive the piezo buzzer when continuity is detected.
 
+> ⚠ **CORRECTED 2026-11-24 (EXP-93):** the EXTI3 ISR does **not** read `ms+0xF5D`. EXTI3 is mapped to **PC3**, rising edge, and PC3 carries the meter SoC's buzzer (BUZ) tone through an optocoupler, a ~2.2 kHz pulse train while the leads are shorted (#94, `docs/re/system_map_corrections.md` §6). On every edge it clears the pending bit and, if `ms[0xF68] == 1` and either `ms[0xF2D] == 0` or `ms[0xF2D] == 2 && ms[0xF36] == 2` (the Automatic and Continuity functions; gate corrected 2026-11-25 after Metalaria's review on PR #102), writes 10 to TMR11 `C1DT` (`0x40015434`, the buzzer duty), which a 10 ms tick clears 100–110 ms after the last edge. The beep therefore follows the SoC's own continuity output, not the decoded frame. Who reads `ms+0xF5D` is not traced. See `analysis_v120/FPGA_TASK_ANALYSIS.md` §8 and `docs/experiments/2026-11-24-93-continuity-beep-latency.md`.
+
 ---
 
 ## 10. Power Management
