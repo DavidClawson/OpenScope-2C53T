@@ -76,14 +76,14 @@
 | PC4 | Unknown | -- | -- | -- | | |
 | PC5 | Button matrix row | Input | Pull-up | -- | `peripheral_map.md`; `input_and_housekeeping` | Down button row pin |
 | PC6 | FPGA SPI enable | Output | Push-pull | 50 MHz | `FPGA_BOOT_SEQUENCE.md` step 19; set via GPIOC_BOP = (1<<6) | Must be HIGH for SPI3 to communicate with FPGA |
-| PC7 | Probe detect | Input | Pull-up | -- | `FPGA_TASK_ANALYSIS.md` USART cmd 0x07 | HIGH = probe detected |
-| PC8 | Unknown | -- | -- | -- | | |
-| PC9 | Power hold | Output | Push-pull | 50 MHz | `main.c` line 281; `FPGA_BOOT_SEQUENCE.md` step 2 | **Must be HIGH immediately at boot or device shuts off** |
+| PC7 | Probe detect **or charger CHRG** (disputed) | Input | Pull-up | -- | `FPGA_TASK_ANALYSIS.md` USART cmd 0x07; stock charge loop `0x0802B39A`, status-bar icon `0x0801F93C`, battery monitor `0x08009CAE` | Stock reads LOW as **charging** in three places (`analysis_v120/stock_charge_screen_2026-11-24.md`). The "probe detect" reading was inferred from the meter cmd tail. Not bench-checked |
+| PC8 | POWER button | Input | Pull-up | -- | stock charge loop `0x0802B3BA`; `swd_chargemode_baseline.txt`; `button_scan.c` | Active LOW. Bridges the battery rail while held, so it also powers the unit until PC9 latches |
+| PC9 | Power hold | Output | Push-pull | 50 MHz | `main.c` line 281; `FPGA_BOOT_SEQUENCE.md` step 2 | **Latches the battery path; must go HIGH before POWER is released.** USB powers the board regardless, so stock holds it LOW on its charge screen (`analysis_v120/stock_charge_screen_2026-11-24.md`) |
 | PC10 | Button matrix row | Input | Pull-up | -- | `peripheral_map.md`; `input_and_housekeeping` | Auto button row; also GPIOC IDR bit 10 scanned for Group 3 buttons |
 | PC11 | Unknown | -- | -- | -- | | |
 | PC12 | Analog front-end | Output | Push-pull | 50 MHz | `gpio_mux_portc_porte` at 0x080018A4 | Relay/MUX switching |
 | PC13 | Unknown | -- | -- | -- | | |
-| PC14 | Unknown | -- | -- | -- | | |
+| PC14 | Charger STDBY (decoded) | Input | Pull-up | -- | stock charge loop `0x0802B3A2` | LOW = charge complete; stock draws the "full" image. Seen LOW on a full battery on our charge screen (EXP-75) |
 | PC15 | Unknown | -- | -- | -- | | |
 
 **GPIOC IDR reads** (0x40011008): 5 functions read GPIOC IDR for probe detection and button scanning: `FUN_0800bc98`, `FUN_0800bc00`, `FUN_0800bba6`, `FUN_0800bb10`, `FUN_0800ba06`, plus `input_and_housekeeping`.
@@ -632,7 +632,7 @@ The following MCU pins have no identified function from decompilation or hardwar
 
 **GPIOA:** PA0, PA1, PA4, PA5, PA6 (PA4/PA5 may be DAC outputs)
 **GPIOB:** PB1, PB2
-**GPIOC:** PC1, PC2, PC3, PC4, PC8, PC11, PC13, PC14, PC15
+**GPIOC:** PC1, PC2, PC3, PC4, PC11, PC13, PC15
 **GPIOD:** PD2, PD3, PD6
 **GPIOE:** PE0, PE1
 

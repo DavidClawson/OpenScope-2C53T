@@ -65,7 +65,8 @@ Write one file per experiment in `docs/experiments/`, named
   running configured part and only a true power cycle recovers it.
 - A **true power cycle** is POWER → "Goodbye" → **unplug USB** → replug. The
   pinhole reset and a POWER-button shutdown with USB attached both leave the
-  FPGA powered.
+  FPGA powered. Since EXP-75 the shutdown on USB lands on the charge screen,
+  and after the replug the unit waits there: hold POWER to boot.
 
 ## Git workflow
 
