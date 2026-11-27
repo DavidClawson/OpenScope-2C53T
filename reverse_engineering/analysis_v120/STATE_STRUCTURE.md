@@ -34,12 +34,14 @@ Everything above and below this section comes from static analysis. This section
 different: these are values read from the RAM of one unit running stock V1.2.0, over USB,
 with the case closed ([fnirsi-2c53t-link](https://github.com/Metalaria/fnirsi-2c53t-link):
 a read-only HID interface added to stock's own image; about 2 ms a read). The readings
-were taken on 2026-11-24 and 2026-11-25. Where a row here disagrees with a row in the
-sections below, the old row is left as it was and has a note pointing here.
+were taken from 2026-11-24 to 2026-11-27; a row that rests on the last two days says so.
+Where a row here disagrees with a row in the sections below, the old row is left as it
+was and has a note pointing here.
 
 How each row was checked is in the last column: **screen** means the value was compared
 with what the instrument showed, **keys** means it was watched while a key was pressed,
-**code** means it was only read in the disassembly. Sources:
+**code** means it was only read in the disassembly, **timed** means it was watched
+against the host's clock. Sources:
 [stock_v120_notes.md](https://github.com/Metalaria/fnirsi-2c53t-link/blob/main/docs/stock_v120_notes.md),
 [formats.md](https://github.com/Metalaria/fnirsi-2c53t-link/blob/main/docs/formats.md),
 [hardware_results_2026-11-25.md](https://github.com/Metalaria/fnirsi-2c53t-link/blob/main/docs/hardware_results_2026-11-25.md), #103, and
@@ -49,22 +51,34 @@ the comments on #102 for the meter rows.
 
 | Offset | Abs Address | Live reading | Checked |
 |--------|-------------|--------------|---------|
-| +0x00 | 200000F8 | Coupling of CH1: 1 DC, 0 AC. Switching it changed this byte and no other of `+0x00..+0x37`, and the trace dropped to straddle zero. It stayed 1 with CH1 off and CH2 alone on, so it is not `ch1_enable`; the channels' on flags are `+0x14`. `+0x01` read 0 throughout and CH2's coupling was not switched | keys |
+| +0x00 | 200000F8 | Coupling of CH1: 1 DC, 0 AC. Switching it changed this byte and no other of `+0x00..+0x37`, and the trace dropped to straddle zero. It stayed 1 with CH1 off and CH2 alone on, so it is not `ch1_enable`; the channels' on flags are `+0x14` | keys |
+| +0x01 | 200000F9 | Coupling of CH2, the same way: switched to AC and back with both channels on (2026-11-26), 1 to 0 to 1 and no other byte of `+0x00..+0x37` changed. Not `ch2_enable` | keys |
 | +0x02, +0x03 | 200000FA, 200000FB | Volts per division of CH1, CH2 as shown on the screen, as an index: 0 = 10 mV, then 1-2-5 steps up to 9 = 10 V (probe X1). Up/down change +0x02 when the arrow keys are in mode 0 (see +0x354) | screen, at 0, 2 and 5; keys |
 | +0x04, +0x05 | 200000FC, 200000FD | Vertical position of CH1, CH2 as set by the user, signed: zero volts is drawn at sample value 128 + position. It is what the paused-view formula of `docs/re/parity2_static.md` uses as the position | screen, CH1 in three sessions; CH2 assumed |
 | +0x06, +0x07 | 200000FE, 200000FF | Probe setting of CH1, CH2: 0 = X1, 1 = X10. The measurement blocks at `+0x50`.. carry the factor: 334 mV at X1 and 3.35 V at X10 on the same wave | keys, both channels both ways |
+| +0x0A, +0x0B | 20000102, 20000103 | The "FFT" row of the panel of CH1, CH2: 1 on, 0 off. Each was switched on and off with both channels on (2026-11-26) | keys |
+| +0x0C, +0x10 | 20000104, 20000108 | Two 32-bit words. While the FFT of CH1 (`+0x0C`) or of CH2 (`+0x10`) is on, the word is `0x20033940`; 0 while it is off. With the flag above these four bytes were all that changed. At `0x20033940`, outside `ms`: 128 bytes and then 32-bit floats | keys |
 | +0x14 | 2000010C | Channels on: bit 0 CH1, bit 1 CH2. Read 1 with CH1 alone, 2 with CH2 alone and 3 with both. It stayed 1 in all the snapshots of 2026-11-25 while +0x02 went through 1, 2 and 3, so it is **not** the voltage range | screen |
-| +0x15 | 2000010D | `0x01` with CH1 alone, `0x12` with CH2 alone. The high nibble agrees with the active channel of the row below; the low nibble is 1 and 2 with one channel on each time, so it is not the number of enabled channels (the trigger source?) | screen, two values |
-| +0x16 | 2000010E | 0 with CH1 alone, 1 with CH2 alone, as `active_channel` below says | screen, two values |
-| +0x1A | 20000112 | Horizontal position in screen columns, signed. Left/right change it by one a press when the arrow keys are in mode 2. While stopped it is rescaled when the time base is changed (-2 became -4, -8, -20, -40 zooming in, and 0 zooming out) | keys |
-| +0x1C | 20000114 | Changed by 2 a press of up/down with the arrow keys in mode 2, which fits the trigger level | keys; meaning inferred |
-| +0x2D | 20000125 | Time per division as an index: 0 = 10 ns, then 1-2-5 steps. RIGHT is one step faster (index - 1), in arrow mode 0 only | screen, at 8 (5 us) and 13 (200 us); keys |
+| +0x15 | 2000010D | `0x01` with CH1 alone, `0x12` with CH2 alone, `0x02` with both on. The low nibble is 1 and 2 with one channel on each time, so it is not the number of enabled channels. It is not the trigger's channel either: with both on it stayed `0x02` while that was switched (2026-11-26). Not established | screen, three values |
+| +0x16 | 2000010E | The trigger's channel: 0 CH1, 1 CH2. Switched to CH2 and back in the trigger panel with both channels on (2026-11-26): the only byte of `+0x00..+0x37` that changed. Earlier it had read 0 with CH1 alone and 1 with CH2 alone | keys |
+| +0x17 | 2000010F | The trigger's mode: **0 Normal, 1 Auto**, 2 Single, each selected in the trigger panel (2026-11-26). Between Auto and Normal it was the only byte that changed; in Single `+0x2E` read 0 as well | keys |
+| +0x18 | 20000110 | The trigger's edge: 0 rising, 1 falling, as below. 0 in every reading with the rising edge and 1 in the one taken with the falling edge, nothing else changed (2026-11-26) | keys, one reading |
+| +0x1A | 20000112 | Horizontal position, signed. Left/right change it by one a press when the arrow keys are in mode 1 or 2. While stopped it is rescaled when the time base is changed (-2 became -4, -8, -20, -40 zooming in, and 0 zooming out). Its unit fits a tenth of a division and not a screen column: in the readings where it is not 0 (over sixty, at 10 us to 500 us per division) it is `+0x20` divided by a tenth of the time per division, e.g. 1 with 1000 ns at 10 us. Two readings do not fit: one stopped at 5 us (-25 with -500000) and one taken after AUTO at 200 us (-150 with -150000) | keys |
+| +0x1C | 20000114 | The trigger level, signed, one count a press of up/down with the arrow keys in mode 2 (2026-11-26 and 27, one key at a time; an earlier reading had it change by 2). It also moves without those keys: by the same count as the position of the trigger's channel when that is moved, and when that channel's range changes it is rewritten: -8, then -44 at twice the volts per division, then -9 back, with `+0x04` at -79. Taken as counts from mid-screen (128), that is 71 counts above the channel's zero, then 35, then 70, so about the same voltage each time. With the trigger on CH1 it did not move with CH2's range or position. AUTO ends by writing it | keys |
+| +0x20 | 20000118 | A signed 64-bit number: the horizontal position in ns. On a change of time base while running it was kept (-200000 at 500 us and at 100 us) and `+0x1A` followed (-4, -20) | keys |
+| +0x28 | 20000120 | A 16-bit counter that runs down to 0 in about 3 s after a change of the time base or of the horizontal position: first read at 294 to 299 after each of eight such changes, 0 after 2.95 to 3.03 s, and 0 otherwise | timed |
+| +0x2A | 20000122 | The same after a change of the trigger level with the arrow keys in mode 2: first read at 295 to 300 after each of six such changes, 0 after 2.95 to 3.03 s | timed |
+| +0x2C | 20000124 | A counter that runs down to 0 in about 1 s after a change of a channel's vertical position, CH1's or CH2's: first read at 97 to 100 after each of six such changes, 0 after 0.97 to 1.03 s | timed |
+| +0x2D | 20000125 | Time per division as an index: 0 = 10 ns, then 1-2-5 steps. RIGHT is one step faster (index - 1), in arrow mode 0 only | screen, at 8 (5 us), 12 ("H=100uS"), 13 (200 us), 14 ("H=500uS") and 18 ("H=10mS"); keys |
 | +0x2E | 20000126 | 1 running, 0 stopped: the RUN/STOP key | keys |
+| +0x2F | 20000127 | The step of the sequence the AUTO key starts, 0 when none is running. With both channels on: `01`, `02`, `03`, `11`, `21`, `22`, `32`, `F3`, `FF`, then 0, in 5.76 s one time and 7.20 s another (the range of CH1 goes up one index about every 0.45 s during `01`, to 2 the first time and to 5 the second; `22` was read the first time, at a reading every 10 ms, and not the second, at one every 64 ms). With CH1 alone: `01`, `02`, `03`, `11`, `12`, `13`, `FF`, 0, in 5.65 to 5.69 s. At the key the couplings, the ranges and the positions are cleared and the time base goes to 4; they are written back step by step, the trigger level last | timed, four presses |
+| +0x31 | 20000129 | The couplings as the AUTO key found them, CH1's in the low nibble and CH2's in the high one: `0x11` with both channels in DC, `0x01` with CH1 alone. Stock packs it at `0x0800CC46` / `0x0800CD8C` and restores the couplings from it at `0x08008E3E`. It read 0 after the unit had been reflashed | timed, code |
+| +0x32 | 2000012A | A count of 10 ms ticks within a step of that sequence: 0 at the key, back to 0 at most changes of `+0x2F`, and after the last one it counts to `0xFF` and stays | timed |
 | +0x45 | 2000013D | Counter of the key scan: 0 to 50, then 0 again. 498 steps in 4.980 s, 10.00 ms a step | timed |
 | +0x50 | 20000148 | Measurements of the last acquisition: twelve 32-bit words for CH1, then twelve for CH2 | screen |
 | +0xB0 | 200001A8 | The same 24 words as a running average | screen |
 | +0x110 | 20000208 | The same 24 words as shown on the screen: the averaged block while running, the last acquisition once stopped. All zero outside the oscilloscope. CH2's twelve were read with a 50 kHz square wave on CH2 alone: 50 kHz, 20 us, 345 mV peak to peak at 100 mV/div, where the CH2 record itself gives 344 mV | screen, two stopped screens; CH2 against its record |
-| +0x354 | 2000044C | Low nibble: what the arrow keys do. 0 = time base and range, 2 = move (+0x1A and +0x1C), 3 = cursors (code only), 1 not looked at. SELECT steps it (handler `0x0800D2F8`, nibble advanced at `0x0800D38C`); one press took it from 2 to 0 on the unit | keys, code |
+| +0x354 | 2000044C | Low nibble: what the arrow keys do. 0 = time base (left/right) and range (up/down); 1 = horizontal position `+0x1A` and the channel's vertical position `+0x04` / `+0x05`; 2 = `+0x1A` and the trigger level `+0x1C`; 3 = cursors (code only). SELECT steps it 0, 1, 2, 0 (handler `0x0800D2F8`, nibble advanced at `0x0800D38C`). Bit 7 is the channel up/down act on: with both channels on MOVE switched it (`0x00` / `0x80`, and likewise in modes 1 and 2), and with it set the range and the position that changed were CH2's; with CH1 alone MOVE changed nothing (2026-11-26 and 27, one key at a time) | keys, code |
 | +0x356, +0x483 | 2000044E, 2000057B | The 301 points drawn for CH1, CH2 in normal (not roll) operation. While stopped, +0x356 is a slice of the record at the captured time base, the record through the 16-tap interpolator when zoomed in, and is left alone when zoomed out (#103) | 56 stopped snapshots |
 | +0x5B0 | 200006A8 | CH1 record, 1024 bytes. Byte-identical in every stopped snapshot of a session | 56 stopped snapshots |
 | +0xDB0 | 20000EA8 | Moves among 0, 1 and 2 within each acquisition | timed |
@@ -83,8 +97,12 @@ the comments on #102 for the meter rows.
 Words of each measurement block (CH1; CH2 follows with the same layout): 0 frequency in
 Hz; 1 period in ns; 2, 3 positive and negative duty in 0.01 %; 4, 5 positive and negative
 pulse width in ns; 6, 7, 8 Vmax, Vmin, Vpp in uV, signed; 9 a second amplitude a few mV
-under Vpp; 10, 11 not identified. Checked against two stopped screens ("40.23KHz" with
-40232, "64.51%" with 6451, "114.0mV" with 114000).
+under Vpp, which stock labels "Amp:"; 10 and 11 what it labels "Vrms:" and "Avg:", in uV
+(the order of stock's label table at `0x0804BF28`). Checked against two stopped screens
+("40.23KHz" with 40232, "64.51%" with 6451, "114.0mV" with 114000). Words 10 and 11 were
+not read from an acquisition that was also photographed: with a square from about 0 to
+304 mV they read 208000 to 209500 and 147833 to 148000, and three screens of the same
+wave showed 208.0 to 212.0 mV and 144.0 to 148.0 mV under those labels (2026-11-26).
 
 ### Signal generator
 
@@ -172,6 +190,8 @@ These are the fundamental device configuration parameters, set during init and c
 | +0x0A | 20000102 | `coupling_config` | uint16 | — | master_init | Coupling/BW limit bitfield (likely AC/DC + BW for both channels) |
 | +0x0D | 20000105 | — | — | — | — | (gap) |
 
+> ⚠ **LIVE 2026-11:** on a running stock unit `+0x00` / `+0x01` are the couplings of CH1 / CH2 (1 DC, 0 AC), not enable flags; `+0x06` / `+0x07` the probe settings; `+0x0A` / `+0x0B` the FFT flags of CH1 / CH2, and `+0x0C` a pointer that is set while CH1's FFT is on. See "Live Readings on a Running Stock Unit" above.
+
 ---
 
 ## Section 2: Acquisition Control (offsets 0x10 – 0x1F)
@@ -188,6 +208,8 @@ Controls how the FPGA acquires data — mode, channels, trigger, voltage range.
 | +0x18 | 20000110 | `trigger_edge` | uint8 | **3** | scope_fsm, timebase, channel_info | Trigger edge polarity (0=rising, 1=falling) |
 | +0x1A | 20000112 | `trigger_position` | int16 | **11** | scope_fsm, timebase, math, channel_info | Signed trigger horizontal position offset. Used for pre/post-trigger display windowing. |
 | +0x1C | 20000114 | `trigger_level` | int16 | **8** | siggen, scope_fsm, timebase, channel_info, spi3_acq | Trigger voltage level (signed 16-bit). In the SPI3 acquisition: `trigger_pos = (int16_t)voltage_range - trigger_level` before calibration. |
+
+> ⚠ **LIVE 2026-11:** selected one by one in the trigger panel of a running unit, `+0x17` read **0 for Normal and 1 for Auto** (2 for Single), the reverse of the row above for the first two; `+0x16` followed the trigger's channel with both channels on, and `+0x10` is a pointer that is set while CH2's FFT is on. See "Live Readings" above.
 
 ---
 
@@ -214,6 +236,8 @@ Dynamic state that changes during oscilloscope operation.
 | +0x3C | 20000134 | `measurement_config` | uint8 | **5** | scope_measure | Current label is now shaky. In the `0x080095AE..0x08009B1E` posture cluster this byte is mirrored against `F6B`, toggled between `0` and `F6B`, and gates pointer/list handling via `+0x40`, so it likely participates in a local preview/control posture beyond plain measurement config. |
 | +0x3D | 20000135 | `frame_counter` | uint8 | **1** | — | Frame/update counter (wraps at 99) |
 | +0x40 | 20000138 | `measurement_state` | uint32 | **25** | scope_measure + many unknowns | Current label is provisional. In the newer posture-cluster trace this field behaves like a pointer/list head with elements at offsets `+4`, `+8`, and `+16`, and is cleared to `0` when exhausted. That looks more structured than a plain scalar measurement selector. |
+
+> ⚠ **LIVE 2026-11:** on a running unit `+0x20` read as one signed 64-bit number, the horizontal position in ns; `+0x28` and `+0x2A` are 16-bit counters and `+0x2C` an 8-bit one that run down after a key changed the time base or a position; `+0x2F` steps through the AUTO key's sequence (0 when none runs), `+0x31` holds the couplings that sequence restores and `+0x32` its count of 10 ms ticks. See "Live Readings" above.
 
 ---
 
