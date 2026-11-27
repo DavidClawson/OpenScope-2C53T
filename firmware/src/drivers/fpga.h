@@ -529,6 +529,13 @@ typedef struct {
      * stock-like right-panel and packed-state flows. */
     volatile fpga_stock_shadow_t stock_shadow;
 
+    /* The IDCODE-after-upload read (probe_id_bit_close) actually ran this
+     * boot. probe_id_bit_close is preset to -1 before any read, so -1 alone
+     * cannot tell "port closed" from "never checked" (the faithful bit-bang
+     * variant skips the read). acq_opphase_trusted() needs both. Kept at the
+     * end so no existing field moves. */
+    volatile bool     probe_close_read;
+
 } fpga_state_t;
 
 /* Global FPGA state (defined in fpga.c) */
