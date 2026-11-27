@@ -12,6 +12,7 @@ FB_PATH = "/tmp/openscope_fb.bin"
 CMD_CASET = 0x2A
 CMD_RASET = 0x2B
 CMD_RAMWR = 0x2C
+CMD_NOP = 0x00
 
 # States
 ST_IDLE = 0
@@ -50,15 +51,21 @@ elif request.IsWrite:
             state[0] = ST_RASET
             param_count[0] = 0
         elif cmd == CMD_RAMWR:
-            # Flush any previous pixel data before starting new write
-            if write_count[0] > 0:
-                write_count[0] = 0
-                f = open(FB_PATH, "wb")
-                f.write(bytes(fb))
-                f.close()
+            # No flush here: a frame drawn in many small windows (one per
+            # column, say) meant a 150 KB file write each time, and the model
+            # became the bottleneck. Pixels flush every 5000 writes, and an
+            # LCD NOP forces it (below).
             state[0] = ST_PIXELS
             cursor_x[0] = col_start[0]
             cursor_y[0] = row_start[0]
+        elif cmd == CMD_NOP:
+            # Forced flush, for a paused machine: from the monitor,
+            #   sysbus WriteWord 0x6001FFFE 0x0000
+            # leaves the exact current framebuffer in FB_PATH.
+            write_count[0] = 0
+            f = open(FB_PATH, "wb")
+            f.write(bytes(fb))
+            f.close()
         else:
             state[0] = ST_PARAM
             param_count[0] = 0

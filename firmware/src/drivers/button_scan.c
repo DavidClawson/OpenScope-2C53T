@@ -100,6 +100,14 @@ static void pin_output_pp(gpio_type *port, uint16_t pin) {
  * ═══════════════════════════════════════════════════════════════════ */
 
 static uint16_t matrix_scan(void) {
+#ifdef EMULATOR_BUILD
+    /* Renode models no pull-ups: every undriven input reads 0, which is
+     * "pressed" for POWER and UP (active low) and for the whole matrix. The
+     * emulator presses keys through g_emu_key (main.c) instead, so the
+     * physical scan reports nothing. Without this the scope came up under a
+     * phantom "Hold to power off" countdown (EXP-85). */
+    return 0;
+#endif
     uint16_t events = 0;
     uint8_t row = 0;
 

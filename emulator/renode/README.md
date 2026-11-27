@@ -6,13 +6,20 @@ Renode-based emulation of the FNIRSI 2C53T oscilloscope's GD32F307VET6 MCU.
 
 ### Renode Installation (macOS)
 
-Renode v1.16.1 is installed at `/Applications/Renode.app`.
+Expected at `/Applications/Renode.app` (set `RENODE` to use another path).
+Not in Homebrew. Checked with v1.17.1:
 
-To install manually:
-1. Download the macOS ARM64 portable DMG from:
-   https://github.com/renode/renode/releases/download/v1.16.1/renode-1.16.1-dotnet.osx-arm64-portable.dmg
-2. Open the DMG and drag `Renode.app` to `/Applications/`
+1. `gh release download v1.17.1 -R renode/renode -p 'renode-1.17.1.osx-arm64-portable.dmg'`
+   (or the DMG from https://github.com/renode/renode/releases; the build is unsigned)
+2. Mount the DMG and copy `Renode.app` to `/Applications/`
 3. Verify: `/Applications/Renode.app/Contents/MacOS/renode --version`
+
+Renode 1.17 changed two models this platform uses: the STM32 I2C is
+`I2C.STM32F1_I2C` (was `STM32F4_I2C`), and `SPI.STM32SPI` needs a
+`series:` (F4, the same SPI block as F1). `gd32f307_2c53t.repl` has both.
+
+To run our firmware with the LCD and key panel viewer, see
+[../README.md](../README.md) (`emulator/run_emulator.sh`).
 
 ### Firmware
 

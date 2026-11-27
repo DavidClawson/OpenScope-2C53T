@@ -132,18 +132,20 @@ timer8: Timers.STM32_Timer @ sysbus 0x40013400
     initialLimit: 0xFFFF
 
 // --- I2C1 at 0x40005400 (Touch panel GT911) ---
-i2c1: I2C.STM32F4_I2C @ sysbus 0x40005400
+i2c1: I2C.STM32F1_I2C @ sysbus 0x40005400
     EventInterrupt -> nvic@31
     ErrorInterrupt -> nvic@32
 
 // --- SPI0/SPI1 at 0x40013000 (External flash W25Q64) ---
 // Note: GD32 SPI0 = STM32 SPI1 at 0x40013000
 spi1: SPI.STM32SPI @ sysbus 0x40013000
+    series: STM32Series.F4
     IRQ -> nvic@35
 
 // --- SPI2 at 0x40003C00 (FPGA data channel) ---
 // GD32 SPI2 = STM32 SPI3 at 0x40003C00
 spi2: SPI.STM32SPI @ sysbus 0x40003C00
+    series: STM32Series.F4
     IRQ -> nvic@51
 
 // --- SPI1 at 0x40003800 (I2C1 alternate / touch) ---
