@@ -2590,6 +2590,10 @@ static void fpga_usart_rx_task(void *pv)
          * frame family/range rules, and keep H2/MISO counts in status/trace for
          * the still-unresolved calibration/frontend investigation.
          */
+        /* The SoC woke for this transition and echoed the selector word:
+         * its frames belong to the commanded function. */
+        meter_data_set_function_confirmed(fpga.meter_soc_wake_ms != 0xFFFFu &&
+                                          fpga.meter_selector_confirmed != 0U);
         meter_data_process_frame(event.frame, parse_submode);
 
         /*
