@@ -2866,6 +2866,38 @@ static int test_live_capacitance_frames_self_describe(void)
 }
 
 /*
+ * DC mA with a current flowing, from the stock unit of #101 (2026-11-27):
+ * 5 V through 1 kOhm and a second meter in series, which read +5.051 mA.
+ * Each frame was read together with stock's own state, which held +5.044
+ * and +5.043 (0x20001028) with the unit code mA. frame[7] is 0x01 in them,
+ * as in every DC mA and AC mA frame of that unit, positive, zero or
+ * negative: there it goes with the "m" of the unit and is not a sign.
+ * frame[2] bit 4, the sign, is clear in the first two and set in the third,
+ * an idle frame for which stock held -0.005.
+ */
+static int test_dcma_positive_current_is_not_negated_by_frame7_bit0(void)
+{
+    uint8_t frame[12];
+
+    meter_data_init();
+    raw_frame(frame, "5AA5C6F74B4E0E0101000111");
+    process_frame(frame, 2);
+    ASSERT(expect_normal_reading("5.044", "mA", 5.044f, 0.0005f));
+    ASSERT(!meter_reading.negative);
+
+    raw_frame(frame, "5AA5C6F74B8E0F0101000111");
+    process_frame(frame, 2);
+    ASSERT(expect_normal_reading("5.043", "mA", 5.043f, 0.0005f));
+    ASSERT(!meter_reading.negative);
+
+    raw_frame(frame, "5AA5F6FBEBCB0701010000EF");
+    process_frame(frame, 2);
+    ASSERT(expect_normal_reading("-0.005", "mA", -0.005f, 0.0005f));
+    ASSERT(meter_reading.negative);
+    return 1;
+}
+
+/*
  * @saulvalenzuela23's frames, issue #37 (2026-10-03): a DL16 on the isolated
  * meter UART of his UNLABELLED (pre-V1.4) board, stock firmware 1.2.0, with
  * his meter's own display reading beside each frame. The first real frames
@@ -3179,6 +3211,7 @@ int main(void)
     TEST(stock_fsm_debug_fields_follow_mode_and_frames);
     TEST(large_current_submodes_use_active_local_range_state);
     TEST(current_submodes_do_not_expose_unproven_microamp_unit);
+    TEST(dcma_positive_current_is_not_negated_by_frame7_bit0);
     TEST(snapshot_returns_coherent_latest_completed_reading);
     TEST(snapshot_rejects_concurrent_two_writer_window);
     TEST(continuity_threshold_rule);

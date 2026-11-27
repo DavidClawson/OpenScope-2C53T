@@ -1484,10 +1484,14 @@ void meter_data_process_frame(const volatile uint8_t *frame, uint8_t submode)
      * (VNEG at 0x08037166, documented in meter_math_pipeline_annotated.c since
      * 2026-04 but never implemented here). Bench, @saulvalenzuela23 #37:
      * -2.0030 V arrives as frame[2] = 0xB6 with frame[7] = 0x00, so the old
-     * rule below alone showed +2.003 V. frame[7] bit 0 is kept for DCV/DC
-     * current, where @Stlkv measured it on a -00.03 mA frame (EXP-205 5c). */
+     * rule below alone showed +2.003 V. frame[7] bit 0 is kept for DCV and
+     * DC A, where @Stlkv measured it on a -00.03 mA frame (EXP-205 5c), but
+     * no longer for DC mA: a stock unit (#101, 2026-11-27) sends frame[7] =
+     * 0x01 in every DC mA frame, +5.044 mA with a real current included,
+     * which the rule showed as -5.044 mA. There the bit goes with the "m" of
+     * the unit and frame[2] bit 4 alone is the sign. */
     r->negative = ((frame[2] & 0x10U) != 0U) ||
-                  ((submode == 0 || submode == 2 || submode == 3) &&
+                  ((submode == 0 || submode == 3) &&
                    (status & (1 << 0)) != 0);
 
     /* Parse flags from byte [6] */
