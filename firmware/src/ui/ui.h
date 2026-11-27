@@ -216,6 +216,7 @@ void draw_fft_screen(void);
 void draw_split_screen(uint32_t frame);
 void draw_waterfall_screen(void);
 void draw_xy_screen(void);
+void scope_xy_note_view(bool xy);    /* display task, every scope frame: X-Y entry/exit */
 #endif
 
 /* meter_ui.c */
