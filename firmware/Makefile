@@ -467,18 +467,22 @@ flash-all: $(BUILD_DIR)/$(TARGET).bin bootloader
 	dfu-util -a 0 -d 2e3c:df11 -s 0x08000000 -D bootloader/build/bootloader.bin
 	python3 ../scripts/at32_dfuse_write.py 0x08004000 $(BUILD_DIR)/$(TARGET).bin --preserve-blank-pages-range 0x08006000:0x08007000 --leave 0x08004000
 
+# Renode binary (override: make renode-test RENODE=/path/to/renode)
+RENODE ?= /Applications/Renode.app/Contents/MacOS/renode
+
 # Run in Renode emulator (display only, no input)
 renode: emu
-	cd ../emulator/renode && /Applications/Renode.app/Contents/MacOS/renode --disable-gui run_openscope.resc
+	cd ../emulator/renode && $(RENODE) --disable-gui run_openscope.resc
 
-# Run in Renode with interactive input (use with lcd_viewer in another terminal)
+# Run in Renode with interactive input (use with lcd_viewer in another terminal;
+# emulator/run_emulator.sh does both in one go)
 renode-interactive: emu
-	@echo "Start the LCD viewer in another terminal: cd emulator && ./lcd_viewer"
-	cd ../emulator/renode && /Applications/Renode.app/Contents/MacOS/renode --disable-gui run_interactive.resc
+	@echo "Start the viewer in another terminal: cd emulator && make && ./lcd_viewer"
+	cd ../emulator/renode && $(RENODE) --disable-gui run_interactive.resc
 
 # Run in Renode for quick smoke test (5 seconds, then quit)
 renode-test: emu
-	cd ../emulator/renode && /Applications/Renode.app/Contents/MacOS/renode --disable-gui --console -e \
+	cd ../emulator/renode && $(RENODE) --disable-gui --console -e \
 		"include @run_openscope.resc; sleep 5; pause; cpu PC; quit"
 
 # Soak test — random button fuzzing with fault monitoring (default 2 minutes)

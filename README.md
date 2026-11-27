@@ -313,11 +313,16 @@ make emu          # Build for emulator (skips hardware init)
 ### Emulator (no hardware required)
 
 ```bash
-make renode              # Run in Renode with LCD display
-make renode-interactive  # Run with keyboard input
+emulator/run_emulator.sh     # build, start Renode, open the LCD + key panel viewer
 ```
 
-Requires [Renode](https://renode.io/) (the Makefile looks for `/Applications/Renode.app` on macOS; set `RENODE` to override). An SDL3 native LCD viewer is also available (`brew install sdl3 && cd emulator && make`).
+The viewer shows the emulated LCD with the instrument's keys underneath (click
+them or type them). Setup, keys, and what the emulator cannot do (no FPGA, no
+meter chip): [emulator/README.md](emulator/README.md). Requires
+[Renode](https://renode.io/) (`/Applications/Renode.app` on macOS; set
+`RENODE` to override) and SDL3 (`brew install sdl3`). The Makefile targets
+`make renode` / `make renode-interactive` / `make renode-test` still run Renode
+on its own.
 
 ## Project Structure
 

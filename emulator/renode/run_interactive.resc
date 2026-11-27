@@ -1,12 +1,15 @@
 # OpenScope 2C53T - Interactive Emulation
 # Runs firmware with LCD output and keyboard input via SDL viewer.
 #
-# Usage:
-#   Terminal 1: cd firmware && make renode-interactive
-#   Terminal 2: cd emulator && ./lcd_viewer
+# Usage (one command): emulator/run_emulator.sh   (see emulator/README.md)
+#   or by hand: Terminal 1: cd firmware && make renode-interactive
+#               Terminal 2: cd emulator && make && ./lcd_viewer
 #
-# Keys in LCD viewer: M=menu, arrows, Enter=OK, Space=select,
-#   A=auto, S=save, P=prm, 1=CH1, 2=CH2, Q=quit
+# The viewer presses keys through the firmware's g_emu_key mailbox via this
+# monitor (port 1234): M=MENU A=AUTO S=SAVE 1=CH1 2=CH2 P=PRM Space=SELECT
+# T=TRIGGER V=MOVE, arrows, Enter=OK, or click its key panel. The file-backed
+# GPIO ports below are no longer read for keys: the emulator build ignores
+# the key matrix (button_scan.c).
 
 mach create "OpenScope_2C53T"
 machine LoadPlatformDescription @gd32f307_2c53t.repl
