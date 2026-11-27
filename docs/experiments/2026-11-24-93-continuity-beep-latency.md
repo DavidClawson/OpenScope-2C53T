@@ -391,7 +391,10 @@ cleared while the tone went on, a 47 Ω part slid onto a short stayed quiet.
   frame interval (p95 204 ms);
 - after that, each new frame decides: at or above the threshold mutes, anything else
   (below it, `OL`, no resistance) unmutes. The veto follows the latest frame and no
-  longer latches.
+  longer latches. *Revised 2026-11-27 after the first bench run below (`4390251`):
+  `OL` or a blank frame now changes nothing, and only a resistance below the
+  threshold unmutes. Release reaches the frames in tens of ms, so an `OL` frame
+  could land inside the tone's 105 ms hold and unmute a muted part on release.*
 
 **Cost.** A part between the user's threshold and the SoC's beeps for up to 1.2 s
 plus one frame (about 1.4 s) before it goes quiet. The Part D/E build went quiet at
@@ -406,28 +409,95 @@ screen says SHORT.
 **Host test** (`make test-continuity-veto`, `firmware/tests/test_continuity_veto.c`).
 A millisecond simulation of the probes, the SoC's tone (below an assumed 60 Ω, with
 the 105 ms hold) and one frame per 163 ms that shows the probes `lag` ms before it
-arrived. Seven scenarios, each at five lags (300, 475, 676, 850, 1012 ms) and four
-frame phases. The gate as first posted and two half-fixes are negative controls:
+arrived, except that an open circuit shows as `OL` within `rel` ms (the release seen
+on the bench). Seven scenarios, each at five lags (300, 475, 676, 850, 1012 ms), two
+release lags (30 ms, or as slow as contact) and four frame phases. The gate as first
+posted, two half-fixes and the first review fix are negative controls (as of
+`4390251`):
 
 | gate | runs as expected | the runs it gets wrong |
 |---|---|---|
-| `cont_veto_step` | 140/140 | none |
-| control: as first posted (`9d1d135`) | 82/140 | 1 kΩ slid onto a short (20/20); 1 kΩ lifted, then a short tapped (18/20); 47 Ω slid onto a short (20/20) |
-| control: no ignore window | 102/140 | the two 1 kΩ scenarios (20/20, 18/20) |
-| control: window, but latching | 120/140 | 47 Ω slid onto a short (20/20) |
+| `cont_veto_step` | 280/280 | none |
+| control: as first posted (`9d1d135`) | 165/280 | 1 kΩ slid onto a short (40/40); 1 kΩ lifted, then a short tapped (35/40); 47 Ω slid onto a short (40/40) |
+| control: no ignore window | 205/280 | the two 1 kΩ scenarios (40/40, 35/40) |
+| control: window, but latching | 240/280 | 47 Ω slid onto a short (40/40) |
+| control: `OL` unmutes (`6bf6e95`) | 260/280 | the release of a muted 47 Ω part, from open and after a short (10/40 each: the 30 ms release lag, at the two phases that put a frame inside the hold) |
 
-So each half of the fix is needed. The 2 runs of "1 kΩ lifted, then a short tapped"
-that the controls get right are at lag 300 ms, where two of the four phases put no
-frame into the 100 ms that still shows the 1 kΩ part.
+So each part of the fix is needed. The runs of "1 kΩ lifted, then a short tapped"
+that the controls get right are at lag 300 ms, where some phases put no frame into
+the 100 ms that still shows the 1 kΩ part. The first version of the test (`6bf6e95`,
+one lag model, three controls) gave 140/140 against 82, 102 and 120 of 140.
 
 **Blind spots.**
 - **Not on hardware yet.** The firmware builds (`make`), the host test passes; no unit
   has run this change. The acceptance test is by ear: short, 47 Ω, 1 kΩ slid onto a
-  short, 47 Ω slid onto a short.
+  short, 47 Ω slid onto a short. *Run the same day, see the bench below, except the
+  1 kΩ case: no resistor above the threshold was at hand.*
 - **The 1200 ms rests on six taps** (Part B). A lag longer than 1200 ms would let a
   stale frame mute a short for the difference.
 - **The lag was measured on shorts only.** Whether a 47 Ω or 1 kΩ reading lags the
-  same way is not measured.
+  same way is not measured. *The bench below gives the first 47 Ω frame 483 to 965 ms
+  after the tone started (five contacts), inside Part B's range; 1 kΩ still not.*
 - **The simulation is regular:** frames arrive exactly every 163 ms and show the
   probes' state, with no readings in between (Part A saw none, on shorts). The SoC's
-  threshold is an assumption that only decides which parts make a tone.
+  threshold is an assumption that only decides which parts make a tone. *On the bench,
+  sliding between 47 Ω and a short gave readings in between (23.7 and 24 Ω); below the
+  threshold, they unmute, as a near short should.*
+
+### Bench, my unit, 2026-11-27
+
+**Instrument.** The fork's read-only shell command `buzzer status` (s00500
+`feat/remote-control` `f9f72d5`, not part of #102) prints one line with the device
+tick, whether the buzzer is on, its toggle counter (+1 per ms while it sounds), the
+PC3 edge count, the tone state, the veto, the tone's age and the latest frame.
+`reverse_engineering/captures/exp93/buzzer_log.py` polls it about 10 times a second;
+`buzzer_episodes.py` splits a capture into tones. Beep time comes from the toggle
+counter, so it is exact to the ms even where the poll is ~110 ms apart; mute and
+unmute times are poll-limited. Image: `feat/remote-control` with this branch merged,
+built as `guest-coldtrace-meter` (`guest-coldtrace` cannot reach the meter's
+submodes; in it the continuity frames are rejected, `sub=0`). Continuity, threshold
+30 Ω (the default), probes and one 47 Ω resistor, by hand.
+
+**Positive control, both runs:** every short beeped from the tone's start to its
+end (11 shorts, 0.19 to 2.0 s, never muted), and every 47 Ω contact went quiet, so
+the instrument sees both states.
+
+**Run 1, the `6bf6e95` rule** (`r04m`, build `Nov 27 2026 14:32:33`;
+`bench_veto_6bf6e95.txt`):
+
+| tone | what | beep | veto |
+|---|---|---|---|
+| #1 to #9 | shorts | the whole tone | never muted |
+| #10 | 47 Ω, 3.8 s | 1267 ms | muted at the first frame after the window, held to release |
+| #11 | 47 Ω, 2.4 s | 1260 ms, then **76 ms at release** | muted; an `OL` frame unmuted it at release |
+
+In #11 the PC3 edges stopped at device tick ~144,896 and an `OL` frame arrived by
+144,989, inside the tone's 105 ms hold. Under that rule `OL` unmutes, so the buzzer
+sounded for the rest of the hold. In #10 the next frame came after the hold. Release
+reaches the frames in tens of ms, where contact takes 0.5 to 1 s; the first host
+test modelled one lag for both and could not see this. Fixed in `4390251`.
+
+**Run 2, the `4390251` rule** (`r05m`, build `Nov 27 2026 14:44:44`;
+`bench_veto_4390251.txt`):
+
+| tone | what | beep | veto |
+|---|---|---|---|
+| #1, #5 | shorts, 0.84 s and 0.19 s | the whole tone | never muted |
+| #2 | 47 Ω, slid onto a short and back twice, 12.7 s, the tone never stopping | 5675 ms | muted 1.39 s; **unmuted** when the first short frame came (0.25 Ω); muted when the frames showed 47.7 Ω again; unmuted (23.7 Ω, then 0.29 Ω); muted (47.7 Ω) |
+| #3 | 47 Ω, slid onto a short and back, 6.8 s | 3160 ms | muted 1.35 s; unmuted (0.33 Ω); stayed on through 24 Ω; muted (47.7 Ω) |
+| #4 | 47 Ω, 5.0 s | 1200 ms | muted, held to release |
+| #6 | 47 Ω, 3.6 s | 1435 ms | muted, held to release |
+
+- **The veto follows the frames:** three slides onto a short each unmuted at the
+  first frame below the threshold, and three slides back each muted at the first
+  frame at or above it, with the tone running throughout.
+- **No release chirp:** in #2 and #6 an `OL` frame arrived inside the hold (#6: about
+  30 ms after the last edge), the veto stayed on and the toggle counter did not move
+  (6528 and 12596). The other two releases had no frame in the hold.
+- **Cost, measured:** a 47 Ω part beeps for 1.20 to 1.44 s (four clean holds, both
+  runs) before it goes quiet; "about 1.4 s" was the estimate.
+- **Operator, by ear:** "feels good" (run 1).
+
+**Not tested on hardware:** the review's own case, a part above the threshold slid
+onto a short (stale frames after the onset). Only one resistor, 47 Ω, was at hand, so
+that rests on the host test.
