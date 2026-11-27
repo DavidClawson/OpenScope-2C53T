@@ -39,6 +39,7 @@
 #endif
 #include "scope_trigger.h"
 #include "fpga.h"
+#include "acq_gate.h"
 #include "lcd.h"
 #include "meter_auto.h"
 #include "meter_autoselect.h"
@@ -794,6 +795,7 @@ static void cmd_status(void)
             usb_send_str(
                 "STATUS(0x41):  n/a — not read\r\n"
                 "IDCODE anchor: n/a — not read\r\n"
+                "acq opcode-phase term: NOT trusted (no config sequence ran this boot)\r\n"
                 "H2 upload:     n/a — no bitstream sent this boot\r\n"
                 "0x3A close status: n/a\r\n"
                 "0x03 scope status: n/a\r\n"
@@ -816,6 +818,16 @@ static void cmd_status(void)
                     ? "silent (config port closed — consistent with configured;"
                       " a dead bus reads the same)"
                     : "still answering 0x0120681B => port OPEN => NOT configured");
+
+            /* Whether the acquisition gate's third term (dsp/acq_gate.h) is in
+             * force: the same call fpga.c makes per frame. Its own short print,
+             * so it cannot be cut off with a longer one. */
+            usb_debug_printf("acq opcode-phase term: %s\r\n",
+                acq_opphase_trusted(fpga.probe_close_read, fpga.probe_id_bit_close)
+                    ? "trusted (IDCODE silent after our upload: port closed)"
+                    : !fpga.probe_close_read
+                        ? "NOT trusted (no IDCODE read after the upload this boot)"
+                        : "NOT trusted (IDCODE still answers: config port open)");
 
             usb_debug_printf("\r\n=== H2 Bitstream Upload ===\r\n"
                              "Bytes sent: %lu / 115638\r\n"
