@@ -1776,6 +1776,22 @@ void meter_data_process_frame(const volatile uint8_t *frame, uint8_t submode)
     }
 
     /*
+     * DC A, lowest range: frame[8] bit 7 with no point in the digits is four
+     * decimals, the reading resistance and DCV already give that bit. A retail
+     * unit on stock V1.2.0 (#101) sent digits "0007" with frame[8] = 0x81
+     * while stock's own state held -0.0007 (0x20001028), 4 in its decimals
+     * byte (0x2000102C) and the unit code A; the X.XXX fallback made that
+     * -0.007 A. Those frames, all taken with nothing on the 10 A socket, are
+     * the evidence, so this is DC A with exactly these bits and nothing wider.
+     */
+    if (submode == 3 && !frame_dp && (frame[8] & 0x80U)) {
+        format_5digit(r, 4);
+        float abs_a = r->value < 0.0f ? -r->value : r->value;
+        r->bar_fraction = abs_a / bar_full_scale[submode];
+        if (r->bar_fraction > 1.0f) r->bar_fraction = 1.0f;
+    }
+
+    /*
      * Capacitance: the frame describes itself (unit #2, EXP-205 and five
      * capacitors on 2026-09-07). frame[7] == 0x10 marks the function; the
      * unit is frame[6]'s upper nibble, 0x2_ nF and 0x1_ uF; the point is in

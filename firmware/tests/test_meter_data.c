@@ -1897,6 +1897,75 @@ static int test_current_rejects_unimplemented_plus_10000_extension(void)
     return 1;
 }
 
+/*
+ * DC A with nothing on the 10 A socket, from a retail unit running stock
+ * V1.2.0 (#101): three frames its meter SoC sent, each read together with
+ * stock's own state for it. frame[8] is 0x81, the A annunciator plus bit 7,
+ * and no digit carries a point. Stock's state held the value expected here
+ * (0x20001028), 4 in its decimals byte (0x2000102C) and the unit code A. In
+ * AC A, same digits and same frame[8], the screen was noted by hand as
+ * "0.0007A".
+ */
+static int test_dca_lowest_range_frames_read_as_stock_has_them(void)
+{
+    static const struct {
+        uint8_t frame[12];
+        const char *display;
+        float value;
+    } cases[] = {
+        { { 0x5A, 0xA5, 0xF6, 0xEB, 0xEB, 0x8B, 0x0A, 0x00, 0x81, 0x00, 0x00, 0xFF },
+          "-0.0007", -0.0007f },
+        { { 0x5A, 0xA5, 0xF6, 0xEB, 0xEB, 0xEB, 0x07, 0x00, 0x81, 0x00, 0x00, 0xEF },
+          "-0.0006", -0.0006f },
+        { { 0x5A, 0xA5, 0xE6, 0xEB, 0xEB, 0xEB, 0x0B, 0x00, 0x81, 0x00, 0x00, 0xFF },
+          "0.0000", 0.0f },
+    };
+
+    for (unsigned i = 0; i < sizeof(cases) / sizeof(cases[0]); i++) {
+        meter_data_init();
+        process_frame(cases[i].frame, 3);
+        ASSERT(meter_reading.reject_reason == METER_REJECT_NONE);
+        ASSERT(expect_normal_reading(cases[i].display, "A",
+                                     cases[i].value, 0.00001f));
+    }
+    return 1;
+}
+
+/*
+ * The same range with a current flowing, same stock unit (2026-11-27), each
+ * frame read together with stock's own state: 4 in its decimals byte
+ * (0x2000102C), the unit code A, and the value expected here (0x20001028).
+ *   - 5 V through 1 kOhm with a second meter in series, which read 0.0048 A:
+ *     stock held 0.0041 A;
+ *   - about 0.9 A from a 9 V battery, falling as it drained (a second meter
+ *     read about 0.84 A): the first and the last frame of that capture.
+ * Before the DC A fix these read 0.041 A, -9.124 A and -8.267 A.
+ */
+static int test_dca_lowest_range_frames_with_a_real_current(void)
+{
+    static const struct {
+        uint8_t frame[12];
+        const char *display;
+        float value;
+    } cases[] = {
+        { { 0x5A, 0xA5, 0xE6, 0xEB, 0x4B, 0x0E, 0x0A, 0x00, 0x81, 0x00, 0x01, 0x14 },
+          "0.0041", 0.0041f },
+        { { 0x5A, 0xA5, 0xD6, 0x0F, 0xAA, 0x4D, 0x0E, 0x00, 0x81, 0x00, 0x01, 0x18 },
+          "-0.9124", -0.9124f },
+        { { 0x5A, 0xA5, 0xF6, 0xAF, 0xED, 0x87, 0x0A, 0x00, 0x81, 0x00, 0x01, 0x16 },
+          "-0.8267", -0.8267f },
+    };
+
+    for (unsigned i = 0; i < sizeof(cases) / sizeof(cases[0]); i++) {
+        meter_data_init();
+        process_frame(cases[i].frame, 3);
+        ASSERT(meter_reading.reject_reason == METER_REJECT_NONE);
+        ASSERT(expect_normal_reading(cases[i].display, "A",
+                                     cases[i].value, 0.00001f));
+    }
+    return 1;
+}
+
 static int test_mixed_special_voltage_digits_do_not_become_numeric_dcv(void)
 {
     uint8_t frame[12];
@@ -3160,6 +3229,8 @@ int main(void)
     TEST(zero_detect_does_not_clamp_nonzero_range_hunting_frame);
     TEST(acv_rejects_unimplemented_plus_10000_extension);
     TEST(current_rejects_unimplemented_plus_10000_extension);
+    TEST(dca_lowest_range_frames_read_as_stock_has_them);
+    TEST(dca_lowest_range_frames_with_a_real_current);
     TEST(mixed_special_voltage_digits_do_not_become_numeric_dcv);
     TEST(frame6_0x40_is_not_a_global_resistance_family_marker);
     TEST(voltage_mode_mains_frame_uses_stock_range_hint);
