@@ -118,6 +118,12 @@ themselves are still unchecked.
 | F49 | **New, fixed before push:** the first settling check sampled the reading at redraws, but the view redraws only when the shown value changes (361 draws against 11,222 frames), so a steady short never filled the window and Cal leads refused it. It now reads the meter's own 8-frame history (`meter_data_recent_dc_mv`, under the reading's seqlock). |
 | F48 | **New, open (S3):** DC V resolves 0.1 mV, which is 13 mA steps on a 10 A ATO (7.9 mΩ). Fine for finding a draw, coarse for measuring a small one. |
 
+## Status after the Startup on Boot fix (2026-11-28)
+
+| # | Status |
+|---|---|
+| F07 | **Fixed for "always Scope":** the images that configure the FPGA themselves (`guest-coldtrace` and its variants) inherited the scope-only boot of the stock warm-handoff builds through `FPGA_WARM_HANDOFF_TEST`; they now boot into the saved mode, and a meter boot runs the same deferred transition as the mode key. Only `guest-warmtest*` still forces Scope. Seen on my unit with Startup = Meter, after a reset: `guest-coldtrace-meter` (Build Nov 28 2026 12:05:50) booted into Continuity twice, selector `0517` echoed, `OL` on open leads, and after switching over the scope showed the generator's 1 kHz 3 V sine on CH1; `guest-coldtrace` (Build Nov 28 2026 12:06:41) booted into the meter in the same state a scope-to-meter switch gives on that image. The "Meter" default is now what an erased unit boots into. The flash write is unchanged: one 2 KB sector, rewritten only when the value changes. |
+
 ## G. From the first live run (2026-10-06, David, unit #1, Build Oct 6 10:04:11)
 
 User feedback, not code predictions. Each is a design change to agree, not a bug to confirm.
@@ -138,6 +144,6 @@ User feedback, not code predictions. Each is a design change to agree, not a bug
 - Meter has 4 layouts (Fuse); AUTO is function pick, not REL (lines 117-118, 133).
 - SigGen amplitude steps are 0.1/0.2/0.5/1/2/3.3 Vpp, not ±0.1; duty is ±10 %, not ±5 %; OK is inert in release.
 - 20M Limit is `n/a` (lines 217, 220); the math list is wrong (line 230).
-- Startup default isn't honoured in release (lines 208-210); Firmware Update isn't the HID bootloader (line 183).
+- Startup default isn't honoured in release (lines 208-210): fixed in the code 2026-11-28 (F07), the manual's text holds again. Firmware Update isn't the HID bootloader (line 183).
 - Quick-reference card: MOVE, AUTO and SAVE rows are stale (lines 280-283).
 - Nowhere says which screens are demos.

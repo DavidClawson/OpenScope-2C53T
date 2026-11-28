@@ -253,8 +253,7 @@ A remote-control protocol designed around this quirk is specified in
 does not capture. Only `make guest-coldtrace` currently produces a cold-boot live trace. Folding
 that path into the default build is a known outstanding task.
 
-That build also carries bench-rig behaviour you should know about: it boots straight into scope
-mode, the SAVE button toggles the input-coupling relay for live A/B testing instead of taking a
+That build also carries bench-rig behaviour you should know about: the SAVE button toggles the input-coupling relay for live A/B testing instead of taking a
 screenshot, and the signal generator is disabled because the scope needs the same DAC pin.
 
 ---

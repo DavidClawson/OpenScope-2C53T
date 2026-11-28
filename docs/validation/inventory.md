@@ -214,7 +214,7 @@ only 7 rows show at a time.
 | Math / Persist › | sub-menu (below) | | |
 | Component Tester › | screen (section 6) | | DEMO |
 | Bode Plot › | screen (section 6) | | DEMO |
-| Startup on Boot | Scope / Meter | yes (MCU flash, written on every change) | **INERT in release**: always boots Scope. The default shows "Meter". |
+| Startup on Boot | Scope / Meter | yes (MCU flash, written on every change) | LIVE since 2026-11-28 (F07): the release image boots into the chosen mode; erased settings boot Meter. Until then it always booted Scope. |
 | About › | static text | | LIVE. Says "Custom Firmware v0.2". |
 | FPGA SPI Scanner | — | | **INERT** (compiled out) |
 | Firmware Update | DFU | | Resets via the old HID-bootloader handshake; under the factory bootloader probably just reboots (**confirm**). The working path is MENU+POWER. |
