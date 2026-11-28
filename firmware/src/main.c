@@ -1082,7 +1082,15 @@ int main(void)
     meter_data_init();
     meter_voltage_wave_init();
     startup_mode_load();
-#if FPGA_WARM_HANDOFF_TEST
+    /* Settings > Startup on Boot decides the first screen, except in a stock
+     * warm-handoff image (guest-warmtest*): there stock left the FPGA armed in
+     * scope posture and the scope screen is the bench readout, so it always
+     * boots into the scope. A build that configures the FPGA itself
+     * (FPGA_CONFIG_B / FPGA_CONFIG_A_HWSPI: guest-coldtrace and its variants,
+     * the release image) used to inherit that through FPGA_WARM_HANDOFF_TEST
+     * and ignored the setting; switching to the meter later is the same
+     * transition, so booting into it is too. */
+#if FPGA_WARM_HANDOFF_TEST && !FPGA_CONFIG_B && !FPGA_CONFIG_A_HWSPI
     current_mode = MODE_OSCILLOSCOPE;
 #else
     current_mode = startup_target_mode();
@@ -1188,7 +1196,18 @@ int main(void)
     meter_autoselect_create_task();
 
     if (current_mode == MODE_MULTIMETER) {
+#if FPGA_WARM_HANDOFF_TEST
+        /* As the mode key does it (input_handler.c enter_mode): the meter
+         * poll task runs the transition once the scheduler is up, and the
+         * display task's first pass raises PC11 and USART2. Run inline here
+         * it could not work: these builds keep USART2 off until meter entry,
+         * and the queue creates above already raised BASEPRI, which masks
+         * the USART2 IRQ until the scheduler starts, so the SoC wake would
+         * sit out its timeout with nothing received. */
+        fpga_request_meter_mode(meter_submode);
+#else
         fpga_set_meter_mode(meter_submode);
+#endif
     } else {
         fpga_enter_scope_mode();
     }
